@@ -32,7 +32,12 @@ deprecations ship one minor release before removal.
   foundation for the in-VM config-sync workflow — an operator can edit
   this file from inside the VM and sync it back for review without
   being able to escape the VM's own OS boundary. Host-owned settings
-  stay in `config`, which the guest cannot edit.
+  stay in `config`, which the guest cannot edit. When set, the current
+  approved guest config is also seeded into the VM (read-only at
+  `/etc/nixling/guest-config.nix`, plus a writable working copy at
+  `/var/lib/nixling-guest/guest-config.nix`) so it can be edited from
+  inside the VM. See
+  [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
 ### Fixed
 
