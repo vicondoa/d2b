@@ -245,6 +245,18 @@ let
         message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs-stack telemetry sink).";
       }
       {
+        assertion = !(vm.enable && vm.audit.enable && !vm.observability.enable);
+        message = "nixling.vms.${name}.audit.enable requires observability.enable on the same VM";
+      }
+      {
+        assertion = !(vm.enable && vm.supervisor == "nixlingd" && !cfg.daemonExperimental.enable);
+        message = "nixling.vms.${name}.supervisor = \"nixlingd\" requires "
+          + "nixling.daemonExperimental.enable = true (the v1.0 daemon-only "
+          + "control plane per ADR 0015 owns the nixlingd path; on hosts "
+          + "where the W18 flip-gate readiness predicate is not satisfied "
+          + "the option must be explicitly enabled to opt in).";
+      }
+      {
         # Phase 2b: `nixling.vms.<name>.entra-id.*` was removed; the
         # option is a kept-but-internal stub so legacy assignments
         # land here instead of producing a cryptic
@@ -353,6 +365,25 @@ let
       (lib.attrValues cfg.vms);
 
   siteAssertions =
+    [
+      {
+        assertion = toString cfg.site.stateDir == "/var/lib/nixling";
+        message = ''
+          nixling.site.stateDir is reserved but not fully threaded yet.
+          Leave it at /var/lib/nixling for now; overriding it would
+          split host-side state across inconsistent roots.
+        '';
+      }
+      {
+        assertion = toString cfg.store.stateDir == "/var/lib/nixling/vms";
+        message = ''
+          nixling.store.stateDir is reserved but not fully threaded yet.
+          Leave it at /var/lib/nixling/vms for now; overriding it would
+          desynchronise the manifest, CLI, and per-VM runtime state.
+        '';
+      }
+    ]
+    ++
     # If any VM uses graphics or audio, the host MUST point at a
     # Wayland user — that's the user whose XDG_RUNTIME_DIR the GPU /
     # audio sidecars bind into.

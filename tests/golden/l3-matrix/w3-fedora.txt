@@ -1,0 +1,14 @@
+# W3 L3 distro matrix — Fedora Server 40
+os = fedora
+release = 40
+image_url = https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2
+sha256 = placeholder
+kernel_min = 6.8
+kernel_shipped = 6.8.5-301.fc40
+glibc = 2.39
+cgroup = v2-unified
+network_manager = 1.46
+nftables = 1.0.9
+cloud_hypervisor_min = 40
+minijail = 17-nix-built
+panel_approval_required_for_change = true

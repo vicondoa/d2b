@@ -1,0 +1,25 @@
+# tests/golden/runner-shape/virtgpu-ioctl-values.txt
+#
+# P1 kernel-r1-1 closure: authoritative DRM_IOCTL_VIRTGPU_* values.
+#
+# Computed against Linux kernel UAPI virtgpu_drm.h via a small C
+# oracle (see _DOC.md below). When upstream changes a struct size
+# the oracle output drifts; this file is the byte-for-byte reference
+# the per-role minijail validator and ioctl_policy.rs constants must
+# match.
+#
+# Source headers: /nix/store/.../linux-headers-6.18.7/include/drm/virtgpu_drm.h
+# Computed: 2026-05-30 on Linux 6.18.7 nixpkgs#linuxHeaders
+#
+# Oracle:
+#   #include <drm/virtgpu_drm.h>
+#   printf("DRM_IOCTL_VIRTGPU_<name> = 0x%08lx\n", (unsigned long)DRM_IOCTL_VIRTGPU_<name>);
+#
+DRM_IOCTL_VIRTGPU_MAP                  = 0xc0106441
+DRM_IOCTL_VIRTGPU_EXECBUFFER           = 0xc0406442
+DRM_IOCTL_VIRTGPU_GETPARAM             = 0xc0106443
+DRM_IOCTL_VIRTGPU_RESOURCE_CREATE      = 0xc0386444
+DRM_IOCTL_VIRTGPU_WAIT                 = 0xc0086448
+DRM_IOCTL_VIRTGPU_GET_CAPS             = 0xc0186449
+DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB = 0xc030644a
+DRM_IOCTL_VIRTGPU_CONTEXT_INIT         = 0xc010644b

@@ -37,12 +37,16 @@ let
     lib.unique (relayVmNames ++ lib.optional obsVmEnabled obsCfg.vmName);
 
   relayEndpointStateDirs = map vmStateDir relayEndpointVmNames;
+  relayListenerStateDirs = map vmStateDir relayVmNames;
+  relayStackStateDirs = lib.optional obsVmEnabled (vmStateDir obsCfg.vmName);
   # Workload VMs: relay LISTENs at <vm>/vsock.sock_14317 (guest->host).
   # Stack VM: relay speaks CH textual protocol on <vm>/vsock.sock
   # (host->guest). Two different sockets per endpoint type.
   relayEndpointSockets =
     (map relaySocketPath relayVmNames)
     ++ lib.optional obsVmEnabled (baseVsockSocket obsCfg.vmName);
+  relayListenerSockets = map relaySocketPath relayVmNames;
+  relayStackSockets = lib.optional obsVmEnabled (baseVsockSocket obsCfg.vmName);
 
   bridgeStateDirs = lib.optional obsVmEnabled (vmStateDir obsCfg.vmName);
   # v0.2.0+: bridge speaks CH textual protocol on the BASE UDS
@@ -69,6 +73,10 @@ let
       state_root=${lib.escapeShellArg cfg.store.stateDir}
       relay_keep_dirs=( ${shellArray relayEndpointStateDirs} )
       relay_keep_sockets=( ${shellArray relayEndpointSockets} )
+      relay_listener_keep_dirs=( ${shellArray relayListenerStateDirs} )
+      relay_listener_keep_sockets=( ${shellArray relayListenerSockets} )
+      relay_stack_keep_dirs=( ${shellArray relayStackStateDirs} )
+      relay_stack_keep_sockets=( ${shellArray relayStackSockets} )
       bridge_keep_dirs=( ${shellArray bridgeStateDirs} )
       bridge_keep_sockets=( ${shellArray bridgeSockets} )
       ch_keep_dirs=( ${shellArray chExporterStateDirs} )
@@ -143,6 +151,7 @@ let
         local mode="''${3:---x}"
         if is_safe_dir "$dir"; then
           run_setfacl -d -x "$entity" "$dir" || true
+          run_setfacl -x "$entity" "$dir" || true
           run_setfacl -m "$entity:$mode" "$dir" || true
         fi
       }
@@ -231,12 +240,19 @@ let
       # v0.2.0+: the per-VM relay does UNIX-LISTEN at
       # <vm>/vsock.sock_<obsOtlpPort> (CH proxies the workload
       # guest's VSOCK-CONNECT:2:14317 to this LISTEN). Bind requires
-      # write+exec on the parent dir, not just traverse — grant rwx
-      # to nixling-otel-relay. The relay ALSO needs read+write on
-      # the obs stack VM's BASE vsock.sock for the CH textual
-      # protocol. The bridge has the same need.
-      refresh_acl_set "g:nixling-otel-relay" relay_keep_dirs relay_keep_sockets "vsock.sock_${toString obsOtlpPort}" rwx
+      # write+exec on the workload listener dirs, so grant rwx/default
+      # there to nixling-otel-relay. The guest runner
+      # (microvm:kvm or the graphics sidecar with
+      # SupplementaryGroups=kvm) also needs to connect to the resulting
+      # listener socket, so grant kvm on ONLY those workload listener
+      # dirs/sockets. Separately, the relay needs traverse on the obs
+      # stack state dir plus explicit rw on the stack VM base vsock.sock
+      # for the CH textual protocol; do not install a default ACL there.
+      refresh_acl_set "g:nixling-otel-relay" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" rwx
+      refresh_acl_set "g:nixling-otel-relay" relay_stack_keep_dirs relay_stack_keep_sockets "vsock.sock" --x
+      refresh_acl_set "g:kvm" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" --x
       refresh_acl_set "g:nixling-otel-bridge" bridge_keep_dirs bridge_keep_sockets "vsock.sock"
+      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted nixling-ch-exporter.service (P3 ph3-p3-ch-exporter-retire)
       refresh_acl_set "g:nixling-ch-exporter" ch_keep_dirs ch_keep_sockets "%VM%.sock"
     '';
   };
@@ -259,13 +275,11 @@ lib.mkMerge [
       "nixling observability vsock relay"
       "nixling-otel-relay";
 
-    systemd.services."nixling-otel-relay@".serviceConfig = {
-      User = lib.mkForce "nixling-otel-relay";
-      Group = lib.mkForce "nixling-otel-relay";
-      DynamicUser = lib.mkForce false;
-      SupplementaryGroups = lib.mkForce [ ];
-      ExecStartPre = lib.mkBefore [ "+${otelAclRefreshBin}" ];
-    };
+    # P6 ph6-remove-systemd-emission: the per-VM
+    # `nixling-otel-relay@<vm>.service` was deleted; the observability
+    # vsock relay is now broker-spawned via SpawnRunner{role:
+    # VsockRelay}. The .serviceConfig extension below was a no-op
+    # against a missing service after the deletion. Removed.
   })
 
   (lib.mkIf obsVmEnabled {
@@ -275,8 +289,11 @@ lib.mkMerge [
       "nixling observability host bridge"
       "nixling-otel-bridge";
 
-    systemd.services.nixling-otel-host-bridge.serviceConfig.ExecStartPre =
-      lib.mkBefore [ "+${otelAclRefreshBin}" ];
+    # P6 ph6-remove-systemd-emission: `nixling-otel-host-bridge.service`
+    # was deleted; the OTel host bridge is now broker-spawned via
+    # SpawnRunner{role: OtelHostBridge} (P1 ph1-p1-otelbridge-role).
+    # The .serviceConfig extension below was a no-op against a missing
+    # service after the deletion. Removed.
   })
 
   (lib.mkIf (obsVmEnabled || relayVmNames != [ ] || chExporterEnabled) {

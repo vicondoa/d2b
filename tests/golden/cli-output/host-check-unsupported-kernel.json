@@ -1,0 +1,9 @@
+{
+  "code": "unsupported-kernel",
+  "docs_anchor": "docs/reference/error-codes.md#unsupported-kernel",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "uname -r reports a kernel older than 6.6.",
+  "remediation": "Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see tests/golden/l3-matrix/w3-ubuntu.txt).",
+  "what_was_checked": "Whether the running kernel is >= 6.6 (W3 minimum)."
+}

@@ -23,19 +23,93 @@
         farm to work (see `nixling.store.stateDir`, which defaults to
         `${"$"}{stateDir}/vms`).
 
-        **ADVISORY ONLY in v0.1.0.** The framework hardcodes
-        `/var/lib/nixling` in several places (host.nix's
-        `microvm.stateDir`, host-activation.nix's ACL repair,
-        host-known-hosts.nix's known_hosts location, host-sidecars.nix's
-        per-VM unit WorkingDirectory + ExecStart, and the per-VM
-        manifest baked by cli.nix). Overriding this option in v0.1.0
-        WILL break those code paths. Full threading lands in v0.2.0
-        (`med-findings-postrelease`: `stateDir-threading`); until
-        then, leave it at the default. The option is declared so
-        future docs / overrides have a stable name and so consumers
-        can read the framework's nominal state-root without
-        grepping.
+        **Reserved in v0.4.0.** The framework still hardcodes
+        `/var/lib/nixling` in several host-side paths, so eval now
+        rejects overrides until full threading lands. Leave this at the
+        default for now; the option exists so consumers and future
+        migrations have a stable name for the framework's nominal
+        state root.
       '';
+    };
+
+    tmpDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/nixling/tmp";
+      readOnly = true;
+      description = ''
+        Ephemeral state directory, cleaned on every boot via a host
+        `systemd-tmpfiles` `D` rule.
+        Components SHOULD use `${"$"}{tmpDir}/<vm>/` for any state
+        that is safe to lose across reboots (transient sockets,
+        temporary swtpm proxies, build artifacts, etc.).
+      '';
+    };
+
+    allowUnsafeEastWest = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Acknowledge that `nixling.envs.<env>.lan.allowEastWest = true`
+        is an explicit out-of-threat-model mode. Leave this at `false`
+        to preserve the default peer-guest isolation boundary.
+      '';
+    };
+
+    ch = {
+      netHandoffMode = lib.mkOption {
+        type = lib.types.enum [ "tap-fd" "persistent-tap" ];
+        default = "tap-fd";
+        example = "persistent-tap";
+        description = ''
+          Cloud Hypervisor net-handoff mode for long-lived runners
+          (W3 virt-1). The emitted `host.json.ch.netHandoffMode`
+          records this declared value; the broker's `host check`
+          probes the packaged CH binary at runtime and fails closed
+          with `ch-net-handoff-not-supported` if neither mode
+          satisfies the declared VM network resources without
+          `CAP_NET_ADMIN` in the long-lived runner.
+
+          - `"tap-fd"` (default): the broker opens TAP +
+            `/dev/vhost-net` and passes them via `SCM_RIGHTS`; the
+            runner has no `CAP_NET_ADMIN`.
+          - `"persistent-tap"` (fallback): the broker creates a
+            persistent TAP via `TUNSETOWNER`/`TUNSETGROUP` for the
+            runner uid/gid; the runner mounts the device node
+            read-only.
+        '';
+      };
+    };
+
+    audit = {
+      retentionDays = lib.mkOption {
+        type = lib.types.int;
+        default = 14;
+        example = 30;
+        description = ''
+          How many days of daily-rotated broker audit log files
+          (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`) to
+          retain. Files older than this are deleted on every
+          day-boundary rotation by the broker (best-effort; failures
+          to remove are logged but do not break the audit-write path).
+          Set to `0` to disable pruning entirely (unbounded retention).
+
+          **Reserved at W4a-H1.** The broker accepts
+          `--audit-retention-days <N>` and the runtime prune-on-rotate
+          loop is shipping in `packages/nixling-priv-broker/src/audit.rs`,
+          but the NixOS module does not yet spawn the broker
+          (`nixlingd` does so at runtime in a future W4 sub-phase, and
+          this option's value will then thread through
+          `daemon-config.json` → `nixlingd` → `nixling-priv-broker
+          serve --audit-retention-days <value>`). Until that wiring
+          lands, overriding this option is a no-op at runtime — the
+          broker defaults to 14 days regardless.
+
+          The option is exposed now so consumer NixOS configs can
+          declare their intended retention ahead of the W4 wiring;
+          the W4 main wave will pick the value up without a config
+          break.
+        '';
+      };
     };
 
     waylandUser = lib.mkOption {
@@ -70,14 +144,30 @@
         (see `nixos-modules/host-polkit.nix` for the exact-unit
         allowlist).
 
+        When `nixling.daemonExperimental.enable = true`, the same user
+        list is also added to the daemon-facing `nixling-launchers`
+        socket ACL group.
+
         The framework does NOT create the users — declare them in
         your top-level NixOS config with `users.users.<name> = { …
-        };`. nixling only adds the `nixling-launcher` group to their
+        };`. nixling only adds the launcher groups to their
         `extraGroups`.
 
         Empty list = nobody is a launcher principal. The framework
         still works (sudo + polkit-password prompts cover everything
         the launcher group's allowlist grants).
+      '';
+    };
+
+    adminUsers = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "alice" ];
+      description = ''
+        Users allowed to request privileged read-only daemon operations
+        such as `nixling audit`. Admin users still need to connect over
+        the daemon public socket, so they SHOULD also be present in
+        `launcherUsers`.
       '';
     };
 
@@ -137,14 +227,18 @@
 
     yubikey.enable = lib.mkOption {
       type = lib.types.bool;
+      # Intentionally kept `true` for backward compatibility. Host-side
+      # USBIP units and `usbip-host` now materialize only when an enabled
+      # VM also opts into `usbip.yubikey`.
       default = true;
       example = false;
       description = ''
         Install host-side Yubikey support: the udev rules for vendor
         ID 1050 (so hidraw / raw-USB nodes carry `GROUP="kvm"
-        MODE="0660" uaccess`) AND the `usbip-host` kernel module
-        (so `nixling usb <vm>` can re-bind the device into a guest
-        via USBIP).
+        MODE="0660" uaccess`). When at least one enabled VM sets
+        `usbip.yubikey = true`, this also loads the host's
+        `usbip-host` kernel module so `nixling usb <vm>` can re-bind
+        the device into a guest via USBIP.
 
         Set to `false` on hosts that do not use Yubikeys. With this
         option off the framework does not load `usbip-host` and does

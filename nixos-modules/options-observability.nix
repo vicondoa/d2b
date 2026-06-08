@@ -1,8 +1,14 @@
 # nixling.observability.* — host-wide observability surface. Split into
 # its own file for the v0.2.0 observability track so follow-up PRs can
 # extend the feature without reopening the baseline option schema.
-{ lib, pkgs, ... }:
+{ config, lib, pkgs, ... }:
 
+let
+  nl = import ./lib.nix { inherit lib; };
+  inherit (nl) subnetIp;
+  defaultGrafanaListenAddress =
+    subnetIp config.nixling.observability.lanSubnet config.nixling.observability.index;
+in
 {
   options.nixling.observability = {
     enable = lib.mkEnableOption ''
@@ -71,7 +77,78 @@
       traces = lib.mkOption {
         type = lib.types.str;
         default = "7d";
-        description = "Retention window for traces in the observability stack.";
+        description = ''
+          Default retention window for traces (default Tempo
+          tenant). Mirror of `nixling.observability.retention.traces`
+          on the stack VM. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      tracesCritical = lib.mkOption {
+        type = lib.types.str;
+        default = "30d";
+        description = ''
+          Retention window for the critical Tempo tenant (spans
+          tagged `kind=critical`). Mirror of
+          `nixling.observability.retention.tracesCritical` on the
+          stack VM. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+    };
+
+    sampling = {
+      criticalAttribute = lib.mkOption {
+        type = lib.types.str;
+        default = "kind";
+        description = ''
+          Span attribute key inspected to decide whether a span
+          belongs to the critical Tempo tenant.
+        '';
+      };
+
+      criticalValue = lib.mkOption {
+        type = lib.types.str;
+        default = "critical";
+        description = ''
+          Span attribute value that pins a span into the critical
+          Tempo tenant.
+        '';
+      };
+
+      criticalRatio = lib.mkOption {
+        type = lib.types.float;
+        default = 1.0;
+        description = ''
+          Sampling ratio for critical spans (0.0–1.0). Pinned to
+          1.0 by the canonical policy.
+        '';
+      };
+
+      defaultRatio = lib.mkOption {
+        type = lib.types.float;
+        default = 0.1;
+        description = ''
+          Head-consistent sampling ratio for non-critical spans
+          (0.0–1.0). Pinned to 0.1 by the canonical policy.
+        '';
+      };
+
+      criticalTenant = lib.mkOption {
+        type = lib.types.str;
+        default = "nixling-critical";
+        description = ''
+          Tempo tenant id (`X-Scope-OrgID`) that critical spans
+          are routed to.
+        '';
+      };
+
+      defaultTenant = lib.mkOption {
+        type = lib.types.str;
+        default = "nixling-default";
+        description = ''
+          Tempo tenant id (`X-Scope-OrgID`) that non-critical
+          spans are routed to.
+        '';
       };
     };
 
@@ -89,9 +166,11 @@
     grafana = {
       listenAddress = lib.mkOption {
         type = lib.types.str;
-        default = "10.40.0.10";
+        default = defaultGrafanaListenAddress;
         description = ''
-          Address Grafana binds inside the observability env.
+          Address Grafana binds inside the observability env. Default
+          tracks the observability VM's derived IP (`lanSubnet` +
+          `index`).
         '';
       };
 

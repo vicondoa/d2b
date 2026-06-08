@@ -1,0 +1,9 @@
+{
+  "code": "host-lan-cidr-ambiguous",
+  "docs_anchor": "docs/reference/error-codes.md#host-lan-cidr-ambiguous",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "Multiple plausible LAN CIDRs detected (multi-iface + VPN); auto-inference refused.",
+  "remediation": "Set nixling.site.hostLanCidr explicitly in the bundle.",
+  "what_was_checked": "Whether the host LAN CIDR can be uniquely inferred from the live routing table."
+}

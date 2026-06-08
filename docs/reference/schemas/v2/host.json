@@ -1,0 +1,829 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostJson",
+  "description": "Private host topology and host-owned capability contract.",
+  "type": "object",
+  "required": [
+    "cloudHypervisorCapabilities",
+    "environments",
+    "fdOwnership",
+    "hostsFile",
+    "kernelModules",
+    "networkManager",
+    "nftables",
+    "schemaVersion",
+    "site"
+  ],
+  "properties": {
+    "ch": {
+      "description": "W3 Cloud Hypervisor net handoff probe result (virt-1). Optional for backward compatibility with V1 host.json fixtures.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HostChConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cloudHypervisorCapabilities": {
+      "description": "VMM/device capability matrix anchored to Cloud Hypervisor.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/CloudHypervisorCapability"
+      }
+    },
+    "environments": {
+      "description": "Per-environment network policy and derived host firewall inputs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/NetEnv"
+      }
+    },
+    "fdOwnership": {
+      "description": "Broker-opened file descriptor ownership table.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FdOwnershipEntry"
+      }
+    },
+    "firewallCoexistencePolicy": {
+      "description": "W4a-H3: per-host firewall coexistence policy emitted by the Nix `host-json.nix` module. The broker reads this at runtime to decide whether `ApplyNftables` runs (Coexist), refuses (Refuse), or demands an explicit unmanaged drop-in (RequireUnmanaged). Optional for backward compatibility with pre-W4a host.json fixtures; the broker treats `None` as the implicit \"no managed firewall detected\" Coexist default.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FirewallCoexistencePolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hostsFile": {
+      "description": "`/etc/hosts` marked-block ownership rule.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/HostsFileOwnership"
+        }
+      ]
+    },
+    "ifNameMappings": {
+      "description": "W3 hash-derived IfName mapping exposure (networking-2). One row per managed bridge/TAP gives the broker the user-visible → derived `<=15`-byte name pair and a stable role tag for the per-role bridge-port-flags table. Empty for V1-shaped bundles.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/IfNameMapping"
+      }
+    },
+    "kernelModules": {
+      "description": "Kernel module requirements and gates.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/KernelModulesEntry"
+      }
+    },
+    "networkManager": {
+      "description": "NetworkManager unmanaged file materialization rules.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkManagerUnmanaged"
+        }
+      ]
+    },
+    "nftables": {
+      "description": "Exact nftables `inet nixling` table declaration.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NftablesModel"
+        }
+      ]
+    },
+    "schemaVersion": {
+      "description": "Schema version used by this artifact.",
+      "type": "string"
+    },
+    "site": {
+      "description": "Host-wide site policy toggles threaded from v0.4.0.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SitePolicy"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BridgePortFlags": {
+      "description": "Bridge-port flags applied to a TAP role.",
+      "type": "object",
+      "required": [
+        "isolated",
+        "neighSuppress",
+        "role",
+        "rule"
+      ],
+      "properties": {
+        "isolated": {
+          "type": "boolean"
+        },
+        "learning": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "neighSuppress": {
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/definitions/TapRole"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "unicastFlood": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CapabilityStatus": {
+      "description": "Capability support state.",
+      "type": "string",
+      "enum": [
+        "required",
+        "optional",
+        "deferred"
+      ]
+    },
+    "ChNetHandoffMode": {
+      "description": "W3 Cloud Hypervisor net handoff modes. `TapFd` keeps the long-lived runner without `CAP_NET_ADMIN`; `PersistentTap` falls back to pre-created TAPs handed off via `TUNSETOWNER`/`TUNSETGROUP`. The emitter records the declared mode; the broker's host-check probe validates it against the packaged CH binary at runtime.",
+      "oneOf": [
+        {
+          "description": "Preferred: broker opens TAP + `/dev/vhost-net` and passes fds.",
+          "type": "string",
+          "enum": [
+            "tap-fd"
+          ]
+        },
+        {
+          "description": "Fallback: broker creates persistent TAP owned by the runner.",
+          "type": "string",
+          "enum": [
+            "persistent-tap"
+          ]
+        }
+      ]
+    },
+    "CloudHypervisorCapability": {
+      "description": "Cloud Hypervisor capability matrix row.",
+      "type": "object",
+      "required": [
+        "capability",
+        "devicesOrModules",
+        "notes",
+        "readiness",
+        "sidecars",
+        "status"
+      ],
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "devicesOrModules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "string"
+        },
+        "readiness": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/definitions/CapabilityStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CoexistencePolicy": {
+      "description": "What nixling does when a given firewall manager is present.",
+      "oneOf": [
+        {
+          "description": "Coexist: install `inet nixling` table alongside the manager's rules without flushing.",
+          "type": "string",
+          "enum": [
+            "coexist"
+          ]
+        },
+        {
+          "description": "Refuse: fail-closed host check with a remediation message.",
+          "type": "string",
+          "enum": [
+            "refuse"
+          ]
+        },
+        {
+          "description": "RequireUnmanaged: require an explicit \"unmanaged\" file from the manager covering nixling interfaces before proceeding.",
+          "type": "string",
+          "enum": [
+            "require-unmanaged"
+          ]
+        }
+      ]
+    },
+    "FdOwnershipEntry": {
+      "description": "Broker-opened fd ownership row.",
+      "type": "object",
+      "required": [
+        "brokerOperation",
+        "jailVisibleDevice",
+        "notes",
+        "recipient",
+        "resource",
+        "transfer"
+      ],
+      "properties": {
+        "brokerOperation": {
+          "type": "string"
+        },
+        "jailVisibleDevice": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "recipient": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "transfer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FirewallCoexistencePolicy": {
+      "description": "Per-host firewall coexistence policy row owned by scope s3. Mirrors plan.md §\"W3 firewall coexistence policy matrix\" ADR.",
+      "type": "object",
+      "required": [
+        "manager",
+        "policy",
+        "rationale"
+      ],
+      "properties": {
+        "manager": {
+          "description": "Detected firewall manager (or `None`/`Unknown`).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/FirewallManager"
+            }
+          ]
+        },
+        "policy": {
+          "description": "What nixling does when this manager is detected.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CoexistencePolicy"
+            }
+          ]
+        },
+        "rationale": {
+          "description": "Operator-facing rationale; appears in docs anchors.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FirewallManager": {
+      "description": "Detected host firewall manager. Detection lives in scope s3.",
+      "type": "string",
+      "enum": [
+        "firewalld",
+        "ufw",
+        "docker",
+        "libvirt",
+        "iptables-nft",
+        "unknown",
+        "none"
+      ]
+    },
+    "HostChConfig": {
+      "description": "W3 Cloud Hypervisor host-side configuration probed at bundle build (virt-1). Selects the runner network-handoff mode based on the packaged CH binary's capabilities.",
+      "type": "object",
+      "required": [
+        "netHandoffMode"
+      ],
+      "properties": {
+        "netHandoffMode": {
+          "description": "Net handoff mode selected for every CH runner on this host.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ChNetHandoffMode"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostsFileOwnership": {
+      "description": "`/etc/hosts` marked-block ownership contract.",
+      "type": "object",
+      "required": [
+        "endMarker",
+        "rule",
+        "startMarker"
+      ],
+      "properties": {
+        "endMarker": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "startMarker": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IfName": {
+      "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
+      "type": "string",
+      "maxLength": 15,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "IfNameMapping": {
+      "description": "W3 hash-derived IfName mapping row exposed in `host.json` (networking-2). The broker's `nixling_host::ifname::detect_collisions` re-validates uniqueness over `derived_ifname` at runtime; the Nix emitter rejects duplicates at bundle build with a deterministic emitter error.",
+      "type": "object",
+      "required": [
+        "derivedIfname",
+        "env",
+        "role",
+        "userVisibleName"
+      ],
+      "properties": {
+        "derivedIfname": {
+          "description": "Deterministic hash-derived IFNAMSIZ-safe interface name with `nl-` prefix (e.g. `nl-br-a1b2c3d4`). Bundle build refuses any collision.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            }
+          ]
+        },
+        "env": {
+          "description": "Environment name this mapping belongs to.",
+          "type": "string"
+        },
+        "role": {
+          "description": "TAP role for the bridge-port flag matrix.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TapRole"
+            }
+          ]
+        },
+        "userVisibleName": {
+          "description": "User-visible interface name as it appears in `nixling.envs.*` and operator docs (e.g. `br-work-lan`).",
+          "type": "string"
+        },
+        "vm": {
+          "description": "Optional VM name; absent for env-wide bridges.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Ipv6SysctlEntry": {
+      "description": "IPv6-off sysctls applied per link.",
+      "type": "object",
+      "required": [
+        "acceptRa",
+        "addrGenMode",
+        "autoconf",
+        "disableIpv6",
+        "ifName"
+      ],
+      "properties": {
+        "acceptRa": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "addrGenMode": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "arpIgnore": {
+          "default": 1,
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "autoconf": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "disableIpv6": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "ifName": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KernelModulesEntry": {
+      "description": "Kernel module requirement row.",
+      "type": "object",
+      "required": [
+        "feature",
+        "gate",
+        "jailVisibleDevice",
+        "module",
+        "requirement",
+        "sysctls"
+      ],
+      "properties": {
+        "feature": {
+          "type": "string"
+        },
+        "gate": {
+          "type": "string"
+        },
+        "jailVisibleDevice": {
+          "type": "boolean"
+        },
+        "module": {
+          "type": "string"
+        },
+        "requirement": {
+          "$ref": "#/definitions/ModuleRequirement"
+        },
+        "sysctls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LanPolicy": {
+      "description": "LAN policy inputs and effective result.",
+      "type": "object",
+      "required": [
+        "allowEastWest",
+        "effectiveEastWest"
+      ],
+      "properties": {
+        "allowEastWest": {
+          "type": "boolean"
+        },
+        "effectiveEastWest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModuleRequirement": {
+      "description": "Kernel module requirement class.",
+      "type": "string",
+      "enum": [
+        "required",
+        "alternatives",
+        "optional",
+        "deferred"
+      ]
+    },
+    "NetEnv": {
+      "description": "Per-environment network contract.",
+      "type": "object",
+      "required": [
+        "bridge",
+        "bridgePortFlags",
+        "env",
+        "ipv6Sysctls",
+        "lan",
+        "mtu",
+        "netVmForwardBlocklist",
+        "usbipBusidLocks"
+      ],
+      "properties": {
+        "bridge": {
+          "description": "Host bridge name for the environment LAN.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            }
+          ]
+        },
+        "bridgePortFlags": {
+          "description": "TAP bridge-port flags by role.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BridgePortFlags"
+          }
+        },
+        "env": {
+          "description": "Environment name from the public manifest.",
+          "type": "string"
+        },
+        "ipv6Sysctls": {
+          "description": "Per-link IPv6-off sysctl contract.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Ipv6SysctlEntry"
+          }
+        },
+        "lan": {
+          "description": "Per-env LAN policy including east-west intent.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LanPolicy"
+            }
+          ]
+        },
+        "mssClamp": {
+          "description": "Optional MSS clamp applied to forwarded traffic.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "mtu": {
+          "description": "Per-env MTU value applied to bridges and TAPs.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "netVmForwardBlocklist": {
+          "description": "Forwarding blocklist derived from env config and host LAN CIDRs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "usbipBusidLocks": {
+          "description": "USBIP-capable VMs in this env; daemon owns the runtime per-busid locks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipBusidLock"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkManagerUnmanaged": {
+      "description": "NetworkManager unmanaged config ownership and reload behavior.",
+      "type": "object",
+      "required": [
+        "filePath",
+        "matchCriteria",
+        "ownership",
+        "reloadBehavior"
+      ],
+      "properties": {
+        "filePath": {
+          "type": "string"
+        },
+        "matchCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ownership": {
+          "$ref": "#/definitions/OwnershipRule"
+        },
+        "reloadBehavior": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NftChain": {
+      "description": "Single nftables chain declaration.",
+      "type": "object",
+      "required": [
+        "name",
+        "purpose"
+      ],
+      "properties": {
+        "hook": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NftablesModel": {
+      "description": "Exact nftables table, hook priorities, and chain layout owned by nixling.",
+      "type": "object",
+      "required": [
+        "chains",
+        "family",
+        "table"
+      ],
+      "properties": {
+        "chains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/NftChain"
+          }
+        },
+        "family": {
+          "type": "string"
+        },
+        "ownershipId": {
+          "description": "W3 (networking-4) stable per-table comment marker installed on every rule (`comment \"nixling managed: <ownership-id>\"`). Empty for V1-shaped bundles.",
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "tableHashAfterApply": {
+          "description": "W3 (networking-4) drift-detection digest of the applied `inet nixling` table. `None` in the emitted bundle; the broker fills it in after `ApplyNftables` so pre-VM-start drift checks can compare against the previously applied digest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OwnershipRule": {
+      "description": "File ownership policy for host materialized files.",
+      "type": "object",
+      "required": [
+        "driftPolicy",
+        "group",
+        "mode",
+        "owner"
+      ],
+      "properties": {
+        "driftPolicy": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SitePolicy": {
+      "description": "Host-wide policy bits used when deriving per-env settings.",
+      "type": "object",
+      "required": [
+        "allowUnsafeEastWest"
+      ],
+      "properties": {
+        "allowUnsafeEastWest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapRole": {
+      "description": "TAP roles with distinct isolation behavior.",
+      "type": "string",
+      "enum": [
+        "net-vm-lan",
+        "workload-lan",
+        "uplink"
+      ]
+    },
+    "UsbipBusidLock": {
+      "description": "USBIP daemon-owned lock policy for one env.",
+      "type": "object",
+      "required": [
+        "lockOwner",
+        "scope",
+        "vm"
+      ],
+      "properties": {
+        "busIds": {
+          "description": "Concrete USBIP busids allowed for this VM in this env.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lockOwner": {
+          "description": "Ownership of the runtime exclusivity lock.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipLockOwner"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Lock scope enforced by the daemon at runtime.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipLockScope"
+            }
+          ]
+        },
+        "vendorProductAllowlist": {
+          "description": "Optional vendor:product allowlist enforced before bind/attach.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VendorProductPair"
+          }
+        },
+        "vm": {
+          "description": "VM name allowed to request USBIP inside this env.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipLockOwner": {
+      "description": "USBIP busid lock owner.",
+      "type": "string",
+      "enum": [
+        "daemon"
+      ]
+    },
+    "UsbipLockScope": {
+      "description": "USBIP exclusivity scope enforced by the daemon.",
+      "type": "string",
+      "enum": [
+        "per-busid"
+      ]
+    },
+    "VendorProductPair": {
+      "description": "USBIP vendor:product allowlist entry.",
+      "type": "object",
+      "required": [
+        "product",
+        "vendor"
+      ],
+      "properties": {
+        "product": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "vendor": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

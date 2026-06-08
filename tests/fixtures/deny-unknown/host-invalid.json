@@ -1,0 +1,150 @@
+{
+  "cloudHypervisorCapabilities": [
+    {
+      "capability": "graphics",
+      "devicesOrModules": [
+        "kvm"
+      ],
+      "notes": "Smoke capability row.",
+      "readiness": [
+        "required"
+      ],
+      "sidecars": [
+        "gpu"
+      ],
+      "status": "required"
+    }
+  ],
+  "environments": [
+    {
+      "bridge": "br-work",
+      "bridgePortFlags": [
+        {
+          "isolated": true,
+          "neighSuppress": true,
+          "learning": true,
+          "unicastFlood": false,
+          "role": "workload-lan",
+          "rule": "lan workloads stay isolated"
+        }
+      ],
+      "env": "work",
+      "ipv6Sysctls": [
+        {
+          "acceptRa": 0,
+          "addrGenMode": 0,
+          "arpIgnore": 1,
+          "autoconf": 0,
+          "disableIpv6": 1,
+          "ifName": "worktap0"
+        }
+      ],
+      "lan": {
+        "allowEastWest": false,
+        "effectiveEastWest": false
+      },
+      "mtu": 1500,
+      "netVmForwardBlocklist": [
+        "10.0.0.0/8"
+      ],
+      "usbipBusidLocks": [
+        {
+          "lockOwner": "daemon",
+          "scope": "per-busid",
+          "vm": "workshop"
+        }
+      ]
+    }
+  ],
+  "fdOwnership": [
+    {
+      "brokerOperation": "OpenKvm",
+      "jailVisibleDevice": false,
+      "notes": "broker opens /dev/kvm",
+      "recipient": "nixlingd",
+      "resource": "/dev/kvm",
+      "transfer": "SCM_RIGHTS"
+    }
+  ],
+  "hostsFile": {
+    "endMarker": "# nixling-managed end",
+    "rule": "nixling owns its marked block",
+    "startMarker": "# nixling-managed begin"
+  },
+  "kernelModules": [
+    {
+      "feature": "hypervisor",
+      "gate": "always",
+      "jailVisibleDevice": false,
+      "module": "kvm",
+      "requirement": "required",
+      "sysctls": []
+    }
+  ],
+  "networkManager": {
+    "filePath": "/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf",
+    "matchCriteria": [
+      "interface-name:br-work"
+    ],
+    "ownership": {
+      "driftPolicy": "replace",
+      "group": "root",
+      "mode": "0644",
+      "owner": "root"
+    },
+    "reloadBehavior": "nmcli general reload"
+  },
+  "nftables": {
+    "chains": [
+      {
+        "hook": "input",
+        "name": "nl_ingress_accept",
+        "policy": "accept",
+        "priority": -300,
+        "purpose": "Early ACCEPT carve-outs for daemon-owned host endpoints and marked ingress traffic."
+      },
+      {
+        "hook": "forward",
+        "name": "nl_forward_accept",
+        "policy": "accept",
+        "priority": -300,
+        "purpose": "Early ACCEPT carve-outs for net-VM forwarding, DHCP/DNS, USBIP, and explicitly allowed env traffic."
+      },
+      {
+        "hook": "output",
+        "name": "nl_egress_accept",
+        "policy": "accept",
+        "priority": -300,
+        "purpose": "Early ACCEPT carve-outs for host-originated nixling control-plane traffic."
+      },
+      {
+        "hook": "input",
+        "name": "nl_ingress_drop",
+        "policy": "accept",
+        "priority": 300,
+        "purpose": "Late drops for marked nixling ingress traffic that did not match an allow rule."
+      },
+      {
+        "hook": "forward",
+        "name": "nl_forward_drop",
+        "policy": "accept",
+        "priority": 300,
+        "purpose": "Late default-drop for cross-env forwarding, env blocklists, and non-carved nixling traffic."
+      },
+      {
+        "hook": "output",
+        "name": "nl_egress_drop",
+        "policy": "accept",
+        "priority": 300,
+        "purpose": "Late drops for marked nixling egress traffic that must not escape policy."
+      }
+    ],
+    "family": "inet",
+    "table": "nixling"
+  },
+  "schemaVersion": "v1",
+  "site": {
+    "allowUnsafeEastWest": false
+  },
+  "unexpected": true
+}

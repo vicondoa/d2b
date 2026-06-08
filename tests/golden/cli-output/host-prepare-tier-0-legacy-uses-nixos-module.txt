@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: tier-0-legacy-uses-nixos-module
+  exit_code: 78
+  what_was_checked: Whether a Tier-0 all-legacy host is invoking the W3 apply path.
+  observed_state: host.tier == 0 / legacy but nixlingd.service was asked to mutate the host.
+  remediation: Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.
+  docs_anchor: docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module

@@ -25,22 +25,30 @@ let
   sanitizeLabel = value:
     builtins.replaceStrings [ "@" "." "-" "/" ] [ "_" "_" "_" "_" ] value;
 
+  # Loki label contract: see docs/reference/loki-label-contract.md.
+  # Only {vm, env, role, severity, source} are emitted as labels.
+  # The systemd unit name is preserved as a `matches` filter (so we
+  # only consume the right journald stream) but NOT promoted to a
+  # label — unit names are an unbounded path-like axis. The host
+  # name is reflected by role="host" / vm="host" rather than a
+  # dedicated `host` label.
   mkJournalSource =
     {
       label,
       unit,
       vm,
       env,
+      role,
     }:
     ''
       loki.source.journal "${label}" {
         forward_to = [otelcol.receiver.loki.journal.receiver]
         matches    = "_SYSTEMD_UNIT=${unit}"
         labels = {
-          host = ${quote hostName},
-          unit = ${quote unit},
-          vm   = ${quote vm},
-          env  = ${quote env},
+          vm     = ${quote vm},
+          env    = ${quote env},
+          role   = "${role}",
+          source = "journal",
         }
       }
     '';
@@ -70,6 +78,7 @@ let
               inherit unit;
               vm = name;
               env = envLabel;
+              role = "workload";
             })
           units)
       (lib.attrNames enabledVms);
@@ -83,6 +92,7 @@ let
               label = sanitizeLabel "journal_${env}_${unit}";
               inherit unit env;
               vm = "host";
+              role = "usbipd";
             })
           [
             "nixling-sys-${env}-usbipd-backend.service"
@@ -98,20 +108,16 @@ let
         unit = "nixling-otel-host-bridge.service";
         vm = "host";
         env = cfg.env;
+        role = "host";
       })
       (mkJournalSource {
         label = "journal_usbipd_nixling_service";
         unit = "usbipd-nixling.service";
         vm = "host";
         env = "host";
+        role = "host";
       })
     ]
-    ++ lib.optional cfg.ch.exporter.enable (mkJournalSource {
-      label = "journal_nixling_ch_exporter_service";
-      unit = "nixling-ch-exporter.service";
-      vm = "host";
-      env = cfg.env;
-    })
   );
 
   journalSources = lib.concatStringsSep "\n\n" (
@@ -232,23 +238,6 @@ let
             }
           ''
         ]
-        ++ lib.optional cfg.ch.exporter.enable ''
-          otelcol.receiver.prometheus "host_ch_exporter" {
-            output {
-              metrics = [otelcol.exporter.otlp.egress.input]
-            }
-          }
-
-          prometheus.scrape "host_ch_exporter" {
-            job_name = "nixling-ch-exporter"
-            targets = [{
-              "__address__" = "127.0.0.1:${toString cfg.ch.exporter.listenPort}",
-              "host"        = ${quote hostName},
-              "instance"    = ${quote hostName},
-            }]
-            forward_to = [otelcol.receiver.prometheus.host_ch_exporter.receiver]
-          }
-        ''
         ++ [ journalSources ]
       )
   );
@@ -299,87 +288,17 @@ lib.mkIf cfg.enable {
     RuntimeDirectoryPreserve = "yes";
   };
 
-  systemd.services.nixling-otel-host-bridge = {
-    description = "Host OTLP bridge into the observability VM vsock backend";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "microvm@${cfg.vmName}.service" "alloy.service" ];
-    bindsTo = [ "microvm@${cfg.vmName}.service" "alloy.service" ];
-    restartIfChanged = false;
-    startLimitBurst = 20;
-    startLimitIntervalSec = 300;
-
-    serviceConfig = {
-      Type = "exec";
-      User = lib.mkForce "nixling-otel-bridge";
-      # Run with primary group `alloy` so socat creates host-egress.sock
-      # with the right group ownership at bind time. socat's
-      # `group=alloy` ExecStart option would have done the same thing
-      # via a post-bind chown(2), but with `CapabilityBoundingSet=""`
-      # the bridge has no CAP_CHOWN and socat 1.8.1.1 segfaults
-      # instead of returning EPERM. Setting the primary group sidesteps
-      # the chown entirely.
-      Group = lib.mkForce "alloy";
-      SupplementaryGroups = lib.mkForce [ ];
-      ExecStartPre = [
-        "+${pkgs.acl}/bin/setfacl -m u:nixling-otel-bridge:rwx ${alloyRuntimeDir}"
-        # Clean up any stale listen socket from a prior crashed
-        # instance. socat does not unlink existing UNIX-LISTEN paths
-        # before binding (the unlink-early option triggered a
-        # segfault in socat 1.8.1.1 in our deployment), so we use a
-        # plain rm -f as a privileged ExecStartPre. The `+` runs
-        # without ProtectSystem=strict scoping so it can write into
-        # the alloy RuntimeDirectory regardless of unit hardening.
-        "+${pkgs.coreutils}/bin/rm -f ${hostEgressSocket}"
-        # NOTE: do NOT `test -S ${obsOtlpVsockHostSocket}` here.
-        # Cloud-Hypervisor creates the per-port host UDS lazily on
-        # the first connect from the host side; the file does not
-        # exist before. Pre-checking it would chicken-and-egg with
-        # this bridge being the thing that first connects. The
-        # ExecStart socat will get ENOENT once if CH itself isn't
-        # ready yet, and systemd's Restart=on-failure backs us off.
-        # We DO check the per-VM CH base vsock UDS which is always
-        # present once microvm@<vm>.service is active.
-        "${pkgs.coreutils}/bin/test -S ${obsVsockHostSocket}"
-      ];
-      # OTLP push path on the bridge:
-      #   host alloy → UNIX-LISTEN host-egress.sock → socat (this) →
-      #   EXEC nixling-ch-vsock-connect <stack-base> 14317 →
-      #   CH textual protocol on stack VM's vsock base UDS →
-      #   stack VM's vsock 14317 (LISTENed by stack VM's socat).
-      #
-      # Why EXEC instead of UNIX-CONNECT:<base>_14317? CH only
-      # creates `<base>_<port>` host UDS files lazily for the
-      # GUEST→HOST direction (when a guest does vsock connect).
-      # For HOST→GUEST, you must use the textual protocol on the
-      # base UDS — `CONNECT <port>\n` / `OK <buf>\n` / bytes. See
-      # nixling-ch-vsock-connect.nix for the protocol implementation.
-      ExecStart = ''
-        ${cfg.transport.relayPackage}/bin/socat -d -d \
-          UNIX-LISTEN:${hostEgressSocket},fork,reuseaddr,mode=0660 \
-          EXEC:"${chVsockConnect}/bin/nixling-ch-vsock-connect ${obsVsockHostSocket} ${toString obsOtlpPort}"
-      '';
-      Restart = "on-failure";
-      RestartSec = "3s";
-      DynamicUser = false;
-      NoNewPrivileges = true;
-      ProtectSystem = "strict";
-      ProtectHome = true;
-      PrivateTmp = true;
-      PrivateDevices = true;
-      RestrictAddressFamilies = [ "AF_UNIX" ];
-      SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
-      CapabilityBoundingSet = "";
-      AmbientCapabilities = "";
-      # ProtectSystem=strict makes / read-only except for these:
-      #   - /run/nixling/alloy/   socat UNIX-LISTEN binds host-egress.sock here
-      #   - /var/lib/nixling/vms/<obsVm>/  CH lazily creates vsock.sock_<port>
-      #     here on the first host UNIX-CONNECT, so socat needs write access
-      ReadWritePaths = [
-        alloyRuntimeDir
-        (builtins.dirOf obsOtlpVsockHostSocket)
-      ];
-    };
-  };
+  # P6 ph6-remove-systemd-emission + P1 ph1-p1-otelbridge-role:
+  # `nixling-otel-host-bridge.service` host singleton was deleted.
+  # The OTel host bridge is now broker-spawned via
+  # SpawnRunner{role: OtelHostBridge} (P1 ph1-p1-otelbridge-role,
+  # commit 566ef72) with readiness gated by P3
+  # ph3-p3-otelbridge-readiness (commit 02c0cc4). The argv generator
+  # lives at packages/nixling-host/src/otel_host_bridge_argv.rs;
+  # the broker dispatcher at packages/nixling-priv-broker/src/runtime.rs
+  # refuses bundle intent for non-obs VMs (security-2 closed-set).
+  # The systemd.tmpfiles.rules block below stays — those are the
+  # documented stable socket name aliases consumed by Alloy + Grafana.
 
   # Keep the documented socket names stable for clients/docs while the
   # real Alloy-owned sockets live under /run/nixling/alloy/.

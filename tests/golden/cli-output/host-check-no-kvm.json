@@ -1,0 +1,9 @@
+{
+  "code": "no-kvm",
+  "docs_anchor": "docs/reference/error-codes.md#no-kvm",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "/dev/kvm missing or not accessible to the nixling group.",
+  "remediation": "Load the appropriate kvm_intel/kvm_amd module and ensure the nixling group has access.",
+  "what_was_checked": "Whether /dev/kvm is present and accessible."
+}

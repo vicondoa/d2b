@@ -1,40 +1,50 @@
 # nixling
 
-> ⚠️ **Alpha — v0.1.0 not yet released.** This repo is the result of an
-> in-flight refactor extracting nixling from a personal NixOS host into
-> a standalone reusable flake. APIs will change before the first tagged
-> release.
+> **v1.0 daemon-only.** Every mutating verb dispatches through
+> `nixlingd` → `nixling-priv-broker`; the historical bash CLI was
+> retired in P6 (see [ADR 0015](docs/adr/0015-daemon-only-clean-break.md)
+> and the [v0 → v1 migration guide](docs/how-to/migrate-nixling-v0-to-v1.md)).
 
 **Nixling is opinionated NixOS desktop microVM workspaces on top of
 [microvm.nix].** ("microVM" = a Linux VM booted via lightweight VMMs
 like cloud-hypervisor or crosvm.) It adds, on top of raw microvm.nix:
 
-- A single `nixling` CLI for daily VM ops (`up`, `down`, `status`,
-  `switch`, `keys rotate`, `audio …`, `usb …`).
-- Per-VM systemd-isolated sidecars (GPU forward, audio mediation,
-  TPM emulation, virtiofsd) running as dedicated system users.
+- A single `nixling` CLI for daily VM ops (`vm start`, `vm stop`,
+  `status`, `switch`, `keys rotate`, `audio …`, `usb …`).
+- Per-VM broker-spawned sidecars (GPU forward, audio mediation,
+  TPM emulation, virtiofsd) running as dedicated system users under
+  the supervisor DAG (per-VM pidfd ownership).
 - Per-environment isolated networks (point-to-point uplink + LAN
   bridge + auto-declared NAT/DHCP "net VM" + firewall).
 - Per-VM `/nix/store` hardlink farm so each guest sees only its
   own closure.
 - Nixling-managed Ed25519 SSH keys, generated and rotated per VM
   at activation time.
-- A documented JSON manifest contract sized for a future Rust CLI
-  port.
+- A documented JSON manifest + bundle contract shared by the Rust
+  CLI and daemon control plane.
 
-**Quickest path to a working host** (full walkthrough under
+**Rust-first quick start** (full walkthroughs under
+[Quick start (Rust CLI / examples)](#quick-start-rust-cli--examples) and
 [Quick start (template path)](#quick-start-template-path) below):
 
 ```bash
-mkdir my-nixling-host && cd my-nixling-host
-nix flake init -t github:vicondoa/nixling   # scaffolds a ~150-line host config
-# edit configuration.nix — 7 numbered TODOs, assertions gate the hard ones
-sudo nixos-rebuild switch --flake .#desktop
+# after switching the host config from examples/personal-dev
+sudo nixling vm start personal-dev --apply
+
+# after switching the host config from examples/work-entra
+sudo nixling vm start work-entra --apply
 ```
 
+Every mutating verb is daemon-only in v1.0; there is no bash fallback
+to disable (per [ADR 0015](docs/adr/0015-daemon-only-clean-break.md);
+the historical W14c three-mode bridge was retired in P6).
+`NIXLING_NATIVE_ONLY=1` and `NIXLING_LEGACY_BASH_OPT_IN=1` are no-ops
+in v1.0; the daemon-only invariant is the default.
+
 Other entry points: see [Where to start](#where-to-start) below for a
-table of all four examples (`minimal`, `graphics-workstation`,
-`multi-env`, `with-entra-id`) and the manual-integration path.
+table of the doc-friendly example aliases (`personal-dev`,
+`graphics-workstation`, `multi-env`, `work-entra`) plus the manual
+integration path.
 
 ## Who this is for
 
@@ -79,7 +89,7 @@ look at raw [microvm.nix], NixOS containers, or
 
 ## Project status
 
-- **Stage:** pre-1.0, alpha
+- **Stage:** v1.0 daemon-only (per [ADR 0015](docs/adr/0015-daemon-only-clean-break.md))
 - **Maintainer:** one person
 - **Tested on:** NixOS unstable. Runtime tested on `x86_64-linux`
   desktop; eval-tested for headless `aarch64-linux` (the cloud-
@@ -92,19 +102,38 @@ See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Where to start
 
-Pick the entry point that matches your situation. All four examples
-and the template live in this repo; the manual integration path
-below ("Manual integration") is for plugging nixling into an
-existing host config.
+Pick the entry point that matches your situation. The checked flakes
+and the doc-friendly alias READMEs all live in this repo; the manual
+integration path below ("Manual integration") is for plugging
+nixling into an existing host config.
 
-| Path                                        | Audience                                  | Notes                                                           |
-|---------------------------------------------|-------------------------------------------|-----------------------------------------------------------------|
-| [`templates/default`](./templates/default)  | New host, fastest setup                   | `nix flake init -t github:vicondoa/nixling` — sentinel TODOs + assertion gates |
-| [`examples/minimal`](./examples/minimal)    | Read-and-copy headless starter            | One env, one VM, ~25-line flake                                 |
-| [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` non-null      |
-| [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal)       | Demonstrates per-env isolation and route preflight              |
-| [`examples/with-entra-id`](./examples/with-entra-id) | Entra-ID-joined VM via the sibling flake  | Composes [`vicondoa/nixos-entra-id`][nixos-entra-id]; needs swtpm + Himmelblau |
-| [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs-stack` VM (Grafana/Prometheus/Loki/Tempo) and wires per-VM Alloy agents over virtio-vsock |
+| Path | Audience | Notes |
+| --- | --- | --- |
+| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/nixling` — sentinel TODOs + assertion gates |
+| [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
+| [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
+| [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
+| [`examples/work-entra`](./examples/work-entra) | Entra-ID-joined work VM via the sibling flake | Alias of the checked [`examples/with-entra-id`](./examples/with-entra-id) flake; VM name `work-entra`. |
+| [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs-stack` VM (Grafana/Prometheus/Loki/Tempo) and wires per-VM Alloy agents over virtio-vsock. |
+
+## Quick start (Rust CLI / examples)
+
+The Rust CLI is now the primary documented operator surface. If you
+want the exact names used throughout the migration docs, start from
+one of these checked example layouts and use the native `vm start`
+path:
+
+```bash
+# headless personal workspace (examples/personal-dev → examples/minimal)
+sudo nixling vm start personal-dev --apply
+
+# Entra workspace (examples/work-entra → examples/with-entra-id)
+sudo nixling vm start work-entra --apply
+```
+
+Those alias directories exist so the README, examples index, and
+migration notes can use stable VM names while CI keeps the checked
+flakes in `examples/minimal` and `examples/with-entra-id`.
 
 ## Quick start (template path)
 
@@ -125,7 +154,7 @@ nixling list                          # corp-vm + sys-work-net
 # corp-vm            work      false     false false   10.20.0.10      stopped
 # sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
 nixling status                        # same table + bridge-health footer
-nixling up corp-vm
+sudo nixling vm start corp-vm --apply
 ```
 
 The scaffold is ~150 lines and is documented inline. See
@@ -176,7 +205,7 @@ net VM) is materialised by the framework.
   };
 
   # Tell nixling about Alice + grant her the polkit-launcher group
-  # so 'nixling up <vm>' works without sudo.
+  # so 'nixling vm start <vm> --apply' works without sudo.
   nixling.site = {
     waylandUser = "alice";
     launcherUsers = [ "alice" ];
@@ -239,9 +268,9 @@ nixling list                          # expect 'corp-vm' + 'sys-work-net'
 # corp-vm            work      false     false false   10.20.0.10      stopped
 # sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
 nixling status                        # same table + "=== Bridge health ===" footer
-nixling up corp-vm                    # interactive boot
+nixling vm start corp-vm --apply      # preferred Rust CLI path
 ssh -i /var/lib/nixling/keys/corp-vm_ed25519 alice@10.20.0.10 hostname
-nixling down corp-vm                  # clean shutdown
+nixling vm stop corp-vm --apply       # clean shutdown
 ```
 
 That's it. Add a second env or a second VM by repeating the
@@ -273,12 +302,55 @@ A handful of things consistently bite first-time users.
 - **No autostart for graphics VMs.** `autostart = true` on a
   graphics VM is rejected — there is no Wayland session
   available at multi-user.target. Use `autostart = false` (the
-  default) and `nixling up <vm>` from a Plasma terminal.
+  default) and `nixling vm start <vm> --apply` from a Plasma
+  terminal.
 - **Nixling state is secret material.** `/var/lib/nixling/`
   contains per-VM SSH private keys and (for TPM-enabled VMs)
   swtpm state. Treat nixling state directories as secret
   material; back them up only to encrypted, access-controlled
   media.
+
+## v1.0 daemon-only end-state (post-clean-break)
+
+The Rust CLI is the only operator surface. Per
+[ADR 0015](docs/adr/0015-daemon-only-clean-break.md), the v1.0
+clean break:
+
+- removed the bash CLI builder (`nixos-modules/cli.nix`),
+  `scripts/`, and every bash entrypoint they shipped;
+- collapsed the persistent root-visible nixling systemd footprint to
+  exactly three units: `nixlingd.service`,
+  `nixling-priv-broker.service`, `nixling-priv-broker.socket`;
+- routes `nixling vm start|stop|restart|list --apply` exclusively
+  through the daemon (no fallback; failures surface as typed
+  envelopes per [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md));
+- retired the `NIXLING_LEGACY_BASH_OPT_IN` env-var escape hatch for
+  lifecycle verbs (now a no-op);
+- retired the `NIXLING_NATIVE_ONLY=1` env var (no-op in v1.0; the
+  daemon-only invariant is the default per ADR 0015).
+
+### v1.0 verb compatibility
+
+- **Lifecycle (daemon-only in v1.0)**: `vm start`, `vm stop`,
+  `vm restart`, `vm list`, plus the `up` / `down` / `restart`
+  aliases.
+- **Read-only daemon-backed (v1.0)**: `status`, `audit`, `auth
+  status`, `host check`, `host doctor`, `host validate`,
+  `keys list`, `keys show`.
+- **Daemon-first with broker dispatch (v1.0)**: `switch`, `boot`,
+  `test`, `rollback`, `gc`, `migrate`, `keys rotate`, `trust`,
+  `rotate-known-host`, `host install`, `host prepare`,
+  `host destroy`, `host reconcile`, `usb attach`, `usb detach`,
+  `usb probe`.
+- **Queued for v1.1+ (returns typed exit-78 envelope in v1.0)**:
+  `console`, `audio status|mic|speaker|off`. The Rust subcommand
+  surface (help, argument parsing, kebab-case alias compatibility)
+  is preserved so operator runbooks and shell completions keep
+  working; invoking the verb in v1.0 returns a guidance message
+  pointing at the migration guide.
+
+See [`docs/how-to/migrate-nixling-v0-to-v1.md`](docs/how-to/migrate-nixling-v0-to-v1.md)
+for the operator migration runbook.
 
 ## Companion flakes
 
@@ -297,11 +369,14 @@ Organised as a [Diataxis] tree under [`docs/`](docs/):
 - **Tutorials / Examples** — [`examples/`](examples/) and
   [`templates/default/`](templates/default/).
 - **How-to** — [`docs/how-to/`](docs/how-to/):
+  [`install-nixos-tier1.md`](docs/how-to/install-nixos-tier1.md),
+  [`host-prepare.md`](docs/how-to/host-prepare.md),
   [`migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md),
   [`enable-observability.md`](docs/how-to/enable-observability.md).
 - **Reference** — [`docs/reference/`](docs/reference/): manifest
-  schema, CLI contract, per-component docs (graphics, tpm, usbip,
-  audio, home-manager, observability).
+  schema, CLI contract, security runbook, error-envelope guidance,
+  and per-component docs (graphics, tpm, usbip, audio,
+  home-manager, observability).
 - **Explanation** — [`docs/explanation/design.md`](docs/explanation/design.md):
   threat model + design rationale + *Why not X* FAQ.
 
@@ -311,9 +386,10 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 
 | Goal                                  | Read                                                            |
 |---------------------------------------|-----------------------------------------------------------------|
-| New user, fastest start               | [`templates/default/`](templates/default/) → [`examples/minimal/`](examples/minimal/) |
+| New user, fastest start               | [`templates/default/`](templates/default/) → [`examples/personal-dev/`](examples/personal-dev/) |
 | Migrating from `microvm.nix`          | [`docs/how-to/migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md) |
 | Is this secure?                       | [`docs/explanation/design.md`](docs/explanation/design.md) → [`SECURITY.md`](SECURITY.md) |
+| Security incident / USBIP emergency   | [`docs/reference/security-runbook.md`](docs/reference/security-runbook.md) |
 | How does `<component>` work?          | [`docs/reference/components-<name>.md`](docs/reference/)        |
 | Adding observability to an existing host | [`docs/how-to/enable-observability.md`](docs/how-to/enable-observability.md) → [`docs/reference/components-observability.md`](docs/reference/components-observability.md) |
 | Manifest contract                     | [`docs/reference/manifest-schema.md`](docs/reference/manifest-schema.md) + [`manifest-schema.json`](docs/reference/manifest-schema.json) |

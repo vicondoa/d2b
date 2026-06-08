@@ -1,0 +1,28 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+{
+  "command": "host install",
+  "mode": "dry-run",
+  "notes": "W15: dry-run preview retained; --apply routes through the daemon → broker RunHostInstall path.",
+  "planned_steps": [
+    {
+      "step": 1,
+      "what": "place systemd units at /etc/systemd/system/nixlingd.service + nixling-priv-broker.socket"
+    },
+    {
+      "step": 2,
+      "what": "write daemon-config.json to /etc/nixling/daemon-config.json with paths matching the daemon's compiled-in defaults"
+    },
+    {
+      "step": 3,
+      "what": "bind /run/nixling/public.sock + /run/nixling/priv.sock with the W3 socket ACLs (launcher / admin groups)"
+    },
+    {
+      "step": 4,
+      "what": "neither --enable nor --start specified: leave service inactive"
+    },
+    {
+      "step": 5,
+      "what": "smoke: nixling auth status against /run/nixling/public.sock"
+    }
+  ]
+}

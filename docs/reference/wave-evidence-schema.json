@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nixling.dev/schemas/validated-wave.schema.json",
+  "title": "Nixling wave validation evidence",
+  "description": "Canonical schema for /var/lib/nixling/validated/<wave>.json files. Each file is a host-local proof that a given default-switch readiness wave was exercised successfully on this operator host. Consumed by nixos-modules/options-daemon.nix:validationEvidencePresent at eval time; nixling.defaultSwitchReadiness.<wave>.validated = true is gated on a payload matching this schema.",
+  "type": "object",
+  "required": ["wave", "timestamp", "operatorSignature"],
+  "properties": {
+    "wave": {
+      "type": "string",
+      "description": "The readiness wave key this evidence vouches for. MUST equal the file basename (e.g. \"p0\" for /var/lib/nixling/validated/p0.json). Must be one of the keys declared in nixos-modules/options-daemon.nix:readinessWaveSpecs.",
+      "pattern": "^[a-z][a-zA-Z0-9]*$",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "Non-empty string recording when the validating smoke run completed. RFC 3339 / ISO-8601 UTC (e.g. \"2025-04-12T17:42:11Z\") is the recommended shape; the eval-time validator only enforces that the field is a non-empty string.",
+      "minLength": 1
+    },
+    "operatorSignature": {
+      "type": "string",
+      "description": "Non-empty string identifying the operator (or automated agent) who attests to the validating run. The canonical shape emitted by `nixling host validate --apply` is `sha256:<64 hex chars>` computed over `<wave>|<daemon.version>|<broker.version>|<bundle.hash>`. The eval-time validator (`nixos-modules/options-daemon.nix:validationEvidencePresent`) accepts ANY non-empty string for forward compatibility with operator-curated signatures (host fingerprints, GPG signatures, CI build tokens); however, the recommended shape for automated tooling is `sha256:<hex64>`. Free-form alternatives like `alice@example` or `ci-bot@build-host-3` remain accepted so legacy hosts can continue to flip without regenerating signatures.",
+      "minLength": 1,
+      "pattern": "^.+$",
+      "examples": [
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "alice@example",
+        "ci-bot@build-host-3"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

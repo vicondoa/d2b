@@ -1,0 +1,85 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH nixling 1 1970-01-01 "nixling 0.0.0-bootstrap" "nixling CLI"
+.SH NAME
+nixling \- nixling v1.0 daemon\-native CLI — daemon\-only end\-state per ADR 0015. Lifecycle verbs (vm start/stop/restart/list) dispatch exclusively to nixlingd + nixling\-priv\-broker. Compatibility verbs (console, audio) return a typed exit\-78 envelope in v1.0 because their daemon\-native surfaces are queued for v1.1+; the bash runtime that historically backed them was retired in P6. Daemon\-first verbs (switch, gc, migrate, keys list/show, etc.) dispatch through the broker — see docs/reference/default\-switch\-and\-deprecation.md for the per\-verb matrix.
+.SH SYNOPSIS
+\fBnixling\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+nixling v1.0 daemon\-native CLI — daemon\-only end\-state per ADR 0015. Lifecycle verbs (vm start/stop/restart/list) dispatch exclusively to nixlingd + nixling\-priv\-broker. Compatibility verbs (console, audio) return a typed exit\-78 envelope in v1.0 because their daemon\-native surfaces are queued for v1.1+; the bash runtime that historically backed them was retired in P6. Daemon\-first verbs (switch, gc, migrate, keys list/show, etc.) dispatch through the broker — see docs/reference/default\-switch\-and\-deprecation.md for the per\-verb matrix.
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+nixling\-list(1)
+.TP
+nixling\-status(1)
+.TP
+nixling\-usb(1)
+.TP
+nixling\-console(1)
+Foreground serial console bridge for headless VMs. P7fu2: the bash runtime that backed this verb pre\-v1.0 was retired in P6; the daemon\-native console surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit\-78 envelope per ADR 0015
+.TP
+nixling\-audio(1)
+Per\-VM audio grant bridge. P7fu2: the bash runtime that backed this verb pre\-v1.0 was retired in P6; the daemon\-native audio surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit\-78 envelope per ADR 0015
+.TP
+nixling\-audit(1)
+.TP
+nixling\-host(1)
+.TP
+nixling\-auth(1)
+.TP
+nixling\-vm(1)
+W4\-H7 / P4: per\-VM lifecycle verbs routed through `nixlingd`. `\-\-apply` is daemon\-only; failure modes surface as typed envelopes. `\-\-dry\-run` returns the DAG the supervisor would drive
+.TP
+nixling\-up(1)
+P4 alias for `vm start <vm>`. Daemon\-native; no bash fallback
+.TP
+nixling\-down(1)
+P4 alias for `vm stop <vm>`. Daemon\-native; no bash fallback
+.TP
+nixling\-restart(1)
+P4 alias for `vm restart <vm>`. Daemon\-native; no bash fallback
+.TP
+nixling\-build(1)
+W7\-H1: `nixling build <vm>` — non\-destructive eval+build of the per\-VM toplevel
+.TP
+nixling\-generations(1)
+W7\-H2: `nixling generations <vm>` — lists current/booted/N
+.TP
+nixling\-switch(1)
+W7\-H3: `nixling switch <vm> [\-\-apply|\-\-dry\-run]` — atomic activation. `\-\-apply` dispatches through `nixlingd` → broker `RunActivation` (v1.0 daemon\-only per ADR 0015); `\-\-dry\-run` returns the planned activation
+.TP
+nixling\-boot(1)
+W7\-H4: `nixling boot <vm>` — stage for next boot only
+.TP
+nixling\-test(1)
+W7\-H5: `nixling test <vm>` — activate\-but\-rollback\-on\-reboot
+.TP
+nixling\-rollback(1)
+W7\-H6: `nixling rollback <vm>` — back to the previous generation
+.TP
+nixling\-gc(1)
+W7\-H7: `nixling gc [\-\-apply|\-\-dry\-run]` — store cleanup
+.TP
+nixling\-keys(1)
+W8: managed\-key + trust lifecycle verbs (list / show / rotate). `\-\-apply` dispatches through `nixlingd` → broker `RunKeysRotate` (v1.0 daemon\-only per ADR 0015)
+.TP
+nixling\-trust(1)
+W8: `nixling trust <vm>` (top\-level, NOT under `keys`). Trust a host key on first use (TOFU) through the daemon / broker `RunHostKeyTrust` op. Bash runtime retired in P6
+.TP
+nixling\-rotate\-known\-host(1)
+W8: `nixling rotate\-known\-host <vm>` (top\-level, NOT under `keys`). Rotate the consumer\*(Aqs recorded known\-host entry via the daemon / broker `RunRotateKnownHost` op. Bash runtime retired in P6
+.TP
+nixling\-migrate(1)
+W9: `nixling migrate` — analyze the current host config and emit a migration plan to the daemon\-experimental path. `\-\-apply` dispatches the broker `RunMigrate` op (daemon\-only since P6; the historical bash dispatch path was retired in the same wave)
+.TP
+nixling\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.0.0\-bootstrap

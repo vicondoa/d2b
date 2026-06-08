@@ -20,7 +20,8 @@ they are.
 - A working `nixling` deployment, consumed via
   `inputs.nixling.url = "github:vicondoa/nixling/v0.2.0"` or later.
 - Sufficient host resources for one extra microVM (roughly 2 GiB RAM
-  and 5 GiB disk with the default retention windows).
+  plus persistent storage sized for your chosen retention windows; the
+  stock v0.2.0 module does not impose a fixed obs-VM disk cap).
 - Cloud Hypervisor and the vsock kernel module, already part of the
   nixling baseline.
 
@@ -87,7 +88,9 @@ systemctl status nixling-otel-vsock-in.service
   stay on loopback inside the obs VM.
 - The shipped dashboards live in the Grafana **Nixling** folder:
   Nixling Overview, VM Resources, Lifecycle Traces, Logs, Per-VM
-  Store, and Obs VM Health.
+  Store, and Obs VM Health. The Lifecycle Traces dashboard is
+  preprovisioned but stays empty on the stock setup unless you point
+  `otel-cli` at a reachable OTLP collector.
 
 ### Step 4b: Configure alert notifications (optional)
 
@@ -135,7 +138,16 @@ nixling.observability.transport.relayPackage = pkgs.your-relay;
 Use this only if your package exposes a `bin/socat`-compatible CLI.
 The current transport still passes `socat`-specific arguments on the
 host, guest, and obs-VM relay paths. The default stays `pkgs.socat`.
+When a future stable relay interface lands, the socat-compatible path
+will remain supported for at least one minor release so custom
+`relayPackage` users have a clean migration window.
+host, guest, and obs-VM relay paths. The default stays `pkgs.socat`.
 v0.3.0 will define a stable relay-binary interface.
+host, guest, and obs-VM relay paths, so that compatibility requirement
+remains in force for now. When `nixling-otel-relay` lands, nixling
+will add a dedicated relay interface first and keep `bin/socat`
+compatibility for at least one minor release with CHANGELOG migration
+notes before removing it.
 
 ## Step 8: Supply Grafana's secret key from sops-nix or agenix
 
@@ -221,9 +233,13 @@ entirely, so Prometheus never evaluates them.
   switch` should fail at eval time if CIDs collide.
 - **Obs VM disk full.** Tune retention (Step 6) or wipe the obs VM
   state with
-  `nixling down sys-obs-stack && rm -rf /var/lib/nixling/vms/sys-obs-stack/state`.
-- **CLI traces not appearing in Tempo.** Confirm `otel-cli` is in the
-  CLI runtime closure:
+  `nixling vm stop sys-obs-stack --apply && rm -rf /var/lib/nixling/vms/sys-obs-stack/state`.
+- **CLI traces not appearing in Tempo.** The stock v0.2.0 host setup
+  keeps Alloy's OTLP receiver on a Unix socket, which `otel-cli`
+  cannot dial directly. The preprovisioned dashboard stays empty unless
+  you additionally point `OTEL_EXPORTER_OTLP_ENDPOINT` at a reachable
+  OTLP collector. First confirm `otel-cli` is in the CLI runtime
+  closure:
   `nix-store -q --requisites $(which nixling) | grep otel-cli`.
 
 ## See also

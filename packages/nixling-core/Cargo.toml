@@ -1,0 +1,65 @@
+[package]
+name = "nixling-core"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[features]
+fuzz = ["dep:bolero"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+semver = "1"
+# P0: O_NOFOLLOW open + fstat for bundle artifact tamper detection.
+rustix = { workspace = true }
+# P0: SHA-256 self-hash verification of bundle.json.
+sha2 = { workspace = true }
+bolero = { version = "0.10", optional = true }
+
+[dev-dependencies]
+regex = "1"
+serde_json.workspace = true
+tempfile = "3"
+
+[[test]]
+name = "nixling-core-smoke"
+path = "fuzz/src/bin/core.rs"
+harness = false
+
+[[test]]
+name = "nixling-core-fuzz-manifest"
+path = "fuzz/src/bin/manifest.rs"
+harness = false
+required-features = ["fuzz"]
+
+[[test]]
+name = "nixling-core-fuzz-bundle"
+path = "fuzz/src/bin/bundle.rs"
+harness = false
+required-features = ["fuzz"]
+
+[[test]]
+name = "nixling-core-fuzz-host"
+path = "fuzz/src/bin/host.rs"
+harness = false
+required-features = ["fuzz"]
+
+[[test]]
+name = "nixling-core-fuzz-privileges"
+path = "fuzz/src/bin/privileges.rs"
+harness = false
+required-features = ["fuzz"]
+
+[[test]]
+name = "bundle-resolver-tamper"
+path = "tests/bundle_resolver_tamper.rs"

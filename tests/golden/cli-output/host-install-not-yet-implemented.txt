@@ -1,0 +1,7 @@
+error: host-install-error
+  code: not-yet-implemented
+  exit_code: 70
+  what_was_checked: Whether `host install` is implemented in this nixling release.
+  observed_state: host install is a W4 deliverable; W3 ships the schema + CLI surface only.
+  remediation: Use `nixling switch` or the NixOS module integration path until W4 ships.
+  docs_anchor: docs/reference/error-codes.md#not-yet-implemented

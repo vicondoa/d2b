@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "nixling-core-fuzz"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+default = ["fuzz"]
+fuzz = []
+
+[dependencies]
+bolero = "0.10"
+nixling-core = { path = "..", version = "0.0.0-bootstrap" }
+serde_json = "1"

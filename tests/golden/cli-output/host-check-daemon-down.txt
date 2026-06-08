@@ -1,0 +1,7 @@
+error: host-check-error
+  code: daemon-down
+  exit_code: 1
+  what_was_checked: Whether nixlingd.service is active on the host.
+  observed_state: systemctl is-active nixlingd reports inactive/failed.
+  remediation: Start the daemon: `systemctl start nixlingd.service`.
+  docs_anchor: docs/reference/error-codes.md#daemon-down

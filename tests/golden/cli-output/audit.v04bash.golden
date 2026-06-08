@@ -1,0 +1,46 @@
+{
+  "kvm_dev_mode": "660",
+  "wayland_user_in_kvm": false,
+  "store_delivery": {
+    "corp-vm": "virtiofs",
+    "sys-work-net": "virtiofs"
+  },
+  "virtiofsd": {},
+  "ssh": {
+    "host": {
+      "PasswordAuthentication": false
+    },
+    "corp-vm": {
+      "PasswordAuthentication": null
+    }
+  },
+  "bridge_isolation": {
+    "corp-vm": {
+      "bridge": "br-work-lan",
+      "tap": "work-l10",
+      "state": "isolated",
+      "isolated": true
+    }
+  },
+  "autoUpgrade_commits_lock": false,
+  "ch_version": "52.0",
+  "crosvm_rev": "4c80bf3523cf84114054209d88a7af3eefd8423f",
+  "seccomp_rev": "299c1e7c3d5a1b98106212c20f58b9fdb7b1b1ea",
+  "ch_crosvm_pair_ok": true,
+  "fail2ban_active": true,
+  "sidecars_per_vm": {
+    "corp-vm": {
+      "gpu_active": false,
+      "snd_active": false,
+      "gpu_user": "none",
+      "snd_user": "none"
+    },
+    "sys-work-net": {
+      "gpu_active": false,
+      "snd_active": false,
+      "gpu_user": "none",
+      "snd_user": "none"
+    }
+  },
+  "usbipd_per_env_isolation": {}
+}

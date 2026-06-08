@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: cgroup-delegation-refused
+  exit_code: 1
+  what_was_checked: Whether the broker delegated +cpu +memory +io +pids before launching VMs.
+  observed_state: Apply phase observed the same delegation failure as the read-only probe.
+  remediation: See remediation for host-check#cgroup-delegation-refused; re-run prepare after the fix.
+  docs_anchor: docs/reference/error-codes.md#cgroup-delegation-refused

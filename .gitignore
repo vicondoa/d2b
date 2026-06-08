@@ -34,3 +34,56 @@ result-*
 
 # Test artifacts
 /tmp/nixling-*.log
+
+# W2 transient test caches + logs (smoke/cache scratch, daemon test agent-tmp,
+# repo-local scratch registries, static.sh flock)
+.agent-tmp/
+.assertions-eval.*/
+.audio-gitcfg.*/
+.broad-caps-invariant.*/
+.broker-*/
+.bundle-drift.*/
+.cli-contract-coverage.*/
+.cli-contract-coverage.log
+.cli-rust-native-cache/
+.cli-rust-native.log
+.cli-json.*/
+.cli-json-drift.*/
+.cli-legacy-bash-dispatch.*/
+.cli-rust-native-audit.*/
+.cli-rust-native-auth-status.*/
+.cli-rust-native-host-check.*/
+.cli-rust-native-list.*/
+.cli-rust-native-status.*/
+.daemon-*/
+.host-check.*/
+.manifest-fuzz-bounded.*/
+.manifest-gate.*/
+.manifest-v04-roundtrip.*/
+.nl-cleanups.*
+.nl-scratch-registry
+.nl-smoke-cache.*/
+.nixling-rust-gate.*/
+.nixling-stub-smoke.*/
+.nixling-test.log
+.observability-eval.*/
+.opaque-key-ids.*/
+.privileges-matrix.*/
+.runner-shape-snapshot.log
+.static-cache.*/
+.static-gitcfg.*/
+.static-sh.lock
+.static-timing.log
+.static-timing.log.*
+.static-timing.raw
+.static-timing.raw.*
+.static-timing.status.*
+.template-flake-check.*/
+.uid0-invariant.*/
+.vms-json-parity.*/
+.world-readable-invariant.*/
+.writable-paths-invariant.*/
+.static-fast.lock
+packages/*/t/
+.copilot-*
+.*-eval.log

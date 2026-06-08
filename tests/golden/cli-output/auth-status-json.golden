@@ -1,0 +1,46 @@
+{
+  "role": "launcher",
+  "effectiveUid": 1000,
+  "sockets": [
+    {
+      "name": "public",
+      "path": "/run/nixling/public.sock",
+      "reachable": true,
+      "version": "0.4.0-test"
+    },
+    {
+      "name": "broker",
+      "path": "/run/nixling/priv.sock",
+      "reachable": false,
+      "version": null
+    }
+  ],
+  "allowedSubcommands": [
+    "audio",
+    "auth status",
+    "boot",
+    "build",
+    "console",
+    "down",
+    "gc",
+    "generations",
+    "host check",
+    "keys list",
+    "list",
+    "restart",
+    "rollback",
+    "rotate-known-host",
+    "status",
+    "switch",
+    "test",
+    "trust",
+    "up",
+    "usb"
+  ],
+  "deniedSubcommands": [
+    {
+      "name": "audit",
+      "reason": "audit requires admin role in `nixling.site.adminUsers`."
+    }
+  ]
+}

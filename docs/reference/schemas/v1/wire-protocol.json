@@ -1,0 +1,2206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WireProtocolSchema",
+  "type": "object",
+  "required": [
+    "brokerRequest",
+    "brokerResponse",
+    "brokerSocket",
+    "framing",
+    "hello",
+    "helloOk",
+    "helloRejected",
+    "publicRequest",
+    "publicResponse",
+    "publicSocket",
+    "schemaVersion"
+  ],
+  "properties": {
+    "brokerRequest": {
+      "$ref": "#/definitions/BrokerRequest"
+    },
+    "brokerResponse": {
+      "$ref": "#/definitions/BrokerResponse"
+    },
+    "brokerSocket": {
+      "$ref": "#/definitions/SocketSpec"
+    },
+    "framing": {
+      "$ref": "#/definitions/FramingSpec"
+    },
+    "hello": {
+      "$ref": "#/definitions/Hello"
+    },
+    "helloOk": {
+      "$ref": "#/definitions/HelloOk"
+    },
+    "helloRejected": {
+      "$ref": "#/definitions/HelloRejected"
+    },
+    "publicRequest": {
+      "$ref": "#/definitions/PublicRequest"
+    },
+    "publicResponse": {
+      "$ref": "#/definitions/PublicResponse"
+    },
+    "publicSocket": {
+      "$ref": "#/definitions/SocketSpec"
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AckResponse": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "operation"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyNftablesRequest": {
+      "type": "object",
+      "properties": {
+        "desiredHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyRouteRequest": {
+      "type": "object",
+      "required": [
+        "destination"
+      ],
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "device": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "via": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplySysctlRequest": {
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditEntry": {
+      "type": "object",
+      "required": [
+        "action",
+        "result",
+        "scope",
+        "timestamp"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditFormat": {
+      "type": "string",
+      "enum": [
+        "human",
+        "json"
+      ]
+    },
+    "AuditRequest": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "default": "human",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuditFormat"
+            }
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditSelector": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthRole": {
+      "type": "string",
+      "enum": [
+        "none",
+        "launcher",
+        "admin"
+      ]
+    },
+    "AuthStatusResponse": {
+      "type": "object",
+      "required": [
+        "allowedSubcommands",
+        "deniedSubcommands",
+        "role",
+        "sockets"
+      ],
+      "properties": {
+        "allowedSubcommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deniedSubcommands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DeniedCommandHint"
+          }
+        },
+        "role": {
+          "$ref": "#/definitions/AuthRole"
+        },
+        "sockets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SocketReachability"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindUnixSocketRequest": {
+      "type": "object",
+      "required": [
+        "mode",
+        "socketPath"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "socketPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BridgeCheck": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "present"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/definitions/IfName"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "tap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BridgePortFlagsResponse": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "isolated",
+        "neighSuppress",
+        "port"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/definitions/IfName"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "neighSuppress": {
+          "type": "boolean"
+        },
+        "port": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerAuditFilter": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNftables"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyNftablesRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNmUnmanaged"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/InterfaceListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyRoute"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyRouteRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplySysctl"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplySysctlRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BindUnixSocket"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BindUnixSocketRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateOrReconcileUsersGroups"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateOrReconcileUsersGroupsRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreatePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreatePersistentTapRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateTapFd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateTapFdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DelegateCgroupV2"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DelegateCgroupV2Request"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ExportBrokerAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExportBrokerAuditRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "InjectSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LaunchMinijailChild"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/LaunchMinijailChildRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ModprobeIfAllowed"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ModprobeIfAllowedRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenCgroupDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenCgroupDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenDevice"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenDeviceRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenFuse"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenKvm"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenVhostNet"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PauseBroker"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareRuntimeDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareStateDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareStoreView"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareStoreViewRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ReadSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ResumeBroker"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RotateSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetBridgePortFlags"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetBridgePortFlagsRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetSocketAcl"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetSocketAclRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetupMountNamespace"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetupMountNamespaceRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UpdateHostsFile"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UpdateHostsFileRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipBind"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipBindRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipBindFirewallRule"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipBindFirewallRuleRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipProxyReconcile"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipProxyReconcileRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipUnbind"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipUnbindRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateBundle"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "BrokerResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Ack"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AckResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreatePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/TapReadyResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateTapFd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/TapReadyResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ExportBrokerAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExportBrokerAuditResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetBridgePortFlags"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BridgePortFlagsResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateBundle"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ValidateBundleResponse"
+            }
+          }
+        }
+      ]
+    },
+    "CapabilitiesResponse": {
+      "type": "object",
+      "required": [
+        "brokerSocket",
+        "capabilities",
+        "publicSocket",
+        "selectedVersion",
+        "serverVersion"
+      ],
+      "properties": {
+        "brokerSocket": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        },
+        "publicSocket": {
+          "type": "string"
+        },
+        "selectedVersion": {
+          "$ref": "#/definitions/Version"
+        },
+        "serverVersion": {
+          "$ref": "#/definitions/Version"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateOrReconcileUsersGroupsRequest": {
+      "type": "object",
+      "required": [
+        "subjects"
+      ],
+      "properties": {
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreatePersistentTapRequest": {
+      "type": "object",
+      "required": [
+        "tap"
+      ],
+      "properties": {
+        "bridge": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ownerGid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "ownerUid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tap": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateTapFdRequest": {
+      "type": "object",
+      "required": [
+        "tap"
+      ],
+      "properties": {
+        "bridge": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tap": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DelegateCgroupV2Request": {
+      "type": "object",
+      "required": [
+        "subtree"
+      ],
+      "properties": {
+        "subtree": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeniedCommandHint": {
+      "type": "object",
+      "required": [
+        "command",
+        "reason"
+      ],
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "code",
+        "docsAnchor",
+        "kind",
+        "message",
+        "owningCommand",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "docsAnchor": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/Kind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "owningCommand": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        }
+      }
+    },
+    "ExportBrokerAuditRequest": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrokerAuditFilter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExportBrokerAuditResponse": {
+      "type": "object",
+      "required": [
+        "lines"
+      ],
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeatureFlag": {
+      "type": "string"
+    },
+    "FramingSpec": {
+      "type": "object",
+      "required": [
+        "bodyEncoding",
+        "lengthPrefixBytes",
+        "lengthPrefixEncoding",
+        "maxFrameSize",
+        "transport"
+      ],
+      "properties": {
+        "bodyEncoding": {
+          "type": "string"
+        },
+        "lengthPrefixBytes": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "lengthPrefixEncoding": {
+          "type": "string"
+        },
+        "maxFrameSize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "transport": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Hello": {
+      "type": "object",
+      "required": [
+        "clientVersion"
+      ],
+      "properties": {
+        "clientVersion": {
+          "$ref": "#/definitions/SemverRange"
+        },
+        "supportedFeatures": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloOk": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "selectedVersion",
+        "serverVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        },
+        "selectedVersion": {
+          "$ref": "#/definitions/Version"
+        },
+        "serverVersion": {
+          "$ref": "#/definitions/Version"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloRejected": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/HelloRejectedReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloRejectedReason": {
+      "type": "string",
+      "enum": [
+        "versionMismatch",
+        "capabilityNegotiationFailed",
+        "internalError"
+      ]
+    },
+    "HostCheckRequest": {
+      "type": "object",
+      "properties": {
+        "readOnly": {
+          "default": true,
+          "type": "boolean"
+        },
+        "strict": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCheckResponse": {
+      "type": "object",
+      "required": [
+        "exitCode",
+        "findings"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HostFinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostFinding": {
+      "type": "object",
+      "required": [
+        "check",
+        "message",
+        "remediation",
+        "severity"
+      ],
+      "properties": {
+        "check": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/HostFindingSeverity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostFindingSeverity": {
+      "type": "string",
+      "enum": [
+        "Pass",
+        "Warn",
+        "Fail"
+      ]
+    },
+    "IfName": {
+      "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
+      "type": "string",
+      "maxLength": 15,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "InterfaceListRequest": {
+      "type": "object",
+      "required": [
+        "interfaces"
+      ],
+      "properties": {
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/IfName"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "authz-not-a-launcher",
+        "authz-audit-requires-admin",
+        "wire-version-mismatch",
+        "wire-frame-too-large",
+        "wire-unknown-field",
+        "wire-ifname-invalid",
+        "wire-malformed-json",
+        "broker-unimplemented",
+        "broker-validation-failed",
+        "manifest-parse-error",
+        "internal-io"
+      ]
+    },
+    "LaunchMinijailChildRequest": {
+      "type": "object",
+      "required": [
+        "argv",
+        "profileId"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "profileId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListEntry": {
+      "type": "object",
+      "required": [
+        "lifecycle",
+        "runtime",
+        "vm"
+      ],
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/VmLifecycle"
+        },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeSummary"
+        },
+        "sshUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListRequest": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListResponse": {
+      "type": "object",
+      "required": [
+        "vms"
+      ],
+      "properties": {
+        "vms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModprobeIfAllowedRequest": {
+      "type": "object",
+      "required": [
+        "module"
+      ],
+      "properties": {
+        "module": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenCgroupDirRequest": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenDeviceRequest": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrepareDirRequest": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrepareStoreViewRequest": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capabilities"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "auth status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StatusRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuditRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host check"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCheckRequest"
+            }
+          }
+        }
+      ]
+    },
+    "PublicResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capabilities"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CapabilitiesResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "auth status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuthStatusResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ListResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StatusResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuditResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host check"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCheckResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      ]
+    },
+    "RuntimeSummary": {
+      "type": "object",
+      "required": [
+        "detail"
+      ],
+      "properties": {
+        "detail": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretByIdRequest": {
+      "type": "object",
+      "required": [
+        "opaqueId"
+      ],
+      "properties": {
+        "opaqueId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SemverRange": {
+      "description": "Semantic version requirement string, for example `>=0.4.0, <0.5.0`.",
+      "type": "string"
+    },
+    "SetBridgePortFlagsRequest": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "isolated",
+        "neighSuppress",
+        "port"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/definitions/IfName"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "neighSuppress": {
+          "type": "boolean"
+        },
+        "port": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetSocketAclRequest": {
+      "type": "object",
+      "required": [
+        "group",
+        "mode",
+        "owner",
+        "socketPath"
+      ],
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "socketPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetupMountNamespaceRequest": {
+      "type": "object",
+      "required": [
+        "profileId"
+      ],
+      "properties": {
+        "profileId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SocketReachability": {
+      "type": "object",
+      "required": [
+        "reachable",
+        "socket"
+      ],
+      "properties": {
+        "reachable": {
+          "type": "boolean"
+        },
+        "socket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SocketSpec": {
+      "type": "object",
+      "required": [
+        "abstractNamespace",
+        "group",
+        "mode",
+        "owner",
+        "path"
+      ],
+      "properties": {
+        "abstractNamespace": {
+          "type": "boolean"
+        },
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusRequest": {
+      "type": "object",
+      "properties": {
+        "checkBridges": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusResponse": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "$ref": "#/definitions/VmStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapReadyResponse": {
+      "type": "object",
+      "required": [
+        "tap"
+      ],
+      "properties": {
+        "bridge": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tap": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UpdateHostsFileRequest": {
+      "type": "object",
+      "required": [
+        "endMarker",
+        "lines",
+        "startMarker"
+      ],
+      "properties": {
+        "endMarker": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "startMarker": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipBindFirewallRuleRequest": {
+      "description": "W3 USBIP firewall-rule skeleton. Carries the busid plus a stable `rule_hash` placeholder; scope s3 fills in the actual rule derivation. `UsbipBind` / `UsbipUnbind` / `UsbipProxyReconcile` (live device routing) are explicitly OUT of W3 scope per plan.md \"W3 broker variant additions\".",
+      "type": "object",
+      "required": [
+        "busId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "ruleHash": {
+          "description": "Stable hash of the rule body for idempotency / audit. Empty in the W3 prep skeleton; scope s3 derives this from the typed per-busid policy.",
+          "default": "",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipBindRequest": {
+      "type": "object",
+      "required": [
+        "busId",
+        "vm"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProxyReconcileRequest": {
+      "type": "object",
+      "required": [
+        "env"
+      ],
+      "properties": {
+        "env": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipUnbindRequest": {
+      "type": "object",
+      "required": [
+        "busId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidateBundleResponse": {
+      "type": "object",
+      "required": [
+        "valid"
+      ],
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Version": {
+      "description": "Semantic version string used by the daemon and clients, for example `0.4.0`.",
+      "type": "string"
+    },
+    "VmLifecycle": {
+      "type": "object",
+      "required": [
+        "pendingRestart",
+        "state"
+      ],
+      "properties": {
+        "pendingRestart": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/definitions/VmLifecycleState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLifecycleState": {
+      "type": "string",
+      "enum": [
+        "Stopped",
+        "Starting",
+        "Booted",
+        "Running",
+        "Stopping",
+        "Restarting",
+        "Failed",
+        "Unknown"
+      ]
+    },
+    "VmStatus": {
+      "type": "object",
+      "required": [
+        "bridgeChecks",
+        "lifecycle",
+        "runtime",
+        "vm"
+      ],
+      "properties": {
+        "bridgeChecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BridgeCheck"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/VmLifecycle"
+        },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeSummary"
+        },
+        "sshUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

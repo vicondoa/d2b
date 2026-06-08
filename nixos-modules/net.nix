@@ -60,7 +60,11 @@ in
       addresses = [{ Address = "${m.netUplinkIp}/${m.uplinkMask}"; }];
       routes = [{ Gateway = m.hostUplinkIp; }];
       networkConfig.DNS = [ "1.1.1.1" "8.8.8.8" ];
-      linkConfig.RequiredForOnline = "no";
+      linkConfig = {
+        RequiredForOnline = "no";
+      } // lib.optionalAttrs (m.mtu != null) {
+        MTUBytes = toString m.mtu;
+      };
     };
     "10-lan" = {
       matchConfig.MACAddress = m.netLanMac;
@@ -69,7 +73,11 @@ in
         IPMasquerade = "no";
         DNS = [ ];
       };
-      linkConfig.RequiredForOnline = "no";
+      linkConfig = {
+        RequiredForOnline = "no";
+      } // lib.optionalAttrs (m.mtu != null) {
+        MTUBytes = toString m.mtu;
+      };
     };
   };
 
@@ -132,10 +140,23 @@ in
           ct state established,related accept
           ct state invalid drop
 
-          # networking-1: LAN-to-LAN (eth1→eth1) forwarding is intentionally absent.
-          # H1 bridge isolation prevents direct L2 between workloads, but the
-          # net VM must also not relay same-LAN frames at L3. Remove this rule
-          # so a workload cannot reach peers by sending to the net-VM MAC.
+          # Clamp TCP MSS to the routed path MTU when the env rides a
+          # tunneled uplink (WireGuard, Tailscale, etc).
+          ${lib.optionalString m.mssClamp ''
+          tcp flags syn tcp option maxseg size set rt mtu
+          ''}
+
+          # Opt-in same-env east-west traffic. This complements the
+          # host bridge's `Isolated = false` path when
+          # `nixling.envs.<env>.lan.allowEastWest = true`.
+          ${lib.optionalString m.allowEastWest ''
+          iifname "eth1" oifname "eth1" ct state new accept
+          ''}
+
+          # networking-1: LAN-to-LAN (eth1→eth1) forwarding is intentionally absent
+          # by default. H1 bridge isolation prevents direct L2 between workloads,
+          # and the net VM must also not relay same-LAN frames at L3 unless the
+          # env explicitly opts in.
 
           # Host → workload VMs: ssh, scp, anything the operator initiates.
           iifname "eth0" oifname "eth1" ct state new accept
@@ -143,6 +164,7 @@ in
           # Workload → host's USBIP daemon, only.
           iifname "eth1" oifname "eth0" \
             ip daddr ${m.hostUplinkIp} tcp dport 3240 ct state new accept
+          iifname "eth1" oifname "eth0" ip daddr ${m.hostUplinkIp} drop
 
           # Workload → blocklisted host destinations (RFC1918, link-
           # local, etc): drop BEFORE the broad "lan to internet" rule

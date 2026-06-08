@@ -1,0 +1,1 @@
+{"schemaVersion":"v1","publicOperations":[{"operation":"NotARealOp","subject":"host","scope":"global","allowedGroups":[],"destructive":false,"secretAccess":"none","brokerRequired":"no","audit":{"required":false,"mode":"deny-only","retainedFields":[]},"defaultForUnknown":"deny-and-audit"}],"brokerOperations":[]}

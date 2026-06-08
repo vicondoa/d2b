@@ -1,0 +1,9 @@
+{
+  "code": "ipv6-sysctl-drift",
+  "docs_anchor": "docs/reference/error-codes.md#ipv6-sysctl-drift",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "Observed sysctl value diverges from the host.json `ipv6Sysctls` declaration.",
+  "remediation": "Re-run `nixling host prepare --apply` so the broker re-asserts the declared sysctl set.",
+  "what_was_checked": "Whether net.ipv6.* sysctls match the host-prepare declared values."
+}

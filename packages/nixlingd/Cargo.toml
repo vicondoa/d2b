@@ -1,0 +1,32 @@
+[package]
+name = "nixlingd"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+libc = "0.2"
+nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process"] }
+parking_lot = "0.12"
+rustix = { workspace = true }
+nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
+nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+semver = "1"
+serde.workspace = true
+sha2 = "0.10"
+tracing = "0.1"
+serde_json.workspace = true
+socket2 = "0.5"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+uzers = "0.12"
+
+[dev-dependencies]
+regex = "1"
+tempfile = "3"

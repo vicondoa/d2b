@@ -1,6 +1,7 @@
 # nixling.vms.<vm>.* — per-VM submodule schema. Includes the
 # component toggles (graphics.enable / tpm.enable / usbip.* /
-# audio.*) whose matching files under `nixos-modules/components/`
+# audio.* / audit.*) whose matching files under
+# `nixos-modules/components/`
 # are conditionally imported by host.nix on this submodule's
 # resolved values. Extracted from options.nix in Phase 2c
 # (split-options) for reviewability.
@@ -87,6 +88,19 @@
           `nixos-modules/network.nix`.
         '';
 
+        usbip.busids = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "1-1.4" ];
+          description = ''
+            Exact USBIP busids this VM is allowed to claim inside its
+            env. Emitted into `host.json.environments[].usbipBusidLocks[]
+            .busIds` for the daemon/broker intent resolver. Leave empty
+            to preserve the legacy placeholder `pending` fallback used by
+            v0.4-era host.json fixtures.
+          '';
+        };
+
         audio.enable = lib.mkEnableOption ''
           Host microphone + speaker, mediated via vhost-user-sound +
           PipeWire. Setting this only enables the *capability*: the
@@ -141,6 +155,29 @@
           '';
         };
 
+        audit = {
+          enable = lib.mkEnableOption ''
+            guest-side auditd with forwarding to the existing
+            observability pipeline (guest Alloy → vsock → Loki)
+          '';
+
+          rules = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [
+              "-w /etc/passwd -p wa -k identity"
+              "-w /etc/shadow -p wa -k identity"
+              "-w /etc/sudoers -p wa -k priv-esc"
+            ];
+            description = ''
+              Curated guest-side audit rules. Propagated to the
+              guest's `nixling.audit.rules` when `audit.enable = true`.
+              The default excludes `execve` argv capture because
+              command lines routinely carry secrets; add that rule
+              explicitly only for short-lived, high-sensitivity audits.
+            '';
+          };
+        };
+
         observability.enable = lib.mkEnableOption ''
           guest Alloy agent + reverse OTLP tunnel from the
           observability stack VM
@@ -161,6 +198,38 @@
           description = ''
             Whether the future observability guest component should
             scrape this VM's node/system metrics.
+          '';
+        };
+
+        supervisor = lib.mkOption {
+          type = lib.types.enum [ "systemd" "nixlingd" ];
+          default = "systemd";
+          example = "nixlingd";
+          description = ''
+            Which supervisor owns this VM's lifecycle.
+
+            **v1.0 (per [ADR 0015](../../docs/adr/0015-daemon-only-clean-break.md)):**
+            the daemon-only end-state is `"nixlingd"`; consumer flakes
+            adopting v1.0 should set this option to `"nixlingd"` on
+            every workload VM and enable
+            `nixling.daemonExperimental.enable = true`.
+
+            - `"nixlingd"`: the daemon owns this VM's lifecycle via
+              the broker `SpawnRunner` path + pidfd handoff. The NixOS
+              module skips the per-VM `microvm@<vm>` autostart wiring
+              and the emitted `processes.json` omits the systemd
+              `unit` references for this VM so the single-writer
+              invariant is preserved. Requires
+              `nixling.daemonExperimental.enable = true`.
+            - `"systemd"` (legacy default, retained for consumer
+              flakes pinning pre-v1.0 VM declarations): the framework
+              emits the per-VM `microvm@<vm>.service` template
+              instance and (when `autostart = true`) wires
+              `multi-user.target.wants` to it. The pre-P6
+              `nixling@<vm>.service` wrapper this option used to emit
+              was deleted in P6 (per ADR 0015); on v1.0 hosts the
+              `"systemd"` path keeps only the upstream microvm.nix
+              unit.
           '';
         };
 

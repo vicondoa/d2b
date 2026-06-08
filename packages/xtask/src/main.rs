@@ -1,0 +1,836 @@
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+
+use clap_complete::{
+    generate,
+    shells::{Bash, Fish, Zsh},
+};
+use clap_mangen::Man;
+use nixling::{AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, StatusOutputV2};
+use nixling_core::{
+    bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
+    manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
+    processes::ProcessesJson,
+};
+use nixling_ipc::WireProtocolSchema;
+use schemars::schema::RootSchema;
+
+const SCHEMA_VERSION: &str = "v2";
+const DAEMON_API_DOC: &str = "docs/reference/daemon-api.md";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ItemKind {
+    Struct,
+    Enum,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Field {
+    name: String,
+    ty: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Variant {
+    name: String,
+    shape: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RustItem {
+    name: String,
+    kind: ItemKind,
+    file_rel: String,
+    line: usize,
+    fields: Vec<Field>,
+    variants: Vec<Variant>,
+}
+
+fn main() -> std::process::ExitCode {
+    let mut args = env::args().skip(1);
+    match (args.next().as_deref(), args.next(), args.next()) {
+        (Some("gen-schemas"), None, None) => run_task("gen-schemas", gen_schemas),
+        (Some("gen-cli-schemas"), None, None) => run_task("gen-cli-schemas", gen_cli_schemas),
+        (Some("gen-error-codes"), None, None) => run_task("gen-error-codes", gen_error_codes),
+        (Some("gen-cli-shell-artifacts"), None, None) => {
+            run_task("gen-cli-shell-artifacts", gen_cli_shell_artifacts)
+        }
+        (Some("gen-daemon-api"), None, None) => {
+            run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
+        }
+        (Some("release-notes"), Some(version), None) => run_task("release-notes", move || {
+            gen_release_notes(&version).map(|p| vec![p])
+        }),
+        _ => {
+            eprintln!(
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-daemon-api|release-notes <version>>"
+            );
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_task<F>(label: &str, task: F) -> std::process::ExitCode
+where
+    F: FnOnce() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>,
+{
+    match task() {
+        Ok(files) => {
+            println!("{} generated {} file(s)", label, files.len());
+            std::process::ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("{} failed: {err}", label);
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .ok_or_else(|| "cannot locate repo root".into())
+}
+
+fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let out_dir = repo_root
+        .join("docs/reference/schemas")
+        .join(SCHEMA_VERSION);
+    fs::create_dir_all(&out_dir)?;
+
+    let schemas: [(&str, RootSchema); 8] = [
+        ("bundle.json", schemars::schema_for!(Bundle)),
+        ("host.json", schemars::schema_for!(HostJson)),
+        ("processes.json", schemars::schema_for!(ProcessesJson)),
+        ("privileges.json", schemars::schema_for!(PrivilegesJson)),
+        ("closures.json", schemars::schema_for!(ClosureMetadata)),
+        (
+            "minijail-profile.json",
+            schemars::schema_for!(MinijailProfile),
+        ),
+        (
+            "wire-protocol.json",
+            schemars::schema_for!(WireProtocolSchema),
+        ),
+        ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
+    ];
+
+    write_schemas(&out_dir, &schemas)
+}
+
+fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let out_dir = repo_root.join("docs/reference/cli-output");
+    fs::create_dir_all(&out_dir)?;
+
+    let schemas: [(&str, RootSchema); 5] = [
+        ("list.schema.json", schemars::schema_for!(ListOutputV2)),
+        ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
+        ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
+        (
+            "host-check.schema.json",
+            schemars::schema_for!(HostCheckOutputV2),
+        ),
+        (
+            "auth-status.schema.json",
+            schemars::schema_for!(AuthStatusOutputV2),
+        ),
+    ];
+
+    write_schemas(&out_dir, &schemas)
+}
+
+fn gen_error_codes() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let out_path = repo_root.join("docs/reference/error-codes.md");
+    let doc = fs::read_to_string(&out_path)?;
+    let rendered = render_error_code_table();
+    let updated = replace_generated_block(&doc, "error-table", &rendered)?;
+    fs::write(&out_path, updated)?;
+    Ok(vec![out_path])
+}
+
+fn render_error_code_table() -> String {
+    let mut rendered = String::new();
+    rendered.push_str(
+        "| docs anchor | kind | exit code | owningCommand | message template | remediation |\n",
+    );
+    rendered.push_str("| --- | --- | --- | --- | --- | --- |\n");
+    for record in Error::all_kinds() {
+        let anchor_id = &record.docs_anchor[1..];
+        rendered.push_str(&format!(
+            "| <a id=\"{anchor_id}\"></a>`{}` | `{}` | `{}` | `{}` | {} | {} |\n",
+            record.docs_anchor,
+            record.kind.discriminant(),
+            record.exit_code,
+            record.owning_command,
+            markdown_cell(record.message_template),
+            markdown_cell(record.remediation),
+        ));
+    }
+    rendered
+}
+
+fn markdown_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', "<br>")
+}
+
+fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let man_dir = repo_root.join("docs/manpages");
+    let comp_dir = repo_root.join("docs/completions");
+    fs::create_dir_all(&man_dir)?;
+    fs::create_dir_all(&comp_dir)?;
+
+    let mut man_command = nixling::cli_command();
+    man_command.build();
+    let source = man_command
+        .get_version()
+        .map(|version| format!("nixling {version}"))
+        .unwrap_or_else(|| "nixling".to_owned());
+    let man_path = man_dir.join("nixling.1");
+    let mut man_buffer = Vec::new();
+    Man::new(man_command)
+        .title("nixling")
+        .section("1")
+        .date("1970-01-01")
+        .source(source)
+        .manual("nixling CLI")
+        .render(&mut man_buffer)?;
+    fs::write(&man_path, man_buffer)?;
+
+    let bash_path = comp_dir.join("nixling.bash");
+    let mut bash_command = nixling::cli_command();
+    let mut bash_buffer = Vec::new();
+    generate(Bash, &mut bash_command, "nixling", &mut bash_buffer);
+    fs::write(&bash_path, bash_buffer)?;
+
+    let zsh_path = comp_dir.join("nixling.zsh");
+    let mut zsh_command = nixling::cli_command();
+    let mut zsh_buffer = Vec::new();
+    generate(Zsh, &mut zsh_command, "nixling", &mut zsh_buffer);
+    fs::write(&zsh_path, zsh_buffer)?;
+
+    let fish_path = comp_dir.join("nixling.fish");
+    let mut fish_command = nixling::cli_command();
+    let mut fish_buffer = Vec::new();
+    generate(Fish, &mut fish_command, "nixling", &mut fish_buffer);
+    fs::write(&fish_path, fish_buffer)?;
+
+    Ok(vec![man_path, bash_path, zsh_path, fish_path])
+}
+
+fn write_schemas(
+    out_dir: &Path,
+    schemas: &[(&str, RootSchema)],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut written = Vec::with_capacity(schemas.len());
+    for (file_name, schema) in schemas {
+        let mut schema = schema.clone();
+        schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
+        let path = out_dir.join(file_name);
+        let mut data = serde_json::to_string_pretty(&schema)?;
+        data.push('\n');
+        fs::write(&path, data)?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
+fn gen_daemon_api() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let doc_path = repo_root.join(DAEMON_API_DOC);
+    let mut doc = fs::read_to_string(&doc_path)?;
+    let items = parse_ipc_items(repo_root)?;
+
+    doc = replace_generated_block(&doc, "handshake-types", &render_handshake_section(&items))?;
+    doc = replace_generated_block(&doc, "request-types", &render_request_section(&items))?;
+    doc = replace_generated_block(&doc, "response-types", &render_response_section(&items))?;
+    doc = replace_generated_block(&doc, "enum-variants", &render_enum_section(&items))?;
+    doc = replace_generated_block(&doc, "error-envelope", &render_error_section(&items))?;
+
+    fs::write(&doc_path, doc)?;
+    Ok(doc_path)
+}
+
+fn parse_ipc_items(repo_root: &Path) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
+    let ipc_dir = repo_root.join("packages/nixling-ipc/src");
+    let mut files = fs::read_dir(&ipc_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("rs"))
+        .collect::<Vec<_>>();
+    files.sort();
+
+    let mut items = Vec::new();
+    for path in files {
+        items.extend(parse_rust_items(repo_root, &path)?);
+    }
+    items.sort_by(|left, right| {
+        left.file_rel
+            .cmp(&right.file_rel)
+            .then(left.line.cmp(&right.line))
+            .then(left.name.cmp(&right.name))
+    });
+    Ok(items)
+}
+
+fn parse_rust_items(
+    repo_root: &Path,
+    path: &Path,
+) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
+    let text = fs::read_to_string(path)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    let file_rel = path
+        .strip_prefix(repo_root)?
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let mut items = Vec::new();
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index].trim_start();
+
+        // Skip macro_rules! definitions: their bodies contain
+        // `pub struct $name(...)` templates whose `$name`
+        // placeholder is not a valid Rust identifier and would
+        // make extract_name fail. We track brace depth from the
+        // `macro_rules! foo {` opening line until the matched
+        // closing brace and skip everything in between.
+        if line.starts_with("macro_rules!") {
+            let mut depth = brace_delta(lines[index]);
+            index += 1;
+            // If the `{` is on a later line, advance until we see it.
+            while depth == 0 && index < lines.len() {
+                depth += brace_delta(lines[index]);
+                index += 1;
+                if depth > 0 {
+                    break;
+                }
+            }
+            while depth > 0 && index < lines.len() {
+                depth += brace_delta(lines[index]);
+                index += 1;
+            }
+            continue;
+        }
+
+        let kind = if line.starts_with("pub struct ") {
+            Some(ItemKind::Struct)
+        } else if line.starts_with("pub enum ") {
+            Some(ItemKind::Enum)
+        } else {
+            None
+        };
+
+        let Some(kind) = kind else {
+            index += 1;
+            continue;
+        };
+
+        let start = index;
+        let mut item_lines = vec![lines[index].to_string()];
+        let mut depth = brace_delta(lines[index]);
+        index += 1;
+        while depth > 0 && index < lines.len() {
+            item_lines.push(lines[index].to_string());
+            depth += brace_delta(lines[index]);
+            index += 1;
+        }
+
+        let item_text = item_lines.join("\n");
+        let body = extract_body(&item_text);
+        let name = extract_name(
+            item_lines.first().map(String::as_str).unwrap_or_default(),
+            &kind,
+        )?;
+        let fields = if kind == ItemKind::Struct {
+            parse_fields(&body)
+        } else {
+            Vec::new()
+        };
+        let variants = if kind == ItemKind::Enum {
+            parse_variants(&body)
+        } else {
+            Vec::new()
+        };
+        items.push(RustItem {
+            name,
+            kind,
+            file_rel: file_rel.clone(),
+            line: start + 1,
+            fields,
+            variants,
+        });
+    }
+
+    Ok(items)
+}
+
+fn brace_delta(line: &str) -> i32 {
+    let opens = line.chars().filter(|&ch| ch == '{').count() as i32;
+    let closes = line.chars().filter(|&ch| ch == '}').count() as i32;
+    opens - closes
+}
+
+fn extract_name(header: &str, kind: &ItemKind) -> Result<String, Box<dyn std::error::Error>> {
+    let needle = match kind {
+        ItemKind::Struct => "pub struct ",
+        ItemKind::Enum => "pub enum ",
+    };
+    let after = header
+        .split_once(needle)
+        .map(|(_, tail)| tail)
+        .ok_or("missing type header")?
+        .trim_start();
+    let name = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect::<String>();
+    if name.is_empty() {
+        return Err("could not parse type name".into());
+    }
+    Ok(name)
+}
+
+fn extract_body(item_text: &str) -> String {
+    let Some(open) = item_text.find('{') else {
+        return String::new();
+    };
+    let Some(close) = item_text.rfind('}') else {
+        return String::new();
+    };
+    item_text[open + 1..close].to_string()
+}
+
+fn parse_fields(body: &str) -> Vec<Field> {
+    split_top_level_entries(&strip_non_code_lines(body))
+        .into_iter()
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            let (name, ty) = trimmed.split_once(':')?;
+            Some(Field {
+                name: name.trim().trim_start_matches("pub ").trim().to_string(),
+                ty: normalize_ws(ty),
+            })
+        })
+        .collect()
+}
+
+fn parse_variants(body: &str) -> Vec<Variant> {
+    split_top_level_entries(&strip_non_code_lines(body))
+        .into_iter()
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let name = trimmed
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect::<String>();
+            if name.is_empty() {
+                return None;
+            }
+            let rest = trimmed[name.len()..].trim();
+            let shape = if rest.is_empty() {
+                "unit".to_string()
+            } else if rest.starts_with('{') {
+                let fields = parse_fields(&extract_body(rest));
+                if fields.is_empty() {
+                    "struct {}".to_string()
+                } else {
+                    format!("struct {{ {} }}", render_fields(&fields))
+                }
+            } else {
+                normalize_ws(rest)
+            };
+            Some(Variant { name, shape })
+        })
+        .collect()
+}
+
+fn strip_non_code_lines(body: &str) -> String {
+    body.lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.is_empty()
+                && !trimmed.starts_with("///")
+                && !trimmed.starts_with("//!")
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with("#")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn split_top_level_entries(input: &str) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0i32;
+    let mut brace = 0i32;
+    let mut bracket = 0i32;
+    let mut angle = 0i32;
+
+    for ch in input.chars() {
+        match ch {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            '[' => bracket += 1,
+            ']' => bracket -= 1,
+            '<' => angle += 1,
+            '>' => {
+                if angle > 0 {
+                    angle -= 1;
+                }
+            }
+            ',' if paren == 0 && brace == 0 && bracket == 0 && angle == 0 => {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    entries.push(trimmed.to_string());
+                }
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(ch);
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        entries.push(trimmed.to_string());
+    }
+    entries
+}
+
+fn normalize_ws(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn render_fields(fields: &[Field]) -> String {
+    fields
+        .iter()
+        .map(|field| format!("`{}`: `{}`", field.name, field.ty))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn render_shape(item: &RustItem) -> String {
+    match item.kind {
+        ItemKind::Struct => {
+            if item.fields.is_empty() {
+                "empty struct".to_string()
+            } else {
+                format!("struct {{ {} }}", render_fields(&item.fields))
+            }
+        }
+        ItemKind::Enum => {
+            if item.variants.is_empty() {
+                "empty enum".to_string()
+            } else {
+                item.variants
+                    .iter()
+                    .map(|variant| {
+                        if variant.shape == "unit" {
+                            format!("`{}`", variant.name)
+                        } else {
+                            format!("`{}` — {}", variant.name, variant.shape)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }
+        }
+    }
+}
+
+fn rust_link(item: &RustItem) -> String {
+    format!("[`{}`](../../{}#L{})", item.name, item.file_rel, item.line)
+}
+
+fn replace_generated_block(
+    doc: &str,
+    marker: &str,
+    content: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let begin = format!("<!-- BEGIN AUTO-GENERATED: {marker} -->");
+    let end = format!("<!-- END AUTO-GENERATED: {marker} -->");
+    let start = doc
+        .find(&begin)
+        .ok_or_else(|| format!("missing begin marker for {marker}"))?;
+    let after_begin = start + begin.len();
+    let end_index = doc[after_begin..]
+        .find(&end)
+        .map(|index| after_begin + index)
+        .ok_or_else(|| format!("missing end marker for {marker}"))?;
+
+    let mut rebuilt = String::new();
+    rebuilt.push_str(&doc[..after_begin]);
+    rebuilt.push('\n');
+    rebuilt.push_str(content.trim_end());
+    rebuilt.push('\n');
+    rebuilt.push_str(&doc[end_index..]);
+    Ok(rebuilt)
+}
+
+fn render_handshake_section(items: &[RustItem]) -> String {
+    let mut selected = items
+        .iter()
+        .filter(|item| {
+            item.name.starts_with("Hello")
+                || item.name == "SemverRange"
+                || item.name.contains("FeatureFlag")
+                || item.name.contains("Capability")
+        })
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| left.name.cmp(&right.name));
+    render_item_table("Handshake and negotiation types", &selected)
+}
+
+fn render_request_section(items: &[RustItem]) -> String {
+    let public = items
+        .iter()
+        .filter(|item| {
+            item.file_rel.ends_with("public_wire.rs")
+                && (item.name.ends_with("Request")
+                    || item.name.ends_with("Command")
+                    || item.name == "Hello")
+        })
+        .collect::<Vec<_>>();
+    let broker = items
+        .iter()
+        .filter(|item| {
+            item.file_rel.ends_with("broker_wire.rs")
+                && (item.name.ends_with("Request") || item.name.ends_with("Command"))
+        })
+        .collect::<Vec<_>>();
+    render_grouped_tables(
+        &[
+            ("Public socket request types", public),
+            ("Broker socket request types", broker),
+        ],
+        "No request types were found under `packages/nixling-ipc/src/` yet.",
+    )
+}
+
+fn render_response_section(items: &[RustItem]) -> String {
+    let public = items
+        .iter()
+        .filter(|item| {
+            item.file_rel.ends_with("public_wire.rs")
+                && (item.name.ends_with("Response")
+                    || item.name.ends_with("Ok")
+                    || item.name.ends_with("Rejected"))
+        })
+        .collect::<Vec<_>>();
+    let broker = items
+        .iter()
+        .filter(|item| item.file_rel.ends_with("broker_wire.rs") && item.name.ends_with("Response"))
+        .collect::<Vec<_>>();
+    render_grouped_tables(
+        &[
+            ("Public socket response types", public),
+            ("Broker socket response types", broker),
+        ],
+        "No response types were found under `packages/nixling-ipc/src/` yet.",
+    )
+}
+
+fn render_enum_section(items: &[RustItem]) -> String {
+    let lifecycle = items
+        .iter()
+        .find(|item| is_lifecycle_enum(item))
+        .map(|item| vec![item])
+        .unwrap_or_default();
+    let other = items
+        .iter()
+        .filter(|item| {
+            item.kind == ItemKind::Enum
+                && !is_lifecycle_enum(item)
+                && !item.name.starts_with("Hello")
+                && !item.name.ends_with("Request")
+                && !item.name.ends_with("Response")
+                && !item.name.ends_with("Ok")
+                && !item.name.ends_with("Rejected")
+                && !is_error_item(item)
+        })
+        .collect::<Vec<_>>();
+    render_grouped_tables(
+        &[
+            ("Lifecycle enum", lifecycle),
+            ("Other documented enums", other),
+        ],
+        "No documented enums were found under `packages/nixling-ipc/src/` yet.",
+    )
+}
+
+fn render_error_section(items: &[RustItem]) -> String {
+    let selected = items
+        .iter()
+        .filter(|item| is_error_item(item))
+        .collect::<Vec<_>>();
+    render_item_table("Typed error envelope types", &selected)
+}
+
+fn is_lifecycle_enum(item: &RustItem) -> bool {
+    item.kind == ItemKind::Enum
+        && [
+            "Stopped",
+            "Starting",
+            "Booted",
+            "Running",
+            "Stopping",
+            "Restarting",
+            "Failed",
+            "Unknown",
+        ]
+        .iter()
+        .all(|name| item.variants.iter().any(|variant| variant.name == *name))
+}
+
+fn is_error_item(item: &RustItem) -> bool {
+    let lower = item.name.to_ascii_lowercase();
+    if lower.contains("error") {
+        return true;
+    }
+    item.fields.iter().any(|field| field.name == "kind")
+        && item.fields.iter().any(|field| field.name == "code")
+        && item.fields.iter().any(|field| field.name == "message")
+}
+
+fn render_grouped_tables(groups: &[(&str, Vec<&RustItem>)], empty_message: &str) -> String {
+    let mut rendered = String::new();
+    let mut any = false;
+    for (title, items) in groups {
+        if items.is_empty() {
+            continue;
+        }
+        any = true;
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str(&render_item_table(title, items));
+    }
+    if any {
+        rendered
+    } else {
+        format!("> {empty_message}")
+    }
+}
+
+fn render_item_table(title: &str, items: &[&RustItem]) -> String {
+    if items.is_empty() {
+        return "> No matching IPC types were found yet.".to_string();
+    }
+
+    let mut rendered = String::new();
+    rendered.push_str(&format!("### {title}\n\n"));
+    rendered.push_str("| Type | Kind | Rust definition | Shape |\n");
+    rendered.push_str("| --- | --- | --- | --- |\n");
+    for item in items {
+        let kind = match item.kind {
+            ItemKind::Struct => "struct",
+            ItemKind::Enum => "enum",
+        };
+        rendered.push_str(&format!(
+            "| `{}` | {} | {} | {} |\n",
+            item.name,
+            kind,
+            rust_link(item),
+            render_shape(item)
+        ));
+    }
+    rendered
+}
+
+/// W18 (W10-fu): aggregate the `Unreleased` section of CHANGELOG.md
+/// into a versioned section. Re-runs are idempotent — if a section
+/// for `version` already exists, the function exits with a clear
+/// error rather than duplicating it.
+///
+/// Output: writes CHANGELOG.md in place; returns the path so the
+/// caller can announce the artifact.
+fn gen_release_notes(version: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let repo_root = repo_root()?;
+    let changelog_path = repo_root.join("CHANGELOG.md");
+    let original =
+        fs::read_to_string(&changelog_path).map_err(|e| format!("read CHANGELOG.md: {e}"))?;
+
+    let versioned_header = format!("## [{version}]");
+    if original.contains(&versioned_header) {
+        return Err(format!(
+            "CHANGELOG.md already has a section for {version}: refusing to duplicate"
+        )
+        .into());
+    }
+
+    let unreleased_header = "## Unreleased";
+    let unreleased_idx = original
+        .find(unreleased_header)
+        .ok_or_else(|| "CHANGELOG.md is missing the '## Unreleased' section".to_string())?;
+    let after_unreleased_header = unreleased_idx + unreleased_header.len();
+
+    let body_search_start = after_unreleased_header;
+    let next_section_offset = original[body_search_start..]
+        .find("\n## ")
+        .map(|i| body_search_start + i + 1)
+        .unwrap_or(original.len());
+
+    let unreleased_body = original[after_unreleased_header..next_section_offset].trim();
+    if unreleased_body.is_empty() {
+        return Err("CHANGELOG.md '## Unreleased' section is empty; nothing to release".into());
+    }
+
+    let date = today_utc_iso8601();
+    let mut rendered = String::new();
+    rendered.push_str(&original[..unreleased_idx]);
+    rendered.push_str(unreleased_header);
+    rendered.push_str("\n\n");
+    rendered.push_str(&format!("## [{version}] - {date}\n\n"));
+    rendered.push_str(unreleased_body);
+    rendered.push_str("\n\n");
+    if next_section_offset < original.len() {
+        rendered.push_str(&original[next_section_offset..]);
+    }
+
+    let mut out =
+        fs::File::create(&changelog_path).map_err(|e| format!("write CHANGELOG.md: {e}"))?;
+    out.write_all(rendered.as_bytes())
+        .map_err(|e| format!("write CHANGELOG.md body: {e}"))?;
+
+    Ok(changelog_path)
+}
+
+fn today_utc_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let (y, m, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i32 + era as i32 * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}

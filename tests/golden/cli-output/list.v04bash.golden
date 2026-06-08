@@ -1,0 +1,22 @@
+[
+  {
+    "name": "corp-vm",
+    "env": "work",
+    "graphics": false,
+    "tpm": false,
+    "usbip": false,
+    "staticIp": "10.20.0.10",
+    "status": "stopped",
+    "isNetVm": false
+  },
+  {
+    "name": "sys-work-net",
+    "env": "work",
+    "graphics": false,
+    "tpm": false,
+    "usbip": false,
+    "staticIp": "192.0.2.2",
+    "status": "running",
+    "isNetVm": true
+  }
+]

@@ -80,14 +80,14 @@
     waylandUser = "alice";
 
     # Members of `nixling-launcher` get a polkit grant on the
-    # framework's own systemd units; without this, `nixling up`
+    # framework's own systemd units; without this, `nixling vm start`
     # would prompt for sudo every time.
     launcherUsers = [ "alice" ];
 
-    # Install host-side YubiKey support (udev rules for Yubico's
-    # vendor ID + the `usbip-host` kernel module). Required for
-    # any VM that sets `usbip.yubikey = true`. Flip to `false` on
-    # hosts that don't use a YubiKey.
+    # Install host-side YubiKey support (Yubico udev rules; the
+    # `usbip-host` kernel module is loaded only when an enabled VM
+    # also sets `usbip.yubikey = true`). Required for any VM that
+    # uses `nixling usb <vm>`. Flip to `false` on hosts without one.
     yubikey.enable = true;
   };
 
@@ -121,7 +121,7 @@
   #
   # `autostart` is intentionally left at the default `false` —
   # graphics VMs cannot autostart because there is no Wayland
-  # session at multi-user.target. Use `nixling up corp-desktop`
+  # session at multi-user.target. Use `nixling vm start corp-desktop --apply`
   # from a Plasma terminal once you're logged in.
   # ---------------------------------------------------------------
   nixling.vms.corp-desktop = {

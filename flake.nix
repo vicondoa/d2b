@@ -41,7 +41,20 @@
       #   overlays.default     — adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
 
-      packages = forAllSystems (system: { });
+      packages = forAllSystems (system: let
+        pkgs = nixpkgsFor.${system};
+      in {
+        manpages = pkgs.runCommandNoCC "nixling-manpages" { } ''
+          install -Dm644 ${./docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
+          ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
+        '';
+
+        completions = pkgs.runCommandNoCC "nixling-completions" { } ''
+          install -Dm644 ${./docs/completions/nixling.bash} "$out/share/bash-completion/completions/nixling"
+          install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
+          install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
+        '';
+      });
 
       apps = forAllSystems (system: { });
 
@@ -81,12 +94,202 @@
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
         '';
+        # W3 (w2-rust-tests-golden-fragility-w3) — rust-tests reaches
+        # repo-level fixtures under tests/golden/ (compile-time
+        # include_str! goldens) and tests/fixtures/ (compile-time +
+        # runtime fixture-path reads from unit/integration tests).
+        # Compose a sandbox src that holds packages/ plus those fixture
+        # trees so the cargo workspace never reads outside its packaged
+        # source in the Nix sandbox. Operators running cargo OUTSIDE
+        # the sandbox use the raw ./packages tree and the same relative
+        # paths still resolve against the checkout.
+        rustPackagesSrc = pkgs.runCommand "nixling-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages}/. $out/packages/
+          mkdir -p $out/tests
+          cp -r ${./tests/golden} $out/tests/golden
+          cp -r ${./tests/fixtures} $out/tests/fixtures
+        '';
+        rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
+          pname = "nixling-rust-workspace";
+          version = "0.0.0-bootstrap";
+          src = rustPackagesSrc;
+          sourceRoot = "nixling-rust-src/packages";
+          cargoLock.lockFile = ./packages/Cargo.lock;
+          # W2fu4 H16 — repo-local .cargo/config.toml files set
+          # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
+          # have sccache on PATH (and even if it did, sccache wants
+          # a writable cache dir + network for distributed builds).
+          # Disable the wrapper for sandbox builds. Operators running
+          # cargo OUTSIDE the sandbox (worktrees, dev shells) still
+          # get the sccache speedup from the config files.
+          RUSTC_WRAPPER = "";
+          SCCACHE_DIR = "";
+        } // args);
+        rustToolchainChannel =
+          (builtins.fromTOML (builtins.readFile ./packages/rust-toolchain.toml)).toolchain.channel;
+        brokerManifestToml = builtins.fromTOML (builtins.readFile ./packages/nixling-priv-broker/Cargo.toml);
+        mainManifestToml = builtins.fromTOML (builtins.readFile ./packages/Cargo.toml);
+        assertRustToolchain = ''
+          rustc --version | grep -F "${rustToolchainChannel}"
+        '';
+        assertRustSupplyChainInputs = ''
+          test -f ${rustPackagesSrc}/packages/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/deny.toml
+          test -f ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml
+          printf '%s\n' '${builtins.toJSON mainManifestToml.workspace.members}' >/dev/null
+          printf '%s\n' '${brokerManifestToml.package.name}' >/dev/null
+          printf '%s\n' '${builtins.toJSON brokerManifestToml.workspace}' >/dev/null
+        '';
+
+        # Pinned RustSec advisory DB snapshot for offline cargo-deny /
+        # cargo-audit checks in the Nix sandbox.  Update the rev + hash
+        # periodically to pick up new advisories.
+        advisoryDbSrc = pkgs.fetchFromGitHub {
+          owner = "rustsec";
+          repo = "advisory-db";
+          rev = "831c50f4a4304068f125e603add6a8839f08b3eb";
+          hash = "sha256-wXKYURZz76ZC5lbuDA1oVQA/MxSB3pSJ1raF1HG0oIc=";
+        };
+
+        # cargo-deny and cargo-audit (via the rustsec crate) require the
+        # advisory DB to be a git repository.  Wrap the fetchFromGitHub
+        # source tree in a minimal git repo so gix::open() succeeds.
+        advisoryDbGit = pkgs.runCommand "rustsec-advisory-db-git" {
+          nativeBuildInputs = [ pkgs.git ];
+        } ''
+          cp -r ${advisoryDbSrc} $out
+          chmod -R u+w $out
+          cd $out
+          git init -q
+          git add .
+          git -c user.email=nixbld@localhost -c user.name=nixbld \
+            commit -q -m 'advisory-db snapshot'
+        '';
       in {
         eval-minimal = mkCheck "eval-minimal"
           (mkEval [ (import ./examples/minimal/configuration.nix) ]);
 
         eval-multi-env = mkCheck "eval-multi-env"
           (mkEval [ (import ./examples/multi-env/configuration.nix) ]);
+
+        rust-build = rustWorkspace {
+          pname = "nixling-rust-build";
+          preBuild = assertRustToolchain;
+          cargoBuildFlags = [ "--workspace" ];
+          doCheck = false;
+        };
+
+        rust-tests = rustWorkspace {
+          pname = "nixling-rust-tests";
+          preBuild = assertRustToolchain;
+          cargoBuildFlags = [ "--workspace" ];
+          cargoTestFlags = [ "--workspace" ];
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            echo ok > $out/rust-tests
+            runHook postInstall
+          '';
+        };
+
+        rust-clippy = rustWorkspace {
+          pname = "nixling-rust-clippy";
+          nativeBuildInputs = [ pkgs.clippy ];
+          cargoBuildFlags = [ "--workspace" ];
+          doCheck = false;
+          buildPhase = ''
+            runHook preBuild
+            ${assertRustToolchain}
+            cargo clippy --workspace --all-targets -- -D warnings
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            echo ok > $out/rust-clippy
+            runHook postInstall
+          '';
+        };
+
+        # Real cargo-deny gate: bans, licenses, and sources for both
+        # the main workspace and the broker workspace.  Advisory
+        # checks are handled by rust-audit below (cargo-deny requires
+        # a fetchable URL for the advisory DB which is incompatible
+        # with the Nix sandbox's no-network constraint).
+        #
+        # cargo-deny shells out to `cargo metadata`, so we vendor
+        # the crate registry and override the sccache wrapper that
+        # the repo-local .cargo/config.toml enables.
+        rust-deny = let
+          mainVendor = pkgs.rustPlatform.importCargoLock {
+            lockFile = ./packages/Cargo.lock;
+          };
+          brokerVendor = pkgs.rustPlatform.importCargoLock {
+            lockFile = ./packages/nixling-priv-broker/Cargo.lock;
+          };
+          cargoConfig = vendorDir: ''
+            [source.crates-io]
+            replace-with = "vendored-sources"
+            [source.vendored-sources]
+            directory = "${vendorDir}"
+          '';
+        in pkgs.runCommand "nixling-rust-deny" {
+          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
+        } ''
+          export HOME="$TMPDIR"
+
+          run_deny() {
+            local label=$1 manifest=$2 vendor_cfg=$3 deny_cfg=$4
+            local ws="$TMPDIR/$label"
+            cp -r "${rustPackagesSrc}/packages" "$ws"
+            chmod -R u+w "$ws"
+            # Override all .cargo/config.toml files to disable sccache
+            # and enable vendored dependencies.
+            find "$ws" -path '*/.cargo/config.toml' -exec sh -c \
+              'printf "%s\n" "$1" > "$0"' {} "$vendor_cfg" \;
+            mkdir -p "$ws/.cargo"
+            printf '%s\n' "$vendor_cfg" > "$ws/.cargo/config.toml"
+            echo "==> cargo deny check ($label)"
+            cargo-deny --manifest-path "$ws/$manifest" \
+              check --config "$deny_cfg" bans licenses sources
+            rm -rf "$ws"
+          }
+
+          run_deny "main" \
+            "Cargo.toml" \
+            '${cargoConfig mainVendor}' \
+            "${rustPackagesSrc}/packages/deny.toml"
+
+          run_deny "broker" \
+            "nixling-priv-broker/Cargo.toml" \
+            '${cargoConfig brokerVendor}' \
+            "${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml"
+
+          echo ok > $out
+        '';
+
+        # Real cargo-audit gate: vulnerability scan of both lockfiles
+        # against the pinned advisory DB snapshot.  Runs offline via
+        # --no-fetch with the bundled git-repo copy of the RustSec DB.
+        rust-audit = pkgs.runCommand "nixling-rust-audit" {
+          nativeBuildInputs = [ pkgs.cargo-audit ];
+        } ''
+          export HOME="$TMPDIR"
+          for lock in \
+            ${rustPackagesSrc}/packages/Cargo.lock \
+            ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock; do
+            echo "==> cargo audit ($(basename "$(dirname "$lock")"))"
+            cargo-audit audit --file "$lock" \
+              --db ${advisoryDbGit} --no-fetch
+          done
+          echo ok > $out
+        '';
+
+        harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
+          pkgs = nixpkgsFor.${system};
+        };
 
         # Template eval-check: override the three sentinel-gated
         # fields (TODOs 2 + 3) so the assertion block passes. The

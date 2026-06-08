@@ -1,0 +1,7 @@
+error: host-check-error
+  code: ifname-too-long
+  exit_code: 78
+  what_was_checked: Whether every derived bridge/TAP ifname fits in IFNAMSIZ-1 (15 bytes).
+  observed_state: Derived ifname exceeds 15 bytes after hash truncation.
+  remediation: Shorten the env/vm name in nixling.envs.<env>.name so the derived ifname stays <= 15 bytes.
+  docs_anchor: docs/reference/error-codes.md#ifname-too-long

@@ -105,6 +105,7 @@ let
         if envName != null && envIndexMap ? ${envName}
         then 100 + (envIndexMap.${envName} * 100) + vm.index
         else legacyObsVsockCid name;
+      stateRoot = "${config.nixling.store.stateDir}/${name}";
     in
     {
       inherit name;
@@ -118,17 +119,17 @@ let
       isNetVm = asNetVmForEnv != null;
       netVm = if env != null then netVmOfEnv env else null;
       usbipdHostIp = usbipdHostIp;
-      stateDir = "/var/lib/nixling/vms/${name}";
-      apiSocket = "/var/lib/nixling/vms/${name}/${name}.sock";
-      gpuSocket = "/var/lib/nixling/vms/${name}/${name}-gpu.sock";
+      stateDir = stateRoot;
+      apiSocket = "${stateRoot}/${name}.sock";
+      gpuSocket = "${stateRoot}/${name}-gpu.sock";
       tpmSocket = "/run/swtpm/${name}/sock";
       # security-2: state file under root-owned non-group-writable subdir.
-      audioStateFile = "/var/lib/nixling/vms/${name}/state/audio-state.json";
+      audioStateFile = "${stateRoot}/state/audio-state.json";
       audioService = "nixling-${name}-snd.service";
       observability = {
         enabled = vm.observability.enable;
         vsockCid = obsVsockCid;
-        vsockHostSocket = "/var/lib/nixling/vms/${name}/vsock.sock";
+        vsockHostSocket = "${stateRoot}/vsock.sock";
         agentSocket = "/run/nixling/otlp.sock";
       };
       staticIp =
@@ -166,7 +167,7 @@ let
       enabled = obsCfg.enable;
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
-      obsVsockHostSocket = "/var/lib/nixling/vms/${obsCfg.vmName}/vsock.sock";
+      obsVsockHostSocket = "${config.nixling.store.stateDir}/${obsCfg.vmName}/vsock.sock";
       grafanaUrl = "http://${obsCfg.grafana.listenAddress}:${toString obsCfg.grafana.listenPort}";
       chExporter = {
         listenPort = obsCfg.ch.exporter.listenPort;
@@ -450,7 +451,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 2;
+    default = 3;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -472,6 +473,14 @@ in
         * 2 — observability schema expansion. Adds the always-emitted
           per-VM `observability` block and the top-level
           `_observability` sentinel.
+        * 3 — P2 daemon-only end-state break
+          (`ph2-p2-manifestversion-bump`). Drops per-VM systemd-unit
+          reference fields that become meaningless once supervisor
+          mode is retired and the daemon owns every per-VM lifecycle
+          transition. Pinned by `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`;
+          the broker / daemon refuse any other value with a
+          `manifest-version-mismatch` typed error (no legacy
+          compatibility window).
     '';
   };
 

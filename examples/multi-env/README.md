@@ -287,10 +287,10 @@ nixling status
 # Net VMs (`sys-<env>-net`) show STATUS=`systemd (net-vm)` — they
 # are framework-managed and `autostart = true` by construction in
 # `nixos-modules/network.nix`. Workload VMs default to `stopped`
-# until you `nixling up <vm>` (or set `autostart = true` per-VM).
+# until you `nixling vm start <vm> --apply` (or set `autostart = true` per-VM).
 
-nixling up work-app
-nixling up personal-app
+nixling vm start work-app --apply
+nixling vm start personal-app --apply
 ssh -i /var/lib/nixling/keys/work-app_ed25519     alice@10.20.0.10 hostname
 ssh -i /var/lib/nixling/keys/personal-app_ed25519 alice@10.30.0.10 hostname
 
@@ -369,7 +369,7 @@ Every per-VM lifecycle service in the framework carries
 unit files but does NOT cycle running VMs. After rebuilding,
 `nixling list` flags any VM whose declared closure has drifted
 from the running one as `[pending restart]`; apply with
-`nixling restart <vm>`. See
+`nixling vm restart <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
@@ -381,6 +381,128 @@ for the exact predicate.
 - [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP
 - [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
 - [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
+
+## W3 daemon-backed variant (experimental)
+
+The flake exposes a sibling `nixosConfigurations` output,
+`multi-env-daemon-experimental`, that exercises the v0.4.0
+per-env `mtu` / `mssClamp` / `lan.allowEastWest` knobs together
+with the site-level `allowUnsafeEastWest` acknowledgement, and
+opts one VM into the experimental `nixlingd` supervisor (W3 Tier
+0 mixed mode per plan §"W3 daemon-vs-legacy migration boundary").
+The legacy `nixosConfigurations.demo` variant is unchanged.
+
+What the variant changes on top of `configuration.nix`:
+
+| Key                                         | Value                | Why                                                          |
+|---------------------------------------------|----------------------|--------------------------------------------------------------|
+| `nixling.site.allowUnsafeEastWest`          | `true`               | Site-level acknowledgement: this host accepts relaxed east-west isolation for envs that opt in. |
+| `nixling.daemonExperimental.enable`         | `true`               | Gate the experimental `nixlingd` skeleton (required for any VM with `supervisor = "nixlingd"`). |
+| `nixling.envs.work.mtu`                     | `1400`               | Reference for a tunneled uplink. Propagates to host bridges, TAPs, the workload guest NIC, and the net VM's NICs (see `net.nix`). |
+| `nixling.envs.work.mssClamp`                | `true`               | Adds the TCP MSS clamp rule on the net VM's nftables forward chain; the emitted `host.json` records the resolved MSS value (`mtu - 40` = `1360` here). |
+| `nixling.envs.work.lan.allowEastWest`       | `true`               | First half of the east-west double opt-in. By itself does nothing; pairs with `site.allowUnsafeEastWest`. |
+| `nixling.vms.work-app.supervisor`           | `"nixlingd"`         | Daemon-owned lifecycle: the NixOS module skips emitting per-VM `nixling@<vm>` autostart wiring and the emitted `processes.json` drops the systemd `unit` references for this VM. |
+| `nixling.vms.personal-app.supervisor`       | `"systemd"`          | Legacy v0.4.0 path on the same host — proves mixed Tier 0 mode evaluates. |
+
+### East-west double opt-in
+
+`nixling.envs.<env>.lan.allowEastWest = true` is one half of the
+double opt-in for relaxed isolation between workload LAN TAPs in
+the same env. The other half is the site-level acknowledgement
+`nixling.site.allowUnsafeEastWest = true`. **Both must be true**
+for the per-tap `bridgePortFlags.isolated` flag to flip to `false`
+on workload LAN ports — anything less leaves the default isolation
+in place. The emitted `host.json` records the resolved state as
+`environments[].lan.effectiveEastWest` for operators to inspect
+without re-deriving the predicate.
+
+The net-VM LAN TAP (`role = "net-vm-lan"`) is `isolated = false`
+unconditionally so workload VMs can always reach their gateway;
+the uplink TAP (`role = "uplink"`) is `isolated = false`
+unconditionally because the uplink is a point-to-point /30 with
+no peers to reach.
+
+### MTU and MSS clamp
+
+`nixling.envs.<env>.mtu` propagates to:
+
+- the env's LAN bridge (`br-<env>-lan`);
+- the env's uplink bridge (`br-<env>-up`);
+- every workload TAP (`<env>-l<index>`);
+- the net VM's NICs (the `10-uplink` and `10-lan` networkd
+  matches in the auto-declared net VM);
+- the workload guest's primary NIC (the guest-side
+  `10-eth-dhcp` networkd entry).
+
+`nixling.envs.<env>.mssClamp = true` adds the net VM's TCP MSS
+clamp rule (`tcp flags syn tcp option maxseg size set rt mtu`)
+to the nftables forward chain. The emitted `host.json` records
+the resolved MSS as `environments[].mssClamp` (integer, equal to
+the env MTU minus 40 bytes; `null` when `mssClamp` is unset).
+
+### Switching a VM between supervisors
+
+```nix
+# Legacy (default):
+nixling.vms.work-app.supervisor = "systemd";
+
+# Experimental nixlingd ownership (requires
+# nixling.daemonExperimental.enable = true; assertions.nix
+# enforces the gate):
+nixling.vms.work-app.supervisor = "nixlingd";
+```
+
+Daemon-supervised VMs:
+
+- are NOT wired into `multi-user.target.wants` even when
+  `autostart = true` (the NixOS module filters daemon-owned VMs
+  out of the autostart symlink set);
+- do NOT surface a per-node systemd `unit` in the emitted
+  `processes.json` (single-writer invariant — the daemon owns
+  lifecycle via pidfd, so the bundle must not also point a
+  systemd unit at the same VM);
+- still produce the same `host.json` env-level network state and
+  per-VM `closures/<vm>.json` artifacts (the daemon needs both at
+  reconcile time).
+
+Systemd-supervised VMs continue to use the v0.4.0 contract
+unchanged — same `nixling@<vm>.service` + `microvm@<vm>.service`
+template instances, same `restartIfChanged = false` policy, same
+`tests/static.sh` smoke evals.
+
+### Where the host reconcile lives
+
+`host prepare` (the operator UX described in
+[`docs/how-to/host-prepare.md`](../../docs/how-to/host-prepare.md),
+assembled by the W3 integrator from per-scope fragments) is the
+verb that materialises the daemon-owned host state on Tier 0:
+bridges, TAPs, nftables, sysctls, NetworkManager unmanaged
+config, `/etc/hosts`. On an all-legacy bundle it reports
+`nothing-to-do`; on a mixed bundle it reconciles only the
+daemon-owned + unambiguously nixling-owned resources; on an
+all-daemon bundle it reconciles the full host state. See plan
+§"W3 daemon-vs-legacy migration boundary" for the exact
+sub-case table.
+
+### Trying both variants
+
+```bash
+# Both variants evaluate cleanly without building.
+nix flake check --no-build --all-systems --no-write-lock-file ./examples/multi-env/
+
+# Legacy variant — same as before.
+nix eval ./examples/multi-env#nixosConfigurations.demo.config.system.build.toplevel.drvPath
+
+# Daemon-backed variant.
+nix eval ./examples/multi-env#nixosConfigurations.multi-env-daemon-experimental.config.system.build.toplevel.drvPath
+```
+
+The dedicated Layer-1 gate
+[`tests/multi-env-daemon-backed.sh`](../../tests/multi-env-daemon-backed.sh)
+asserts the env-level propagation, the `bridgePortFlags`
+double-opt-in, the `vms.json` / `processes.json` omission of
+`microvm@<vm>` for the daemon-supervised VM, and the legacy
+variant's preserved per-VM unit references.
 
 > **Note on the in-tree path** — the version of `flake.nix` checked
 > into this directory uses `nixling.url = "path:../..";` so the

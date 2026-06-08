@@ -1,0 +1,7 @@
+error: host-destroy-apply-error
+  code: legacy-no-destroy-apply
+  exit_code: 78
+  what_was_checked: Whether the legacy bash dispatch attempted a mutating destroy apply.
+  observed_state: Legacy bash `nixling host destroy --apply` invoked; refused by design.
+  remediation: Re-run via the Rust path: `nixling host destroy --apply` (no legacy shim).
+  docs_anchor: docs/reference/error-codes.md#legacy-no-destroy-apply

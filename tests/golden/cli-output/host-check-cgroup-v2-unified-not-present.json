@@ -1,0 +1,9 @@
+{
+  "code": "cgroup-v2-unified-not-present",
+  "docs_anchor": "docs/reference/error-codes.md#cgroup-v2-unified-not-present",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "Hybrid or legacy v1 hierarchy detected at /sys/fs/cgroup.",
+  "remediation": "Boot the host with systemd.unified_cgroup_hierarchy=1 on the kernel command line.",
+  "what_was_checked": "Whether /sys/fs/cgroup is the unified v2 hierarchy."
+}

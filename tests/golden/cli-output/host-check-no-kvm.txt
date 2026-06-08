@@ -1,0 +1,7 @@
+error: host-check-error
+  code: no-kvm
+  exit_code: 1
+  what_was_checked: Whether /dev/kvm is present and accessible.
+  observed_state: /dev/kvm missing or not accessible to the nixling group.
+  remediation: Load the appropriate kvm_intel/kvm_amd module and ensure the nixling group has access.
+  docs_anchor: docs/reference/error-codes.md#no-kvm

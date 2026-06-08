@@ -1,0 +1,107 @@
+{
+  "_comment": "Canonical W0b stub output for a hypothetical green Ubuntu 24.04 Tier-1-alpha host. Regenerate with: bash harness/ubuntu/host-check-stub.sh | jq . > harness/ubuntu/expected-host-check.json, then normalize host-specific green-host details before committing. All todo-wave-w3 fields are intentionally deferred to W3 host prepare.",
+  "kernel_version": {
+    "status": "ok",
+    "detail": "6.8.0-ubuntu24.04"
+  },
+  "cgroup_v2_unified": {
+    "status": "ok",
+    "detail": "/sys/fs/cgroup/cgroup.controllers"
+  },
+  "nftables": {
+    "status": "ok",
+    "detail": "nftables available in PATH"
+  },
+  "nftables_table_nixling": {
+    "status": "ok",
+    "detail": "inet nixling table absent"
+  },
+  "firewalld_coexistence": {
+    "status": "unsupported",
+    "detail": "firewalld and ufw absent"
+  },
+  "network_manager_unmanaged": {
+    "status": "ok",
+    "detail": "found nixling unmanaged-devices config: /etc/NetworkManager/conf.d/nixling.conf"
+  },
+  "route_preflight": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare; nixling envs not yet declared"
+  },
+  "bridge_tap_port_flag_readback": {
+    "status": "ok",
+    "detail": "ip -j -d link show type bridge parses with jq"
+  },
+  "ipv6_sysctl_drift": {
+    "status": "ok",
+    "detail": "all.disable_ipv6=0 default.accept_ra=1"
+  },
+  "ifnamsiz_validation_negatives": {
+    "status": "ok",
+    "detail": "W3 interface-name regex: ^nx[a-z0-9-]{0,12}$"
+  },
+  "etc_hosts_marked_block": {
+    "status": "ok",
+    "detail": "no nixling marked block found in /etc/hosts"
+  },
+  "usbip_busid_lock_module_firewall_prereqs": {
+    "status": "ok",
+    "detail": "usbip_host module dry-run succeeded"
+  },
+  "nix": {
+    "status": "ok",
+    "detail": "nix available in PATH"
+  },
+  "kvm": {
+    "status": "ok",
+    "detail": "/dev/kvm present and accessible"
+  },
+  "minijail": {
+    "status": "ok",
+    "detail": "minijail0 available in PATH"
+  },
+  "vhost_net": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "vhost_vsock": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "cgroup_delegation": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "tuntap": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "cgroup.kill": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "pidfd_open": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "selinux": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "apparmor": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "init_system": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "glibc_version": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  },
+  "architecture": {
+    "status": "todo-wave-w3",
+    "detail": "deferred to W3 host prepare"
+  }
+}

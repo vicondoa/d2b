@@ -13,11 +13,14 @@ the units you should see on a host with nixling installed are:
 | Backend (microvm.nix template) | `microvm@<vm>.service`                   |
 | Per-VM virtiofsd               | `microvm-virtiofsd@<vm>.service` *(W2 rename to `nixling-<vm>-virtiofsd` deferred)* |
 | Per-VM GPU sidecar             | `nixling-<vm>-gpu.service`               |
+| Per-VM video sidecar           | `nixling-<vm>-video.service`             |
 | Per-VM audio sidecar           | `nixling-<vm>-snd.service`               |
 | Per-VM TPM emulator            | `nixling-<vm>-swtpm.service`             |
 | Per-VM store sync              | `nixling-<vm>-store-sync.service`        |
 | Per-env USBIP proxy            | `nixling-sys-<env>-usbipd-proxy.{service,socket}` |
 | Per-env USBIP backend          | `nixling-sys-<env>-usbipd-backend.service` |
+| Host observability bridge      | `nixling-otel-host-bridge.service`       |
+| Host CH exporter               | `nixling-ch-exporter.service`            |
 | Auto-declared per-env net VM   | `nixling@sys-<env>-net.service` (workload-side `microvm@sys-<env>-net.service` backend) |
 | Polkit launcher group          | `nixling-launcher` (singleton)           |
 
@@ -56,20 +59,33 @@ Layer-1 gates exercised (W4):
 - `nix-instantiate --parse` for every framework `.nix` file.
 - `shellcheck --severity=warning` for every shell script under
   `tests/` and `scripts/`.
+- Heuristic `readOnly + default + config` trio lint across
+  `nixos-modules/` — catches the read-only mkOption pattern from issue
+  #6 before it escapes review.
 - `nix flake check --no-build --all-systems` — both x86_64-linux and
   aarch64-linux flake outputs eval clean.
+- Per-example flake checks pass `--no-write-lock-file`, so
+  `tests/static.sh` never rewrites an example's committed `flake.lock`
+  while eval-checking it.
 - `tests/smoke-eval.nix` — minimal consumer-style nixosSystem on the
   builder's system (typically x86_64-linux).
 - `tests/smoke-eval-aarch64.nix` — same shape, cross-evaluated on
   aarch64-linux to verify the headless workload eval graph stays
   multi-arch clean (Phase 4 W4 gate).
+- `tests/smoke-eval-tpm.nix` — TPM host-surface regression gate:
+  swtpm parent-dir ACL, swtpm ExecStartPre stale-session flush,
+  and `nixlingMigrateOwnership` invariants.
 - `tests/assertions-eval.sh` — eval-time assertion regression tests
   (CIDR shape, CIDR overlap, key validation, `waylandUser`
   presence, graphics/audio platform gating, and observability
   collision/prefix cases).
-- `tests/observability-eval.sh` — 10 eval-time observability cases:
-  defaults, auto-declaration, manifest fields, CLI-traces gating,
-  and auto-SKIP negative cases for not-yet-merged Wave-1 work.
+- `tests/observability-eval.sh` — 23/23 eval-time observability
+  cases: defaults, auto-declaration, manifest fields, CLI-traces
+  gating, and the current negative/auto-SKIP coverage.
+- `tests/usbip-gating-eval.sh` — host-side USBIP gating: per-env
+  usbipd services/sockets/firewall rules stay absent until both
+  `site.yubikey.enable` and an enabled VM `usbip.yubikey` opt-in are
+  set, and stay scoped to envs that actually have an opted-in VM.
 - **Manifest contract gate** (Phase 5 W4): renders the smoke
   manifest, then runs a 5-check sequence:
   1. Manifest renders without errors.
@@ -90,6 +106,13 @@ Layer-1 script inventory:
 | `tests/assertions-eval.sh` | Eval-time assertion regressions, including the observability collision/prefix cases. |
 | `tests/observability-eval.sh` | Eval-time observability surface checks: defaults, auto-declared env/VM, manifest fields, CLI-traces gate, and assertion auto-SKIPs. |
 | `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
+| `tests/usbip-gating-eval.sh` | Host-side USBIP gating: absent with no host+enabled-VM opt-in, present once both knobs are enabled, and scoped to the opted-in env only. |
+| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
+| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services plus the host, workload-guest, and obs-guest observability relay units. |
+| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for `nixling-<vm>-video.service` (`AF_UNIX` only, syscall filter, empty capability sets). |
+| `tests/bridge-isolation-runtime.sh` | Hermetic runtime check that Linux bridge port isolation still blocks workload↔workload traffic while preserving workload↔net-VM reachability. |
+| `tests/network-isolation.sh` | Optional live-host datapath checks for same-env east-west and cross-env isolation. |
+| `tests/audit-forwarding.sh` | Optional live-host end-to-end check for auditd -> journald -> Alloy -> Loki delivery. |
 
 ## Layer 2 — `nixling-store.sh`
 
@@ -129,6 +152,41 @@ tests/nixling-store.sh --list
 | `test_legacy_status`            | `nixling status` baseline regression                                           |
 | `test_error_missing_ssh_creds`  | helpful error when a VM lacks ssh.{user,keyPath}                               |
 | `test_retention_keeps_current`  | every path in the current generation is present under store/                   |
+
+## Layer 2 (network isolation) — `network-isolation.sh`
+
+Optional live-host datapath checks for the Wave 3 network isolation
+claims. The script looks for running workload VMs with SSH access and:
+
+- verifies same-env east-west is blocked when bridge taps are isolated,
+  including an attacker-style route-via-gateway attempt when sudo is
+  available in the source VM,
+- only allows a same-env reachability check for an explicitly named
+  `NL_ALLOW_EASTWEST_PAIR`, using a temporary listener inside the peer VM,
+- verifies cross-env workload and net-VM uplink reachability stay
+  blocked against a controlled temporary listener, and
+- verifies host-LAN reachability stays blocked against a temporary host
+  listener plus the live LAN gateway.
+
+Runs as a skip-if-prereqs-missing test, just like the other Layer-2
+scripts.
+
+```bash
+tests/network-isolation.sh
+```
+
+## Layer 2 (audit forwarding) — `audit-forwarding.sh`
+
+Optional live-host audit pipeline check for Wave 3. The script looks for
+an audit-enabled, observability-enabled running VM plus a reachable obs
+VM, verifies the default `/etc/passwd` watch is loaded, adds a
+per-run nonce watch under `/run/`, triggers it, and polls Loki on the
+obs VM for the resulting
+`source="audit" unit="audisp-syslog" vm=<vm> env=<env>` stream.
+
+```bash
+tests/audit-forwarding.sh
+```
 
 ## Layer 2 (audio) — `audio.sh`
 
@@ -186,24 +244,37 @@ checks above (`test_host_has_audio_*`) are the regression coverage
 for that ambient breakage — run them after any rebuild that touches
 audio, PipeWire packages, or the audio-host.nix module.
 
+> **Known Layer-2 gap.** Bridge-isolation enforcement (the DHCP
+> anti-spoofing posture for workload taps on `br-<env>-lan`) still has
+> no runtime Layer-2 test. Verifying that workload taps remain isolated
+> from each other requires a live host plus packet-level assertions
+> across the bridge, so the current Layer-2 suite documents the
+> expectation but does not yet automate it. The first planned Layer-3
+> `nixosTest` for this area is a MAC/IP spoof attempt where one
+> workload tries to impersonate a peer's DHCP reservation and send
+> east-west traffic across `br-<env>-lan`; the test should prove the
+> isolated taps still block that path.
+
 ## Layer 3 — reproducible `nixosTest`
 
-Out of scope for now. Sketch is in the refactor plan for the
-follow-up: a `flake.nix#checks.x86_64-linux.nixling-store` output that
-boots a dummy nested host + microVM and drives the same assertions.
+Still out of scope for now.
+
+The current runtime bridge-isolation gate is
+`tests/bridge-isolation-runtime.sh`, which runs hermetically inside a
+user+network namespace and is wired into `tests/static.sh`. It proves
+that the Linux bridge semantics nixling relies on match the documented
+threat model: the net-VM port stays reachable while workload ports stay
+isolated even after a workload spoofs a peer-style MAC.
 
 ## Future tests (Phase 7a / v0.2.0)
 
-- **Static lint for the `mkOption { default = …; readOnly = true; }`
-  + matching `config.<…>` trio.** Spec correction #29 (the
-  `nixling.manifest` default landed alongside a `config` assignment
-  and `readOnly = true`, which is a silent overlay-only update
-  pitfall) was caught by the W5 reviewer panel, not by tooling.
-  Phase 7a will add a grep-level lint that scans every
-  `nixos-modules/*.nix` for the full three-of-three trio (a
-  two-of-three match — e.g. `store.nix` carrying `readOnly +
-  default` on options that have **no** matching `config.<…>`
-  assignment — is intentional and must NOT trip the lint).
+- **USBIP live isolation `nixosTest`** (Phase 6 follow-up). The
+  Layer-1 eval gate now proves host-side USBIP units, sockets, and
+  firewall rules only materialize for envs with an enabled
+  `usbip.yubikey` VM, but it still does not exercise live systemd
+  socket materialization, iptables enforcement, or cleanup against a
+  running guest. Lift that adversarial cross-env attach/isolation path
+  into the eventual Phase 6 `nixosTest` suite.
 
 - **Audit `--strict` graphics-VM running-check mock test** (Spec
   correction #38 / v0.1.6 follow-up Test-H8). The v0.1.6 fix in
@@ -212,17 +283,11 @@ boots a dummy nested host + microVM and drives the same assertions.
   `microvm@<vm>` probe to also accept `nixling@<vm>` or
   `nixling-<vm>-gpu` as evidence the VM is up — without this,
   graphics VMs were blanket-skipped by `nixling audit --strict`
-  even when actively running. A regression test would PATH-override
-  `systemctl` with a stub that reports `nixling-<vm>-gpu.service`
-  active and then assert the audit emits NO
-  `AUDIT SKIP [bridge_isolated_workload.<vm>]`. Deferred to v0.2.0:
-  the v0.1.6 cli.nix change is small and the existing audit
-  scaffolding doesn't yet have a hermetic harness for stubbing
-  `systemctl` calls baked into the shell-application closure
-  (`pkgs.systemd` is a runtimeInputs dep, so a stub on `PATH`
-  alone isn't enough — the harness would need to override
-  `runtimeInputs` and rebuild the wrapper). Track alongside the
-  other v0.2.0 testing items.
+  even when actively running. **Known gap:** this still needs a live
+  host / higher-fidelity harness because the shell-application wrapper
+  bakes `systemctl` in via `runtimeInputs`; a plain `PATH` stub is not
+  enough to exercise the strict-audit path faithfully. Deferred to
+  v0.2.0 alongside the other host-backed testing items.
 
 > Per-example iteration is now part of the static gate:
 > `tests/static.sh` iterates every `examples/*/flake.nix` and runs

@@ -1,0 +1,30 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+{
+  "classificationAvailable": false,
+  "command": "migrate",
+  "currentTier": "all-daemon",
+  "mode": "dry-run",
+  "notes": "migrate reports the deployment-shape tier today; per-VM classification is still unavailable on the public manifest, but `--apply` is live.",
+  "perVmClassificationNote": "Per-VM supervisor classification is not available on the public manifest today, so the planner cannot reliably split VMs into legacy vs daemon-managed. Use `nixling status <vm>` for the per-VM systemd-unit state.",
+  "plannedSteps": [
+    "Expose per-VM `supervisor` in the public manifest so the planner can classify VMs directly.",
+    "Per migrating VM: set `nixling.vms.<vm>.supervisor = \"nixlingd\"` in the consumer flake.",
+    "Per migrating VM: verify per-VM state under `/var/lib/nixling/vms/<vm>/` is owned root:nixlingd 0750.",
+    "Run `nixos-rebuild switch` so the daemon module materializes the per-VM systemd units.",
+    "Verify each migrated VM via `nixling status <vm>`; `vm list` is still a placeholder inventory surface.",
+    "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
+  ],
+  "totalVms": 2,
+  "vms": [
+    {
+      "classification": "unknown-not-in-public-manifest",
+      "env": "work",
+      "name": "corp-vm"
+    },
+    {
+      "classification": "unknown-not-in-public-manifest",
+      "env": "work",
+      "name": "sys-work-net"
+    }
+  ]
+}

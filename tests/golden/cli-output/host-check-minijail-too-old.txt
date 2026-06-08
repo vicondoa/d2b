@@ -1,0 +1,7 @@
+error: host-check-error
+  code: minijail-too-old
+  exit_code: 1
+  what_was_checked: Whether the nix-built minijail satisfies the W3 minimum version (v17).
+  observed_state: Detected minijail version older than 17; W3 sandbox profiles will not parse.
+  remediation: Update to the Nix-built minijail v17+ pinned in pkgs/minijail.nix.
+  docs_anchor: docs/reference/error-codes.md#minijail-too-old

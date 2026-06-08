@@ -1,0 +1,7 @@
+error: host-check-error
+  code: unsupported-kernel
+  exit_code: 1
+  what_was_checked: Whether the running kernel is >= 6.6 (W3 minimum).
+  observed_state: uname -r reports a kernel older than 6.6.
+  remediation: Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see tests/golden/l3-matrix/w3-ubuntu.txt).
+  docs_anchor: docs/reference/error-codes.md#unsupported-kernel

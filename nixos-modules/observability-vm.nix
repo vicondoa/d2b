@@ -30,6 +30,7 @@ in
       tpm.enable = lib.mkDefault false;
       usbip.yubikey = lib.mkDefault false;
       audio.enable = lib.mkDefault false;
+      audit.enable = lib.mkDefault false;
 
       config = {
         imports = [

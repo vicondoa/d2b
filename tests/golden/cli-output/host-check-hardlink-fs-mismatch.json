@@ -1,0 +1,9 @@
+{
+  "code": "hardlink-fs-mismatch",
+  "docs_anchor": "docs/reference/error-codes.md#hardlink-fs-mismatch",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "The store and the per-VM farm are on different filesystems; hardlinks impossible.",
+  "remediation": "Co-locate the per-VM store-view path on the same filesystem as /nix/store.",
+  "what_was_checked": "Whether the per-VM /nix/store hardlink farm filesystem supports hardlinks."
+}

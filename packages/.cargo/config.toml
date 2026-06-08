@@ -1,0 +1,22 @@
+# nixling cargo config.
+#
+# Each git worktree keeps its OWN packages/target/ for isolation (so
+# different SHAs don't stomp on each other's incremental cache).
+# Compiled rustc outputs are deduplicated across worktrees via sccache:
+# same crate version + same flags -> one cache entry in
+# $SCCACHE_DIR (default ~/.cache/nixling-sccache), reused by every
+# worktree's build.
+#
+# Why not shared target-dir: cargo's target-dir lock is workspace-wide;
+# two worktrees building concurrently at different SHAs would serialize
+# pessimistically and stomp incremental caches. sccache gives the cross-
+# worktree dedup without the contention.
+#
+# To skip sccache locally (e.g. when bisecting a compiler issue), set
+# RUSTC_WRAPPER= explicitly or set CARGO_BUILD_RUSTC_WRAPPER=.
+
+[alias]
+xtask = "run -p xtask --"
+
+[build]
+rustc-wrapper = "sccache"

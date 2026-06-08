@@ -1,0 +1,13 @@
+{
+  "$comment": "W3fu1 H4 malicious fixture — firewallCoexistence carries an undeclared field `bypass` that the schema's `deny_unknown_fields` MUST refuse with `wire-unknown-field`.",
+  "schemaVersion": "v2",
+  "bundleVersion": "0.4.0",
+  "site": {"hostLanCidr": "192.0.2.0/24", "stateDir": "/var/lib/nixling", "runtimeDir": "/run/nixling"},
+  "firewallCoexistence": {
+    "manager": "networkmanager",
+    "allow": [],
+    "refuse": [],
+    "bypass": ["everything"]
+  },
+  "_expectedRejection": {"code": "wire-unknown-field", "reason": "firewallCoexistence.bypass"}
+}

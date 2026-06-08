@@ -1,0 +1,7 @@
+error: host-check-error
+  code: seccomp-denial
+  exit_code: 1
+  what_was_checked: Whether the seccomp policy denies undeclared syscalls.
+  observed_state: Probe issued an undeclared syscall and the policy allowed it.
+  remediation: Tighten the seccomp policy to match the declared syscall matrix.
+  docs_anchor: docs/reference/error-codes.md#seccomp-denial

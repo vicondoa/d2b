@@ -1,0 +1,9 @@
+{
+  "code": "no-cgroup-v2",
+  "docs_anchor": "docs/reference/error-codes.md#no-cgroup-v2",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "/sys/fs/cgroup/cgroup.controllers missing or hybrid layout detected.",
+  "remediation": "Boot with systemd.unified_cgroup_hierarchy=1.",
+  "what_was_checked": "Whether the host runs the unified cgroup v2 hierarchy."
+}

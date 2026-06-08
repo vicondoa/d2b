@@ -11,6 +11,7 @@ let
   guestOtlpSocket = "${alloyRuntimeDir}/otlp.sock";
   guestOtlpEgressSocket = "${alloyRuntimeDir}/otlp-egress.sock";
   quote = builtins.toJSON;
+  auditEnabled = config.nixling.audit.enable or false;
 
   alloyConfig = lib.concatStringsSep "\n\n" (
     [
@@ -120,20 +121,33 @@ let
         forward_to = [otelcol.receiver.prometheus.node.receiver]
       }
     ''
-    ++ lib.optional cfg.scrapeJournal ''
+    ++ lib.optional (cfg.scrapeJournal || auditEnabled) ''
       otelcol.receiver.loki "journal" {
         output {
           logs = [otelcol.exporter.otlp.vsock.input]
         }
       }
-
+    ''
+    ++ lib.optional cfg.scrapeJournal ''
       loki.source.journal "journal" {
         forward_to = [otelcol.receiver.loki.journal.receiver]
         labels = {
-          job  = "guest-journal",
-          vm   = ${quote cfg.identity.vmName},
-          env  = ${quote cfg.identity.envName},
-          role = "workload",
+          vm     = ${quote cfg.identity.vmName},
+          env    = ${quote cfg.identity.envName},
+          role   = "workload",
+          source = "journal",
+        }
+      }
+    ''
+    ++ lib.optional auditEnabled ''
+      loki.source.journal "audit" {
+        forward_to = [otelcol.receiver.loki.journal.receiver]
+        matches    = "_TRANSPORT=syslog SYSLOG_IDENTIFIER=audisp-syslog"
+        labels = {
+          vm     = ${quote cfg.identity.vmName},
+          env    = ${quote cfg.identity.envName},
+          role   = "workload",
+          source = "audit",
         }
       }
     ''
@@ -212,6 +226,7 @@ in
       DynamicUser = lib.mkForce false;
       User = lib.mkForce "alloy";
       Group = lib.mkForce "alloy";
+      SupplementaryGroups = lib.optional (cfg.scrapeJournal || auditEnabled) "systemd-journal";
 
       StateDirectory = lib.mkAfter [ "alloy" ];
       StateDirectoryMode = "0750";

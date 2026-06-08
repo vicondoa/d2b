@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: nm-reload-failed
+  exit_code: 1
+  what_was_checked: Whether nmcli reload conf succeeded after broker rewrote the unmanaged drop-in.
+  observed_state: Apply phase observed nmcli reload returned non-zero.
+  remediation: Inspect NetworkManager logs and retry `host prepare --apply`.
+  docs_anchor: docs/reference/error-codes.md#nm-reload-failed

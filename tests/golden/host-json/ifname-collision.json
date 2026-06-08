@@ -1,0 +1,43 @@
+{
+  "$comment": "W3fu1 H4 malicious fixture — two environments hash-derive to the SAME ifname suffix, which the emitter MUST reject at emit time with `ifname-collision`. host-json-drift-gate.sh asserts the schema rejects this input with the documented error code.",
+  "schemaVersion": "v2",
+  "bundleVersion": "0.4.0",
+  "site": {
+    "hostLanCidr": "192.0.2.0/24",
+    "modulesDisabledSysctlPolicy": "preload-required",
+    "stateDir": "/var/lib/nixling",
+    "runtimeDir": "/run/nixling"
+  },
+  "environments": [
+    {
+      "env": "work",
+      "subnet": "10.42.1.0/24",
+      "bridge": "nl-work-deadbeef",
+      "natUpstream": "eth0",
+      "ipv6Sysctls": {"all.disable_ipv6": "1"},
+      "dnsmasqBoundIp": "10.42.1.1"
+    },
+    {
+      "env": "personal",
+      "subnet": "10.42.2.0/24",
+      "bridge": "nl-work-deadbeef",
+      "natUpstream": "eth0",
+      "ipv6Sysctls": {"all.disable_ipv6": "1"},
+      "dnsmasqBoundIp": "10.42.2.1"
+    }
+  ],
+  "nftables": {"table": "inet nixling", "ownershipMarker": "nixling-owned", "priority": -100},
+  "networkManager": {"managed": false, "unmanagedDropIn": "/etc/NetworkManager/conf.d/nixling-unmanaged.conf"},
+  "hostsFile": {"path": "/etc/hosts", "markerBegin": "# nixling-managed-begin", "markerEnd": "# nixling-managed-end"},
+  "kernelModules": {"allowed": ["tun"], "modulesDisabledPolicy": "preload-required"},
+  "bridgePortFlags": {"learning": true, "flooding": false, "mcastFlood": false, "broadcastFlood": true},
+  "firewallCoexistence": {"manager": "networkmanager", "allow": [], "refuse": []},
+  "ifnameMapping": {"scheme": "hash-truncate-8", "prefix": "nl-", "max_ifname_bytes": 15},
+  "ch": {"minVersion": "v40", "netHandoffMode": "tap-fd"},
+  "fdOwnership": [],
+  "cloudHypervisorCapabilities": [],
+  "_expectedRejection": {
+    "code": "ifname-collision",
+    "reason": "environments[0].bridge == environments[1].bridge — emitter MUST refuse"
+  }
+}

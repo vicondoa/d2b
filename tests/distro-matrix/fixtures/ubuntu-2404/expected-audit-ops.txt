@@ -1,0 +1,12 @@
+# Broker operations the W19 Ubuntu 24.04 Tier-1 smoke must produce in
+# /var/lib/nixling/audit/broker-<UTC-date>.jsonl. Lines starting with
+# `#` are comments; everything else is matched as an exact substring.
+Hello
+ValidateBundle
+RunHostInstall
+ApplyNftables
+ApplyRoute
+ApplySysctl
+UpdateHostsFile
+SpawnRunner
+OpenPidfd

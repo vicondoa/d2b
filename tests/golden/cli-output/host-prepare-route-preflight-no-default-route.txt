@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: route-preflight-no-default-route
+  exit_code: 1
+  what_was_checked: Whether the host has a default route before nixling adds NAT routes.
+  observed_state: ip route show default returned empty; nixling refuses to add routes without an upstream.
+  remediation: Configure a default route on the host upstream before running `host prepare --apply`.
+  docs_anchor: docs/reference/error-codes.md#route-preflight-no-default-route

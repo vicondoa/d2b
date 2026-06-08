@@ -1,0 +1,7 @@
+error: host-check-error
+  code: single-writer-conflict
+  exit_code: 78
+  what_was_checked: Whether legacy systemd units and the W3 daemon are both writing the host.
+  observed_state: Both `nixling-legacy.service` and `nixlingd.service` are active on a Tier-0 mixed host.
+  remediation: Stop the legacy units before starting the daemon; consult docs/explanation/host-prepare.md#mixed-tier-0.
+  docs_anchor: docs/reference/error-codes.md#single-writer-conflict

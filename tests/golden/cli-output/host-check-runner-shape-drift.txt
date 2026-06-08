@@ -1,0 +1,7 @@
+error: host-check-error
+  code: runner-shape-drift
+  exit_code: 1
+  what_was_checked: Whether the rendered runner argv matches the golden runner-shape snapshot.
+  observed_state: Runner argv diverges from tests/golden/runner-shape/* baseline.
+  remediation: Regenerate the runner-shape baseline via the documented xtask or revert the drifted change.
+  docs_anchor: docs/reference/error-codes.md#runner-shape-drift

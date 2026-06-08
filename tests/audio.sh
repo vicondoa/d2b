@@ -49,8 +49,11 @@ set -uo pipefail
 # `nix eval` below). Same pattern as static.sh/security-baseline.sh.
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(dirname "$HERE")}
-_AUDIO_GITCFG=$(mktemp -d -t nixling-audio-gitcfg.XXXXXX)
-trap 'rm -rf -- "$_AUDIO_GITCFG"' EXIT
+
+# shellcheck source=lib.sh
+. "$HERE/lib.sh"
+
+_AUDIO_GITCFG=$(nl_mktemp .audio-gitcfg.XXXXXX)
 install -d -m 0700 "$_AUDIO_GITCFG/git"
 printf "[safe]\n\tdirectory = %s\n" "$ROOT" > "$_AUDIO_GITCFG/git/config"
 export XDG_CONFIG_HOME="$_AUDIO_GITCFG"
@@ -59,9 +62,6 @@ export GIT_CONFIG_KEY_0=safe.directory
 export GIT_CONFIG_VALUE_0="$ROOT"
 
 NL_HOST_CONFIG=${NL_HOST_CONFIG:-desktop}
-
-# shellcheck source=lib.sh
-. "$HERE/lib.sh"
 
 STATE_ROOT=/var/lib/nixling/vms
 
@@ -672,16 +672,15 @@ add_cleanup _m7_cleanup
 # (pre-rebuild) so callers can SKIP cleanly.
 _m7_run_helper() {
   local helper_path
-  # Primary: resolve via the live system's NixOS option (set by cli.nix as
-  # nixling.audioStateHelperPath).  Always points to the current generation.
-  helper_path=$(nix eval --raw "$ROOT#nixosConfigurations.$NL_HOST_CONFIG.config.nixling.audioStateHelperPath" 2>/dev/null || echo "")
-  if [ -z "$helper_path" ] || [ ! -f "$helper_path" ]; then
-    # Fallback: extract from the live nixling binary (avoids stale store glob).
-    local nixling_bin
-    nixling_bin=$(command -v nixling 2>/dev/null || echo /run/current-system/sw/bin/nixling)
-    helper_path=$(grep -o '/nix/store/[^ ]*nixling-read-audio-state\.sh' \
-      "$nixling_bin" 2>/dev/null | head -1) || helper_path=""
-  fi
+  # P6 ph6-p6-cli-nix-migrations: the `nixling.audioStateHelperPath`
+  # internal option was retired together with the bash CLI surface,
+  # so we no longer eval it out of the live config. Instead, locate
+  # the helper by greping the nixling binary in the current system
+  # generation (the daemon-managed `nixling` references it directly).
+  local nixling_bin
+  nixling_bin=$(command -v nixling 2>/dev/null || echo /run/current-system/sw/bin/nixling)
+  helper_path=$(grep -o '/nix/store/[^ ]*nixling-read-audio-state\.sh' \
+    "$nixling_bin" 2>/dev/null | head -1) || helper_path=""
   if [ -z "$helper_path" ] || [ ! -f "$helper_path" ]; then
     return 77
   fi

@@ -1,0 +1,8 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+{
+  "command": "keys rotate-known-host",
+  "mode": "dry-run",
+  "notes": "W8 keys rotate-known-host --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
+  "planned": [],
+  "vm": "corp-vm"
+}

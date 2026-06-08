@@ -14,8 +14,8 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 2,
-          "description": "Schema version. This document IS the v2 schema; the field is locked to `const: 2`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v3.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v2 manifests (versions 0 and 1) are historical and are no longer valid under this schema."
+          "const": 3,
+          "description": "Schema version. This document IS the v3 schema; the field is locked to `const: 3`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v4.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v3 manifests (versions 0, 1, 2) are historical and are no longer valid under this schema — the P2 daemon-only end-state (ph2-p2-manifestversion-bump) retired v2."
         }
       }
     },
@@ -143,7 +143,7 @@
         },
         "usbipYubikey": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb <vm>` refuses to run when false."
+          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb attach|detach|probe` refuses to run when false. (The pre-P6 `nixling usb <vm>` bash orchestrator was retired in P6 per ADR 0015.)"
         },
         "audio": {
           "type": "boolean",
@@ -171,7 +171,7 @@
         },
         "usbipdHostIp": {
           "type": ["string", "null"],
-          "description": "Host IP of the per-env usbipd proxy. `nixling usb <vm>` passes this to `usbip attach -r`. Null for net VMs and legacy."
+          "description": "Host IP of the per-env usbipd proxy. `nixling usb attach` passes this to `usbip attach -r` via the broker SpawnRunner DAG (v1.0; the pre-P6 `nixling usb <vm>` bash orchestrator was retired in P6 per ADR 0015). Null for net VMs and legacy."
         },
         "stateDir": {
           "type": "string",

@@ -24,8 +24,9 @@
 #     `ssh user@<lan>.<index>` and packets head out via the net VM.
 #
 # H1 (bridge port isolation): workload taps land on the LAN bridge
-# with `Isolated = true` so they can only exchange frames with the
-# net VM's tap, not with each other.  The net VM's LAN tap
+# with `Isolated = true` by default so they can only exchange
+# frames with the net VM's tap, not with each other. The env-level
+# `lan.allowEastWest` opt-in clears that flag. The net VM's LAN tap
 # (`<env>-l1`) uses the priority-25 rule which comes before the
 # isolation rule (priority 30) and therefore stays un-isolated.
 # STP and multicast snooping are disabled on all bridges (no
@@ -62,36 +63,57 @@ let
 
   # Per-env metadata used by host.nix, cli.nix, and net.nix.
   # `hostBlocklist` is augmented with the host's own primary-LAN CIDRs
-  # (cfg.hostLanCidrs) so the default DROP rule explicitly excludes
-  # everything on the wire the host itself sits on, not just the
-  # broad RFC1918 catch-alls.
-  netMeta = envName: net: rec {
-    name = envName;
-    inherit (net) lanSubnet uplinkSubnet netName;
-    hostBlocklist = lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs);
-    lanBridge = "br-${envName}-lan";
-    uplinkBridge = "br-${envName}-up";
-    hostUplinkIp = subnetIp uplinkSubnet 1;
-    netUplinkIp = subnetIp uplinkSubnet 2;
-    netLanIp = subnetIp lanSubnet 1;
-    uplinkMask = subnetMask uplinkSubnet;
-    lanMask = subnetMask lanSubnet;
-    # DHCP pool: avoid the net VM (.1), reserved low (.2–.9), and
-    # the static-reservation block (.10–.250).
-    dhcpRangeStart = subnetIp lanSubnet 251;
-    dhcpRangeEnd = subnetIp lanSubnet 254;
-    netUplinkMac = mkMac envName "up" 2;
-    netLanMac = mkMac envName "lan" 1;
-    workloads = lib.mapAttrs
-      (vmName: vm: {
-        ip = subnetIp lanSubnet vm.index;
-        mac = mkMac envName "lan" vm.index;
-        hostName = vmName;
-      })
-      (workloadsInEnv envName);
-  };
+  # (cfg.hostLanCidrs) plus every OTHER env's LAN/uplink CIDR. That
+  # keeps the broad LAN->uplink forward rule in net.nix from becoming a
+  # routed path into peer envs.
+  netMeta = envName: net:
+    let
+      peerEnvCidrs = lib.flatten (lib.mapAttrsToList
+        (otherName: otherNet:
+          lib.optionals (otherName != envName) [
+            otherNet.lanSubnet
+            otherNet.uplinkSubnet
+          ])
+        envs);
+    in rec {
+      name = envName;
+      inherit (net) lanSubnet uplinkSubnet netName mtu mssClamp;
+      allowEastWest = net.lan.allowEastWest;
+      hostBlocklist = lib.unique (net.hostBlocklist ++ cfg.hostLanCidrs ++ peerEnvCidrs);
+      lanBridge = "br-${envName}-lan";
+      uplinkBridge = "br-${envName}-up";
+      hostUplinkIp = subnetIp uplinkSubnet 1;
+      netUplinkIp = subnetIp uplinkSubnet 2;
+      netLanIp = subnetIp lanSubnet 1;
+      uplinkMask = subnetMask uplinkSubnet;
+      lanMask = subnetMask lanSubnet;
+      # DHCP pool: avoid the net VM (.1), reserved low (.2–.9), and
+      # the static-reservation block (.10–.250).
+      dhcpRangeStart = subnetIp lanSubnet 251;
+      dhcpRangeEnd = subnetIp lanSubnet 254;
+      netUplinkMac = mkMac envName "up" 2;
+      netLanMac = mkMac envName "lan" 1;
+      workloads = lib.mapAttrs
+        (vmName: vm: {
+          ip = subnetIp lanSubnet vm.index;
+          mac = mkMac envName "lan" vm.index;
+          hostName = vmName;
+        })
+        (workloadsInEnv envName);
+    };
 
   allMeta = lib.mapAttrs netMeta envs;
+
+  # USBIP host-side plumbing is only needed for envs that actually
+  # carry a YubiKey-enabled workload VM, and only when host-side
+  # YubiKey support is enabled at all.
+  usbipEnvNames = lib.unique (lib.concatMap
+    (vm: lib.optional (vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
+    (lib.attrValues cfg.vms));
+  usbipMeta =
+    if cfg.site.yubikey.enable
+    then lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) allMeta
+    else { };
 
   # Per-env backend port: 3241 + alphabetical index of env name.
   # lib.attrNames returns names sorted, so the assignment is deterministic.
@@ -133,10 +155,10 @@ in
     # Every VM that names an env must point at one that exists.
     (lib.mapAttrsToList
       (vmName: vm: {
-        assertion = vm.env == null || lib.hasAttr vm.env cfg.envs;
+        assertion = vm.env == null || (lib.hasAttr vm.env cfg.envs && cfg.envs.${vm.env}.enable);
         message = "nixling.vms.${vmName}.env = \"${toString vm.env}\" "
-          + "but nixling.envs has no such env (have: "
-          + lib.concatStringsSep ", " (lib.attrNames cfg.envs) + ").";
+          + "but nixling.envs has no such ENABLED env (have enabled: "
+          + lib.concatStringsSep ", " (lib.attrNames envs) + ").";
       })
       cfg.vms)
     # `staticIp` and `env` are mutually exclusive.
@@ -152,7 +174,8 @@ in
       (envName: _:
         let
           indices = lib.mapAttrsToList (_: vm: vm.index) (workloadsInEnv envName);
-          dups = lib.subtractLists (lib.unique indices) indices;
+          dups = lib.attrNames (lib.filterAttrs (_: members: builtins.length members > 1)
+            (lib.groupBy toString indices));
         in
         {
           assertion = dups == [ ];
@@ -171,6 +194,12 @@ in
         message = "nixling.envs.${envName}: env name must be at "
           + "most 8 characters (Linux IFNAMSIZ-1=15 limit: bridge "
           + "`br-<env>-lan` is 7 + len(env) chars).";
+      })
+      envs)
+    ++ (lib.mapAttrsToList
+      (envName: net: {
+        assertion = !(net.lan.allowEastWest && !cfg.site.allowUnsafeEastWest);
+        message = "nixling.envs.${envName}.lan.allowEastWest requires nixling.site.allowUnsafeEastWest = true because peer-guest traffic is outside nixling's default isolation threat model.";
       })
       envs)
     # Phase 2b networking hardening: per-env CIDR validation.
@@ -348,8 +377,14 @@ in
           }];
           networkConfig = {
             ConfigureWithoutCarrier = true;
+            LinkLocalAddressing = "no";
+            IPv6AcceptRA = false;
           };
-          linkConfig.RequiredForOnline = "no";
+          linkConfig = {
+            RequiredForOnline = "no";
+          } // lib.optionalAttrs (m.mtu != null) {
+            MTUBytes = toString m.mtu;
+          };
         };
 
         # LAN bridge: host has NO IP. The bridge interface still
@@ -359,9 +394,13 @@ in
           matchConfig.Name = m.lanBridge;
           networkConfig = {
             ConfigureWithoutCarrier = true;
+            LinkLocalAddressing = "no";
+            IPv6AcceptRA = false;
           };
           linkConfig = {
             RequiredForOnline = "no";
+          } // lib.optionalAttrs (m.mtu != null) {
+            MTUBytes = toString m.mtu;
           };
         };
 
@@ -370,7 +409,11 @@ in
         "30-up-${envName}" = {
           matchConfig.Name = "${envName}-u*";
           networkConfig.Bridge = m.uplinkBridge;
-          linkConfig.RequiredForOnline = "no";
+          linkConfig = {
+            RequiredForOnline = "no";
+          } // lib.optionalAttrs (m.mtu != null) {
+            MTUBytes = toString m.mtu;
+          };
         };
 
         # H1: Net-VM LAN tap (${envName}-l1) → LAN bridge, NOT isolated.
@@ -381,19 +424,29 @@ in
         "25-net-lan-${envName}" = {
           matchConfig.Name = "${envName}-l1";
           networkConfig.Bridge = m.lanBridge;
-          linkConfig.RequiredForOnline = "no";
+          linkConfig = {
+            RequiredForOnline = "no";
+          } // lib.optionalAttrs (m.mtu != null) {
+            MTUBytes = toString m.mtu;
+          };
         };
 
         # H1: Workload LAN taps (${envName}-l<index>, index >= 2) →
-        # LAN bridge, ISOLATED. Each workload tap can only exchange
-        # frames with the net VM's tap, not with peer workload taps.
+        # LAN bridge. Default: ISOLATED so each workload tap can only
+        # exchange frames with the net VM's tap, not with peer
+        # workload taps. `lan.allowEastWest = true` clears the bridge
+        # isolation and restores same-env east-west traffic.
         # The priority-25 rule above claims ${envName}-l1 first, so
         # this rule only applies to workload taps.
         "30-lan-${envName}" = {
           matchConfig.Name = "${envName}-l*";
           networkConfig.Bridge = m.lanBridge;
-          linkConfig.RequiredForOnline = "no";
-          bridgeConfig.Isolated = true;
+          linkConfig = {
+            RequiredForOnline = "no";
+          } // lib.optionalAttrs (m.mtu != null) {
+            MTUBytes = toString m.mtu;
+          };
+          bridgeConfig.Isolated = !m.allowEastWest;
         };
       })
       allMeta);
@@ -435,245 +488,21 @@ in
   };
 
   # ---------------------------------------------------------------------------
-  # M6 / P2r2 nixos-1+security-1 — usbipd exclusive single-env export.
+  # P6 (ph6-remove-systemd-emission): the per-env usbipd systemd units
+  # (`nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`) and the
+  # `nixling-net-route-preflight.service` singleton were deleted here.
   #
-  # ARCHITECTURE NOTE (h2-usbip-arch-doc, post-W2 review):
-  # ----------------------------------------------------------------
-  # The W2 panel-review networking reviewer flagged that the original
-  # plan called for a host-wide `nixling-sys-usbipd.service` binding
-  # `127.0.0.1:3241`, whereas this module declares PER-ENV backends
-  # (`nixling-sys-<env>-usbipd-backend.service`). The per-env design
-  # is the **intended** and **safer** shape:
-  #
-  #   * Each env gets its own loopback-bound backend (different
-  #     port). usbipd has no `--host` flag, so the backend binds
-  #     0.0.0.0 by default — we restrict it to loopback via
-  #     source-based iptables in extraCommands.
-  #   * The user-facing proxy is socket-activated on the env's
-  #     uplink IP (`<hostUplinkIp>:3240`) and forwards to its own
-  #     backend's loopback port via systemd-socket-proxyd.
-  #   * A host-wide singleton would centralize the trust boundary
-  #     and create a single point where a misconfigured firewall
-  #     could leak the service to other interfaces. Per-env
-  #     backends fail closed.
-  #
-  # The cli.nix exclusive-export layer (see below) coordinates
-  # which backend is active at any moment, since `usbip bind`
-  # exports a device to the host-wide kernel usbip-host namespace.
-  # ----------------------------------------------------------------
-  #
-  # Problem (addressed by this commit): a global `usbip bind -b $BUSID` exports
-  # the device to the host-wide usbip-host kernel namespace, so any usbipd
-  # instance—regardless of port—can serve the same device to any env.
-  #
-  # Fix (two layers):
-  #
-  #   Layer 1 — cli.nix exclusive export (primary):
-  #     do_usb and do_up stop all non-target env sockets/backends before
-  #     binding the device, and restore them after detach. Only one env's
-  #     backend can be active while a device is bound.
-  #
-  #   Layer 2 — iptables defense-in-depth (below, in extraCommands):
-  #     Even if a backend somehow starts, iptables rules restrict each
-  #     backend port to 127.0.0.1 on lo, and each proxy port (3240) on
-  #     each env's uplinkBridge to that env's own uplinkSubnet.
-  #
-  # Service layout: one backend per env on a distinct loopback port:
-  #   nixling-sys-<env>-usbipd-backend.service — usbipd on 127.0.0.1:<port>
-  #   nixling-sys-<env>-usbipd-proxy.socket    — ListenStream=<hostUplinkIp>:3240
-  #   nixling-sys-<env>-usbipd-proxy.service   — socket-proxyd to its own backend port
-  #
-  # Ports: 3241 + alphabetical index of env name (sorted, deterministic).
-  # Each proxy forwards only to its own backend; backend ports are lifted to
-  # the module-level let so extraCommands can share the same computation.
-  #
-  # Confinement: NoNewPrivileges + CapabilityBoundingSet restrict the backend
-  # to net capabilities only. ProtectSystem is omitted because usbipd requires
-  # read access to /sys/bus/usb for device enumeration.
+  # Replacements:
+  #   - usbipd-backend / usbipd-proxy: broker `SpawnRunner{role: Usbip,
+  #     vm_id: sys-<env>-usbipd}` per the per-busid state machine in
+  #     `docs/reference/privileges.md` (`ph3-p3-usbip-state-machine`).
+  #   - net route preflight: `nixlingd` startup self-check +
+  #     `nixling host reconcile --network --apply` via broker ops
+  #     (`ph3-p3-net-route-degraded-mode`).
+  #   - Firewall carve-outs for per-env usbip ports: broker
+  #     `UsbipBindFirewallRule` op.
   # ---------------------------------------------------------------------------
 
-  systemd.services =
-    lib.mkMerge (
-    # Per-env backend services — each on a distinct loopback port.
-    lib.mapAttrsToList (_: m: {
-      "nixling-sys-${m.name}-usbipd-backend" = {
-        description = "USB/IP backend for nixling ${m.name} env "
-          + "(127.0.0.1:${toString (backendPort m.name)})";
-        serviceConfig = {
-          Type = "exec";
-          ExecStartPre = "${pkgs.kmod}/bin/modprobe usbip-host";
-          ExecStart = "${pkgs.linuxPackages.usbip}/bin/usbipd -4 "
-            + "--tcp-port ${toString (backendPort m.name)}";
-          Restart = "on-failure";
-          RestartSec = 2;
-          # Confinement: restrict to network capabilities only.
-          NoNewPrivileges = true;
-          CapabilityBoundingSet = "CAP_NET_BIND_SERVICE CAP_NET_RAW";
-          AmbientCapabilities  = "CAP_NET_BIND_SERVICE CAP_NET_RAW";
-          RestrictAddressFamilies = "AF_INET AF_INET6 AF_UNIX AF_NETLINK";
-          LockPersonality = true;
-        };
-      };
-    }) allMeta
-    # Per-env socket-proxy services — each forwards to its own backend port.
-    ++ lib.mapAttrsToList (_: m: {
-      "nixling-sys-${m.name}-usbipd-proxy" = {
-        description = "USB/IP socket proxy for nixling ${m.name} env "
-          + "(${m.hostUplinkIp}:3240 → 127.0.0.1:${toString (backendPort m.name)})";
-        requires = [ "nixling-sys-${m.name}-usbipd-backend.service" ];
-        after    = [ "nixling-sys-${m.name}-usbipd-backend.service" ];
-        serviceConfig = {
-          ExecStart =
-            "${pkgs.systemd}/lib/systemd/systemd-socket-proxyd "
-            + "127.0.0.1:${toString (backendPort m.name)}";
-          Restart    = "on-failure";
-          RestartSec = 2;
-          # Basic confinement for the long-lived proxy process.
-          NoNewPrivileges = true;
-          CapabilityBoundingSet = "";
-          LockPersonality = true;
-        };
-      };
-    }) allMeta
-    # Phase 2b networking hardening: route preflight oneshot.
-    # W3b H1 followup: this unit is fail-closed. If the host has a
-    # static route for any env's LAN that resolves to something other
-    # than the env's `uplinkBridge`, we exit 1 — and because each
-    # nixling-managed VM unit declares `Requires=` on this unit
-    # (set via `requiredBy` below), the VMs refuse to start until the
-    # operator clears the route conflict.
-    #
-    # Contract:
-    #   - wantedBy = multi-user.target so it ALWAYS runs at boot.
-    #   - RemainAfterExit = true so the unit stays "active" after a
-    #     successful preflight and dependent units see the "active"
-    #     state instead of "inactive (dead)".
-    #   - For every enabled VM, ordered Before= the wrapper and the
-    #     underlying microvm@ template instance, AND RequiredBy= the
-    #     wrapper, so VM-start refuses if preflight fails.
-    ++ lib.optional (allMeta != { }) {
-      nixling-net-route-preflight = {
-        description = "nixling: env LAN-route preflight (fail-closed) — blocks all nixling VMs from starting if any env's lanSubnet does not resolve via its uplink bridge";
-        wantedBy = [ "multi-user.target" ];
-        wants = [ "network-online.target" ];
-        after = [ "systemd-networkd.service" "network-online.target" ];
-        # Order + dependency: every enabled nixling-managed VM (workload
-        # and net) waits on this preflight. systemd does not accept a
-        # wildcard `nixling@*.service` for templates, so we enumerate.
-        before =
-          lib.concatMap
-            (n: [ "nixling@${n}.service" "microvm@${n}.service" ])
-            (lib.attrNames enabledVms);
-        requiredBy = map (n: "nixling@${n}.service") (lib.attrNames enabledVms);
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = "${pkgs.writeShellScript "nixling-net-route-preflight" ''
-            set -u
-            # v0.1.0 H6 — fail-closed invariant.
-            # If `ip route get <env-lan-ip>` returns nothing (lookup
-            # failed, bridge missing, no route), the preflight MUST
-            # treat that as failure. The previous shape wrapped the
-            # wrong-dev check in `if [ -n "$_probe_ip" ]; then`,
-            # which silently passed when the lookup returned empty —
-            # i.e. the very case the preflight exists to catch
-            # (workloads about to start with no route at all) would
-            # be reported as OK. Explicit empty-check below.
-            _rc=0
-            ${lib.concatStringsSep "\n" (lib.mapAttrsToList
-              (envName: m: ''
-                _probe_ip="$(${pkgs.iproute2}/bin/ip route get ${subnetIp m.lanSubnet 10} 2>/dev/null \
-                  | head -n1)" || _probe_ip=""
-                if [ -z "$_probe_ip" ]; then
-                  echo "nixling-net-route-preflight: ERROR env '${envName}': 'ip route get ${subnetIp m.lanSubnet 10}' returned no result" >&2
-                  echo "  This likely means the env's LAN bridge doesn't exist or has no IP." >&2
-                  echo "  Check 'ip addr show ${m.uplinkBridge}' and 'systemctl status nixling-${envName}-net.service'." >&2
-                  _rc=1
-                else
-                  case "$_probe_ip" in
-                    *"dev ${m.uplinkBridge}"*)
-                      : # OK — landed on this env's uplink bridge.
-                      ;;
-                    *)
-                      echo "nixling-net-route-preflight: ERROR env '${envName}' workload IP ${subnetIp m.lanSubnet 10} resolves via:" >&2
-                      echo "  $_probe_ip" >&2
-                      echo "  expected dev ${m.uplinkBridge}; check for stale routes / CIDR overlaps." >&2
-                      _rc=1
-                      ;;
-                  esac
-                fi
-              '')
-              allMeta)}
-            exit "$_rc"
-          ''}";
-        };
-      };
-    }
-  );
-
-  # ---------------------------------------------------------------------------
-  # P2r3 nixos-1/networking-1/security-1 — iptables rule ordering fix.
-  #
-  # Problem fixed: the previous code used iptables -A (append) which placed
-  # DROP rules AFTER the NixOS-generated accept rules from allowedTCPPorts.
-  # iptables first-match wins, so the accept fired before the drop.
-  #
-  # Fix: use iptables -I nixos-fw 1 (insert at position 1) so our rules
-  # are evaluated BEFORE any NixOS-generated accepts. 3240 is removed from
-  # allowedTCPPorts above; we emit an explicit accept only for the correct
-  # envs uplinkSubnet. Backend ports use ! -i lo (not -i lo ! -s) which
-  # matches all non-loopback interfaces correctly.
-  #
-  # Insertion order (last inserted = position 1):
-  #   1st insert: backend DROP (! -i lo) -> pushed to pos N by later inserts
-  #   2nd insert: cross-env DROP for 3240 -> pushed above backend DROP
-  #   3rd insert: correct-env ACCEPT for 3240 -> lands at pos 1
-  # Final order: ACCEPT correct-env -> DROP cross-env -> DROP backend non-lo
-  # ---------------------------------------------------------------------------
-  networking.firewall.extraCommands = lib.concatMapStringsSep "\n" (m:
-    let
-      bPort = toString (backendPort m.name);
-    in
-    ''
-      # P2r3 nixos-1/networking-1/security-1 [${m.name}]: insert at pos 1 (before NixOS accepts).
-      # Step 1: drop non-loopback-source access to backend port ${bPort}.
-      # Note: usbipd has no --host flag; it binds to 0.0.0.0. Use source-based
-      # rule (! -s 127.0.0.1) instead of interface-based (! -i lo) because
-      # connections from the host to its own IP route via lo, bypassing ! -i lo.
-      iptables -I nixos-fw 1 -p tcp --dport ${bPort} ! -s 127.0.0.1 -j DROP
-      # Step 2: drop cross-env access to usbip proxy port 3240 on this bridge (pushed to pos 2).
-      iptables -I nixos-fw 1 -i ${m.uplinkBridge} -p tcp --dport 3240 ! -s ${m.uplinkSubnet} -j DROP
-      # Step 3: accept correct-env access to 3240 (inserted last -> lands at pos 1, DROP at pos 2).
-      iptables -I nixos-fw 1 -i ${m.uplinkBridge} -p tcp --dport 3240 -s ${m.uplinkSubnet} -j nixos-fw-accept
-    ''
-  ) (lib.attrValues allMeta);
-
-  networking.firewall.extraStopCommands = lib.concatMapStringsSep "\n" (m:
-    let
-      bPort = toString (backendPort m.name);
-    in
-    ''
-      iptables -D nixos-fw -p tcp --dport ${bPort} ! -s 127.0.0.1 -j DROP 2>/dev/null || true
-      iptables -D nixos-fw -i ${m.uplinkBridge} -p tcp --dport 3240 ! -s ${m.uplinkSubnet} -j DROP 2>/dev/null || true
-      iptables -D nixos-fw -i ${m.uplinkBridge} -p tcp --dport 3240 -s ${m.uplinkSubnet} -j nixos-fw-accept 2>/dev/null || true
-    ''
-  ) (lib.attrValues allMeta);
-
-  # Per-env socket units: each binds exactly the host's uplink IP so
-  # usbipd is unreachable on the WAN interface or any other address.
-  systemd.sockets = lib.mkMerge (lib.mapAttrsToList
-    (_: m: {
-      "nixling-sys-${m.name}-usbipd-proxy" = {
-        description =
-          "USB/IP socket for nixling ${m.name} env (${m.hostUplinkIp}:3240)";
-        socketConfig = {
-          ListenStream = "${m.hostUplinkIp}:3240";
-          Accept       = false;
-        };
-        wantedBy = [ "sockets.target" ];
-      };
-    })
-    allMeta);
 
   # ---------------------------------------------------------------------------
   # Auto-declare the net VM for each env.

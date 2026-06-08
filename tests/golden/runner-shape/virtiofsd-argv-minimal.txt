@@ -1,0 +1,2 @@
+# W4-H10 virtiofsd argv snapshot from nixling_host::virtiofsd_argv::generate_virtiofsd_argv(audit_ro_store_input())
+/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-virtiofsd-1.13.0/bin/virtiofsd --socket-path=corp-vm-virtiofs-ro-store.sock --socket-group=kvm --shared-dir=/nix/store --thread-pool-size=4 --posix-acl --xattr --cache=auto --inode-file-handles=prefer --readonly

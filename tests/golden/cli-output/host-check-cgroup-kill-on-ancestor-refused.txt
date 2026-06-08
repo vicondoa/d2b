@@ -1,0 +1,7 @@
+error: host-check-error
+  code: cgroup-kill-on-ancestor-refused
+  exit_code: 1
+  what_was_checked: Whether the broker can issue cgroup.kill on a leaf without escalating to an ancestor.
+  observed_state: cgroup.kill probe targeted an ancestor outside the nixling delegated subtree.
+  remediation: Re-issue cgroup.kill against a leaf inside nixling.slice; never write cgroup.kill on an ancestor.
+  docs_anchor: docs/reference/error-codes.md#cgroup-kill-on-ancestor-refused

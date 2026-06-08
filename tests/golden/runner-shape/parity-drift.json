@@ -1,0 +1,18 @@
+{
+  "_comment": "W3 s4 golden fixture for runner_shape preflight drift detection (plan.md §'W3 runner-shape preflight'). Consumed by tests/runner-shape-preflight.sh and the runner_shape::tests rust unit tests.",
+  "chCapabilitiesDeclared": ["headless", "virtio-fs", "vhost-user-net"],
+  "chCapabilitiesPackaged": ["headless", "virtio-fs"],
+  "declaredRunnerArgv": [
+    {"vm": "corp-vm", "argvHash": ""}
+  ],
+  "chApiSocketPaths": [
+    {"vm": "corp-vm", "path": "/run/nixling/vms/corp-vm/ch.sock", "mode": 384, "owner": ""}
+  ],
+  "vsockTransports": [
+    {"vm": "corp-vm", "transport": "ip"}
+  ],
+  "sidecarNodes": [
+    {"vm": "corp-vm", "kind": "virtiofsd", "dagNodeId": "missing-node"}
+  ],
+  "processesDagNodeIds": ["corp-vm/swtpm"]
+}

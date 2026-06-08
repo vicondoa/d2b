@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: bridge-port-flag-drift
+  exit_code: 1
+  what_was_checked: Whether bridge port flags (learning/flooding/etc.) match the host.json declaration.
+  observed_state: Netlink readback shows a port flag diverging from bridgePortFlags.
+  remediation: Re-run `host prepare --apply` or update host.bridgePortFlags to match the desired state.
+  docs_anchor: docs/reference/error-codes.md#bridge-port-flag-drift

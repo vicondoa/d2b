@@ -43,41 +43,41 @@
     # sudo + the per-VM SSH key flow still cover every CLI path.
     launcherUsers = [ ];
 
-    # No YubiKey hardware on this host. Skips the usbip-host
-    # kernel module and the Yubico udev rules; the per-VM
+    # No YubiKey hardware on this host. Skips the Yubico udev rules
+    # and any host-side `usbip-host` loading; the per-VM
     # `usbip.yubikey` toggle (off below) is independent.
     yubikey.enable = false;
   };
 
   # --------------------------------------------------------------
-  # nixling.envs.work — one isolated environment
+  # nixling.envs.personal — one isolated environment
   # --------------------------------------------------------------
   # Declaring this attribute set is enough for nixling to render
   # the full per-env plumbing — see this example's README for the
   # itemised list of bridges, VMs, and services that materialise.
-  nixling.envs.work = {
+  nixling.envs.personal = {
     lanSubnet    = "10.99.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
   };
 
   # --------------------------------------------------------------
-  # nixling.vms.corp-vm — one headless workload VM
+  # nixling.vms.personal-dev — one headless workload VM
   # --------------------------------------------------------------
   # No `graphics.enable`, `audio.enable`, `tpm.enable`, or
   # `usbip.yubikey`. This is the bare-minimum nixling consumer:
   # plain DHCP guest networking, framework-managed SSH key, and
   # nothing else. Layer components on from the
   # `graphics-workstation` example next.
-  nixling.vms.corp-vm = {
+  nixling.vms.personal-dev = {
     enable = true;
 
     # Bind to the env declared above. Together with `index`, this
     # derives the VM's MAC, IP (10.99.0.10), dnsmasq reservation,
     # and tap name — no imperative wiring required.
-    env   = "work";
+    env   = "personal";
     index = 10;
 
-    # `nixling switch corp-vm` will SSH in as this user using the
+    # `nixling switch personal-dev` will SSH in as this user using the
     # framework-managed Ed25519 key generated under
     # /var/lib/nixling/keys/ on every activation.
     ssh.user = "alice";
@@ -86,7 +86,7 @@
     # this minimal — the framework already handles networking,
     # SSH keys, and the per-VM /nix/store.
     config = {
-      networking.hostName = lib.mkDefault "corp-vm";
+      networking.hostName = lib.mkDefault "personal-dev";
 
       users.users.alice = {
         isNormalUser = true;

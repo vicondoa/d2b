@@ -19,8 +19,9 @@
 #     conditionally by host.nix per-VM when `homeManager.enable =
 #     true`; the partial application flows through there.
 #
-# Components live in sibling files (components/graphics.nix, etc.)
-# and are conditionally imported per-VM by host.nix.
+# Components live in sibling files (components/graphics.nix,
+# components/audit.nix, etc.) and are conditionally imported per-VM
+# by host.nix.
 { inputs }:
 
 { ... }:
@@ -29,6 +30,7 @@
   imports = [
     ./options.nix
     ./options-observability.nix
+    ./options-ownership-matrix.nix
     ./assertions.nix
     ./network.nix
     (import ./host.nix { inherit inputs; })
@@ -42,10 +44,19 @@
     ./observability-vm.nix
     ./store.nix
     ./manifest.nix
-    ./cli.nix
-    ./host-ch-exporter.nix
+    ./bundle.nix
+    ./host-json.nix
+    ./processes-json.nix
+    ./privileges-json.nix
+    ./closures-json.nix
+    ./minijail-profiles.nix
+    # P6 ph6-p6-cli-nix-migrations + ph6-remove-systemd-emission:
+    # both cli.nix (bash CLI package) and host-ch-exporter.nix (host
+    # singleton scraper folded into daemon /metrics) are now retired.
+    # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
+    # for the static gates.
+    (import ./host-broker.nix { inherit inputs; })
     ./components/audio/host.nix
-    ./components/video/host.nix
     ./components/observability/default.nix
   ];
 

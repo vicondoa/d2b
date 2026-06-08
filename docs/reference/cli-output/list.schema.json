@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_ListItemOutputV2",
+  "type": "array",
+  "items": {
+    "$ref": "#/definitions/ListItemOutputV2"
+  },
+  "definitions": {
+    "ListItemOutputV2": {
+      "type": "object",
+      "required": [
+        "graphics",
+        "isNetVm",
+        "name",
+        "status",
+        "tpm",
+        "usbip"
+      ],
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "graphics": {
+          "type": "boolean"
+        },
+        "isNetVm": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "runnerParityOk": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "tpm": {
+          "type": "boolean"
+        },
+        "usbip": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

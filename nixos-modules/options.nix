@@ -1,8 +1,9 @@
 # nixling option schema.
 #
 # Per-VM declarations live under `nixling.vms.<name>`. Component
-# toggles (graphics.enable / tpm.enable / usbip.* / audio.*) are
-# defined here on the same submodule; the matching component file
+# toggles (graphics.enable / tpm.enable / usbip.* / audio.* /
+# audit.*) are defined here on the same submodule; the matching
+# component file
 # under `nixos-modules/components/` is conditionally imported by
 # host.nix.
 #
@@ -20,30 +21,11 @@
     ./options-site.nix
     ./options-envs.nix
     ./options-vms.nix
+    ./options-daemon.nix
   ];
 
-  # Internal: store path of the nixling-read-audio-state.sh helper.
-  # Baked in by cli.nix so tests can resolve it via nix eval instead of
-  # scanning the Nix store (which may find a stale previous generation).
-  options.nixling.audioStateHelperPath = lib.mkOption {
-    type = lib.types.str;
-    default = "";
-    internal = true;
-    description = "Store path of nixling-read-audio-state.sh (set by cli.nix).";
-  };
-
-  # Internal: absolute path to the 'nixling' CLI binary for the current
-  # generation, baked in by cli.nix. Used by host.nix to reference the
-  # nixling binary in systemd ExecStart lines without relying on PATH.
-  options.nixling.cliBin = lib.mkOption {
-    type = lib.types.str;
-    default = "";
-    internal = true;
-    description = "Absolute path to the nixling binary (set by cli.nix).";
-  };
-
   # Internal: populated by network.nix from the resolved
-  # nixling.envs config. host.nix and cli.nix read it to derive
+  # nixling.envs config. host.nix reads it to derive
   # workload-VM tap names, MACs, IPs, USBIP host IP, etc. Don't set
   # this manually.
   options.nixling._envMeta = lib.mkOption {
@@ -52,4 +34,27 @@
     internal = true;
     description = "Internal: per-env computed metadata (set by network.nix).";
   };
+
+  # ---------------------------------------------------------------------------
+  # P6 ph6-p6-cli-nix-migrations: the following internal options were
+  # retired together with the bash CLI consumer surface:
+  #
+  #   nixling.cliBin             — set by cli.nix to point at the
+  #                                bash CLI; consumed by
+  #                                host-audit.nix (deleted in the
+  #                                same commit; the audit-check
+  #                                service is on the P6 denylist).
+  #   nixling.audioStateHelperPath — set by cli.nix to point at
+  #                                nixling-read-audio-state.sh; the
+  #                                only consumer (tests/audio.sh)
+  #                                now discovers the helper at the
+  #                                daemon-managed path.
+  #   nixling._desktopWrappers   — set by cli.nix to pin the per-VM
+  #                                .desktop launcher contract. The
+  #                                daemon-native launcher module
+  #                                will re-introduce this option
+  #                                when it lands; until then no
+  #                                graphics VM gets a .desktop
+  #                                wrapper through the framework.
+  # ---------------------------------------------------------------------------
 }

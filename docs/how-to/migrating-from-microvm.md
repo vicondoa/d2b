@@ -62,14 +62,14 @@ the existing taps), stop here and shrink the scope first.
 | Egress firewall      | host nftables                                      | nftables inside the net VM (`hostBlocklist` + RFC1918 DROP)          |
 | VM-to-VM isolation   | shared bridge by default                           | one bridge per env, no inter-env forwarding                          |
 | SSH into the VM      | bake keys into the guest's nixos config            | framework-managed per-VM Ed25519 key under `nixling.site.keysDir`    |
-| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `nixling up\|down\|switch\|build\|boot\|test\|status <vm>` + polkit  |
+| Lifecycle commands   | `systemctl start microvm@<vm>` + `microvm -R`      | `nixling vm start\|vm stop\|switch\|build\|boot\|test\|status <vm>` (dispatches through `nixlingd` → `nixling-priv-broker` per ADR 0015 v1.0 daemon-only) |
 | Autostart            | `microvm.autostart` list                           | `nixling.vms.<vm>.autostart` per-VM bool                             |
 | Graphics             | hand-rolled crosvm + virtio-gpu wiring             | `nixling.vms.<vm>.graphics.enable = true` (component toggle)         |
 | TPM                  | hand-rolled `swtpm`, manual socket plumbing        | `nixling.vms.<vm>.tpm.enable = true`                                 |
 | Audio                | hand-rolled vhost-user-sound                       | `nixling.vms.<vm>.audio.enable = true` + `nixling audio mic/speaker` |
-| USBIP                | manual `usbipd` + `usbip attach` on the host       | per-env `nixling-sys-<env>-usbipd-proxy` + `nixling usb <vm>`        |
-| Non-root start/stop  | sudo every time                                    | `nixling-launcher` group + polkit allowlist on framework units       |
-| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `nixling@<vm>.service` (lifecycle), upstream still works  |
+| USBIP                | manual `usbipd` + `usbip attach` on the host       | `nixling usb attach <vm> <busid> --apply` (dispatches through nixlingd → broker `SpawnRunner` per-env usbipd runner; pre-P6 systemd `nixling-sys-<env>-usbipd-proxy.{service,socket}` was retired in P6 per ADR 0015) |
+| Non-root start/stop  | sudo every time                                    | `nixling-launchers` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in P6) |
+| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `nixlingd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the W14 `nixling@<vm>.service` wrapper was retired in P6) |
 
 ## Option mapping
 
@@ -154,8 +154,15 @@ egress via `sys-work-net`, but they **cannot directly talk to each
 other** — workload taps are marked `Isolated = true` in the LAN bridge
 (see `nixos-modules/network.nix:376-386`), and the net VM does not
 forward eth1→eth1 (`nixos-modules/net.nix:135-155`). If you need
-explicit VM-to-VM traffic (e.g. service mesh inside an env), that is
-not yet supported; track it as a future feature request.
+explicit VM-to-VM traffic (e.g. service mesh inside an env), opt in
+with the two-step unsafe acknowledgement:
+
+```nix
+nixling.site.allowUnsafeEastWest = true;
+nixling.envs.work.lan.allowEastWest = true;
+```
+
+Leave both unset for the default isolated LAN.
 
 ### Pattern: multiple envs (work / personal)
 
@@ -184,6 +191,28 @@ not yet supported; track it as a future feature request.
 Disjoint `lanSubnet` and `uplinkSubnet`. Reusing `index = 10` across
 envs is fine — uniqueness is scoped per-env. There is no inter-env
 route; the two LAN bridges are independent.
+
+### Pattern: tunneled uplinks (per-env MTU + MSS clamp)
+
+If an env rides a tunnel or overlay (WireGuard, Tailscale, VXLAN,
+PPPoE, ...), set `mtu` to the effective path MTU and enable
+`mssClamp` so forwarded TCP SYN packets advertise a safe MSS:
+
+```nix
+{
+  nixling.envs.work = {
+    lanSubnet = "10.20.0.0/24";
+    uplinkSubnet = "192.0.2.0/30";
+    mtu = 1280;
+    mssClamp = true;
+  };
+}
+```
+
+`mtu` threads through the env's bridges, taps, and guest NICs.
+`mssClamp = true` adds the net VM nftables rule
+`tcp flags syn tcp option maxseg size set rt mtu`, which keeps
+forwarded TCP flows aligned with the routed path MTU.
 
 See `examples/multi-env/` for a fully-annotated version.
 
@@ -214,7 +243,7 @@ cross-domain goes away.
 `graphics.enable = true` implicitly pins `microvm.hypervisor =
 "cloud-hypervisor"` — the only hypervisor wired for the GPU sidecar.
 Do not also start it with `systemctl start microvm@workstation`: use
-`nixling up workstation` from a Plasma/sway/Hyprland terminal so the
+`nixling vm start workstation` from a Plasma/sway/Hyprland terminal so the
 sidecar can reach `$WAYLAND_DISPLAY`. See `examples/graphics-workstation/`.
 
 ### Pattern: TPM-backed VM
@@ -238,7 +267,7 @@ back up only to encrypted, access-controlled media.
 ### Pattern: YubiKey passthrough
 
 ```nix
-nixling.site.yubikey.enable = true;       # host udev + usbip-host
+nixling.site.yubikey.enable = true;       # host udev; usbip-host loads on per-VM opt-in
 
 nixling.vms.work-app = {
   env = "work"; index = 10; ssh.user = "alice";
@@ -247,9 +276,12 @@ nixling.vms.work-app = {
 };
 ```
 
-Then `nixling usb work-app` from the host attaches a plugged-in
-YubiKey via the per-env `nixling-sys-work-usbipd-proxy.service`.
-Ctrl-C detaches.
+Then `nixling usb attach work-app <busid> --apply` from the host
+attaches a plugged-in YubiKey via the per-env usbipd broker-spawned
+runner under `nixling.slice/sys-work/usbipd-proxy` (v1.0 per ADR
+0015; the pre-P6 `nixling usb work-app` bash orchestrator + the
+per-env `nixling-sys-work-usbipd-proxy.service` systemd unit were
+retired in P6). Ctrl-C detaches.
 
 ### Pattern: keeping legacy / hand-rolled networking
 
@@ -444,22 +476,25 @@ has built cleanly. See "Rollback" at the end of this section.
    ```bash
    nixling list                       # what's declared + status
    nixling status <vm>                # per-VM health
-   nixling up    <vm>                 # bring up (graphics: needs Wayland)
-   nixling switch <vm>                # push a new closure live
+   nixling vm start <vm> --apply      # bring up (graphics: needs Wayland)
+   nixling switch <vm> --apply        # push a new closure live
    ```
 
    For headless VMs, `autostart = true` plus
-   `systemctl status microvm@<vm>` will show the same unit state
-   `microvm.nix` always reported. SSH into each migrated VM to
-   confirm reachability.
+   `nixling vm list` will show the broker-spawned runner state
+   (`nixling vm start <vm>` registers the runner in the supervisor
+   pidfd table). SSH into each migrated VM to confirm reachability.
 
-### After every subsequent `nixos-rebuild switch` (v0.1.5+)
+### After every subsequent `nixos-rebuild switch` (v1.0)
 
-Every per-VM lifecycle service in the framework carries
-`restartIfChanged = false`. Rebuilds update the unit files in
-`/etc/systemd/system/` but do NOT cycle the running VMs — this
+In v1.0 (per ADR 0015) `nixlingd` and `nixling-priv-broker` are the
+only persistent system units the framework declares; rebuilds update
+the systemd unit files and `/etc/nixling/{bundle,host,processes,
+privileges}.json` but the broker's per-runner pidfd ownership
 protects in-flight session state (interactive Wayland clients,
-in-RAM Entra device-bound tokens, virtiofsd socket handshakes).
+in-RAM Entra device-bound tokens, virtiofsd socket handshakes) —
+the runners are not respawned. Use `nixling vm restart <vm> --apply`
+to explicitly cycle a VM after a rebuild.
 
 After `nixos-rebuild switch`, check whether any VM has pending
 changes:
@@ -479,7 +514,7 @@ work             work   true     true  true    10.20.0.10      systemd [pending 
 Apply with:
 
 ```bash
-nixling restart <vm>
+nixling vm restart <vm>
 ```
 
 (Or `nixling switch <vm>` if you want a per-VM closure rebuild +
@@ -522,19 +557,22 @@ change. For the full predicate semantics see
   Zero byte duplication. `nixling switch <vm>` updates it live without
   a VM reboot. Back up `/var/lib/nixling/` only to encrypted,
   access-controlled media.
-- **Explicit lifecycle.** `nixling@<vm>.service` wraps
-  `microvm@<vm>.service` so "start", "stop", "restart", and
-  "rotate ssh key" all become single commands with clear exit codes
-  (`docs/reference/cli-contract.md`).
-- **CLI ergonomics.** `nixling up/down/status/list/audio/usb` — no
-  more remembering tap names, MAC byte counts, or which env's
-  usbipd is bound to which `192.0.2.X`.
+- **Explicit lifecycle.** In v1.0 (per ADR 0015) `nixling vm start /
+  stop / restart` dispatch through `nixlingd` → `nixling-priv-broker`;
+  the broker's `SpawnRunner` / `SignalRunner` ops + supervisor pidfd
+  table are the lifecycle-of-record. Single commands, clear exit
+  codes (`docs/reference/cli-contract.md`).
+- **CLI ergonomics.** `nixling vm start / vm stop / status / list /
+  audio / usb` — no more remembering tap names, MAC byte counts, or
+  which env's usbipd is bound to which `192.0.2.X`.
 - **SSH key management.** Per-VM Ed25519 keys generated at activation,
-  ACL'd to the `nixling-launcher` group, injected into the guest
+  ACL'd to the `nixling-launchers` group, injected into the guest
   at boot via `nixling-load-host-keys.service`. No flake-baked keys.
-- **Polkit allowlist.** Members of `nixling-launcher` can drive
-  `start`/`stop`/`restart` on framework units from a Plasma launcher
-  without sudo prompts.
+- **Permission boundary.** Members of `nixling-launchers` can drive
+  `vm start` / `vm stop` / `vm restart` against `nixlingd`'s public
+  socket (mode 0660, group `nixling-launchers`); `SO_PEERCRED` at
+  accept time is the authorisation surface. The pre-P6 polkit per-VM
+  allowlist was retired in P6 (ADR 0015).
 
 ## What microvm.nix users lose / what's nixling-only
 
@@ -559,10 +597,14 @@ change. For the full predicate semantics see
 - **Framework-owned shares.** Do not add a `/nix/store` entry to
   `microvm.shares` in `nixling.vms.<vm>.config` — the framework
   injects it with `lib.mkForce`.
-- **`microvm@<vm>.service` is wrapped, not replaced.** Use
-  `nixling@<vm>` for lifecycle (it understands the per-VM store
-  sync, polkit, and audio state). Use `microvm@<vm>` if you need to
-  reach upstream behaviour directly.
+- **`microvm@<vm>.service` is wrapped, not replaced — but only at
+  evaluation time.** In v1.0 (per ADR 0015) the per-VM lifecycle is
+  fully owned by `nixlingd` → `nixling-priv-broker` via the
+  supervisor DAG; the pre-P6 `nixling@<vm>.service` wrapper was
+  retired. Use `nixling vm start / vm stop / vm restart` for
+  day-to-day lifecycle. The upstream `microvm@<vm>.service` template
+  is still emitted by `microvm.nix` and can be used directly if you
+  need to bypass nixling entirely for debugging.
 
 ## Naming conventions you'll see post-migration
 
@@ -571,11 +613,20 @@ change. For the full predicate semantics see
 - `sys-<env>-net` — auto-declared net VM (NAT + dnsmasq + nftables).
 - `vm-<vm>-<env>` / `vm-<vm>-up` — taps on the bridges above.
 - `nixling-sys-<env>-usbipd-proxy.service` — host-side USBIP proxy
-  per env.
-- `nixling@<vm>.service` — lifecycle wrapper.
-- `microvm@<vm>.service` — upstream unit (still exists).
-- `nixling-launcher` — host group whose members can drive framework
-  units without sudo.
+  per env (retired as a host singleton in P3 → now a broker-spawned
+  runner per ADR 0015; the unit name above is preserved as the
+  cgroup leaf identifier).
+- `nixlingd.service` — daemon control plane (read-only RPCs + dispatch
+  to broker; never root).
+- `nixling-priv-broker.{service,socket}` — socket-activated privileged
+  broker (single audited host-mutation surface; see
+  [`docs/reference/privileges.md`](../reference/privileges.md)).
+- `microvm@<vm>.service` — upstream unit (still emitted by
+  `microvm.nix` for debugging; in v1.0 the broker `SpawnRunner` is
+  the lifecycle of record).
+- `nixling-launchers` — host group whose members can drive `vm start
+  / vm stop / vm restart` against `nixlingd`'s public socket (mode
+  0660, group `nixling-launchers`).
 
 ## Backup / state directories
 
@@ -605,9 +656,9 @@ another env's `lanSubnet`. Pick a disjoint `/24`.
 **Eval fails with `graphics.enable = true` but `waylandUser = null`.**
 Set `nixling.site.waylandUser = "<your-user>"` and declare that user
 in `users.users`. The user must have a running Wayland session at the
-time `nixling up <vm>` runs.
+time `nixling vm start <vm>` runs.
 
-**`nixling up <vm>` fails: `cannot find $WAYLAND_DISPLAY`.**
+**`nixling vm start <vm>` fails: `cannot find $WAYLAND_DISPLAY`.**
 You ran it over SSH or as root. Graphics VMs require a terminal
 inside the host's Wayland session. Headless VMs work over SSH and
 as root.
@@ -622,7 +673,7 @@ The per-VM store needs same-FS hardlinks; move
 `/var/lib/nixling` to the same FS as `/nix/store` (typically by
 remounting or relocating).
 
-**Polkit prompt still appears on `nixling up`.**
+**Polkit prompt still appears on `nixling vm start`.**
 The invoking user is not in `nixling-launcher`. Add them to
 `nixling.site.launcherUsers` (which only adjoins the group; you must
 still declare the user) and re-log-in so the group membership
@@ -631,7 +682,7 @@ takes effect.
 **SSH into the VM still uses your old key.**
 The guest's `authorized_keys` is populated at boot by
 `nixling-load-host-keys.service`. Restart the VM
-(`nixling down <vm> && nixling up <vm>`) or, inside the guest,
+(`nixling vm stop <vm> && nixling vm start <vm>`) or, inside the guest,
 `systemctl restart nixling-load-host-keys.service`.
 
 **`microvm.vms.<vm>` declared in two places.**

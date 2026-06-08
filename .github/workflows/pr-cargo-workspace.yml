@@ -1,0 +1,75 @@
+name: pr-cargo-workspace
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe-nixos-runner:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      available: ${{ steps.probe.outputs.available }}
+    steps:
+      - id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if runners_json=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100" 2>/dev/null); then
+            if echo "$runners_json" | jq -e 'any(.runners[]?; .status == "online" and ([.labels[].name] | index("self-hosted")) != null and ([.labels[].name] | index("nixos")) != null)' >/dev/null; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              echo "Using online self-hosted nixos runner."
+            else
+              echo "available=false" >> "$GITHUB_OUTPUT"
+              echo "No online self-hosted nixos runner detected; falling back to install-nix."
+            fi
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Runner probe unavailable; falling back to install-nix."
+          fi
+
+  cargo-self-hosted:
+    needs: probe-nixos-runner
+    if: needs.probe-nixos-runner.outputs.available == 'true'
+    runs-on: [self-hosted, nixos]
+    timeout-minutes: 90
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Cargo workspace gate
+        run: |
+          cd packages
+          CARGO_BUILD_RUSTC_WRAPPER='' nix develop --command bash -c '
+            cargo fmt --all -- --check &&
+            cargo clippy --workspace --all-targets -- -D warnings &&
+            cargo test --workspace &&
+            (cd nixling-priv-broker && cargo test && cargo test --features layer1-bootstrap)
+          '
+
+  cargo-ubuntu:
+    needs: probe-nixos-runner
+    if: needs.probe-nixos-runner.outputs.available != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Cargo workspace gate
+        run: |
+          cd packages
+          CARGO_BUILD_RUSTC_WRAPPER='' nix develop --command bash -c '
+            cargo fmt --all -- --check &&
+            cargo clippy --workspace --all-targets -- -D warnings &&
+            cargo test --workspace &&
+            (cd nixling-priv-broker && cargo test && cargo test --features layer1-bootstrap)
+          '

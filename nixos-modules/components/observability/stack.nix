@@ -37,6 +37,29 @@ let
   obsIngressSocket = "${alloyRuntimeDir}/obs-ingress.sock";
   stackHostName = config.networking.hostName;
 
+  # P5 ph5-p5-tempo-budget — canonical tempo retention + sampling
+  # policy. Per-tenant overrides are emitted as a separate YAML file
+  # because Tempo's inline `overrides.defaults.*` form covers only
+  # the default tenant; per-tenant rows (the critical tenant getting
+  # `tracesCritical` retention) live under
+  # `overrides.per_tenant_override_config`.
+  tempoPerTenantOverrides = pkgs.writeText "nixling-tempo-overrides.yaml" (
+    lib.generators.toYAML { } {
+      overrides = {
+        "${cfg.sampling.criticalTenant}" = {
+          compaction = {
+            block_retention = cfg.retention.tracesCritical;
+          };
+        };
+      };
+    }
+  );
+
+  samplingPercentageCritical =
+    builtins.toString (cfg.sampling.criticalRatio * 100.0);
+  samplingPercentageDefault =
+    builtins.toString (cfg.sampling.defaultRatio * 100.0);
+
   dashboardDir = pkgs.runCommand "nixling-grafana-dashboards" { } ''
     mkdir -p "$out"
     cp ${./dashboards/01-nixling-overview.json} "$out/01-nixling-overview.json"
@@ -252,11 +275,86 @@ let
       ''
 
       ''
-        otelcol.exporter.otlp "traces" {
-          client {
-            endpoint = "127.0.0.1:${toString tempoOtlpGrpcPort}"
-            compression = "none"
+        // P5 ph5-p5-tempo-budget — tempo retention + sampling budget.
+        // Pipeline shape:
+        //   otelcol.receiver.otlp.ingress.traces
+        //     -> otelcol.processor.tail_sampling.tempo_budget
+        //          (critical=always, default=probabilistic ${samplingPercentageDefault}%)
+        //     -> otelcol.connector.routing.tempo_tenant
+        //          (by attribute ${cfg.sampling.criticalAttribute}=${cfg.sampling.criticalValue})
+        //     -> otelcol.exporter.otlp.traces_{critical,default}
+        //          (sets X-Scope-OrgID to ${cfg.sampling.criticalTenant}
+        //           / ${cfg.sampling.defaultTenant} so Tempo's per-tenant
+        //           retention overrides apply).
+        otelcol.processor.tail_sampling "tempo_budget" {
+          decision_wait               = "5s"
+          num_traces                  = 50000
+          expected_new_traces_per_sec = 100
 
+          policy {
+            name = "critical_keep_all"
+            type = "and"
+            and {
+              and_sub_policy {
+                name = "match_critical_attribute"
+                type = "string_attribute"
+                string_attribute {
+                  key    = ${quote cfg.sampling.criticalAttribute}
+                  values = [${quote cfg.sampling.criticalValue}]
+                }
+              }
+              and_sub_policy {
+                name = "always_sample"
+                type = "always_sample"
+              }
+            }
+          }
+
+          policy {
+            name = "default_probabilistic"
+            type = "probabilistic"
+            probabilistic {
+              sampling_percentage = ${samplingPercentageDefault}
+            }
+          }
+
+          output {
+            traces = [otelcol.connector.routing.tempo_tenant.input]
+          }
+        }
+
+        otelcol.connector.routing "tempo_tenant" {
+          default_pipelines = [otelcol.exporter.otlp.traces_default.input]
+
+          table {
+            statement = "route() where attributes[${quote cfg.sampling.criticalAttribute}] == ${quote cfg.sampling.criticalValue}"
+            pipelines = [otelcol.exporter.otlp.traces_critical.input]
+          }
+
+          output {
+          }
+        }
+
+        otelcol.exporter.otlp "traces_default" {
+          client {
+            endpoint    = "127.0.0.1:${toString tempoOtlpGrpcPort}"
+            compression = "none"
+            headers     = {
+              "X-Scope-OrgID" = ${quote cfg.sampling.defaultTenant},
+            }
+            tls {
+              insecure = true
+            }
+          }
+        }
+
+        otelcol.exporter.otlp "traces_critical" {
+          client {
+            endpoint    = "127.0.0.1:${toString tempoOtlpGrpcPort}"
+            compression = "none"
+            headers     = {
+              "X-Scope-OrgID" = ${quote cfg.sampling.criticalTenant},
+            }
             tls {
               insecure = true
             }
@@ -274,7 +372,7 @@ let
           output {
             metrics = [otelcol.exporter.prometheus.metrics.input]
             logs    = [otelcol.exporter.loki.logs.input]
-            traces  = [otelcol.exporter.otlp.traces.input]
+            traces  = [otelcol.processor.tail_sampling.tempo_budget.input]
           }
         }
       ''
@@ -360,7 +458,95 @@ in
       traces = lib.mkOption {
         type = lib.types.str;
         default = "7d";
-        description = "Retention window for traces in the observability stack VM.";
+        description = ''
+          Default retention window for traces in the observability
+          stack VM. Applies to the default Tempo tenant
+          (`sampling.defaultTenant`). See
+          [docs/reference/tempo-retention-sampling.md] for the
+          canonical policy (P5 `ph5-p5-tempo-budget`).
+        '';
+      };
+
+      tracesCritical = lib.mkOption {
+        type = lib.types.str;
+        default = "30d";
+        description = ''
+          Retention window for the critical Tempo tenant
+          (`sampling.criticalTenant`). Spans tagged with the
+          configured `sampling.criticalAttribute` =
+          `sampling.criticalValue` (default `kind = "critical"`)
+          are routed to this tenant and kept for this longer
+          window so post-incident forensics on framework-critical
+          events (SpawnRunner failures, BundleTampered,
+          broker authz denials, etc.) stay queryable beyond the
+          default 7-day budget. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+    };
+
+    sampling = {
+      criticalAttribute = lib.mkOption {
+        type = lib.types.str;
+        default = "kind";
+        description = ''
+          Span attribute key inspected to decide whether a span
+          belongs to the critical Tempo tenant. P5
+          `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      criticalValue = lib.mkOption {
+        type = lib.types.str;
+        default = "critical";
+        description = ''
+          Span attribute value (matched against
+          `sampling.criticalAttribute`) that pins a span into the
+          critical Tempo tenant — sampled at
+          `sampling.criticalRatio` and retained for
+          `retention.tracesCritical`. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      criticalRatio = lib.mkOption {
+        type = lib.types.float;
+        default = 1.0;
+        description = ''
+          Sampling ratio for critical spans, 0.0–1.0. Pinned to
+          1.0 by the canonical policy so every critical span is
+          retained. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      defaultRatio = lib.mkOption {
+        type = lib.types.float;
+        default = 0.1;
+        description = ''
+          Head-consistent (traceID-deterministic) sampling ratio
+          for non-critical spans, 0.0–1.0. Pinned to 0.1 by the
+          canonical policy to keep per-VM trace volume inside
+          the disk budget documented in
+          docs/reference/tempo-retention-sampling.md. P5
+          `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      criticalTenant = lib.mkOption {
+        type = lib.types.str;
+        default = "nixling-critical";
+        description = ''
+          Tempo tenant id (set as `X-Scope-OrgID`) that critical
+          spans are routed to. P5 `ph5-p5-tempo-budget`.
+        '';
+      };
+
+      defaultTenant = lib.mkOption {
+        type = lib.types.str;
+        default = "nixling-default";
+        description = ''
+          Tempo tenant id (set as `X-Scope-OrgID`) that
+          non-critical spans are routed to. P5
+          `ph5-p5-tempo-budget`.
+        '';
       };
     };
 
@@ -378,8 +564,8 @@ in
     grafana = {
       listenAddress = lib.mkOption {
         type = lib.types.str;
-        default = "10.40.0.10";
-        description = "Address Grafana binds inside the observability stack VM.";
+        default = "0.0.0.0";
+        description = "Address Grafana binds inside the observability stack VM. The auto-declared obs VM injects the derived env IP via the host-level option; standalone use can override this.";
       };
 
       listenPort = lib.mkOption {
@@ -552,6 +738,11 @@ in
     services.tempo = {
       enable = true;
       settings = {
+        # P5 ph5-p5-tempo-budget — enable multi-tenancy so per-tenant
+        # retention overrides apply. Alloy attaches the X-Scope-OrgID
+        # header per critical / default span via two OTLP exporters
+        # downstream of the tail-sampling processor.
+        multitenancy_enabled = true;
         server = {
           http_listen_address = "127.0.0.1";
           http_listen_port = tempoHttpPort;
@@ -572,8 +763,22 @@ in
         };
         compactor = {
           compaction = {
-            block_retention = cfg.retention.traces;
+            # Global ceiling: blocks live at most `tracesCritical`
+            # before the compactor evicts them. Per-tenant overrides
+            # (below) shorten the default tenant to `traces`.
+            block_retention = cfg.retention.tracesCritical;
           };
+        };
+        # Per P5 policy: default tenant -> `retention.traces` (7d);
+        # critical tenant -> `retention.tracesCritical` (30d) via the
+        # per_tenant_override_config file generated above.
+        overrides = {
+          defaults = {
+            compaction = {
+              block_retention = cfg.retention.traces;
+            };
+          };
+          per_tenant_override_config = toString tempoPerTenantOverrides;
         };
         storage = {
           trace = {
@@ -669,7 +874,12 @@ in
             access = "proxy";
             url = "http://127.0.0.1:${toString tempoHttpPort}";
             editable = false;
+            # P5 ph5-p5-tempo-budget — multitenancy is on; default
+            # Tempo datasource queries the default tenant. A sibling
+            # `Tempo (Critical)` datasource (uid = `tempo-critical`)
+            # queries the critical tenant.
             jsonData = {
+              httpHeaderName1 = "X-Scope-OrgID";
               serviceMap = {
                 datasourceUid = "prometheus";
               };
@@ -708,6 +918,33 @@ in
                 search = true;
                 metrics = true;
               };
+            };
+            secureJsonData = {
+              httpHeaderValue1 = cfg.sampling.defaultTenant;
+            };
+          }
+          {
+            # P5 ph5-p5-tempo-budget — sibling Tempo datasource that
+            # queries the critical tenant (`X-Scope-OrgID =
+            # ${cfg.sampling.criticalTenant}`). Critical spans are
+            # retained for `retention.tracesCritical` (default 30d)
+            # so post-incident forensics on SpawnRunner failures,
+            # BundleTampered, broker authz denials, etc. stay
+            # queryable beyond the default 7d budget.
+            name = "Tempo (Critical)";
+            type = "tempo";
+            uid = "tempo-critical";
+            access = "proxy";
+            url = "http://127.0.0.1:${toString tempoHttpPort}";
+            editable = false;
+            jsonData = {
+              httpHeaderName1 = "X-Scope-OrgID";
+              serviceMap = {
+                datasourceUid = "prometheus";
+              };
+            };
+            secureJsonData = {
+              httpHeaderValue1 = cfg.sampling.criticalTenant;
             };
           }
         ];

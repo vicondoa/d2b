@@ -1,0 +1,9 @@
+{
+  "code": "single-writer-conflict",
+  "docs_anchor": "docs/reference/error-codes.md#single-writer-conflict",
+  "exit_code": 78,
+  "kind": "host-prepare-apply-error",
+  "observed_state": "Both legacy units and nixlingd.service hold an exclusive writer claim.",
+  "remediation": "Stop legacy units before running `host prepare --apply` on a Tier-0 mixed host.",
+  "what_was_checked": "Whether legacy + daemon writers are both targeting host state at apply time."
+}

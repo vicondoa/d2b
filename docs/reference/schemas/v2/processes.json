@@ -1,0 +1,601 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProcessesJson",
+  "description": "Per-VM process DAG and lifecycle invariants from ADR 0004.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "vms"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "Schema version used by this artifact.",
+      "type": "string"
+    },
+    "vms": {
+      "description": "Per-VM process DAGs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VmProcessDag"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CgroupPlacement": {
+      "description": "Cgroup placement for a jailed role.",
+      "type": "object",
+      "required": [
+        "controllers",
+        "delegated",
+        "subtree"
+      ],
+      "properties": {
+        "controllers": {
+          "description": "Controllers requested by the role.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "delegated": {
+          "description": "Whether the broker must delegate ownership to nixlingd.",
+          "type": "boolean"
+        },
+        "subtree": {
+          "description": "cgroup-v2 subtree requested for this role.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DagEdge": {
+      "description": "Directed dependency edge in the per-VM DAG.",
+      "type": "object",
+      "required": [
+        "from",
+        "reason",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "description": "Predecessor node.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the dependency exists.",
+          "type": "string"
+        },
+        "to": {
+          "description": "Successor node.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountPolicy": {
+      "description": "Mount policy for a minijail role.",
+      "type": "object",
+      "required": [
+        "hideDeviceNodesByDefault",
+        "nixStoreReadOnly",
+        "readOnlyPaths",
+        "writablePaths"
+      ],
+      "properties": {
+        "hideDeviceNodesByDefault": {
+          "description": "Whether device nodes are hidden unless broker-opened fds are passed.",
+          "type": "boolean"
+        },
+        "nixStoreReadOnly": {
+          "description": "Whether `/nix/store` is visible read-only.",
+          "type": "boolean"
+        },
+        "readOnlyPaths": {
+          "description": "Read-only paths mounted into the jail.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writablePaths": {
+          "description": "Writable paths explicitly documented for this role.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WritablePath"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "NamespaceSet": {
+      "description": "Namespace flags for a minijail profile.",
+      "type": "object",
+      "required": [
+        "ipc",
+        "mount",
+        "net",
+        "pid",
+        "user",
+        "uts"
+      ],
+      "properties": {
+        "ipc": {
+          "description": "Whether the IPC namespace is isolated.",
+          "type": "boolean"
+        },
+        "mount": {
+          "description": "Whether the mount namespace is isolated.",
+          "type": "boolean"
+        },
+        "net": {
+          "description": "Whether the network namespace is isolated.",
+          "type": "boolean"
+        },
+        "pid": {
+          "description": "Whether the PID namespace is isolated.",
+          "type": "boolean"
+        },
+        "user": {
+          "description": "Whether a user namespace is used.",
+          "type": "boolean"
+        },
+        "uts": {
+          "description": "Whether the UTS namespace is isolated.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessNode": {
+      "description": "Single process role in a VM DAG.",
+      "type": "object",
+      "required": [
+        "id",
+        "profile",
+        "readiness",
+        "role"
+      ],
+      "properties": {
+        "argv": {
+          "description": "Full argv for daemon-spawned roles; `argv[0]` is the process title.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "binaryPath": {
+          "description": "Absolute execve path for daemon-spawned roles.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable node id used by edges.",
+          "type": "string"
+        },
+        "profile": {
+          "description": "Typed minijail metadata for this role.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RoleProfile"
+            }
+          ]
+        },
+        "readiness": {
+          "description": "Readiness predicates that mark the role available.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReadinessPredicate"
+          }
+        },
+        "role": {
+          "description": "Role kind used by orchestration and minijail profile selection.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessRole"
+            }
+          ]
+        },
+        "unit": {
+          "description": "Optional systemd unit backing this node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessRole": {
+      "description": "Known role types in the ADR 0004 process graph.",
+      "oneOf": [
+        {
+          "description": "Host reconciliation before VM-specific startup.",
+          "type": "string",
+          "enum": [
+            "host-reconcile"
+          ]
+        },
+        {
+          "description": "Store and virtiofs preflight validation.",
+          "type": "string",
+          "enum": [
+            "store-virtiofs-preflight"
+          ]
+        },
+        {
+          "description": "swtpm pre-start flush step.",
+          "type": "string",
+          "enum": [
+            "swtpm-pre-start-flush"
+          ]
+        },
+        {
+          "description": "swtpm sidecar.",
+          "type": "string",
+          "enum": [
+            "swtpm"
+          ]
+        },
+        {
+          "description": "virtiofsd sidecar.",
+          "type": "string",
+          "enum": [
+            "virtiofsd"
+          ]
+        },
+        {
+          "description": "Optional video sidecar.",
+          "type": "string",
+          "enum": [
+            "video"
+          ]
+        },
+        {
+          "description": "Optional GPU/graphics sidecar.",
+          "type": "string",
+          "enum": [
+            "gpu"
+          ]
+        },
+        {
+          "description": "Optional audio sidecar.",
+          "type": "string",
+          "enum": [
+            "audio"
+          ]
+        },
+        {
+          "description": "Cloud Hypervisor runner.",
+          "type": "string",
+          "enum": [
+            "cloud-hypervisor-runner"
+          ]
+        },
+        {
+          "description": "vsock relay sidecar.",
+          "type": "string",
+          "enum": [
+            "vsock-relay"
+          ]
+        },
+        {
+          "description": "Guest SSH readiness probe.",
+          "type": "string",
+          "enum": [
+            "guest-ssh-readiness"
+          ]
+        },
+        {
+          "description": "USBIP proxy or attach helper.",
+          "type": "string",
+          "enum": [
+            "usbip"
+          ]
+        }
+      ]
+    },
+    "ReadinessPredicate": {
+      "description": "Readiness predicates used by orchestration.",
+      "oneOf": [
+        {
+          "description": "Cloud Hypervisor API socket info is available.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "api-socket-info"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Guest or sidecar sent a vsock readiness notification.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vsock-notify"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "A Unix socket path exists.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "unix-socket-exists"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "A TCP port accepts connections.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "tcp-port"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "host",
+                "port"
+              ],
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "A command exits successfully.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "command"
+              ]
+            },
+            "value": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Component-specific predicate named by the emitter.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "component-specific"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "RoleProfile": {
+      "description": "Role-level minijail metadata without kernel-version syscall allowlists.",
+      "type": "object",
+      "required": [
+        "caps",
+        "cgroupPlacement",
+        "gid",
+        "mountPolicy",
+        "namespaces",
+        "profileId",
+        "uid"
+      ],
+      "properties": {
+        "adr_carve_out": {
+          "description": "ADR or plan carve-out reference for uid/root-capable exceptions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caps": {
+          "description": "Linux capabilities retained by the role.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cgroupPlacement": {
+          "description": "cgroup-v2 placement and delegation metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CgroupPlacement"
+            }
+          ]
+        },
+        "gid": {
+          "description": "Numeric gid used by the role.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mountPolicy": {
+          "description": "Mount policy metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MountPolicy"
+            }
+          ]
+        },
+        "namespaces": {
+          "description": "Namespace isolation metadata.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/NamespaceSet"
+            }
+          ]
+        },
+        "profileId": {
+          "description": "Profile reference shared with minijail-profile.json.",
+          "type": "string"
+        },
+        "seccompPolicyRef": {
+          "description": "Seccomp policy reference only; syscall allowlists are W3-owned.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uid": {
+          "description": "Numeric uid used by the role.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmProcessDag": {
+      "description": "Process DAG for one VM.",
+      "type": "object",
+      "required": [
+        "edges",
+        "invariants",
+        "nodes",
+        "vm"
+      ],
+      "properties": {
+        "edges": {
+          "description": "Dependency edges between DAG nodes.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DagEdge"
+          }
+        },
+        "invariants": {
+          "description": "v0.4.0 invariants that must hold for this VM.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/VmProcessInvariants"
+            }
+          ]
+        },
+        "nodes": {
+          "description": "Ordered role nodes in the DAG.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessNode"
+          }
+        },
+        "vm": {
+          "description": "VM name from the public manifest.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmProcessInvariants": {
+      "description": "v0.4.0 invariants preserved in the W1 process contract.",
+      "type": "object",
+      "required": [
+        "perVmAuditPipeline",
+        "swtpmPreStartFlush",
+        "tpmOwnershipMigrationWithoutRunningVmMutation",
+        "usbipGating"
+      ],
+      "properties": {
+        "perVmAuditPipeline": {
+          "description": "Every VM participates in the audit pipeline.",
+          "type": "boolean"
+        },
+        "swtpmPreStartFlush": {
+          "description": "swtpm pre-start uses `swtpm_ioctl -i` boot+shutdown flush.",
+          "type": "boolean"
+        },
+        "tpmOwnershipMigrationWithoutRunningVmMutation": {
+          "description": "TPM ownership migration avoids touching running VMs.",
+          "type": "boolean"
+        },
+        "usbipGating": {
+          "description": "USBIP is gated by host and VM opt-ins plus env scoping.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WritablePath": {
+      "description": "Writable path declaration with a purpose string.",
+      "type": "object",
+      "required": [
+        "path",
+        "purpose"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute path made writable in the jail.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "Reason the path is writable.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

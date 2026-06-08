@@ -1,0 +1,4864 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WireProtocolSchema",
+  "type": "object",
+  "required": [
+    "brokerRequest",
+    "brokerResponse",
+    "brokerSocket",
+    "framing",
+    "hello",
+    "helloOk",
+    "helloRejected",
+    "publicRequest",
+    "publicResponse",
+    "publicSocket",
+    "schemaVersion"
+  ],
+  "properties": {
+    "brokerRequest": {
+      "$ref": "#/definitions/BrokerRequest"
+    },
+    "brokerResponse": {
+      "$ref": "#/definitions/BrokerResponse"
+    },
+    "brokerSocket": {
+      "$ref": "#/definitions/SocketSpec"
+    },
+    "framing": {
+      "$ref": "#/definitions/FramingSpec"
+    },
+    "hello": {
+      "$ref": "#/definitions/Hello"
+    },
+    "helloOk": {
+      "$ref": "#/definitions/HelloOk"
+    },
+    "helloRejected": {
+      "$ref": "#/definitions/HelloRejected"
+    },
+    "publicRequest": {
+      "$ref": "#/definitions/PublicRequest"
+    },
+    "publicResponse": {
+      "$ref": "#/definitions/PublicResponse"
+    },
+    "publicSocket": {
+      "$ref": "#/definitions/SocketSpec"
+    },
+    "schemaVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AckResponse": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "operation"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "operation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ActivationMode": {
+      "type": "string",
+      "enum": [
+        "switch",
+        "boot",
+        "test",
+        "rollback"
+      ]
+    },
+    "ActivationRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyNftablesRequest": {
+      "description": "W3fu1 H1 (security-1): the broker re-derives the desired nft state from `bundle_nft_intent_ref`. The daemon does NOT pass inline rule text. `desired_hash` is a stable digest of the resolved intent, used for idempotent audit + drift detection.",
+      "type": "object",
+      "required": [
+        "bundleNftIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleNftIntentRef": {
+          "type": "string"
+        },
+        "desiredHash": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destroy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyNmUnmanagedRequest": {
+      "type": "object",
+      "required": [
+        "bundleNmIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleNmIntentRef": {
+          "type": "string"
+        },
+        "destroy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplyRouteRequest": {
+      "type": "object",
+      "required": [
+        "bundleRouteIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleRouteIntentRef": {
+          "type": "string"
+        },
+        "destroy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApplySysctlRequest": {
+      "type": "object",
+      "required": [
+        "bundleSysctlIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleSysctlIntentRef": {
+          "type": "string"
+        },
+        "destroy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditEntry": {
+      "type": "object",
+      "required": [
+        "action",
+        "result",
+        "scope",
+        "timestamp"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditFormat": {
+      "type": "string",
+      "enum": [
+        "human",
+        "json"
+      ]
+    },
+    "AuditRequest": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AuditSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "default": "human",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuditFormat"
+            }
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AuditEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditSelector": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthRole": {
+      "type": "string",
+      "enum": [
+        "none",
+        "launcher",
+        "admin"
+      ]
+    },
+    "AuthStatusResponse": {
+      "type": "object",
+      "required": [
+        "allowedSubcommands",
+        "deniedSubcommands",
+        "role",
+        "sockets"
+      ],
+      "properties": {
+        "allowedSubcommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deniedSubcommands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DeniedCommandHint"
+          }
+        },
+        "role": {
+          "$ref": "#/definitions/AuthRole"
+        },
+        "sockets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SocketReachability"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindMountFromHardlinkFarmRequest": {
+      "description": "P2 BindMountFromHardlinkFarm request. The broker resolves the `store-view` intent for `vm_id` and creates the bind mount from the per-VM hardlink farm.",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "bundleStoreViewIntentRef": {
+          "description": "Optional opaque pointer at the `store-view` intent row. `None` means \"use the canonical per-VM intent\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BindUnixSocketRequest": {
+      "type": "object",
+      "required": [
+        "bundleSocketIntentRef",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "bundleSocketIntentRef": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BridgeCheck": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "present"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/definitions/IfName"
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "tap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BridgePortFlagsResponse": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "isolated",
+        "neighSuppress",
+        "port"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/definitions/IfName"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "neighSuppress": {
+          "type": "boolean"
+        },
+        "port": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerAuditFilter": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerErrorResponse": {
+      "description": "W4-fu clean-break: typed broker error envelope for the real wire. Mirrors the bootstrap `BrokerResponse::Error` struct variant fields so the audit pipeline + daemon-side error propagation stay shape-compatible across the dispatcher transition.",
+      "type": "object",
+      "required": [
+        "action",
+        "kind",
+        "message",
+        "operation"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "targetWave": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNftables"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyNftablesRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNmUnmanaged"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyNmUnmanagedRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyRoute"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyRouteRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplySysctl"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplySysctlRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BindUnixSocket"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BindUnixSocketRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateOrReconcileUsersGroups"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateOrReconcileUsersGroupsRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreatePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreatePersistentTapRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateTapFd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateTapFdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DelegateCgroupV2"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DelegateCgroupV2Request"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ExportBrokerAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExportBrokerAuditRequest"
+            }
+          }
+        },
+        {
+          "description": "W4-fu clean-break: daemon ↔ broker handshake request. The daemon sends its client_version and supported_features; the broker replies with [`HelloResponse`] containing the selected wire version. Mirrors the bootstrap `Hello` shape so the connection layer doesn't need a side-channel.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Hello"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HelloRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "InjectSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LaunchMinijailChild"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/LaunchMinijailChildRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ModprobeIfAllowed"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ModprobeIfAllowedRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenCgroupDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenCgroupDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenDevice"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenDeviceRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenFuse"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenFuseRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenKvm"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenKvmRequest"
+            }
+          }
+        },
+        {
+          "description": "W4-fu: daemon-side reconcile-and-adopt support. The daemon asks the broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat` field 22 matches the expected start-time in one atomic call (no daemon-side syscall surface needed). The pidfd is returned via SCM_RIGHTS; if start-time drifted the broker closes the fd and surfaces a typed pidfd-race error.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenPidfd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenPidfdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenVhostNet"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenVhostNetRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PauseBroker"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareRuntimeDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareStateDir"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareDirRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "PrepareStoreView"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/PrepareStoreViewRequest"
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-store-sync: typed broker op that hardlink-farms a VM's resolved closure into `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the `current` symlink. Replaces the per-VM `nixling-<vm>-store-sync.service` bash oneshot. The daemon names only the opaque `bundle_closure_ref` + `vm_id` + expected `generation`; the broker re-derives every closure path from its trusted bundle copy.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreSync"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreSyncRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ReadSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ResumeBroker"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RotateSecretById"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SecretByIdRequest"
+            }
+          }
+        },
+        {
+          "description": "W15 (W9-fu): live host installer + migrate writer. Drives the per-host systemd unit install + `--enable` / `--start` flow (or migrate writer for existing NixOS hosts). The broker resolves the installer plan from the trusted bundle's `installer:host` intent row; the daemon never names raw systemd unit paths or `--enable` flags on the wire.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunHostInstall"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunHostInstallRequest"
+            }
+          }
+        },
+        {
+          "description": "W15 (W9-fu migrate writer): transition an existing systemd-owned VM to daemon-owned without touching running VMs. Resolves the migrate plan from the bundle's `migrate:host` intent row.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunMigrate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunMigrateRequest"
+            }
+          }
+        },
+        {
+          "description": "W14 LiveNative: broker-side mutating verb flips for per-VM activation, host GC, framework-managed SSH key rotation, and known_hosts trust maintenance.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunActivation"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunGc"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunGcRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunKeysRotate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunKeysRotateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunHostKeyTrust"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunHostKeyTrustRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunRotateKnownHost"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunRotateKnownHostRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetBridgePortFlags"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetBridgePortFlagsRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetSocketAcl"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetSocketAclRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetupMountNamespace"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SetupMountNamespaceRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SignalRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SignalRunnerRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SpawnRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SpawnRunnerRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UpdateHostsFile"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UpdateHostsFileRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipBind"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipBindRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipBindFirewallRule"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipBindFirewallRuleRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipProxyReconcile"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipProxyReconcileRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "UsbipUnbind"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipUnbindRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateBundle"
+              ]
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-dag-host-prep: write the per-VM dnsmasq lease file. Replaces leaves of the retired `microvm-setup@<vm>.service`. Currently a typed stub (`Unimplemented`); real dispatch lands later in P2.\n\nTODO(P2/P3): wire to a `live_seed_dnsmasq_lease` handler resolved via `BundleResolver` (per-VM dnsmasq lease row).",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SeedDnsmasqLease"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SeedDnsmasqLeaseRequest"
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-dag-host-prep: bind-mount `/var/lib/nixling/vms/<vm>/store-view` from the per-VM hardlink farm at `<vm>/store/`. Currently a typed stub (`Unimplemented`); real dispatch lands later in P2.\n\nTODO(P2/P3): wire to a `live_bind_mount_from_hardlink_farm` handler resolved via `BundleResolver::find_store_view_intent`.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BindMountFromHardlinkFarm"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BindMountFromHardlinkFarmRequest"
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-p2-ownership-matrix (sibling agent): enforce the per-leaf ownership/mode matrix on `/var/lib/nixling/vms/<vm>/`. Currently a typed stub (`Unimplemented`); the sibling agent lands the real check.\n\nTODO(P2): wire to `nixling_host::ownership_matrix::check` (delivered by the ph2-p2-ownership-matrix sibling agent).",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OwnershipMatrixCheck"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OwnershipMatrixCheckRequest"
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-p2-ssh-host-key-preflight (sibling agent): refuse VM start if `/var/lib/nixling/vms/<vm>/sshd-host-keys/` drifts from `root:root 0400`. Currently a typed stub (`Unimplemented`); the sibling agent lands the real check.\n\nTODO(P2): wire to the `O_NOFOLLOW` symlink-rejecting check (delivered by the ph2-p2-ssh-host-key-preflight sibling agent).",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SshHostKeyPreflight"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SshHostKeyPreflightRequest"
+            }
+          }
+        }
+      ]
+    },
+    "BrokerResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Ack"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AckResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreatePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/TapReadyResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateTapFd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/TapReadyResponse"
+            }
+          }
+        },
+        {
+          "description": "W4-fu clean-break: typed broker error envelope returned in place of an op-specific response when the broker refuses or fails to handle a request. Mirrors the bootstrap `BrokerResponse::Error` struct-variant shape so the audit pipeline and daemon-side error propagation stay shape-compatible across the dispatcher transition.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Error"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BrokerErrorResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ExportBrokerAudit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExportBrokerAuditResponse"
+            }
+          }
+        },
+        {
+          "description": "W15 (W9-fu): live host install + migrate writer responses.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunHostInstall"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunHostInstallResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunMigrate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunMigrateResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunActivation"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunActivationResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunGc"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunGcResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunKeysRotate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunKeysRotateResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunHostKeyTrust"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunHostKeyTrustResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "RunRotateKnownHost"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RunRotateKnownHostResponse"
+            }
+          }
+        },
+        {
+          "description": "W4-fu clean-break: daemon ↔ broker handshake confirmation response. Returned in reply to a `BrokerRequest::Hello` (added by the clean-break refactor; see below) so the daemon can capability-negotiate and the broker can audit the connection without a separate side-channel.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Hello"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HelloResponse"
+            }
+          }
+        },
+        {
+          "description": "W4-fu OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS on the same frame; the JSON body confirms which `(pid, start_time_ticks)` the broker verified.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "OpenPidfd"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/OpenPidfdResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SetBridgePortFlags"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/BridgePortFlagsResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SignalRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SignalRunnerResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SpawnRunner"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/SpawnRunnerResponse"
+            }
+          }
+        },
+        {
+          "description": "P2 ph2-store-sync: typed response carrying the activated generation, the resolved hardlink-farm root, and the count of top-level closure paths populated. Used by the daemon to surface the swap result in audit + start traces.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreSync"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreSyncResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ValidateBundle"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ValidateBundleResponse"
+            }
+          }
+        }
+      ]
+    },
+    "CapabilitiesResponse": {
+      "type": "object",
+      "required": [
+        "brokerSocket",
+        "capabilities",
+        "publicSocket",
+        "selectedVersion",
+        "serverVersion"
+      ],
+      "properties": {
+        "brokerSocket": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        },
+        "publicSocket": {
+          "type": "string"
+        },
+        "selectedVersion": {
+          "$ref": "#/definitions/Version"
+        },
+        "serverVersion": {
+          "$ref": "#/definitions/Version"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateOrReconcileUsersGroupsRequest": {
+      "type": "object",
+      "required": [
+        "subjectIds"
+      ],
+      "properties": {
+        "subjectIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreatePersistentTapRequest": {
+      "description": "W3fu2 H1 (rust-1 / security-1): the broker derives the bridge ifname, owner uid/gid, and TAP attributes from the trusted bundle row anchored by `role_id` + `vm_id`. The pre-W3fu2 wire carried a caller-supplied `ifname_derived: IfName`; W3fu1 R2 rust-1 found that this preserved a future bypass of broker-side trusted-bundle resolution, so the field was removed. The broker emits the observed ifname only in the audit record / response.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CreateTapFdRequest": {
+      "description": "See [`CreatePersistentTapRequest`] for the W3fu2 H1 opaque-ID rationale; `CreateTapFd` follows the same contract.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DelegateCgroupV2Request": {
+      "description": "W3fu1 H1 (security-1): the slice path is pinned by the bundle (`/sys/fs/cgroup/nixling.slice` per plan §\"W3 cgroup v2 delegation algorithm\"). It is **not** taken from caller input — the broker reads it from its own bundle copy via `scope_id`.",
+      "type": "object",
+      "required": [
+        "scopeId"
+      ],
+      "properties": {
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeniedCommandHint": {
+      "type": "object",
+      "required": [
+        "command",
+        "reason"
+      ],
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "required": [
+        "code",
+        "docsAnchor",
+        "kind",
+        "message",
+        "owningCommand",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "docsAnchor": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/Kind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "owningCommand": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        }
+      }
+    },
+    "ExportBrokerAuditRequest": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrokerAuditFilter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExportBrokerAuditResponse": {
+      "type": "object",
+      "required": [
+        "lines"
+      ],
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeatureFlag": {
+      "type": "string"
+    },
+    "FramingSpec": {
+      "type": "object",
+      "required": [
+        "bodyEncoding",
+        "lengthPrefixBytes",
+        "lengthPrefixEncoding",
+        "maxFrameSize",
+        "transport"
+      ],
+      "properties": {
+        "bodyEncoding": {
+          "type": "string"
+        },
+        "lengthPrefixBytes": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "lengthPrefixEncoding": {
+          "type": "string"
+        },
+        "maxFrameSize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "transport": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GcRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "keepGenerations": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Hello": {
+      "type": "object",
+      "required": [
+        "clientVersion"
+      ],
+      "properties": {
+        "clientVersion": {
+          "$ref": "#/definitions/SemverRange"
+        },
+        "supportedFeatures": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloOk": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "selectedVersion",
+        "serverVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FeatureFlag"
+          }
+        },
+        "selectedVersion": {
+          "$ref": "#/definitions/Version"
+        },
+        "serverVersion": {
+          "$ref": "#/definitions/Version"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloRejected": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "$ref": "#/definitions/HelloRejectedReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloRejectedReason": {
+      "type": "string",
+      "enum": [
+        "versionMismatch",
+        "capabilityNegotiationFailed",
+        "internalError"
+      ]
+    },
+    "HelloRequest": {
+      "description": "W4-fu clean-break: daemon ↔ broker handshake request. Carries the daemon's client_version and the wire feature flags it understands so the broker can pick a compatible response version + capability set. Mirrors the bootstrap `Hello { client_version, supported_features }` shape.",
+      "type": "object",
+      "required": [
+        "clientVersion"
+      ],
+      "properties": {
+        "clientVersion": {
+          "type": "string"
+        },
+        "supportedFeatures": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloResponse": {
+      "description": "W4-fu clean-break: daemon ↔ broker handshake response. Mirrors the bootstrap `BrokerResponse::HelloOk` shape so the connection-level capability negotiation works without a side-channel.",
+      "type": "object",
+      "required": [
+        "capabilities",
+        "selectedVersion",
+        "serverVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selectedVersion": {
+          "type": "string"
+        },
+        "serverVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCheckRequest": {
+      "type": "object",
+      "properties": {
+        "readOnly": {
+          "default": true,
+          "type": "boolean"
+        },
+        "strict": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCheckResponse": {
+      "type": "object",
+      "required": [
+        "exitCode",
+        "findings"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HostFinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostDestroyRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostFinding": {
+      "type": "object",
+      "required": [
+        "check",
+        "message",
+        "remediation",
+        "severity"
+      ],
+      "properties": {
+        "check": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/HostFindingSeverity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostFindingSeverity": {
+      "type": "string",
+      "enum": [
+        "Pass",
+        "Warn",
+        "Fail"
+      ]
+    },
+    "HostInstallRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "noStart": {
+          "default": false,
+          "type": "boolean"
+        },
+        "start": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostPrepareRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostReconcileRequest": {
+      "description": "P3 `ph3-p3-net-route-degraded-mode`: `host reconcile` request payload. Today the only scope is `--network`; future P-phases may add additional scopes (e.g. `--ownership`) carved out of `host prepare`. The daemon rejects requests with no scope selected with a typed `invalid-request` envelope.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "network": {
+          "description": "Re-run the per-env nftables / route / sysctl reconcile and clear the operator-only-mode counter on success.",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IfName": {
+      "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
+      "type": "string",
+      "maxLength": 15,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "KeyEntry": {
+      "type": "object",
+      "required": [
+        "fingerprint",
+        "managedKeyPath",
+        "vm"
+      ],
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "knownHostsEntry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "managedKeyPath": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeysListResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/KeyEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeysRotateRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeysShowRequest": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KeysShowResponse": {
+      "type": "object",
+      "required": [
+        "fingerprint",
+        "managedKeyPath",
+        "publicKey",
+        "vm"
+      ],
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "knownHostsEntry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "managedKeyPath": {
+          "type": "string"
+        },
+        "publicKey": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Kind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "authz-not-a-launcher",
+            "authz-audit-requires-admin",
+            "wire-version-mismatch",
+            "wire-frame-too-large",
+            "wire-unknown-field",
+            "wire-ifname-invalid",
+            "wire-malformed-json",
+            "broker-unimplemented",
+            "broker-validation-failed",
+            "manifest-parse-error",
+            "internal-io"
+          ]
+        },
+        {
+          "description": "P2 ph2-p2-manifestversion-bump: bundle's emitted manifestVersion is not the version the running daemon supports (after the v2→v3 clean break, v2 bundles MUST be rejected with this distinct kind so operators can correlate the failure to a re-render of the bundle, not to a parse-side regression).",
+          "type": "string",
+          "enum": [
+            "manifest-version-mismatch"
+          ]
+        },
+        {
+          "description": "P0: bundle artifact failed tamper-resistance check (symlink, owner, mode, or SHA-256 hash mismatch).",
+          "type": "string",
+          "enum": [
+            "bundle-tampered"
+          ]
+        }
+      ]
+    },
+    "LaunchMinijailChildRequest": {
+      "description": "W3fu1 H1 (security-1): the daemon never passes argv, env, uid/gid, caps, seccomp profile path, or any other launch authority across the wire. The broker reads the full launch context from `bundle.vms[vm_id].roles[role_id]` and constructs the minijail exec line itself.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListEntry": {
+      "type": "object",
+      "required": [
+        "lifecycle",
+        "runtime",
+        "vm"
+      ],
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/VmLifecycle"
+        },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeSummary"
+        },
+        "sshUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListRequest": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ListResponse": {
+      "type": "object",
+      "required": [
+        "vms"
+      ],
+      "properties": {
+        "vms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ListEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "MigrateRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModprobeIfAllowedRequest": {
+      "description": "`module_name` stays as the (already-validated) [`ModuleName`] newtype because it is genuinely a public input — the broker still looks it up in the trusted kernel-module matrix and refuses anything not in the allow list. The matrix itself never crosses the wire.",
+      "type": "object",
+      "required": [
+        "moduleName"
+      ],
+      "properties": {
+        "moduleName": {
+          "description": "Kernel-module name. The broker validates this against the trusted module allowlist; anything not present is refused.",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "MutatingVerbOutcome": {
+      "type": "string",
+      "enum": [
+        "dry-run-planned",
+        "applied",
+        "not-yet-implemented",
+        "broker-error",
+        "invalid-request"
+      ]
+    },
+    "MutatingVerbResponse": {
+      "description": "W14a mutating-verb daemon response shape.\n\n`outcome = \"dry-run-planned\"` returns a human-readable plan description in `summary` (the native CLI's dry-run planner output is preserved verbatim by the daemon).\n\n`outcome = \"applied\"` is returned only when the daemon has a native handler that genuinely executed the verb against the broker.\n\n`outcome = \"not-yet-implemented\"` is the v1.0 daemon-only contract (ADR 0015): the daemon has the wire variant + handler dispatch row but the per-verb native backend has not yet landed. The CLI surfaces the typed envelope (exit 78) unconditionally; the historical `NIXLING_LEGACY_BASH_OPT_IN` escape hatch and the bash-fallback shim were both retired in P6.\n\n`outcome = \"broker-error\"` means the daemon reached the live broker executor, but the broker refused or failed the request. The CLI surfaces the redacted broker remediation to the operator with exit 78; the raw broker `message` / `action` details MUST stay on the broker audit + admin-only log surfaces. There is no bash fallback in v1.0 daemon-only.",
+      "type": "object",
+      "required": [
+        "outcome",
+        "verb"
+      ],
+      "properties": {
+        "outcome": {
+          "$ref": "#/definitions/MutatingVerbOutcome"
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targetWave": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verb": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenCgroupDirRequest": {
+      "type": "object",
+      "required": [
+        "pathClass",
+        "scopeId"
+      ],
+      "properties": {
+        "pathClass": {
+          "$ref": "#/definitions/PathClass"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenDeviceRequest": {
+      "type": "object",
+      "required": [
+        "deviceClass",
+        "roleId"
+      ],
+      "properties": {
+        "deviceClass": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenFuseRequest": {
+      "type": "object",
+      "required": [
+        "roleId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenKvmRequest": {
+      "type": "object",
+      "required": [
+        "roleId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenPidfdRequest": {
+      "description": "W4-fu OpenPidfd: daemon-side reconcile-and-adopt support. The daemon's `nixlingd::supervisor::state::reconcile_and_adopt` loop sends this request for every snapshot the classifier returned `Adopt` for. The broker:\n\n1. Calls `pidfd_open(pid)`. 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks). 3. Compares against `expected_start_time_ticks`. 4. On match: returns the pidfd via SCM_RIGHTS + the [`OpenPidfdResponse`] JSON body. 5. On mismatch (pid reuse race): closes the pidfd and surfaces a typed pidfd-race error (audit record carries the observed start-time so the operator can correlate).\n\nThis atomic open-AND-verify closes the W*-fu GPT-5.5 panel CRITICAL finding that the daemon could otherwise re-adopt a pidfd that referred to a reused-pid unrelated process.",
+      "type": "object",
+      "required": [
+        "expectedStartTimeTicks",
+        "pid",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "expectedStartTimeTicks": {
+          "description": "Field-22 start-time ticks from `/proc/<pid>/stat` at the time the snapshot was written. The broker re-reads field 22 AFTER `pidfd_open` and compares; mismatch means the pid was reused.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "pid": {
+          "description": "PID the snapshot recorded.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "roleId": {
+          "description": "Per-VM role identifier (matches the daemon-side `PidfdKey::role_id`).",
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "description": "Per-VM scope the snapshot belongs to.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenPidfdResponse": {
+      "description": "Response body for [`OpenPidfdRequest`] success. The pidfd itself is the first SCM_RIGHTS attachment on the same frame.",
+      "type": "object",
+      "required": [
+        "pid",
+        "pidfdIndex",
+        "roleId",
+        "verifiedStartTimeTicks",
+        "vmId"
+      ],
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "pidfdIndex": {
+          "description": "Always `0` today; reserved for future multi-fd SCM_RIGHTS handoffs.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "verifiedStartTimeTicks": {
+          "description": "Echoed back so the daemon can re-verify the match the broker performed. Equal to `expected_start_time_ticks` from the request.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OpenVhostNetRequest": {
+      "type": "object",
+      "required": [
+        "roleId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "OwnershipMatrixCheckRequest": {
+      "description": "P2 OwnershipMatrixCheck request. The broker walks the `/var/lib/nixling/vms/<vm>/` subtree and verifies each leaf against the ownership matrix (plan.md P2 §\"Ownership matrix\"). Owned by sibling P2 agent (ph2-p2-ownership-matrix).",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PathClass": {
+      "description": "Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`] (security-1). The broker derives the concrete path from the bundle anchored by `vm_id` + `path_class`; the daemon never passes a raw path.\n\n[`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir [`PrepareRuntimeDir`]: crate::broker_wire::BrokerRequest::PrepareRuntimeDir",
+      "oneOf": [
+        {
+          "description": "Per-VM state directory under `/var/lib/nixling/vms/<vm>/`.",
+          "type": "string",
+          "enum": [
+            "vm"
+          ]
+        },
+        {
+          "description": "Per-VM runtime directory under `/run/nixling/<vm>/`.",
+          "type": "string",
+          "enum": [
+            "runtime"
+          ]
+        }
+      ]
+    },
+    "PrepareDirRequest": {
+      "description": "W3fu1 H1 (security-1): the concrete `/var/lib/nixling/vms/<vm>` or `/run/nixling/<vm>` path is derived from `vm_id` + `path_class` against the broker-side bundle. The daemon never passes a raw path.",
+      "type": "object",
+      "required": [
+        "pathClass",
+        "vmId"
+      ],
+      "properties": {
+        "pathClass": {
+          "$ref": "#/definitions/PathClass"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrepareStoreViewRequest": {
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capabilities"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "auth status"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ListRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StatusRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuditRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host check"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCheckRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vm start"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/VmLifecycleRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vm stop"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/VmLifecycleRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "vm restart"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/VmLifecycleRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "switch"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "boot"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "test"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "rollback"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ActivationRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "gc"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GcRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "keys list"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "keys show"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/KeysShowRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "keys rotate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/KeysRotateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "trust"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/TrustRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "rotate-known-host"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/RotateKnownHostRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb attach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipBindCliRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb detach"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipUnbindCliRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb probe"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "migrate"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MigrateRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host prepare"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostPrepareRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host destroy"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostDestroyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host install"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostInstallRequest"
+            }
+          }
+        },
+        {
+          "description": "P3 `ph3-p3-net-route-degraded-mode`: dedicated reconcile verb that re-runs the daemon-side net-route preflight + the broker-side per-env nftables / route / sysctl reconcile without starting any VM. On success it resets the operator-only-mode counter so future daemon startups are no longer locked out of autostart. The CLI exposes this as `nixling host reconcile --network --apply`.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host reconcile"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostReconcileRequest"
+            }
+          }
+        }
+      ]
+    },
+    "PublicResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "capabilities"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CapabilitiesResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "auth status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuthStatusResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "list"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ListResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "status"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StatusResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "audit"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/AuditResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "host check"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/HostCheckResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "keys list"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/KeysListResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "keys show"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/KeysShowResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "usb probe"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/UsbipProbeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "mutating verb"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/MutatingVerbResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      ]
+    },
+    "RotateKnownHostRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunActivationRequest": {
+      "type": "object",
+      "required": [
+        "bundleActivationIntentRef",
+        "mode",
+        "vm"
+      ],
+      "properties": {
+        "bundleActivationIntentRef": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/definitions/ActivationMode"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunActivationResponse": {
+      "type": "object",
+      "required": [
+        "mode",
+        "summary",
+        "vm"
+      ],
+      "properties": {
+        "generationNumber": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "mode": {
+          "$ref": "#/definitions/ActivationMode"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunGcRequest": {
+      "type": "object",
+      "required": [
+        "bundleGcIntentRef"
+      ],
+      "properties": {
+        "bundleGcIntentRef": {
+          "type": "string"
+        },
+        "keepGenerations": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunGcResponse": {
+      "type": "object",
+      "required": [
+        "retainedStorePathCount",
+        "summary"
+      ],
+      "properties": {
+        "keepGenerations": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "retainedStorePathCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunHostInstallRequest": {
+      "description": "W15 (W9-fu live host install): broker-side installer driver. The broker resolves the bundle's `installer:host` intent row (synthesised by `nixling_core::bundle_resolver` from the `host.json` + Nix-emitted installer plan), then runs the systemd unit install + `--enable` / `--start` shellouts per the resolved plan. The daemon never names the systemd unit path or `--enable` flag on the wire.",
+      "type": "object",
+      "required": [
+        "bundleInstallerIntentRef"
+      ],
+      "properties": {
+        "bundleInstallerIntentRef": {
+          "type": "string"
+        },
+        "enable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "noStart": {
+          "default": false,
+          "type": "boolean"
+        },
+        "start": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunHostInstallResponse": {
+      "type": "object",
+      "required": [
+        "artifactsWritten",
+        "enabled",
+        "installed",
+        "started"
+      ],
+      "properties": {
+        "artifactsWritten": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "started": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunHostKeyTrustRequest": {
+      "type": "object",
+      "required": [
+        "bundleTrustIntentRef",
+        "vm"
+      ],
+      "properties": {
+        "bundleTrustIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunHostKeyTrustResponse": {
+      "type": "object",
+      "required": [
+        "knownHostsPath",
+        "staticIp",
+        "updated",
+        "vm"
+      ],
+      "properties": {
+        "knownHostsPath": {
+          "type": "string"
+        },
+        "staticIp": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunKeysRotateRequest": {
+      "type": "object",
+      "required": [
+        "bundleKeysIntentRef",
+        "vm"
+      ],
+      "properties": {
+        "bundleKeysIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunKeysRotateResponse": {
+      "type": "object",
+      "required": [
+        "keyPath",
+        "publicKeyFingerprint",
+        "vm"
+      ],
+      "properties": {
+        "keyPath": {
+          "type": "string"
+        },
+        "publicKeyFingerprint": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunMigrateRequest": {
+      "description": "W15 (W9-fu migrate writer): broker-side migration driver.",
+      "type": "object",
+      "required": [
+        "bundleMigrateIntentRef"
+      ],
+      "properties": {
+        "bundleMigrateIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunMigrateResponse": {
+      "type": "object",
+      "required": [
+        "migratedVmCount",
+        "notes"
+      ],
+      "properties": {
+        "migratedVmCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunRotateKnownHostRequest": {
+      "type": "object",
+      "required": [
+        "bundleRotateKnownHostIntentRef",
+        "vm"
+      ],
+      "properties": {
+        "bundleRotateKnownHostIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunRotateKnownHostResponse": {
+      "type": "object",
+      "required": [
+        "knownHostsPath",
+        "removed",
+        "staticIp",
+        "vm"
+      ],
+      "properties": {
+        "knownHostsPath": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "staticIp": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunnerAllocation": {
+      "description": "Per-runner runtime allocation tuple. Each entry pairs a typed slot kind with the daemon-side opaque reference (a stringified file descriptor slot, vsock CID, or socket path the broker validates against the bundle row).",
+      "type": "object",
+      "required": [
+        "kind",
+        "opaqueRef"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/RunnerAllocationKind"
+        },
+        "opaqueRef": {
+          "description": "Opaque reference; the broker interprets per-kind.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunnerAllocationKind": {
+      "oneOf": [
+        {
+          "description": "CH `--vsock cid=N` value (the daemon's allocator decided this CID at host-prepare time; the broker cross-checks against the per-VM bundle row).",
+          "type": "string",
+          "enum": [
+            "vsock-cid"
+          ]
+        },
+        {
+          "description": "CH `--net fd=N` value when running under [`crate::broker_wire::CreateTapFdRequest`] — the daemon references the SCM_RIGHTS slot the broker handed back in the matching CreateTapFd response.",
+          "type": "string",
+          "enum": [
+            "tap-fd-slot"
+          ]
+        },
+        {
+          "description": "CH `--api-socket` path the daemon owns; the broker validates the path is under `/run/nixling/<vm>/`.",
+          "type": "string",
+          "enum": [
+            "api-socket-path"
+          ]
+        }
+      ]
+    },
+    "RunnerRole": {
+      "description": "W4-H5 (security-1): the daemon never names argv, env, uid/gid, caps, kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any other launch authority across the wire. The broker resolves the full role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored by the opaque `bundle_runner_intent_ref`. The wire shape follows the W3fu1 H1 opaque-only contract for every other mutating variant.\n\n`RunnerRole` selects which of the W4 H1/H2/H3 argv generators the broker invokes against the bundle data (CH, virtiofsd, or swtpm). Adding new roles requires a wave-blocking bundle schema bump so downstream bundles can declare the new launch context.",
+      "oneOf": [
+        {
+          "description": "Cloud Hypervisor headless / hybrid VM. Broker invokes `nixling_host::ch_argv::generate_ch_argv`.",
+          "type": "string",
+          "enum": [
+            "cloud-hypervisor"
+          ]
+        },
+        {
+          "description": "virtiofsd sidecar; one per `microvm.shares` row. Broker invokes `nixling_host::virtiofsd_argv::generate_virtiofsd_argv`.",
+          "type": "string",
+          "enum": [
+            "virtiofsd"
+          ]
+        },
+        {
+          "description": "swtpm sidecar (long-lived `swtpm socket ...` process).",
+          "type": "string",
+          "enum": [
+            "swtpm"
+          ]
+        },
+        {
+          "description": "swtpm pre-start flush (`swtpm_ioctl -i --unix ...`). One-shot.",
+          "type": "string",
+          "enum": [
+            "swtpm-flush"
+          ]
+        },
+        {
+          "description": "crosvm GPU sidecar. Broker invokes `nixling_host::gpu_argv::generate_gpu_argv`.",
+          "type": "string",
+          "enum": [
+            "gpu"
+          ]
+        },
+        {
+          "description": "vhost-device-sound audio sidecar. Broker invokes `nixling_host::audio_argv::generate_audio_argv`.",
+          "type": "string",
+          "enum": [
+            "audio"
+          ]
+        },
+        {
+          "description": "crosvm video-decoder sidecar. Broker invokes `nixling_host::video_argv::generate_video_argv`.",
+          "type": "string",
+          "enum": [
+            "video"
+          ]
+        },
+        {
+          "description": "socat-based vsock relay sidecar. Broker invokes `nixling_host::vsock_relay_argv::generate_vsock_relay_argv`.",
+          "type": "string",
+          "enum": [
+            "vsock-relay"
+          ]
+        },
+        {
+          "description": "usbip helper sidecar. Broker invokes `nixling_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.",
+          "type": "string",
+          "enum": [
+            "usbip"
+          ]
+        },
+        {
+          "description": "P1 observability-4 + decision 5: OTel host-bridge sidecar (vsock relay folded out of `nixling-otel-host-bridge.service` into broker SpawnRunner). Receives pre-opened vsock fds for the obs VM and the alloy host-egress socket; no AF_VSOCK socket creation capability in the role profile (per security-2 closed-set intent contract). Broker invokes `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.",
+          "type": "string",
+          "enum": [
+            "otel-host-bridge"
+          ]
+        }
+      ]
+    },
+    "RunnerSignal": {
+      "description": "Legacy runner-signal broker envelope. The live daemon stop/restart path now delivers signals through `nixlingd::supervisor::pidfd_table` after `SpawnRunner` pidfd registration; this wire shape remains for explicit broker-side signal audit/control flows and still returns `signaled=false` until a broker-owned live caller is wired up.",
+      "type": "string",
+      "enum": [
+        "term",
+        "kill",
+        "quit"
+      ]
+    },
+    "RuntimeSummary": {
+      "type": "object",
+      "required": [
+        "detail"
+      ],
+      "properties": {
+        "detail": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretByIdRequest": {
+      "type": "object",
+      "required": [
+        "opaqueId"
+      ],
+      "properties": {
+        "opaqueId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SeedDnsmasqLeaseRequest": {
+      "description": "P2 SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq lease intent from the bundle (using `vm_id`) and writes `/var/lib/nixling/dnsmasq/<vm>.leases` with the correct owner / mode.",
+      "type": "object",
+      "required": [
+        "scopeId",
+        "vmId"
+      ],
+      "properties": {
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SemverRange": {
+      "description": "Semantic version requirement string, for example `>=0.4.0, <0.5.0`.",
+      "type": "string"
+    },
+    "SetBridgePortFlagsRequest": {
+      "description": "W3fu2 H1 (rust-1 / security-1): the broker derives the bridge, port, isolated/neigh_suppress/learning/unicast_flood flags, and matching rule rationale from the trusted bundle row anchored by `vm_id` + `role_id`. The pre-W3fu2 wire carried caller-supplied `bridge: IfName`, `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; W3fu1 R2 rust-1 + security-1 found these violated the broker's own \"daemon never names raw ifnames or raw intent\" invariant, so the fields were removed. The broker reads the per-role `BridgePortFlags` row from `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and applies the documented flag set.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetSocketAclRequest": {
+      "type": "object",
+      "required": [
+        "bundleSocketIntentRef",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "bundleSocketIntentRef": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SetupMountNamespaceRequest": {
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SignalRunnerRequest": {
+      "type": "object",
+      "required": [
+        "roleId",
+        "signal",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "signal": {
+          "$ref": "#/definitions/RunnerSignal"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SignalRunnerResponse": {
+      "type": "object",
+      "required": [
+        "roleId",
+        "signaled",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "signaled": {
+          "type": "boolean"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SocketReachability": {
+      "type": "object",
+      "required": [
+        "reachable",
+        "socket"
+      ],
+      "properties": {
+        "reachable": {
+          "type": "boolean"
+        },
+        "socket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SocketSpec": {
+      "type": "object",
+      "required": [
+        "abstractNamespace",
+        "group",
+        "mode",
+        "owner",
+        "path"
+      ],
+      "properties": {
+        "abstractNamespace": {
+          "type": "boolean"
+        },
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpawnRunnerRequest": {
+      "type": "object",
+      "required": [
+        "bundleRunnerIntentRef",
+        "role",
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "bundleRunnerIntentRef": {
+          "description": "Opaque reference into the trusted bundle's runner-intent table. The broker resolves this to the full launch context (binary path, argv inputs, uid/gid, capabilities, seccomp policy ref, cgroup placement, mount namespace, environment) and feeds it to the matching W4 H1/H2/H3 argv generator.",
+          "type": "string"
+        },
+        "role": {
+          "description": "Role selector — picks the argv generator the broker applies to the bundle row anchored by `bundle_runner_intent_ref`.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RunnerRole"
+            }
+          ]
+        },
+        "roleId": {
+          "description": "Per-VM role this runner fills. Must be unique across the VM's active runners — the daemon's pidfd table is keyed on `(vm_id, role_id)` and a duplicate registration fails closed.",
+          "type": "string"
+        },
+        "runtimeAllocations": {
+          "description": "Optional vsock CID / TAP fd slot allocated by the daemon at host-prepare time. The broker validates each entry against the bundle row and refuses any unexpected allocation slot. None for roles that do not need them (virtiofsd / swtpm).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RunnerAllocation"
+          }
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "description": "VM scope the runner belongs to.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpawnRunnerResponse": {
+      "description": "Response to [`SpawnRunnerRequest`]. The pidfd itself is delivered out-of-band as a `SCM_RIGHTS` attachment on the same broker socket frame; this JSON body carries the metadata the daemon's pidfd table requires to validate / reconcile the handle (`(pid, start_time_ticks)` is the W3 s1 pidfd contract).",
+      "type": "object",
+      "required": [
+        "pid",
+        "pidfdIndex",
+        "role",
+        "roleId",
+        "startTimeTicks",
+        "vmId"
+      ],
+      "properties": {
+        "pid": {
+          "description": "Child PID. The daemon validates this against the pidfd it received and against `/proc/<pid>/stat` field 22 (`start_time`).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "pidfdIndex": {
+          "description": "Index into the SCM_RIGHTS fd vector the daemon should treat as the spawned process's pidfd. Always `0` today — kept explicit so future multi-fd spawn responses (e.g. CH API socket + pidfd) have an existing wire slot.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "role": {
+          "$ref": "#/definitions/RunnerRole"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "startTimeTicks": {
+          "description": "Field-22 `start_time` value the broker captured immediately after `clone()`. Pinned to the pidfd so any restart reconciliation rejects a stale (pid, start_time) tuple.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SshHostKeyPreflightRequest": {
+      "description": "P2 SshHostKeyPreflight request. The broker opens every `/var/lib/nixling/vms/<vm>/sshd-host-keys/ssh_host_*_key` with `O_NOFOLLOW` and refuses if drift from `root:root 0400`. Owned by sibling P2 agent (ph2-p2-ssh-host-key-preflight).",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusRequest": {
+      "type": "object",
+      "properties": {
+        "checkBridges": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusResponse": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "$ref": "#/definitions/VmStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreSyncRequest": {
+      "description": "P2 ph2-store-sync request. The broker resolves the closure intent row keyed by `vm_id` (canonical id form `\"store-view:vm:<vm>\"`) and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation` does not match the bundle's resolved generation — generations are monotonic, so a stale daemon must not race the activator.",
+      "type": "object",
+      "required": [
+        "bundleClosureRef",
+        "generation",
+        "vmId"
+      ],
+      "properties": {
+        "bundleClosureRef": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreSyncResponse": {
+      "description": "P2 ph2-store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store/`); the active generation directory is reachable via the `current` symlink.",
+      "type": "object",
+      "required": [
+        "closureCount",
+        "generation",
+        "hardlinkFarmPath",
+        "vm"
+      ],
+      "properties": {
+        "closureCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hardlinkFarmPath": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapReadyResponse": {
+      "type": "object",
+      "required": [
+        "tap"
+      ],
+      "properties": {
+        "bridge": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tap": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TrustRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UpdateHostsFileRequest": {
+      "description": "W3fu1 H1 (security-1): the managed-block lines come from the bundle's `host::HostsEntry` rows, not the wire. The broker only needs the lookup key.",
+      "type": "object",
+      "required": [
+        "bundleHostsIntentRef"
+      ],
+      "properties": {
+        "bundleHostsIntentRef": {
+          "type": "string"
+        },
+        "destroy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipBindCliRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "busId",
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "busId": {
+          "type": "string"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipBindFirewallRuleRequest": {
+      "description": "W3 USBIP firewall-rule skeleton. The rule body and the bus_id are derived from the per-busid policy in the trusted bundle (`bundle.usbip.busidLocks[*]`) via the `bundle_usbip_firewall_intent_ref` opaque-ID lookup. W3fu2 H1 (security-1) replaced the pre-W3fu2 caller-supplied `bus_id: String` + `rule_hash: String` fields with this opaque reference because the raw `bus_id` was being interpolated into nft rule text without a validating newtype or escaping, and the caller-supplied `rule_hash` allowed the daemon to override the broker's drift-detection digest.",
+      "type": "object",
+      "required": [
+        "bundleUsbipFirewallIntentRef"
+      ],
+      "properties": {
+        "bundleUsbipFirewallIntentRef": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipBindRequest": {
+      "description": "USBIP live device routing is W6 — every variant in this group is refused with `unknown-operation` audit by the W3 broker.",
+      "type": "object",
+      "required": [
+        "busId",
+        "vmId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProbeEntry": {
+      "type": "object",
+      "required": [
+        "busId",
+        "env",
+        "lockPath",
+        "status",
+        "vm"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        },
+        "env": {
+          "type": "string"
+        },
+        "lockPath": {
+          "type": "string"
+        },
+        "ownerVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/UsbipProbeStatus"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProbeResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipProbeEntry"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipProbeStatus": {
+      "type": "string",
+      "enum": [
+        "bound",
+        "unbound"
+      ]
+    },
+    "UsbipProxyReconcileRequest": {
+      "type": "object",
+      "required": [
+        "scopeId"
+      ],
+      "properties": {
+        "scopeId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipUnbindCliRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "busId",
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "busId": {
+          "type": "string"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipUnbindRequest": {
+      "type": "object",
+      "required": [
+        "busId"
+      ],
+      "properties": {
+        "busId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidateBundleResponse": {
+      "type": "object",
+      "required": [
+        "valid"
+      ],
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Version": {
+      "description": "Semantic version string used by the daemon and clients, for example `0.4.0`.",
+      "type": "string"
+    },
+    "VmLifecycle": {
+      "type": "object",
+      "required": [
+        "pendingRestart",
+        "state"
+      ],
+      "properties": {
+        "pendingRestart": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/definitions/VmLifecycleState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLifecycleRequest": {
+      "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "apply": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dryRun": {
+          "default": false,
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLifecycleState": {
+      "type": "string",
+      "enum": [
+        "Stopped",
+        "Starting",
+        "Booted",
+        "Running",
+        "Stopping",
+        "Restarting",
+        "Failed",
+        "Unknown"
+      ]
+    },
+    "VmStatus": {
+      "type": "object",
+      "required": [
+        "bridgeChecks",
+        "lifecycle",
+        "runtime",
+        "vm"
+      ],
+      "properties": {
+        "bridgeChecks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BridgeCheck"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lifecycle": {
+          "$ref": "#/definitions/VmLifecycle"
+        },
+        "runtime": {
+          "$ref": "#/definitions/RuntimeSummary"
+        },
+        "sshUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

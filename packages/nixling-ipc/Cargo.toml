@@ -1,0 +1,18 @@
+[package]
+name = "nixling-ipc"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

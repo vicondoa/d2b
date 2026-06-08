@@ -35,7 +35,7 @@ examples/with-entra-id/
 ├── flake.nix           inputs: nixpkgs, nixling, nixos-entra-id
 │                       outputs: nixosConfigurations.demo
 ├── configuration.nix   host-side: user, nixling.site, nixling.envs.work
-├── work-vm.nix         guest-side: hostname, security.tpm2, nixosEntraId.*
+├── work-entra.nix         guest-side: hostname, security.tpm2, nixosEntraId.*
 └── README.md           you are here
 ```
 
@@ -56,8 +56,8 @@ configure the VM itself.
 | Option                                | Set in            | Purpose                                           |
 |---------------------------------------|-------------------|---------------------------------------------------|
 | `nixling.site.waylandUser`            | `configuration.nix` | Host's Plasma / Wayland user                    |
-| `nixling.site.launcherUsers`          | `configuration.nix` | Polkit grant for `nixling up/down`              |
-| `nixling.site.yubikey.enable`         | `configuration.nix` | Host-side YubiKey udev rules + `usbip-host`     |
+| `nixling.site.launcherUsers`          | `configuration.nix` | Polkit grant for `nixling vm start/stop`              |
+| `nixling.site.yubikey.enable`         | `configuration.nix` | Host-side YubiKey udev rules; `usbip-host` loads on per-VM opt-in |
 | `nixling.envs.<env>.lanSubnet`        | `configuration.nix` | Per-env workload `/24`                          |
 | `nixling.envs.<env>.uplinkSubnet`     | `configuration.nix` | Per-env host↔net-VM `/30`                       |
 | `nixling.vms.<vm>.tpm.enable`         | `flake.nix`         | swtpm for this VM                               |
@@ -69,7 +69,7 @@ configure the VM itself.
 
 ### Options that live in `nixosEntraId.*` (from the other flake)
 
-These are set **inside the VM** in `work-vm.nix`. They configure
+These are set **inside the VM** in `work-entra.nix`. They configure
 Himmelblau and the Intune compliance shim. The full schema is in
 the [`nixos-entra-id` README][nixos-entra-id-readme].
 
@@ -88,12 +88,12 @@ the [`nixos-entra-id` README][nixos-entra-id-readme].
 The two trees meet at exactly one place — `flake.nix`:
 
 ```nix
-nixling.vms.work-vm = {
+nixling.vms.work-entra = {
   tpm.enable = true;             # nixling option
   config = {
     imports = [
       nixos-entra-id.nixosModules.default   # bring in the other flake
-      ./work-vm.nix                         # bring in our own VM config
+      ./work-entra.nix                         # bring in our own VM config
     ];
   };
 };
@@ -133,7 +133,7 @@ in `nixos-entra-id` for the patch rationale.
 the VM sees a real TPM CRB at `/dev/tpmrm0` and exposes it through
 the standard tpm2 stack. The keys it generates persist on the host
 under `/var/lib/nixling/vms/<vm>/swtpm/` (for this example:
-`/var/lib/nixling/vms/work-vm/swtpm/`).
+`/var/lib/nixling/vms/work-entra/swtpm/`).
 
 > **DO NOT wipe this directory.** It holds the Intune device-bound
 > TPM credentials. Wiping it forces a fresh device-registration on
@@ -227,7 +227,7 @@ loudly at build time.
 sudo -A nixos-rebuild switch --flake .#demo
 ```
 
-This creates `/var/lib/nixling/keys/work-vm_ed25519`, spawns
+This creates `/var/lib/nixling/keys/work-entra_ed25519`, spawns
 `sys-work-net` (the per-env net VM), materialises the
 `br-work-up` + `br-work-lan` bridges, and installs the `nixling`
 CLI on `$PATH`. The work VM itself is **not** started — graphics
@@ -241,12 +241,12 @@ default):
 nixling list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
-# work-vm            work      false     true  false   10.20.0.10      stopped
+# work-entra            work      false     true  false   10.20.0.10      stopped
 
 nixling status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
 # sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
-# work-vm            work      false     true  false   10.20.0.10      stopped
+# work-entra            work      false     true  false   10.20.0.10      stopped
 #
 # === Bridge health ===
 # BRIDGE               STATE      ADMIN   EXPECTED     RESULT
@@ -254,11 +254,11 @@ nixling status
 # br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 ```
 
-`work-vm` shows `STATUS=stopped` until you `nixling up work-vm`;
+`work-entra` shows `STATUS=stopped` until you `nixling vm start work-entra --apply`;
 after that it transitions to `interactive` (because Entra VMs are
 expected to be launched ad-hoc from a Plasma terminal, never as a
 systemd unit). The `TPM=true` column reflects the swtpm sidecar
-wired up by `nixling.vms.work-vm.tpm.enable = true`.
+wired up by `nixling.vms.work-entra.tpm.enable = true`.
 
 ### 4. Bring the VM up
 
@@ -266,7 +266,7 @@ From a Plasma / Wayland terminal (not over SSH — see
 [nixling's README, "Common gotchas"][nixling-readme] for why):
 
 ```bash
-nixling up work-vm
+nixling vm start work-entra --apply
 ```
 
 ### 5. Trigger enrolment
@@ -276,7 +276,7 @@ the canonical way to surface enrolment errors without going through
 a graphical login:
 
 ```bash
-ssh -i /var/lib/nixling/keys/work-vm_ed25519 alice@10.20.0.10
+ssh -i /var/lib/nixling/keys/work-entra_ed25519 alice@10.20.0.10
 
 # Inside the VM:
 sudo aad-tool auth-test --name alice@contoso.com
@@ -306,14 +306,14 @@ systemctl status himmelblaud himmelblaud-tasks   # daemons healthy
   [`nixos-entra-id` README quick start][nixos-entra-id-readme]
   for tenant prerequisites (admin role, Conditional Access caveats,
   `dmidecode` for realistic `fakeDmi` values).
-- **Add graphics** — set `nixling.vms.work-vm.graphics.enable =
+- **Add graphics** — set `nixling.vms.work-entra.graphics.enable =
   true` in `flake.nix` and the VM gains a virtio-gpu + Wayland
   forward to the host compositor (a `foot` terminal auto-launches
   inside the guest on boot). Requires `nixling.site.waylandUser`
   to be non-null on the host — already set in this example.
 - **Add YubiKey passthrough** — set
-  `nixling.vms.work-vm.usbip.yubikey = true` and run
-  `nixling usb work-vm` to redirect a plugged YubiKey from the
+  `nixling.vms.work-entra.usbip.yubikey = true` and run
+  `nixling usb attach work-entra <busid> --apply` to redirect a plugged YubiKey from the
   host's USB controller to the VM via USBIP. Useful for the MFA
   prompt during `aad-tool auth-test` and any downstream FIDO2
   flow.
@@ -348,7 +348,7 @@ back into sync.
 ## Common gotchas
 
 - **TPM state backup**: do **not** wipe
-  `/var/lib/nixling/vms/work-vm/swtpm/`. It holds the per-VM TPM
+  `/var/lib/nixling/vms/work-entra/swtpm/`. It holds the per-VM TPM
   2.0 NVRAM + EK seed that Entra/Intune treats as the device's
   hardware identity. Zeroing it forces re-enrolment and looks
   like device tampering to the IdP.
@@ -359,7 +359,7 @@ back into sync.
   crosvm GPU sidecar) and TPM emulation paths are platform-gated
   to `x86_64-linux`. aarch64 hosts will fail eval with an
   actionable message.
-- **`nixling up work-vm` before SSH/enrollment.** The Himmelblau
+- **`nixling vm start work-entra --apply` before SSH/enrollment.** The Himmelblau
   service inside the VM doesn't start until the VM is up;
   attempting to enrol against a stopped VM hangs at the first
   device-code prompt.
@@ -376,7 +376,7 @@ Every per-VM lifecycle service in the framework carries
 unit files but does NOT cycle running VMs. After rebuilding,
 `nixling list` flags any VM whose declared closure has drifted
 from the running one as `[pending restart]`; apply with
-`nixling restart <vm>`. See
+`nixling vm restart <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

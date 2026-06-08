@@ -202,8 +202,12 @@ let
       # graphics VMs. A kvm-group process could otherwise rename/swap
       # the patched script between write and supervisord-exec.
       # Security finding P1r1 security-3.
+      #
+      # P0 (ph0-runtime-dir-canonicalize): NEVER create or chmod
+      # /run/nixling here — host-daemon.nix owns that path when the
+      # daemon is enabled, and host.nix's tmpfiles owns it in the
+      # pre-daemon path. We only touch the per-VM leaf under it.
       HARDENED=/run/nixling/${name}/hardened
-      install -d -m 0755 -o root -g root /run/nixling 2>/dev/null || true
       install -d -m 0700 -o root -g root /run/nixling/${name}
       install -d -m 0700 -o root -g root "$HARDENED"
       LOCAL=$HARDENED/supervisord-hardened.conf
@@ -452,6 +456,13 @@ let
       fi
 
       mkdir -p "$STORE_DIR" "$GEN_DIR" "$ROOT_DIR"
+
+      # Serialize per-VM syncs across activation + CLI callers. The lock
+      # stays held until process exit so generation allocation, current
+      # pointer updates, and retention sweep are one critical section.
+      LOCK_FILE=$META_DIR/store-sync.lock
+      exec 9>"$LOCK_FILE"
+      flock 9
 
       # Compute next generation number = max(existing dirs) + 1.
       MAX_GEN=0
@@ -712,21 +723,17 @@ in
       '';
     };
 
-    package = lib.mkOption {
-      type = lib.types.package;
-      default = nixlingStoreSync;
-      internal = true;
-      readOnly = true;
-      description = "The `nixling-store-sync` helper, exposed for cli.nix to invoke.";
-    };
-
-    generations = lib.mkOption {
-      type = lib.types.attrsOf lib.types.package;
-      default = vmGenPaths;
-      internal = true;
-      readOnly = true;
-      description = "Per-VM generation derivations; consumed by cli.nix and the activation script.";
-    };
+    # ---------------------------------------------------------------------------
+    # P6 ph6-p6-cli-nix-migrations: the previously-exposed internal
+    # options `nixling.store.package` and `nixling.store.generations`
+    # were retired together with the bash CLI. The only consumer was
+    # `cli.nix` (the `nixling switch` codepath); store.nix itself
+    # uses the `nixlingStoreSync` derivation and `vmGenPaths`
+    # let-bindings directly. Both bindings remain available for the
+    # daemon-native StoreSync surface, which will plumb them through
+    # bundle.nix / processes-json.nix instead of re-exposing a
+    # readOnly NixOS option (issue #6 — see tests/static.sh trio lint).
+    # ---------------------------------------------------------------------------
   };
 
   config = lib.mkIf cfg.store.enable {
@@ -1125,29 +1132,13 @@ in
     # /run/nixling/<vm>/next-generation (a path the activation script
     # and the CLI both write before triggering the service).
     # ---------------------------------------------------------------------------
-    (lib.mapAttrs'
-      (name: _: lib.nameValuePair "nixling-${name}-store-sync" {
-        description = "Populate nixling per-VM nix store for ${name}";
-        after = [ "local-fs.target" ];
-        serviceConfig = {
-          Type = "oneshot";
-          # Stays as root: needs unshare(CLONE_NEWNS), umount, chown.
-          User = "root";
-          SyslogIdentifier = "nixling-${name}-store-sync";
-          ExecStart = "${pkgs.writeShellScript "nixling-${name}-store-sync-trigger" ''
-            set -euo pipefail
-            VM=${lib.escapeShellArg name}
-            GEN_LINK=/run/nixling/$VM/next-generation
-            if [ ! -L "$GEN_LINK" ]; then
-              echo "nixling-$VM-store-sync: no $GEN_LINK; refusing to run." >&2
-              exit 2
-            fi
-            GEN=$(readlink -f "$GEN_LINK")
-            exec ${nixlingStoreSync}/bin/nixling-store-sync "$VM" "$GEN"
-          ''}";
-        };
-      })
-      enabledVms);
+    # ---------------------------------------------------------------------------
+    # P6 ph6-remove-systemd-emission: per-VM `nixling-<vm>-store-sync.service`
+    # was deleted. Store-sync now runs via broker `StoreSync` op (P2
+    # ph2-store-sync, commit bfe8c60). The mapAttrs' block that emitted
+    # the per-VM systemd oneshot below has been removed.
+    # ---------------------------------------------------------------------------
+    {};
 
     systemd.timers."nixling-vfsd-watchdog@" = {
       description = "Periodic check for wedged cloud-hypervisor vhost-user-fs on %i";
@@ -1165,10 +1156,15 @@ in
     # pointer into /run/nixling/<vm>/next-generation and invoke the
     # sync helper directly (in-process; faster than systemd-start and
     # gives us synchronous error reporting in the activation log).
+    #
+    # P0 (ph0-runtime-dir-canonicalize): /run/nixling is created by
+    # host-daemon.nix tmpfiles (nixlingd:nixling-launchers 0750) under
+    # daemonExperimental, or host.nix tmpfiles (root:nixling-launcher
+    # 0775) without it. This activation hook MUST NOT touch the parent
+    # `/run/nixling` directory — only per-VM leaves.
     # ---------------------------------------------------------------------------
     system.activationScripts.nixlingStoreSync = lib.stringAfter [ "specialfs" "users" ] ''
       set -u
-      install -d -m 0755 /run/nixling
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: gen: ''
           install -d -m 0755 /run/nixling/${name}

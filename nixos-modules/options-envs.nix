@@ -54,6 +54,16 @@
           '';
         };
 
+        mtu = lib.mkOption {
+          type = lib.types.nullOr lib.types.int;
+          default = null;
+          description = "Override MTU for the env's bridges, taps, and guest NICs. Leave null for the default (1500).";
+        };
+
+        mssClamp = lib.mkEnableOption "TCP MSS clamping on the net VM's nftables forward chain (recommended when running over a tunneled uplink)";
+
+        lan.allowEastWest = lib.mkEnableOption "east-west traffic between workload VMs in this env (default: isolated; also requires nixling.site.allowUnsafeEastWest = true)";
+
         netName = lib.mkOption {
           type = lib.types.str;
           default = "sys-${name}-net";
@@ -74,9 +84,11 @@
           description = ''
             Destination CIDRs the net VM DROPs on forward from
             the LAN. Intent: workload VMs must not reach the host's
-            primary-LAN IP or other RFC1918 services. Carve-outs
-            (intra-env LAN, USBIP-to-host-uplink-IP) are evaluated
-            before this list.
+            primary-LAN IP, peer envs, or other RFC1918 services.
+            The framework automatically augments this with
+            `nixling.hostLanCidrs` and every other env's LAN/uplink
+            CIDR. Carve-outs (intra-env LAN, USBIP-to-host-uplink-IP)
+            are evaluated before this list.
           '';
         };
 

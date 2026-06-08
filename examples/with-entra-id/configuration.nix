@@ -2,7 +2,7 @@
 # composition example. This file owns everything *outside* the
 # Entra VM: the human user on the host, the nixling site-level
 # knobs, and the env that the VM lives in. The VM's own NixOS
-# config (and its `nixosEntraId.*` settings) live in `work-vm.nix`.
+# config (and its `nixosEntraId.*` settings) live in `work-entra.nix`.
 { lib, ... }:
 
 {
@@ -30,23 +30,22 @@
 
   nixling.site = {
     # Required when any VM enables `graphics.enable` or
-    # `audio.enable`. The work-vm in this example is headless
+    # `audio.enable`. The work-entra in this example is headless
     # (TPM only, no Wayland forward), so this is informational —
     # but a realistic Entra workspace will probably want graphics
     # too, in which case waylandUser is mandatory.
     waylandUser = "alice";
 
-    # Members of `nixling-launcher` can run `nixling up/down/...`
+    # Members of `nixling-launcher` can run `nixling vm start/stop/...`
     # without password prompts via polkit. The framework adds the
     # group; you still declare the user above.
     launcherUsers = [ "alice" ];
 
     # Most Entra-joined workstations want a Yubikey for the MFA
-    # prompt during Conditional Access flows. Leave true to load
-    # the host-side udev rules + `usbip-host` module. Flip false
-    # if you don't have a Yubikey — the work-vm's
-    # `usbip.yubikey = true` toggle is independent of this and
-    # still pulls in the guest-side bits.
+    # prompt during Conditional Access flows. Leave true to keep
+    # the host-side Yubico udev rules enabled; `usbip-host` then
+    # loads only when an enabled VM also sets `usbip.yubikey = true`.
+    # Flip false if you don't have a Yubikey.
     yubikey.enable = true;
   };
 

@@ -25,7 +25,10 @@ in
     (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-swtpm" { })
-    (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms));
+    (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "nixling-${name}-runner" { })
+    (lib.filterAttrs (_: vm: vm.enable) cfg.vms));
 
   users.users =
     # nixling-launcher group membership for any user the site
@@ -47,7 +50,9 @@ in
       # E: nixling-launcher NOT in extraGroups — a compromised sidecar
       # must not be a polkit launcher principal. Only `launcherUsers`
       # (typically the Wayland user) needs nixling-launcher.
-      extraGroups = [ "kvm" ];
+      # The per-VM runner group is used for host-side relay sockets that
+      # only the matching VM runner should reach.
+      extraGroups = [ "kvm" "nixling-${name}-runner" ];
       description = "nixling GPU+hypervisor sidecar for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:

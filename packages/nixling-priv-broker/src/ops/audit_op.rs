@@ -1,0 +1,800 @@
+//! Broker audit-record schema per plan.md §"Broker audit event
+//! schema (W3 baseline)". Every W3 op emits one record per decision,
+//! with the common header below plus a per-variant `operation_fields`
+//! nested object. The actual append to the root-owned `0640
+//! root:nixlingd` log goes via [`crate::audit::AuditLog`]; this
+//! module is the typed shape used by the op call-sites so the JSON
+//! drift gate can read back fields per variant.
+
+use std::io;
+
+use nixling_ipc::broker_wire::RunnerAllocation;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OperationFields {
+    ApplyNftables {
+        bundle_nft_intent_ref: String,
+        scope_id: String,
+        desired_hash: Option<String>,
+        destroy: bool,
+    },
+    ApplyRoute {
+        bundle_route_intent_ref: String,
+        destination: String,
+        via: Option<String>,
+        destroy: bool,
+    },
+    DelegateCgroupV2 {
+        scope_id: String,
+    },
+    OpenCgroupDir {
+        scope_id: String,
+        path_class: String,
+        cgroup_path: String,
+    },
+    CreateTapFd {
+        vm_id: String,
+        role_id: String,
+        tap_ifname: String,
+        bridge_ifname: Option<String>,
+    },
+    CreatePersistentTap {
+        vm_id: String,
+        role_id: String,
+        tap_ifname: String,
+        bridge_ifname: Option<String>,
+    },
+    OpenKvm {
+        role_id: String,
+        device_class: String,
+        device_path: String,
+        matrix_entry_id: String,
+    },
+    OpenVhostNet {
+        role_id: String,
+        device_class: String,
+        device_path: String,
+        matrix_entry_id: String,
+    },
+    OpenFuse {
+        role_id: String,
+        device_class: String,
+        device_path: String,
+        matrix_entry_id: String,
+    },
+    OpenDevice {
+        role_id: String,
+        device_class: String,
+        device_path: String,
+        matrix_entry_id: String,
+    },
+    ModprobeIfAllowed {
+        module_name: String,
+        matrix_entry_id: String,
+        modules_disabled_sysctl: bool,
+        disposition: String,
+    },
+    PrepareRuntimeDir {
+        vm_id: String,
+        base_dir: String,
+        owner_uid: u32,
+        owner_gid: u32,
+        mode: u32,
+    },
+    PrepareStateDir {
+        vm_id: String,
+        base_dir: String,
+        owner_uid: u32,
+        owner_gid: u32,
+        mode: u32,
+    },
+    PrepareStoreView {
+        vm: String,
+        generation: u64,
+        hardlink_farm_path: String,
+        view_root: String,
+    },
+    /// P2 ph2-store-sync audit fields. The broker re-derives the
+    /// closure paths from the trusted bundle, so the audit row
+    /// records only the resolved farm root + closure count +
+    /// activated generation + opaque closure ref.
+    StoreSync {
+        vm_id: String,
+        bundle_closure_ref: String,
+        generation: u32,
+        closure_count: u32,
+        hardlink_farm_path: String,
+    },
+    SetBridgePortFlags {
+        vm: String,
+        role: String,
+        ifname: String,
+        flags: Value,
+    },
+    SetupMountNamespace {
+        vm: String,
+        role: String,
+        mount_count: u32,
+        mount_root: String,
+        mount_view_path: String,
+        source_view_path: String,
+    },
+    SpawnRunner {
+        bundle_runner_intent_ref: String,
+        vm_id: String,
+        role_id: String,
+        role: String,
+        runtime_allocations: Vec<RunnerAllocation>,
+    },
+    OpenPidfd {
+        pid: i32,
+        expected_start_time_ticks: u64,
+    },
+    RunHostInstall {
+        bundle_installer_intent_ref: String,
+        enable: bool,
+        start: bool,
+        no_start: bool,
+    },
+    RunMigrate {
+        bundle_migrate_intent_ref: String,
+    },
+    UsbipBind {
+        bus_id: String,
+        vm: String,
+    },
+    UsbipUnbind {
+        bus_id: String,
+    },
+    UsbipProxyReconcile {},
+    UsbipBindFirewallRule {
+        bundle_usbip_firewall_intent_ref: String,
+    },
+    ApplyNmUnmanaged {
+        bundle_nm_intent_ref: String,
+        scope_id: String,
+        destroy: bool,
+    },
+    ApplySysctl {
+        bundle_sysctl_intent_ref: String,
+        key: String,
+        destroy: bool,
+    },
+    UpdateHostsFile {
+        bundle_hosts_intent_ref: String,
+        destroy: bool,
+    },
+    /// P3 host-prep-broker-arms: live SeedDnsmasqLease op fields.
+    /// The broker resolves the per-VM dnsmasq lease intent from the
+    /// trusted bundle (using `vm_id`) and ensures
+    /// `/var/lib/nixling/dnsmasq/<vm>.leases` exists with the right
+    /// owner/mode. The audit row records the resolved vm name and
+    /// the scope label so operators can correlate failures with the
+    /// per-env lease subtree.
+    SeedDnsmasqLease {
+        vm_id: String,
+        scope_id: String,
+    },
+    /// P3 host-prep-broker-arms: live BindMountFromHardlinkFarm op
+    /// fields. The broker resolves the per-VM `store-view` intent
+    /// from the trusted bundle (using `vm_id`) and surfaces the
+    /// hardlink farm path it would bind-mount from. The audit row
+    /// records the opaque store-view intent ref (or `None` when the
+    /// canonical per-VM intent was used) for traceability.
+    BindMountFromHardlinkFarm {
+        vm_id: String,
+        bundle_store_view_intent_ref: Option<String>,
+        hardlink_farm_path: String,
+    },
+    SignalRunner {
+        vm_id: String,
+        role_id: String,
+        signal: String,
+    },
+    RunActivation {
+        bundle_activation_intent_ref: String,
+        mode: String,
+        vm: String,
+    },
+    RunGc {
+        bundle_gc_intent_ref: String,
+        keep_generations: Option<u32>,
+    },
+    RunKeysRotate {
+        bundle_keys_intent_ref: String,
+        vm: String,
+    },
+    RunHostKeyTrust {
+        bundle_trust_intent_ref: String,
+        vm: String,
+    },
+    RunRotateKnownHost {
+        bundle_rotate_known_host_intent_ref: String,
+        vm: String,
+    },
+    Hello {
+        client_version: String,
+    },
+    ValidateBundle {},
+    ExportBrokerAudit {
+        since: Option<String>,
+        filter: Option<String>,
+    },
+}
+
+impl OperationFields {
+    pub fn from_operation_value(operation: &str, value: Value) -> serde_json::Result<Self> {
+        macro_rules! parse_fields {
+            ($value:expr => $variant:ident { $($field:ident : $ty:ty),* $(,)? }) => {{
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields {
+                    $(
+                        $field: $ty,
+                    )*
+                }
+                let Fields { $( $field, )* } = serde_json::from_value($value)?;
+                Ok(Self::$variant { $( $field, )* })
+            }};
+            ($value:expr => $variant:ident {}) => {{
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Fields {}
+                let Fields {} = serde_json::from_value($value)?;
+                Ok(Self::$variant {})
+            }};
+        }
+
+        match operation {
+            "ApplyNftables" => parse_fields!(value => ApplyNftables {
+                bundle_nft_intent_ref: String,
+                scope_id: String,
+                desired_hash: Option<String>,
+                destroy: bool,
+            }),
+            "ApplyRoute" => parse_fields!(value => ApplyRoute {
+                bundle_route_intent_ref: String,
+                destination: String,
+                via: Option<String>,
+                destroy: bool,
+            }),
+            "DelegateCgroupV2" => parse_fields!(value => DelegateCgroupV2 {
+                scope_id: String,
+            }),
+            "OpenCgroupDir" => parse_fields!(value => OpenCgroupDir {
+                scope_id: String,
+                path_class: String,
+                cgroup_path: String,
+            }),
+            "CreateTapFd" => parse_fields!(value => CreateTapFd {
+                vm_id: String,
+                role_id: String,
+                tap_ifname: String,
+                bridge_ifname: Option<String>,
+            }),
+            "CreatePersistentTap" => parse_fields!(value => CreatePersistentTap {
+                vm_id: String,
+                role_id: String,
+                tap_ifname: String,
+                bridge_ifname: Option<String>,
+            }),
+            "OpenKvm" => parse_fields!(value => OpenKvm {
+                role_id: String,
+                device_class: String,
+                device_path: String,
+                matrix_entry_id: String,
+            }),
+            "OpenVhostNet" => parse_fields!(value => OpenVhostNet {
+                role_id: String,
+                device_class: String,
+                device_path: String,
+                matrix_entry_id: String,
+            }),
+            "OpenFuse" => parse_fields!(value => OpenFuse {
+                role_id: String,
+                device_class: String,
+                device_path: String,
+                matrix_entry_id: String,
+            }),
+            "OpenDevice" => parse_fields!(value => OpenDevice {
+                role_id: String,
+                device_class: String,
+                device_path: String,
+                matrix_entry_id: String,
+            }),
+            "ModprobeIfAllowed" => parse_fields!(value => ModprobeIfAllowed {
+                module_name: String,
+                matrix_entry_id: String,
+                modules_disabled_sysctl: bool,
+                disposition: String,
+            }),
+            "PrepareRuntimeDir" => parse_fields!(value => PrepareRuntimeDir {
+                vm_id: String,
+                base_dir: String,
+                owner_uid: u32,
+                owner_gid: u32,
+                mode: u32,
+            }),
+            "PrepareStateDir" => parse_fields!(value => PrepareStateDir {
+                vm_id: String,
+                base_dir: String,
+                owner_uid: u32,
+                owner_gid: u32,
+                mode: u32,
+            }),
+            "PrepareStoreView" => parse_fields!(value => PrepareStoreView {
+                vm: String,
+                generation: u64,
+                hardlink_farm_path: String,
+                view_root: String,
+            }),
+            "StoreSync" => parse_fields!(value => StoreSync {
+                vm_id: String,
+                bundle_closure_ref: String,
+                generation: u32,
+                closure_count: u32,
+                hardlink_farm_path: String,
+            }),
+            "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
+                vm: String,
+                role: String,
+                ifname: String,
+                flags: Value,
+            }),
+            "SetupMountNamespace" => parse_fields!(value => SetupMountNamespace {
+                vm: String,
+                role: String,
+                mount_count: u32,
+                mount_root: String,
+                mount_view_path: String,
+                source_view_path: String,
+            }),
+            "SpawnRunner" => parse_fields!(value => SpawnRunner {
+                bundle_runner_intent_ref: String,
+                vm_id: String,
+                role_id: String,
+                role: String,
+                runtime_allocations: Vec<RunnerAllocation>,
+            }),
+            "OpenPidfd" => parse_fields!(value => OpenPidfd {
+                pid: i32,
+                expected_start_time_ticks: u64,
+            }),
+            "RunHostInstall" => parse_fields!(value => RunHostInstall {
+                bundle_installer_intent_ref: String,
+                enable: bool,
+                start: bool,
+                no_start: bool,
+            }),
+            "RunMigrate" => parse_fields!(value => RunMigrate {
+                bundle_migrate_intent_ref: String,
+            }),
+            "UsbipBind" => parse_fields!(value => UsbipBind {
+                bus_id: String,
+                vm: String,
+            }),
+            "UsbipUnbind" => parse_fields!(value => UsbipUnbind {
+                bus_id: String,
+            }),
+            "UsbipProxyReconcile" => parse_fields!(value => UsbipProxyReconcile {}),
+            "UsbipBindFirewallRule" => parse_fields!(value => UsbipBindFirewallRule {
+                bundle_usbip_firewall_intent_ref: String,
+            }),
+            "ApplyNmUnmanaged" => parse_fields!(value => ApplyNmUnmanaged {
+                bundle_nm_intent_ref: String,
+                scope_id: String,
+                destroy: bool,
+            }),
+            "ApplySysctl" => parse_fields!(value => ApplySysctl {
+                bundle_sysctl_intent_ref: String,
+                key: String,
+                destroy: bool,
+            }),
+            "UpdateHostsFile" => parse_fields!(value => UpdateHostsFile {
+                bundle_hosts_intent_ref: String,
+                destroy: bool,
+            }),
+            "SeedDnsmasqLease" => parse_fields!(value => SeedDnsmasqLease {
+                vm_id: String,
+                scope_id: String,
+            }),
+            "BindMountFromHardlinkFarm" => parse_fields!(value => BindMountFromHardlinkFarm {
+                vm_id: String,
+                bundle_store_view_intent_ref: Option<String>,
+                hardlink_farm_path: String,
+            }),
+            "SignalRunner" => parse_fields!(value => SignalRunner {
+                vm_id: String,
+                role_id: String,
+                signal: String,
+            }),
+            "RunActivation" => parse_fields!(value => RunActivation {
+                bundle_activation_intent_ref: String,
+                mode: String,
+                vm: String,
+            }),
+            "RunGc" => parse_fields!(value => RunGc {
+                bundle_gc_intent_ref: String,
+                keep_generations: Option<u32>,
+            }),
+            "RunKeysRotate" => parse_fields!(value => RunKeysRotate {
+                bundle_keys_intent_ref: String,
+                vm: String,
+            }),
+            "RunHostKeyTrust" => parse_fields!(value => RunHostKeyTrust {
+                bundle_trust_intent_ref: String,
+                vm: String,
+            }),
+            "RunRotateKnownHost" => parse_fields!(value => RunRotateKnownHost {
+                bundle_rotate_known_host_intent_ref: String,
+                vm: String,
+            }),
+            "Hello" => parse_fields!(value => Hello {
+                client_version: String,
+            }),
+            "ValidateBundle" => parse_fields!(value => ValidateBundle {}),
+            "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
+                since: Option<String>,
+                filter: Option<String>,
+            }),
+            other => Err(serde_json::Error::io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported audit operation `{other}`"),
+            ))),
+        }
+    }
+}
+
+fn default_request_fields() -> Value {
+    Value::Object(Default::default())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnedOpAuditRecord {
+    pub ts_ms: u128,
+    pub broker_version: String,
+    pub bundle_version: String,
+    pub bundle_hash: String,
+    pub operation: String,
+    pub public_operation_id: String,
+    #[serde(default)]
+    pub event_id: String,
+    pub peer_uid: u32,
+    pub peer_gid: u32,
+    #[serde(default)]
+    pub peer_pid: i32,
+    #[serde(default)]
+    pub peer_role: String,
+    pub authz_result: String,
+    pub subject_id: String,
+    pub scope_id: String,
+    #[serde(default)]
+    pub verb: String,
+    #[serde(default = "default_request_fields")]
+    pub request_fields: Value,
+    pub decision: String,
+    #[serde(default)]
+    pub result: String,
+    pub error_kind: Option<String>,
+    pub tracing_span_id: Option<String>,
+    #[serde(default)]
+    pub duration_us: u64,
+    pub operation_fields: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpAuditRecord<'a> {
+    pub ts_ms: u128,
+    pub broker_version: &'a str,
+    pub bundle_version: &'a str,
+    pub bundle_hash: &'a str,
+    pub operation: &'a str,
+    pub public_operation_id: &'a str,
+    pub event_id: &'a str,
+    pub peer_uid: u32,
+    pub peer_gid: u32,
+    pub peer_pid: i32,
+    pub peer_role: &'a str,
+    pub authz_result: &'a str,
+    pub subject_id: &'a str,
+    pub scope_id: &'a str,
+    pub verb: &'a str,
+    pub request_fields: Value,
+    pub decision: &'a str,
+    pub result: &'a str,
+    pub error_kind: Option<&'a str>,
+    pub tracing_span_id: Option<&'a str>,
+    pub duration_us: u64,
+    pub operation_fields: Option<Value>,
+}
+
+impl<'a> OpAuditRecord<'a> {
+    /// Renders one JSONL line (single object + newline).
+    pub fn to_jsonl(&self) -> String {
+        let mut s = serde_json::to_string(self).expect("audit record serializes");
+        s.push('\n');
+        s
+    }
+}
+
+impl From<&OpAuditRecord<'_>> for OwnedOpAuditRecord {
+    fn from(value: &OpAuditRecord<'_>) -> Self {
+        Self {
+            ts_ms: value.ts_ms,
+            broker_version: value.broker_version.to_owned(),
+            bundle_version: value.bundle_version.to_owned(),
+            bundle_hash: value.bundle_hash.to_owned(),
+            operation: value.operation.to_owned(),
+            public_operation_id: value.public_operation_id.to_owned(),
+            event_id: value.event_id.to_owned(),
+            peer_uid: value.peer_uid,
+            peer_gid: value.peer_gid,
+            peer_pid: value.peer_pid,
+            peer_role: value.peer_role.to_owned(),
+            authz_result: value.authz_result.to_owned(),
+            subject_id: value.subject_id.to_owned(),
+            scope_id: value.scope_id.to_owned(),
+            verb: value.verb.to_owned(),
+            request_fields: value.request_fields.clone(),
+            decision: value.decision.to_owned(),
+            result: value.result.to_owned(),
+            error_kind: value.error_kind.map(str::to_owned),
+            tracing_span_id: value.tracing_span_id.map(str::to_owned),
+            duration_us: value.duration_us,
+            operation_fields: value.operation_fields.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nixling_ipc::broker_wire::RunnerAllocationKind;
+    use serde_json::json;
+
+    macro_rules! roundtrip_test {
+        ($name:ident, $operation:literal, $fields:expr) => {
+            #[test]
+            fn $name() {
+                let fields = $fields;
+                let value = serde_json::to_value(&fields).expect("serialize operation fields");
+                let reparsed = OperationFields::from_operation_value($operation, value.clone())
+                    .expect("reparse operation fields");
+                assert_eq!(reparsed, fields);
+                assert_eq!(serde_json::to_value(&reparsed).unwrap(), value);
+            }
+        };
+    }
+
+    roundtrip_test!(
+        apply_nftables_round_trip,
+        "ApplyNftables",
+        OperationFields::ApplyNftables {
+            bundle_nft_intent_ref: "nft:env:work".to_owned(),
+            scope_id: "env:work".to_owned(),
+            desired_hash: Some("fnv1a64:1234".to_owned()),
+            destroy: false,
+        }
+    );
+    roundtrip_test!(
+        apply_route_round_trip,
+        "ApplyRoute",
+        OperationFields::ApplyRoute {
+            bundle_route_intent_ref: "route:env:work".to_owned(),
+            destination: "default".to_owned(),
+            via: Some("192.0.2.1".to_owned()),
+            destroy: false,
+        }
+    );
+    roundtrip_test!(
+        prepare_store_view_round_trip,
+        "PrepareStoreView",
+        OperationFields::PrepareStoreView {
+            vm: "corp-vm".to_owned(),
+            generation: 42,
+            hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store".to_owned(),
+            view_root: "/run/nixling/store-views/corp-vm/42".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        store_sync_round_trip,
+        "StoreSync",
+        OperationFields::StoreSync {
+            vm_id: "vm:corp-vm".to_owned(),
+            bundle_closure_ref: "store-view:vm:corp-vm".to_owned(),
+            generation: 42,
+            closure_count: 17,
+            hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        set_bridge_port_flags_round_trip,
+        "SetBridgePortFlags",
+        OperationFields::SetBridgePortFlags {
+            vm: "corp-vm".to_owned(),
+            role: "lan".to_owned(),
+            ifname: "tap-corp-vm".to_owned(),
+            flags: json!({
+                "isolated": true,
+                "neighSuppress": true,
+            }),
+        }
+    );
+    roundtrip_test!(
+        setup_mount_namespace_round_trip,
+        "SetupMountNamespace",
+        OperationFields::SetupMountNamespace {
+            vm: "corp-vm".to_owned(),
+            role: "ch-runner".to_owned(),
+            mount_count: 1,
+            mount_root: "/run/nixling/mountns/corp-vm/ch-runner".to_owned(),
+            mount_view_path: "/run/nixling/mountns/corp-vm/ch-runner/nix/store".to_owned(),
+            source_view_path: "/run/nixling/store-views/corp-vm/42".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        spawn_runner_round_trip,
+        "SpawnRunner",
+        OperationFields::SpawnRunner {
+            bundle_runner_intent_ref: "runner:corp-vm:cloud-hypervisor".to_owned(),
+            vm_id: "corp-vm".to_owned(),
+            role_id: "ch-runner".to_owned(),
+            role: "cloud-hypervisor".to_owned(),
+            runtime_allocations: vec![RunnerAllocation {
+                kind: RunnerAllocationKind::VsockCid,
+                opaque_ref: "cid:42".to_owned(),
+            }],
+        }
+    );
+    roundtrip_test!(
+        open_pidfd_round_trip,
+        "OpenPidfd",
+        OperationFields::OpenPidfd {
+            pid: 4242,
+            expected_start_time_ticks: 123456,
+        }
+    );
+    roundtrip_test!(
+        run_host_install_round_trip,
+        "RunHostInstall",
+        OperationFields::RunHostInstall {
+            bundle_installer_intent_ref: "installer:host".to_owned(),
+            enable: true,
+            start: true,
+            no_start: false,
+        }
+    );
+    roundtrip_test!(
+        run_migrate_round_trip,
+        "RunMigrate",
+        OperationFields::RunMigrate {
+            bundle_migrate_intent_ref: "migrate:wave15".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        usbip_bind_round_trip,
+        "UsbipBind",
+        OperationFields::UsbipBind {
+            bus_id: "1-2.3".to_owned(),
+            vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        usbip_unbind_round_trip,
+        "UsbipUnbind",
+        OperationFields::UsbipUnbind {
+            bus_id: "1-2.3".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        usbip_proxy_reconcile_round_trip,
+        "UsbipProxyReconcile",
+        OperationFields::UsbipProxyReconcile {}
+    );
+    roundtrip_test!(
+        usbip_bind_firewall_rule_round_trip,
+        "UsbipBindFirewallRule",
+        OperationFields::UsbipBindFirewallRule {
+            bundle_usbip_firewall_intent_ref: "usbip-firewall:1-2.3".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        apply_nm_unmanaged_round_trip,
+        "ApplyNmUnmanaged",
+        OperationFields::ApplyNmUnmanaged {
+            bundle_nm_intent_ref: "nm:host".to_owned(),
+            scope_id: "host".to_owned(),
+            destroy: false,
+        }
+    );
+    roundtrip_test!(
+        apply_sysctl_round_trip,
+        "ApplySysctl",
+        OperationFields::ApplySysctl {
+            bundle_sysctl_intent_ref: "sysctl:work".to_owned(),
+            key: "net.ipv6.conf.nl-work.disable_ipv6".to_owned(),
+            destroy: false,
+        }
+    );
+    roundtrip_test!(
+        update_hosts_file_round_trip,
+        "UpdateHostsFile",
+        OperationFields::UpdateHostsFile {
+            bundle_hosts_intent_ref: "hosts:host".to_owned(),
+            destroy: false,
+        }
+    );
+    roundtrip_test!(
+        signal_runner_round_trip,
+        "SignalRunner",
+        OperationFields::SignalRunner {
+            vm_id: "corp-vm".to_owned(),
+            role_id: "ch-runner".to_owned(),
+            signal: "term".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        run_activation_round_trip,
+        "RunActivation",
+        OperationFields::RunActivation {
+            bundle_activation_intent_ref: "activation:corp-vm".to_owned(),
+            mode: "switch".to_owned(),
+            vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        run_gc_round_trip,
+        "RunGc",
+        OperationFields::RunGc {
+            bundle_gc_intent_ref: "gc:host".to_owned(),
+            keep_generations: Some(3),
+        }
+    );
+    roundtrip_test!(
+        run_keys_rotate_round_trip,
+        "RunKeysRotate",
+        OperationFields::RunKeysRotate {
+            bundle_keys_intent_ref: "keys:corp-vm".to_owned(),
+            vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        run_host_key_trust_round_trip,
+        "RunHostKeyTrust",
+        OperationFields::RunHostKeyTrust {
+            bundle_trust_intent_ref: "trust:corp-vm".to_owned(),
+            vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        run_rotate_known_host_round_trip,
+        "RunRotateKnownHost",
+        OperationFields::RunRotateKnownHost {
+            bundle_rotate_known_host_intent_ref: "rotate-known-host:corp-vm".to_owned(),
+            vm: "corp-vm".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        hello_round_trip,
+        "Hello",
+        OperationFields::Hello {
+            client_version: "1.2.3".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        validate_bundle_round_trip,
+        "ValidateBundle",
+        OperationFields::ValidateBundle {}
+    );
+    roundtrip_test!(
+        export_broker_audit_round_trip,
+        "ExportBrokerAudit",
+        OperationFields::ExportBrokerAudit {
+            since: Some("2026-01-01T00:00:00Z".to_owned()),
+            filter: Some(r#"{"kind":"op-name","contains":"Run"}"#.to_owned()),
+        }
+    );
+}

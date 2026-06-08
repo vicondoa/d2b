@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ManifestV04",
+  "description": "Typed v0.4.0 public vms.json manifest with reserved sentinels and dynamic VM keys.",
+  "type": "object",
+  "required": [
+    "_manifest",
+    "_observability"
+  ],
+  "properties": {
+    "_manifest": {
+      "$ref": "#/definitions/ManifestMeta"
+    },
+    "_observability": {
+      "$ref": "#/definitions/ObservabilityMeta"
+    }
+  },
+  "patternProperties": {
+    "^[a-z][a-z0-9-]*$": {
+      "$ref": "#/definitions/VmEntry"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ChExporterMeta": {
+      "type": "object",
+      "required": [
+        "listenPort"
+      ],
+      "properties": {
+        "listenPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManifestMeta": {
+      "type": "object",
+      "required": [
+        "manifestVersion"
+      ],
+      "properties": {
+        "manifestVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ObservabilityMeta": {
+      "type": "object",
+      "required": [
+        "chExporter",
+        "enabled",
+        "grafanaUrl",
+        "obsVsockCid",
+        "obsVsockHostSocket",
+        "vmName"
+      ],
+      "properties": {
+        "chExporter": {
+          "$ref": "#/definitions/ChExporterMeta"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "grafanaUrl": {
+          "type": "string"
+        },
+        "obsVsockCid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "obsVsockHostSocket": {
+          "type": "string"
+        },
+        "vmName": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmEntry": {
+      "type": "object",
+      "required": [
+        "apiSocket",
+        "audio",
+        "audioService",
+        "audioStateFile",
+        "gpuSocket",
+        "graphics",
+        "isNetVm",
+        "name",
+        "observability",
+        "stateDir",
+        "tap",
+        "tpm",
+        "tpmSocket",
+        "usbipYubikey"
+      ],
+      "properties": {
+        "apiSocket": {
+          "type": "string"
+        },
+        "audio": {
+          "type": "boolean"
+        },
+        "audioService": {
+          "type": "string"
+        },
+        "audioStateFile": {
+          "type": "string"
+        },
+        "bridge": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gpuSocket": {
+          "type": "string"
+        },
+        "graphics": {
+          "type": "boolean"
+        },
+        "isNetVm": {
+          "type": "boolean"
+        },
+        "lan": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/VmLanPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mssClamp": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "mtu": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "name": {
+          "type": "string"
+        },
+        "netVm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observability": {
+          "$ref": "#/definitions/VmObservability"
+        },
+        "sshUser": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stateDir": {
+          "type": "string"
+        },
+        "staticIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tap": {
+          "type": "string"
+        },
+        "tpm": {
+          "type": "boolean"
+        },
+        "tpmSocket": {
+          "type": "string"
+        },
+        "usbipYubikey": {
+          "type": "boolean"
+        },
+        "usbipdHostIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmLanPolicy": {
+      "type": "object",
+      "required": [
+        "allowEastWest",
+        "effectiveEastWest"
+      ],
+      "properties": {
+        "allowEastWest": {
+          "type": "boolean"
+        },
+        "effectiveEastWest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "VmObservability": {
+      "type": "object",
+      "required": [
+        "agentSocket",
+        "enabled",
+        "vsockCid",
+        "vsockHostSocket"
+      ],
+      "properties": {
+        "agentSocket": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "vsockCid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "vsockHostSocket": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

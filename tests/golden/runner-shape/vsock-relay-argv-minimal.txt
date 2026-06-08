@@ -1,0 +1,22 @@
+# P1 vsock-relay argv snapshots from
+# nixling_host::vsock_relay_argv::generate_vsock_relay_argv(<fixture>).
+#
+# Two shapes are covered (the EXEC form is OtelHostBridge's golden, not
+# this one):
+#
+#   1. stack-vm vsock-in  — obs stack VM listens on AF_VSOCK port 14317
+#      and forwards into an in-guest Alloy UDS. Source: VSOCK-LISTEN,
+#      sink: UNIX-CONNECT.
+#   2. guest egress       — guest Alloy egresses via a UDS on the host
+#      side that pipes into AF_VSOCK CID 2 (host) port 14317. Source:
+#      UNIX-LISTEN, sink: VSOCK-CONNECT.
+#
+# Fixture details (must match audit_* fns in vsock_relay_argv.rs):
+#   socat = /nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat
+#   relay names: nixling-otel-vsock-in / nixling-otel-egress@corp-vm
+#
+# One blank-stripped, comment-stripped line per shape (in declaration
+# order); the Rust parity test asserts argv.join(" ") byte-equals the
+# corresponding line.
+/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d VSOCK-LISTEN:14317,fork,reuseaddr,max-children=16 UNIX-CONNECT:/run/nixling/obs-ingress.sock
+/nix/store/SOCATSOCATSOCATSOCATSOCAT-socat/bin/socat -d -d UNIX-LISTEN:/run/nixling/otlp.sock,fork,reuseaddr,max-children=16,mode=0660 VSOCK-CONNECT:2:14317

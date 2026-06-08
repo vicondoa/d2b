@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: path-safety-violation
+  exit_code: 1
+  what_was_checked: Whether broker fs writes were performed via openat2+O_NOFOLLOW+RESOLVE_BENEATH.
+  observed_state: Target path observed to be a symlink, world-writable parent, or non-root parent.
+  remediation: Inspect the path called out in the error; remove the symlink/hostile mount and retry.
+  docs_anchor: docs/reference/error-codes.md#path-safety-violation

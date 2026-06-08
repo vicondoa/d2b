@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MinijailProfile",
+  "description": "Typed minijail profile metadata referenced by process roles.",
+  "type": "object",
+  "required": [
+    "capabilities",
+    "cgroupPlacement",
+    "gid",
+    "mountPolicy",
+    "namespaces",
+    "profileId",
+    "requiresStartRoot",
+    "role",
+    "uid"
+  ],
+  "properties": {
+    "adr_carve_out": {
+      "description": "ADR or plan carve-out reference for uid/root-capable exceptions.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "capabilities": {
+      "description": "Linux capabilities retained by the jailed process.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cgroupPlacement": {
+      "description": "Cgroup placement declaration for broker delegation.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/CgroupPlacement"
+        }
+      ]
+    },
+    "exceptionRef": {
+      "description": "Optional ADR or plan reference justifying privileged exceptions.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gid": {
+      "description": "Numeric gid used after minijail drops privilege.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "mountPolicy": {
+      "description": "Mount policy metadata, including writable paths.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/MountPolicy"
+        }
+      ]
+    },
+    "namespaces": {
+      "description": "Namespace isolation requested for this role.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NamespaceSet"
+        }
+      ]
+    },
+    "profileId": {
+      "description": "Stable profile identifier used from processes.json.",
+      "type": "string"
+    },
+    "requiresStartRoot": {
+      "description": "Whether this long-lived profile may start as root under an ADR-listed exception.",
+      "type": "boolean"
+    },
+    "role": {
+      "description": "Human-readable role the profile constrains.",
+      "type": "string"
+    },
+    "seccompPolicyRef": {
+      "description": "Seccomp policy reference; kernel-version syscall allowlists are out of W1 scope.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "uid": {
+      "description": "Numeric uid used after minijail drops privilege.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CgroupPlacement": {
+      "description": "Cgroup placement for a jailed role.",
+      "type": "object",
+      "required": [
+        "controllers",
+        "delegated",
+        "subtree"
+      ],
+      "properties": {
+        "controllers": {
+          "description": "Controllers requested by the role.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "delegated": {
+          "description": "Whether the broker must delegate ownership to nixlingd.",
+          "type": "boolean"
+        },
+        "subtree": {
+          "description": "cgroup-v2 subtree requested for this role.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MountPolicy": {
+      "description": "Mount policy for a minijail role.",
+      "type": "object",
+      "required": [
+        "hideDeviceNodesByDefault",
+        "nixStoreReadOnly",
+        "readOnlyPaths",
+        "writablePaths"
+      ],
+      "properties": {
+        "hideDeviceNodesByDefault": {
+          "description": "Whether device nodes are hidden unless broker-opened fds are passed.",
+          "type": "boolean"
+        },
+        "nixStoreReadOnly": {
+          "description": "Whether `/nix/store` is visible read-only.",
+          "type": "boolean"
+        },
+        "readOnlyPaths": {
+          "description": "Read-only paths mounted into the jail.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writablePaths": {
+          "description": "Writable paths explicitly documented for this role.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WritablePath"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "NamespaceSet": {
+      "description": "Namespace flags for a minijail profile.",
+      "type": "object",
+      "required": [
+        "ipc",
+        "mount",
+        "net",
+        "pid",
+        "user",
+        "uts"
+      ],
+      "properties": {
+        "ipc": {
+          "description": "Whether the IPC namespace is isolated.",
+          "type": "boolean"
+        },
+        "mount": {
+          "description": "Whether the mount namespace is isolated.",
+          "type": "boolean"
+        },
+        "net": {
+          "description": "Whether the network namespace is isolated.",
+          "type": "boolean"
+        },
+        "pid": {
+          "description": "Whether the PID namespace is isolated.",
+          "type": "boolean"
+        },
+        "user": {
+          "description": "Whether a user namespace is used.",
+          "type": "boolean"
+        },
+        "uts": {
+          "description": "Whether the UTS namespace is isolated.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WritablePath": {
+      "description": "Writable path declaration with a purpose string.",
+      "type": "object",
+      "required": [
+        "path",
+        "purpose"
+      ],
+      "properties": {
+        "path": {
+          "description": "Absolute path made writable in the jail.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "Reason the path is writable.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

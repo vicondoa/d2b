@@ -1,0 +1,3 @@
+# P1 usbip argv snapshot from nixling_host::usbip_argv::generate_usbip_argv(audit_input(), {Bind, Unbind})
+/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip bind --busid 1-2
+/nix/store/USBIPUSBIPUSBIP-linux-usbip/bin/usbip unbind --busid 1-2

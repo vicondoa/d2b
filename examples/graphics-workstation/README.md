@@ -35,8 +35,8 @@ The matching site-level requirements are declared in
 ```nix
 nixling.site = {
   waylandUser   = "alice";        # required for graphics/audio
-  launcherUsers = [ "alice" ];    # polkit grant for `nixling up`
-  yubikey.enable = true;          # host udev + usbip-host module
+  launcherUsers = [ "alice" ];    # polkit grant for `nixling vm start`
+  yubikey.enable = true;          # host udev; usbip-host loads on per-VM opt-in
 };
 ```
 
@@ -66,7 +66,7 @@ Practical implications:
 - `autostart = true` on a graphics VM is rejected; the systemd
   unit cannot reach the user's Wayland session at boot. Always
   bring graphics VMs up interactively from a Plasma (or sway,
-  etc.) terminal: `nixling up corp-desktop`.
+  etc.) terminal: `nixling vm start corp-desktop --apply`.
 - The sidecar is hardened with `MemoryDenyWriteExecute = false`
   (the crosvm GPU command-buffer JIT needs `PROT_WRITE|PROT_EXEC`
   — see Spec correction #19) and
@@ -128,7 +128,8 @@ talks to PipeWire as a regular client, so:
 - **Host side** (from `nixling.site.yubikey.enable`):
   - udev rules for Yubico vendor ID `1050` so the hidraw / raw-USB
     nodes carry `GROUP="kvm" MODE="0660" uaccess`.
-  - The `usbip-host` kernel module is loaded.
+  - The `usbip-host` kernel module is loaded once an enabled VM opts
+    into `usbip.yubikey = true`.
   - A per-env USBIP proxy: `nixling-sys-desktop-usbipd-proxy.service`
     bound to the host's uplink IP (here `192.0.2.1`, the host's
     side of the env's `/30`). Per-env loopback isolation — there's
@@ -252,16 +253,16 @@ nixling status                            # adds a "Bridge health" block
 # br-desktop-lan       NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
 # `corp-desktop` is GRAPHICS=true, so its STATUS will go to
-# `interactive` (not `systemd`) after the next `nixling up
+# `interactive` (not `systemd`) after the next `nixling vm start
 # corp-desktop` — graphics VMs cannot run as systemd units because
 # there is no Wayland compositor in the system unit's PID 1.
 
-nixling up corp-desktop                   # interactive boot from a Plasma terminal
+nixling vm start corp-desktop --apply      # interactive boot from a Plasma terminal
 ssh -i /var/lib/nixling/keys/corp-desktop_ed25519 alice@10.42.0.10 hostname
 nixling audio mic on corp-desktop         # grant microphone
 nixling audio speaker on corp-desktop     # grant speakers
 nixling usb corp-desktop                  # attach YubiKey (Ctrl-C to detach)
-nixling down corp-desktop                 # clean shutdown
+nixling vm stop corp-desktop --apply       # clean shutdown
 ```
 
 ## Verifying the example before deploying
@@ -298,14 +299,14 @@ Plasma + PipeWire + nixling closure and takes minutes.
 
 ## Common gotchas
 
-- **`nixling up corp-desktop` must run from a Plasma/Wayland
+- **`nixling vm start corp-desktop --apply` must run from a Plasma/Wayland
   terminal on the host** — not over SSH, not as a systemd unit.
   The launcher reads the operator's Wayland environment to wire
   the crosvm GPU sidecar; over SSH there is no `wayland-0` socket
   to reach. (Headless VMs are unaffected.)
 - **`nixling.site.waylandUser` must own an active session** when
   the VM boots, not just be declared. A fresh boot with no Plasma
-  login leaves the GPU sidecar idle; `nixling up` will block on
+  login leaves the GPU sidecar idle; `nixling vm start` will block on
   the Wayland socket.
 - **YubiKey USBIP is exclusive across envs.** Only one env's
   USBIP backend can hold a `usbip bind` at a time — the CLI
@@ -323,7 +324,7 @@ Every per-VM lifecycle service in the framework carries
 unit files but does NOT cycle running VMs. After rebuilding,
 `nixling list` flags any VM whose declared closure has drifted
 from the running one as `[pending restart]`; apply with
-`nixling restart <vm>`. See
+`nixling vm restart <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

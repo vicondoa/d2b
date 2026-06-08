@@ -25,9 +25,9 @@ let
   });
 
   # Our vendored, spectrum-os-patched cloud-hypervisor build (see
-  # modules/nixling/ext/spectrum-ch/). Pulled into a let-binding so
-  # the W2 assertion below can read `passthru.testedWithCrosvmRev`
-  # and compare to `pkgs.crosvm.src.rev`.
+  # pkgs/spectrum-ch/MAINTAINING.md for the patch-bump workflow).
+  # Pulled into a let-binding so the W2 assertion below can read
+  # `passthru.testedWithCrosvmRev` and compare to `pkgs.crosvm.src.rev`.
   spectrumCH = import ../../pkgs/spectrum-ch { inherit pkgs; };
 
   # Patched wayland-proxy-virtwl that forwards EVERY host `wl_output`
@@ -57,8 +57,8 @@ let
   # the standardised vhost-user shmem message numbers
   # (`GET_SHMEM_CONFIG = 44`, `SHMEM_MAP = 9`, `SHMEM_UNMAP = 10`)
   # which match rust-vmm/vhost @ vhost-user-backend-v0.22.0 (the
-  # vhost crate we use in modules/nixling/ext/spectrum-ch/ for
-  # cloud-hypervisor v52).
+  # vhost crate we use in pkgs/spectrum-ch/ for cloud-hypervisor
+  # v52; see MAINTAINING.md for the bump workflow).
   #
   # Historical note: this used to be pinned to crosvm 18bc84d
   # (Oct 2024), which used the OLD non-standard numbers
@@ -432,7 +432,7 @@ in
       # broken (consistent truncation under 100KB, fetch-pack RST).
       #
       # Solution: we vendor the (tiny) patch set in
-      # modules/nixling/ext/spectrum-ch/ and build the patched
+      # pkgs/spectrum-ch/ (see MAINTAINING.md) and build the patched
       # cloud-hypervisor ourselves.
       cloud-hypervisor.package = spectrumCH;
     };

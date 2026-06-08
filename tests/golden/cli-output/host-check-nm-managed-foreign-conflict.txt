@@ -1,0 +1,7 @@
+error: host-check-error
+  code: nm-managed-foreign-conflict
+  exit_code: 1
+  what_was_checked: Whether a foreign NetworkManager profile is managing a nixling-owned interface.
+  observed_state: NetworkManager reports a managed connection on an interface declared as nixling-owned.
+  remediation: Add the interface to /etc/NetworkManager/conf.d/nixling-unmanaged.conf and `nmcli general reload`.
+  docs_anchor: docs/reference/error-codes.md#nm-managed-foreign-conflict

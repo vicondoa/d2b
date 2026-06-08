@@ -1,0 +1,7 @@
+error: host-check-error
+  code: cgroup-controllers-missing
+  exit_code: 1
+  what_was_checked: Whether the host slice exposes the cpu/memory/io/pids controllers.
+  observed_state: Required controllers missing from /sys/fs/cgroup/nixling.slice/cgroup.controllers.
+  remediation: Enable the missing controllers via systemd `Delegate=` on nixling-host.slice and reload.
+  docs_anchor: docs/reference/error-codes.md#cgroup-controllers-missing

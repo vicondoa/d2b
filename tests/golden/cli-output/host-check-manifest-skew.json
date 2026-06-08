@@ -1,0 +1,9 @@
+{
+  "code": "manifest-skew",
+  "docs_anchor": "docs/reference/error-codes.md#manifest-skew",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "The bundleVersion in vms.json does not match the activated generation.",
+  "remediation": "Re-run `nixos-rebuild switch` to align the activated generation with the manifest.",
+  "what_was_checked": "Whether the installed manifest matches the activated NixOS generation."
+}

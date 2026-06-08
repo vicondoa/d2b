@@ -1,0 +1,20 @@
+# P1 swtpm argv snapshot from nixling_host::swtpm_argv::generate_swtpm_argv(audit_swtpm_input())
+# Format: argv joined by '\n', one argument per line. Update via cargo test --lib swtpm_argv
+# (the audit_swtpm_input_parity_golden test panics with the observed vs expected diff).
+# Plan: ph1-p1-swtpm-persistence — the long-lived swtpm sidecar argv shape is locked here.
+/nix/store/SWTPMSWTPMSWTPMSWTPMSWTPM-swtpm-0.10.0/bin/swtpm
+socket
+--tpm2
+--tpmstate
+dir=/var/lib/nixling/vms/corp-vm/tpm
+--ctrl
+type=unixio,path=/var/lib/nixling/vms/corp-vm/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100
+--server
+type=unixio,path=/run/nixling/vms/corp-vm/swtpm.sock,mode=0660,uid=1100,gid=1100
+--flags
+startup-clear
+--log
+file=/var/lib/nixling/vms/corp-vm/tpm/swtpm.log,level=20
+--pid
+file=/var/lib/nixling/vms/corp-vm/tpm/swtpm.pid
+--daemon=false

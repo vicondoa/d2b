@@ -1,0 +1,7 @@
+error: host-check-error
+  code: socket-perms-wrong
+  exit_code: 1
+  what_was_checked: Whether /run/nixling/public.sock has the expected mode/owner/group.
+  observed_state: Observed mode/owner/group diverges from the declared SocketSpec.
+  remediation: Inspect `systemctl status nixlingd.socket`; the unit re-asserts perms on restart.
+  docs_anchor: docs/reference/error-codes.md#socket-perms-wrong

@@ -1,0 +1,7 @@
+error: host-destroy-apply-error
+  code: vm-still-running-refused
+  exit_code: 1
+  what_was_checked: Whether all VMs in the bundle are stopped before `host destroy --apply`.
+  observed_state: At least one VM is still running (cloud-hypervisor process detected).
+  remediation: Stop the listed VMs with `nixling down <vm>` then retry `host destroy --apply`.
+  docs_anchor: docs/reference/error-codes.md#vm-still-running-refused

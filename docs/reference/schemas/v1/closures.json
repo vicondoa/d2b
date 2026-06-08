@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClosureMetadata",
+  "description": "Per-VM closure metadata consumed by the future daemon parity oracle.",
+  "type": "object",
+  "required": [
+    "closurePaths",
+    "declaredRunner",
+    "generation",
+    "runnerParityOk",
+    "runnerParityPath",
+    "schemaVersion",
+    "toplevel",
+    "vm"
+  ],
+  "properties": {
+    "closurePaths": {
+      "description": "Complete closure paths required by the VM.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "declaredRunner": {
+      "description": "Declared runner path from the public manifest/emitter.",
+      "type": "string"
+    },
+    "generation": {
+      "description": "Generation and source metadata.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ClosureGeneration"
+        }
+      ]
+    },
+    "runnerParityOk": {
+      "description": "Whether declared runner and parity path agree.",
+      "type": "boolean"
+    },
+    "runnerParityPath": {
+      "description": "Runner path observed or snapshotted for parity checks.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "description": "Schema version used by this artifact.",
+      "type": "string"
+    },
+    "toplevel": {
+      "description": "Declared top-level NixOS system path.",
+      "type": "string"
+    },
+    "vm": {
+      "description": "VM name this closure describes.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ClosureGeneration": {
+      "description": "Generation metadata for a VM closure.",
+      "type": "object",
+      "properties": {
+        "generatedAt": {
+          "description": "Reproducible timestamp string supplied by the Nix emitter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hostGeneration": {
+          "description": "Host-side generation number when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "sourceRevision": {
+          "description": "Source revision or derivation identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmGeneration": {
+          "description": "VM generation label or number when known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: firewall-coexistence-mismatch
+  exit_code: 1
+  what_was_checked: Whether the declared firewallCoexistence manager matches the running stack at apply time.
+  observed_state: Apply phase observed the same firewallCoexistence drift as the read-only probe.
+  remediation: See remediation for host-check#firewall-coexistence-mismatch; re-run apply after the fix.
+  docs_anchor: docs/reference/error-codes.md#firewall-coexistence-mismatch

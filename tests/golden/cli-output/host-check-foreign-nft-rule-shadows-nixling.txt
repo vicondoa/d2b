@@ -1,0 +1,7 @@
+error: host-check-error
+  code: foreign-nft-rule-shadows-nixling
+  exit_code: 1
+  what_was_checked: Whether a foreign nft rule in a higher-priority hook shadows the inet nixling table.
+  observed_state: Foreign nft rule found at a hook priority lower than nixling's declared priority.
+  remediation: Move the foreign rule to a higher priority or document it in nixling.firewallCoexistence.allow.
+  docs_anchor: docs/reference/error-codes.md#foreign-nft-rule-shadows-nixling

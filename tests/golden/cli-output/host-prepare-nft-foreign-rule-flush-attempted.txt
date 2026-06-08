@@ -1,0 +1,7 @@
+error: host-prepare-apply-error
+  code: nft-foreign-rule-flush-attempted
+  exit_code: 1
+  what_was_checked: Whether nft apply refused to flush a foreign table.
+  observed_state: Broker observed an nft ruleset replace targeting a non-nixling table; refused.
+  remediation: Restrict nft batches to `table inet nixling`; never `flush ruleset` from nixling.
+  docs_anchor: docs/reference/error-codes.md#nft-foreign-rule-flush-attempted

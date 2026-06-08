@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StatusOutputV2",
+  "anyOf": [
+    {
+      "$ref": "#/definitions/StatusVmOutputV2"
+    },
+    {
+      "$ref": "#/definitions/StatusInventoryOutputV2"
+    },
+    {
+      "$ref": "#/definitions/StatusBridgeCheckOutputV2"
+    }
+  ],
+  "definitions": {
+    "RunnerParityOutputV2": {
+      "type": "object",
+      "required": [
+        "declaredRunner",
+        "runnerParityOk",
+        "runnerParityPath"
+      ],
+      "properties": {
+        "declaredRunner": {
+          "type": "string"
+        },
+        "runnerParityOk": {
+          "type": "boolean"
+        },
+        "runnerParityPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusBridgeCheckOutputV2": {
+      "type": "object",
+      "required": [
+        "message",
+        "mode",
+        "runtime",
+        "status"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusInventoryOutputV2": {
+      "type": "object",
+      "required": [
+        "runtime",
+        "vms"
+      ],
+      "properties": {
+        "runtime": {
+          "type": "string"
+        },
+        "vms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StatusVmOutputV2"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusServicesOutputV2": {
+      "type": "object",
+      "required": [
+        "microvm",
+        "nixling",
+        "virtiofsd"
+      ],
+      "properties": {
+        "gpu": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "microvm": {
+          "type": "string"
+        },
+        "nixling": {
+          "type": "string"
+        },
+        "snd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "swtpm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "virtiofsd": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StatusVmOutputV2": {
+      "type": "object",
+      "required": [
+        "declaredRoles",
+        "name",
+        "pendingRestart",
+        "readiness",
+        "runtime",
+        "services"
+      ],
+      "properties": {
+        "booted": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declaredRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "pendingRestart": {
+          "type": "boolean"
+        },
+        "readiness": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runnerParity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunnerParityOutputV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "services": {
+          "$ref": "#/definitions/StatusServicesOutputV2"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

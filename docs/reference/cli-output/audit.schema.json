@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuditOutputV2",
+  "type": "object",
+  "required": [
+    "autoUpgrade_commits_lock",
+    "bridge_isolation",
+    "ch_crosvm_pair_ok",
+    "ch_version",
+    "crosvm_rev",
+    "fail2ban_active",
+    "kvm_dev_mode",
+    "seccomp_rev",
+    "sidecars_per_vm",
+    "ssh",
+    "store_delivery",
+    "usbipd_per_env_isolation",
+    "virtiofsd",
+    "wayland_user_in_kvm"
+  ],
+  "properties": {
+    "autoUpgrade_commits_lock": {
+      "type": "boolean"
+    },
+    "bridge_isolation": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/AuditBridgeIsolationOutputV2"
+      }
+    },
+    "ch_crosvm_pair_ok": {
+      "type": "boolean"
+    },
+    "ch_version": {
+      "type": "string"
+    },
+    "crosvm_rev": {
+      "type": "string"
+    },
+    "fail2ban_active": {
+      "type": "boolean"
+    },
+    "kvm_dev_mode": {
+      "type": "string"
+    },
+    "seccomp_rev": {
+      "type": "string"
+    },
+    "sidecars_per_vm": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/AuditSidecarsOutputV2"
+      }
+    },
+    "ssh": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/AuditSshOutputV2"
+      }
+    },
+    "store_delivery": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "usbipd_per_env_isolation": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/AuditUsbipEnvOutputV2"
+      }
+    },
+    "virtiofsd": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/AuditVirtiofsdOutputV2"
+      }
+    },
+    "wayland_user_in_kvm": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AuditBridgeIsolationOutputV2": {
+      "type": "object",
+      "required": [
+        "bridge",
+        "isolated",
+        "state",
+        "tap"
+      ],
+      "properties": {
+        "bridge": {
+          "type": "string"
+        },
+        "isolated": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "tap": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditSidecarsOutputV2": {
+      "type": "object",
+      "required": [
+        "gpu_active",
+        "gpu_user",
+        "snd_active",
+        "snd_user"
+      ],
+      "properties": {
+        "gpu_active": {
+          "type": "boolean"
+        },
+        "gpu_user": {
+          "type": "string"
+        },
+        "snd_active": {
+          "type": "boolean"
+        },
+        "snd_user": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditSshOutputV2": {
+      "type": "object",
+      "properties": {
+        "PasswordAuthentication": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditUsbipEnvOutputV2": {
+      "type": "object",
+      "required": [
+        "backend_active",
+        "lock_present",
+        "socket_active"
+      ],
+      "properties": {
+        "backend_active": {
+          "type": "boolean"
+        },
+        "lock_present": {
+          "type": "boolean"
+        },
+        "socket_active": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditVirtiofsdOutputV2": {
+      "type": "object",
+      "required": [
+        "caps_dropped",
+        "marker_ok",
+        "readonly_flag",
+        "user"
+      ],
+      "properties": {
+        "caps_dropped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "marker_ok": {
+          "type": "boolean"
+        },
+        "readonly_flag": {
+          "type": "boolean"
+        },
+        "user": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

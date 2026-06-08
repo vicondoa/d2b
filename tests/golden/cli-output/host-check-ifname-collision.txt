@@ -1,0 +1,7 @@
+error: host-check-error
+  code: ifname-collision
+  exit_code: 78
+  what_was_checked: Whether two derived ifnames collide after hash truncation.
+  observed_state: Two distinct env/vm names produced the same nl-* ifname suffix.
+  remediation: Rename one of the colliding env/vm entries or pin a non-colliding `ifnameMapping` override.
+  docs_anchor: docs/reference/error-codes.md#ifname-collision

@@ -19,13 +19,15 @@
 #   - systemd.services."microvm-virtiofsd@<vm>"              (per-VM)
 #   - systemd.services."nixling-<vm>-swtpm"                  (per-VM)
 #   - systemd.services."nixling-<vm>-snd"                    (per-VM)
+#   - systemd.services."nixling-<vm>-video"                  (per-VM)
 #   - systemd.services."nixling-<vm>-gpu"                    (per-VM)
 #   - systemd.services."nixling-otel-relay@"                 (template)
 #
-# Wave-1 observability extends the host-side allowlist with:
+# Wave-1 observability extends the allowlist with:
 #   - systemd.services."nixling-otel-relay@"                 (template)
 #   - systemd.services."nixling-otel-host-bridge"            (singleton)
 #   - systemd.services."nixling-ch-exporter"                 (singleton)
+#   - workload guest systemd.services."nixling-otel-vsock-out"
 #
 # v0.1.7 tightened the invariant: top-level `restartIfChanged = false`
 # is REQUIRED. `unitConfig.X-RestartIfChanged = false` is rejected
@@ -83,25 +85,33 @@ let
       })
     ];
   };
-  svcs = nixos.config.systemd.services;
-  pull = key:
-    if !(builtins.hasAttr key svcs) then null
+  hostSvcs = nixos.config.systemd.services;
+  guestSvcs = nixos.config.microvm.vms.full-vm.config.config.systemd.services;
+  obsGuestSvcs = nixos.config.microvm.vms.sys-obs-stack.config.config.systemd.services;
+  pullFrom = services: key:
+    if !(builtins.hasAttr key services) then null
     else
-      let s = svcs.\${key};
+      let s = services.\${key};
       in {
         ric = s.restartIfChanged or null;
         xric = (s.unitConfig or {}).X-RestartIfChanged or null;
       };
+  pull = key: pullFrom hostSvcs key;
+  pullGuest = key: pullFrom guestSvcs key;
+  pullObsGuest = key: pullFrom obsGuestSvcs key;
 in {
   "nixling@" = pull "nixling@";
   "microvm@" = pull "microvm@";
   "microvm-virtiofsd@full-vm" = pull "microvm-virtiofsd@full-vm";
   "nixling-full-vm-swtpm" = pull "nixling-full-vm-swtpm";
   "nixling-full-vm-snd"   = pull "nixling-full-vm-snd";
+  "nixling-full-vm-video" = pull "nixling-full-vm-video";
   "nixling-full-vm-gpu"   = pull "nixling-full-vm-gpu";
   "nixling-otel-relay@" = pull "nixling-otel-relay@";
   "nixling-otel-host-bridge" = pull "nixling-otel-host-bridge";
   "nixling-ch-exporter" = pull "nixling-ch-exporter";
+  "guest:nixling-otel-vsock-out" = pullGuest "nixling-otel-vsock-out";
+  "obs:nixling-otel-vsock-in" = pullObsGuest "nixling-otel-vsock-in";
 }
 EOF2
 )
@@ -142,19 +152,100 @@ check_optional() {
   check "$key"
 }
 
-check "nixling@"
+check_optional "nixling@" "P6 deletion — daemon supervisor + broker SpawnRunner{CloudHypervisor}"
 check "microvm@"
 check "microvm-virtiofsd@full-vm"
-check "nixling-full-vm-swtpm"
-check "nixling-full-vm-snd"
-check "nixling-full-vm-gpu"
-check "nixling-otel-relay@"
-check "nixling-otel-host-bridge"
-check "nixling-ch-exporter"
+check_optional "nixling-full-vm-swtpm" "P6 deletion — broker SpawnRunner{Swtpm}"
+# P6 (ph6-remove-systemd-emission): the per-VM nixling-<vm>-snd /
+# -video / -gpu sidecars and the nixling-otel-relay@ template have
+# been deleted; their replacements are broker `SpawnRunner` runners
+# (Audio / Video / Gpu / OtelHostBridge) and carry no
+# `restartIfChanged` knob (broker `supervisor::pidfd` owns the
+# restart contract). The `nixling-ch-exporter` host singleton was
+# replaced by the daemon's `/metrics` endpoint and is gone for the
+# same reason. Checks retained: the upstream `microvm@` and
+# `microvm-virtiofsd@` per-VM templates (still emitted by upstream
+# microvm.nix via the `microvm.vms` translation in host.nix), the
+# per-VM swtpm sidecar (host-sidecars.nix deletion in P6 took the
+# top-level `nixling-<vm>-swtpm` service with it — listed here only
+# so a re-introduction regresses the gate), and the in-guest
+# observability vsock relays.
+check_optional "nixling-full-vm-snd"   "P6 deletion — broker SpawnRunner{Audio}"
+check_optional "nixling-full-vm-video" "P6 deletion — broker SpawnRunner{Video}"
+check_optional "nixling-full-vm-gpu"   "P6 deletion — broker SpawnRunner{Gpu}"
+check_optional "nixling-otel-relay@"   "P6 deletion — broker SpawnRunner{OtelHostBridge}"
+check_optional "nixling-otel-host-bridge" "P6 deletion — broker SpawnRunner{OtelHostBridge}"
+check_optional "nixling-ch-exporter"   "P6 deletion — folded into nixlingd /metrics"
+check "guest:nixling-otel-vsock-out"
+check "obs:nixling-otel-vsock-in"
 
 # In-VM observability units (nixling-otel-vsock-out.service in workload
 # guests and nixling-otel-vsock-in.service in the obs VM) are out of
 # scope here: this file evaluates host systemd.services only. Future
 # in-VM tests will cover their restartIfChanged policy.
+
+# The obs VM's nixling-otel-vsock-in.service is still covered in
+# observability-eval.sh, which evaluates the stack VM's guest config.
+
+# ph0-daemon-restart-if-changed (P0): assert that nixlingd.service
+# carries restartIfChanged = false when daemonExperimental.enable = true.
+# nixlingd is the long-lived supervisor whose pidfd owns the child runner
+# DAG; a rebuild-triggered restart would tear down all in-flight VM
+# processes. The VM lifecycle policy (AGENTS.md) extends to the daemon.
+EXPR_DAEMON=$(cat <<'EOFD'
+let
+  flake = builtins.getFlake (toString ROOT_PLACEHOLDER);
+  nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
+  nixos = nixosSystem {
+    system = "x86_64-linux";
+    modules = [
+      flake.nixosModules.default
+      ({ lib, ... }: {
+        boot.loader.grub.enable = false;
+        boot.loader.systemd-boot.enable = false;
+        boot.initrd.includeDefaultModules = false;
+        fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+        environment.etc."machine-id".text = "00000000000000000000000000000000";
+        system.stateVersion = "25.11";
+        users.users.alice = { isNormalUser = true; uid = 1000; };
+        nixling.site = { waylandUser = "alice"; launcherUsers = [ "alice" ]; yubikey.enable = false; };
+        nixling.envs.work = { lanSubnet = "10.20.0.0/24"; uplinkSubnet = "192.0.2.0/30"; };
+        # Force daemon on explicitly so the unit materialises regardless
+        # of whether any allReady gates have flipped.
+        nixling.daemonExperimental.enable = true;
+      })
+    ];
+  };
+  svc = nixos.config.systemd.services.nixlingd or null;
+in {
+  present        = svc != null;
+  ric            = if svc != null then svc.restartIfChanged or null else null;
+  xric           = if svc != null then (svc.unitConfig or {}).X-RestartIfChanged or null else null;
+}
+EOFD
+)
+# Substitute $ROOT into the heredoc (single-quote prevented expansion above).
+EXPR_DAEMON="${EXPR_DAEMON//ROOT_PLACEHOLDER/$ROOT}"
+
+OUT_DAEMON=$(nix-instantiate --eval --strict --json --expr "$EXPR_DAEMON" 2>/dev/null) || \
+  fail "daemon eval failed; cannot inspect nixlingd.service restart policy"
+
+present=$(printf '%s' "$OUT_DAEMON" | jq -r '.present')
+if [ "$present" != "true" ]; then
+  fail "nixlingd.service: service not found in config when daemonExperimental.enable = true"
+fi
+
+ric_daemon=$(printf '%s' "$OUT_DAEMON" | jq -r '.ric')
+xric_daemon=$(printf '%s' "$OUT_DAEMON" | jq -r '.xric')
+
+case "$ric_daemon" in
+  false) ok "nixlingd.service: restartIfChanged = false" ;;
+  *)
+    if [ "$xric_daemon" != "null" ]; then
+      fail "nixlingd.service: uses unitConfig.X-RestartIfChanged ($xric_daemon) which NixOS switch-to-configuration ignores (emits under [Unit] not [Service]). Use top-level \`restartIfChanged = false\` instead. See AGENTS.md 'Adding new per-VM units'."
+    fi
+    fail "nixlingd.service: missing restartIfChanged=false (got ric=$ric_daemon). The VM lifecycle policy extends to the daemon — see AGENTS.md and ph0-daemon-restart-if-changed."
+    ;;
+esac
 
 log "==> restart-policy-eval OK"

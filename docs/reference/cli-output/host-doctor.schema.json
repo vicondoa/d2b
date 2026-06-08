@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostDoctorOutputP3",
+  "type": "object",
+  "required": [
+    "broker_ready",
+    "checks",
+    "command",
+    "exitCode",
+    "findings",
+    "mode",
+    "summary"
+  ],
+  "properties": {
+    "command": {
+      "type": "string",
+      "const": "host doctor"
+    },
+    "mode": {
+      "type": "string",
+      "const": "read-only"
+    },
+    "broker_ready": {
+      "type": "boolean",
+      "description": "Backward-compat alias for the broker-ready check status (pass => true)."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Backward-compat: human-readable lines for every non-pass check.",
+      "items": { "type": "string" }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["pass", "warn", "fail"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "exitCode": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "description": "0 = all pass, 1 = at least one warn (no fail), 2 = at least one fail."
+    },
+    "checks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/DoctorCheck" }
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "DoctorCheck": {
+      "type": "object",
+      "required": ["name", "status", "detail"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "broker-ready",
+            "daemon-ready",
+            "metrics-endpoint",
+            "otel-host-bridge-runner",
+            "usbipd-runners",
+            "kernel-module-matrix",
+            "autostart-status"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"]
+        },
+        "detail": { "type": "string" },
+        "data": {
+          "type": "object",
+          "description": "Optional structured payload (per-check shape).",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

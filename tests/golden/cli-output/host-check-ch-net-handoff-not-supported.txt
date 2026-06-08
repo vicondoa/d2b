@@ -1,0 +1,7 @@
+error: host-check-error
+  code: ch-net-handoff-not-supported
+  exit_code: 1
+  what_was_checked: Whether the pinned Cloud Hypervisor exposes tap-fd net handoff.
+  observed_state: CH probe (--version + capability JSON) reports tap-fd net handoff is unsupported.
+  remediation: Pin Cloud Hypervisor >= v40 or switch host.ch.netHandoffMode to `persistent-tap`.
+  docs_anchor: docs/reference/error-codes.md#ch-net-handoff-not-supported

@@ -1,0 +1,9 @@
+{
+  "code": "host-modules-locked",
+  "docs_anchor": "docs/reference/error-codes.md#host-modules-locked",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "/proc/sys/kernel/modules_disabled reads 1 but required modules are not preloaded.",
+  "remediation": "Either preload the required modules at boot or set modules_disabled=0 in the boot policy.",
+  "what_was_checked": "Whether kernel.modules_disabled=1 prevents loading required modules."
+}

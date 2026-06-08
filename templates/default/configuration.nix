@@ -89,8 +89,9 @@ in
     userAuthorizedKeys = [ ];
 
     # Flip to `true` if you plan to use `nixling usb <vm>` for
-    # Yubikey USBIP passthrough. Default `true` installs Yubico
-    # udev rules + `usbip-host`; set `false` to skip them entirely.
+    # Yubikey USBIP passthrough. Default `true` keeps the Yubico
+    # udev rules enabled; `usbip-host` loads only once an enabled VM
+    # also opts into `usbip.yubikey`. Set `false` to skip them.
     yubikey.enable = false;
   };
 

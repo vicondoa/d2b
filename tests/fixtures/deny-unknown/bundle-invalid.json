@@ -1,0 +1,26 @@
+{
+  "bundleVersion": 1,
+  "closures": [
+    {
+      "path": "closures/corp-vm.json",
+      "vm": "corp-vm"
+    }
+  ],
+  "generation": {
+    "generatedAt": null,
+    "generator": "tests",
+    "sourceRevision": null
+  },
+  "hostPath": "host.json",
+  "minijailProfiles": [
+    {
+      "path": "minijail-profile.json",
+      "profileId": "cloud-hypervisor"
+    }
+  ],
+  "privilegesPath": "privileges.json",
+  "processesPath": "processes.json",
+  "publicManifestPath": "vms.json",
+  "schemaVersion": "v1",
+  "unexpected": true
+}

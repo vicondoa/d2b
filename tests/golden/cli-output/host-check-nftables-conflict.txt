@@ -1,0 +1,7 @@
+error: host-check-error
+  code: nftables-conflict
+  exit_code: 1
+  what_was_checked: Whether a conflicting nft framework (firewalld/ufw raw) is active.
+  observed_state: Probe detected an unmanaged nft framework conflicting with nixling's policy.
+  remediation: Configure firewallCoexistence to declare the running manager, or stop the conflicting service.
+  docs_anchor: docs/reference/error-codes.md#nftables-conflict

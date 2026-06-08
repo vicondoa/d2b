@@ -3,8 +3,8 @@
 The "is nixling for me?" sanity test. About 25 lines of `flake.nix`
 plus a small `configuration.nix` get you:
 
-- one isolated network environment named `work`,
-- one headless workload VM named `corp-vm` joined to that env,
+- one isolated network environment named `personal`,
+- one headless workload VM named `personal-dev` joined to that env,
 - and the full per-env plumbing rendered around them — bridges,
   an auto-declared net VM, dnsmasq, NAT, USBIP proxy.
 
@@ -61,18 +61,18 @@ nixling.site = {
   yubikey.enable = false;
 };
 
-nixling.envs.work = {
+nixling.envs.personal = {
   lanSubnet    = "10.99.0.0/24"; # workload VMs land in here
   uplinkSubnet = "192.0.2.0/30"; # point-to-point host ↔ net VM
 };
 
-nixling.vms.corp-vm = {
+nixling.vms.personal-dev = {
   enable   = true;
-  env      = "work";             # bind to the env above
+  env      = "personal";         # bind to the env above
   index    = 10;                 # → 10.99.0.10
   ssh.user = "alice";
   config = {                     # NixOS module merged into the GUEST
-    networking.hostName = "corp-vm";
+    networking.hostName = "personal-dev";
     users.users.alice = { isNormalUser = true; uid = 1000; };
   };
 };
@@ -86,20 +86,20 @@ honest: any future VM that turns on `graphics.enable` or
 
 ## What materialises after `nixos-rebuild switch`
 
-Declaring just `nixling.envs.work = { … };` and one workload VM
+Declaring just `nixling.envs.personal = { … };` and one workload VM
 expands into a surprisingly large amount of host plumbing. After
 the rebuild, on the host you will find:
 
 | Resource                                           | Purpose                                                                 |
 |----------------------------------------------------|-------------------------------------------------------------------------|
-| `br-work-up`                                       | /30 point-to-point bridge: host `.1` ↔ net VM `.2`.                     |
-| `br-work-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10–.250`. **Host has no IP on this bridge.** |
-| `sys-work-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
-| `corp-vm` (microVM)                                | Your declared workload VM. Tap on `br-work-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
-| `nixling-sys-work-usbipd-proxy.service`            | Per-env USBIP proxy bound to the uplink host IP. Idle while no workload VM opts in. |
+| `br-personal-up`                                       | /30 point-to-point bridge: host `.1` ↔ net VM `.2`.                     |
+| `br-personal-lan`                                      | /24 LAN bridge: net VM `.1` ↔ workload VMs `.10–.250`. **Host has no IP on this bridge.** |
+| `sys-personal-net` (microVM)                           | Auto-declared headless net VM. Runs NAT, dnsmasq, and the per-env firewall blocklist. Set to `autostart = true`. |
+| `personal-dev` (microVM)                                | Your declared workload VM. Tap on `br-personal-lan`, IP `10.99.0.10`, DHCP-driven inside the guest. |
+| `nixling-sys-personal-usbipd-proxy.service`            | Per-env USBIP proxy bound to the uplink host IP. Idle while no workload VM opts in. |
 | `nixling-store-sync@*.service` + per-VM timers     | Hardlink farms under `/var/lib/nixling/<vm>/store/` mirroring each VM's closure. |
-| `/var/lib/nixling/keys/corp-vm_ed25519`            | Framework-managed Ed25519 key for SSH into `corp-vm`. Regenerated on activation if missing. |
-| `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch corp-vm` rebuilds and live-applies inside the running VM. |
+| `/var/lib/nixling/keys/personal-dev_ed25519`            | Framework-managed Ed25519 key for SSH into `personal-dev`. Regenerated on activation if missing. |
+| `nixling` CLI on `$PATH`                           | `nixling list` shows declared VMs + env metadata; `nixling switch personal-dev` rebuilds and live-applies inside the running VM. |
 
 All of that comes from the ~25-line flake plus the small consumer
 config in this directory. The framework is opinionated by design;
@@ -145,32 +145,32 @@ is **not** autostarted.
 ```bash
 nixling list
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.99.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# personal-dev       personal      false     false false   10.99.0.10      stopped
+# sys-personal-net   personal  false     false false   192.0.2.2       systemd (net-vm)
 
 nixling status
 # NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-# corp-vm            work      false     false false   10.99.0.10      stopped
-# sys-work-net       work      false     false false   192.0.2.2       systemd (net-vm)
+# personal-dev       personal      false     false false   10.99.0.10      stopped
+# sys-personal-net   personal  false     false false   192.0.2.2       systemd (net-vm)
 #
 # === Bridge health ===
 # BRIDGE               STATE      ADMIN   EXPECTED     RESULT
-# br-work-up           UP         up      UP           ok
-# br-work-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
+# br-personal-up           UP         up      UP           ok
+# br-personal-lan          NO-CARRIER up      NO-CARRIER   no-carrier (no workloads up)
 
 # STATUS legend:
 #   systemd      — autostarted by the framework's `nixling@<vm>.service`
 #                  wrapper (or the underlying `microvm@<vm>.service`).
 #                  Net VMs always show this; tagged `systemd (net-vm)`.
-#   interactive  — launched ad-hoc via `nixling up <vm>` from a Plasma
+#   interactive  — launched ad-hoc via `nixling vm start <vm> --apply` from a Plasma
 #                  terminal (typical for graphics VMs).
 #   stopped      — not running.
 
-nixling up corp-vm
-ssh -i /var/lib/nixling/keys/corp-vm_ed25519 alice@10.99.0.10 hostname
-# corp-vm
+nixling vm start personal-dev --apply
+ssh -i /var/lib/nixling/keys/personal-dev_ed25519 alice@10.99.0.10 hostname
+# personal-dev
 
-nixling down corp-vm
+nixling vm stop personal-dev --apply
 ```
 
 ## Common gotchas
@@ -198,7 +198,7 @@ Every per-VM lifecycle service in the framework carries
 unit files but does NOT cycle running VMs. After rebuilding,
 `nixling list` flags any VM whose declared closure has drifted
 from the running one as `[pending restart]`; apply with
-`nixling restart <vm>`. See
+`nixling vm restart <vm> --apply`. See
 [`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)

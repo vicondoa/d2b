@@ -1,0 +1,9 @@
+{
+  "code": "cgroup-delegation-refused",
+  "docs_anchor": "docs/reference/error-codes.md#cgroup-delegation-refused",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "Delegation request refused; controllers missing from cgroup.subtree_control.",
+  "remediation": "Add `Delegate=cpu memory io pids` to /etc/systemd/system/nixling-host.slice and `systemctl daemon-reload`.",
+  "what_was_checked": "Whether systemd delegated +cpu +memory +io +pids to the nixling host slice."
+}

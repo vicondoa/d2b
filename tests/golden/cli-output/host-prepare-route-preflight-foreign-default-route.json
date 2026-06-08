@@ -1,0 +1,9 @@
+{
+  "code": "route-preflight-foreign-default-route",
+  "docs_anchor": "docs/reference/error-codes.md#route-preflight-foreign-default-route",
+  "exit_code": 1,
+  "kind": "host-prepare-apply-error",
+  "observed_state": "Default route observed via a nixling-owned bridge; nixling refuses to claim it.",
+  "remediation": "Move the default route to the upstream uplink before running `host prepare --apply`.",
+  "what_was_checked": "Whether the host's default route is on a nixling-owned interface."
+}

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostCheckOutputV2",
+  "type": "object",
+  "required": [
+    "exitCode",
+    "findings",
+    "mode",
+    "strict",
+    "summary"
+  ],
+  "properties": {
+    "exitCode": {
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0.0
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/HostCheckFindingV2"
+      }
+    },
+    "mode": {
+      "type": "string"
+    },
+    "strict": {
+      "type": "boolean"
+    },
+    "summary": {
+      "$ref": "#/definitions/HostCheckSummaryV2"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "HostCheckFindingV2": {
+      "type": "object",
+      "required": [
+        "id",
+        "message",
+        "remediation",
+        "severity"
+      ],
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "remediation": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/definitions/HostCheckSeverityV2"
+        },
+        "vm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostCheckSeverityV2": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "warn",
+        "fail"
+      ]
+    },
+    "HostCheckSummaryV2": {
+      "type": "object",
+      "required": [
+        "fail",
+        "pass",
+        "warn"
+      ],
+      "properties": {
+        "fail": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "pass": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "warn": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

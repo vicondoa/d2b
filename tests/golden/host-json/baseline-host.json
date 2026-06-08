@@ -1,0 +1,88 @@
+{
+  "$comment": "W3fu1 H4 baseline host.json fixture — a known-good emitted host.json for the multi-env-daemon-experimental example. The host-json-drift-gate.sh compares the emitter output against this fixture byte-for-byte, allowing only the dynamic hash-derived ifname suffix to vary (regex `nl-[a-z]+-[0-9a-f]{8}`). Any other drift fails the gate; intentional schema bumps update this fixture in the same commit as the schema regeneration.",
+  "schemaVersion": "v2",
+  "bundleVersion": "0.4.0",
+  "site": {
+    "hostLanCidr": "192.0.2.0/24",
+    "modulesDisabledSysctlPolicy": "preload-required",
+    "stateDir": "/var/lib/nixling",
+    "runtimeDir": "/run/nixling"
+  },
+  "environments": [
+    {
+      "env": "wk",
+      "subnet": "10.42.1.0/24",
+      "bridge": "nl-wk-XXXXXXXX",
+      "natUpstream": "eth0",
+      "ipv6Sysctls": {
+        "all.disable_ipv6": "1",
+        "default.disable_ipv6": "1"
+      },
+      "dnsmasqBoundIp": "10.42.1.1"
+    },
+    {
+      "env": "pe",
+      "subnet": "10.42.2.0/24",
+      "bridge": "nl-pe-XXXXXXXX",
+      "natUpstream": "eth0",
+      "ipv6Sysctls": {
+        "all.disable_ipv6": "1",
+        "default.disable_ipv6": "1"
+      },
+      "dnsmasqBoundIp": "10.42.2.1"
+    }
+  ],
+  "nftables": {
+    "table": "inet nixling",
+    "ownershipMarker": "nixling-owned",
+    "priority": -100
+  },
+  "networkManager": {
+    "managed": false,
+    "unmanagedDropIn": "/etc/NetworkManager/conf.d/nixling-unmanaged.conf"
+  },
+  "hostsFile": {
+    "path": "/etc/hosts",
+    "markerBegin": "# nixling-managed-begin",
+    "markerEnd": "# nixling-managed-end"
+  },
+  "kernelModules": {
+    "allowed": ["tun", "kvm-intel", "kvm-amd", "vhost-net", "vhost-vsock", "fuse"],
+    "modulesDisabledPolicy": "preload-required"
+  },
+  "bridgePortFlags": {
+    "learning": true,
+    "flooding": false,
+    "mcastFlood": false,
+    "broadcastFlood": true
+  },
+  "firewallCoexistence": {
+    "manager": "networkmanager",
+    "allow": [],
+    "refuse": ["firewalld", "ufw"]
+  },
+  "ifnameMapping": {
+    "scheme": "hash-truncate-8",
+    "prefix": "nl-",
+    "max_ifname_bytes": 15
+  },
+  "ch": {
+    "minVersion": "v40",
+    "netHandoffMode": "tap-fd"
+  },
+  "fdOwnership": [
+    {
+      "fd": "tap",
+      "owner": "broker",
+      "passing": "scm-rights"
+    }
+  ],
+  "cloudHypervisorCapabilities": [
+    {
+      "version": "v40",
+      "tapFdHandoff": true,
+      "vhostNet": true,
+      "vhostVsock": true
+    }
+  ]
+}

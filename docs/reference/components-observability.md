@@ -75,7 +75,7 @@ The observability data path is vsock and Unix sockets end-to-end. It does not tr
 
 ## Option reference
 
-The tables below copy the live v0.2.0 schema. Types, defaults, and descriptions follow the committed option declarations.
+The tables below copy the live committed schema. Types, defaults, and descriptions follow the current option declarations.
 
 ### Host-level options under `nixling.observability.*`
 
@@ -90,7 +90,7 @@ The tables below copy the live v0.2.0 schema. Types, defaults, and descriptions 
 | `nixling.observability.retention.metrics` | str | `"30d"` | Retention window for metrics in the observability stack. |
 | `nixling.observability.retention.logs` | str | `"14d"` | Retention window for logs in the observability stack. |
 | `nixling.observability.retention.traces` | str | `"7d"` | Retention window for traces in the observability stack. |
-| `nixling.observability.grafana.listenAddress` | str | `"10.40.0.10"` | Address Grafana binds inside the observability env. |
+| `nixling.observability.grafana.listenAddress` | str | `"10.40.0.10"` | Address Grafana binds inside the observability env. The default tracks the observability VM's derived IP (`lanSubnet` + `index`). |
 | `nixling.observability.grafana.listenPort` | port | `3000` | TCP port Grafana listens on inside the observability env. |
 | `nixling.observability.grafana.secretKeyFile` | path or null | `null` | Optional file containing Grafana's session signing secret. When null, framework generates a per-install secret on the **host** at `${nixling.site.stateDir}/observability/grafana-secret-key` (mode 0400 root:root) and shares it read-only into `sys-obs-stack` at `/run/nixling-obs-secrets/grafana-secret-key`. When set, the path is loaded via systemd LoadCredential. Use this to source the secret from sops-nix, agenix, or another declarative secrets framework. |
 | `nixling.observability.grafana.adminPasswordFile` | path or null | `null` | Optional file containing Grafana's `nixling-admin` user password. When null, framework generates a per-install password on the **host** at `${nixling.site.stateDir}/observability/grafana-admin-password` (mode 0400 root:root) and shares it read-only into `sys-obs-stack` at `/run/nixling-obs-secrets/grafana-admin-password`. Host operators can read it directly via `sudo cat <path>` — no cross-VM SSH required. When set, the path is loaded via systemd LoadCredential. Use this to source the password from sops-nix, agenix, or another declarative secrets framework. |
@@ -100,7 +100,9 @@ The tables below copy the live v0.2.0 schema. Types, defaults, and descriptions 
 | `nixling.observability.ch.exporter.includeTopologyLabels` | bool | `false` | Opt-in: include `bridge`, `tap`, `tpm`, `graphics`, `audio`, `usbip_yubikey` labels on emitted CH metrics. Default `false` to keep the security-posture surface narrow; enable for debug. |
 | `nixling.observability.alerts.<name>.enable` | bool | `true` | Per-alert toggle. The 8 default alerts (NixlingVMDown, NixlingNetVMDownWithRunningWorkloads, NixlingObsVMUnreachableFromHost, NixlingVsockRelayDown, NixlingCHAPISocketMissing, NixlingStoreSyncFailure, NixlingGuestTelemetryMissing, NixlingObsVMStackUnhealthy) can be individually disabled by setting `<name>.enable = false`. Disabled alerts are omitted from the generated rule file entirely. |
 | `nixling.observability.cli.traces.enable` | bool | `true` | Include OpenTelemetry trace helpers in the `nixling` CLI. |
+| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. A future stable relay interface may replace this contract, but the socat-compatible path will stay supported for at least one minor release after that lands. |
 | `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. v0.3.0 will define a stable relay-binary interface. |
+| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. That compatibility requirement remains in force for the current transport. When `nixling-otel-relay` lands, nixling will add a dedicated relay interface first and keep `bin/socat` compatibility for at least one minor release with CHANGELOG-guided migration notes before removal. |
 
 ### Per-VM options under `nixling.vms.<vm>.observability.*`
 
@@ -109,6 +111,23 @@ The tables below copy the live v0.2.0 schema. Types, defaults, and descriptions 
 | `nixling.vms.<vm>.observability.enable` | bool | `false` | Enable the guest Alloy agent and reverse OTLP tunnel for this workload VM. |
 | `nixling.vms.<vm>.observability.scrapeJournal` | bool | `true` | Whether the observability guest component should scrape this VM's journald stream. |
 | `nixling.vms.<vm>.observability.scrapeNodeMetrics` | bool | `true` | Whether the observability guest component should scrape this VM's node/system metrics. |
+
+### Per-VM audit forwarding under `nixling.vms.<vm>.audit.*`
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `nixling.vms.<vm>.audit.enable` | bool | `false` | Enable guest-side `auditd` forwarding for this VM. Requires `nixling.vms.<vm>.observability.enable = true` on the same VM. |
+| `nixling.vms.<vm>.audit.rules` | list of strings | curated ruleset | Guest audit rules passed to `security.audit.rules`. The default watches `/etc/passwd`, `/etc/shadow`, and `/etc/sudoers`; it intentionally omits syscall-heavy rules such as `execve`/`connect` because those records frequently carry command-line secrets and executable paths. |
+
+When audit forwarding is enabled, the guest path is:
+
+1. `auditd` runs in the workload VM with `audisp-syslog` active.
+2. `audisp-syslog` forwards audit events into journald.
+3. The guest Alloy config tails journald with
+   `_TRANSPORT=syslog SYSLOG_IDENTIFIER=audisp-syslog` and labels the
+   stream `source="audit"`, `unit="audisp-syslog"`, `vm`, and `env`.
+4. The existing reverse OTLP/vsock transport carries that stream into
+   the observability stack VM and on to Loki.
 
 ## Port and CID allocation
 
@@ -196,6 +215,8 @@ The observability stack VM holds no credentials that grant access to monitored w
 
 `network.nix` stays untouched. Existing `hostBlocklist` handling and deny-by-default outbound policy continue to apply exactly as before. The observability transport bypasses IP entirely by using vsock plus Unix sockets, so no new LAN/uplink firewall exception is part of the design.
 
+The auto-declared `obs` env (lanSubnet `10.40.0.0/24`, uplinkSubnet `203.0.113.0/30`) and the framework-owned `sys-obs-net` VM nevertheless go through the same per-env net-VM contract as user-declared envs. `tests/net-vm-network-eval.sh` pins that contract end to end (see the case-10 block in its header doc): `sys-obs-net` must derive its `10-uplink`/`10-lan` static addresses from the env CIDRs, must drop every peer env LAN/uplink CIDR before the broad LAN -> uplink accept (and reciprocally, peer envs must drop the obs CIDRs), must keep `30-lan-obs` bridge `Isolated = true`, and must NOT acquire the MSS-clamp or LAN-to-LAN forward rules — enabling observability cannot become a hidden east-west tunnel between previously-isolated envs.
+
 ### Attribute hygiene
 
 Telemetry labels and attributes are an explicit allowlist. Permitted examples are `vm.name`, `vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`, `bridge`, `static_ip`, and `generation`. Forbidden payload includes SSH key paths, command output, Nix derivation paths, and any Entra-, TPM-, or audio-user-specific data.
@@ -236,7 +257,7 @@ OpenTelemetry span and trace attributes use dot-notation aligned with OTel seman
 |---|---|---|---|---|
 | Nixling Overview | `nixling-overview` | Nixling | `30s` | VM state, CH API up, vsock relay health |
 | VM Resources | `nixling-vm-resources` | Nixling | `30s` | Per-VM CPU/mem/FS/net + CH counters |
-| Lifecycle Traces | `nixling-lifecycle-traces` | Nixling | `30s` | Tempo traces of `nixling up/down/switch/...` |
+| Lifecycle Traces | `nixling-lifecycle-traces` | Nixling | `30s` | Reserved Tempo dashboard for `nixling vm start/down/switch/...`; populated only when `otel-cli` is pointed at a reachable OTLP endpoint. |
 | Logs | `nixling-logs` | Nixling | `30s` | Loki filtered by vm/env/unit/severity |
 | Per-VM Store | `nixling-per-vm-store` | Nixling | `30s` | Generation, sync result, path count |
 | Obs VM Health | `nixling-obs-vm-health` | Nixling | `30s` | Stack self-health, disk, ingestion rates |

@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrivilegesJson",
+  "description": "Authorization matrix artifact for public API and private broker operations.",
+  "type": "object",
+  "required": [
+    "brokerOperations",
+    "publicOperations",
+    "schemaVersion"
+  ],
+  "properties": {
+    "brokerOperations": {
+      "description": "Private broker authorization rows.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OperationAuthz"
+      }
+    },
+    "publicOperations": {
+      "description": "Public CLI/API authorization rows.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OperationAuthz"
+      }
+    },
+    "schemaVersion": {
+      "description": "Schema version used by this artifact.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AuditMode": {
+      "description": "Audit mode for compact policy rows.",
+      "type": "string",
+      "enum": [
+        "deny-only",
+        "errors",
+        "yes"
+      ]
+    },
+    "AuditPolicy": {
+      "description": "Audit requirement for an authorization row.",
+      "type": "object",
+      "required": [
+        "mode",
+        "required",
+        "retainedFields"
+      ],
+      "properties": {
+        "mode": {
+          "description": "Whether deny-only or error-only auditing is sufficient.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuditMode"
+            }
+          ]
+        },
+        "required": {
+          "description": "Whether a successful operation must emit an audit event.",
+          "type": "boolean"
+        },
+        "retainedFields": {
+          "description": "Field names retained in the audit event.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "BrokerRequirement": {
+      "description": "Broker-use class for an authorization row.",
+      "type": "string",
+      "enum": [
+        "no",
+        "no-mutation",
+        "conditional",
+        "yes"
+      ]
+    },
+    "DefaultForUnknown": {
+      "description": "Required default for any unknown operation.",
+      "type": "string",
+      "enum": [
+        "deny-and-audit"
+      ]
+    },
+    "OperationAuthz": {
+      "description": "One explicit authorization row; unknown future operations always deny.",
+      "type": "object",
+      "required": [
+        "allowedGroups",
+        "audit",
+        "brokerRequired",
+        "defaultForUnknown",
+        "destructive",
+        "operation",
+        "scope",
+        "secretAccess",
+        "subject"
+      ],
+      "properties": {
+        "allowedGroups": {
+          "description": "Groups allowed to invoke the operation; empty denies by default.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "audit": {
+          "description": "Audit event requirement and retained fields.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AuditPolicy"
+            }
+          ]
+        },
+        "brokerRequired": {
+          "description": "Whether the private broker is required or conditionally used.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/BrokerRequirement"
+            }
+          ]
+        },
+        "defaultForUnknown": {
+          "description": "Default policy for unknown/future operations.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DefaultForUnknown"
+            }
+          ]
+        },
+        "destructive": {
+          "description": "Whether state mutation, teardown, rollback, GC, or live routing changes are possible.",
+          "type": "boolean"
+        },
+        "operation": {
+          "description": "Stable operation enum or command name.",
+          "type": "string",
+          "enum": [
+            "ApplyNftables",
+            "ApplyNmUnmanaged",
+            "ApplyRoute",
+            "ApplySysctl",
+            "BindUnixSocket",
+            "CreateOrReconcileUsersGroups",
+            "CreatePersistentTap",
+            "CreateTapFd",
+            "DelegateCgroupV2",
+            "ExportBrokerAudit",
+            "Hello",
+            "InjectSecretById",
+            "LaunchMinijailChild",
+            "ModprobeIfAllowed",
+            "OpenCgroupDir",
+            "OpenDevice",
+            "OpenFuse",
+            "OpenKvm",
+            "OpenPidfd",
+            "OpenVhostNet",
+            "PauseBroker",
+            "PrepareRuntimeDir",
+            "PrepareStateDir",
+            "PrepareStoreView",
+            "ReadSecretById",
+            "ResumeBroker",
+            "RotateSecretById",
+            "RunActivation",
+            "RunGc",
+            "RunHostInstall",
+            "RunHostKeyTrust",
+            "RunKeysRotate",
+            "RunMigrate",
+            "RunRotateKnownHost",
+            "SetBridgePortFlags",
+            "SetSocketAcl",
+            "SetupMountNamespace",
+            "SignalRunner",
+            "SpawnRunner",
+            "UpdateHostsFile",
+            "UsbipBind",
+            "UsbipBindFirewallRule",
+            "UsbipProxyReconcile",
+            "UsbipUnbind",
+            "ValidateBundle",
+            "audio",
+            "audio mic",
+            "audio off",
+            "audio on",
+            "audio speaker",
+            "audio status",
+            "audit",
+            "audit --human",
+            "audit --json",
+            "auth status",
+            "boot",
+            "build",
+            "capabilities",
+            "console",
+            "debug bundle",
+            "down",
+            "gc",
+            "generations",
+            "hello",
+            "host check",
+            "host destroy --apply",
+            "host destroy --dry-run",
+            "host doctor --read-only",
+            "host install",
+            "host prepare",
+            "host prepare --apply",
+            "host prepare --dry-run",
+            "keys list",
+            "keys rotate",
+            "keys show",
+            "list",
+            "migrate",
+            "restart",
+            "rollback",
+            "rotate-known-host",
+            "status",
+            "status --check-bridges",
+            "switch",
+            "test",
+            "trust",
+            "up",
+            "usb",
+            "usb attach",
+            "usb detach",
+            "usb probe"
+          ]
+        },
+        "scope": {
+          "description": "Per-VM, per-env, per-role, per-busid, scoped, or global resource scope.",
+          "type": "string"
+        },
+        "secretAccess": {
+          "description": "Whether secret or key material can be read or modified.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SecretAccess"
+            }
+          ]
+        },
+        "subject": {
+          "description": "VM, env, host, key, bundle, daemon, or global subject.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecretAccess": {
+      "description": "Secret exposure class for an authorization row.",
+      "type": "string",
+      "enum": [
+        "none",
+        "public-key-only",
+        "redacted-only",
+        "metadata-only",
+        "possible-paths-only",
+        "host-key-metadata",
+        "read-write"
+      ]
+    }
+  }
+}

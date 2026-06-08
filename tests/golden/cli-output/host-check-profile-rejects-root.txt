@@ -1,0 +1,7 @@
+error: host-check-error
+  code: profile-rejects-root
+  exit_code: 1
+  what_was_checked: Whether the minijail profile correctly refuses uid 0 inside the sandbox.
+  observed_state: Minijail dry-run permitted uid 0 to retain capabilities; profile is too lax.
+  remediation: Tighten the minijail profile in nixos-modules/components/sandbox.nix.
+  docs_anchor: docs/reference/error-codes.md#profile-rejects-root

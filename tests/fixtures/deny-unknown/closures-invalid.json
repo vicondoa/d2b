@@ -1,0 +1,18 @@
+{
+  "closurePaths": [
+    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-corp-vm"
+  ],
+  "declaredRunner": "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cloud-hypervisor",
+  "generation": {
+    "generatedAt": null,
+    "hostGeneration": null,
+    "sourceRevision": null,
+    "vmGeneration": null
+  },
+  "runnerParityOk": true,
+  "runnerParityPath": "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cloud-hypervisor",
+  "schemaVersion": "v1",
+  "toplevel": "/nix/store/cccccccccccccccccccccccccccccccc-system",
+  "vm": "corp-vm",
+  "unexpected": true
+}

@@ -1,0 +1,9 @@
+{
+  "code": "cgroup-delegation-refused",
+  "docs_anchor": "docs/reference/error-codes.md#cgroup-delegation-refused",
+  "exit_code": 1,
+  "kind": "host-prepare-apply-error",
+  "observed_state": "Apply phase observed the same delegation failure as the read-only probe.",
+  "remediation": "See remediation for host-check#cgroup-delegation-refused; re-run prepare after the fix.",
+  "what_was_checked": "Whether the broker delegated +cpu +memory +io +pids before launching VMs."
+}

@@ -1,0 +1,8 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+{
+  "command": "host prepare",
+  "mode": "dry-run",
+  "notes": "W3 host-prepare dry-run reports the planned reconcile without mutation; --apply mutates host state.",
+  "planned": [],
+  "tier": "all-daemon"
+}

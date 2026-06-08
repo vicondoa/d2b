@@ -1,0 +1,14 @@
+{
+  "name": "corp-vm",
+  "services": {
+    "nixling": "inactive",
+    "microvm": "inactive",
+    "virtiofsd": "inactive",
+    "gpu": null,
+    "snd": null,
+    "swtpm": null
+  },
+  "current": null,
+  "booted": null,
+  "pendingRestart": false
+}

@@ -28,6 +28,9 @@
 #                                 nixling-<vm>-gpu sidecar user (not
 #                                 microvm) can read/write them.
 #   - nixlingNetVmVarImgPerms   — net VMs use microvm:kvm 0660 on var.img.
+#   - nixlingMigrateOwnership   — repair orphan swtpm-state UIDs after
+#                                 service-user renames, gated on
+#                                 `tpm.enable` and skipped for running VMs.
 { config, pkgs, lib, ... }:
 
 let
@@ -50,17 +53,7 @@ in
           ${pkgs.acl}/bin/setfacl -m "g::r-x" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rwx" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -d -m "g::r-x" /var/lib/nixling/vms/${name} || true
-          ${pkgs.acl}/bin/setfacl -d -m "u:nixling-${name}-gpu:rw" /var/lib/nixling/vms/${name} || true${lib.optionalString cfg.vms.${name}.tpm.enable ''
-          # v0.1.4 fix: nixling-${name}-swtpm needs +x on the parent
-          # state dir to traverse into its `swtpm/` subdir (where
-          # systemd's StateDirectory= places it). Without this grant
-          # the swtpm service starts but fails to open
-          # tpm2-00.permall with EACCES, libtpms enters failure mode,
-          # and the VM boots with a freshly-initialised TPM —
-          # triggering Entra/Intune device-tampering alerts for
-          # tenant-enrolled VMs.
-          ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
-        ''}
+          ${pkgs.acl}/bin/setfacl -d -m "u:nixling-${name}-gpu:rw" /var/lib/nixling/vms/${name} || true
           # security-r8-audio-13: iterate over EVERY *.img disk in the
           # state dir, not just var.img. microvm.nix VMs can declare
           # arbitrary additional volumes — all of them are owned by
@@ -69,7 +62,8 @@ in
           # directory but gets EACCES on open(). The default ACL on the
           # parent dir only applies to NEW files; pre-existing disks
           # keep their original perms and need an explicit setfacl.
-          if pgrep -f "nixling-${name}-gpu\|microvm@${name}\b" >/dev/null 2>&1; then
+          if systemctl is-active --quiet "nixling-${name}-gpu.service" 2>/dev/null \
+             || systemctl is-active --quiet "microvm@${name}.service" 2>/dev/null; then
             echo "nixling: ${name} is running; skipping disk image ownership fix (apply on next nixling up)"
           else
             for img in /var/lib/nixling/vms/${name}/*.img; do
@@ -83,13 +77,34 @@ in
       '')
       (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms)));
 
+  # TPM VMs need an explicit traverse ACL for the dedicated swtpm user on
+  # the parent VM state dir, regardless of whether the VM is graphics-backed
+  # or headless. The swtpm StateDirectory itself is 0700-owned by the swtpm
+  # user; this parent-dir grant is only for the path walk into `swtpm/`.
+  system.activationScripts.nixlingTpmStatePerms = lib.stringAfter [ "users" ]
+    (lib.concatStringsSep "\n" (lib.mapAttrsToList
+      (name: _: ''
+        if [ -d /var/lib/nixling/vms/${name} ]; then
+          # v0.1.4 fix: nixling-${name}-swtpm needs +x on the parent
+          # state dir to traverse into its `swtpm/` subdir (where
+          # systemd's StateDirectory= places it). Without this grant
+          # the swtpm service starts but fails to open
+          # tpm2-00.permall with EACCES, libtpms enters failure mode,
+          # and the VM boots with a freshly-initialised TPM —
+          # triggering Entra/Intune device-tampering alerts for
+          # tenant-enrolled VMs.
+          ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
+        fi
+      '')
+      (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms)));
+
   # Non-graphics VMs (net VMs) also need microvm:kvm ownership on var.img.
   # No ACL needed: net VMs have no nixling-<vm>-gpu sidecar user.
   system.activationScripts.nixlingNetVmVarImgPerms = lib.stringAfter [ "users" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
         if [ -f /var/lib/nixling/vms/${name}/var.img ]; then
-          if pgrep -f "microvm@${name}\b" >/dev/null 2>&1; then
+          if systemctl is-active --quiet "microvm@${name}.service" 2>/dev/null; then
             echo "nixling: ${name} (net VM) is running; skipping var.img ownership fix"
           else
             chown microvm:kvm /var/lib/nixling/vms/${name}/var.img || true
@@ -98,4 +113,36 @@ in
         fi
       '')
       (lib.filterAttrs (_: vm: vm.enable && !vm.graphics.enable) cfg.vms)));
+
+  system.activationScripts.nixlingMigrateOwnership = lib.stringAfter [ "users" ]
+    (lib.concatStringsSep "\n" (lib.mapAttrsToList
+      (name: vmCfg: ''
+        # Repair orphan swtpm owners/groups in per-VM TPM state after
+        # user-name renames. GNU coreutils reports unmapped owners as
+        # UNKNOWN rather than the raw UID/GID, so treat any UNKNOWN
+        # user/group as orphaned and repair it without disturbing
+        # already-correct inodes.
+        ${lib.optionalString vmCfg.tpm.enable ''
+          if [ -d /var/lib/nixling/vms/${name}/swtpm ]; then
+            if systemctl is-active --quiet "nixling-${name}-gpu.service" 2>/dev/null \
+               || systemctl is-active --quiet "microvm@${name}.service" 2>/dev/null; then
+              echo "nixling: ${name} is running; skipping ownership repair"
+            else
+              find /var/lib/nixling/vms/${name}/swtpm -mindepth 1 \
+                \( -type d -o -type f \) -exec ${pkgs.bash}/bin/bash -c '
+                  for f do
+                    owner=$(stat -c "%U:%G" "$f" 2>/dev/null || true)
+                    case "$owner" in
+                      ""|UNKNOWN:*|*:UNKNOWN)
+                        chown nixling-${name}-swtpm:nixling-${name}-swtpm "$f" || true
+                        echo "nixling: repaired orphan ownership on $f"
+                        ;;
+                    esac
+                  done
+                ' bash {} +
+            fi
+          fi
+        ''}
+      '')
+      (lib.filterAttrs (_: vm: vm.enable) cfg.vms)));
 }

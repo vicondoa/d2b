@@ -1,0 +1,9 @@
+{
+  "code": "nm-reload-failed",
+  "docs_anchor": "docs/reference/error-codes.md#nm-reload-failed",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "nmcli reload returned non-zero; D-Bus call to NetworkManager failed.",
+  "remediation": "Inspect `systemctl status NetworkManager` and retry; the broker will re-attempt on next apply.",
+  "what_was_checked": "Whether `nmcli general reload conf` succeeded after writing the unmanaged drop-in."
+}

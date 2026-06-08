@@ -1,0 +1,2 @@
+# Rust snapshot deferred: usb probe success output is daemon-backed.
+# Bash side comparison gated on Tier-2 self-hosted KVM runner.

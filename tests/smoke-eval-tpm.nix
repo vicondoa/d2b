@@ -1,22 +1,19 @@
-# tests/smoke-eval-tpm.nix — regression test for Spec correction #35
-# (v0.1.4: swtpm-user ACL grant on the VM's parent state dir).
+# tests/smoke-eval-tpm.nix — regression coverage for the TPM host-side
+# hardening surface.
 #
-# Mirrors tests/smoke-eval.nix but declares one TPM-enabled VM and
-# deep-seqs `system.activationScripts.nixlingVmStatePerms.text`.
-# The activation snippet under exercise:
+# Mirrors tests/smoke-eval.nix but declares one TPM-enabled graphics VM,
+# one TPM-enabled headless VM, and one graphics-only control VM, then
+# inspects the rendered host activation scripts + swtpm sidecar services
+# to prove three invariants:
 #
-#   setfacl -m "u:nixling-<vm>-swtpm:--x" /var/lib/nixling/vms/<vm>
-#
-# Why: the per-VM `nixling-<vm>-swtpm.service` runs as a dedicated
-# system user (`nixling-<vm>-swtpm`) and stores its state under
-# `/var/lib/nixling/vms/<vm>/swtpm/`. systemd's StateDirectory= sets
-# the leaf perms, but the parent directory (`/var/lib/nixling/vms/<vm>`)
-# is owned `microvm:kvm 2770` — the swtpm user is neither, so it
-# cannot traverse into the leaf. Without the `--x` ACL grant, swtpm
-# starts but EACCES'es on `tpm2-00.permall`, libtpms enters failure
-# mode, and the VM boots with a freshly-initialised TPM —
-# triggering Entra/Intune device-tampering alerts for tenant-enrolled
-# VMs.
+#   1. `nixlingTpmStatePerms` grants the swtpm user `--x` on every
+#      TPM VM's parent state dir (graphics and headless).
+#   2. `nixling-<vm>-swtpm.service` carries the pre-start stale-session
+#      flush helper, grants the socket to the correct runner identity,
+#      and orders headless TPM sidecars before `microvm@<vm>`.
+#   3. `nixlingMigrateOwnership` exists, is gated on `tpm.enable`, and
+#      keeps the running-VM guard + orphan-owner repair logic without
+#      traversing symlinks.
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 }:
@@ -58,12 +55,9 @@ let
           uplinkSubnet = "192.0.2.0/30";
         };
 
-        # Graphics + TPM enabled VM. The framework's
-        # host-activation.nix iteration that emits the parent-dir
-        # ACL grant filters on `graphics.enable = true` (the snippet
-        # lives in the graphics-VM block), then conditionally adds
-        # the `nixling-<vm>-swtpm:--x` line when `tpm.enable = true`.
-        # Both toggles are required to reach the assertion below.
+        # Graphics + TPM enabled VM. The framework should emit both the
+        # graphics-side state-dir ACLs and the TPM parent-dir traverse
+        # ACL for its dedicated swtpm user.
         nixling.vms.tpm-vm = {
           enable = true;
           env = "work";
@@ -79,39 +73,74 @@ let
             };
           };
         };
+
+        nixling.vms.plain-vm = {
+          enable = true;
+          env = "work";
+          index = 13;
+          ssh.user = "alice";
+          graphics.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "plain-vm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+
+        nixling.vms.headless-tpm = {
+          enable = true;
+          env = "work";
+          index = 14;
+          ssh.user = "alice";
+          tpm.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "headless-tpm";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
+
       })
     ];
   };
 
-  activationText =
-    nixos.config.system.activationScripts.nixlingVmStatePerms.text;
+  hasTpmActivationScript =
+    builtins.hasAttr "nixlingTpmStatePerms"
+      nixos.config.system.activationScripts;
+  hasMigrationScript =
+    builtins.hasAttr "nixlingMigrateOwnership"
+      nixos.config.system.activationScripts;
 
-  # Substring check. The literal `nixling-` prefix and
-  # `-swtpm:--x` suffix bracket the VM name without depending
-  # on exact whitespace/quoting (which Nix string interpolation
-  # already settles deterministically; we just don't want the
-  # test to be brittle on minor formatting tweaks).
-  expectedFragment =
-    ''setfacl -m "u:nixling-tpm-vm-swtpm:--x" /var/lib/nixling/vms/tpm-vm'';
-
-  hasFragment =
-    let
-      el = builtins.stringLength expectedFragment;
-      tl = builtins.stringLength activationText;
-      scan = i:
-        if i + el > tl then false
-        else if (builtins.substring i el activationText) == expectedFragment then true
-        else scan (i + 1);
-    in scan 0;
-
-  _check =
-    if hasFragment
-    then null
-    else throw ("smoke-eval-tpm: system.activationScripts.nixlingVmStatePerms.text "
-                + "does not contain the swtpm parent-dir ACL grant for tpm-vm "
-                + "(Spec correction #35 / v0.1.4). Expected fragment:\n  "
-                + expectedFragment);
+  # P6 (ph6-remove-systemd-emission): the per-VM
+  # `nixling-<vm>-swtpm.service` units were deleted along with
+  # host-sidecars.nix. The TPM sidecar is now spawned by the
+  # nixling priv-broker as `SpawnRunner{role: Swtpm}`; the
+  # equivalent pre-start session-flush + socket ACL handoff lives
+  # in `packages/nixling-priv-broker/src/runners/swtpm.rs`. The
+  # legacy per-VM systemd assertions (ExecStartPre/ExecStartPost,
+  # microvm@ wants/after wiring, host-sidecars.nix flush helper
+  # source check) are deferred to a forthcoming
+  # broker-swtpm-runner-eval.
+  #
+  # The host-side state-dir hardening *is* preserved: the
+  # `nixlingTpmStatePerms` and `nixlingMigrateOwnership`
+  # activation scripts still live in host-activation.nix because
+  # they prepare /var/lib/nixling/vms/<vm>/swtpm for the broker
+  # runner to chown into at fork time. We keep the presence
+  # checks; the textual-fragment assertions that named the
+  # deleted per-VM sidecar users are dropped (the broker
+  # negotiates ownership at runtime instead of statically
+  # naming `nixling-<vm>-swtpm`).
+  checks = [
+    (if hasTpmActivationScript then null else
+      throw "smoke-eval-tpm: system.activationScripts.nixlingTpmStatePerms is missing")
+    (if hasMigrationScript then null else
+      throw "smoke-eval-tpm: system.activationScripts.nixlingMigrateOwnership is missing")
+  ];
 in
-  builtins.deepSeq _check
-    (builtins.deepSeq activationText
-      nixos.config.system.build.toplevel)
+  builtins.deepSeq checks
+    nixos.config.system.build.toplevel

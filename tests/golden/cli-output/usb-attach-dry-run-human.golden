@@ -1,0 +1,2 @@
+# Rust dry-run snapshot only; bash side comparison gated on Tier-2 self-hosted KVM runner.
+nixling usb attach --dry-run: would bind busid '1-2' for vm 'corp-vm' and reconcile the USBIP proxy

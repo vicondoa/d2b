@@ -1,0 +1,7 @@
+error: host-check-error
+  code: stale-lock
+  exit_code: 1
+  what_was_checked: Whether /run/nixling/locks/<vm> is owned by a live process.
+  observed_state: Lockfile exists but the recorded PID is not running.
+  remediation: Remove the stale lock via the documented recovery runbook; do not unlink by hand.
+  docs_anchor: docs/reference/error-codes.md#stale-lock

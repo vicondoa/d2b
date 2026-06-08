@@ -1,0 +1,532 @@
+{
+  "mode": "read-only",
+  "strict": false,
+  "summary": {
+    "pass": 53,
+    "warn": 0,
+    "fail": 0
+  },
+  "exitCode": 0,
+  "findings": [
+    {
+      "id": "kernel-version",
+      "severity": "pass",
+      "message": "kernel 6.8.12-nixling satisfies the >= 6.6 requirement",
+      "remediation": "Keep a 6.6+ kernel available for W2 daemon experiments."
+    },
+    {
+      "id": "cgroup-v2",
+      "severity": "pass",
+      "message": "/sys/fs/cgroup/cgroup.controllers is present",
+      "remediation": "Keep the unified cgroup-v2 hierarchy enabled."
+    },
+    {
+      "id": "cpu-vendor",
+      "severity": "pass",
+      "message": "detected supported CPU vendor `intel`",
+      "remediation": "No action required."
+    },
+    {
+      "id": "kernel-module:kvm",
+      "severity": "pass",
+      "message": "kernel module `kvm` is loaded",
+      "remediation": "No action required.",
+      "detail": "cloud-hypervisor",
+      "details": {
+        "gate": "All nixling VMs require the base KVM module."
+      }
+    },
+    {
+      "id": "kernel-module:kvm_intel",
+      "severity": "pass",
+      "message": "vendor-gated kernel module `kvm_intel` is loaded",
+      "remediation": "No action required.",
+      "detail": "cloud-hypervisor-intel",
+      "details": {
+        "gate": "host-cpu-vendor=intel"
+      }
+    },
+    {
+      "id": "kernel-module:kvm_amd",
+      "severity": "pass",
+      "message": "kernel module `kvm_amd` is not required on this host",
+      "remediation": "No action required.",
+      "detail": "cloud-hypervisor-amd",
+      "details": {
+        "gate": "host-cpu-vendor=amd"
+      }
+    },
+    {
+      "id": "kernel-module:tun",
+      "severity": "pass",
+      "message": "kernel module `tun` is loaded",
+      "remediation": "No action required.",
+      "detail": "tap",
+      "details": {
+        "gate": "All env-backed VMs require TAP devices on the host."
+      }
+    },
+    {
+      "id": "kernel-module:vhost_net",
+      "severity": "pass",
+      "message": "kernel module `vhost_net` is loaded",
+      "remediation": "No action required.",
+      "detail": "virtio-net",
+      "details": {
+        "gate": "Required when vhost-net acceleration is used for Cloud Hypervisor TAP handoff."
+      }
+    },
+    {
+      "id": "kernel-module:fuse",
+      "severity": "pass",
+      "message": "kernel module `fuse` is loaded",
+      "remediation": "No action required.",
+      "detail": "virtiofs",
+      "details": {
+        "gate": "Required for the per-VM virtiofs store views served by virtiofsd."
+      }
+    },
+    {
+      "id": "kernel-module:nf_tables",
+      "severity": "pass",
+      "message": "kernel module `nf_tables` is loaded",
+      "remediation": "No action required.",
+      "detail": "nftables",
+      "details": {
+        "gate": "Required for the marker-owned inet nixling table."
+      }
+    },
+    {
+      "id": "kernel-module:bridge",
+      "severity": "pass",
+      "message": "kernel module `bridge` is loaded",
+      "remediation": "No action required.",
+      "detail": "linux-bridge",
+      "details": {
+        "gate": "Required for every env LAN and uplink bridge."
+      }
+    },
+    {
+      "id": "kernel-module:br_netfilter",
+      "severity": "pass",
+      "message": "optional kernel module `br_netfilter` is loaded",
+      "remediation": "No action required.",
+      "detail": "bridge-netfilter",
+      "details": {
+        "gate": "Optional, but if present nixling fails closed unless all bridge-nf-call sysctls are zero."
+      }
+    },
+    {
+      "id": "kernel-module-sysctl:br_netfilter:net.bridge.bridge-nf-call-iptables",
+      "severity": "pass",
+      "message": "kernel module `br_netfilter` sysctl `net.bridge.bridge-nf-call-iptables` matches the declared value `0`",
+      "remediation": "No action required.",
+      "detail": "bridge-netfilter",
+      "details": {
+        "expected": "0",
+        "module": "br_netfilter",
+        "sysctl": "net.bridge.bridge-nf-call-iptables"
+      }
+    },
+    {
+      "id": "kernel-module-sysctl:br_netfilter:net.bridge.bridge-nf-call-ip6tables",
+      "severity": "pass",
+      "message": "kernel module `br_netfilter` sysctl `net.bridge.bridge-nf-call-ip6tables` matches the declared value `0`",
+      "remediation": "No action required.",
+      "detail": "bridge-netfilter",
+      "details": {
+        "expected": "0",
+        "module": "br_netfilter",
+        "sysctl": "net.bridge.bridge-nf-call-ip6tables"
+      }
+    },
+    {
+      "id": "kernel-module-sysctl:br_netfilter:net.bridge.bridge-nf-call-arptables",
+      "severity": "pass",
+      "message": "kernel module `br_netfilter` sysctl `net.bridge.bridge-nf-call-arptables` matches the declared value `0`",
+      "remediation": "No action required.",
+      "detail": "bridge-netfilter",
+      "details": {
+        "expected": "0",
+        "module": "br_netfilter",
+        "sysctl": "net.bridge.bridge-nf-call-arptables"
+      }
+    },
+    {
+      "id": "kernel-module:i915",
+      "severity": "pass",
+      "message": "optional kernel module `i915` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-intel",
+      "details": {
+        "gate": "Used only on Intel hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:amdgpu",
+      "severity": "pass",
+      "message": "optional kernel module `amdgpu` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-amd",
+      "details": {
+        "gate": "Used only on AMD hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:nvidia",
+      "severity": "pass",
+      "message": "optional kernel module `nvidia` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-nvidia",
+      "details": {
+        "gate": "Used only on Nvidia hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:nvidia_modeset",
+      "severity": "pass",
+      "message": "optional kernel module `nvidia_modeset` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-nvidia-modeset",
+      "details": {
+        "gate": "Used only on Nvidia hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:nvidia_uvm",
+      "severity": "pass",
+      "message": "optional kernel module `nvidia_uvm` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-nvidia-uvm",
+      "details": {
+        "gate": "Used only on Nvidia hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:nvidia_drm",
+      "severity": "pass",
+      "message": "optional kernel module `nvidia_drm` is loaded",
+      "remediation": "No action required.",
+      "detail": "graphics-nvidia-drm",
+      "details": {
+        "gate": "Used only on Nvidia hosts when a VM enables graphics."
+      }
+    },
+    {
+      "id": "kernel-module:usbip_host",
+      "severity": "pass",
+      "message": "optional kernel module `usbip_host` is loaded",
+      "remediation": "No action required.",
+      "detail": "usbip",
+      "details": {
+        "gate": "Used only when host YubiKey support and a VM usbip.yubikey flag are both enabled."
+      }
+    },
+    {
+      "id": "kernel-module:vfio",
+      "severity": "pass",
+      "message": "kernel module `vfio` remains deferred to a later wave",
+      "remediation": "No W2 action required.",
+      "detail": "future-passthrough",
+      "details": {
+        "gate": "Reserved for a later passthrough role; not required in W1."
+      }
+    },
+    {
+      "id": "kernel-module:vhost_vsock",
+      "severity": "pass",
+      "message": "kernel module `vhost_vsock` remains deferred to a later wave",
+      "remediation": "No W2 action required.",
+      "detail": "future-kernel-vsock",
+      "details": {
+        "gate": "Reserved for a later kernel-backed vsock path; W1 uses Unix-socket-backed Cloud Hypervisor vsock only."
+      }
+    },
+    {
+      "id": "nftables-table",
+      "severity": "pass",
+      "message": "`nft list ruleset --json` shows an `inet nixling` table",
+      "remediation": "No action required."
+    },
+    {
+      "id": "firewall-coexistence",
+      "severity": "pass",
+      "message": "firewalld and ufw are both inactive",
+      "remediation": "No action required."
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-lan.disable_ipv6",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-lan.disable_ipv6` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-lan.accept_ra",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-lan.accept_ra` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-lan.autoconf",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-lan.autoconf` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-lan.addr_gen_mode",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-lan.addr_gen_mode` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-lan.arp_ignore",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-lan.arp_ignore` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-up.disable_ipv6",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-up.disable_ipv6` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-up.accept_ra",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-up.accept_ra` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-up.autoconf",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-up.autoconf` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-up.addr_gen_mode",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-up.addr_gen_mode` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:br-work-up.arp_ignore",
+      "severity": "pass",
+      "message": "IPv6 sysctl `br-work-up.arp_ignore` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l1.disable_ipv6",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l1.disable_ipv6` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l1.accept_ra",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l1.accept_ra` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l1.autoconf",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l1.autoconf` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l1.addr_gen_mode",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l1.addr_gen_mode` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l1.arp_ignore",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l1.arp_ignore` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-u2.disable_ipv6",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-u2.disable_ipv6` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-u2.accept_ra",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-u2.accept_ra` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-u2.autoconf",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-u2.autoconf` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-u2.addr_gen_mode",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-u2.addr_gen_mode` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-u2.arp_ignore",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-u2.arp_ignore` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l10.disable_ipv6",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l10.disable_ipv6` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l10.accept_ra",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l10.accept_ra` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l10.autoconf",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l10.autoconf` matches the declared value `0`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "0",
+        "observed": "0"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l10.addr_gen_mode",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l10.addr_gen_mode` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "ipv6-sysctl:work:work-l10.arp_ignore",
+      "severity": "pass",
+      "message": "IPv6 sysctl `work-l10.arp_ignore` matches the declared value `1`",
+      "remediation": "Ensure the declared nixling IPv6 sysctls are applied to every env bridge and tap.",
+      "details": {
+        "expected": "1",
+        "observed": "1"
+      }
+    },
+    {
+      "id": "runner-parity",
+      "severity": "pass",
+      "message": "runner parity matches for `corp-vm`",
+      "remediation": "Rebuild the VM closure or correct the declared runner path before relying on daemon-experimental mode.",
+      "vm": "corp-vm",
+      "detail": "runner parity drift remains advisory until `--strict` is supplied",
+      "details": {
+        "declaredRunner": "/nix/store/139kn3xbgap472rgr7nxs3safamq7n78-microvm-qemu-corp-vm",
+        "runnerParityPath": "/nix/store/139kn3xbgap472rgr7nxs3safamq7n78-microvm-qemu-corp-vm"
+      }
+    },
+    {
+      "id": "runner-parity",
+      "severity": "pass",
+      "message": "runner parity matches for `sys-work-net`",
+      "remediation": "Rebuild the VM closure or correct the declared runner path before relying on daemon-experimental mode.",
+      "vm": "sys-work-net",
+      "detail": "runner parity drift remains advisory until `--strict` is supplied",
+      "details": {
+        "declaredRunner": "/nix/store/qdy2azmkmw4nzyrmgl452yw2zbf9cjkc-microvm-qemu-sys-work-net",
+        "runnerParityPath": "/nix/store/qdy2azmkmw4nzyrmgl452yw2zbf9cjkc-microvm-qemu-sys-work-net"
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# Installer artifacts the W15 RunHostInstall broker op must
+# materialize on the Ubuntu 24.04 host. Lines starting with `#` are
+# comments; everything else is matched as an exact path the smoke
+# harness asserts is present + non-empty after `nixling host install
+# --apply` completes.
+/etc/systemd/system/nixlingd.service
+/etc/nixling/daemon-config.json
+/run/current-system/sw/share/nixling/vms.json
+/var/lib/nixling/runtime/host-runtime.json

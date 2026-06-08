@@ -1,0 +1,584 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostJson",
+  "description": "Private host topology and host-owned capability contract.",
+  "type": "object",
+  "required": [
+    "cloudHypervisorCapabilities",
+    "environments",
+    "fdOwnership",
+    "hostsFile",
+    "kernelModules",
+    "networkManager",
+    "nftables",
+    "schemaVersion",
+    "site"
+  ],
+  "properties": {
+    "cloudHypervisorCapabilities": {
+      "description": "VMM/device capability matrix anchored to Cloud Hypervisor.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/CloudHypervisorCapability"
+      }
+    },
+    "environments": {
+      "description": "Per-environment network policy and derived host firewall inputs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/NetEnv"
+      }
+    },
+    "fdOwnership": {
+      "description": "Broker-opened file descriptor ownership table.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FdOwnershipEntry"
+      }
+    },
+    "hostsFile": {
+      "description": "`/etc/hosts` marked-block ownership rule.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/HostsFileOwnership"
+        }
+      ]
+    },
+    "kernelModules": {
+      "description": "Kernel module requirements and gates.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/KernelModulesEntry"
+      }
+    },
+    "networkManager": {
+      "description": "NetworkManager unmanaged file materialization rules.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkManagerUnmanaged"
+        }
+      ]
+    },
+    "nftables": {
+      "description": "Exact nftables `inet nixling` table declaration.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/NftablesModel"
+        }
+      ]
+    },
+    "schemaVersion": {
+      "description": "Schema version used by this artifact.",
+      "type": "string"
+    },
+    "site": {
+      "description": "Host-wide site policy toggles threaded from v0.4.0.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SitePolicy"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BridgePortFlags": {
+      "description": "Bridge-port flags applied to a TAP role.",
+      "type": "object",
+      "required": [
+        "isolated",
+        "neighSuppress",
+        "role",
+        "rule"
+      ],
+      "properties": {
+        "isolated": {
+          "type": "boolean"
+        },
+        "neighSuppress": {
+          "type": "boolean"
+        },
+        "role": {
+          "$ref": "#/definitions/TapRole"
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CapabilityStatus": {
+      "description": "Capability support state.",
+      "type": "string",
+      "enum": [
+        "required",
+        "optional",
+        "deferred"
+      ]
+    },
+    "CloudHypervisorCapability": {
+      "description": "Cloud Hypervisor capability matrix row.",
+      "type": "object",
+      "required": [
+        "capability",
+        "devicesOrModules",
+        "notes",
+        "readiness",
+        "sidecars",
+        "status"
+      ],
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "devicesOrModules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "string"
+        },
+        "readiness": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/definitions/CapabilityStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FdOwnershipEntry": {
+      "description": "Broker-opened fd ownership row.",
+      "type": "object",
+      "required": [
+        "brokerOperation",
+        "jailVisibleDevice",
+        "notes",
+        "recipient",
+        "resource",
+        "transfer"
+      ],
+      "properties": {
+        "brokerOperation": {
+          "type": "string"
+        },
+        "jailVisibleDevice": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "recipient": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "transfer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostsFileOwnership": {
+      "description": "`/etc/hosts` marked-block ownership contract.",
+      "type": "object",
+      "required": [
+        "endMarker",
+        "rule",
+        "startMarker"
+      ],
+      "properties": {
+        "endMarker": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "startMarker": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "IfName": {
+      "description": "Linux interface name: <=15 ASCII bytes matching [A-Za-z0-9_-]+",
+      "type": "string",
+      "maxLength": 15,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "Ipv6SysctlEntry": {
+      "description": "IPv6-off sysctls applied per link.",
+      "type": "object",
+      "required": [
+        "acceptRa",
+        "addrGenMode",
+        "autoconf",
+        "disableIpv6",
+        "ifName"
+      ],
+      "properties": {
+        "acceptRa": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "addrGenMode": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "autoconf": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "disableIpv6": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "ifName": {
+          "$ref": "#/definitions/IfName"
+        }
+      },
+      "additionalProperties": false
+    },
+    "KernelModulesEntry": {
+      "description": "Kernel module requirement row.",
+      "type": "object",
+      "required": [
+        "feature",
+        "gate",
+        "jailVisibleDevice",
+        "module",
+        "requirement",
+        "sysctls"
+      ],
+      "properties": {
+        "feature": {
+          "type": "string"
+        },
+        "gate": {
+          "type": "string"
+        },
+        "jailVisibleDevice": {
+          "type": "boolean"
+        },
+        "module": {
+          "type": "string"
+        },
+        "requirement": {
+          "$ref": "#/definitions/ModuleRequirement"
+        },
+        "sysctls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LanPolicy": {
+      "description": "LAN policy inputs and effective result.",
+      "type": "object",
+      "required": [
+        "allowEastWest",
+        "effectiveEastWest"
+      ],
+      "properties": {
+        "allowEastWest": {
+          "type": "boolean"
+        },
+        "effectiveEastWest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModuleRequirement": {
+      "description": "Kernel module requirement class.",
+      "type": "string",
+      "enum": [
+        "required",
+        "alternatives",
+        "optional",
+        "deferred"
+      ]
+    },
+    "NetEnv": {
+      "description": "Per-environment network contract.",
+      "type": "object",
+      "required": [
+        "bridge",
+        "bridgePortFlags",
+        "env",
+        "ipv6Sysctls",
+        "lan",
+        "mtu",
+        "netVmForwardBlocklist",
+        "usbipBusidLocks"
+      ],
+      "properties": {
+        "bridge": {
+          "description": "Host bridge name for the environment LAN.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/IfName"
+            }
+          ]
+        },
+        "bridgePortFlags": {
+          "description": "TAP bridge-port flags by role.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BridgePortFlags"
+          }
+        },
+        "env": {
+          "description": "Environment name from the public manifest.",
+          "type": "string"
+        },
+        "ipv6Sysctls": {
+          "description": "Per-link IPv6-off sysctl contract.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Ipv6SysctlEntry"
+          }
+        },
+        "lan": {
+          "description": "Per-env LAN policy including east-west intent.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/LanPolicy"
+            }
+          ]
+        },
+        "mssClamp": {
+          "description": "Optional MSS clamp applied to forwarded traffic.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "mtu": {
+          "description": "Per-env MTU value applied to bridges and TAPs.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "netVmForwardBlocklist": {
+          "description": "Forwarding blocklist derived from env config and host LAN CIDRs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "usbipBusidLocks": {
+          "description": "USBIP-capable VMs in this env; daemon owns the runtime per-busid locks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/UsbipBusidLock"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "NetworkManagerUnmanaged": {
+      "description": "NetworkManager unmanaged config ownership and reload behavior.",
+      "type": "object",
+      "required": [
+        "filePath",
+        "matchCriteria",
+        "ownership",
+        "reloadBehavior"
+      ],
+      "properties": {
+        "filePath": {
+          "type": "string"
+        },
+        "matchCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ownership": {
+          "$ref": "#/definitions/OwnershipRule"
+        },
+        "reloadBehavior": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NftChain": {
+      "description": "Single nftables chain declaration.",
+      "type": "object",
+      "required": [
+        "name",
+        "purpose"
+      ],
+      "properties": {
+        "hook": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int16"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NftablesModel": {
+      "description": "Exact nftables table, hook priorities, and chain layout owned by nixling.",
+      "type": "object",
+      "required": [
+        "chains",
+        "family",
+        "table"
+      ],
+      "properties": {
+        "chains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/NftChain"
+          }
+        },
+        "family": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OwnershipRule": {
+      "description": "File ownership policy for host materialized files.",
+      "type": "object",
+      "required": [
+        "driftPolicy",
+        "group",
+        "mode",
+        "owner"
+      ],
+      "properties": {
+        "driftPolicy": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SitePolicy": {
+      "description": "Host-wide policy bits used when deriving per-env settings.",
+      "type": "object",
+      "required": [
+        "allowUnsafeEastWest"
+      ],
+      "properties": {
+        "allowUnsafeEastWest": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapRole": {
+      "description": "TAP roles with distinct isolation behavior.",
+      "type": "string",
+      "enum": [
+        "net-vm-lan",
+        "workload-lan",
+        "uplink"
+      ]
+    },
+    "UsbipBusidLock": {
+      "description": "USBIP daemon-owned lock policy for one env.",
+      "type": "object",
+      "required": [
+        "lockOwner",
+        "scope",
+        "vm"
+      ],
+      "properties": {
+        "lockOwner": {
+          "description": "Ownership of the runtime exclusivity lock.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipLockOwner"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Lock scope enforced by the daemon at runtime.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipLockScope"
+            }
+          ]
+        },
+        "vm": {
+          "description": "VM name allowed to request USBIP inside this env.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UsbipLockOwner": {
+      "description": "USBIP busid lock owner.",
+      "type": "string",
+      "enum": [
+        "daemon"
+      ]
+    },
+    "UsbipLockScope": {
+      "description": "USBIP exclusivity scope enforced by the daemon.",
+      "type": "string",
+      "enum": [
+        "per-busid"
+      ]
+    }
+  }
+}

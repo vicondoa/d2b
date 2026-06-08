@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+exclude = ["nixling-priv-broker"]
+members = [
+    "nixling-core",
+    "nixling-host",
+    "nixling-ipc",
+    "nixling",
+    "nixlingd",
+    "xtask",
+]
+
+[workspace.package]
+license = "Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "0.8", features = ["derive"] }
+# W3 host-prepare low-level dependencies. `rustix` lands in the
+# integrator prep so nixling-host stubs can compile and so the supply-
+# chain gate (cargo-deny + cargo-audit through flake.nix's pinned
+# advisory DB) covers it before scope agents consume it.
+#
+# `rtnetlink` and `nftnl` are intentionally NOT declared here: panel
+# review for the W3 prep commit ruled they ship with the scope commit
+# that first consumes them (s2 for rtnetlink, s3 for nftables) so the
+# license / advisory whitelist update lands in the same commit that
+# adds the consumer. See plan.md §"W3 broker variant additions" — the
+# wire contract for routes/nft is fully encoded in nixling-ipc here,
+# so scope agents have everything they need to pull these crates in.
+rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system"] }
+# W3 s2: declared in workspace.dependencies so future scope work (and
+# the eventual production netlink backend in nixling-priv-broker) can
+# opt into rtnetlink via `{ workspace = true }`. Not yet consumed by
+# any workspace member, so the resolved Cargo.lock is unchanged. The
+# trait-based netlink backend in `nixling_host::netlink` lets the L1c
+# canary matrix exercise every fail-closed path through a fake
+# backend without `CAP_NET_ADMIN`.
+rtnetlink = "0.14"
+# W3 s3: sha2 lands here so nixling-host's nft drift-detection digest
+# is byte-stable across builds and consumers. The nftnl native binding
+# is intentionally NOT pulled in — see
+# `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-
+# rationalized fallback (typed NftBatch + `nft -f -` text rendering,
+# verified by the broker's hash readback).
+sha2 = "0.10"

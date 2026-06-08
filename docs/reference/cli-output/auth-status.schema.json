@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuthStatusOutputV2",
+  "type": "object",
+  "required": [
+    "allowedSubcommands",
+    "deniedSubcommands",
+    "effectiveUid",
+    "role",
+    "sockets"
+  ],
+  "properties": {
+    "allowedSubcommands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "deniedSubcommands": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AuthDeniedSubcommandV2"
+      }
+    },
+    "effectiveUid": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "role": {
+      "$ref": "#/definitions/AuthRoleV2"
+    },
+    "sockets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AuthSocketStatusV2"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "AuthDeniedSubcommandV2": {
+      "type": "object",
+      "required": [
+        "name",
+        "reason"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthRoleV2": {
+      "type": "string",
+      "enum": [
+        "none",
+        "launcher",
+        "admin"
+      ]
+    },
+    "AuthSocketStatusV2": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "reachable"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

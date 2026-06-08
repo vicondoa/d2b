@@ -63,8 +63,8 @@ The matching guest-visible option lives in the imported
   - `ExecStartPre`: `setfacl -m u:nixling-<vm>-gpu:rw /run/user/<wayland-uid>/wayland-0`.
   - `BindPaths`: `/run/user/<wayland-uid>/wayland-0:/run/nixling-gpu/<vm>/wayland-0` — only the socket is visible inside the sidecar's mount namespace, not the parent directory.
   - `ExecStopPost`: `setfacl -x u:nixling-<vm>-gpu /run/user/<wayland-uid>/wayland-0`.
-  - `Restart = "no"` — graphics VMs are launched interactively from a Plasma terminal via `nixling up`; restart-on-failure would re-attempt a doomed start.
-  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — the GPU sidecar IS the cloud-hypervisor process. A `nixos-rebuild switch` updates the unit file but does NOT cycle the running CH. Use `nixling restart <vm>` to apply pending changes. See [`design.md`](../explanation/design.md#why-doesnt-nixos-rebuild-switch-restart-vms) for rationale. (Pre-v0.1.7 this was `unitConfig.X-RestartIfChanged = false`, which is silently ignored by NixOS's switch logic — v0.1.7 corrected it.)
+  - `Restart = "no"` — graphics VMs are launched interactively from a Plasma terminal via `nixling vm start`; restart-on-failure would re-attempt a doomed start.
+  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — the GPU sidecar IS the cloud-hypervisor process. A `nixos-rebuild switch` updates the unit file but does NOT cycle the running CH. Use `nixling vm restart <vm>` to apply pending changes. See [`design.md`](../explanation/design.md#why-doesnt-nixos-rebuild-switch-restart-vms) for rationale. (Pre-v0.1.7 this was `unitConfig.X-RestartIfChanged = false`, which is silently ignored by NixOS's switch logic — v0.1.7 corrected it.)
   - `ExecStartPre` (v0.1.5+) replicates upstream `microvm-set-booted_-start`: `rm -f booted && ln -s $(readlink current) booted` so graphics VMs maintain the per-VM `booted` symlink that the pending-restart indicator compares against `current`. Headless VMs get this from `microvm-set-booted@<vm>.service`; graphics VMs bypass that template, so the GPU sidecar owns it instead.
 - **/dev/kvm + /dev/dri/renderD128 + /dev/net/tun device allow** via
   `DevicePolicy = "closed"` + explicit `DeviceAllow` (no
@@ -133,7 +133,7 @@ The matching guest-visible option lives in the imported
 ## Lifecycle (v0.1.5+)
 
 The GPU sidecar IS the cloud-hypervisor process. There is no
-separate `microvm@<vm>` wrapper for graphics VMs — `nixling up
+separate `microvm@<vm>` wrapper for graphics VMs — `nixling vm start
 <vm>` from a Plasma terminal starts `nixling-<vm>-gpu.service`
 directly via polkit, and that service's ExecStart is the
 `microvm-run` binary the framework built into the per-VM closure.
@@ -144,7 +144,7 @@ Implications:
   All per-VM lifecycle services (including this one) carry
   `restartIfChanged = false`. After a rebuild, `nixling list`
   flags the VM with `[pending restart]` if its `current` closure
-  has drifted from `booted`. Apply with `nixling restart <vm>`.
+  has drifted from `booted`. Apply with `nixling vm restart <vm>`.
 
 - **`booted` symlink is owned by this sidecar.** `ExecStartPre`
   runs `rm -f booted && ln -s $(readlink current) booted` so the
@@ -198,7 +198,7 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 
 - **Black screen / no guest window.** The host `wayland-0` socket
   must be reachable as the user named by `nixling.site.waylandUser`.
-  `nixling up <vm>` must be invoked from a Plasma session terminal —
+  `nixling vm start <vm>` must be invoked from a Plasma session terminal —
   never as root, never over SSH (`autostart = true` is also wrong
   for graphics VMs and triggers an assertion in the audio module if
   audio is enabled).
@@ -229,8 +229,8 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 - [Design / threat model](../explanation/design.md)
 - [Manifest schema](./manifest-schema.md) — the per-VM `nixling-<vm>-gpu`
   unit is exposed under the manifest's `units.gpu` field.
-- [CLI contract](./cli-contract.md) — `nixling up <vm>` /
-  `nixling down <vm>` lifecycle.
+- [CLI contract](./cli-contract.md) — `nixling vm start <vm>` /
+  `nixling vm stop <vm>` lifecycle.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
   end-to-end example with graphics + audio + USBIP YubiKey.
 - [`examples/with-entra-id`](../../examples/with-entra-id/) — graphics

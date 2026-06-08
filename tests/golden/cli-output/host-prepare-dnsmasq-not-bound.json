@@ -1,0 +1,9 @@
+{
+  "code": "dnsmasq-not-bound",
+  "docs_anchor": "docs/reference/error-codes.md#dnsmasq-not-bound",
+  "exit_code": 1,
+  "kind": "host-prepare-apply-error",
+  "observed_state": "ss -lnp probe shows no dnsmasq listening on the nl-* bridge IP.",
+  "remediation": "Inspect systemctl status nixling-dnsmasq@<env>.service and retry `host prepare --apply`.",
+  "what_was_checked": "Whether the per-env dnsmasq is bound to its bridge after reconcile."
+}

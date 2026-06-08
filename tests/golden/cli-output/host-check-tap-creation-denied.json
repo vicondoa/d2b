@@ -1,0 +1,9 @@
+{
+  "code": "tap-creation-denied",
+  "docs_anchor": "docs/reference/error-codes.md#tap-creation-denied",
+  "exit_code": 1,
+  "kind": "host-check-error",
+  "observed_state": "TUNSETIFF returned EPERM; CAP_NET_ADMIN missing from the broker capability set.",
+  "remediation": "Ensure nixling-priv-broker.service carries CAP_NET_ADMIN.",
+  "what_was_checked": "Whether the broker can create a TAP fd via TUNSETIFF."
+}

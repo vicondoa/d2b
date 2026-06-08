@@ -27,12 +27,12 @@
         nixling.nixosModules.default
         ./configuration.nix
 
-        # Per-VM glue: register `work-vm` with nixling, hand its
+        # Per-VM glue: register `work-entra` with nixling, hand its
         # NixOS config (including the nixos-entra-id module) to
         # the framework via `config.imports`. The two flakes know
         # nothing about each other; this attrset is where they meet.
         {
-          nixling.vms.work-vm = {
+          nixling.vms.work-entra = {
             enable = true;
             tpm.enable = true;
             env = "work";
@@ -42,7 +42,7 @@
             config = {
               imports = [
                 nixos-entra-id.nixosModules.default
-                ./work-vm.nix
+                ./work-entra.nix
               ];
             };
           };

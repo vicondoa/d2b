@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bundle",
+  "description": "Top-level private bundle index installed beside the public vms.json manifest.",
+  "type": "object",
+  "required": [
+    "bundleVersion",
+    "closures",
+    "generation",
+    "hostPath",
+    "minijailProfiles",
+    "privilegesPath",
+    "processesPath",
+    "publicManifestPath",
+    "schemaVersion"
+  ],
+  "properties": {
+    "bundleVersion": {
+      "description": "Version of the bundle format; W1 starts at schema version v1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "closures": {
+      "description": "Per-VM closure artifact paths keyed by VM name.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/BundleClosureRef"
+      }
+    },
+    "generation": {
+      "description": "Generation metadata for auditing drift between Nix output and runtime state.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/BundleGeneration"
+        }
+      ]
+    },
+    "hostPath": {
+      "description": "Private host.json artifact path.",
+      "type": "string"
+    },
+    "minijailProfiles": {
+      "description": "Minijail profile metadata paths shipped with the bundle.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/BundleProfileRef"
+      }
+    },
+    "privilegesPath": {
+      "description": "Private privileges.json artifact path.",
+      "type": "string"
+    },
+    "processesPath": {
+      "description": "Private processes.json artifact path.",
+      "type": "string"
+    },
+    "publicManifestPath": {
+      "description": "Public vms.json manifest path retained for v0.4.0 compatibility.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "description": "Schema version directory used to validate all artifacts in this bundle.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "BundleClosureRef": {
+      "description": "Reference to a per-VM closure artifact under closures/<vm>.json.",
+      "type": "object",
+      "required": [
+        "path",
+        "vm"
+      ],
+      "properties": {
+        "path": {
+          "description": "Bundle-relative path to the VM closure JSON.",
+          "type": "string"
+        },
+        "vm": {
+          "description": "VM name whose closure metadata is described.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BundleGeneration": {
+      "description": "Generator identity and timestamps used by bundle drift gates.",
+      "type": "object",
+      "required": [
+        "generator"
+      ],
+      "properties": {
+        "generatedAt": {
+          "description": "Reproducible timestamp string supplied by the Nix emitter.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generator": {
+          "description": "Tool or module that emitted the bundle.",
+          "type": "string"
+        },
+        "sourceRevision": {
+          "description": "Optional source revision or derivation identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BundleProfileRef": {
+      "description": "Reference to typed minijail profile metadata.",
+      "type": "object",
+      "required": [
+        "path",
+        "profileId"
+      ],
+      "properties": {
+        "path": {
+          "description": "Bundle-relative path to the profile JSON.",
+          "type": "string"
+        },
+        "profileId": {
+          "description": "Stable profile identifier used by processes.json roles.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

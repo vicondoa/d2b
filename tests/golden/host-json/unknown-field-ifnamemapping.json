@@ -1,0 +1,13 @@
+{
+  "$comment": "W3fu1 H4 malicious fixture — ifnameMapping carries an undeclared field `disableTruncation` that the schema's `deny_unknown_fields` MUST refuse with `wire-unknown-field`.",
+  "schemaVersion": "v2",
+  "bundleVersion": "0.4.0",
+  "site": {"hostLanCidr": "192.0.2.0/24", "stateDir": "/var/lib/nixling", "runtimeDir": "/run/nixling"},
+  "ifnameMapping": {
+    "scheme": "hash-truncate-8",
+    "prefix": "nl-",
+    "max_ifname_bytes": 15,
+    "disableTruncation": true
+  },
+  "_expectedRejection": {"code": "wire-unknown-field", "reason": "ifnameMapping.disableTruncation"}
+}
