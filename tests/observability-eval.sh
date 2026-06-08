@@ -396,7 +396,8 @@ if ! (
       --expr "import ./tests/eval-cases/observability.nix { flakeRoot = \"$ROOT\"; }"
 ) > "$BATCH_JSON" 2> "$batch_stderr"; then
   if grep -q "attribute 'microvm' missing" "$batch_stderr"; then
-    skip_case 'observability-eval: microvm guest surface absent in daemon-only config'
+    skip_case 'observability-eval: microvm guest surface absent in daemon-only config' || true
+    SKIP=$((SKIP + 1))
     log "==> observability-eval: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
     exit 0
   fi

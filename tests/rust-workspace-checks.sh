@@ -44,7 +44,7 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
 if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
-    fail "rustup not on PATH and nix is unavailable; W0a rust gate cannot run pinned Rust $pinned_channel"
+    fail "rustup not on PATH and nix is unavailable; rust gate cannot run pinned Rust $pinned_channel"
     exit 1
   fi
   rust_gate_scratch=$(nl_mktemp .nixling-rust-gate.XXXXXX)
@@ -70,7 +70,7 @@ fi
 
 if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
-    fail "neither cargo nor nix is on PATH; W0a rust gate cannot run"
+    fail "neither cargo nor nix is on PATH; rust gate cannot run"
     exit 1
   fi
   rust_gate_scratch=$(nl_mktemp .nixling-rust-gate.XXXXXX)
@@ -255,7 +255,7 @@ cargo_deny_check() {
         cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   else
-    fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
+    fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
 }
@@ -272,7 +272,7 @@ cargo_audit_check() {
       env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
     ok "cargo audit ($label)"
   else
-    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
+    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
 }

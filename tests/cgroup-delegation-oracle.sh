@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
 # Cgroup v2 delegation canary matrix.
 #
-# Plan ref: ~/.copilot/session-state/<id>/plan.md
-#   §" cgroup v2 delegation algorithm" (8-step contract)
-#   §" pre-merge canary matrix" rows owned by s1:
-#     - cgroup-delegation-refused
-#     - cgroup-v2-unified-not-present
-#     - cgroup-controllers-missing
-#     - cgroup-kill on ancestor refused
-#
 # This gate drives the algorithm through the in-memory
 # `nixling_host::cgroup::fake::FakeCgroupBackend` and the broker's
 # `ops::cgroup::test_harness::RecordingAuditSink`. Each canary
 # corresponds to a named `cargo test` in `nixling-host` (raw algorithm)
 # or `nixling-priv-broker` (broker variant + audit record).
-#
-# Per AGENTS.md " tests/static.sh ownership rule": this script is
-# scope-owned by s1; the integrator wires it into the `tests/static.sh`
-# parallel-gate pool in a separate commit.
 
 set -euo pipefail
 
@@ -27,12 +15,20 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 . "$ROOT/tests/lib.sh"
 
 CARGO=${CARGO:-cargo}
-if ! command -v "$CARGO" >/dev/null 2>&1; then
+if ! command -v "$CARGO" >/dev/null 2>&1 && ! command -v rustup >/dev/null 2>&1; then
   echo "cgroup-delegation-oracle: cargo not on PATH; expected the static gate's rust shell" >&2
   exit 1
 fi
 
-# Required canaries (named cargo tests). Each must pass for s1 sign-off.
+run_cargo() {
+  if command -v rustup >/dev/null 2>&1 && [ -n "${RUSTUP_TOOLCHAIN:-}" ]; then
+    rustup run "$RUSTUP_TOOLCHAIN" cargo "$@"
+  else
+    "$CARGO" "$@"
+  fi
+}
+
+# Required canaries (named cargo tests). Each must pass for this gate.
 declare -a HOST_CANARIES=(
   cgroup::tests::refuses_uid_zero
   cgroup::tests::refuses_when_unified_hierarchy_missing
@@ -55,7 +51,7 @@ declare -a BROKER_CANARIES=(
   ops::cgroup::tests::cgroup_kill_ancestor_refused
 )
 
-LOG_DIR=${TMPDIR:-/tmp}/nixling-w3-s1-cgroup-oracle.$$
+LOG_DIR=${TMPDIR:-/tmp}/nixling-cgroup-oracle.$$
 mkdir -p "$LOG_DIR"
 cleanup() { rm -rf -- "$LOG_DIR"; }
 trap cleanup EXIT INT TERM
@@ -66,7 +62,7 @@ BROKER_LOG="$LOG_DIR/broker.log"
 printf '\n[cgroup-delegation-oracle] host canaries (nixling-host fake backend)\n'
 (
   cd "$ROOT/packages"
-  "$CARGO" test -p nixling-host --all-features --lib cgroup::
+  run_cargo test -p nixling-host --all-features --lib cgroup::
 ) >"$HOST_LOG" 2>&1
 host_status=$?
 if [ $host_status -ne 0 ]; then
@@ -87,7 +83,7 @@ printf '  ok: %d host canaries passed\n' "${#HOST_CANARIES[@]}"
 printf '\n[cgroup-delegation-oracle] broker canaries (ops::cgroup + RecordingAuditSink)\n'
 (
   cd "$ROOT/packages/nixling-priv-broker"
-  "$CARGO" test --all-features --lib ops::cgroup
+  run_cargo test --all-features --lib ops::cgroup
 ) >"$BROKER_LOG" 2>&1
 broker_status=$?
 if [ $broker_status -ne 0 ]; then
@@ -105,5 +101,5 @@ for canary in "${BROKER_CANARIES[@]}"; do
 done
 printf '  ok: %d broker canaries passed\n' "${#BROKER_CANARIES[@]}"
 
-printf '\ncgroup-delegation-oracle: all W3 s1 cgroup canaries passed\n'
+printf '\ncgroup-delegation-oracle: all cgroup canaries passed\n'
 exit 0
