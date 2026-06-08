@@ -394,6 +394,26 @@ pub struct ResolvedStoreViewIntent {
     pub closure_paths: Vec<PathBuf>,
 }
 
+impl ResolvedStoreViewIntent {
+    /// Stable per-closure identity for this store-view generation,
+    /// derived from the toplevel store-path basename (whose Nix-base32
+    /// hash component captures the full closure content). Written into
+    /// the hardlink-farm generation marker's `closure_hash` so that a
+    /// u32 generation-number collision between two *distinct* closures
+    /// of the same VM is detected fail-closed instead of silently
+    /// unioning two closures into one store view (which would corrupt
+    /// rollback). Falls back to the vm+generation tuple only when the
+    /// target view path has no basename (should never happen for a
+    /// resolved intent).
+    pub fn closure_identity(&self) -> String {
+        self.target_view_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| format!("toplevel:{name}"))
+            .unwrap_or_else(|| format!("store-view:{}:{}", self.vm, self.generation))
+    }
+}
+
 /// Resolved host-GC intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedGcIntent {
@@ -2991,8 +3011,28 @@ mod tests {
     }
 
     #[test]
-    fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {
-        let root = test_root("vm-start-intents");
+    fn closure_identity_uses_toplevel_basename() {
+        let intent = ResolvedStoreViewIntent {
+            intent_id: intent_id_store_view("corp-vm"),
+            vm: "corp-vm".to_owned(),
+            generation: 42,
+            hardlink_farm_path: PathBuf::from("/var/lib/nixling/vms/corp-vm/store-view"),
+            target_view_path: PathBuf::from(
+                "/var/lib/nixling/vms/corp-vm/store-view/generations/42/abc123-nixos-system-corp",
+            ),
+            closure_paths: Vec::new(),
+        };
+        // Identity is the toplevel basename (carries the Nix input hash),
+        // so two distinct closures of one VM never share an identity even
+        // if their u32 generation numbers collide.
+        assert_eq!(
+            intent.closure_identity(),
+            "toplevel:abc123-nixos-system-corp"
+        );
+    }
+
+    #[test]
+    fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {        let root = test_root("vm-start-intents");
         let resolver = build_personal_dev_bundle(&root);
 
         let host = resolver

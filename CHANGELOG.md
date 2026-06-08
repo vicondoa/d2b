@@ -10,6 +10,21 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- `nixling switch` / `boot` / `test` no longer fail with `broker-error`
+  ("no store-view intent in the trusted bundle"). The per-VM closure
+  artifact now emits a populated `hostGeneration` (a deterministic,
+  content-derived store-view generation), so the broker builds a
+  store-view intent for every VM instead of skipping it. Previously
+  live activation was impossible and the only way to apply a new
+  generation was `nixling down <vm> --apply` followed by
+  `nixling up <vm> --apply`. The per-VM `/nix/store` hardlink farm now
+  also fails closed on a store-view generation collision (two distinct
+  closures of one VM mapping to the same generation number) instead of
+  unioning them, by pinning the closure identity in the generation
+  marker.
+
 ## [1.2] - 2026-06-03
 
 Primarily a stabilization release per

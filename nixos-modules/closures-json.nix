@@ -44,12 +44,30 @@ let
       relativePath = "closures/${name}.json";
       file = pkgs.runCommand "nixling-${name}-closure.json" { nativeBuildInputs = [ pkgs.python3 ]; } ''
         python - "$out" "${closure}/store-paths" <<'PY'
+        import hashlib
         import json
         import sys
 
         out, store_paths = sys.argv[1], sys.argv[2]
         with open(store_paths, encoding="utf-8") as f:
             paths = [line.strip() for line in f if line.strip()]
+
+        # Deterministic per-VM store-view generation. Derived at eval
+        # time from the toplevel store path (whose Nix-base32 hash
+        # component already captures the full closure content), reduced
+        # to a non-zero u32 so it fits the broker's store-sync /
+        # activation generation field. The broker's
+        # `build_store_view_intents` SKIPS any closure whose
+        # `hostGeneration` is null, so leaving this null disables every
+        # store-view intent and breaks `nixling switch`/`boot`/`test`.
+        # Stable per closure (no runtime state), changes whenever the
+        # closure changes. The astronomically-rare u32 collision between
+        # two distinct closures of the same VM is caught fail-closed by
+        # the hardlink-farm generation-marker identity check
+        # (packages/nixling-host/src/hardlink_farm.rs::build_farm).
+        host_generation = (
+            int(hashlib.sha256("${top}".encode("utf-8")).hexdigest(), 16) % 4294967295
+        ) + 1
 
         data = {
             "schemaVersion": "v2",
@@ -60,7 +78,7 @@ let
             "runnerParityPath": "${runner}",
             "runnerParityOk": True,
             "generation": {
-                "hostGeneration": None,
+                "hostGeneration": host_generation,
                 "vmGeneration": None,
                 "sourceRevision": None,
                 "generatedAt": None,

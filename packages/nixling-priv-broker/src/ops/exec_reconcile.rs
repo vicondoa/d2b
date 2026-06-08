@@ -53,6 +53,13 @@ pub enum ReconcileExecError {
     },
     /// The target generation dir exists but lacks the trusted marker.
     MarkerMissing { generation_dir: String },
+    /// The target store-view generation dir already holds a different
+    /// closure (u32 generation-number collision); refused fail-closed.
+    StoreViewGenerationCollision {
+        generation_dir: String,
+        existing: String,
+        incoming: String,
+    },
     /// I/O error writing /proc/sys/* or /etc/hosts.
     Io { path: String, detail: String },
     /// Mount-namespace staging or activation-script setup failed.
@@ -80,6 +87,15 @@ impl std::fmt::Display for ReconcileExecError {
             Self::MarkerMissing { generation_dir } => {
                 write!(f, "generation {generation_dir} lacks marker.json")
             }
+            Self::StoreViewGenerationCollision {
+                generation_dir,
+                existing,
+                incoming,
+            } => write!(
+                f,
+                "store-view generation collision at {generation_dir}: already holds closure \
+                 `{existing}`, refusing to build `{incoming}` over it"
+            ),
             Self::Io { path, detail } => write!(f, "I/O error on {path}: {detail}"),
             Self::MountNamespace { detail } => write!(f, "mount namespace: {detail}"),
             Self::InvalidInput { detail } => write!(f, "invalid input: {detail}"),
@@ -533,7 +549,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             intent.generation,
             &intent.closure_paths,
             &GenerationMarker {
-                closure_hash: format!("store-view:{}:{}", intent.vm, intent.generation),
+                closure_hash: intent.closure_identity(),
                 nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
                 activated_at: format!("unix-{}", current_unix_ms()),
                 vm: intent.vm.clone(),
@@ -835,6 +851,15 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
         HardlinkFarmError::MarkerMissing { generation_dir } => {
             ReconcileExecError::MarkerMissing { generation_dir }
         }
+        HardlinkFarmError::GenerationCollision {
+            generation_dir,
+            existing,
+            incoming,
+        } => ReconcileExecError::StoreViewGenerationCollision {
+            generation_dir,
+            existing,
+            incoming,
+        },
         HardlinkFarmError::MarkerUnparseable { path, detail }
         | HardlinkFarmError::Io { path, detail } => ReconcileExecError::Io { path, detail },
     }
@@ -1109,7 +1134,7 @@ mod fake {
                 intent.generation,
                 &intent.closure_paths,
                 &GenerationMarker {
-                    closure_hash: format!("fake-store-view:{}:{}", intent.vm, intent.generation),
+                    closure_hash: intent.closure_identity(),
                     nixling_version: "fake".to_owned(),
                     activated_at: "fake".to_owned(),
                     vm: intent.vm.clone(),
