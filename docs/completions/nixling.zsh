@@ -766,6 +766,112 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_nixling__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-config-command-$line[1]:"
+        case $line[1] in
+            (sync)
+_arguments "${_arguments_options[@]}" : \
+'--guest-path=[Path of the editable guest config INSIDE the VM to pull]:GUEST_PATH:_default' \
+'--host=[Override the SSH host (defaults to the manifest \`static_ip\`)]:HOST:_default' \
+'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`)]:USER:_default' \
+'--key=[Override the SSH private key path]:KEY:_files' \
+'--dry-run[Print the SSH command instead of running it]' \
+'--json[Emit a JSON envelope]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name (must match the static manifest):_default' \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+'--against=[The live host-side guest config file to compare the staging against]:AGAINST:_files' \
+'--json[Emit a JSON envelope]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name (must match the static manifest):_default' \
+&& ret=0
+;;
+(approve)
+_arguments "${_arguments_options[@]}" : \
+'--to=[The host-side file to write the approved staging copy onto. The operator chooses this (typically their \`guestConfigFile\` path)]:TO:_files' \
+'--json[Emit a JSON envelope]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name (must match the static manifest):_default' \
+&& ret=0
+;;
+(reject)
+_arguments "${_arguments_options[@]}" : \
+'--json[Emit a JSON envelope]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name (must match the static manifest):_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--all[Report every VM that currently has a pending staging file]' \
+'--json[Emit a JSON envelope]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::vm -- VM name; omit together with `--all` to report every staged VM:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__config__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-config-help-command-$line[1]:"
+        case $line[1] in
+            (sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(approve)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reject)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_nixling__subcmd__help_commands" \
@@ -1038,6 +1144,42 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__help__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-help-config-command-$line[1]:"
+        case $line[1] in
+            (sync)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(approve)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reject)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1077,6 +1219,7 @@ _nixling_commands() {
 'trust:Trust a VM'\''s host key on first use (TOFU)' \
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
+'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling commands' commands "$@"
@@ -1194,6 +1337,85 @@ _nixling__subcmd__build_commands() {
     local commands; commands=()
     _describe -t commands 'nixling build commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__config_commands] )) ||
+_nixling__subcmd__config_commands() {
+    local commands; commands=(
+'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
+'diff:Diff the staged guest config against a live host-side file' \
+'approve:Approve the staged guest config by writing it to a target file' \
+'reject:Discard the staged guest config' \
+'status:Report whether a VM has a pending (un-approved) staged config' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling config commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__approve_commands] )) ||
+_nixling__subcmd__config__subcmd__approve_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config approve commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__diff_commands] )) ||
+_nixling__subcmd__config__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config diff commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help_commands] )) ||
+_nixling__subcmd__config__subcmd__help_commands() {
+    local commands; commands=(
+'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
+'diff:Diff the staged guest config against a live host-side file' \
+'approve:Approve the staged guest config by writing it to a target file' \
+'reject:Discard the staged guest config' \
+'status:Report whether a VM has a pending (un-approved) staged config' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling config help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__approve_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__approve_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help approve commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__diff_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help diff commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__help_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__reject_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__reject_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help reject commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__status_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help status commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__help__subcmd__sync_commands] )) ||
+_nixling__subcmd__config__subcmd__help__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config help sync commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__reject_commands] )) ||
+_nixling__subcmd__config__subcmd__reject_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config reject commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__status_commands] )) ||
+_nixling__subcmd__config__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config status commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__config__subcmd__sync_commands] )) ||
+_nixling__subcmd__config__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling config sync commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__console_commands] )) ||
 _nixling__subcmd__console_commands() {
     local commands; commands=()
@@ -1240,6 +1462,7 @@ _nixling__subcmd__help_commands() {
 'trust:Trust a VM'\''s host key on first use (TOFU)' \
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
 'migrate:Analyse the host config and emit a migration plan' \
+'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling help commands' commands "$@"
@@ -1300,6 +1523,42 @@ _nixling__subcmd__help__subcmd__boot_commands() {
 _nixling__subcmd__help__subcmd__build_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help build commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config_commands] )) ||
+_nixling__subcmd__help__subcmd__config_commands() {
+    local commands; commands=(
+'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
+'diff:Diff the staged guest config against a live host-side file' \
+'approve:Approve the staged guest config by writing it to a target file' \
+'reject:Discard the staged guest config' \
+'status:Report whether a VM has a pending (un-approved) staged config' \
+    )
+    _describe -t commands 'nixling help config commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config__subcmd__approve_commands] )) ||
+_nixling__subcmd__help__subcmd__config__subcmd__approve_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help config approve commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config__subcmd__diff_commands] )) ||
+_nixling__subcmd__help__subcmd__config__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help config diff commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config__subcmd__reject_commands] )) ||
+_nixling__subcmd__help__subcmd__config__subcmd__reject_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help config reject commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config__subcmd__status_commands] )) ||
+_nixling__subcmd__help__subcmd__config__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help config status commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__config__subcmd__sync_commands] )) ||
+_nixling__subcmd__help__subcmd__config__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help config sync commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__console_commands] )) ||
 _nixling__subcmd__help__subcmd__console_commands() {

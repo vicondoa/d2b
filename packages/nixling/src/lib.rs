@@ -1869,7 +1869,10 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
     require_known_vm(context, &args.vm, args.json)?;
     let manifest = context.load_manifest()?;
     let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
-        CliFailure::new(1, format!("config sync: unknown vm '{}' in manifest", args.vm))
+        CliFailure::new(
+            1,
+            format!("config sync: unknown vm '{}' in manifest", args.vm),
+        )
     })?;
     let host = args
         .host
@@ -2122,7 +2125,9 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
         print_json(&body)?;
     } else if pending.is_empty() {
         match &args.vm {
-            Some(vm) => print_stdout(&format!("config status: no pending staged config for '{vm}'\n")),
+            Some(vm) => print_stdout(&format!(
+                "config status: no pending staged config for '{vm}'\n"
+            )),
             None => print_stdout("config status: no pending staged guest configs\n"),
         }
     } else {
@@ -6977,7 +6982,10 @@ mod config_cmd_tests {
         let dir = std::env::current_dir()
             .expect("cwd")
             .join("target")
-            .join(format!("config-cmd-{name}-{}-{counter}", std::process::id()));
+            .join(format!(
+                "config-cmd-{name}-{}-{counter}",
+                std::process::id()
+            ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch");
         dir
@@ -6988,7 +6996,9 @@ mod config_cmd_tests {
         assert!(config_validate_vm_name("work-aad").is_ok());
         assert!(config_validate_vm_name("personal-dev").is_ok());
         assert!(config_validate_vm_name("a1").is_ok());
-        for bad in ["", "../x", "..", "Work", "a/b", "1abc", "a_b", "a b", "sys/.."] {
+        for bad in [
+            "", "../x", "..", "Work", "a/b", "1abc", "a_b", "a b", "sys/..",
+        ] {
             assert!(
                 config_validate_vm_name(bad).is_err(),
                 "expected '{bad}' to be rejected"
@@ -7001,13 +7011,13 @@ mod config_cmd_tests {
         assert!(config_validate_remote_path("/var/lib/nixling-guest/guest-config.nix").is_ok());
         assert!(config_validate_remote_path("/etc/nixling/guest-config.nix").is_ok());
         for bad in [
-            "guest.nix",          // not absolute
-            "/a;rm -rf /",        // shell metachar
-            "/a b",               // space
-            "/a$(x)",             // command substitution
-            "/a`x`",              // backtick
-            "/a\nb",              // newline
-            "/a|b",               // pipe
+            "guest.nix",   // not absolute
+            "/a;rm -rf /", // shell metachar
+            "/a b",        // space
+            "/a$(x)",      // command substitution
+            "/a`x`",       // backtick
+            "/a\nb",       // newline
+            "/a|b",        // pipe
         ] {
             assert!(
                 config_validate_remote_path(bad).is_err(),
@@ -7042,7 +7052,11 @@ mod config_cmd_tests {
         let leftovers: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .flatten()
-            .filter(|e| e.file_name().to_string_lossy().contains("nixling-approve.tmp"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("nixling-approve.tmp")
+            })
             .collect();
         assert!(leftovers.is_empty(), "approve left a temp file behind");
     }
@@ -7068,7 +7082,10 @@ mod config_cmd_tests {
         fs::write(&target, b"{ keep = true; }\n").expect("seed target");
         let err = config_approve_core(&staging, &target).expect_err("must error on empty");
         assert!(err.message.contains("empty"));
-        assert_eq!(fs::read(&target).expect("read target"), b"{ keep = true; }\n");
+        assert_eq!(
+            fs::read(&target).expect("read target"),
+            b"{ keep = true; }\n"
+        );
     }
 
     #[test]
