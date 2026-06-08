@@ -1057,9 +1057,20 @@ pub mod path_safe {
             relative,
             OFlags::RDONLY | OFlags::DIRECTORY,
         )?;
-        fchmod(fd.as_fd(), mode)?;
-        if owner_uid.is_some() || owner_gid.is_some() {
-            fchown(fd.as_fd(), owner_uid, owner_gid)?;
+        // Apply mode + ownership only when WE created the dir, or when
+        // the caller asked to re-assert metadata. The `created == false`
+        // case here is the `mkdirat` EEXIST race: a concurrent actor
+        // (e.g. host activation) created the per-VM root between our
+        // initial open (which returned NotFound) and this `mkdirat`.
+        // Re-stamping it then would defeat `ensure_dir_preserve_existing`
+        // exactly as the always-fchmod path did — clipping the ACL mask
+        // / chowning to a runner principal. Treat that raced dir like
+        // any other pre-existing dir and leave its metadata intact.
+        if created || reassert_metadata {
+            fchmod(fd.as_fd(), mode)?;
+            if owner_uid.is_some() || owner_gid.is_some() {
+                fchown(fd.as_fd(), owner_uid, owner_gid)?;
+            }
         }
         Ok((
             fd,
