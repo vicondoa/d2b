@@ -1,8 +1,8 @@
 # How to migrate a NixOS host from systemd-owned to daemon-owned VM lifecycle
 
-> **v1.0 status:** This guide documents the pre-P6 → P6 transition.
+> **v1.0 status:** This guide documents the v0.x → v1.0 transition.
 > In v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md))
-> the pre-P6 `nixling@<vm>.service` wrapper was retired entirely;
+> the legacy `nixling@<vm>.service` wrapper was retired entirely;
 > there is no longer a coexistence period. New hosts deploy
 > straight to v1.0 daemon-owned lifecycle. Existing v0.x hosts
 > upgrading to v1.0 should follow

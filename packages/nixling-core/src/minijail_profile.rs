@@ -20,7 +20,7 @@ pub struct MinijailProfile {
     pub capabilities: Vec<String>,
     /// Namespace isolation requested for this role.
     pub namespaces: NamespaceSet,
-    /// Seccomp policy reference; kernel-version syscall allowlists are out of W1 scope.
+    /// Seccomp policy reference; kernel-version syscall allowlists are out of scope.
     pub seccomp_policy_ref: Option<String>,
     /// Mount policy metadata, including writable paths.
     pub mount_policy: MountPolicy,
@@ -41,11 +41,11 @@ pub struct MinijailProfile {
     pub user_namespace: Option<UserNamespaceProfile>,
     /// v1.1.2fu36: file-creation mask the broker installs in the
     /// spawned child before execve. Lets profiles that bind shared
-    /// sockets (vhost-user-sound, crosvm-gpu, swtpm) declare an
-    /// umask of `0o007` so the resulting sockets have group r-w
-    /// (mode 0660) and the existing default ACL on the per-VM
-    /// runtime dir (`/run/nixling/vms/<vm>/`) yields effective r-w
-    /// for named-user entries (cloud-hypervisor uid). Without this,
+    /// sockets (vhost-user-sound, crosvm-gpu, crosvm video, swtpm)
+    /// declare an umask of `0o007` so the resulting sockets have
+    /// group r-w (mode 0660/0770) and the existing default ACL on the
+    /// per-VM runtime dir yields effective r-w for named-user entries
+    /// (cloud-hypervisor uid). Without this,
     /// the default 0o022 umask yields socket mode 0644 — but
     /// vhost-user/swtpm bind() typically restricts to 0600 — which
     /// derives ACL mask=0 and named-user entries become ineffective.

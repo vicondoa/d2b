@@ -1,4 +1,4 @@
-# `StoreSync` broker op (P2 ph2-store-sync)
+# `StoreSync` broker op
 
 This page documents the typed broker op that hardlink-farms a VM's
 resolved closure into `/var/lib/nixling/vms/<vm>/store/` and
@@ -7,8 +7,8 @@ generation directory.
 
 It replaces the per-VM `nixling-<vm>-store-sync.service` systemd
 oneshot (a bash script invoking `ln(1)` + `mv(1)` directly) with a
-broker-side typed handler so the daemon-only end-state (P6) can
-delete the generated systemd unit.
+broker-side typed handler so the daemon-only end-state can delete the
+generated systemd unit.
 
 ## Why a broker op (instead of the daemon doing it)
 
@@ -139,5 +139,5 @@ envelope.
 
 The generated `nixling-<vm>-store-sync.service` unit is the
 caller of the bash hardlink-farm script today. Deletion of the
-generator is owned by the P6 deletion sweep — `StoreSync` is the
+generator is owned by the daemon-only cleanup — `StoreSync` is the
 typed replacement op that the per-VM start path will call instead.

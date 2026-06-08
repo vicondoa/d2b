@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P2 ph2-dag-host-prep: assert that the host-prep DAG module + docs
+# Assert that the host-prep DAG module + docs
 # carry the documented step set + broker-op mapping. Static gate —
 # no nixpkgs eval required.
 
@@ -38,8 +38,8 @@ for kind in \
     ok "HostPrepStepKind::${kind}"
 done
 
-# P2fu1 kernel-r1-1 closure: assert ordering edges in the workload
-# DAG fixture exist as documented. The DAG builder is a pure function
+# Assert ordering edges in the workload DAG fixture exist as documented.
+# The DAG builder is a pure function
 # of the bundle resolver shape; the test below pins the dep edges
 # inline by grepping the builder source for the canonical
 # depends_on declarations the integrator just landed.
@@ -85,12 +85,12 @@ ok "pub mod host_prep_dag"
 echo "==> broker wire scaffolds (typed Unimplemented stubs)"
 WIRE="packages/nixling-ipc/src/broker_wire.rs"
 RUNTIME="packages/nixling-priv-broker/src/runtime.rs"
-# P3 host-prep-broker-arms: SeedDnsmasqLease and
+# Host-prep-broker-arms: SeedDnsmasqLease and
 # BindMountFromHardlinkFarm flipped from typed-Unimplemented stubs
 # to live broker dispatch arms (they look up the per-VM bundle
 # intent, record a typed audit row, and ack). OwnershipMatrixCheck
-# and SshHostKeyPreflight still carry the typed Unimplemented P2
-# label pending the sibling P3 wave-B handlers.
+# and SshHostKeyPreflight still carry the typed Unimplemented
+# label pending the sibling wave-B handlers.
 for variant in \
     SeedDnsmasqLease \
     BindMountFromHardlinkFarm \
@@ -149,8 +149,7 @@ for kind in \
 done
 ok "docs cover every step kind (all 10)"
 
-# P2fu1 kernel-r1-1 + P2fu2 test-r2 closure: assert the doc's
-# canonical ordering block names the new step kinds AND the
+# Assert the doc's canonical ordering block names the new step kinds AND the
 # dependency-edge keywords ("AFTER tap", "BEFORE tap" / "BEFORE
 # nftables apply", "AFTER ApplySysctl") so doc drift is caught.
 echo "==> documentation: ordering"

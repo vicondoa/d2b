@@ -1,6 +1,7 @@
 # Reference: cgroup v2 delegation
 
-> W3 scope **s1** reference. Operator-facing how-to lives at
+> Reference for the cgroup-delegation contract. Operator-facing
+> how-to lives at
 > [`docs/how-to/host-prepare.d/cgroup.md`](../how-to/host-prepare.d/cgroup.md).
 > ADR with rationale and rejected alternatives:
 > [`docs/adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md`](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md).
@@ -12,7 +13,7 @@ broker, daemon, and CLI.
 
 ## Scope and invariants
 
-W3 introduces **non-root nixlingd cgroup delegation**: the broker
+Nixling uses **non-root `nixlingd` cgroup delegation**: the broker
 runs the privileged Phase A setup once at host prepare, then
 `nixling.slice` and its descendants belong to the `nixlingd` system
 user. Subsequent runtime operations against the delegated subtree
@@ -36,33 +37,30 @@ split into two categories:
   for process placement at spawn time per
   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 8 "Process-into-cgroup placement primitive";
-  there is no daemon-side attach codepath in v1.1+ source).
+  there is no daemon-side attach codepath in the current source).
 - **Broker-mediated and audited** (the broker ops below): all
   cross-trust-boundary mutations on the cgroup tree are exposed
   as audited broker operations. The broker performs leaf mkdir
   (one-shot at Phase A), process placement (atomic on each
   `SpawnRunner` via `clone3(CLONE_INTO_CGROUP)`), leaf-only kill
-  via the v1.1-P10 `CgroupKill` op, and any subsequent runtime
-  state changes.
+  via `CgroupKill`, and any subsequent runtime state changes.
 
-**Broker ops on the cgroup tree** (resolves R12 software-r12-2 +
-R13 software-r13-1 + R14 software-r14-1/r14-2 + R14 kernel-r14-1
-+ R14 virt-r14-1 + R14 test-r14-2 — single canonical statement):
+**Broker ops on the cgroup tree:**
 
 | Broker op | Status | Audit | Owner of side-effect |
 | --- | --- | --- | --- |
-| `DelegateCgroupV2` | v1.0 live | yes | Broker (one-shot Phase A: `+controllers` cascade, slice/leaf `mkdir`, `fchown` to `nixlingd` uid/gid; re-runnable on host re-prepare). |
-| `OpenCgroupDir` | v1.0 live | yes | Broker (fd-passing for delegated leaves; the daemon acquires fresh fds when needed). |
-| `CgroupKill` | **v1.1-P10 addition** (NOT live at v1.0 HEAD; the v1.0 source has no `BrokerRequest::CgroupKill` variant) | yes (when added) | Broker, broker-only. The broker holds the leaf write-fd via the Phase A `fchown` and is the **sole writer** of `cgroup.kill` files. The daemon NEVER writes `cgroup.kill` directly — daemon teardown of a runner uses `pidfd_send_signal(SIGTERM)` first; if SIGTERM does not drain the leaf within the role's documented grace period, the daemon escalates by issuing a `CgroupKill` broker request as a last resort. v1.1-P10 adds the `BrokerRequest::CgroupKill` variant + handler + dispatch arm per the corresponding TDD-table row. |
+| `DelegateCgroupV2` | live | yes | Broker (one-shot Phase A: `+controllers` cascade, slice/leaf `mkdir`, `fchown` to `nixlingd` uid/gid; re-runnable on host re-prepare). |
+| `OpenCgroupDir` | live | yes | Broker (fd-passing for delegated leaves; the daemon acquires fresh fds when needed). |
+| `CgroupKill` | live | yes | Broker, broker-only. The broker holds the leaf write-fd via the Phase A `fchown` and is the **sole writer** of `cgroup.kill` files. The daemon NEVER writes `cgroup.kill` directly — daemon teardown of a runner uses `pidfd_send_signal(SIGTERM)` first; if SIGTERM does not drain the leaf within the role's documented grace period, the daemon escalates by issuing a `CgroupKill` broker request as a last resort. |
 
 The **broker-only `cgroup.kill` writer invariant** is the canonical
-v1.1 rule for the leaf-kill code path (per ADR 0011 Decision item 6
+rule for the leaf-kill code path (per ADR 0011 Decision item 6
 "kill scope is leaf-only" + the audit-completeness requirement that
 every cross-trust-boundary mutation generates an `OpAuditRecord`).
 The corresponding error code
 [`cgroup-kill-on-ancestor-refused`](error-codes.md#cgroup-kill-on-ancestor-refused)
 applies to the broker's `CgroupKill` op (the only writer); there
-are no daemon-side `cgroup.kill` write sites in v1.1+ source.
+are no daemon-side `cgroup.kill` write sites.
 
 Hard invariants:
 
@@ -73,12 +71,9 @@ Hard invariants:
    all be present in the root `cgroup.controllers`. Optional
    controllers (`rdma`, `hugetlb`, `misc`, ...) are accepted but
    never required.
-3. **Single slice name; v1.1 per-VM-interior + per-role-leaf
+3. **Single slice name; per-VM-interior + per-role-leaf
    hierarchy.** The slice is `nixling.slice` literally — not
-   configurable. **v1.0 (historical):** per-VM leaves at
-   `nixling.slice/<vm-id>.scope`. **v1.1+ (canonical, per
-   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-   Decision item 1):** per-VM **intermediate** directory at
+   configurable. Per-VM **intermediate** directories live at
    `nixling.slice/<vm-id>/` (process-free) with **per-role leaves**
    at `nixling.slice/<vm-id>/<role>/`. Host-scoped roles split
    into two patterns, both `path_class: host-scoped-leaf`:
@@ -86,9 +81,9 @@ Hard invariants:
    with `sys-<env>/` process-free interior; host singletons
    (e.g., otel-host-bridge) at `nixling.slice/host/<role>/`
    with `host/` process-free interior. The role-leaf model is
-   required because v1.1 retires the per-VM systemd-template
-   scope model and replaces it with one broker-spawned child
-   per role; each role needs its own pidfd / cgroup.kill scope.
+   required because the framework replaces the old per-VM
+   systemd-template scope model with one broker-spawned child
+   per role; each role needs its own pidfd / `cgroup.kill` scope.
 4. **`partition=member` on nixling-created cgroups.** `cpuset.cpus.partition`
    STAYS `member` on `nixling.slice` and every nixling-created
    descendant (per-VM intermediate `<vm-id>/`, per-role leaves
@@ -125,9 +120,7 @@ Hard invariants:
    module **AFTER** the initial Phase A delegation completes
    (steps 1-6 are Phase A; they require root for `+controllers`,
    slice/leaf `mkdir`, and `fchown` to `nixlingd`'s uid/gid; the
-   broker drops privileges between steps 6 and 7). The R9 kernel
-   reviewer flagged a self-contradiction in the previous
-   flat-8-step reading. See
+   broker drops privileges between steps 6 and 7). See
    [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
    § Decision item 2 for the explicit Phase A vs Phase B split.
 
@@ -142,7 +135,7 @@ The algorithm runs through
 | 2 | `require_controllers(root, REQUIRED)` | `cgroup-controllers-missing` |
 | 3 | `prepare_cpuset_inheritance(<ancestor>)` before `+cpuset` | `cpuset-inheritance-failed` |
 | 4 | `enable_subtree_controllers(<path>, ENABLE_ORDER)` per-controller, re-read after each | `cgroup-subtree-control-enable-failed` |
-| 5 | `create_nixling_slice(...)` creates `nixling.slice`; `create_vm_subtree(...)` creates per-VM intermediate `<vm-id>/` and per-role leaves `<vm-id>/<role>/` (v1.1 taxonomy per ADR 0011); `assert_no_internal_processes(<path>)` checks intermediate dirs | `cgroup-internal-processes-present` |
+| 5 | `create_nixling_slice(...)` creates `nixling.slice`; `create_vm_subtree(...)` creates per-VM intermediate `<vm-id>/` and per-role leaves `<vm-id>/<role>/` (current taxonomy per ADR 0011); `assert_no_internal_processes(<path>)` checks intermediate dirs | `cgroup-internal-processes-present` |
 | 6 | `chown_subtree_to_nixlingd(<path>, uid, gid)` via fd-based `fchown` | `cgroup-io-error` |
 | 7 | `cgroup_kill_leaf_only(<path>, leaf_set)` | `cgroup-kill-on-ancestor-refused` |
 | 8 | `require_non_root_delegation()` (uid != 0 guard) | `cgroup-delegation-refused` |
@@ -170,7 +163,8 @@ forbidden outside the reconciliation path, where pid +
 
 ## Path-safety contract
 
-All filesystem I/O against the cgroup tree follows W3 path-safety:
+All filesystem I/O against the cgroup tree follows the documented
+path-safety contract:
 
 - fd-relative `openat`/`openat2` with `O_NOFOLLOW` on every open;
 - For the chown step on `O_PATH` descriptors: use
@@ -181,10 +175,10 @@ All filesystem I/O against the cgroup tree follows W3 path-safety:
   operate on the fd itself rather than a path component. As an
   alternative (when a non-`O_PATH` fd is acceptable), open the
   directory with `O_DIRECTORY | O_NOFOLLOW` (no `O_PATH`) and
-  then call `fchown(fd, ...)`. The R10 kernel reviewer flagged
-  the earlier `O_PATH | O_NOFOLLOW` + `fchown` combination as
-  incorrect; the v1.1 implementation MUST use `fchownat` with
-  `AT_EMPTY_PATH` when working with `O_PATH` descriptors.
+  then call `fchown(fd, ...)`. The earlier
+  `O_PATH | O_NOFOLLOW` + `fchown` combination is incorrect; the
+  implementation MUST use `fchownat` with `AT_EMPTY_PATH` when
+  working with `O_PATH` descriptors.
 - the broker re-derives every operating path from the trusted bundle,
   never from caller input.
 
@@ -197,8 +191,8 @@ Every `DelegateCgroupV2` and `OpenCgroupDir` decision emits one JSON
 record to `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640).
 
 The common audit header is defined canonically in
-[`docs/reference/privileges.md`](privileges.md) § "Audit record schema
-(W3 baseline)". The cgroup variants reuse that header verbatim;
+[`docs/reference/privileges.md`](privileges.md) § "Audit record
+schema". The cgroup variants reuse that header verbatim;
 `authz_result` is the launcher/admin/deny class assigned by the broker
 authz layer, and `decision` is the broker's per-operation
 allowed/denied-refused/denied-unknown/errored verdict.
@@ -265,18 +259,18 @@ non-bootstrap dispatcher as well as the cgroup paths documented here:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `cgroup_id` | string | The canonical path the broker resolved from the subject. Omitted on subject-resolution failure. |
-| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (v1.1 taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1); legacy `nixling-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are RETIRED in v1.1 and the v1.1-P10 `audit_path_class.rs` Rust enum lands the new taxonomy as a closed four-value enum. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below — the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
+| `path_class` | string | One of `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` (the current four-value taxonomy per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) Decision item 1). Legacy `nixling-slice` / `vm-leaf` / `foreign` / `unknown-subject` values are retired. **Bundle-miss / unresolved-subject cases**: same convention as `CgroupKill` below — the `path_class` field is OMITTED from `operation_fields` on subject-resolution failure; the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level. |
 
 ### `CgroupKill` (internal teardown path)
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `cgroup_id` | string | The canonical leaf path. |
-| `path_class` | string | Always `vm-role-leaf` (or `host-scoped-leaf` for host-scope roles) on success. **Bundle-miss / unresolved-subject cases**: per the closed v1.1 `path_class` taxonomy (resolves R12 rust-r12-1 + security-r12-1), the `path_class` field is **only populated after successful subject resolution**; on bundle miss the field is OMITTED from the audit record's `operation_fields` block and the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level (the four-value enum `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` stays closed — no `unknown-subject` discriminant). |
+| `path_class` | string | Always `vm-role-leaf` (or `host-scoped-leaf` for host-scope roles) on success. **Bundle-miss / unresolved-subject cases**: the `path_class` field is **only populated after successful subject resolution**; on bundle miss the field is OMITTED from the audit record's `operation_fields` block and the failure is recorded via `decision: "denied-unknown"` + `error_kind: "unknown-subject"` at the audit-header level (the four-value enum `slice` / `vm-interior` / `vm-role-leaf` / `host-scoped-leaf` stays closed — no `unknown-subject` discriminant). |
 
 ## Forbidden surfaces
 
-W3 explicitly forbids the following:
+Nixling explicitly forbids the following:
 
 - writing `cpuset.cpus.partition` on nixling-owned cgroups
   (`nixling.slice` and every nixling-created descendant stays
@@ -286,9 +280,9 @@ W3 explicitly forbids the following:
 - creating threaded cgroups;
 - holding non-leaf processes inside `nixling.slice` or an intermediate
   VM cgroup (`<vm-id>/` and `sys-<env>/` interiors stay
-  process-free per the v1.1 taxonomy in invariant 3);
+  process-free per the taxonomy in invariant 3);
 - `cgroup.kill` on `nixling.slice` or any ancestor (including
-  v1.1 per-VM `<vm-id>/` and host-scope `sys-<env>/` interiors);
+  per-VM `<vm-id>/` and host-scope `sys-<env>/` interiors);
 - **Phase B (post-delegation) runtime mutation while running as
   uid 0** — i.e., once Phase A (privileged setup: `+controllers`
   cascade, slice/leaf `mkdir`, `fchown` to `nixlingd`'s uid/gid;
@@ -296,20 +290,15 @@ W3 explicitly forbids the following:
   [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 2) has completed and the broker has dropped
   privileges, all subsequent calls into the cgroup module
-  (any potential daemon-side cgroup interaction — though in
-  v1.1+ the daemon performs read-only enumeration only per
-  the scope-and-invariants section above) MUST run as
-  `nixlingd`'s uid (`getuid() != 0`). Mutating operations
-  (process placement via `clone3(CLONE_INTO_CGROUP)`, leaf
-  kill via `CgroupKill`, leaf mkdir via Phase A
-  `DelegateCgroupV2`) are broker-only and audited; there is
-  no daemon-direct mutating codepath in v1.1+. The R10/R11
-  kernel + software reviewers
-  flagged the prior "delegation while broker is uid 0"
-  blanket forbidden as self-contradictory with Phase A; the
-  scoped wording above is the corrected invariant. Direct
-  privilege escalation in the steady-state cgroup code path
-  is what is forbidden, NOT the one-shot Phase A setup;
+  (any potential daemon-side cgroup interaction — though the daemon
+  performs read-only enumeration only per the
+  scope-and-invariants section above) MUST run as `nixlingd`'s uid
+  (`getuid() != 0`). Mutating operations (process placement via
+  `clone3(CLONE_INTO_CGROUP)`, leaf kill via `CgroupKill`, leaf
+  mkdir via Phase A `DelegateCgroupV2`) are broker-only and
+  audited; there is no daemon-direct mutating codepath. Direct
+  privilege escalation in the steady-state cgroup code path is what
+  is forbidden, NOT the one-shot Phase A setup;
 - libcgroup (rejected in the ADR — it cannot enforce the
   scoped non-root Phase B invariant);
 - systemd `Slice=` direct delegation without the broker (rejected in

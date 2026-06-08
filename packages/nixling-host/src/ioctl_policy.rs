@@ -1,4 +1,4 @@
-//! W3 per-role ioctl allowlist derivation.
+//! Per-role ioctl allowlist derivation.
 //!
 //! Derives the per-role ioctl allowlist from the typed
 //! [`crate::devices::DeviceClass`] matrix (`RoleResources`) so role
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::devices::DeviceClass;
 
 pub mod constants {
-    //! Versioned ioctl request numbers consumed by W3.
+    //! Versioned ioctl request numbers consumed by the allowlist.
     //!
     //! The values match the kernel UAPI on Linux x86_64. They are
     //! redeclared here (rather than `include!`ed via bindgen) so the
@@ -34,7 +34,7 @@ pub mod constants {
     pub const TUNSETOWNER: Number = 0x400454cc;
     /// `<linux/if_tun.h>` — set TAP owner gid.
     pub const TUNSETGROUP: Number = 0x400454ce;
-    /// `<linux/if_tun.h>` — attach a BPF filter (denied by W3 — leads
+    /// `<linux/if_tun.h>` — attach a BPF filter (denied because it leads
     /// to undeclared packet inspection paths).
     pub const TUNATTACHFILTER: Number = 0x401054d5;
 
@@ -66,7 +66,7 @@ pub mod constants {
     pub const DRM_IOCTL_GET_UNIQUE: Number = 0xc0106401;
 
     // ---------------------------------------------------------------
-    // P1 kernel-2 + gpu-seccomp closure: DRM_IOCTL_VIRTGPU_* family.
+    // DRM_IOCTL_VIRTGPU_* family.
     //
     // virtgpu (drm/virtgpu_drm.h, base 0x40 + DRM_COMMAND_BASE 0x40)
     // — required for virgl/venus/cross-domain Wayland on the Gpu role.
@@ -78,8 +78,8 @@ pub mod constants {
     // Values are computed directly from
     // /nix/store/.../linux-headers-6.18.7/include/drm/virtgpu_drm.h
     // via a small C oracle so they stay accurate against the kernel
-    // UAPI struct sizes (P1 kernel-r1-1 closure: the previous
-    // hand-derived constants had nrs shifted by one and SUBMIT_CMD
+    // UAPI struct sizes (the previous hand-derived constants had nrs
+    // shifted by one and SUBMIT_CMD
     // collided with WAIT). When the upstream UAPI bumps a struct
     // size, regenerate via the oracle in
     // tests/golden/runner-shape/virtgpu-ioctl-values.txt.
@@ -129,8 +129,8 @@ pub struct RoleResources {
     pub device_classes: Vec<DeviceClass>,
 }
 
-/// Returns the W3 per-role ioctl allowlist derived from the device
-/// classes the role declares. The result is sorted + deduplicated so
+/// Returns the per-role ioctl allowlist derived from the device classes
+/// the role declares. The result is sorted + deduplicated so
 /// fixture comparisons stay deterministic.
 pub fn ioctl_allowlist(resources: &RoleResources) -> Vec<constants::Number> {
     let mut set: BTreeSet<constants::Number> = BTreeSet::new();
@@ -167,8 +167,8 @@ fn class_ioctls(class: DeviceClass) -> &'static [constants::Number] {
         DeviceClass::NetTun => &[TUNSETIFF, TUNSETGROUP],
         DeviceClass::VhostNet => &[VHOST_SET_OWNER, VHOST_GET_FEATURES, VHOST_NET_SET_BACKEND],
         DeviceClass::Fuse => &[FUSE_NO_IOCTL],
-        // P1 kernel-2 + gpu-seccomp: virtgpu needs the full
-        // virtgpu DRM family for cross-domain Wayland. Dri retains
+        // virtgpu needs the full virtgpu DRM family for cross-domain
+        // Wayland. Dri retains
         // its narrow set (used by non-virtgpu role consumers like
         // direct-render passthrough scenarios).
         DeviceClass::Dri => &[
@@ -201,8 +201,7 @@ pub fn is_allowed(resources: &RoleResources, ioctl: constants::Number) -> bool {
         .any(|class| class_ioctls(*class).contains(&ioctl))
 }
 
-/// Surface for the negative-allowlist matrix (plan.md §"W3 seccomp/
-/// ioctl negative-allowlist matrix").
+/// Surface for the negative-allowlist matrix.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NegativeMatrixClass {
@@ -238,7 +237,7 @@ pub fn negative_matrix() -> Vec<NegativeMatrixCase> {
             class: NegativeMatrixClass::TapTun,
             name: "TUNATTACHFILTER refused".to_owned(),
             expected_allowed: false,
-            rationale: "Out-of-band BPF filter installation is not declared by any W3 role."
+            rationale: "Out-of-band BPF filter installation is not declared by any role."
                 .to_owned(),
         },
         NegativeMatrixCase {
@@ -251,7 +250,7 @@ pub fn negative_matrix() -> Vec<NegativeMatrixCase> {
             class: NegativeMatrixClass::CgroupChown,
             name: "fchownat on /sys/fs/cgroup refused".to_owned(),
             expected_allowed: false,
-            rationale: "Ancestor chown would escape the W3 delegation contract.".to_owned(),
+            rationale: "Ancestor chown would escape the delegation contract.".to_owned(),
         },
         NegativeMatrixCase {
             class: NegativeMatrixClass::SysctlWrite,
@@ -287,13 +286,13 @@ pub fn negative_matrix() -> Vec<NegativeMatrixCase> {
             class: NegativeMatrixClass::DeviceOpen,
             name: "/dev/sg0 open refused".to_owned(),
             expected_allowed: false,
-            rationale: "Generic SCSI device is not in the W3 device-node matrix.".to_owned(),
+            rationale: "Generic SCSI device is not in the device-node matrix.".to_owned(),
         },
         NegativeMatrixCase {
             class: NegativeMatrixClass::DeviceOpen,
             name: "/dev/mem open refused".to_owned(),
             expected_allowed: false,
-            rationale: "Raw physical memory access is never declared by any W3 role.".to_owned(),
+            rationale: "Raw physical memory access is never declared by any role.".to_owned(),
         },
     ]
 }

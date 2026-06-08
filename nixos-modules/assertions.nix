@@ -17,7 +17,7 @@ let
   obsCfg = cfg.observability;
   obsVsockCid = 1000;
   nl = import ./lib.nix { inherit lib; };
-  inherit (nl) parseCidr subnetIp;
+  inherit (nl) parseCidr subnetIp volumeSerialIssues;
 
   pow2 = n:
     lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
@@ -48,7 +48,7 @@ let
     lib.any (p: lib.hasPrefix p s) sshKeyPrefixes;
 
   # Eval-time validation of an authorized-keys entry. The entry is
-  # either a path (a .pub file on disk, e.g. /etc/nixos/keys/foo.pub)
+  # either a path (a.pub file on disk, e.g. /etc/nixos/keys/foo.pub)
   # or a string (the literal pubkey content). Either way the first
   # non-empty / non-comment line must start with an allowed prefix
   # AND must not look like a PRIVATE key (the universal disaster
@@ -111,7 +111,7 @@ let
     ++ lib.optional obsCfg.enable obsCfg.vmName;
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
-  # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes:
+  # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
   #   * `.` (dots — systemd-escape would turn them into `\x2e`)
   #   * `_` (underscores — same)
   #   * `@` (would collide with template-instance separator)
@@ -120,21 +120,19 @@ let
   #     downstream tooling like `systemctl --type=service` is not
   #     consistent; lower-case avoids the foot-gun)
   #   * leading `-` (looks like a flag)
-  #   * leading digit (W2-followup H1: a numeric-prefixed VM/env name
-  #     like `42web` produces unit names such as `nixling@42web.service`
-  #     and tap names like `42web-l10` which are technically legal but
-  #     trip up tooling that treats the leading digit as a numeric
-  #     argument — e.g. `ip link show 42web-l10` resolves to the
-  #     interface at index 42 first. Requiring a leading letter
-  #     matches systemd-escape best practices and avoids the
-  #     ambiguity. Stricter than the W2 plan's original
-  #     `^[a-z0-9][a-z0-9-]*$`; accepted at panel review.)
+  #   * leading digit (a numeric-prefixed VM/env name like `42web`
+  #     produces unit names such as `nixling@42web.service` and tap
+  #     names like `42web-l10` which are technically legal but trip up
+  #     tooling that treats the leading digit as a numeric argument —
+  #     e.g. `ip link show 42web-l10` resolves to the interface at
+  #     index 42 first. Requiring a leading letter matches
+  #     systemd-escape best practices and avoids the ambiguity.)
   vmNameOk = name:
     builtins.match "^[a-z][a-z0-9-]*$" name != null;
 
   # Reserved single-name: `launcher` is taken by the polkit-launcher
-  # group (`nixling-launcher`) singleton. A VM named `launcher` would
-  # produce `nixling-launcher-gpu` etc. users that collide with the
+  # group (`nixling`) singleton. A VM named `launcher` would
+  # produce `nixling-gpu` etc. users that collide with the
   # group's namespace.
   reservedVmName = name: name == "launcher";
 
@@ -151,7 +149,7 @@ let
   # rather than in network.nix because it's a pure naming-format
   # rule, not a topology rule.
   #
-  # Same leading-letter restriction as vmNameOk (W2-followup H1):
+  # Same leading-letter restriction as vmNameOk
   # env names show up in interface names (`br-<env>-up`, `<env>-l1`)
   # which `ip link` and other tools treat as numeric indices when
   # they start with a digit.
@@ -227,7 +225,7 @@ let
       {
         assertion = !(reservedVmName name);
         message = "nixling.vms.${name}: 'launcher' is reserved for "
-          + "the polkit-launcher group (nixling-launcher); pick "
+          + "the polkit-launcher group (nixling); pick "
           + "another name.";
       }
       {
@@ -249,7 +247,28 @@ let
         message = "nixling.vms.${name}.audit.enable requires observability.enable on the same VM";
       }
       {
-        # v1.1-P2 primary error path (per ADR 0015): the
+        assertion = !(vm.enable && vm.graphics.videoSidecar && !vm.graphics.enable);
+        message = ''
+          nixling.vms.${name}.graphics.videoSidecar requires graphics.enable = true.
+          Enable graphics for this VM or disable graphics.videoSidecar.
+        '';
+      }
+      {
+        assertion = !(vm.enable && vm.graphics.videoNvidiaDecode && !vm.graphics.videoSidecar);
+        message = ''
+          nixling.vms.${name}.graphics.videoNvidiaDecode requires graphics.videoSidecar = true.
+          Enable the video sidecar or disable graphics.videoNvidiaDecode.
+        '';
+      }
+      {
+        assertion = !(vm.enable && vm.graphics.virglVideo && !vm.graphics.enable);
+        message = ''
+          nixling.vms.${name}.graphics.virglVideo requires graphics.enable = true.
+          Enable graphics for this VM or disable graphics.virglVideo.
+        '';
+      }
+      {
+        # primary error path (per ADR 0015): the
         # `mkRemovedOptionModule` shim approach is incompatible
         # with `attrsOf submodule` semantics (no `assertions` option
         # at the per-submodule layer). The supervisor-removal
@@ -270,13 +289,13 @@ let
         '';
       }
       {
-        # Phase 2b: `nixling.vms.<name>.entra-id.*` was removed; the
+        # `nixling.vms.<name>.entra-id.*` was removed; the
         # option is a kept-but-internal stub so legacy assignments
         # land here instead of producing a cryptic
         # "option does not exist" error from the module system.
         assertion = vm.entra-id == { };
         message = ''
-          nixling.vms.${name}.entra-id.* was removed in Phase 2b.
+          nixling.vms.${name}.entra-id.* was removed.
           Himmelblau / Microsoft Entra ID support has moved out of
           the nixling framework into the sibling
           `vicondoa/nixos-entra-id` flake. To migrate:
@@ -298,12 +317,12 @@ let
               # ...
             };
 
-          See CHANGELOG.md (Phase 2b: Removed) and the
+          See CHANGELOG.md and the
           nixos-entra-id README for the full migration recipe.
         '';
       }
       {
-        # v0.1.6 SWArch-M9: graphics VMs CANNOT be autostart. The
+        # Graphics VMs CANNOT be autostart. The
         # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
         # which is the upstream microvm.nix runner — but graphics
         # VMs run cloud-hypervisor via the `nixling-<vm>-gpu`
@@ -369,7 +388,7 @@ let
       '';
     };
 
-  # Site-level assertions (Phase 2b — host-specific bias was extracted
+  # Site-level assertions (host-specific bias was extracted
   # into `nixling.site.*`; these checks make sure the consumer actually
   # set the options the framework needs for the features it enables).
   needsWaylandUser =
@@ -449,7 +468,7 @@ let
         assertion = config.users.users ? "${u}";
         message = ''
           nixling.site.launcherUsers contains "${u}" but no
-          users.users.${u} is declared. The nixling-launcher group
+          users.users.${u} is declared. The nixling group
           is added to that user via extraGroups; non-existent users
           silently no-op.
         '';
@@ -467,6 +486,49 @@ let
         "nixling.vms.${name}.userAuthorizedKeys"
         vm.userAuthorizedKeys)
     cfg.vms);
+
+  volumeSerialAssertions = lib.flatten (lib.mapAttrsToList
+    (name: vm:
+      let
+        microvm = nl.vmRunner config name;
+        serialIssues = volumeSerialIssues microvm.volumes;
+      in
+      lib.optionals (vm.enable && microvm.volumes != [ ]) [
+        {
+          assertion = serialIssues.duplicates == [ ];
+          message = ''
+            nixling.vms.${name}.config.microvm.volumes derives duplicate virtio
+            disk serial(s): ${lib.concatStringsSep ", " serialIssues.duplicates}. Set explicit
+            unique `serial` values on the volume entries.
+          '';
+        }
+        {
+          assertion = serialIssues.reserved == [ ];
+          message = ''
+            nixling.vms.${name}.config.microvm.volumes uses reserved virtio disk
+            serial `rootfs`, which is owned by writableStoreOverlay. Set an
+            explicit non-reserved `serial`.
+          '';
+        }
+        {
+          assertion = serialIssues.tooLong == [ ];
+          message = ''
+            nixling.vms.${name}.config.microvm.volumes has virtio disk serial(s)
+            longer than 20 bytes: ${lib.concatStringsSep ", " serialIssues.tooLong}. Linux
+            truncates virtio-blk serials, so guest mounts would not match.
+          '';
+        }
+        {
+          assertion = serialIssues.unsafe == [ ];
+          message = ''
+            nixling.vms.${name}.config.microvm.volumes has unsafe virtio disk
+            serial(s): ${lib.concatStringsSep ", " serialIssues.unsafe}. Use
+            only [A-Za-z0-9-], start with an alphanumeric character, and avoid
+            delimiters such as comma, equals, slash, and control characters.
+          '';
+        }
+      ])
+    cfg.vms);
 in
 {
   assertions = lib.flatten (
@@ -476,17 +538,11 @@ in
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions
+    ++ volumeSerialAssertions
   );
 
-  # v1.1-P4: deprecation warning when a consumer flake still sets
-  # nixling.daemonExperimental.enable. The option is now obsolete
-  # because v1.1 promotes the broker socket/service to default-on
-  # (per ADR 0015 daemon-only clean break + the v1.1-P4 TDD row).
-  # We emit a warnings entry (NOT an assertion failure — leaving
-  # the option set must not block eval, only notify) so operators
-  # get a clear migration cue in nixos-rebuild output.
-  warnings =
-    lib.optional
-      (options.nixling.daemonExperimental.enable.isDefined or false)
-      "nixling.daemonExperimental.enable is obsolete in v1.1; remove this option from your consumer flake because the broker socket/service are enabled by default. Leaving it set has no effect.";
+  # The daemon-only end state is now the default. Do not warn on the
+  # compatibility option here: option-default definitions make
+  # `options.<path>.isDefined` true even when consumers do not set it.
+  warnings = [ ];
 }

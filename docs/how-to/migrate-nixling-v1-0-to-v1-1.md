@@ -3,7 +3,7 @@
 This guide covers the operator-visible changes between nixling
 v1.0 (released 2025-Q4) and v1.1 (released 2026-Q2). v1.1 is the
 "daemon-only clean break" follow-through: every v1.0 deferral
-listed under CHANGELOG § "Deferred to follow-up commits" is closed,
+listed under CHANGELOG § "Deferred items" is closed,
 and several latent v0.x compatibility shims are removed.
 
 ## Prerequisites
@@ -14,9 +14,8 @@ order:
 1. **Linux kernel ≥ 6.9** (hard upgrade blocker). Operators on
    kernel 6.6–6.8 cannot run v1.1. The daemon's pidfs runtime
    self-probe in `packages/nixlingd/src/startup.rs` and the
-   static eval gate in `tests/v1.1-kernel-floor-eval.sh`
-   (introduced alongside v1.1-P10's broker reaping model) both
-   require pidfs support, which landed in mainline 6.9. See
+   static eval gate in `tests/v1.1-kernel-floor-eval.sh` both require
+   pidfs support, which landed in mainline 6.9. See
    [ADR 0008 § "v1.1 kernel-floor uplift"](../adr/0008-supported-platforms-and-rejected-targets.md)
    and [ADR 0018 § "set-booted race-free serialization"](../adr/0018-microvm-nix-removal.md#set-booted-race-free-serialization)
    for the rationale.
@@ -24,8 +23,8 @@ order:
 2. **Remove `nixling.daemonExperimental.enable`** from the
    consumer flake (or set it `false` — but `remove` is the
    canonical instruction). Leaving the option set in v1.1+
-   emits an eval-time deprecation warning via the v1.1-P4
-   assertion in `nixos-modules/assertions.nix`. The warning
+   emits an eval-time deprecation warning via the v1.1 assertion in
+   `nixos-modules/assertions.nix`. The warning
    text — emitted verbatim by `nixos-rebuild` AND locked into
    this guide — is:
 
@@ -39,7 +38,7 @@ order:
 
 ## What changed (operator-visible)
 
-### v1.1-P1 — Bash fallback removed
+### Bash fallback removed
 
 `exec_legacy_passthrough` and `should_fallback_to_legacy` were
 deleted from `packages/nixling/src/lib.rs`. The Rust CLI never
@@ -69,7 +68,7 @@ New eval gate: `tests/no-bash-exec-eval.sh` (3 modes: `check`,
 `tests/fixtures/no-bash-exec-exempt-paths.json` (empty at v1.1
 landing time).
 
-### v1.1-P2 — `nixling.vms.<vm>.supervisor` option removed
+### `nixling.vms.<vm>.supervisor` option removed
 
 The `supervisor` per-VM option was removed from
 `nixos-modules/options-vms.nix`. Setting it in a consumer flake
@@ -96,14 +95,14 @@ on the `"systemd"` template path, the v1.1 broker SpawnRunner
 pipeline (already shipped in v1.0 as the daemon-only path) is the
 canonical replacement.
 
-### v1.1-P3 — Bundle resolver runner-intent regression coverage
+### Bundle resolver runner-intent regression coverage
 
 A focused integration test
 (`packages/nixling-core/tests/bundle_resolver_runner_intents.rs`)
 guards against the `internal-io` envelope failure class seen during
 the v1.0 closeout side-task. No operator-visible behaviour change.
 
-### v1.1-P4 — Broker NixOS module default-on
+### Broker NixOS module default-on
 
 `nixos-modules/host-broker.nix` no longer gates its config block
 behind `cfg.daemonExperimental.enable`. Enabling the nixling host
@@ -128,7 +127,7 @@ If the broker fails to activate, the typical causes are:
    `nixlingd nixling-priv-broker.service nixling-priv-broker.socket`
    in that order.
 
-### v1.1-P5 — `/var/lib/nixling` permission tightening
+### `/var/lib/nixling` permission tightening
 
 The parent state directory is `0750 root:nixlingd` (was the same
 in v1.0). v1.1 adds a `nixlingStateDirAcl` activation script that
@@ -143,7 +142,7 @@ stat -c '%a %U %G' /var/lib/nixling          # expect: 750 root nixlingd
 getfacl /var/lib/nixling | head -20          # expect per-sidecar user:nixling-<vm>-{gpu,swtpm,audio,video}:--x entries
 ```
 
-### v1.1-P6 — OTel host-bridge moved to broker SpawnRunner
+### OTel host-bridge moved to broker SpawnRunner
 
 `nixos-modules/host-otel-relay-acl.nix` is no longer imported via
 `nixos-modules/default.nix`. The OTel host-bridge ACL contract
@@ -156,7 +155,7 @@ No operator-visible change if your v1.0 deployment used the
 `nixling-otel-host-bridge.service` host singleton — the broker
 SpawnRunner is the v1.1 replacement and is wired identically.
 
-### v1.1-P7 — `nixling-vfsd-watchdog@.{service,timer}` retired
+### `nixling-vfsd-watchdog@.{service,timer}` retired
 
 The per-VM watchdog systemd template + timer are removed from
 `nixos-modules/store.nix`. Wedge detection moves into the broker's
@@ -171,7 +170,7 @@ nixling audit | grep runner-wedged
 journalctl -u nixling-priv-broker.service | grep runner-wedged
 ```
 
-### v1.1-P8..P11 — Substrate replacement COMPLETE
+### Substrate replacement complete
 
 The substrate-replacement work shipped in v1.1-final: per-VM reads
 re-homed from `config.microvm.vms.<vm>.config.config.microvm.*`
@@ -197,12 +196,12 @@ own `inputs.microvm` for those use cases — nixling no longer
 imports the host module, but nothing prevents you from importing
 it yourself for non-nixling VMs.
 
-### v1.1-P12 — Docs polish
+### Docs polish
 
 This guide, the updated ADR statuses (0015, 0017, 0018), the
 CHANGELOG "Retired from v1.0 deferral list" section, and the
 tagline sweep (drop "on microvm.nix" from `flake.nix` /
-`README.md` / `AGENTS.md` taglines) all land in v1.1-P12.
+`README.md` / `AGENTS.md` taglines) all land in v1.1.
 
 ## `nixling status` output schema (v1.0 vs v1.1 vs v1.1.1)
 
@@ -231,7 +230,7 @@ output; JSON uses `{"virtiofsd_per_share": {"store": {...}},
 
 | V2 field (current CLI output)    | V3 field (wire-side, v1.1.1+) | Notes                                                              |
 | -------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
-| `nixling`                        | (deleted)                     | The pre-P6 wrapper unit was removed in v1.0; V3 drops the field.   |
+| `nixling`                        | (deleted)                     | The legacy wrapper unit was removed in v1.0; V3 drops the field.   |
 | `microvm`                        | `hypervisor`                  | Cloud Hypervisor runner is broker-spawned in v1.1.                 |
 | `virtiofsd`                      | `virtiofsd_per_share[<tag>]`  | Per-share entry instead of a single field.                         |
 | `gpu`                            | `gpu`                         | Unchanged name; broker-spawned in v1.1.                            |
@@ -274,8 +273,8 @@ ls -lZ /run/nixling/priv.sock
 ## See also
 
 - [ADR 0015 — Daemon-only clean break](../adr/0015-daemon-only-clean-break.md) — overall v1.0 → v1.1 narrative.
-- [ADR 0017 — No bash fallbacks invariant](../adr/0017-no-bash-fallbacks-invariant.md) — v1.1-P1 rationale.
-- [ADR 0018 — Removal of the microvm.nix flake dependency](../adr/0018-microvm-nix-removal.md) — v1.1-P6..P11 rationale and roadmap.
+- [ADR 0017 — No bash fallbacks invariant](../adr/0017-no-bash-fallbacks-invariant.md) — v1.1 rationale.
+- [ADR 0018 — Removal of the microvm.nix flake dependency](../adr/0018-microvm-nix-removal.md) — v1.1 rationale and roadmap.
 - [`docs/reference/cli-contract.md`](../reference/cli-contract.md) — per-verb invariants in v1.1+.
 - [`docs/reference/error-codes.md`](../reference/error-codes.md) "Remediation rendering conventions" — typed-envelope format.
 - [`docs/reference/privileges.md`](../reference/privileges.md) — broker capability matrix + per-role ACL contract.
@@ -307,12 +306,12 @@ edits, no `/etc/subuid` / `/etc/subgid` provisioning.
    - `/run/nixling/locks` + `/run/nixling/state` + per-VM
      `store` / `store-meta` ownership reasserted on every
      activation.
-   - W3 altname add no longer silently swallows ALL errors;
+   - Altname add no longer silently swallows ALL errors;
      foreign-device altname collisions now fail loud.
 4. Updates the daemon (`nixlingd`) with `PidfdTable::prune_dead_entries`
    called from the vm-start handler — stale pidfd-table entries
    from prior runs are dropped automatically. The daemon's
-   `extraGroups += "nixling-launchers"` membership is now
+   `extraGroups += "nixling"` membership is now
    declarative (previously a manual `gpasswd -a` operator step).
 
 ### Live VM restart behaviour
@@ -327,8 +326,8 @@ processes, but the security improvement only takes effect on
 the next VM restart.
 
 The manual reset sequence operators previously used between
-`nixling vm start --apply` attempts (per the v1.1.1fu13
-live-deploy session notes — `chown`/`chmod`/`setfacl` on
+`nixling vm start --apply` attempts (per the live-deploy session
+notes — `chown`/`chmod`/`setfacl` on
 `/run/nixling/locks` + per-VM store dirs) is **no longer
 needed**: the new activation script + daemon prune logic
 codify those workarounds.

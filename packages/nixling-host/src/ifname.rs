@@ -1,8 +1,8 @@
-//! W3 host-prepare module: `ifname` — owned by scope s2.
+//! Host-prepare ifname module.
 //!
 //! Implements the hash-derived [`IfName`] scheme + emitter-time
-//! collision detection per plan.md §"W3 IfName hash collision + mapping
-//! exposure". The underlying IFNAMSIZ-validated newtype is owned by
+//! collision detection and mapping exposure. The underlying
+//! IFNAMSIZ-validated newtype is owned by
 //! [`nixling_core::host::IfName`]; this module wraps it with:
 //!
 //! - configurable nixling prefix (default `nl-`);
@@ -33,9 +33,9 @@ pub const TAP_TAG: char = 't';
 /// the bundle scale this targets.
 pub const HASH_SUFFIX_LEN: usize = 8;
 
-/// W3 errors layered over [`CoreIfNameError`]. Maps every emitter and
-/// broker fail-closed path required by the W3 plan to a stable
-/// variant tag the audit log can reference.
+/// Errors layered over [`CoreIfNameError`]. Maps every emitter and
+/// broker fail-closed path to a stable variant tag the audit log can
+/// reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IfNameError {
     /// Name exceeds IFNAMSIZ-1 (15 bytes).
@@ -464,8 +464,8 @@ mod tests {
         assert!(matches!(err, IfNameError::IfNameCollision(_)));
     }
 
-    /// W3fu3 H8 (test-1): the bash gate
-    /// `tests/ifname-nix-rust-parity.sh` originally used a hardcoded
+    /// The bash gate `tests/ifname-nix-rust-parity.sh` originally used
+    /// a hardcoded
     /// shell regex (`^nl-[bt][0-9A-F]{8}$`) as the oracle, which would
     /// silently keep passing if a future Rust change tightened
     /// `looks_nixling_owned`. This test re-validates the same
@@ -473,8 +473,8 @@ mod tests {
     /// supplies a host.json path via the
     /// `NIXLING_IFNAME_PARITY_HOST_JSON` env var.
     ///
-    /// W3fu4 H3 (test-1 from R4): when the env var IS set (i.e., this
-    /// test is being driven by the bash parity gate), missing or empty
+    /// When the env var IS set (i.e., this test is being driven by the
+    /// bash parity gate), missing or empty
     /// `ifNameMappings` now panics instead of trivially passing. A
     /// regression that drops all Nix-emitted mappings used to escape
     /// both the bash and Rust sides of the gate; the bash side now
@@ -497,11 +497,11 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap_or_else(|| {
                 panic!(
-                    "host.json {path} missing `ifNameMappings` array; W3 emitter regression suspected"
+                    "host.json {path} missing `ifNameMappings` array; emitter regression suspected"
                 )
             });
         if mappings.is_empty() {
-            panic!("host.json {path} has empty `ifNameMappings`; W3 emitter regression suspected");
+            panic!("host.json {path} has empty `ifNameMappings`; emitter regression suspected");
         }
         let mut violations: Vec<String> = Vec::new();
         for row in mappings {

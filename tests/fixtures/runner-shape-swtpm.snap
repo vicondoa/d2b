@@ -1,0 +1,10 @@
+# argv
+microvm-swtpm@personal-dev
+socket
+--tpmstate
+dir=/var/lib/nixling/vms/personal-dev/swtpm
+--ctrl
+type=unixio,path=/run/nixling/vms/personal-dev/tpm.sock,mode=0660
+--tpm2
+--flags
+startup-clear

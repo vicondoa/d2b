@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/nft-coexistence.sh — W3 s3 L1c canary gate.
+# tests/nft-coexistence.sh— canary gate.
 #
 # Asserts the 7-row firewall coexistence detector → policy matrix from
-# plan.md §"W3 firewall coexistence policy" by running the
+# plan.md §" firewall coexistence policy" by running the
 # `nixling-host::nftables::tests::coexistence_matrix_all_7_rows` unit
 # test, plus the per-row apply-time refusal checks in
 # `nixling-priv-broker::ops::nft`. The fake firewall detector inputs

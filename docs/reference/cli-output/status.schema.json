@@ -96,6 +96,12 @@
         "nixling": {
           "type": "string"
         },
+        "video": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "snd": {
           "type": [
             "string",

@@ -67,7 +67,7 @@ let
       exit 0
     fi
 
-    # Per-VM nixling-<vm>-snd.service (Phase 4 C3) puts the socket at this
+    # Per-VM nixling-<vm>-snd.service puts the socket at this
     # path under RuntimeDirectory=nixling/vms/<vm>.
     sock="/run/nixling/vms/${vmName}/snd.sock"
 

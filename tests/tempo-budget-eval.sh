@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/tempo-budget-eval.sh — static gate for the Tempo retention +
-# sampling budget policy (P5 `ph5-p5-tempo-budget`).
+# sampling budget policy (``).
 #
 # Asserts, against
 # `nixos-modules/components/observability/stack.nix` and
@@ -219,7 +219,7 @@ else
 fi
 
 # The receiver must forward to the tail-sampling processor (not the
-# pre-P5 single exporter).
+# pre- single exporter).
 if grep -qE 'traces[[:space:]]*=[[:space:]]*\[otelcol\.processor\.tail_sampling\.tempo_budget\.input\]' "$STACK"; then
   ok "[$STACK] Alloy otlp ingress forwards traces to tail_sampling.tempo_budget"
 else

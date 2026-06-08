@@ -1,11 +1,11 @@
 # Host-side wiring for nixling VM audio support. Imported once at the
-# top level via modules/nixling/default.nix. Materialises:
+# top level via modules/nixling/default.nix. Materialises
 #
 #   - A per-VM SYSTEM service `nixling-<vm>-snd.service` that runs
 #     vhost-device-sound as the per-VM nixling-<vm>-snd system user.
 #     Socket at /run/nixling/vms/<vm>/snd.sock, accessible to
 #     nixling-<vm>-gpu (cloud-hypervisor) via ACL on ExecStartPost.
-#     (P4 C3: was a systemd-user service in the host user's manager.)
+#
 #
 #   - An eval-time assertion that audio.enable = true requires
 #     autostart = false. autostart VMs are managed by the `microvm@`
@@ -24,8 +24,8 @@
 # the design originally called for a WirePlumber stream-rule, but a
 # misplaced rule in `monitor.rules` broke the host's audio output
 # during implementation. The rule was removed; v1 ships with binary
-# enforcement (sidecar on/off). See plan.md "audio-wireplumber" todo
-# (blocked) and the let-block note below for the follow-up.
+# enforcement (sidecar on/off). See the let-block note below for the
+# remaining work.
 { config, lib, pkgs, ... }:
 
 let
@@ -54,7 +54,7 @@ let
   # includes the fix from upstream PR #884.
   vhostDeviceSound = import ../../../pkgs/vhost-device-sound { inherit pkgs; };
 
-  # NOTE on WirePlumber split-direction enforcement:
+  # NOTE on WirePlumber split-direction enforcement
   #
   # An earlier iteration installed a WirePlumber config drop-in at
   # /etc/wireplumber/wireplumber.conf.d/90-nixling.conf that used
@@ -65,7 +65,7 @@ let
   # host's audio output devices disappeared from plasma-pa
   # entirely. It has been REMOVED.
   #
-  # v1 enforces direction binary at the systemd-user-service layer:
+  # v1 enforces direction binary at the systemd-user-service layer
   #   both off  -> sidecar stopped, no virtio-snd device, guest has
   #                no soundcard
   #   any on    -> sidecar runs, guest sees a normal soundcard with
@@ -86,7 +86,7 @@ in
     # Assertion: audio VMs must be interactively launched (not
     # autostart). autostart VMs run via `microvm@<vm>.service` which
     # doesn't start nixling-<vm>-gpu.service — there's no CH to
-    # connect to the audio socket. (P4: sidecar now runs as system
+    # connect to the audio socket. (: sidecar now runs as system
     # service nixling-<vm>-snd, not in a host user's manager.)
     # ---------------------------------------------------------------
     {
@@ -110,10 +110,10 @@ in
     }
 
     # ---------------------------------------------------------------
-    # P6 (ph6-remove-systemd-emission): the per-VM
+    # the per-VM
     # `nixling-<vm>-snd.service` system service template was deleted.
     # The vhost-user-sound sidecar now runs as a broker-spawned runner
-    # via `SpawnRunner{role: Audio, vm_id: <vm>}` per the P1 Audio
+    # via `SpawnRunner{role: Audio, vm_id: <vm>}` per the  Audio
     # role matrix in `docs/reference/privileges.md`. The PipeWire
     # client rules, system users, tmpfiles, and the host
     # `vhost-device-sound` package below remain because the broker
@@ -132,7 +132,7 @@ in
       #
       # WHY: vhost-device-sound v0.2.0 always exposes both directions
       # (it has no `--no-input` flag). On the host, that means it
-      # creates two streams per running VM:
+      # creates two streams per running VM
       #   - Stream/Output/Audio "nixling-<vm>"  (guest plays here ->
       #                                          mixed into host sink)
       #   - Stream/Input/Audio  "nixling-<vm>"  (sucks host mic ->
@@ -156,7 +156,7 @@ in
       # audio is unaffected.
       #
       # IMPORTANT placement notes (we have repeatedly broken host
-      # audio in this area; please read before refactoring):
+      # audio in this area; please read before refactoring)
       #
       # 1. The rule belongs in PIPEWIRE's `client.conf.d/`, NOT
       #    WirePlumber's `wireplumber.conf.d/`. WirePlumber's
@@ -201,7 +201,7 @@ in
       # hook recognises "-1" as the canonical sentinel for "do not
       # pick a target" and skips linking the stream entirely.
       #
-      # WHY HERE (client.conf.d, not WP's stream.rules):
+      # WHY HERE (client.conf.d, not WP's stream.rules)
       # WirePlumber's `stream.rules` section is consumed ONLY by the
       # node/state-stream.lua module for state restoration; it does
       # NOT update live node properties at creation time. PipeWire's
@@ -212,7 +212,7 @@ in
       # carries `target.object = "-1"` and the linking decision is
       # short-circuited correctly.
       #
-      # WHY ONLY THE INPUT DIRECTION:
+      # WHY ONLY THE INPUT DIRECTION
       # vhost-device-sound v0.2.0 exposes both directions unconditionally
       # (no --no-input flag). The output direction must remain auto-
       # linked so guest audio reaches the host sink. Only the input
@@ -223,7 +223,7 @@ in
       # `target.object` on the per-VM stream via the WirePlumber
       # metadata API.
       #
-      # WHY ALSO node.dont-reconnect:
+      # WHY ALSO node.dont-reconnect
       # belt-and-suspenders. If something else (a plasma-pa user
       # action, the saved-target restore hook) tries to re-bind the
       # stream to a hardware source after our null-target takes
@@ -242,7 +242,7 @@ in
       # short-circuits and does NOT emit --generic-vhost-user, so the
       # device isn't attached to CH in the first place.
       #
-      # WHY ONLY blocking when the direction is OFF:
+      # WHY ONLY blocking when the direction is OFF
       # PipeWire's `find-defined-target.lua` short-circuits its
       # decision chain via `node.dont-fallback = true` when the
       # target is "-1". `node.linger = true` keeps the stream alive
@@ -252,7 +252,22 @@ in
       # any of these props — leave WirePlumber's normal default-
       # target hook do its job.
       services.pipewire.extraConfig.client."90-nixling" = {
-        "stream.rules" = [
+        "stream.rules" = (lib.optional (cfg.site.audio.inputTargetNode != null) {
+          # Capture allow: on hosts where WirePlumber does not auto-link
+          # capture clients to the configured default source, force nixling
+          # mic-enabled streams to the operator-declared source node.
+          matches = [
+            {
+              "nixling.mic" = "on";
+              "media.class" = "Stream/Input/Audio";
+            }
+          ];
+          actions = {
+            update-props = {
+              "target.object" = cfg.site.audio.inputTargetNode;
+            };
+          };
+        }) ++ [
           {
             # Capture block: only when the sidecar advertises nixling.mic=off.
             matches = [
@@ -299,8 +314,8 @@ in
       # written real values, this is a no-op forever. Argument is
       # the initial contents (single-line JSON).
       #
-      # security-2 (Option A): The state file is now under a root-owned
-      # non-group-writable subdir /var/lib/nixling/vms/<vm>/state/ (root:root 0750).
+      # The state file is now under a root-owned non-group-writable
+      # subdir /var/lib/nixling/vms/<vm>/state/ (root:root 0750).
       # This prevents any kvm-group process from unlinking/replacing the file.
       # The parent /var/lib/nixling/vms/<vm>/ remains microvm:kvm 2775 so the CLI
       # can still acquire the per-VM audio.lock and write temp files there.
@@ -313,20 +328,20 @@ in
               initial = ''{"mic":"${mic}","speaker":"${spk}"}'';
             in
             # 'd' = create directory if missing (won't change mode of existing).
-            # state/: nixlingd:nixling-launcher 0750 — daemon owns it,
+            # state/: nixlingd:nixling 0750 — daemon owns it,
             # launcher-group traverses. v1.1.1 matches the ownership-
-            # matrix declaration (previously root:nixling-launcher
+            # matrix declaration (previously root:nixling
             # which failed ownership-matrix preflight).
-            [''d /var/lib/nixling/vms/${name}/state 0750 nixlingd nixling-launcher -''
-             ''f /var/lib/nixling/vms/${name}/state/audio-state.json 0640 nixlingd nixling-launcher - ${initial}''
-             # P4 A2: audio lock in /run/nixling/ (nixling-launcher 0660) so
-             # nixling-launcher members can open it without kvm-group membership.
-             ''f /run/nixling/audio-${name}.lock 0660 root nixling-launcher -''];
+            [''d /var/lib/nixling/vms/${name}/state 0750 nixlingd nixling -''
+             ''f /var/lib/nixling/vms/${name}/state/audio-state.json 0640 nixlingd nixling - ${initial}''
+             # audio lock in /run/nixling/ (nixling 0660) so
+             # nixling members can open it without kvm-group membership.
+             ''f /run/nixling/audio-${name}.lock 0660 root nixling -''];
         in
         lib.concatLists (lib.mapAttrsToList mk enabledVms);
 
-      # nixos-2 + software-1 + security-2: Ensure both the parent dir and
-      # the root-owned state/ subdir exist before the tmpfiles rule fires.
+      # Ensure both the parent dir and the root-owned state/ subdir
+      # exist before the tmpfiles rule fires.
       # Parent: microvm:kvm 2775 (as before) — kvm group can write here
       #         for the audio.lock and temp files.
       # state/: root:kvm 0750 — kvm group can traverse (execute); no group write.
@@ -335,25 +350,25 @@ in
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
             install -d -m 2770 -o nixlingd -g users /var/lib/nixling/vms/${name} || true
-            install -d -m 0750 -o nixlingd -g nixling-launcher /var/lib/nixling/vms/${name}/state || true
-            # v1.1.1 live-deploy fu9: chown -R to repair any state/
+            install -d -m 0750 -o nixlingd -g nixling /var/lib/nixling/vms/${name}/state || true
+            # live-deploy fu9: chown -R to repair any state/
             # dir that was pre-existing root:* before our fix. install
             # -d is no-op when dir exists; force ownership repair.
-            chown nixlingd:nixling-launcher /var/lib/nixling/vms/${name}/state 2>/dev/null || true
+            chown nixlingd:nixling /var/lib/nixling/vms/${name}/state 2>/dev/null || true
             chmod 0750 /var/lib/nixling/vms/${name}/state 2>/dev/null || true
             # One-time migration: move old audio-state.json to new path.
             old_f="/var/lib/nixling/vms/${name}/audio-state.json"
             new_f="/var/lib/nixling/vms/${name}/state/audio-state.json"
             if [ -f "$old_f" ] && [ ! -f "$new_f" ]; then
-              install -m 0640 -o nixlingd -g nixling-launcher "$old_f" "$new_f" && rm -f "$old_f" || true
+              install -m 0640 -o nixlingd -g nixling "$old_f" "$new_f" && rm -f "$old_f" || true
             fi
-            # software-r2-1: grant nixling-launcher group x-only traversal on the VM
-            # dir so nixling-launcher members (not kvm members) can reach state/.
+            # software-r2-1: grant nixling group x-only traversal on the VM
+            # dir so nixling members (not kvm members) can reach state/.
             # Combined with the existing mask:rwx the effective permission is --x.
-            ${pkgs.acl}/bin/setfacl -m "g:nixling-launcher:x" /var/lib/nixling/vms/${name} || true
+            ${pkgs.acl}/bin/setfacl -m "g:nixling:x" /var/lib/nixling/vms/${name} || true
             # software-r2-1: grant nixling-<vm>-gpu rx on state/ and r on the
             # audio-state.json file so the GPU sidecar can read audio state without
-            # joining nixling-launcher (which would grant polkit launcher rights).
+            # joining nixling (which would grant polkit launcher rights).
             if [ -d "/var/lib/nixling/vms/${name}/state" ]; then
               ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rx" /var/lib/nixling/vms/${name}/state || true
             fi

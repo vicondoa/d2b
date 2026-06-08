@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/usbip-state-machine-eval.sh — integration gate for the typed
-# per-busid USBIP state machine introduced by P3
-# `ph3-p3-usbip-state-machine`.
+# per-busid USBIP state machine introduced by
+# ``.
 #
 # The state machine itself lives in
 # `packages/nixlingd/src/usbip_state_machine.rs`; the unit tests

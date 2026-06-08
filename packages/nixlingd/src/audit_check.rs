@@ -1,20 +1,19 @@
-//! P3 `ph3-p3-audit-check-retire`: in-daemon replacement for the
-//! retired `nixling-audit-check.{service,timer}` host singleton +
-//! timer that periodically validated the broker audit log shape.
+//! In-daemon replacement for the retired
+//! `nixling-audit-check.{service,timer}` host singleton + timer that
+//! periodically validated the broker audit log shape.
 //!
 //! # Why this lives in the daemon
 //!
-//! Before P3 the framework shipped a dedicated systemd oneshot
-//! (`nixling-audit-check.service`) and a daily timer
+//! Before the daemon-owned check, the framework shipped a dedicated
+//! systemd oneshot (`nixling-audit-check.service`) and a daily timer
 //! (`nixling-audit-check.timer`) whose job was to read the broker's
 //! `/var/lib/nixling/audit/broker-<utc-date>.jsonl` daily files and
 //! sanity-check their shape — every record parseable as
 //! [`OpAuditRecord`][broker], required header fields present, no
 //! orphan record whose `decision` contradicts the
 //! `error_kind`/`result` invariants the broker writer guarantees.
-//! Per the P3 retirement plan
-//! (`plan.md::ph3-p3-audit-check-retire`) that singleton folds
-//! into the unprivileged daemon: the same pure check runs on demand
+//! That singleton folds into the unprivileged daemon: the same pure
+//! check runs on demand
 //! through `GET /health/audit-check` on the daemon's HTTP surface
 //! (alongside `GET /metrics`) and on a 5-minute interval from the
 //! supervisor event loop, so operators don't have to wait for the
@@ -66,8 +65,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Default broker audit directory. Mirrors the broker's
-/// `--audit-dir` default and the W4 retire-shim layout described in
+/// Default broker audit directory. Mirrors the broker's `--audit-dir`
+/// default and the retire-shim layout described in
 /// `docs/reference/daemon-api.md::Audit`.
 pub const DEFAULT_AUDIT_DIR: &str = "/var/lib/nixling/audit";
 
@@ -79,12 +78,7 @@ pub const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 300;
 
 /// Canonical `decision` values from
 /// `nixling_priv_broker::ops::audit_op::OpAuditRecord`.
-pub const DECISION_VALUES: &[&str] = &[
-    "allowed",
-    "denied-refused",
-    "denied-unknown",
-    "errored",
-];
+pub const DECISION_VALUES: &[&str] = &["allowed", "denied-refused", "denied-unknown", "errored"];
 
 /// Canonical `authz_result` values.
 pub const AUTHZ_RESULT_VALUES: &[&str] = &["launcher", "admin", "deny"];
@@ -356,10 +350,7 @@ pub fn run_audit_check(
     let mut bag: Vec<(Option<String>, String)> = Vec::new();
     for path in &files {
         let content = std::fs::read_to_string(path)?;
-        let file_label = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(str::to_owned);
+        let file_label = path.file_name().and_then(|s| s.to_str()).map(str::to_owned);
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -380,7 +371,7 @@ pub fn run_audit_check(
 }
 
 /// True if the line parses as an object and its `ts_ms` field is
-/// >= cutoff. Unparseable lines pass through (so the parse-error
+/// \>= cutoff. Unparseable lines pass through (so the parse-error
 /// defect lands in the report instead of being silently dropped).
 fn line_ts_at_least(line: &str, cutoff: u128) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -416,7 +407,11 @@ where
     let path = parts.next().unwrap_or("");
 
     if method != "GET" {
-        return http_response(405, "application/json", "{\"error\":\"method not allowed\"}\n");
+        return http_response(
+            405,
+            "application/json",
+            "{\"error\":\"method not allowed\"}\n",
+        );
     }
     if path != "/health/audit-check" {
         return http_response(404, "application/json", "{\"error\":\"not found\"}\n");
@@ -424,9 +419,8 @@ where
 
     match run() {
         Ok(report) => {
-            let body = serde_json::to_string(&report).unwrap_or_else(|err| {
-                format!("{{\"error\":\"serialize: {}\"}}", err)
-            });
+            let body = serde_json::to_string(&report)
+                .unwrap_or_else(|err| format!("{{\"error\":\"serialize: {}\"}}", err));
             http_response(200, "application/json", &format!("{body}\n"))
         }
         Err(err) => {
@@ -487,9 +481,10 @@ mod tests {
     fn clean_lines_produce_clean_report() {
         let l1 = good_record();
         let l2 = good_record();
-        let report =
-            check_audit_lines([(Some("broker-2024-01-01.jsonl"), l1.as_str()),
-                               (Some("broker-2024-01-01.jsonl"), l2.as_str())]);
+        let report = check_audit_lines([
+            (Some("broker-2024-01-01.jsonl"), l1.as_str()),
+            (Some("broker-2024-01-01.jsonl"), l2.as_str()),
+        ]);
         assert_eq!(report.lines_scanned, 2);
         assert_eq!(report.lines_ok, 2);
         assert!(report.is_clean(), "report not clean: {:?}", report.defects);
@@ -498,11 +493,7 @@ mod tests {
     #[test]
     fn blank_lines_are_skipped() {
         let l = good_record();
-        let report = check_audit_lines([
-            (None, "\n"),
-            (None, l.as_str()),
-            (None, ""),
-        ]);
+        let report = check_audit_lines([(None, "\n"), (None, l.as_str()), (None, "")]);
         assert_eq!(report.lines_scanned, 1);
         assert_eq!(report.lines_ok, 1);
     }
@@ -629,7 +620,10 @@ mod tests {
     fn denied_refused_with_error_kind_is_clean() {
         let mut v: Value = serde_json::from_str(&good_record()).unwrap();
         let obj = v.as_object_mut().unwrap();
-        obj.insert("decision".to_owned(), Value::String("denied-refused".into()));
+        obj.insert(
+            "decision".to_owned(),
+            Value::String("denied-refused".into()),
+        );
         obj.insert("error_kind".to_owned(), Value::String("authz".into()));
         let line = v.to_string();
         let report = check_audit_lines([(None, line.as_str())]);
@@ -704,11 +698,7 @@ mod tests {
     #[test]
     fn run_audit_check_surfaces_defects_with_filename() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("broker-2024-01-01.jsonl"),
-            "not-json\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("broker-2024-01-01.jsonl"), "not-json\n").unwrap();
         let report = run_audit_check(dir.path(), None).unwrap();
         assert_eq!(report.defects.len(), 1);
         assert_eq!(
@@ -782,7 +772,10 @@ mod tests {
     #[test]
     fn handler_returns_500_on_io_error() {
         let resp = audit_check_handler(b"GET /health/audit-check HTTP/1.1\r\n\r\n", || {
-            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))
         });
         let text = std::str::from_utf8(&resp).unwrap();
         assert!(text.starts_with("HTTP/1.1 500 "));

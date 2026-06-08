@@ -74,15 +74,15 @@ refreshed in the shared cache.
 - it resolves one shared Rust toolchain shell at the top of the run and
   reuses that PATH in child scripts instead of spawning a fresh `nix shell`
   per gate;
-- independent W1/W2/example gates run behind a small semaphore controlled by
-  `NL_STATIC_JOBS` (default `4`);
+- independent Rust, schema, and example gates run behind a small semaphore
+  controlled by `NL_STATIC_JOBS` (default `4`);
 - `bash tests/static-timing.sh` writes a per-gate wall-clock report to
   `$ROOT/.static-timing.log`;
 - to profile one gate in isolation, run `time bash tests/<gate>.sh`.
 
-#### W2 schema and shell-artifact drift gates
+#### Schema and shell-artifact drift gates
 
-W2 adds generated CLI/API reference artifacts. Regenerate them locally
+Generated CLI/API reference artifacts must be regenerated locally
 before committing whenever you touch the corresponding Rust types,
 `clap` surface, or prose companion docs.
 
@@ -101,7 +101,7 @@ before committing whenever you touch the corresponding Rust types,
 - `bash tests/daemon-api-drift.sh`
 - `bash tests/cli-contract-coverage.sh`
 
-A typical W2 regeneration loop is:
+A typical regeneration loop is:
 
 ```bash
 cd packages
@@ -128,14 +128,15 @@ bash tests/cli-contract-coverage.sh
 
 When docs disagree with committed, passing code, the code wins. Update the docs to match reality and see [AGENTS.md](./AGENTS.md#existing-code-is-canon) for the full policy.
 
-## W3 host-prepare gates
+## Host-prepare gates
 
 Contributors touching anything in `packages/nixling-host/`,
-`packages/nixling-priv-broker/src/ops/`, or the W3 host-prepare
+`packages/nixling-priv-broker/src/ops/`, or the host-prepare
 docs (`docs/how-to/host-prepare.md`,
 `docs/how-to/host-prepare.d/*.md`,
 `docs/reference/{cgroup-delegation,inet-nixling-chains,privileges,support-matrix}.md`,
-ADRs 0011–0014) MUST run the W3 Layer-1 gate set before submitting:
+ADRs 0011–0014) MUST run the host-prepare Layer-1 gate set before
+submitting:
 
 ```bash
 # From the repo root:
@@ -156,7 +157,7 @@ bash tests/minijail-version-check.sh
 bash tests/multi-env-daemon-backed.sh
 ```
 
-Each of these is also wired into `tests/static.sh` per the W3
+Each of these is also wired into `tests/static.sh` per the
 integrator-owned wiring rule (scope agents add the standalone test
 under `tests/`, the integrator registers it). Running them
 standalone is recommended while iterating because the parallel-gate
@@ -164,7 +165,7 @@ pool in `static.sh` adds ≈ 4-10 minutes of wall-clock per gate.
 
 ### When to run the L2 KVM tests
 
-The W3 L2 (`tests/nixling-store.sh`, `tests/audio.sh`) tests
+The Layer-2 (`tests/nixling-store.sh`, `tests/audio.sh`) tests
 require a live host with nixling activated and are NOT part of the
 PR gate. Run them locally when:
 
@@ -179,7 +180,7 @@ PR gate. Run them locally when:
 
 ### Distro matrix expectations
 
-PRs that touch W3 host-prepare are reviewed against the Tier 0
+PRs that touch host-prepare are reviewed against the Tier 0
 (NixOS) and Tier 1 (Ubuntu 24.04 LTS) rows of
 [`docs/reference/support-matrix.md`](./docs/reference/support-matrix.md).
 Tier 1-later (Fedora/Arch) and Tier 2 (other Linux) issues are
@@ -189,3 +190,49 @@ explicitly targets those tiers.
 ## License
 
 nixling is licensed under [Apache-2.0](./LICENSE). By contributing, you agree to license your contributions under the same terms.
+
+### Provisioning the `nixling-sudo` self-hosted runner
+
+The [`layer2-runtime-with-sudo`](.github/workflows/layer2-runtime-with-sudo.yml)
+workflow runs `tests/state-dir-acl-runtime.sh` adversarial
+host-state coverage. It requires a self-hosted runner
+labeled `nixling-sudo` because the test creates synthetic users,
+modifies `/var/lib/nixling`-shaped scratch state, and calls
+`sudo -n` to switch UIDs.
+
+**Trigger model — manual dispatch only.** Because the job uses
+passwordless `sudo -n` on a persistent self-hosted runner, it
+intentionally does **not** trigger on `pull_request`: running
+PR-controlled checkout contents under passwordless sudo would let
+any contributor execute arbitrary root commands on the runner.
+Maintainers dispatch the workflow
+manually against a reviewed ref:
+
+```bash
+gh workflow run layer2-runtime-with-sudo.yml --ref <ref>
+```
+
+The reviewer signal that "this PR needs Layer-2 with-sudo coverage"
+is the `paths` checklist in the workflow YAML — touching any of
+those paths is a hint to the maintainer to dispatch after review.
+
+To provision a runner:
+
+1. Provision a host that the framework supports (NixOS recommended;
+   any Linux distro with `useradd`, `groupadd`, `getfacl`, and
+   `sudo` will work). The host MUST have passwordless `sudo -n` for
+   the runner user.
+2. Register the runner with GitHub Actions following the standard
+   self-hosted-runner setup, applying both `self-hosted` and
+   `nixling-sudo` as labels.
+3. Verify with a one-shot dispatch:
+   ```bash
+   gh workflow run layer2-runtime-with-sudo
+   ```
+
+For repositories that don't have access to a `nixling-sudo` runner,
+operators can run the test locally instead:
+
+```bash
+NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh
+```

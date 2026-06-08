@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P13 invariant gate: assert release-tag shape for the
+# v1.1 invariant gate: assert release-tag shape for the
 # upcoming v1.1 (and v1.1-rcN) tags.
 #
 # Default: validates `refs/tags/v1.1`.

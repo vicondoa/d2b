@@ -4,10 +4,10 @@
 # The dedicated --vhost-user-media CH device type provides proper SHM
 # support (same pattern as the GPU device), avoiding the broken
 # generic-vhost-user SHM path.
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, name, ... }:
 
 let
-  vmName = config.networking.hostName;
+  vmName = name;
   virtioMediaModule = config.boot.kernelPackages.callPackage
     ../../../pkgs/virtio-media-driver { };
 in

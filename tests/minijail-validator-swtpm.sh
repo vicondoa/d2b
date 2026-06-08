@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# tests/minijail-validator-swtpm.sh — P1 Swtpm minijail profile validator.
+# tests/minijail-validator-swtpm.sh— Swtpm minijail profile validator.
 #
-# Plan: ph1-p1-swtpm-persistence + AGENTS.md "Critical subsystems" guard.
+# AGENTS.md "Critical subsystems" guard.
 #
-# Phase 1 (eval-only, always runs):
+# (eval-only, always runs):
 #   - Asserts the minijail-profiles.nix swtpm + swtpm-flush per-VM
 #     entries declare:
-#       * empty capability set (kernel-r2-4 per-role matrix),
+#       * empty capability set,
 #       * a stable RW writable bind path under
 #         /var/lib/nixling/vms/<vm>/swtpm (NOT tmpfs),
 #       * cgroupSubtree under nixling.slice/<vm>/{swtpm,swtpm-flush}.
 #
-# Phase 2 (live, opt-in via NL_LIVE=1):
+# (live, opt-in via NL_LIVE=1):
 #   Positive path (load-bearing — CRITICAL SUBSYSTEM):
 #     * Boot swtpm under its minijail profile against a tempdir
 #       state dir, write a TPM 2.0 NVRAM index via tpm2_nvdefine,
@@ -63,7 +63,7 @@ trap cleanup EXIT
 log "==> tests/minijail-validator-swtpm.sh"
 
 # ---------------------------------------------------------------------------
-# Phase 1 — eval-only assertions on minijail-profiles.nix shape.
+# Eval-only assertions on minijail-profiles.nix shape.
 # ---------------------------------------------------------------------------
 log "==> Phase 1: minijail-profiles.nix shape assertions"
 
@@ -74,8 +74,8 @@ else
   pass_check "minijail-profiles.nix present"
 fi
 
-# Per-role cap matrix (plan kernel-r2-4): swtpm + swtpm-flush carry empty
-# capability sets. The mkProfile helper defaults capabilities = [ ] when
+# Per-role cap matrix: swtpm + swtpm-flush carry empty capability sets.
+# The mkProfile helper defaults capabilities = [ ] when
 # the swtpm/swtpm-flush blocks don't pass a `capabilities` attr; assert
 # neither block declares one.
 if awk '
@@ -87,6 +87,44 @@ if awk '
   pass_check "swtpm + swtpm-flush profiles declare no capabilities (kernel-r2-4)"
 else
   fail_check "swtpm or swtpm-flush profile declares a capabilities attr — must be empty per plan kernel-r2-4"
+fi
+
+# v1.2 (ADR 0021): the long-lived swtpm sidecar profile MUST declare
+# a userNamespace block mapping in-NS UID/GID 0 → the swtpm principal's
+# stable ephemeral UID. This block MUST NOT appear on swtpm-flush (the
+# one-shot bash wrapper) — only the long-lived swtpm sidecar gets the
+# broker-pre-NS treatment per the plan's "swtpm portion only" scope.
+if grep -A3 '"${profileIdFor name "swtpm"}" = mkProfile {' "$PROFILES_NIX" 2>/dev/null | grep -q 'userNamespace'; then
+  pass_check "swtpm (long-lived sidecar) profile declares userNamespace block (ADR 0021 broker-pre-NS, D5/P2.3)"
+else
+  # More thorough search: find the swtpm mkProfile block and look for userNamespace within it
+  if awk '
+    /"\$\{profileIdFor name "swtpm"\}" = mkProfile \{/ { inblock=1; depth=1; next }
+    inblock { if (/\{/) depth++; if (/\}/) depth--; if (depth==0) { inblock=0; next } }
+    inblock && /userNamespace[[:space:]]*=/ { found=1 }
+    END { exit (found ? 0 : 1) }
+  ' "$PROFILES_NIX" 2>/dev/null; then
+    pass_check "swtpm (long-lived sidecar) profile declares userNamespace block (ADR 0021 broker-pre-NS, D5/P2.3)"
+  else
+    fail_check "swtpm (long-lived sidecar) profile MISSING userNamespace block — D5/P2.3 ADR 0021 broker-pre-NS extension not applied"
+  fi
+fi
+
+# v1.2: confirm userNamespace uses the swtpm principal
+# (nixling-<vm>-swtpm), NOT the runner principal. The swtpm principal
+# is stablePrincipalId "nixling-${name}-swtpm".
+if grep -q 'stablePrincipalId "nixling-\${name}-swtpm"' "$PROFILES_NIX"; then
+  pass_check "swtpm userNamespace references swtpm principal (not runner principal)"
+else
+  fail_check "swtpm userNamespace does not reference 'nixling-\${name}-swtpm' principal — check mkProfile call"
+fi
+
+# umask = 7 must be preserved on the swtpm sidecar profile (fu36 socket-ACL
+# requirement; must survive the userNamespace addition).
+if grep -q 'umask = 7;' "$PROFILES_NIX"; then
+  pass_check "swtpm profile retains umask = 7 (fu36 socket-ACL requirement preserved post-D5/P2.3)"
+else
+  fail_check "swtpm profile lost umask = 7 — fu36 socket-ACL regression"
 fi
 
 # Writable RW bind: /var/lib/nixling/vms/<vm>/swtpm must be present as a
@@ -110,7 +148,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 2 — live (opt-in via NL_LIVE=1)
+# Live (opt-in via NL_LIVE=1)
 # ---------------------------------------------------------------------------
 if [ "${NL_LIVE:-0}" != "1" ]; then
   log "==> Phase 2 skipped (set NL_LIVE=1 to run live persistence + SIGSYS checks)"
@@ -142,13 +180,13 @@ SRV_SOCK="$SCRATCH/server.sock"
 mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
 
-# Resolve a per-VM minijail profile from the bundle, if present. Phase 2
+# Resolve a per-VM minijail profile from the bundle, if present.
 # tolerates the bundle-evidence path being absent by running swtpm with
 # the equivalent profile-shape arguments directly. The point of this
 # layer-2 test is the persistence + seccomp behaviour; the eval gate
 # already asserts the profile schema.
 PROFILE_FLAGS=(
-  "-c" "0"          # empty cap bounding set (kernel-r2-4)
+  "-c" "0"          # empty cap bounding set
   "-n"              # no_new_privs
   "-l"              # new IPC namespace
   "-N"              # new cgroup namespace

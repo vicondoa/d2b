@@ -1,10 +1,9 @@
-//! Broker audit-record schema per plan.md §"Broker audit event
-//! schema (W3 baseline)". Every W3 op emits one record per decision,
-//! with the common header below plus a per-variant `operation_fields`
-//! nested object. The actual append to the root-owned `0640
-//! root:nixlingd` log goes via [`crate::audit::AuditLog`]; this
-//! module is the typed shape used by the op call-sites so the JSON
-//! drift gate can read back fields per variant.
+//! Broker audit-record schema. Every broker op emits one record per
+//! decision, with the common header below plus a per-variant
+//! `operation_fields` nested object. The actual append to the root-owned
+//! `0640 root:nixlingd` log goes via [`crate::audit::AuditLog`]; this
+//! module is the typed shape used by the op call-sites so the JSON drift
+//! gate can read back fields per variant.
 
 use std::io;
 
@@ -97,10 +96,10 @@ pub enum OperationFields {
         hardlink_farm_path: String,
         view_root: String,
     },
-    /// P2 ph2-store-sync audit fields. The broker re-derives the
-    /// closure paths from the trusted bundle, so the audit row
-    /// records only the resolved farm root + closure count +
-    /// activated generation + opaque closure ref.
+    /// Store-sync audit fields. The broker re-derives the closure paths
+    /// from the trusted bundle, so the audit row records only the
+    /// resolved farm root + closure count + activated generation +
+    /// opaque closure ref.
     StoreSync {
         vm_id: String,
         bundle_closure_ref: String,
@@ -167,23 +166,22 @@ pub enum OperationFields {
         bundle_hosts_intent_ref: String,
         destroy: bool,
     },
-    /// P3 host-prep-broker-arms: live SeedDnsmasqLease op fields.
-    /// The broker resolves the per-VM dnsmasq lease intent from the
-    /// trusted bundle (using `vm_id`) and ensures
-    /// `/var/lib/nixling/dnsmasq/<vm>.leases` exists with the right
-    /// owner/mode. The audit row records the resolved vm name and
+    /// Live SeedDnsmasqLease op fields. The broker resolves the per-VM
+    /// dnsmasq lease intent from the trusted bundle (using `vm_id`) and
+    /// ensures `/var/lib/nixling/dnsmasq/<vm>.leases` exists with the
+    /// right owner/mode. The audit row records the resolved vm name and
     /// the scope label so operators can correlate failures with the
     /// per-env lease subtree.
     SeedDnsmasqLease {
         vm_id: String,
         scope_id: String,
     },
-    /// P3 host-prep-broker-arms: live BindMountFromHardlinkFarm op
-    /// fields. The broker resolves the per-VM `store-view` intent
-    /// from the trusted bundle (using `vm_id`) and surfaces the
-    /// hardlink farm path it would bind-mount from. The audit row
-    /// records the opaque store-view intent ref (or `None` when the
-    /// canonical per-VM intent was used) for traceability.
+    /// Live BindMountFromHardlinkFarm op fields. The broker resolves
+    /// the per-VM `store-view` intent from the trusted bundle (using
+    /// `vm_id`) and surfaces the hardlink farm path it would bind-mount
+    /// from. The audit row records the opaque store-view intent ref (or
+    /// `None` when the canonical per-VM intent was used) for
+    /// traceability.
     BindMountFromHardlinkFarm {
         vm_id: String,
         bundle_store_view_intent_ref: Option<String>,
@@ -193,6 +191,10 @@ pub enum OperationFields {
         vm_id: String,
         role_id: String,
         signal: String,
+    },
+    DeregisterRunnerPidfd {
+        vm_id: String,
+        role_id: String,
     },
     RunActivation {
         bundle_activation_intent_ref: String,
@@ -222,6 +224,16 @@ pub enum OperationFields {
     ExportBrokerAudit {
         since: Option<String>,
         filter: Option<String>,
+    },
+    /// Disk-init audit fields. Records the count of plan-ops executed
+    /// and a hash of the target paths (never the raw paths themselves)
+    /// to avoid leaking filesystem layout in the audit log.
+    DiskInit {
+        vm_id: String,
+        ops_total: u32,
+        ops_created: u32,
+        ops_skipped: u32,
+        target_paths_hash: String,
     },
 }
 
@@ -411,6 +423,10 @@ impl OperationFields {
                 role_id: String,
                 signal: String,
             }),
+            "DeregisterRunnerPidfd" => parse_fields!(value => DeregisterRunnerPidfd {
+                vm_id: String,
+                role_id: String,
+            }),
             "RunActivation" => parse_fields!(value => RunActivation {
                 bundle_activation_intent_ref: String,
                 mode: String,
@@ -439,6 +455,13 @@ impl OperationFields {
             "ExportBrokerAudit" => parse_fields!(value => ExportBrokerAudit {
                 since: Option<String>,
                 filter: Option<String>,
+            }),
+            "DiskInit" => parse_fields!(value => DiskInit {
+                vm_id: String,
+                ops_total: u32,
+                ops_created: u32,
+                ops_skipped: u32,
+                target_paths_hash: String,
             }),
             other => Err(serde_json::Error::io(io::Error::new(
                 io::ErrorKind::InvalidInput,

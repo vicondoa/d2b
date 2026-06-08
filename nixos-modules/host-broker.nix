@@ -1,4 +1,4 @@
-# P0: nixling-priv-broker.{socket,service}
+# nixling-priv-broker.{socket,service}
 #
 # Socket-activated privileged broker per ADR 0001 (`unsafe_code =
 # "deny"` quarantine boundary). Daemon connects to /run/nixling/priv.sock
@@ -7,10 +7,9 @@
 # (eliminates address-in-use races and lets systemd own the socket's
 # ACL contract).
 #
-# Authority: framework maintainer 2026-05-30 plan-review R4 panel 9/9 signoff.
-# Per plan.md §"Canonical broker CapabilityBoundingSet" the bounding
-# set is exactly the listed caps (no CAP_SYS_PTRACE, no CAP_CHOWN
-# outside the cgroup-delegation startup window).
+# Authority: framework maintainer.
+# The bounding set is exactly the listed caps (no CAP_SYS_PTRACE, no
+# CAP_CHOWN outside the cgroup-delegation startup window).
 { inputs }:
 
 { pkgs, lib, config, ... }:
@@ -18,7 +17,7 @@
 let
   cfg = config.nixling;
 
-  # v1.1.1fu11: filter out `target/` dev caches from the source
+  # filter out `target/` dev caches from the source
   # so the Nix copy stays small (broker target alone is ~6 GB).
   packagesSrc = lib.cleanSourceWith {
     src = ../packages;
@@ -57,12 +56,12 @@ EOF
 in
 
 {
-  # v1.1-P4: the broker NixOS module was previously gated behind
+  # the broker NixOS module was previously gated behind
   # `cfg.daemonExperimental.enable`. v1.1 makes the broker
   # socket/service default-on (ADR 0015 daemon-only clean break);
   # the `daemonExperimental.enable` toggle is now a no-op (consumer
-  # flakes that still set it receive an eval-time warning, emitted
-  # via the v1.1-P4 assertion in `nixos-modules/assertions.nix`).
+  # flakes that still set it receive an eval-time warning emitted via
+  # `nixos-modules/assertions.nix`).
   # The module body always materializes the broker — there is no
   # `mkIf` wrapper. The legacy gating semantics are documented in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
@@ -71,17 +70,16 @@ in
     environment.systemPackages = [ brokerPackage ];
 
     # broker-owned state + bundle dirs; /run/nixling itself is owned by
-    # nixlingd:nixling-launchers 0750 from host-daemon.nix (canonical;
+    # nixlingd:nixling 0750 from host-daemon.nix (canonical;
     # this module MUST NOT touch /run/nixling tmpfiles to avoid the
-    # ph0-runtime-dir-canonicalize conflict).
+    # runtime-dir ownership conflict).
     systemd.tmpfiles.rules = [
       "d /var/lib/nixling/audit 0750 root nixlingd -"
       "d /var/lib/nixling/current-bundle 0755 root root -"
     ];
 
-    # v1.1.1 live-deploy fu9: declare nixling.slice as a
-    # top-level slice (systemd naming convention: no dashes in
-    # the basename = top-level). The broker's
+    # Declare nixling.slice as a top-level slice (systemd naming
+    # convention: no dashes in the basename = top-level). The broker's
     # DEFAULT_DELEGATED_PARENT_SLICE constant was updated to
     # /sys/fs/cgroup/nixling.slice to match (was previously
     # /sys/fs/cgroup/system.slice/nixling.slice, but that nested
@@ -123,8 +121,8 @@ in
       # No wantedBy here.
       requires = [ "nixling-priv-broker.socket" ];
       after = [ "nixling-priv-broker.socket" "local-fs.target" ];
-      # v1.1.1 live-deploy fu9 + fu12: surface broker debug logs and
-      # point at the nft binary (NixOS has no /usr/sbin/nft default).
+      # Surface broker debug logs and point at the nft binary (NixOS
+      # has no /usr/sbin/nft default).
       environment = {
         RUST_LOG = "debug";
         NIXLING_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
@@ -134,8 +132,8 @@ in
         NIXLING_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
       };
 
-      # v1.1.1 live-deploy fu12: ApplyNftables / SpawnRunner mount-prep
-      # ops invoke nft / setfacl / mount via PATH lookup. Add the
+      # ApplyNftables / SpawnRunner mount-prep ops invoke nft /
+      # setfacl / mount via PATH lookup. Add the
       # tools the broker live handlers shell out to.
       path = with pkgs; [
         nftables
@@ -150,7 +148,7 @@ in
         # completed cgroup delegation. Pair with sd_notify(READY=1)
         # in packages/nixling-priv-broker/src/runtime.rs after the
         # SD_LISTEN_FDS adoption + cgroup delegation sequence.
-        # (ph0-cgroup-delegation-sequence covers the latter.)
+        #
         Type = "notify";
         NotifyAccess = "main";
 
@@ -160,20 +158,22 @@ in
         # Group=nixlingd matches priv.sock peer-cred group.
         Group = "nixlingd";
 
-        # Canonical CapabilityBoundingSet per plan §"Canonical broker
-        # CapabilityBoundingSet". v1.1.1 live-deploy fu10: expanded
-        # to include every cap the broker may need to pass through to
+        # Canonical CapabilityBoundingSet. The set includes every cap
+        # the broker may need to pass through to
         # a spawned runner. Child role caps live in the bundle's
         # role profile; if the broker's bounding set is narrower
         # than the role's cap list, capset(2) in the child fails
         # with EPERM and the child exits silently with
         # CHILD_EXIT_CAPSET. The full set required by virtiofsd /
-        # cloud-hypervisor / swtpm / gpu role profiles is:
+        # cloud-hypervisor / swtpm / gpu role profiles is
         # CAP_NET_ADMIN / CAP_NET_RAW / CAP_DAC_OVERRIDE /
         # CAP_DAC_READ_SEARCH / CAP_SYS_ADMIN / CAP_SETUID /
         # CAP_SETGID / CAP_FOWNER / CAP_SETPCAP / CAP_CHOWN /
         # CAP_FSETID / CAP_MKNOD / CAP_SETFCAP / CAP_SYS_RESOURCE /
-        # CAP_IPC_LOCK.
+        # CAP_IPC_LOCK. CAP_KILL is required for the audited
+        # SignalRunner broker op: root inside this bounding set still
+        # gets EPERM from pidfd_send_signal(2) without it when signaling
+        # runner UIDs outside the broker's own credential set.
         CapabilityBoundingSet = [
           "CAP_NET_ADMIN"
           "CAP_NET_RAW"
@@ -190,25 +190,22 @@ in
           "CAP_SETFCAP"
           "CAP_SYS_RESOURCE"
           "CAP_IPC_LOCK"
+          "CAP_KILL"
         ];
         AmbientCapabilities = [ "" ];
         # NoNewPrivileges=false because the broker re-execs after the
         # cgroup-delegation startup window with a reduced cap set.
         NoNewPrivileges = false;
 
-        # v1.1.1 live-deploy fu9: place broker under
-        # nixling.slice (which is itself nested under
-        # system.slice — see systemd.slices.nixling above) so
-        # the broker's cgroup path is
-        # /sys/fs/cgroup/system.slice/nixling.slice/* matching
-        # the broker's DEFAULT_DELEGATED_PARENT_SLICE.
+        # Place broker under nixling.slice so the broker's cgroup path
+        # matches the broker's DEFAULT_DELEGATED_PARENT_SLICE.
         Slice = "nixling.slice";
         Delegate = true;
 
         # Isolation knobs compatible with broker's job.
         PrivateTmp = true;
-        # v1.1.1fu11 (Option B): ProtectHome=true also tmpfs-masks
-        # /run/user/<uid> which the audio role needs to reach the
+        # ProtectHome=true also tmpfs-masks /run/user/<uid> which the
+        # audio role needs to reach the
         # Wayland user's PipeWire socket. Drop it — the broker
         # has no business reading /home regardless, and CAP_DAC_*
         # in the bounding set is gated by minijail profile per
@@ -216,8 +213,8 @@ in
         ProtectHome = false;
         ProtectClock = true;
         ProtectProc = "invisible";
-        # v1.1.1 live-deploy fu9: ProcSubset=pid blocks the broker
-        # from reading /proc/sys/kernel/random/uuid which audit.rs
+        # ProcSubset=pid blocks the broker from reading
+        # /proc/sys/kernel/random/uuid which audit.rs
         # uses to generate event IDs. Drop the subset restriction
         # so the audit pipeline works. (ProtectProc=invisible
         # still hides other processes' /proc entries.)
@@ -263,7 +260,7 @@ in
     # Daemon: Wants= (not Requires=) the broker socket so daemon
     # serving doesn't hard-fail if the socket-activated broker has
     # idled out. Daemon code reconnects on ENOENT/ECONNRESET per
-    # request (ph0-broker-socket-activation contract).
+    # request.
     #
     # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
     # nixlingd)` caused infinite recursion in the NixOS module system

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 Layer-1 gate: fail closed when docs/reference/cli-contract.md drifts
+# Fail closed when docs/reference/cli-contract.md drifts
 # away from the actual CLI parser/help surface.
 
 set -euo pipefail
@@ -346,11 +346,11 @@ PY
 ok "cli-contract-coverage: docs and CLI parser/help surfaces stay aligned"
 
 # ---------------------------------------------------------------------
-# W3fu1 H4 (product-3, software-3): closed-table coverage for
+# Closed-table coverage for
 # tests/golden/cli-output/host-{check,prepare,destroy,install}-*.{txt,json}
 # enforcing:
-#   * every row in the W3 closed CLI error-code table (plan.md
-#     §"W3 CLI contract docs + per-error golden coverage", §2691-2839)
+#   * every row in the closed CLI error-code table (plan.md
+#     §" CLI contract docs + per-error golden coverage", §2691-2839)
 #     has a paired .txt + .json golden;
 #   * every paired .json carries the seven mandated envelope fields
 #     (kind / code / exit_code / what_was_checked / observed_state /
@@ -368,7 +368,7 @@ from pathlib import Path
 
 golden_dir = Path(sys.argv[1])
 
-# Closed W3 table (verb, code). Must stay in lockstep with
+# Closed CLI table (verb, code). Must stay in lockstep with
 # tests/fixtures/gen-w3-cli-goldens.py. Updating either side without
 # the other will fail this gate.
 W3_ROWS = {
@@ -411,7 +411,7 @@ W3_ROWS = {
     ("host-destroy", "legacy-no-destroy-apply"),
     # host install
     ("host-install", "not-yet-implemented"),
-    # Inherited W3-relevant onboarding rows on host check
+    # Inherited onboarding rows on host check
     ("host-check", "daemon-down"),
     ("host-check", "socket-perms-wrong"),
     ("host-check", "missing-group"),

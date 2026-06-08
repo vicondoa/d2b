@@ -1,5 +1,5 @@
 # nixling.observability.* — host-wide observability surface. Split into
-# its own file for the v0.2.0 observability track so follow-up PRs can
+# its own file for the v0.2.0 observability track so future PRs can
 # extend the feature without reopening the baseline option schema.
 { config, lib, pkgs, ... }:
 
@@ -80,7 +80,7 @@ in
         description = ''
           Default retention window for traces (default Tempo
           tenant). Mirror of `nixling.observability.retention.traces`
-          on the stack VM. P5 `ph5-p5-tempo-budget`.
+          on the stack VM.
         '';
       };
 
@@ -91,7 +91,7 @@ in
           Retention window for the critical Tempo tenant (spans
           tagged `kind=critical`). Mirror of
           `nixling.observability.retention.tracesCritical` on the
-          stack VM. P5 `ph5-p5-tempo-budget`.
+          stack VM.
         '';
       };
     };

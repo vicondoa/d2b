@@ -7,7 +7,7 @@ It gets you to the point where:
 - the distro prerequisites are present;
 - Nix is installed in multi-user mode;
 - the `nixling` CLI is installed;
-- the W15 host-install scaffold has laid down its expected artifact paths; and
+- the host-install scaffold has laid down its expected artifact paths; and
 - you can dry-run the first VM lifecycle through the daemon-facing CLI.
 
 The current host-install writer is still a staging path, so treat this guide as
@@ -59,7 +59,7 @@ sudo nixling host install --dry-run --enable --start
 sudo nixling host install --apply --enable --start
 ```
 
-Today's W15 scaffold writes the expected host artifact paths and exercises the
+Today's scaffold writes the expected host artifact paths and exercises the
 broker install path, but you should still inspect what landed under:
 
 - `/etc/systemd/system/nixlingd.service`

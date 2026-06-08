@@ -1,12 +1,12 @@
-# Modules and devices (W3 s4 fragment)
+# Modules and devices
 
 Operator how-to fragment for the kernel-module and device-node
-requirements W3 introduces. The integrator assembles this fragment
+requirements introduced by host prepare. The integrator assembles this fragment
 into [`docs/how-to/host-prepare.md`](../host-prepare.md).
 
 ## Kernel modules
 
-W3 runs a four-step probe before any `ModprobeIfAllowed` broker call:
+Host prepare runs a four-step probe before any `ModprobeIfAllowed` broker call:
 
 1. `/proc/sys/kernel/modules_disabled` — if the file reads `1`, every
    `required` module that is neither built-in nor loaded surfaces as
@@ -47,14 +47,14 @@ policy. An ADR opt-in is required to suppress this recommendation.
 - **Fedora 40+ (Tier 1 later).** Same module set; `vhost_net` may need
   an explicit `modprobe vhost_net` on first boot.
 - **Arch (Tier 2).** Kernel built with `MODULES_DISABLED=y` requires a
-  rebuild before W3 will accept VM startup.
+  rebuild before VM startup is accepted.
 - **NixOS (Tier 0 legacy).** The framework's NixOS module is the
   primary path; `nixling host prepare --apply` is refused with
   `tier-0-legacy-uses-nixos-module`.
 
 ## Device nodes
 
-The matrix W3 validates (read-only):
+The matrix validated in read-only mode:
 
 | Class           | Default path          | Required mode | Required group | Notes |
 | --------------- | --------------------- | ------------- | -------------- | ----- |
@@ -74,12 +74,12 @@ world bits) fail closed as `loose-mode`. Group ownership is checked by
 name; mismatch surfaces as `wrong-group`. The host check **never
 mutates** ACLs; remediation is via the trusted bundle / NixOS module.
 
-### W3 ↔ W4 boundary
+### Preflight boundary
 
-W3 is read-only preflight only. The per-VM `/nix/store` hardlink farm,
-the mount namespace, and the virtiofsd setup all belong to W4. W3
-surfaces W4-blocking findings under `host doctor --read-only` and
-**refuses** to mutate store state.
+This check is read-only preflight only. The per-VM `/nix/store`
+hardlink farm, the mount namespace, and the virtiofsd setup all
+belong to runtime startup. Host prepare surfaces blocking findings
+under `host doctor --read-only` and **refuses** to mutate store state.
 
 ## Runner-shape preflight
 

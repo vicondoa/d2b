@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P2 ph2-p2-tap-dag-contract: doc/code drift gate.
+# doc/code drift gate.
 #
 # Asserts that docs/reference/tap-dag-contract.md matches the
 # implementation it claims to document: the derived-ifname scheme in
@@ -156,12 +156,12 @@ grep -q "ChNetHandoffMode" "$DOC" \
 ok "ChNetHandoffMode enum"
 
 echo "==> launcher group naming (daemon-only canonical)"
-# The doc claims the broker public socket sits behind nixling-launchers
+# The doc claims the broker public socket sits behind nixling
 # (plural — declared by host-daemon.nix). Sanity check that's still true.
-grep -q "nixling-launchers" "$DOC" \
-    || fail "doc must reference daemon-only nixling-launchers group"
-grep -q "users.groups.nixling-launchers" nixos-modules/host-daemon.nix \
-    || fail "host-daemon.nix no longer declares nixling-launchers group"
-ok "nixling-launchers group"
+grep -q "nixling" "$DOC" \
+    || fail "doc must reference daemon-only nixling group"
+grep -q "users.groups.nixling" nixos-modules/host-daemon.nix \
+    || fail "host-daemon.nix no longer declares nixling group"
+ok "nixling group"
 
 echo "OK: tap-dag-contract doc matches implementation"

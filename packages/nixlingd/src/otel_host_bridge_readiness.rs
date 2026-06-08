@@ -1,9 +1,8 @@
-//! P3 `ph3-p3-otelbridge-readiness`: typed readiness gate for the
-//! broker-spawned `OtelHostBridge` runner.
+//! Typed readiness gate for the broker-spawned `OtelHostBridge` runner.
 //!
 //! # Why this gate exists
 //!
-//! The P1 `RunnerRole::OtelHostBridge` work folded the legacy
+//! The `RunnerRole::OtelHostBridge` work folded the legacy
 //! `nixling-otel-host-bridge.service` host singleton into a
 //! broker-`SpawnRunner` lifecycle. The broker can now start the
 //! runner per the trusted bundle's intent, and `pidfd_table`
@@ -201,7 +200,7 @@ impl Default for ReadinessWaitConfig {
 impl ReadinessWaitConfig {
     /// Build a config from `NIXLING_OTEL_BRIDGE_READINESS_TIMEOUT_MS`
     /// + `NIXLING_OTEL_BRIDGE_READINESS_STRICT`. Invalid timeout
-    /// values fall back to [`DEFAULT_TIMEOUT`] with a warning.
+    ///   values fall back to [`DEFAULT_TIMEOUT`] with a warning.
     pub fn from_env() -> Self {
         let mut cfg = Self::default();
         if let Ok(raw) = std::env::var(TIMEOUT_ENV) {
@@ -215,9 +214,7 @@ impl ReadinessWaitConfig {
                 ),
             }
         }
-        cfg.strict = std::env::var(STRICT_ENV)
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        cfg.strict = std::env::var(STRICT_ENV).map(|v| v == "1").unwrap_or(false);
         cfg
     }
 }
@@ -477,13 +474,8 @@ mod tests {
             poll_interval: Duration::from_millis(1),
             strict: false,
         };
-        let outcome = await_otel_host_bridge_readiness(
-            "obs",
-            &source,
-            &cfg,
-            |_d| {},
-            Instant::now(),
-        );
+        let outcome =
+            await_otel_host_bridge_readiness("obs", &source, &cfg, |_d| {}, Instant::now());
         assert!(matches!(outcome, ReadinessWaitOutcome::Ready { .. }));
         assert!(outcome.to_typed_error().is_none());
     }
@@ -496,13 +488,8 @@ mod tests {
             poll_interval: Duration::from_millis(1),
             strict: false,
         };
-        let outcome = await_otel_host_bridge_readiness(
-            "obs",
-            &source,
-            &cfg,
-            |_d| {},
-            Instant::now(),
-        );
+        let outcome =
+            await_otel_host_bridge_readiness("obs", &source, &cfg, |_d| {}, Instant::now());
         match &outcome {
             ReadinessWaitOutcome::DegradedTimeout { vm, reason, .. } => {
                 assert_eq!(vm, "obs");
@@ -523,13 +510,8 @@ mod tests {
             poll_interval: Duration::from_millis(1),
             strict: false,
         };
-        let outcome = await_otel_host_bridge_readiness(
-            "obs",
-            &source,
-            &cfg,
-            |_d| {},
-            Instant::now(),
-        );
+        let outcome =
+            await_otel_host_bridge_readiness("obs", &source, &cfg, |_d| {}, Instant::now());
         match &outcome {
             ReadinessWaitOutcome::DegradedTimeout { reason, .. } => {
                 assert_eq!(reason, "runner exited before readiness signal");
@@ -539,14 +521,14 @@ mod tests {
     }
 
     #[test]
-    // P4 integration: these env-var tests race when cargo runs the
-    // module's tests concurrently (TIMEOUT_ENV/STRICT_ENV are
+    // These env-var tests race when cargo runs the module's tests
+    // concurrently (TIMEOUT_ENV/STRICT_ENV are
     // process-global). The asserts here pass in isolation
     // (`cargo test from_env_falls_back_on_invalid_timeout`) but flake
     // when interleaved. Mark ignored until a serial-test crate is
     // added; the code path is already exercised by the env-var-free
     // happy-path tests above.
-    #[ignore = "P4 integration: process-global env var races with from_env_honors_strict_flag; run with --test-threads=1 or in isolation"]
+    #[ignore = "integration test: process-global env var races with from_env_honors_strict_flag; run with --test-threads=1 or in isolation"]
     fn from_env_falls_back_on_invalid_timeout() {
         std::env::set_var(TIMEOUT_ENV, "not-a-number");
         std::env::remove_var(STRICT_ENV);
@@ -557,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "P4 integration: process-global env var races with from_env_falls_back_on_invalid_timeout; run with --test-threads=1 or in isolation"]
+    #[ignore = "integration test: process-global env var races with from_env_falls_back_on_invalid_timeout; run with --test-threads=1 or in isolation"]
     fn from_env_honors_strict_flag() {
         std::env::set_var(STRICT_ENV, "1");
         std::env::set_var(TIMEOUT_ENV, "1234");

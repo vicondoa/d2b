@@ -1,5 +1,4 @@
-//! W7-fu: hardlink-farm primitive for the per-VM store activation
-//! lifecycle.
+//! Hardlink-farm primitive for the per-VM store activation lifecycle.
 //!
 //! Each daemon-managed VM owns a per-VM store under
 //! `/var/lib/nixling/vms/<vm>/store/`. New generations land in
@@ -11,9 +10,9 @@
 //! The primitives in this module are:
 //!
 //! - [`assert_same_filesystem`]: refuses to hardlink across
-//!   filesystems. The W3 plan §"W7: Store/build/switch lifecycle"
-//!   requires "same-filesystem fatal checks" because cross-fs
-//!   hardlinks silently degrade to copy on POSIX `link(2)`
+//!   filesystems. The store lifecycle requires "same-filesystem fatal
+//!   checks" because cross-fs hardlinks silently degrade to copy on
+//!   POSIX `link(2)`
 //!   (returns `EXDEV`).
 //! - [`activate_generation_marker`]: writes a per-generation
 //!   `marker.json` recording closure hash + nixling version. The
@@ -307,8 +306,8 @@ pub fn read_generation_marker(
 ///    activation of marker-less dirs).
 /// 2. Verify same-filesystem between the symlink parent and target
 ///    (hardlink farms only work on the same fs; symlinks are
-///    cross-fs-tolerant, but the W7 contract pins same-fs so the
-///    activation surface stays consistent with the farm itself).
+///    cross-fs-tolerant, but the activation contract pins same-fs so
+///    the surface stays consistent with the farm itself).
 /// 3. Create `<store_root>/current.tmp -> generations/<N>` via
 ///    `symlinkat`.
 /// 4. `renameat2` (via `nix::fcntl::renameat`) the tmp symlink over

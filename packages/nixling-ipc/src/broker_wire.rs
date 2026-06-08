@@ -1,14 +1,12 @@
-//! W3 broker wire contract.
+//! Broker wire contract.
 //!
-//! W3fu1 H1 (security-1): every mutating W3 variant carries **only
-//! opaque identifiers** + bundle-resolved intent refs. The daemon
-//! never names a raw path, a raw nft rule text, a raw route spec,
-//! a raw sysctl key/value, a raw ifname set, a raw `/etc/hosts`
-//! entry list, a raw uid/gid, raw argv or env, raw caps, or a raw
-//! seccomp profile path. The broker uses the opaque IDs to look
-//! up the typed intent in its own trusted bundle copy. See
-//! `nixling_ipc::types` for the newtype set and plan.md §"W3
-//! broker variant additions (wire-stable, audit-mandatory)".
+//! Every mutating variant carries **only opaque identifiers** +
+//! bundle-resolved intent refs. The daemon never names a raw path, a
+//! raw nft rule text, a raw route spec, a raw sysctl key/value, a raw
+//! ifname set, a raw `/etc/hosts` entry list, a raw uid/gid, raw argv
+//! or env, raw caps, or a raw seccomp profile path. The broker uses
+//! the opaque IDs to look up the typed intent in its own trusted bundle
+//! copy. See `nixling_ipc::types` for the newtype set.
 
 use crate::types::{
     BundleClosureRef, BundleOpId, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId, VmId,
@@ -30,11 +28,11 @@ pub enum BrokerRequest {
     CreateTapFd(CreateTapFdRequest),
     DelegateCgroupV2(DelegateCgroupV2Request),
     ExportBrokerAudit(ExportBrokerAuditRequest),
-    /// W4-fu clean-break: daemon ↔ broker handshake request. The
-    /// daemon sends its client_version and supported_features; the
-    /// broker replies with [`HelloResponse`] containing the
-    /// selected wire version. Mirrors the bootstrap `Hello` shape
-    /// so the connection layer doesn't need a side-channel.
+    /// Daemon ↔ broker handshake request. The daemon sends its
+    /// client_version and supported_features; the broker replies with
+    /// [`HelloResponse`] containing the selected wire version. Mirrors
+    /// the bootstrap `Hello` shape so the connection layer doesn't need
+    /// a side-channel.
     Hello(HelloRequest),
     InjectSecretById(SecretByIdRequest),
     LaunchMinijailChild(LaunchMinijailChildRequest),
@@ -43,45 +41,47 @@ pub enum BrokerRequest {
     OpenDevice(OpenDeviceRequest),
     OpenFuse(OpenFuseRequest),
     OpenKvm(OpenKvmRequest),
-    /// W4-fu: daemon-side reconcile-and-adopt support. The daemon
-    /// asks the broker to `pidfd_open(pid)` AND re-verify
-    /// `/proc/<pid>/stat` field 22 matches the expected start-time
-    /// in one atomic call (no daemon-side syscall surface needed).
-    /// The pidfd is returned via SCM_RIGHTS; if start-time
-    /// drifted the broker closes the fd and surfaces a typed
-    /// pidfd-race error.
+    /// Daemon-side reconcile-and-adopt support. The daemon asks the
+    /// broker to `pidfd_open(pid)` AND re-verify `/proc/<pid>/stat`
+    /// field 22 matches the expected start-time in one atomic call (no
+    /// daemon-side syscall surface needed). The pidfd is returned via
+    /// SCM_RIGHTS; if start-time drifted the broker closes the fd and
+    /// surfaces a typed pidfd-race error.
     OpenPidfd(OpenPidfdRequest),
     OpenVhostNet(OpenVhostNetRequest),
     PauseBroker,
+    /// Drain the broker's in-memory ring buffer of ChildReaped events.
+    /// Returns [`PollChildReapedResponse`] containing all buffered
+    /// notifications in FIFO order; clears the buffer. Idempotent.
+    PollChildReaped,
     PrepareRuntimeDir(PrepareDirRequest),
     PrepareStateDir(PrepareDirRequest),
     PrepareStoreView(PrepareStoreViewRequest),
-    /// P2 ph2-store-sync: typed broker op that hardlink-farms a
-    /// VM's resolved closure into `/var/lib/nixling/vms/<vm>/store/`
-    /// and atomically swaps the `current` symlink. Replaces the
-    /// per-VM `nixling-<vm>-store-sync.service` bash oneshot.
-    /// The daemon names only the opaque `bundle_closure_ref` +
-    /// `vm_id` + expected `generation`; the broker re-derives
-    /// every closure path from its trusted bundle copy.
+    /// Typed broker op that hardlink-farms a VM's resolved closure into
+    /// `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the
+    /// `current` symlink. Replaces the retired per-VM
+    /// `nixling-<vm>-store-sync.service` bash oneshot. The daemon names
+    /// only the opaque `bundle_closure_ref` + `vm_id` + expected
+    /// `generation`; the broker re-derives every closure path from its
+    /// trusted bundle copy.
     StoreSync(StoreSyncRequest),
     ReadSecretById(SecretByIdRequest),
     ResumeBroker,
     RotateSecretById(SecretByIdRequest),
-    /// W15 (W9-fu): live host installer + migrate writer. Drives
-    /// the per-host systemd unit install + `--enable` / `--start`
-    /// flow (or migrate writer for existing NixOS hosts). The
-    /// broker resolves the installer plan from the trusted bundle's
-    /// `installer:host` intent row; the daemon never names raw
-    /// systemd unit paths or `--enable` flags on the wire.
+    /// Live host installer + migrate writer. Drives the per-host
+    /// systemd unit install + `--enable` / `--start` flow (or migrate
+    /// writer for existing NixOS hosts). The broker resolves the
+    /// installer plan from the trusted bundle's `installer:host` intent
+    /// row; the daemon never names raw systemd unit paths or `--enable`
+    /// flags on the wire.
     RunHostInstall(RunHostInstallRequest),
-    /// W15 (W9-fu migrate writer): transition an existing
-    /// systemd-owned VM to daemon-owned without touching running
-    /// VMs. Resolves the migrate plan from the bundle's
+    /// Transition an existing systemd-owned VM to daemon-owned without
+    /// touching running VMs. Resolves the migrate plan from the bundle's
     /// `migrate:host` intent row.
     RunMigrate(RunMigrateRequest),
-    /// W14 LiveNative: broker-side mutating verb flips for per-VM
-    /// activation, host GC, framework-managed SSH key rotation, and
-    /// known_hosts trust maintenance.
+    /// Broker-side mutating verb flips for per-VM activation, host GC,
+    /// framework-managed SSH key rotation, and known_hosts trust
+    /// maintenance.
     RunActivation(RunActivationRequest),
     RunGc(RunGcRequest),
     RunKeysRotate(RunKeysRotateRequest),
@@ -91,6 +91,7 @@ pub enum BrokerRequest {
     SetSocketAcl(SetSocketAclRequest),
     SetupMountNamespace(SetupMountNamespaceRequest),
     SignalRunner(SignalRunnerRequest),
+    DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest),
     SpawnRunner(SpawnRunnerRequest),
     UpdateHostsFile(UpdateHostsFileRequest),
     UsbipBind(UsbipBindRequest),
@@ -98,47 +99,49 @@ pub enum BrokerRequest {
     UsbipProxyReconcile(UsbipProxyReconcileRequest),
     UsbipUnbind(UsbipUnbindRequest),
     ValidateBundle,
-    /// P2 ph2-dag-host-prep: write the per-VM dnsmasq lease file.
-    /// Replaces leaves of the retired `microvm-setup@<vm>.service`.
-    /// Currently a typed stub (`Unimplemented`); real dispatch
-    /// lands later in P2.
+    /// Write the per-VM dnsmasq lease file. Replaces leaves of the
+    /// retired `microvm-setup@<vm>.service`. Currently a typed stub
+    /// (`Unimplemented`) until the live handler is wired.
     ///
-    /// TODO(P2/P3): wire to a `live_seed_dnsmasq_lease` handler
-    /// resolved via `BundleResolver` (per-VM dnsmasq lease row).
+    /// TODO: wire to a `live_seed_dnsmasq_lease` handler resolved via
+    /// `BundleResolver` (per-VM dnsmasq lease row).
     SeedDnsmasqLease(SeedDnsmasqLeaseRequest),
-    /// P2 ph2-dag-host-prep: bind-mount
-    /// `/var/lib/nixling/vms/<vm>/store-view` from the per-VM
-    /// hardlink farm at `<vm>/store/`. Currently a typed stub
-    /// (`Unimplemented`); real dispatch lands later in P2.
+    /// Bind-mount `/var/lib/nixling/vms/<vm>/store-view` from the
+    /// per-VM hardlink farm at `<vm>/store/`. Currently a typed stub
+    /// (`Unimplemented`) until the live handler is wired.
     ///
-    /// TODO(P2/P3): wire to a `live_bind_mount_from_hardlink_farm`
-    /// handler resolved via `BundleResolver::find_store_view_intent`.
+    /// TODO: wire to a `live_bind_mount_from_hardlink_farm` handler
+    /// resolved via `BundleResolver::find_store_view_intent`.
     BindMountFromHardlinkFarm(BindMountFromHardlinkFarmRequest),
-    /// P2 ph2-p2-ownership-matrix (sibling agent): enforce the
-    /// per-leaf ownership/mode matrix on
+    /// Enforce the per-leaf ownership/mode matrix on
     /// `/var/lib/nixling/vms/<vm>/`. Currently a typed stub
-    /// (`Unimplemented`); the sibling agent lands the real check.
+    /// (`Unimplemented`) until the real check is wired.
     ///
-    /// TODO(P2): wire to `nixling_host::ownership_matrix::check`
-    /// (delivered by the ph2-p2-ownership-matrix sibling agent).
+    /// TODO: wire to `nixling_host::ownership_matrix::check`.
     OwnershipMatrixCheck(OwnershipMatrixCheckRequest),
-    /// P2 ph2-p2-ssh-host-key-preflight (sibling agent): refuse VM
-    /// start if `/var/lib/nixling/vms/<vm>/sshd-host-keys/` drifts
-    /// from `root:root 0400`. Currently a typed stub
-    /// (`Unimplemented`); the sibling agent lands the real check.
+    /// Refuse VM start if `/var/lib/nixling/vms/<vm>/sshd-host-keys/`
+    /// drifts from `root:root 0400`. Currently a typed stub
+    /// (`Unimplemented`) until the real check is wired.
     ///
-    /// TODO(P2): wire to the `O_NOFOLLOW` symlink-rejecting check
-    /// (delivered by the ph2-p2-ssh-host-key-preflight sibling agent).
+    /// TODO: wire to the `O_NOFOLLOW` symlink-rejecting check.
     SshHostKeyPreflight(SshHostKeyPreflightRequest),
+    /// Broker-provisioned disk-image creation.
+    ///
+    /// The daemon dispatches this before `SpawnRunner` for any runner
+    /// whose bundle ProcessNode has `DiskInit` plan-ops (currently CH
+    /// when `writableStoreOverlay` is enabled). The broker resolves
+    /// the target path, size, mode, and ownership from the trusted
+    /// bundle — the daemon names only the opaque `vm_id`.
+    DiskInit(DiskInitRequest),
 }
 
 impl BrokerRequest {
     /// Stable operation name for audit records.
     ///
-    /// W4-fu clean-break: mirrors the bootstrap `BootstrapCall::op_name`
-    /// shape so the broker audit pipeline (`AuditLog::write_entry`)
-    /// can be variant-agnostic between the two wire shapes during
-    /// the transition.
+    /// Mirrors the bootstrap `BootstrapCall::op_name` shape so the
+    /// broker audit pipeline (`AuditLog::write_entry`) can be
+    /// variant-agnostic between the two wire shapes during the
+    /// transition.
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::ApplyNftables(_) => "ApplyNftables",
@@ -162,6 +165,7 @@ impl BrokerRequest {
             Self::OpenPidfd(_) => "OpenPidfd",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::PauseBroker => "PauseBroker",
+            Self::PollChildReaped => "PollChildReaped",
             Self::PrepareRuntimeDir(_) => "PrepareRuntimeDir",
             Self::PrepareStateDir(_) => "PrepareStateDir",
             Self::PrepareStoreView(_) => "PrepareStoreView",
@@ -180,6 +184,7 @@ impl BrokerRequest {
             Self::SetSocketAcl(_) => "SetSocketAcl",
             Self::SetupMountNamespace(_) => "SetupMountNamespace",
             Self::SignalRunner(_) => "SignalRunner",
+            Self::DeregisterRunnerPidfd(_) => "DeregisterRunnerPidfd",
             Self::SpawnRunner(_) => "SpawnRunner",
             Self::UpdateHostsFile(_) => "UpdateHostsFile",
             Self::UsbipBind(_) => "UsbipBind",
@@ -191,6 +196,7 @@ impl BrokerRequest {
             Self::BindMountFromHardlinkFarm(_) => "BindMountFromHardlinkFarm",
             Self::OwnershipMatrixCheck(_) => "OwnershipMatrixCheck",
             Self::SshHostKeyPreflight(_) => "SshHostKeyPreflight",
+            Self::DiskInit(_) => "DiskInit",
         }
     }
 
@@ -204,18 +210,18 @@ impl BrokerRequest {
             Self::Hello(_) => "daemon-handshake",
             Self::ValidateBundle => "bundle",
             Self::ExportBrokerAudit(_) => "audit-log",
+            Self::PollChildReaped => "pidfd-reap-buffer",
             _ => "operation",
         }
     }
 }
 
-/// W15 (W9-fu live host install): broker-side installer driver.
-/// The broker resolves the bundle's `installer:host` intent row
-/// (synthesised by `nixling_core::bundle_resolver` from the
-/// `host.json` + Nix-emitted installer plan), then runs the
-/// systemd unit install + `--enable` / `--start` shellouts per
-/// the resolved plan. The daemon never names the systemd unit
-/// path or `--enable` flag on the wire.
+/// Broker-side installer driver. The broker resolves the bundle's
+/// `installer:host` intent row (synthesised by
+/// `nixling_core::bundle_resolver` from the `host.json` + Nix-emitted
+/// installer plan), then runs the systemd unit install + `--enable` /
+/// `--start` shellouts per the resolved plan. The daemon never names
+/// the systemd unit path or `--enable` flag on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunHostInstallRequest {
@@ -239,7 +245,7 @@ pub struct RunHostInstallResponse {
     pub artifacts_written: Vec<String>,
 }
 
-/// W15 (W9-fu migrate writer): broker-side migration driver.
+/// Broker-side migration driver.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunMigrateRequest {
@@ -356,11 +362,11 @@ pub struct RunRotateKnownHostResponse {
     pub removed: bool,
 }
 
-/// W4-fu clean-break: daemon ↔ broker handshake request.
-/// Carries the daemon's client_version and the wire feature
-/// flags it understands so the broker can pick a compatible
-/// response version + capability set. Mirrors the bootstrap
-/// `Hello { client_version, supported_features }` shape.
+/// Daemon ↔ broker handshake request. Carries the daemon's
+/// client_version and the wire feature flags it understands so the
+/// broker can pick a compatible response version + capability set.
+/// Mirrors the bootstrap `Hello { client_version, supported_features }`
+/// shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelloRequest {
@@ -375,15 +381,14 @@ pub enum BrokerResponse {
     Ack(AckResponse),
     CreatePersistentTap(TapReadyResponse),
     CreateTapFd(TapReadyResponse),
-    /// W4-fu clean-break: typed broker error envelope returned in
-    /// place of an op-specific response when the broker refuses or
-    /// fails to handle a request. Mirrors the
-    /// bootstrap `BrokerResponse::Error` struct-variant shape so
-    /// the audit pipeline and daemon-side error propagation stay
-    /// shape-compatible across the dispatcher transition.
+    /// Typed broker error envelope returned in place of an op-specific
+    /// response when the broker refuses or fails to handle a request.
+    /// Mirrors the bootstrap `BrokerResponse::Error` struct-variant
+    /// shape so the audit pipeline and daemon-side error propagation
+    /// stay shape-compatible across the dispatcher transition.
     Error(BrokerErrorResponse),
     ExportBrokerAudit(ExportBrokerAuditResponse),
-    /// W15 (W9-fu): live host install + migrate writer responses.
+    /// Live host install + migrate writer responses.
     RunHostInstall(RunHostInstallResponse),
     RunMigrate(RunMigrateResponse),
     RunActivation(RunActivationResponse),
@@ -391,32 +396,33 @@ pub enum BrokerResponse {
     RunKeysRotate(RunKeysRotateResponse),
     RunHostKeyTrust(RunHostKeyTrustResponse),
     RunRotateKnownHost(RunRotateKnownHostResponse),
-    /// W4-fu clean-break: daemon ↔ broker handshake confirmation
-    /// response. Returned in reply to a `BrokerRequest::Hello`
-    /// (added by the clean-break refactor; see below) so the
-    /// daemon can capability-negotiate and the broker can audit
-    /// the connection without a separate side-channel.
+    /// Daemon ↔ broker handshake confirmation response. Returned in
+    /// reply to a `BrokerRequest::Hello` so the daemon can
+    /// capability-negotiate and the broker can audit the connection
+    /// without a separate side-channel.
     Hello(HelloResponse),
-    /// W4-fu OpenPidfd response. The pidfd itself is returned via
-    /// SCM_RIGHTS on the same frame; the JSON body confirms which
-    /// `(pid, start_time_ticks)` the broker verified.
+    /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
+    /// on the same frame; the JSON body confirms which `(pid,
+    /// start_time_ticks)` the broker verified.
     OpenPidfd(OpenPidfdResponse),
+    /// Drain response for `BrokerRequest::PollChildReaped`.
+    PollChildReaped(PollChildReapedResponse),
     SetBridgePortFlags(BridgePortFlagsResponse),
     SignalRunner(SignalRunnerResponse),
+    DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
     SpawnRunner(SpawnRunnerResponse),
-    /// P2 ph2-store-sync: typed response carrying the activated
-    /// generation, the resolved hardlink-farm root, and the count
-    /// of top-level closure paths populated. Used by the daemon
-    /// to surface the swap result in audit + start traces.
+    /// Typed response carrying the activated generation, the resolved
+    /// hardlink-farm root, and the count of top-level closure paths
+    /// populated. Used by the daemon to surface the swap result in audit
+    /// + start traces.
     StoreSync(StoreSyncResponse),
     ValidateBundle(ValidateBundleResponse),
 }
 
-/// W4-fu clean-break: typed broker error envelope for the real
-/// wire. Mirrors the bootstrap `BrokerResponse::Error` struct
-/// variant fields so the audit pipeline + daemon-side error
-/// propagation stay shape-compatible across the dispatcher
-/// transition.
+/// Typed broker error envelope for the real wire. Mirrors the
+/// bootstrap `BrokerResponse::Error` struct variant fields so the audit
+/// pipeline + daemon-side error propagation stay shape-compatible
+/// across the dispatcher transition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerErrorResponse {
@@ -428,10 +434,9 @@ pub struct BrokerErrorResponse {
     pub action: String,
 }
 
-/// W4-fu clean-break: daemon ↔ broker handshake response.
-/// Mirrors the bootstrap `BrokerResponse::HelloOk` shape so the
-/// connection-level capability negotiation works without a
-/// side-channel.
+/// Daemon ↔ broker handshake response. Mirrors the bootstrap
+/// `BrokerResponse::HelloOk` shape so the connection-level capability
+/// negotiation works without a side-channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelloResponse {
@@ -440,10 +445,10 @@ pub struct HelloResponse {
     pub capabilities: Vec<String>,
 }
 
-/// W3fu1 H1 (security-1): the broker re-derives the desired nft
-/// state from `bundle_nft_intent_ref`. The daemon does NOT pass
-/// inline rule text. `desired_hash` is a stable digest of the
-/// resolved intent, used for idempotent audit + drift detection.
+/// The broker re-derives the desired nft state from
+/// `bundle_nft_intent_ref`. The daemon does NOT pass inline rule text.
+/// `desired_hash` is a stable digest of the resolved intent, used for
+/// idempotent audit + drift detection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyNftablesRequest {
@@ -508,13 +513,12 @@ pub struct CreateOrReconcileUsersGroupsRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W3fu2 H1 (rust-1 / security-1): the broker derives the bridge
-/// ifname, owner uid/gid, and TAP attributes from the trusted bundle
-/// row anchored by `role_id` + `vm_id`. The pre-W3fu2 wire carried a
-/// caller-supplied `ifname_derived: IfName`; W3fu1 R2 rust-1 found
-/// that this preserved a future bypass of broker-side
-/// trusted-bundle resolution, so the field was removed. The broker
-/// emits the observed ifname only in the audit record / response.
+/// The broker derives the bridge ifname, owner uid/gid, and TAP
+/// attributes from the trusted bundle row anchored by `role_id` +
+/// `vm_id`. The legacy wire carried a caller-supplied
+/// `ifname_derived: IfName`; that preserved a future bypass of
+/// broker-side trusted-bundle resolution, so the field was removed. The
+/// broker emits the observed ifname only in the audit record / response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreatePersistentTapRequest {
@@ -524,8 +528,8 @@ pub struct CreatePersistentTapRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// See [`CreatePersistentTapRequest`] for the W3fu2 H1 opaque-ID
-/// rationale; `CreateTapFd` follows the same contract.
+/// See [`CreatePersistentTapRequest`] for the opaque-ID rationale;
+/// `CreateTapFd` follows the same contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateTapFdRequest {
@@ -535,10 +539,9 @@ pub struct CreateTapFdRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W3fu1 H1 (security-1): the slice path is pinned by the bundle
-/// (`/sys/fs/cgroup/nixling.slice` per plan §"W3 cgroup v2
-/// delegation algorithm"). It is **not** taken from caller input —
-/// the broker reads it from its own bundle copy via `scope_id`.
+/// The slice path is pinned by the bundle
+/// (`/sys/fs/cgroup/nixling.slice`). It is **not** taken from caller
+/// input — the broker reads it from its own bundle copy via `scope_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DelegateCgroupV2Request {
@@ -570,11 +573,10 @@ pub struct SecretByIdRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W3fu1 H1 (security-1): the daemon never passes argv, env,
-/// uid/gid, caps, seccomp profile path, or any other launch
-/// authority across the wire. The broker reads the full launch
-/// context from `bundle.vms[vm_id].roles[role_id]` and constructs
-/// the minijail exec line itself.
+/// The daemon never passes argv, env, uid/gid, caps, seccomp profile
+/// path, or any other launch authority across the wire. The broker
+/// reads the full launch context from `bundle.vms[vm_id].roles[role_id]`
+/// and constructs the minijail exec line itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LaunchMinijailChildRequest {
@@ -625,10 +627,10 @@ pub struct OpenKvmRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W4-fu OpenPidfd: daemon-side reconcile-and-adopt support. The
-/// daemon's `nixlingd::supervisor::state::reconcile_and_adopt`
-/// loop sends this request for every snapshot the classifier
-/// returned `Adopt` for. The broker:
+/// OpenPidfd daemon-side reconcile-and-adopt support. The daemon's
+/// `nixlingd::supervisor::state::reconcile_and_adopt` loop sends this
+/// request for every snapshot the classifier returned `Adopt` for. The
+/// broker:
 ///
 /// 1. Calls `pidfd_open(pid)`.
 /// 2. Reads `/proc/<pid>/stat` field 22 (start-time ticks).
@@ -639,9 +641,9 @@ pub struct OpenKvmRequest {
 ///    a typed pidfd-race error (audit record carries the observed
 ///    start-time so the operator can correlate).
 ///
-/// This atomic open-AND-verify closes the W*-fu GPT-5.5 panel
-/// CRITICAL finding that the daemon could otherwise re-adopt a
-/// pidfd that referred to a reused-pid unrelated process.
+/// This atomic open-AND-verify closes the critical pid-reuse issue: the
+/// daemon could otherwise re-adopt a pidfd that referred to a reused-pid
+/// unrelated process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenPidfdRequest {
@@ -694,10 +696,9 @@ pub struct OpenFuseRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W3fu1 H1 (security-1): the concrete `/var/lib/nixling/vms/<vm>`
-/// or `/run/nixling/<vm>` path is derived from `vm_id` +
-/// `path_class` against the broker-side bundle. The daemon never
-/// passes a raw path.
+/// The concrete `/var/lib/nixling/vms/<vm>` or `/run/nixling/<vm>` path
+/// is derived from `vm_id` + `path_class` against the broker-side
+/// bundle. The daemon never passes a raw path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareDirRequest {
@@ -715,13 +716,12 @@ pub struct PrepareStoreViewRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// P2 ph2-store-sync request. The broker resolves the closure
-/// intent row keyed by `vm_id` (canonical id form
-/// `"store-view:vm:<vm>"`) and refuses the op if
-/// `bundle_closure_ref` does not match. The broker also refuses
-/// if the wire-supplied `generation` does not match the bundle's
-/// resolved generation — generations are monotonic, so a stale
-/// daemon must not race the activator.
+/// Store-sync request. The broker resolves the closure intent row keyed
+/// by `vm_id` (canonical id form `"store-view:vm:<vm>"`) and refuses
+/// the op if `bundle_closure_ref` does not match. The broker also
+/// refuses if the wire-supplied `generation` does not match the bundle's
+/// resolved generation — generations are monotonic, so a stale daemon
+/// must not race the activator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreSyncRequest {
@@ -732,12 +732,11 @@ pub struct StoreSyncRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// P2 ph2-store-sync response. Returned after the broker
-/// successfully populates the per-VM hardlink farm and swaps the
-/// `current` symlink atomically. The `hardlink_farm_path` is the
-/// per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store/`);
-/// the active generation directory is reachable via the
-/// `current` symlink.
+/// Store-sync response. Returned after the broker successfully
+/// populates the per-VM hardlink farm and swaps the `current` symlink
+/// atomically. The `hardlink_farm_path` is the per-VM farm root (i.e.
+/// `/var/lib/nixling/vms/<vm>/store/`); the active generation directory
+/// is reachable via the `current` symlink.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreSyncResponse {
@@ -747,17 +746,16 @@ pub struct StoreSyncResponse {
     pub closure_count: u32,
 }
 
-/// W3fu2 H1 (rust-1 / security-1): the broker derives the bridge,
-/// port, isolated/neigh_suppress/learning/unicast_flood flags, and
-/// matching rule rationale from the trusted bundle row anchored by
-/// `vm_id` + `role_id`. The
-/// pre-W3fu2 wire carried caller-supplied `bridge: IfName`,
-/// `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; W3fu1
-/// R2 rust-1 + security-1 found these violated the broker's own
-/// "daemon never names raw ifnames or raw intent" invariant, so the
-/// fields were removed. The broker reads the per-role
-/// `BridgePortFlags` row from `bundle.host.environments[*].bridgePortFlags`
-/// keyed by `role_id` and applies the documented flag set.
+/// The broker derives the bridge, port,
+/// isolated/neigh_suppress/learning/unicast_flood flags, and matching
+/// rule rationale from the trusted bundle row anchored by `vm_id` +
+/// `role_id`. The legacy wire carried caller-supplied `bridge: IfName`,
+/// `port: IfName`, `isolated: bool`, `neigh_suppress: bool`; these
+/// violated the broker's own "daemon never names raw ifnames or raw
+/// intent" invariant, so the fields were removed. The broker reads the
+/// per-role `BridgePortFlags` row from
+/// `bundle.host.environments[*].bridgePortFlags` keyed by `role_id` and
+/// applies the documented flag set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetBridgePortFlagsRequest {
@@ -786,9 +784,8 @@ pub struct SetupMountNamespaceRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// W3fu1 H1 (security-1): the managed-block lines come from the
-/// bundle's `host::HostsEntry` rows, not the wire. The broker only
-/// needs the lookup key.
+/// The managed-block lines come from the bundle's `host::HostsEntry`
+/// rows, not the wire. The broker only needs the lookup key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateHostsFileRequest {
@@ -799,8 +796,8 @@ pub struct UpdateHostsFileRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// USBIP live device routing is W6 — every variant in this group
-/// is refused with `unknown-operation` audit by the W3 broker.
+/// USBIP live device routing is refused with `unknown-operation` audit
+/// until the broker supports these variants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindRequest {
@@ -808,15 +805,15 @@ pub struct UsbipBindRequest {
     pub vm_id: VmId,
 }
 
-/// W3 USBIP firewall-rule skeleton. The rule body and the bus_id are
+/// USBIP firewall-rule skeleton. The rule body and the bus_id are
 /// derived from the per-busid policy in the trusted bundle
-/// (`bundle.usbip.busidLocks[*]`) via the `bundle_usbip_firewall_intent_ref`
-/// opaque-ID lookup. W3fu2 H1 (security-1) replaced the pre-W3fu2
-/// caller-supplied `bus_id: String` + `rule_hash: String` fields
-/// with this opaque reference because the raw `bus_id` was being
-/// interpolated into nft rule text without a validating newtype or
-/// escaping, and the caller-supplied `rule_hash` allowed the
-/// daemon to override the broker's drift-detection digest.
+/// (`bundle.usbip.busidLocks[*]`) via the
+/// `bundle_usbip_firewall_intent_ref` opaque-ID lookup. The legacy
+/// caller-supplied `bus_id: String` + `rule_hash: String` fields were
+/// replaced with this opaque reference because the raw `bus_id` was
+/// being interpolated into nft rule text without a validating newtype or
+/// escaping, and the caller-supplied `rule_hash` allowed the daemon to
+/// override the broker's drift-detection digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsbipBindFirewallRuleRequest {
@@ -872,11 +869,10 @@ pub struct ValidateBundleResponse {
     pub valid: bool,
 }
 
-/// Legacy runner-signal broker envelope. The live daemon stop/restart
-/// path now delivers signals through `nixlingd::supervisor::pidfd_table`
-/// after `SpawnRunner` pidfd registration; this wire shape remains for
-/// explicit broker-side signal audit/control flows and still returns
-/// `signaled=false` until a broker-owned live caller is wired up.
+/// Runner-signal broker envelope. The live daemon stop/restart path first
+/// delivers signals through `nixlingd::supervisor::pidfd_table` after
+/// `SpawnRunner` pidfd registration; on pidfd `EPERM`, nixlingd falls back
+/// to this broker-owned live caller via `stop_vm_pidfd_role`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerSignal {
@@ -891,6 +887,10 @@ pub struct SignalRunnerRequest {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub signal: RunnerSignal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_start_time_ticks: Option<u64>,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -903,18 +903,34 @@ pub struct SignalRunnerResponse {
     pub role_id: RoleId,
 }
 
-/// W4-H5 (security-1): the daemon never names argv, env, uid/gid,
-/// caps, kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or
-/// any other launch authority across the wire. The broker resolves
-/// the full role spawn context from `bundle.vms[vm_id].roles[role_id]`
-/// anchored by the opaque `bundle_runner_intent_ref`. The wire shape
-/// follows the W3fu1 H1 opaque-only contract for every other mutating
-/// variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeregisterRunnerPidfdRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeregisterRunnerPidfdResponse {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    pub removed: bool,
+}
+
+/// The daemon never names argv, env, uid/gid, caps,
+/// kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any
+/// other launch authority across the wire. The broker resolves the full
+/// role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored
+/// by the opaque `bundle_runner_intent_ref`. The wire shape follows the
+/// opaque-only contract for every other mutating variant.
 ///
-/// `RunnerRole` selects which of the W4 H1/H2/H3 argv generators the
-/// broker invokes against the bundle data (CH, virtiofsd, or swtpm).
-/// Adding new roles requires a wave-blocking bundle schema bump so
-/// downstream bundles can declare the new launch context.
+/// `RunnerRole` selects which argv generator the broker invokes against
+/// the bundle data (CH, virtiofsd, or swtpm). Adding new roles requires
+/// a bundle schema bump so downstream bundles can declare the new launch
+/// context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunnerRole {
@@ -938,12 +954,11 @@ pub enum RunnerRole {
     VsockRelay,
     /// usbip helper sidecar. Broker invokes `nixling_host::usbip_argv::{generate_usbip_bind_argv, generate_usbip_unbind_argv}`.
     Usbip,
-    /// P1 observability-4 + decision 5: OTel host-bridge sidecar
-    /// (vsock relay folded out of `nixling-otel-host-bridge.service`
-    /// into broker SpawnRunner). Receives pre-opened vsock fds for
-    /// the obs VM and the alloy host-egress socket; no AF_VSOCK
-    /// socket creation capability in the role profile (per
-    /// security-2 closed-set intent contract). Broker invokes
+    /// OTel host-bridge sidecar (vsock relay folded out of
+    /// `nixling-otel-host-bridge.service` into broker SpawnRunner).
+    /// Receives pre-opened vsock fds for the obs VM and the alloy
+    /// host-egress socket; no AF_VSOCK socket creation capability in
+    /// the role profile. Broker invokes
     /// `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
     OtelHostBridge,
 }
@@ -981,7 +996,7 @@ pub struct SpawnRunnerRequest {
     /// The broker resolves this to the full launch context (binary
     /// path, argv inputs, uid/gid, capabilities, seccomp policy ref,
     /// cgroup placement, mount namespace, environment) and feeds it
-    /// to the matching W4 H1/H2/H3 argv generator.
+    /// to the matching argv generator.
     pub bundle_runner_intent_ref: BundleOpId,
     /// Optional vsock CID / TAP fd slot allocated by the daemon at
     /// host-prepare time. The broker validates each entry against the
@@ -1026,7 +1041,7 @@ pub enum RunnerAllocationKind {
 /// out-of-band as a `SCM_RIGHTS` attachment on the same broker socket
 /// frame; this JSON body carries the metadata the daemon's pidfd
 /// table requires to validate / reconcile the handle (`(pid,
-/// start_time_ticks)` is the W3 s1 pidfd contract).
+/// start_time_ticks)` is the pidfd contract).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpawnRunnerResponse {
@@ -1048,15 +1063,12 @@ pub struct SpawnRunnerResponse {
     pub pidfd_index: u32,
 }
 
-/// W4-fu wire envelope wrapping a [`BrokerRequest`] with the
-/// authenticated caller context the broker uses for authorization
-/// and audit.
+/// Wire envelope wrapping a [`BrokerRequest`] with the authenticated
+/// caller context the broker uses for authorization and audit.
 ///
-/// The caller role is derived from `SO_PEERCRED` on the broker
-/// socket; the daemon never carries an unauthenticated
-/// `CallerRole` over the wire (the field is set by the broker on
-/// receive, not by the daemon on send), but the type lives here
-/// so the dispatch layer and the request parser share one shape.
+/// The caller role is derived from `SO_PEERCRED` before dispatch.
+/// Broker fallback requests sent by `nixlingd` carry the public
+/// socket caller role that already passed daemon-side authorization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerRequestEnvelope {
@@ -1097,27 +1109,25 @@ impl BrokerCallerRole {
 
     pub fn for_display(&self) -> &'static str {
         match self {
-            Self::AdminUid { .. } => "AdminUid",
-            Self::LauncherUid { .. } => "LauncherUid",
+            Self::AdminUid { .. } => "nixling-admin",
+            Self::LauncherUid { .. } => "nixling-launcher",
             Self::RootUid { .. } => "RootUid",
-            Self::NotAuthorized => "NotAuthorized",
+            Self::NotAuthorized => "nixling-not-authorized",
         }
     }
 }
 
 // ---------------------------------------------------------------
-// P2 ph2-dag-host-prep: typed broker request scaffolds for the
-// host-prep DAG steps. The dispatchers currently return
-// `BrokerError::Unimplemented`; real handlers land later in P2/P3.
-// The structs follow the W3 opaque-id discipline: the daemon never
-// names raw paths/uids/argv on the wire — only bundle-resolved
-// intent references.
+// Typed broker request scaffolds for the host-prep DAG steps. The
+// dispatchers currently return `BrokerError::Unimplemented` until real
+// handlers are wired. The structs follow the opaque-id discipline: the
+// daemon never names raw paths/uids/argv on the wire — only
+// bundle-resolved intent references.
 // ---------------------------------------------------------------
 
-/// P2 SeedDnsmasqLease request. The broker resolves the per-VM
-/// dnsmasq lease intent from the bundle (using `vm_id`) and writes
-/// `/var/lib/nixling/dnsmasq/<vm>.leases` with the correct owner /
-/// mode.
+/// SeedDnsmasqLease request. The broker resolves the per-VM dnsmasq
+/// lease intent from the bundle (using `vm_id`) and writes
+/// `/var/lib/nixling/dnsmasq/<vm>.leases` with the correct owner / mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SeedDnsmasqLeaseRequest {
@@ -1127,9 +1137,9 @@ pub struct SeedDnsmasqLeaseRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// P2 BindMountFromHardlinkFarm request. The broker resolves the
-/// `store-view` intent for `vm_id` and creates the bind mount from
-/// the per-VM hardlink farm.
+/// BindMountFromHardlinkFarm request. The broker resolves the
+/// `store-view` intent for `vm_id` and creates the bind mount from the
+/// per-VM hardlink farm.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BindMountFromHardlinkFarmRequest {
@@ -1142,10 +1152,9 @@ pub struct BindMountFromHardlinkFarmRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// P2 OwnershipMatrixCheck request. The broker walks the
-/// `/var/lib/nixling/vms/<vm>/` subtree and verifies each leaf
-/// against the ownership matrix (plan.md P2 §"Ownership matrix").
-/// Owned by sibling P2 agent (ph2-p2-ownership-matrix).
+/// OwnershipMatrixCheck request. The broker walks the
+/// `/var/lib/nixling/vms/<vm>/` subtree and verifies each leaf against
+/// the ownership matrix.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnershipMatrixCheckRequest {
@@ -1154,16 +1163,92 @@ pub struct OwnershipMatrixCheckRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// P2 SshHostKeyPreflight request. The broker opens every
+/// SshHostKeyPreflight request. The broker opens every
 /// `/var/lib/nixling/vms/<vm>/sshd-host-keys/ssh_host_*_key` with
-/// `O_NOFOLLOW` and refuses if drift from `root:root 0400`. Owned
-/// by sibling P2 agent (ph2-p2-ssh-host-key-preflight).
+/// `O_NOFOLLOW` and refuses if drift from `root:root 0400`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SshHostKeyPreflightRequest {
     pub vm_id: VmId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Disk-image provisioning request.
+///
+/// The daemon sends the VM's opaque `vm_id`; the broker resolves
+/// every `DiskInit` plan-op from the trusted bundle's
+/// `ProcessNode.plan_ops` for that VM and creates the disk images.
+///
+/// Security: the broker NEVER trusts a caller-supplied path. All
+/// `target_path`, `size_bytes`, `mode`, `owner_uid`, and `owner_gid`
+/// values come from the bundle; the caller supplies only an opaque
+/// VM identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiskInitRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// Exit status kind for a broker-reaped child.
+///
+/// - `Exited`: child called `_exit(n)` / `exit(n)`.
+/// - `Signaled`: child was killed by a signal that is NOT SIGKILL.
+/// - `Killed`: child was killed specifically by SIGKILL (unexpected termination).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChildExitKind {
+    Exited,
+    Signaled,
+    Killed,
+}
+
+/// Typed exit status carried in [`ChildReapedNotification`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildExitStatus {
+    pub kind: ChildExitKind,
+    /// Exit code (present when `kind == "exited"`).
+    #[serde(default)]
+    pub code: Option<i32>,
+    /// Signal number (present when `kind == "signaled"` or `"killed"`).
+    #[serde(default)]
+    pub signal: Option<i32>,
+}
+
+/// One broker-reaped child notification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildReapedNotification {
+    /// `"<vm_id>:<role_id>"` key from the broker's pidfd registry.
+    pub runner_id: String,
+    pub pid: i32,
+    pub exit_status: ChildExitStatus,
+    /// Unix timestamp milliseconds when the broker called `waitid`.
+    pub reaped_at_ms: i64,
+}
+
+/// Broker-to-daemon push notifications.
+///
+/// `#[serde(tag = "kind")]` (internally-tagged, no content wrapper)
+/// so a future variant can be added without breaking old daemons;
+/// unknown kinds deserialise as `Unknown` (unit variant, `#[serde(other)]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum BrokerNotification {
+    ChildReaped(ChildReapedNotification),
+    #[serde(other)]
+    Unknown,
+}
+
+/// Response to `BrokerRequest::PollChildReaped`. Drains and returns all
+/// buffered `ChildReaped` notifications in FIFO order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PollChildReapedResponse {
+    pub notifications: Vec<ChildReapedNotification>,
 }
 
 #[cfg(test)]
@@ -1189,6 +1274,22 @@ mod tests {
     fn broker_caller_role_admin_passes_predicate() {
         assert!(BrokerCallerRole::AdminUid { uid: 1000 }.is_admin_uid());
         assert!(!BrokerCallerRole::LauncherUid { uid: 1000 }.is_admin_uid());
+    }
+
+    #[test]
+    fn broker_caller_role_display_uses_stable_audit_labels() {
+        assert_eq!(
+            BrokerCallerRole::LauncherUid { uid: 1000 }.for_display(),
+            "nixling-launcher"
+        );
+        assert_eq!(
+            BrokerCallerRole::AdminUid { uid: 1000 }.for_display(),
+            "nixling-admin"
+        );
+        assert_eq!(
+            BrokerCallerRole::NotAuthorized.for_display(),
+            "nixling-not-authorized"
+        );
     }
 
     #[test]
@@ -1278,10 +1379,9 @@ mod tests {
 
     #[test]
     fn usbip_bind_firewall_rule_round_trips() {
-        // W3fu2 H1 (security-1): the wire shape carries an opaque
-        // BundleOpId reference instead of raw bus_id + rule_hash;
-        // the broker resolves both server-side from the trusted
-        // bundle's per-busid policy.
+        // The wire shape carries an opaque BundleOpId reference instead
+        // of raw bus_id + rule_hash; the broker resolves both
+        // server-side from the trusted bundle's per-busid policy.
         let frame = encode_frame(&serde_json::json!({
             "kind": "UsbipBindFirewallRule",
             "payload": { "bundleUsbipFirewallIntentRef": "usbip-fw-1-2" }
@@ -1299,9 +1399,9 @@ mod tests {
         }
     }
 
-    /// W3fu2 H1 (rust-1 / security-1): CreatePersistentTap and
-    /// CreateTapFd carry only opaque (role_id, vm_id) on the wire;
-    /// the broker derives ifname/owner/attrs from the trusted bundle.
+    /// CreatePersistentTap and CreateTapFd carry only opaque
+    /// (role_id, vm_id) on the wire; the broker derives
+    /// ifname/owner/attrs from the trusted bundle.
     #[test]
     fn create_persistent_tap_request_is_opaque_only() {
         let frame = encode_frame(&serde_json::json!({
@@ -1342,10 +1442,9 @@ mod tests {
         }
     }
 
-    /// W3fu2 H1 (rust-1 / security-1): SetBridgePortFlags carries
-    /// only opaque (role_id, vm_id) on the wire; the broker reads
-    /// bridge/port names and the desired flag set from the trusted
-    /// bundle's per-role BridgePortFlags row.
+    /// SetBridgePortFlags carries only opaque (role_id, vm_id) on the
+    /// wire; the broker reads bridge/port names and the desired flag
+    /// set from the trusted bundle's per-role BridgePortFlags row.
     #[test]
     fn set_bridge_port_flags_request_is_opaque_only() {
         let frame = encode_frame(&serde_json::json!({
@@ -1366,9 +1465,9 @@ mod tests {
         }
     }
 
-    /// W3fu2 H1 regression guard: a wire frame that still contains
-    /// the pre-W3fu2 raw authority field is rejected by
-    /// `deny_unknown_fields`. This pins the new opaque-only contract.
+    /// Regression guard: a wire frame that still contains the legacy raw
+    /// authority field is rejected by `deny_unknown_fields`. This pins
+    /// the opaque-only contract.
     #[test]
     fn set_bridge_port_flags_rejects_raw_bridge_field() {
         let frame = encode_frame(&serde_json::json!({
@@ -1416,22 +1515,22 @@ mod tests {
         assert!(result.is_err(), "raw bus_id must be refused on the W3 wire");
     }
 
-    /// W3fu3 H2 (security-1): the W3fu2 H1 rejection guards lumped
-    /// multiple legacy authority fields into a single test payload, so
-    /// any one field being accidentally reintroduced would still be
-    /// caught — but the guard could not point at which field. The
-    /// helper + per-field tests below assert each removed raw field
-    /// rejects on its own, so a future regression that reintroduces
-    /// exactly one of them fails closed with a precisely-named test.
+    /// Earlier rejection guards lumped multiple legacy authority fields
+    /// into a single test payload, so any one field being accidentally
+    /// reintroduced would still be caught — but the guard could not
+    /// point at which field. The helper + per-field tests below assert
+    /// each removed raw field rejects on its own, so a future regression
+    /// that reintroduces exactly one of them fails closed with a
+    /// precisely-named test.
     ///
-    /// W3fu4 H2 (security-1 from R4): the helper now asserts the
-    /// rejection is specifically `wire-unknown-field`, not any error,
-    /// and the per-field test loops use values matching each field's
-    /// pre-W3fu2 wire type. Without this, a future regression that
-    /// reintroduces a numeric field like `ownerUid`/`ownerGid`/`mtu`
-    /// would still pass via serde type-mismatch on a string value —
-    /// the gate would see an error and accept it without proving the
-    /// wire contract actually refused the field name.
+    /// The helper asserts the rejection is specifically
+    /// `wire-unknown-field`, not any error, and the per-field test loops
+    /// use values matching each field's legacy wire type. Without this,
+    /// a future regression that reintroduces a numeric field like
+    /// `ownerUid`/`ownerGid`/`mtu` would still pass via serde
+    /// type-mismatch on a string value — the gate would see an error and
+    /// accept it without proving the wire contract actually refused the
+    /// field name.
     fn require_wire_unknown_field_rejection(kind: &str, base: serde_json::Value, unknown: &str) {
         let frame = encode_frame(&serde_json::json!({
             "kind": kind,
@@ -1452,13 +1551,12 @@ mod tests {
         }
     }
 
-    /// Legacy authority field with its pre-W3fu2 wire type.
-    /// Tightens the per-field rejection loops in W3fu4 H2 so they
-    /// inject each field with a value matching its original type
-    /// (numeric for uid/gid/mtu, bool for flag fields, string for
-    /// name/hash fields). Without typed values, the rejection could
-    /// pass via serde type-mismatch instead of via the
-    /// `deny_unknown_fields` contract.
+    /// Legacy authority field with its original wire type. Tightens the
+    /// per-field rejection loops so they inject each field with a value
+    /// matching its original type (numeric for uid/gid/mtu, bool for
+    /// flag fields, string for name/hash fields). Without typed values,
+    /// the rejection could pass via serde type-mismatch instead of via
+    /// the `deny_unknown_fields` contract.
     fn legacy_value(field: &str) -> serde_json::Value {
         match field {
             "ownerUid" | "ownerGid" | "mtu" => serde_json::json!(1),
@@ -1602,7 +1700,7 @@ mod tests {
 
     #[test]
     fn launch_minijail_child_rejects_inline_authority_fields() {
-        // argv, env, uid, gid, caps, seccomp_profile from the W2 wire
+        // Legacy argv, env, uid, gid, caps, and seccomp_profile fields
         // are forbidden — deny_unknown_fields traps them.
         let frame = encode_frame(&serde_json::json!({
             "kind": "LaunchMinijailChild",
@@ -1621,15 +1719,14 @@ mod tests {
         ));
     }
 
-    /// W3fu2 H1 regression guard: this test was reframed when
-    /// `ifname_derived` was removed from `CreateTapFdRequest`. The
-    /// payload-side validation it used to assert is now the broker's
-    /// responsibility (it derives the ifname from the trusted bundle
-    /// row keyed by `role_id` + `vm_id`). What we still want to
-    /// guarantee here is that a frame carrying the dropped
-    /// `ifnameDerived` field is fail-closed-rejected by the wire
-    /// layer with `wire-unknown-field`, preventing a future caller
-    /// from supplying it.
+    /// Regression guard: this test was reframed when `ifname_derived`
+    /// was removed from `CreateTapFdRequest`. The payload-side
+    /// validation it used to assert is now the broker's responsibility
+    /// (it derives the ifname from the trusted bundle row keyed by
+    /// `role_id` + `vm_id`). What we still want to guarantee here is
+    /// that a frame carrying the dropped `ifnameDerived` field is
+    /// fail-closed-rejected by the wire layer with `wire-unknown-field`,
+    /// preventing a future caller from supplying it.
     #[test]
     fn create_tap_fd_rejects_invalid_ifname() {
         let frame = encode_frame(&serde_json::json!({
@@ -1651,12 +1748,12 @@ mod tests {
         );
     }
 
-    /// W4-H5: SpawnRunner carries only opaque IDs (vm_id, role_id,
+    /// SpawnRunner carries only opaque IDs (vm_id, role_id,
     /// bundle_runner_intent_ref). The broker resolves the full launch
     /// context (argv inputs, uid/gid, caps, seccomp, cgroup) from the
-    /// trusted bundle row anchored by the opaque reference; the
-    /// daemon never names argv, env, uid, gid, caps, kernel/initrd
-    /// paths, virtiofs sockets, or seccomp profiles on the wire.
+    /// trusted bundle row anchored by the opaque reference; the daemon
+    /// never names argv, env, uid, gid, caps, kernel/initrd paths,
+    /// virtiofs sockets, or seccomp profiles on the wire.
     #[test]
     fn spawn_runner_request_is_opaque_only() {
         let frame = encode_frame(&serde_json::json!({
@@ -1697,10 +1794,10 @@ mod tests {
 
     #[test]
     fn spawn_runner_rejects_each_legacy_authority_field() {
-        // Per W3fu1 H1 + W4-H5: argv, env, uid, gid, caps,
-        // seccomp_profile, kernel/initrd/cmdline, api_socket_mode are
-        // ALL bundle-derived. Wire frames containing them must
-        // fail-closed with wire-unknown-field.
+        // argv, env, uid, gid, caps, seccomp_profile,
+        // kernel/initrd/cmdline, and api_socket_mode are ALL
+        // bundle-derived. Wire frames containing them must fail-closed
+        // with wire-unknown-field.
         let base = serde_json::json!({
             "vmId": "corp-vm",
             "roleId": "ch",
@@ -1820,8 +1917,7 @@ mod tests {
     fn spawn_runner_response_round_trips() {
         // The pidfd is delivered out-of-band over SCM_RIGHTS; the
         // JSON body carries (pid, start_time_ticks, pidfd_index) so
-        // the daemon's pidfd table can validate / reconcile the
-        // handle per the W3 s1 contract.
+        // the daemon's pidfd table can validate / reconcile the handle.
         let response = BrokerResponse::SpawnRunner(SpawnRunnerResponse {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch"),

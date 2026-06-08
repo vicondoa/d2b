@@ -24,11 +24,11 @@ and explicit denial hints.
 - `allowedCommands[]` and `deniedCommands[]` are emitted in command-name
   order for stable diffs.
 - `deniedCommands` is always present and may be an empty array.
-- No documented fields are omitted in W2.
+- No documented fields are omitted.
 
 ## Stability promise
 
-The field names above and the `role` enum are frozen for W2. The reason
+The field names above and the `role` enum are frozen. The reason
 strings are operator-facing text and may be clarified, but they should
 not silently change the underlying authorization decision.
 

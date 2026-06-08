@@ -1,4 +1,4 @@
-//! W3 broker ops: `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`.
+//! Broker ops: `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`.
 //!
 //! Each variant validates a declared role × device-class pair against
 //! the trusted bundle device-node matrix
@@ -75,10 +75,7 @@ impl std::fmt::Display for DeviceOpenValidationError {
             Self::DeviceMajorMinorMismatch { expected, actual } => write!(
                 f,
                 "device major/minor mismatch: expected {}:{}, got {}:{}",
-                expected.0,
-                expected.1,
-                actual.0,
-                actual.1,
+                expected.0, expected.1, actual.0, actual.1,
             ),
             Self::DeviceKindMismatch { expected, actual } => write!(
                 f,
@@ -245,23 +242,27 @@ fn live_open_device_common(
             });
         }
     }
-    let fd = open_device_fd(&matrix_entry.entry.path, read_write_for_class(requested_class))
-        .map_err(|e| super::OpError::Io {
-            path: matrix_entry.entry.path.clone(),
-            detail: e.to_string(),
-        })?;
+    let fd = open_device_fd(
+        &matrix_entry.entry.path,
+        read_write_for_class(requested_class),
+    )
+    .map_err(|e| super::OpError::Io {
+        path: matrix_entry.entry.path.clone(),
+        detail: e.to_string(),
+    })?;
     let stat = fstat(fd.as_raw_fd()).map_err(|e| super::OpError::Io {
         path: matrix_entry.entry.path.clone(),
         detail: e.to_string(),
     })?;
-    let actual_kind = device_kind_from_mode(stat.st_mode).ok_or_else(|| super::OpError::Refused {
-        operation: "OpenDevice",
-        reason: format!(
-            "{}: opened path has unsupported file type mode {:#o}",
-            matrix_entry.entry.path.display(),
-            stat.st_mode,
-        ),
-    })?;
+    let actual_kind =
+        device_kind_from_mode(stat.st_mode).ok_or_else(|| super::OpError::Refused {
+            operation: "OpenDevice",
+            reason: format!(
+                "{}: opened path has unsupported file type mode {:#o}",
+                matrix_entry.entry.path.display(),
+                stat.st_mode,
+            ),
+        })?;
     let actual_major_minor = match &actual_kind {
         DeviceNodeKind::CharacterDevice | DeviceNodeKind::BlockDevice => {
             Some((major(stat.st_rdev), minor(stat.st_rdev)))
@@ -323,9 +324,9 @@ fn expected_major_minor_for_class(class: DeviceClass) -> Option<(u64, u64)> {
         DeviceClass::UsbipHost => Some((251, 0)),
         DeviceClass::Tpm => Some((10, 224)),
         DeviceClass::Vfio => Some((10, 196)),
-        // P1 kernel-3: udmabuf is a misc device with dynamic minor;
-        // skip the major:minor check (matrix-loader still validates
-        // the path + kind + group).
+        // udmabuf is a misc device with dynamic minor; skip the
+        // major:minor check (matrix-loader still validates the path +
+        // kind + group).
         DeviceClass::Udmabuf => None,
     }
 }
@@ -337,7 +338,7 @@ fn validate_opened_device(
 ) -> Result<(), DeviceOpenValidationError> {
     if matrix_entry.entry.kind != actual_kind {
         return Err(DeviceOpenValidationError::DeviceKindMismatch {
-            expected: matrix_entry.entry.kind.clone(),
+            expected: matrix_entry.entry.kind,
             actual: device_kind_name(&actual_kind).to_owned(),
         });
     }
@@ -352,7 +353,7 @@ fn validate_opened_device(
             }
             None => {
                 return Err(DeviceOpenValidationError::DeviceKindMismatch {
-                    expected: matrix_entry.entry.kind.clone(),
+                    expected: matrix_entry.entry.kind,
                     actual: "non-device".to_owned(),
                 })
             }
@@ -389,9 +390,9 @@ fn default_matrix_entry(class: DeviceClass) -> DeviceMatrixEntry {
                 DeviceClass::UsbipHost => "root",
                 DeviceClass::Tpm => "tss",
                 DeviceClass::Vfio => "vfio",
-                // P1 kernel-3: cross-domain Wayland's /dev/udmabuf
-                // is rendered through the render group on stock
-                // distros; matches the kernel module ownership.
+                // Cross-domain Wayland's /dev/udmabuf is rendered
+                // through the render group on stock distros; matches
+                // the kernel module ownership.
                 DeviceClass::Udmabuf => "render",
             }
             .to_owned(),
@@ -492,12 +493,9 @@ mod tests {
 
     #[test]
     fn post_open_validation_rejects_major_minor_mismatch() {
-        let err = validate_opened_device(
-            &matrix_kvm(),
-            DeviceNodeKind::CharacterDevice,
-            Some((1, 3)),
-        )
-        .unwrap_err();
+        let err =
+            validate_opened_device(&matrix_kvm(), DeviceNodeKind::CharacterDevice, Some((1, 3)))
+                .unwrap_err();
         assert_eq!(
             err,
             DeviceOpenValidationError::DeviceMajorMinorMismatch {
@@ -509,8 +507,9 @@ mod tests {
 
     #[test]
     fn post_open_validation_rejects_kind_mismatch() {
-        let err = validate_opened_device(&matrix_kvm(), DeviceNodeKind::BlockDevice, Some((10, 232)))
-            .unwrap_err();
+        let err =
+            validate_opened_device(&matrix_kvm(), DeviceNodeKind::BlockDevice, Some((10, 232)))
+                .unwrap_err();
         assert_eq!(
             err,
             DeviceOpenValidationError::DeviceKindMismatch {

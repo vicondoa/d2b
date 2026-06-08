@@ -20,12 +20,12 @@
       ];
     };
 
-    # W3 daemon-backed variant — exercises the v0.4.0 per-env
+    # Daemon-backed variant — exercises the v0.4.0 per-env
     # `mtu` / `mssClamp` / `lan.allowEastWest` knobs together with
     # the site-level `allowUnsafeEastWest` acknowledgement, and
     # opts one VM into the experimental nixlingd supervisor
-    # (Tier 0 mixed mode per plan §"W3 daemon-vs-legacy migration
-    # boundary"). See ./README.md for the operator UX.
+    # (Tier 0 mixed mode per the daemon-vs-legacy migration
+    # boundary). See ./README.md for the operator UX.
     nixosConfigurations.multi-env-daemon-experimental =
       nixling.inputs.nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
@@ -51,12 +51,12 @@
             nixling.envs.work.mssClamp = lib.mkForce true;
             nixling.envs.work.lan.allowEastWest = lib.mkForce true;
 
-            # v1.1-P2 (per ADR 0015): `nixling.vms.<vm>.supervisor`
+            # v1.1 (per ADR 0015): `nixling.vms.<vm>.supervisor`
             # was removed. v1.1 is daemon-only — every enabled VM
             # is daemon-supervised by default. The previous v1.0
             # "mixed Tier 0 mode" example (one VM on systemd, one
             # on nixlingd) no longer applies because the systemd
-            # template path is retired in v1.1-P10.
+            # template path is retired in v1.1.
           })
         ];
       };

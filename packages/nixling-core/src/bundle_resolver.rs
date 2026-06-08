@@ -1,23 +1,21 @@
-//! W11 bundle resolver: map `BundleOpId` opaque references to
-//! concrete intent rows the broker live_handlers can execute.
+//! Bundle resolver: map `BundleOpId` opaque references to concrete
+//! intent rows the broker live_handlers can execute.
 //!
 //! # Motivation
 //!
 //! Per the security contract in
-//! `packages/nixling-ipc/src/types.rs::BundleOpId`, every W3+
-//! mutating broker request carries opaque IDs that the broker
-//! resolves against its own trusted copy of the bundle — the daemon
-//! never names raw paths, raw uids/gids, raw argv, raw nft rule
-//! text, raw routes, or raw sysctl values.
+//! `packages/nixling-ipc/src/types.rs::BundleOpId`, mutating broker
+//! requests carry opaque IDs that the broker resolves against its own
+//! trusted copy of the bundle — the daemon never names raw paths, raw
+//! uids/gids, raw argv, raw nft rule text, raw routes, or raw sysctl
+//! values.
 //!
-//! Before W11, the W4-fu clean-break broker dispatch arms for
-//! `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile`
-//! / `OpenPidfd` / `SpawnRunner` returned
-//! `BrokerError::Unimplemented { target_wave: "W4-fu-fu (bundle resolver)" }`
-//! because there was no in-tree code path that turned
-//! `bundle_*_intent_ref: BundleOpId` into the concrete `script_body`
-//! / `RouteIntent` / `SysctlIntent` / hosts-file bytes / runner argv
-//! the live_handlers needed.
+//! Earlier clean-break broker dispatch arms for `ApplyNftables` /
+//! `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `OpenPidfd` /
+//! `SpawnRunner` returned an unimplemented target until there was an
+//! in-tree code path that turned `bundle_*_intent_ref: BundleOpId` into
+//! the concrete `script_body` / `RouteIntent` / `SysctlIntent` /
+//! hosts-file bytes / runner argv the live_handlers needed.
 //!
 //! [`BundleResolver`] closes that gap.
 //!
@@ -52,19 +50,19 @@
 //! daemon's `bundle_*_intent_ref` value is a *lookup key*, not the
 //! authority it points at.
 //!
-//! # What W11 deliberately does **not** do
+//! # What the resolver deliberately does **not** do
 //!
-//! - **Broker wiring**: the broker `dispatch_request` still surfaces
-//!   `Unimplemented` for the W4-fu-fu real-wire arms; W12 wires this
-//!   resolver into those arms (with `fd_passing::send_with_fd` for
-//!   `OpenPidfd` / `SpawnRunner`).
+//! - **Broker wiring**: the broker `dispatch_request` may still surface
+//!   `Unimplemented` for real-wire arms until they are wired to this
+//!   resolver (with `fd_passing::send_with_fd` for `OpenPidfd` /
+//!   `SpawnRunner`).
 //! - **Runner binary paths**: `ResolvedRunnerIntent::binary_path`
 //!   is populated as a placeholder (`/run/current-system/sw/bin/
 //!   <role>` for now) because `processes.json` does not carry the
-//!   per-role binary path today. W12 either teaches the Nix emitter
-//!   to include `binary_path` per role, or has the broker maintain
-//!   a static role→binary mapping; W11 ships the resolver shape so
-//!   that wiring drop is purely additive.
+//!   per-role binary path today. The Nix emitter can include
+//!   `binary_path` per role, or the broker can maintain a static
+//!   role→binary mapping; the resolver shape keeps that wiring drop
+//!   purely additive.
 
 use crate::bundle::Bundle;
 use crate::closures::ClosureMetadata;
@@ -82,9 +80,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-/// W11: trusted-bundle intent lookup tables loaded from the
-/// broker-configured `bundle_path`. See the module docs for the
-/// `BundleOpId` encoding contract.
+/// Trusted-bundle intent lookup tables loaded from the broker-configured
+/// `bundle_path`. See the module docs for the `BundleOpId` encoding
+/// contract.
 #[derive(Debug, Clone)]
 pub struct BundleResolver {
     pub bundle: Bundle,
@@ -192,6 +190,7 @@ pub struct ResolvedUsbipBindIntent {
     pub env: String,
     pub lock_path: PathBuf,
     pub vendor_product_allowlist: Vec<VendorProductPair>,
+    pub dynamic_bus_id: bool,
 }
 
 /// Resolved executable startup action for a process-DAG node that would
@@ -217,6 +216,24 @@ impl ResolvedVmStartIntent {
     pub fn is_readiness_only(&self) -> bool {
         self.actions.is_empty()
     }
+}
+
+/// Returned by [`BundleResolver::resolve_disk_init_ops`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedDiskInitOp {
+    /// Absolute target path; validated by the broker as under
+    /// `/var/lib/nixling/vms/`.
+    pub target_path: std::path::PathBuf,
+    /// Pre-allocated file size in bytes.
+    pub size_bytes: u64,
+    /// Unix permission bits (e.g. `0o600`).
+    pub mode: u32,
+    /// Owner UID — typically the per-VM runner UID.
+    pub owner_uid: u32,
+    /// Owner GID.
+    pub owner_gid: u32,
+    /// When `true`, skip creation if file already exists (idempotent).
+    pub if_absent: bool,
 }
 
 /// Resolved runner spawn plan — input to `live_spawn_runner`'s
@@ -246,28 +263,26 @@ pub struct ResolvedRunnerIntent {
     /// Profile id (matches `RoleProfile::profile_id` so the broker
     /// can look up the per-role minijail profile JSON).
     pub profile_id: String,
-    /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
-    /// pre-establishes a single-entry user namespace for this
-    /// runner; the child is fake-root inside the NS and the
-    /// host-side `capabilities` set should be empty. Currently
-    /// only virtiofsd role profiles set this for least-privilege
-    /// FS serving without CAP_DAC_*.
+    /// When `Some`, the broker pre-establishes a single-entry user
+    /// namespace for this runner; the child is fake-root inside the NS
+    /// and the host-side `capabilities` set should be empty. Set by
+    /// virtiofsd (v1.1.2, ADR 0021) and swtpm (v1.2) roles for
+    /// least-privilege operation without host caps.
     pub user_namespace: Option<UserNamespaceSpec>,
-    /// v1.1.2fu36: umask the broker installs in the spawned child
-    /// before execve. None = inherit broker umask.
+    /// Umask the broker installs in the spawned child before execve.
+    /// None = inherit broker umask.
     pub umask: Option<u32>,
 }
 
-/// v1.1.1fu14 — single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
+/// Single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserNamespaceSpec {
     pub host_uid_for_zero: u32,
     pub host_gid_for_zero: u32,
 }
 
-// v1.1.2fu19 panel-software R2 should-fix: convenience From impls
-// across the wire (`UserNamespaceProfile`) and intent
-// (`UserNamespaceSpec`) types so layer boundaries can `.into()`
+// Convenience From impls across the wire (`UserNamespaceProfile`) and
+// intent (`UserNamespaceSpec`) types so layer boundaries can `.into()`
 // instead of hand-copying fields.
 impl From<crate::minijail_profile::UserNamespaceProfile> for UserNamespaceSpec {
     fn from(p: crate::minijail_profile::UserNamespaceProfile) -> Self {
@@ -318,7 +333,7 @@ pub struct ResolvedSocketIntent {
     pub group_gid: u32,
 }
 
-/// W15 (W9-fu): resolved host-install plan.
+/// Resolved host-install plan.
 ///
 /// Synthesized from the bundle's static installer policy: the
 /// systemd unit file path the daemon ships at + the service name
@@ -330,8 +345,8 @@ pub struct ResolvedInstallerIntent {
     pub service_name: String,
     pub daemon_config_path: PathBuf,
     pub bundle_path: PathBuf,
-    /// W11 placeholder: today the installer plan is a small set of
-    /// fixed targets the broker writes. Future versions can extend
+    /// Today the installer plan is a small set of fixed targets the
+    /// broker writes. Future versions can extend
     /// this with per-host customization.
     pub artifacts: Vec<InstallerArtifact>,
 }
@@ -343,21 +358,22 @@ pub struct InstallerArtifact {
     pub purpose: String,
 }
 
-/// W15 (W9-fu migrate writer): resolved migration plan.
+/// Resolved migration plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMigrateIntent {
     pub intent_id: String,
     /// VMs that will be migrated from systemd-owned to daemon-owned.
-    /// The bundle's `processes.json` is the source of truth here:
-    /// every VM declared in `processes.vms[*]` is migrate-eligible.
+    /// The bundle's `processes.json` is the source of truth here,
+    /// excluding synthetic per-env runner scopes such as
+    /// `sys-<env>-usbipd`.
     pub vms: Vec<String>,
     /// Notes the broker echoes back so the operator can see what
     /// the writer plans to do without inspecting the bundle.
     pub notes: Vec<String>,
 }
 
-/// W14 LiveNative: resolved activation intent for per-VM switch / boot /
-/// test / rollback broker dispatch.
+/// Resolved activation intent for per-VM switch / boot / test / rollback
+/// broker dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedActivationIntent {
     pub intent_id: String,
@@ -366,8 +382,8 @@ pub struct ResolvedActivationIntent {
     pub generation_number: Option<u64>,
 }
 
-/// W7/W14: resolved per-VM store-view plan used by the broker's
-/// native activation path.
+/// Resolved per-VM store-view plan used by the broker's native activation
+/// path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedStoreViewIntent {
     pub intent_id: String,
@@ -378,14 +394,14 @@ pub struct ResolvedStoreViewIntent {
     pub closure_paths: Vec<PathBuf>,
 }
 
-/// W14 LiveNative: resolved host-GC intent.
+/// Resolved host-GC intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedGcIntent {
     pub intent_id: String,
     pub retained_store_paths: Vec<PathBuf>,
 }
 
-/// W14 LiveNative: resolved framework-managed SSH key rotation intent.
+/// Resolved framework-managed SSH key rotation intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKeysRotateIntent {
     pub intent_id: String,
@@ -393,7 +409,7 @@ pub struct ResolvedKeysRotateIntent {
     pub key_path: PathBuf,
 }
 
-/// W14 LiveNative: resolved known_hosts trust intent.
+/// Resolved known_hosts trust intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHostKeyTrustIntent {
     pub intent_id: String,
@@ -403,7 +419,7 @@ pub struct ResolvedHostKeyTrustIntent {
     pub host_public_key_path: PathBuf,
 }
 
-/// W14 LiveNative: resolved known_hosts entry removal intent.
+/// Resolved known_hosts entry removal intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRotateKnownHostIntent {
     pub intent_id: String,
@@ -455,20 +471,19 @@ pub struct ResolvedRoleDeviceClaim {
     pub allowed_device_classes: Vec<String>,
 }
 
-/// W16 (W3 ifname unification approach b): host-runtime.json record.
+/// Host-runtime.json record for the unified ifname source of truth.
 ///
-/// At W3 the Nix `derivedIfName` and the Rust
+/// The Nix `derivedIfName` and the Rust
 /// `nixling_host::ifname::derive_from_env_vm` produce ifnames that
 /// match the same *format* (length, role tag prefix, alphabet subset)
 /// but use different hash algorithms (SHA-256 first-8 vs FNV-1a +
-/// Crockford base32). W16 retires the dual-algorithm pretense by
-/// having the broker emit the canonical ifname set into
+/// Crockford base32). The broker emits the canonical ifname set into
 /// `/var/lib/nixling/runtime/host-runtime.json` at install time, and
-/// downstream consumers (status reporter, nft chain emitter) read
-/// from it instead of recomputing.
+/// downstream consumers (status reporter, nft chain emitter) read from
+/// it instead of recomputing.
 ///
 /// `HostRuntime` is the resolver-side type; the broker's live host-
-/// install path (W15 RunHostInstall) writes it out via
+/// install path writes it out via
 /// [`crate::bundle_resolver::HostRuntimeArtifact::write`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -492,9 +507,9 @@ pub struct HostRuntimeIfName {
     pub role_tag: String,
 }
 
-/// W16: artifact that the broker writes during host-install.
+/// Artifact that the broker writes during host-install.
 /// `path` defaults to `/var/lib/nixling/runtime/host-runtime.json`;
-/// the W15 installer plan can override via the artifact list.
+/// the installer plan can override via the artifact list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostRuntimeArtifact {
     pub path: PathBuf,
@@ -520,7 +535,7 @@ impl HostRuntimeArtifact {
 }
 
 // ---------------------------------------------------------------
-// P0: bundle-artifact tamper-resistance verification.
+// Bundle-artifact tamper-resistance verification.
 // ---------------------------------------------------------------
 
 /// Policy applied by [`BundleResolver::load_with_policy`] when
@@ -610,11 +625,14 @@ fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<
         }
     })?;
 
-    let stat = fstat(&fd)
-        .map_err(|_| Error::internal_io(format!("bundle-fstat:{}", path.display())))?;
+    let stat =
+        fstat(&fd).map_err(|_| Error::internal_io(format!("bundle-fstat:{}", path.display())))?;
 
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-        return Err(Error::bundle_tampered(path.to_path_buf(), "not-regular-file"));
+        return Err(Error::bundle_tampered(
+            path.to_path_buf(),
+            "not-regular-file",
+        ));
     }
 
     if stat.st_uid != policy.required_uid {
@@ -720,14 +738,11 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
         None => false,
     };
 
-    let expected = match value
-        .as_object_mut()
-        .and_then(|o| o.remove("bundleHash"))
-    {
+    let expected = match value.as_object_mut().and_then(|o| o.remove("bundleHash")) {
         None => {
             if require_hash {
-                // P0 H4 + P0fu3 H1: schemaVersion >= 2 (and unknown
-                // future schemas) MUST carry bundleHash.
+                // schemaVersion >= 2 (and unknown future schemas) MUST carry
+                // bundleHash.
                 return Err(Error::bundle_tampered(
                     path.to_path_buf(),
                     "missing-bundle-hash",
@@ -1023,6 +1038,45 @@ impl BundleResolver {
             .and_then(|vm| vm.nodes.iter().find(|node| node.id.0 == role_id))
     }
 
+    /// v1.2 collect every `DiskInit` plan-op declared on any node in
+    /// the VM's process DAG.
+    ///
+    /// The broker calls this before issuing `SpawnRunner` for a VM
+    /// so it can create the backing disk images declared in the
+    /// trusted bundle. The caller (daemon) only supplies the opaque
+    /// `vm_id`; all paths and permissions come from the bundle.
+    pub fn resolve_disk_init_ops(&self, vm_id: &str) -> Vec<ResolvedDiskInitOp> {
+        use crate::processes::SpawnRunnerPlanOp;
+        let Some(vm) = self.find_process_vm(vm_id) else {
+            return Vec::new();
+        };
+        let mut ops = Vec::new();
+        for node in &vm.nodes {
+            for plan_op in &node.plan_ops {
+                match plan_op {
+                    SpawnRunnerPlanOp::DiskInit {
+                        target_path,
+                        size_bytes,
+                        mode,
+                        owner_uid,
+                        owner_gid,
+                        if_absent,
+                    } => {
+                        ops.push(ResolvedDiskInitOp {
+                            target_path: target_path.clone(),
+                            size_bytes: *size_bytes,
+                            mode: *mode,
+                            owner_uid: *owner_uid,
+                            owner_gid: *owner_gid,
+                            if_absent: *if_absent,
+                        });
+                    }
+                }
+            }
+        }
+        ops
+    }
+
     pub fn resolve_vm_start_intent(
         &self,
         vm_id: &str,
@@ -1228,8 +1282,7 @@ impl BundleResolver {
             .map(|(owner, _)| owner)
     }
 
-    /// W16 (W3 ifname unification): build the canonical
-    /// `host-runtime.json` record from the bundle's
+    /// Build the canonical `host-runtime.json` record from the bundle's
     /// `host.if_name_mappings` rows. The broker writes this during
     /// `RunHostInstall` so downstream consumers read ifnames from a
     /// single source of truth instead of recomputing via the
@@ -1326,9 +1379,9 @@ impl BundleResolver {
         self.rotate_known_host_intents.keys().map(String::as_str)
     }
 
-    /// W17: per-role minijail profile validator. Walks every profile
-    /// the bundle ships (via `processes.json` role profiles) and
-    /// asserts the W17 invariants:
+    /// Per-role minijail profile validator. Walks every profile the
+    /// bundle ships (via `processes.json` role profiles) and asserts
+    /// the invariants:
     ///
     /// 1. uid and gid are non-zero unless an `adr_carve_out` ref
     ///    explicitly documents a root carve-out;
@@ -1338,9 +1391,9 @@ impl BundleResolver {
     /// 4. profile_id is non-empty.
     ///
     /// Returns the first violation as `Err`, or `Ok(profile_count)`
-    /// when every profile passes. Used by W17 + W18 as a wave-exit
-    /// gate: the integrator must add a corresponding fix to the Nix
-    /// profile emitter for any reported violation.
+    /// when every profile passes. The integrator must add a
+    /// corresponding fix to the Nix profile emitter for any reported
+    /// violation.
     pub fn validate_minijail_profiles(&self) -> Result<usize, MinijailProfileViolation> {
         let mut count = 0usize;
         for dag in &self.processes.vms {
@@ -1383,7 +1436,7 @@ impl BundleResolver {
     }
 }
 
-/// W17 minijail profile validator violations.
+/// Minijail profile validator violations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MinijailProfileViolation {
     EmptyProfileId {
@@ -1491,17 +1544,16 @@ fn role_device_classes(
             ChNetHandoffMode::PersistentTap => &["kvm"],
         },
         ProcessRole::Virtiofsd => &["fuse"],
-        // P1 kernel-r2-1 / security-r2-1 / software-r2-1 corrected
         // Gpu device claim. Must EXACTLY match the per-role device
-        // matrix in nixos-modules/minijail-profiles.nix and the row
-        // in docs/reference/privileges.md:
+        // matrix in nixos-modules/minijail-profiles.nix and the row in
+        // docs/reference/privileges.md:
         //   /dev/kvm, /dev/dri/renderD128, /dev/nvidiactl,
-        //   /dev/nvidia0 (was nvidia-render → /dev/nvidia0 per
-        //   P1 framework kernel-3), /dev/nvidia-uvm, /dev/udmabuf.
-        // The previous claim included vfio (NOT in the P1 GPU
-        // contract — vfio is for SR-IOV passthrough scenarios that
-        // P1 does not cover) and omitted kvm + udmabuf.
-        ProcessRole::Gpu => &[
+        //   /dev/nvidia0 (was nvidia-render → /dev/nvidia0),
+        //   /dev/nvidia-uvm, /dev/udmabuf.
+        // The previous claim included vfio (NOT in the GPU contract —
+        // vfio is for SR-IOV passthrough scenarios that this role does
+        // not cover) and omitted kvm + udmabuf.
+        ProcessRole::Gpu | ProcessRole::GpuRenderNode => &[
             "kvm",
             "dri",
             "nvidia-ctl",
@@ -1517,7 +1569,7 @@ fn role_device_classes(
 }
 
 // ---------------------------------------------------------------
-// W15 (W9-fu) installer + migrate intent ID helpers.
+// Installer + migrate intent ID helpers.
 // ---------------------------------------------------------------
 
 pub fn intent_id_installer_host() -> String {
@@ -1666,6 +1718,45 @@ fn render_host_nft_script(host: &HostJson) -> String {
                 "    ct state established,related accept{comment};\n"
             ));
         }
+        // Per-env forward acceptance: workload traffic exits each env
+        // via its `br-<env>-up` bridge (the host-side end of the net-VM
+        // uplink point-to-point). The forward chain default-drops, so
+        // without an explicit accept the SYN never reaches eno1. The
+        // existing nixos-filter-forward chain at priority 0 already
+        // performs the same allow-by-iifname check; we mirror it here
+        // so the nixling chain at priority -5 doesn't fail-closed
+        // before the nixos chain runs.
+        if chain.hook.as_deref() == Some("forward") {
+            for env in &host.environments {
+                buf.push_str(&format!(
+                    "    iifname \"br-{}-up\" ct state new accept{comment};\n",
+                    env.env
+                ));
+            }
+        }
+        if chain.hook.as_deref() == Some("input") {
+            let usbip_backend_ports: Vec<u16> = host
+                .environments
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, env)| {
+                    (!env.usbip_busid_locks.is_empty()).then_some(3241u16 + idx as u16)
+                })
+                .collect();
+            if !usbip_backend_ports.is_empty() {
+                let backend_ports = usbip_backend_ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                buf.push_str(&format!(
+                    "    iifname != \"lo\" meta l4proto tcp tcp dport {{ {backend_ports} }} drop{comment};\n"
+                ));
+                buf.push_str(&format!(
+                    "    iifname != \"lo\" meta l4proto tcp tcp dport 3240 drop{comment};\n"
+                ));
+            }
+        }
         buf.push_str("  }\n");
     }
     buf.push_str("}\n");
@@ -1702,11 +1793,11 @@ fn build_route_intents(host: &HostJson) -> BTreeMap<String, ResolvedRouteIntent>
     let mut out = BTreeMap::new();
     for env in &host.environments {
         let bridge_ifname =
-            resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
-                .unwrap_or_else(|| env.bridge.as_str().to_owned());
+            user_visible_ifname_for(host, &env.env, None, crate::host::TapRole::Uplink)
+                .unwrap_or_else(|| format!("br-{}-up", env.env));
         // Each env gets one synthetic default route per uplink in its
-        // forward blocklist (placeholder until W12 wires real route
-        // intents). The route_spec is `<dest> dev <bridge>` so the
+        // forward blocklist (placeholder until real route intents are
+        // wired). The route_spec is `<dest> dev <bridge>` so the
         // broker's `ip route add` call is well-formed even without
         // the gateway.
         for (idx, blocked) in env.net_vm_forward_blocklist.iter().enumerate() {
@@ -1917,17 +2008,14 @@ fn build_usbip_firewall_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsb
     let mut out = BTreeMap::new();
     for env in &host.environments {
         let bridge_ifname =
-            resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
-                .unwrap_or_else(|| env.bridge.as_str().to_owned());
+            user_visible_ifname_for(host, &env.env, None, crate::host::TapRole::Uplink)
+                .unwrap_or_else(|| format!("br-{}-up", env.env));
         for lock in &env.usbip_busid_locks {
             for bus_id in synthesize_bus_ids(lock) {
                 let intent_id = intent_id_usbip_firewall(&env.env, &bus_id);
                 let rule_body = format!(
-                    "iif {} ip protocol tcp tcp dport 3240 accept comment \"usbip env={} vm={} bus={}\"\n",
+                    "iifname \"{}\" ip protocol tcp tcp dport 3240 accept",
                     bridge_ifname,
-                    env.env,
-                    lock.vm,
-                    bus_id
                 );
                 let desired_hash = stable_digest(&rule_body);
                 out.insert(
@@ -1962,6 +2050,7 @@ fn build_usbip_bind_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsbipBi
                         env: env.env.clone(),
                         lock_path,
                         vendor_product_allowlist: lock.vendor_product_allowlist.clone(),
+                        dynamic_bus_id: false,
                     },
                 );
             }
@@ -2007,6 +2096,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::Virtiofsd => Some("virtiofsd"),
         ProcessRole::Video => Some("video"),
         ProcessRole::Gpu => Some("gpu"),
+        ProcessRole::GpuRenderNode => Some("gpu-render-node"),
         ProcessRole::Audio => Some("audio"),
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
@@ -2023,18 +2113,24 @@ fn is_placeholder_runner_spec(binary_path: &str, argv: &[String], role_name: &st
 fn legacy_runner_spec(
     dag: &VmProcessDag,
     role: &ProcessRole,
-    role_name: &str,
+    _role_name: &str,
 ) -> Option<(String, Vec<String>)> {
     let (binary_name, arg0) = match role {
         ProcessRole::SwtpmPreStartFlush => ("bash", format!("nixling-swtpm-flush@{}", dag.vm)),
         ProcessRole::Swtpm => ("swtpm", format!("microvm-swtpm@{}", dag.vm)),
         ProcessRole::Virtiofsd => ("virtiofsd", format!("microvm-virtiofsd@{}", dag.vm)),
-        ProcessRole::Video => ("crosvm", format!("nixling-{}-video", dag.vm)),
+        // Video must always carry the patched crosvm video-decoder binary
+        // and closed argv from processes.json. Never fall back to stock crosvm.
+        ProcessRole::Video => return None,
         ProcessRole::Gpu => ("crosvm", format!("nixling-{}-gpu", dag.vm)),
+        ProcessRole::GpuRenderNode => ("crosvm", format!("nixling-{}-gpu-render-node", dag.vm)),
         ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
         ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
         ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
-        ProcessRole::Usbip => ("systemd-socket-proxyd", role_name.to_owned()),
+        // USBIP proxy runners must bind their own listen socket in the
+        // daemon-owned SpawnRunner path. The retired socket-activated
+        // systemd-socket-proxyd shape is not a safe legacy fallback.
+        ProcessRole::Usbip => return None,
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness => return None,
@@ -2123,6 +2219,18 @@ fn resolved_ifname_for(
         .map(|mapping| mapping.derived_ifname.as_str().to_owned())
 }
 
+fn user_visible_ifname_for(
+    host: &HostJson,
+    env: &str,
+    vm: Option<&str>,
+    role: crate::host::TapRole,
+) -> Option<String> {
+    host.if_name_mappings
+        .iter()
+        .find(|mapping| mapping.env == env && mapping.vm.as_deref() == vm && mapping.role == role)
+        .map(|mapping| mapping.user_visible_name.clone())
+}
+
 fn build_socket_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedSocketIntent> {
     let mut out = BTreeMap::new();
     for dag in &processes.vms {
@@ -2164,7 +2272,7 @@ fn build_installer_intents(bundle: &Bundle) -> BTreeMap<String, ResolvedInstalle
         InstallerArtifact {
             path: PathBuf::from(&bundle.public_manifest_path),
             mode: 0o644,
-            purpose: "public vms.json manifest (W14 bundle entry point)".to_owned(),
+            purpose: "public vms.json manifest (bundle entry point)".to_owned(),
         },
     ];
     out.insert(
@@ -2183,9 +2291,14 @@ fn build_installer_intents(bundle: &Bundle) -> BTreeMap<String, ResolvedInstalle
 
 fn build_migrate_intents(processes: &ProcessesJson) -> BTreeMap<String, ResolvedMigrateIntent> {
     let mut out = BTreeMap::new();
-    let vms: Vec<String> = processes.vms.iter().map(|dag| dag.vm.clone()).collect();
+    let vms: Vec<String> = processes
+        .vms
+        .iter()
+        .filter(|dag| !is_per_env_usbipd_scope(&dag.vm))
+        .map(|dag| dag.vm.clone())
+        .collect();
     let notes = vec![
-        "W15: migrate plan synthesised from processes.json vm list".to_owned(),
+        "migrate plan synthesised from processes.json vm list".to_owned(),
         format!("{} VM(s) eligible for daemon-owned migration", vms.len()),
         "Per-VM systemd unit `microvm@<vm>` will be stopped and replaced by the daemon supervisor's pidfd table entry".to_owned(),
     ];
@@ -2198,6 +2311,10 @@ fn build_migrate_intents(processes: &ProcessesJson) -> BTreeMap<String, Resolved
         },
     );
     out
+}
+
+fn is_per_env_usbipd_scope(vm: &str) -> bool {
+    vm.starts_with("sys-") && vm.ends_with("-usbipd")
 }
 
 fn build_activation_intents(
@@ -2478,7 +2595,7 @@ mod tests {
         ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
         VmObservability,
     };
-    use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
+    use crate::minijail_profile::WritablePath;
     use crate::processes::{
         DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
         VmProcessInvariants,
@@ -2562,43 +2679,26 @@ mod tests {
     }
 
     fn role_profile(uid: u32, gid: u32, writable_paths: &[&str], subtree: &str) -> RoleProfile {
-        RoleProfile {
-            profile_id: format!("profile-{uid}-{gid}"),
-            uid,
-            gid,
-            adr_carve_out: None,
-            caps: Vec::new(),
-            namespaces: NamespaceSet {
-                mount: false,
-                pid: false,
-                net: false,
-                ipc: false,
-                uts: false,
-                user: false,
-            },
-            seccomp_policy_ref: None,
-            mount_policy: MountPolicy {
-                read_only_paths: vec!["/nix/store".to_owned()],
-                writable_paths: writable_paths
+        crate::test_support::RoleProfileBuilder::new()
+            .with_profile_id(format!("profile-{uid}-{gid}"))
+            .with_uid(uid)
+            .with_gid(gid)
+            .with_read_only_paths(vec!["/nix/store".to_owned()])
+            .with_writable_paths(
+                writable_paths
                     .iter()
                     .map(|path| WritablePath {
                         path: (*path).to_owned(),
                         purpose: "test writable path".to_owned(),
                     })
                     .collect(),
-                nix_store_read_only: true,
-                hide_device_nodes_by_default: true,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
-            },
-            cgroup_placement: CgroupPlacement {
+            )
+            .with_cgroup_placement(CgroupPlacement {
                 subtree: subtree.to_owned(),
                 controllers: vec!["cpu".to_owned(), "memory".to_owned()],
                 delegated: true,
-            },
-            user_namespace: None,
-            umask: None,
-        }
+            })
+            .build()
     }
 
     fn build_personal_dev_bundle(root: &Path) -> BundleResolver {
@@ -2688,6 +2788,7 @@ mod tests {
                             "nixling.slice/personal-dev/host-reconcile",
                         ),
                         readiness: Vec::new(),
+                        plan_ops: Vec::new(),
                     },
                     ProcessNode {
                         id: NodeId("store-virtiofs-preflight".to_owned()),
@@ -2703,6 +2804,7 @@ mod tests {
                             "nixling.slice/personal-dev/store-virtiofs-preflight",
                         ),
                         readiness: Vec::new(),
+                        plan_ops: Vec::new(),
                     },
                     ProcessNode {
                         id: NodeId("virtiofsd-ro-store".to_owned()),
@@ -2718,6 +2820,7 @@ mod tests {
                             "nixling.slice/personal-dev/virtiofsd-ro-store",
                         ),
                         readiness: Vec::new(),
+                        plan_ops: Vec::new(),
                     },
                 ],
                 edges: vec![
@@ -2835,8 +2938,8 @@ mod tests {
         write_json(&processes_path, &processes);
         write_json(&closure_path, &closure);
 
-        // P1 ph-r1 fix: schemaVersion v2 bundles MUST carry bundleHash
-        // (P0fu3 H1). Replicate the bundle_resolver verify path:
+        // schemaVersion v2 bundles MUST carry bundleHash. Replicate the
+        // bundle_resolver verify path:
         // bundleHash = sha256( serde_json::to_vec( bundle as Value
         // with artifactHashes set to null and no bundleHash field ) ).
         // serde_json (no preserve_order) emits sorted keys, matching
@@ -2856,22 +2959,25 @@ mod tests {
             format!("sha256:{hex}")
         };
         if let serde_json::Value::Object(map) = &mut as_value {
-            map.insert(
-                "bundleHash".to_owned(),
-                serde_json::Value::String(digest),
-            );
+            map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
         }
         let with_hash = serde_json::to_vec(&as_value).expect("re-serialize bundle");
         fs::write(&bundle_path, with_hash).expect("write bundle with hash");
 
-        // P1 ph-r1 fix: production policy requires root:nixlingd owner
-        // + 0640 mode; use a current-user policy so the test runs as
+        // Production policy requires root:nixlingd owner + 0640 mode;
+        // use a current-user policy so the test runs as
         // a non-root developer too (matches the pattern in
         // tests/bundle_resolver_tamper.rs current_user_policy()).
         // fs::write defaults to 0644 (minus umask); chmod the bundle
         // to 0640 to satisfy the verifier's mode check.
         use std::os::unix::fs::PermissionsExt as _;
-        for p in [&bundle_path, &manifest_path, &host_path, &processes_path, &closure_path] {
+        for p in [
+            &bundle_path,
+            &manifest_path,
+            &host_path,
+            &processes_path,
+            &closure_path,
+        ] {
             fs::set_permissions(p, fs::Permissions::from_mode(0o640))
                 .expect("chmod test bundle artifact");
         }
@@ -2925,19 +3031,92 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn usbip_firewall_intent_targets_uplink_not_lan_bridge() {
+        let root = test_root("usbip-firewall-uplink");
+        let resolver = build_personal_dev_bundle(&root);
+
+        let intent = resolver
+            .find_usbip_firewall_intent(&intent_id_usbip_firewall("personal", "pending"))
+            .expect("usbip firewall intent");
+        assert!(
+            intent.nft_rule_body.contains("iifname \"br-personal-up\""),
+            "rule body should target uplink fallback: {}",
+            intent.nft_rule_body
+        );
+        assert!(
+            !intent.nft_rule_body.contains("nlpersbr0"),
+            "rule body must not target LAN bridge: {}",
+            intent.nft_rule_body
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn usbip_firewall_intent_uses_user_visible_uplink_ifname() {
+        let mut host: HostJson =
+            serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        host.environments[0].usbip_busid_locks = vec![UsbipBusidLock {
+            vm: "corp-vm".to_owned(),
+            lock_owner: UsbipLockOwner::Daemon,
+            scope: UsbipLockScope::PerBusid,
+            bus_ids: vec!["1-2".to_owned()],
+            vendor_product_allowlist: Vec::new(),
+        }];
+        host.if_name_mappings = vec![IfNameMapping {
+            env: host.environments[0].env.clone(),
+            vm: None,
+            role: crate::host::TapRole::Uplink,
+            user_visible_name: "br-visible-up".to_owned(),
+            derived_ifname: IfName::new("nl-derived0").expect("ifname"),
+        }];
+
+        let intents = build_usbip_firewall_intents(&host);
+        let intent = intents
+            .get(&intent_id_usbip_firewall(&host.environments[0].env, "1-2"))
+            .expect("usbip firewall intent");
+        assert!(
+            intent.nft_rule_body.contains("iifname \"br-visible-up\""),
+            "rule body: {}",
+            intent.nft_rule_body
+        );
+        assert!(!intent.nft_rule_body.contains("nl-derived0"));
+    }
+
+    #[test]
+    fn host_nft_script_drops_usbip_input_without_runtime_carveout() {
+        let mut host: HostJson =
+            serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        host.environments[0].usbip_busid_locks = vec![UsbipBusidLock {
+            vm: "corp-vm".to_owned(),
+            lock_owner: UsbipLockOwner::Daemon,
+            scope: UsbipLockScope::PerBusid,
+            bus_ids: vec!["1-2".to_owned()],
+            vendor_product_allowlist: Vec::new(),
+        }];
+
+        let script = render_host_nft_script(&host);
+        assert!(
+            script.contains("iifname != \"lo\" meta l4proto tcp tcp dport { 3241 } drop"),
+            "backend port must be broker-dropped on non-loopback ingress:\n{script}"
+        );
+        assert!(
+            script.contains("iifname != \"lo\" meta l4proto tcp tcp dport 3240 drop"),
+            "proxy port must default-drop until UsbipBindFirewallRule inserts a carve-out:\n{script}"
+        );
+    }
+
     // ---------------------------------------------------------------
-    // P1 R2 closure (kernel-r2-1 + security-r2-1 + software-r2-1):
     // role_device_classes for Gpu MUST exactly match the per-role
     // device matrix in nixos-modules/minijail-profiles.nix and the
-    // row in docs/reference/privileges.md. vfio is NOT in the P1 GPU
+    // row in docs/reference/privileges.md. vfio is NOT in the GPU
     // contract; kvm + udmabuf ARE.
     // ---------------------------------------------------------------
     #[test]
     fn role_device_classes_gpu_matches_p1_matrix() {
-        let claim = super::role_device_classes(
-            &ProcessRole::Gpu,
-            super::ChNetHandoffMode::PersistentTap,
-        );
+        let claim =
+            super::role_device_classes(&ProcessRole::Gpu, super::ChNetHandoffMode::PersistentTap);
         let actual: std::collections::BTreeSet<&str> = claim.iter().copied().collect();
         let expected: std::collections::BTreeSet<&str> = [
             "kvm",
@@ -2961,10 +3140,8 @@ mod tests {
 
     #[test]
     fn role_device_classes_audio_matches_p1_matrix() {
-        let claim = super::role_device_classes(
-            &ProcessRole::Audio,
-            super::ChNetHandoffMode::PersistentTap,
-        );
+        let claim =
+            super::role_device_classes(&ProcessRole::Audio, super::ChNetHandoffMode::PersistentTap);
         assert_eq!(claim, &["pipewire-socket"]);
     }
 
@@ -2975,5 +3152,409 @@ mod tests {
             super::ChNetHandoffMode::PersistentTap,
         );
         assert_eq!(claim, &["fuse"]);
+    }
+
+    #[test]
+    fn video_runner_has_no_stock_crosvm_legacy_fallback() {
+        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::processes::{
+            NodeId, ProcessNode, ProcessRole, RoleProfile, VmProcessDag, VmProcessInvariants,
+        };
+
+        let profile = RoleProfile {
+            profile_id: "vm-test-video".to_owned(),
+            uid: 60_100,
+            gid: 60_100,
+            adr_carve_out: None,
+            caps: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: true,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: false,
+            },
+            seccomp_policy_ref: Some("w1-video".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: Vec::new(),
+                writable_paths: vec![crate::minijail_profile::WritablePath {
+                    path: "/run/nixling-video/test-vm".to_owned(),
+                    purpose: "test video runtime dir".to_owned(),
+                }],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds: vec!["/dev/dri/renderD128".to_owned()],
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: "nixling.slice/test-vm/video".to_owned(),
+                controllers: vec![],
+                delegated: false,
+            },
+            user_namespace: None,
+            umask: Some(7),
+        };
+
+        let dag = VmProcessDag {
+            vm: "test-vm".to_owned(),
+            nodes: vec![ProcessNode {
+                id: NodeId("video".to_owned()),
+                role: ProcessRole::Video,
+                unit: None,
+                binary_path: None,
+                argv: Vec::new(),
+                env: Vec::new(),
+                profile,
+                readiness: Vec::new(),
+                plan_ops: Vec::new(),
+            }],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+
+        assert!(
+            super::resolve_runner_node(&dag, &dag.nodes[0]).is_none(),
+            "video must fail closed when processes.json omits the patched crosvm video binary/argv"
+        );
+    }
+
+    // v1.2 swtpm broker-pre-NS extension.
+    //
+    // When the swtpm RoleProfile declares userNamespace = Some(...),
+    // resolve_runner_node must carry that spec through to
+    // ResolvedRunnerIntent.user_namespace = Some(...).
+    // This mirrors the virtiofsd user_namespace round-trip contract
+    // (ADR 0021) and guards against silent drops in the resolver.
+    #[test]
+    fn swtpm_user_namespace_propagates_to_resolved_intent() {
+        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::processes::{
+            NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
+            VmProcessInvariants,
+        };
+
+        const SWTPM_UID: u32 = 60_100;
+        const SWTPM_GID: u32 = 60_100;
+
+        let swtpm_profile = RoleProfile {
+            profile_id: "w1-swtpm-test".to_owned(),
+            uid: SWTPM_UID,
+            gid: SWTPM_GID,
+            adr_carve_out: None,
+            caps: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: true, // set by mkProfile when userNamespace != null
+            },
+            seccomp_policy_ref: Some("w1-swtpm".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec!["/nix/store".to_owned()],
+                writable_paths: vec![],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: "nixling.slice/test-vm/swtpm".to_owned(),
+                controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                delegated: false,
+            },
+            // v1.2 swtpm declares userNamespace per ADR 0021 model.
+            user_namespace: Some(RoleUserNamespace {
+                host_uid_for_zero: SWTPM_UID,
+                host_gid_for_zero: SWTPM_GID,
+            }),
+            umask: Some(7),
+        };
+
+        let dag = VmProcessDag {
+            vm: "test-vm".to_owned(),
+            nodes: vec![ProcessNode {
+                id: NodeId("swtpm".to_owned()),
+                role: ProcessRole::Swtpm,
+                unit: None,
+                binary_path: Some("/run/current-system/sw/bin/swtpm".to_owned()),
+                argv: vec!["swtpm".to_owned()],
+                env: Vec::new(),
+                profile: swtpm_profile,
+                readiness: Vec::new(),
+                plan_ops: Vec::new(),
+            }],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+
+        let node = &dag.nodes[0];
+        let intent = super::resolve_runner_node(&dag, node)
+            .expect("swtpm node must produce a ResolvedRunnerIntent");
+
+        assert_eq!(
+            intent.user_namespace,
+            Some(super::UserNamespaceSpec {
+                host_uid_for_zero: SWTPM_UID,
+                host_gid_for_zero: SWTPM_GID,
+            }),
+            "swtpm ResolvedRunnerIntent.user_namespace must carry the profile's \
+             userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3)"
+        );
+        // Confirm host caps are empty — invariant required alongside user_namespace.
+        assert!(
+            intent.capabilities.is_empty(),
+            "swtpm host capabilities must be empty when user_namespace is Some(_) \
+             (zero-host-caps invariant, ADR 0021)"
+        );
+        // Confirm umask = 7 is preserved (fu36 socket-ACL requirement).
+        assert_eq!(
+            intent.umask,
+            Some(7),
+            "swtpm umask must remain 0o007 after D5/P2.3 (fu36 socket-ACL requirement)"
+        );
+    }
+
+    // v1.2 gpu-render-node broker-pre-NS extension.
+    //
+    // When the gpu-render-node RoleProfile declares userNamespace = Some(...),
+    // resolve_runner_node must carry that spec through to
+    // ResolvedRunnerIntent.user_namespace = Some(...).
+    // Also verifies that the role name resolves to "gpu-render-node" and
+    // that the legacy arg0 is "nixling-{vm}-gpu-render-node".
+    #[test]
+    fn gpu_render_node_user_namespace_propagates_to_resolved_intent() {
+        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::processes::{
+            NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
+            VmProcessInvariants,
+        };
+
+        const GPU_UID: u32 = 60_200;
+        const GPU_GID: u32 = 60_200;
+
+        let gpu_render_node_profile = RoleProfile {
+            profile_id: "w1-gpu-render-node-test".to_owned(),
+            uid: GPU_UID,
+            gid: GPU_GID,
+            adr_carve_out: None,
+            caps: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: true, // set by mkProfile when userNamespace != null
+            },
+            seccomp_policy_ref: Some("w1-gpu-render-node".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec!["/nix/store".to_owned()],
+                writable_paths: vec![],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                // No deviceBinds: render node is pre-opened by broker and
+                // passed via fd inheritance (RENDER_NODE_INHERITED_FD = 10).
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: "nixling.slice/test-vm/gpu".to_owned(),
+                controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                delegated: false,
+            },
+            // v1.2 gpu-render-node declares userNamespace per ADR 0021 model.
+            user_namespace: Some(RoleUserNamespace {
+                host_uid_for_zero: GPU_UID,
+                host_gid_for_zero: GPU_GID,
+            }),
+            umask: Some(7),
+        };
+
+        let dag = VmProcessDag {
+            vm: "test-vm".to_owned(),
+            nodes: vec![ProcessNode {
+                id: NodeId("gpu-render-node".to_owned()),
+                role: ProcessRole::GpuRenderNode,
+                unit: None,
+                binary_path: Some("/run/current-system/sw/bin/crosvm".to_owned()),
+                argv: vec!["nixling-test-vm-gpu-render-node".to_owned()],
+                env: Vec::new(),
+                profile: gpu_render_node_profile,
+                readiness: Vec::new(),
+                plan_ops: Vec::new(),
+            }],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+
+        let node = &dag.nodes[0];
+        let intent = super::resolve_runner_node(&dag, node)
+            .expect("gpu-render-node node must produce a ResolvedRunnerIntent");
+
+        assert_eq!(
+            intent.user_namespace,
+            Some(super::UserNamespaceSpec {
+                host_uid_for_zero: GPU_UID,
+                host_gid_for_zero: GPU_GID,
+            }),
+            "gpu-render-node ResolvedRunnerIntent.user_namespace must carry the profile's \
+             userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3)"
+        );
+        // Confirm host caps are empty — invariant required alongside user_namespace.
+        assert!(
+            intent.capabilities.is_empty(),
+            "gpu-render-node host capabilities must be empty when user_namespace is Some(_) \
+             (zero-host-caps invariant, ADR 0021)"
+        );
+        // Confirm umask = 7 is preserved (fu36 socket-ACL requirement).
+        assert_eq!(
+            intent.umask,
+            Some(7),
+            "gpu-render-node umask must remain 0o007 (fu36 socket-ACL requirement)"
+        );
+        // Confirm seccomp_policy_ref for broker pre-open detection.
+        assert_eq!(
+            intent.seccomp_policy_ref.as_deref(),
+            Some("w1-gpu-render-node"),
+            "gpu-render-node seccomp_policy_ref must be w1-gpu-render-node so the broker \
+             pre-open detection in live_spawn_runner fires"
+        );
+    }
+
+    // v1.2 audio broker-pre-NS extension (Tier 2).
+    //
+    // When the audio RoleProfile declares userNamespace = Some(...) and
+    // namespaces.net = true, resolve_runner_node must carry the user_namespace
+    // spec through to ResolvedRunnerIntent.user_namespace = Some(...).
+    //
+    // Context: vhost-device-sound's libpipewire client opens
+    // AF_NETLINK(NETLINK_KOBJECT_UEVENT) during pw_context_new() (spa-alsa-monitor).
+    // In a user-NS-only spawn, ns_capable(net->user_ns, CAP_NET_RAW) fails because
+    // the host net NS is owned by the initial user NS. Tier 2 resolves this by
+    // combining clone3(CLONE_NEWUSER) with unshare(CLONE_NEWNET) inside the user NS:
+    // the new net NS is owned by the new user NS; CAP_NET_RAW is effective there.
+    // The audio block and panel review cover CAP_NET_RAW + AF_NETLINK.
+    #[test]
+    fn audio_user_namespace_propagates_to_resolved_intent() {
+        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::processes::{
+            NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
+            VmProcessInvariants,
+        };
+
+        const AUDIO_UID: u32 = 60_300;
+        const AUDIO_GID: u32 = 60_300;
+
+        let audio_profile = RoleProfile {
+            profile_id: "w1-audio-test".to_owned(),
+            uid: AUDIO_UID,
+            gid: AUDIO_GID,
+            adr_carve_out: None,
+            // Host caps must be empty — CAP_NET_RAW is effective inside
+            // the user-NS-owned net NS, not on the host.
+            caps: Vec::new(),
+            namespaces: NamespaceSet {
+                mount: false,
+                pid: false,
+                net: true, // CLONE_NEWNET in unshare inside user NS
+                ipc: false,
+                uts: false,
+                user: true, // set by mkProfile when userNamespace != null
+            },
+            seccomp_policy_ref: Some("w1-audio".to_owned()),
+            mount_policy: MountPolicy {
+                read_only_paths: vec!["/nix/store".to_owned()],
+                writable_paths: vec![],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+            },
+            cgroup_placement: CgroupPlacement {
+                subtree: "nixling.slice/test-vm/audio".to_owned(),
+                controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                delegated: false,
+            },
+            // v1.2 audio declares userNamespace per ADR 0021 model.
+            user_namespace: Some(RoleUserNamespace {
+                host_uid_for_zero: AUDIO_UID,
+                host_gid_for_zero: AUDIO_GID,
+            }),
+            umask: Some(7),
+        };
+
+        let dag = VmProcessDag {
+            vm: "test-vm".to_owned(),
+            nodes: vec![ProcessNode {
+                id: NodeId("audio".to_owned()),
+                role: ProcessRole::Audio,
+                unit: None,
+                binary_path: Some("/run/current-system/sw/bin/vhost-device-sound".to_owned()),
+                argv: vec!["nixling-test-vm-snd".to_owned()],
+                env: Vec::new(),
+                profile: audio_profile,
+                readiness: Vec::new(),
+                plan_ops: Vec::new(),
+            }],
+            edges: Vec::new(),
+            invariants: VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+
+        let node = &dag.nodes[0];
+        let intent = super::resolve_runner_node(&dag, node)
+            .expect("audio node must produce a ResolvedRunnerIntent");
+
+        assert_eq!(
+            intent.user_namespace,
+            Some(super::UserNamespaceSpec {
+                host_uid_for_zero: AUDIO_UID,
+                host_gid_for_zero: AUDIO_GID,
+            }),
+            "audio ResolvedRunnerIntent.user_namespace must carry the profile's \
+             userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3 Tier 2)"
+        );
+        // Zero host caps — CAP_NET_RAW is effective only inside the
+        // user-NS-owned net NS, not on the host side.
+        assert!(
+            intent.capabilities.is_empty(),
+            "audio host capabilities must be empty when user_namespace is Some(_) \
+             (zero-host-caps invariant, ADR 0021; Tier 2 drops CAP_NET_RAW from host)"
+        );
+        // Confirm umask = 7 is preserved (fu36 socket-ACL requirement).
+        assert_eq!(
+            intent.umask,
+            Some(7),
+            "audio umask must remain 0o007 (fu36 socket-ACL requirement)"
+        );
+        // Confirm net = true propagates — required for the user-NS-owned net NS
+        // that makes CAP_NET_RAW effective for AF_NETLINK.
+        assert!(
+            intent.namespaces.net,
+            "audio namespaces.net must be true (D5/P2.3 Tier 2: unshare CLONE_NEWNET \
+             inside user NS for AF_NETLINK support without host CAP_NET_RAW)"
+        );
     }
 }

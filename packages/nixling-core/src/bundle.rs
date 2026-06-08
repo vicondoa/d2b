@@ -38,7 +38,7 @@ pub struct Bundle {
     /// The Rust loader verifies it by stripping `bundleHash`, setting
     /// `artifactHashes` to null, re-serialising with serde_json (sorted
     /// keys, no spaces), and comparing.  On `schemaVersion "v2"` bundles
-    /// a missing field is a hard failure (P0 H4); on v1 it logs a warning.
+    /// a missing field is a hard failure; on v1 it logs a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_hash: Option<String>,
 

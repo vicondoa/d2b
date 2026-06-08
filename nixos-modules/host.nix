@@ -5,8 +5,8 @@
 let
   nl = import ./lib.nix { inherit lib; };
   inherit (nl) subnetIp mkMac;
-  # v1.1-final: per-VM evaluator entry point. composeVm is the
-  # nixling-owned replacement for microvm.nix's per-VM
+  # Per-VM evaluator entry point. composeVm is the nixling-owned
+  # replacement for microvm.nix's per-VM
   # lib.evalModules invocation; see vm-evaluator.nix +
   # vm-options.nix. host.nix's `nixling._computed` mapping below
   # calls composeVm for every enabled VM and stores the result
@@ -37,7 +37,7 @@ let
 
   chVsockConnect = import ./nixling-ch-vsock-connect.nix { inherit pkgs; };
 
-  # Phase 4 multi-arch gate: graphics + audio components both
+  # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
   # spectrum-ch, vhost-device-sound — see their meta.platforms).
   # Headless workload VMs (no graphics, no audio) are arch-agnostic
@@ -71,7 +71,7 @@ let
   # warning. Observability-enabled VMs instead pin the transport CID and
   # pass the host socket path via `microvm.cloud-hypervisor.extraArgs`,
   # which microvm.nix then folds into the final
-  #   --vsock cid=...,socket=...
+  #   --vsock cid= ...,socket= ...
   # Cloud Hypervisor argument.
   #
   # CIDs 0/1/2 are reserved (hypervisor/local/host); we take 24 bits of
@@ -96,7 +96,7 @@ let
       };
 
   # Guest-side module auto-layered into any workload VM that names
-  # an env. Provides:
+  # an env. Provides
   #   - the tap interface with the auto-derived MAC + tap name
   #   - a DHCP-only systemd.network block (dnsmasq on the net VM
   #     hands out the static reservation keyed off MAC). The IPv6
@@ -130,11 +130,11 @@ let
   };
 
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  # v1.1-P2: `nixling.vms.<vm>.supervisor` was removed per ADR 0015.
+  # `nixling.vms.<vm>.supervisor` was removed per ADR 0015.
   # Every enabled VM is now daemon-supervised; the systemd-template
   # path is retired. The empty `systemdSupervisedVms` set keeps
   # legacy iteration sites from emitting per-VM microvm@<vm>
-  # template instances; the v1.1-P10 phase deletes those sites
+  # template instances; the v1.1- phase deletes those sites
   # outright when the template definitions themselves go.
   systemdSupervisedVms = { };
   daemonSupervisedVmNames = lib.attrNames enabledVms;
@@ -163,7 +163,7 @@ let
   # Both runners need to start the per-VM relay so the host-side vsock
   # bridge actually connects. Templated systemd units can't have
   # per-instance BindsTo/Wants, so we wire per-VM `wants` on each
-  # graphics gpu sidecar separately below. (panel-w3r3)
+  # graphics gpu sidecar separately below.
   graphicsRelayVmNames =
     lib.filter (name: (cfg.vms.${name}.graphics.enable or false)) relayVmNames;
 
@@ -190,7 +190,7 @@ in
 
 {
   imports = [
-    # v1.1-final: inputs.microvm.nixosModules.host import REMOVED.
+    # inputs.microvm.nixosModules.host import REMOVED.
     # The nixling-owned per-VM evaluator (vm-evaluator.nix +
     # vm-options.nix) replaces microvm.nix's host module. The
     # per-VM `microvm.*` option namespace lives inside the per-VM
@@ -208,15 +208,15 @@ in
     ./host-daemon.nix
   ];
 
-  # v1.1-final: per-VM state directory layout. /var/lib/nixling/vms/<vm>/
-  # carries every nixling-managed file for the VM (no more
+  # Per-VM state directory layout. /var/lib/nixling/vms/<vm>/ carries
+  # every nixling-managed file for the VM (no more
   # microvm.nix-driven /var/lib/microvms/<vm>/ path; nixling owns
   # the substrate end-to-end). The `microvm.stateDir`,
   # `microvm.autostart`, and `systemd.targets.microvms.wants`
   # assignments that lived here under v1.0 are deleted with the
   # upstream microvm.nix host module import.
 
-  # v1.1-final: per-VM NixOS evaluation lives on the nixling-owned
+  # Per-VM NixOS evaluation lives on the nixling-owned
   # `nixling._computed.<name>` attribute (see vm-evaluator.nix).
   # Populated via the composeVm closure imported at the top of this
   # module. Storage location is `nixling._computed` (sibling to
@@ -269,6 +269,8 @@ in
           }
           ++ lib.optional vm'.graphics.enable {
             nixling.graphics.crossDomainTrusted = vm'.graphics.crossDomainTrusted;
+            nixling.graphics.xwayland.enable = vm'.graphics.xwayland.enable;
+            nixling.graphics.virglVideo = vm'.graphics.virglVideo;
           }
           ++ lib.optional vm'.audio.enable {
             nixling.audio.users =
@@ -291,23 +293,16 @@ in
               nixling.sshUser = vm'.ssh.user;
               nixling.sudo = vm'.sudo;
             }
-            # v1.1-final: per-VM framework-managed shares (moved
-            # from store.nix to break the module-system infinite
+            # Per-VM framework-managed shares moved from store.nix to
+            # break the module-system infinite
             # recursion store.nix would cause when mapping over
             # cfg.vms to write back to nixling.vms).
             {
-              # v1.1.1fu13i+j: writableStoreOverlay path "/nix/.rw-store"
-              # is the GUEST path; the HOST backing infrastructure
-              # (per-VM rw-store disk + ext4 init + mount sequencing)
-              # doesn't exist under the broker-spawn model (microvm.nix
-              # v1 did this inline in the systemd unit). FORCE-disable
-              # for v1.1.1 — the consumer's `writableStoreOverlay = "/nix/.rw-store"`
-              # is overridden so the guest boots from the ro-store
-              # virtiofs share without an overlay. Ad-hoc nix-env
-              # installs won't persist; HM activation still works
-              # from the read-only store as long as the closure is
-              # complete.
-              microvm.writableStoreOverlay = lib.mkForce null;
+              # writableStoreOverlay is backed by a broker-provisioned
+              # disk image at `${cfg.store.stateDir}/<vm>/store-overlay.img`.
+              # Per-VM config can set `writableStoreOverlay = "/nix/.rw-store"`
+              # again. The broker creates the disk image before SpawnRunner
+              # via the `DiskInit` plan-op emitted by processes-json.nix.
               microvm.shares = lib.mkForce ([
                 {
                   source = "/nix/store";
@@ -339,8 +334,8 @@ in
       in composeVm name composedModules)
     enabledVms;
 
-  # v1.1-final: fail-fast stub `microvm@<vm>.service` units are no
-  # longer needed — `microvm@<vm>.service` doesn't exist anymore
+  # Fail-fast stub `microvm@<vm>.service` units are no longer needed —
+  # `microvm@<vm>.service` doesn't exist anymore
   # (the upstream microvm.nix host module that declared it is no
   # longer imported). Operators interacting via systemctl get
   # systemd's standard "unknown unit" message; the daemon-owned
@@ -351,12 +346,12 @@ in
     (lib.mkIf false {})
   ];
 
-  # H5: restrict /dev/kvm to kvm group members only (was world-rwx 0666).
+  # Restrict /dev/kvm to kvm group members only (was world-rwx 0666).
   # Only nixling-<vm>-gpu system users and the microvm service user are in
-  # the kvm group after P4; the host's Wayland user is no longer a member.
+  # the kvm group after; the host's Wayland user is no longer a member.
   # The /dev/kvm rule is unconditional; Yubico-specific rules are gated on
-  # `nixling.site.yubikey.enable` (W3b H4 — the option was previously
-  # declared but unused).
+  # `nixling.site.yubikey.enable` (the option was previously declared but
+  # unused).
   services.udev.extraRules = ''
     # H5 — lock KVM device to kvm group, no longer world-accessible
     KERNEL=="kvm", GROUP="kvm", MODE="0660"
@@ -377,7 +372,7 @@ in
     [ "usbip-host" ];
 
   # Host-side debug binaries + acl (setfacl used in activation scripts and
-  # nixling-<vm>-{gpu,snd,swtpm} ExecStartPre/Post stanzas):
+  # nixling-<vm>-{gpu,snd,swtpm} ExecStartPre/Post stanzas)
   environment.systemPackages = [
     pkgs.linuxPackages.usbip
     pkgs.swtpm
@@ -385,8 +380,8 @@ in
     pkgs.acl
   ];
 
-  # P2r4/P4: pre-create /run/nixling and lock file at boot.
-  # Lock file is group=nixling-launcher so members of that group can
+  # pre-create /run/nixling and lock file at boot.
+  # Lock file is group=nixling so members of that group can
   # open it with `exec 9>` without write access to root:root 0755
   # /run/nixling.
   #
@@ -396,27 +391,27 @@ in
   # the leaf <vm>/ dir, keeping the shared parent under root ownership.
   # `/run/nixling/alloy/` is a private subtree for observability sockets so
   # Alloy no longer needs write access to the shared launcher/audio lock root.
-  # P4 C3: also pre-create the GPU sidecar's runtime root.
-  # P0 (ph0-runtime-dir-canonicalize): when daemonExperimental is
+  # also pre-create the GPU sidecar's runtime root.
+  # when daemonExperimental is
   # enabled, /run/nixling is owned exclusively by host-daemon.nix
-  # (nixlingd:nixling-launchers 0750). This module emits its OWN
+  # (nixlingd:nixling 0750). This module emits its OWN
   # /run/nixling rule only in the pre-daemon path. The duplicate
   # `if daemonExperimental … 0755 root root` form is REMOVED.
   systemd.tmpfiles.rules = lib.optionals (! cfg.daemonExperimental.enable) [
-    "d /run/nixling             0775 root nixling-launcher -"
+    "d /run/nixling             0775 root nixling -"
   ] ++ [
     "d /run/nixling/vms         0755 root root -"
-    "f /run/nixling/usbipd.lock 0660 root nixling-launcher -"
+    "f /run/nixling/usbipd.lock 0660 root nixling -"
     "d /run/nixling-gpu         0755 root root -"
-    # P7r2 security-r7-2: lock file for nixling-known-hosts-refresh@.service
+    # security-r7-2: lock file for nixling-known-hosts-refresh@.service
     # so concurrent refresh runs (one per VM at boot) serialize against the
-    # same file the CLI do_trust path uses. Mode 0660 root:nixling-launcher
+    # same file the CLI do_trust path uses. Mode 0660 root:nixling
     # so launcher-group members can also flock it from `nixling trust`.
-    "f ${cfg.site.stateDir}/known_hosts.nixling.lock 0660 root nixling-launcher -"
-    # Phase 2b reserve: keys directory for nixling-managed SSH keys.
-    # Created root:root 0700 — Phase 2b's generator activation script
+    "f ${cfg.site.stateDir}/known_hosts.nixling.lock 0660 root nixling -"
+    # keys directory for nixling-managed SSH keys.
+    # Created root:root 0700 — the generator activation script
     # (deferred) will populate it.
-    "d ${cfg.site.keysDir} 0710 root nixling-launcher -"
+    "d ${cfg.site.keysDir} 0710 root nixling -"
     "D ${cfg.site.tmpDir} 0755 root root -"
   ]
   # /run/nixling/alloy is created at service-start time by

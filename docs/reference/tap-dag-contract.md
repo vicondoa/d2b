@@ -1,10 +1,10 @@
-# Tap DAG contract (P2)
+# Tap DAG contract
 
-> Status: **P2 ph2-p2-tap-dag-contract**. Operator-facing contract for
-> the per-VM tap interfaces the daemon brings up via the host-prep
-> DAG. The implementation modules cited below are the source of
-> truth; this doc exists to pin the operator-observable shape so
-> drift between code and doc is detectable by
+> Status: canonical. Operator-facing contract for the per-VM tap
+> interfaces the daemon brings up via the host-prep DAG. The
+> implementation modules cited below are the source of truth; this
+> doc exists to pin the operator-observable shape so drift between
+> code and doc is detectable by
 > [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh).
 
 The host-prep DAG ([host-prep-dag.md](./host-prep-dag.md))
@@ -107,12 +107,11 @@ The post-create netlink readback verifies every flag; any drift
 fails the step fail-closed and the tap is torn down before
 returning.
 
-**Teardown order (stop DAG).** Owned by
-`ph2-p2-stop-dag-owner`. The reverse ordering applies: runner
-SIGTERM/SIGKILL via supervisor pidfd → broker `ApplyNftables`
-to remove per-VM carve-outs → broker tap teardown (release fd for
-`TapFd`, or `DeleteTap` for `PersistentTap`). A tap is never
-removed while its CH is still live.
+**Teardown order (stop DAG).** The reverse ordering applies:
+runner SIGTERM/SIGKILL via supervisor pidfd → broker
+`ApplyNftables` to remove per-VM carve-outs → broker tap teardown
+(release fd for `TapFd`, or `DeleteTap` for `PersistentTap`). A tap
+is never removed while its CH is still live.
 
 ## Handoff modes
 
@@ -161,7 +160,7 @@ bundle build via `host.json::chConfig`).
    **exact** uid/gid of the runner that `SpawnRunner` will
    exec — this is the per-VM runner uid (graphics VMs use
    `nixling-<vm>-gpu` uid + `kvm` group; headless workloads use
-   the `microvm` per-VM uid; per the plan's networking-1
+   the `microvm` per-VM uid; per the networking
    guidance, the broker MUST bind to the same uid/gid the
    spawn intent will use).
 4. Broker returns the derived ifname (no fd) in
@@ -187,15 +186,12 @@ For the `TapFd` mode, the per-VM fd lifecycle is:
 | 5. CH exit                 | none                                  | kernel reaps the tap on last-fd close (transient tap) |
 
 The unix-socket carrying the SCM_RIGHTS payload is the broker
-public socket (`/run/nixling/priv-broker.sock`) for
-broker→daemon, and the daemon-to-runner control socket for
-daemon→CH. The socket modes are documented in
-[privileges.md](./privileges.md); the relevant invariant for
-this contract is that BOTH sockets are reachable only by
-members of the `nixling-launchers` group (the
-group is declared by `host-daemon.nix`; AGENTS.md's older
-singular `nixling-launcher` is the **polkit launcher group**,
-which is a distinct singleton).
+private socket (`/run/nixling/priv.sock`) for broker→daemon, and
+the daemon-to-runner control socket for daemon→CH. The socket
+modes are documented in [privileges.md](./privileges.md); the
+relevant invariant for this contract is that both sockets remain
+confined to the daemon/broker control plane rather than the public
+launcher surface.
 
 For the `PersistentTap` mode there is no per-handoff fd
 movement; the binding is uid/gid + persistence on the kernel
@@ -280,7 +276,7 @@ ownership marker so `ApplyNmUnmanaged` can succeed), the next
 - **Host config DTO**: [`packages/nixling-core/src/host.rs`](../../packages/nixling-core/src/host.rs) — `ChNetHandoffMode`, `IfNameMapping`, `HostChConfig`.
 - **Failure envelope**: [`packages/nixling-host/src/host_prep_dag.rs`](../../packages/nixling-host/src/host_prep_dag.rs) — `HostPrepStepFailed`.
 - **Drift gate**: [`tests/tap-dag-contract-doc-eval.sh`](../../tests/tap-dag-contract-doc-eval.sh) — fails if any of the above implementation symbols diverge from this document.
-- **Sibling P2 agents**:
-  - `ph2-dag-host-prep` (parent host-prep DAG scaffold).
-  - `ph2-p2-stop-dag-owner` (reverse-order teardown contract).
-  - `ph2-p2-ownership-matrix` (per-VM uid/gid leaf ownership the persistent-tap mode binds to).
+- **Related references**:
+  - [host-prep-dag.md](./host-prep-dag.md) — parent host-prep DAG scaffold.
+  - [stop-dag-reconcile.md](./stop-dag-reconcile.md) — reverse-order teardown contract.
+  - [per-vm-state-ownership.md](./per-vm-state-ownership.md) — per-VM uid/gid leaf ownership the persistent-tap mode binds to.

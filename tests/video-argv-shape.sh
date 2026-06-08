@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# P1 byte-parity gate for the daemon-spawned vhost-user-media (video)
+# Byte-parity gate for the daemon-spawned vhost-user-media (video)
 # sidecar. Drives the `audit_parity_snapshot_line` test in
 # `packages/nixling-host/src/video_argv.rs` and byte-compares the captured
-# argv + kernel-8 wire-contract pins against
+# argv and wire-contract pins against
 # `tests/golden/runner-shape/video-argv-minimal.txt`.
 set -euo pipefail
 

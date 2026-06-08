@@ -1,15 +1,12 @@
-//! Opaque identifier newtypes for the W3 broker wire contract
-//! (security-1: prevent the daemon from passing authority-bearing
-//! payloads to the broker).
+//! Opaque identifier newtypes for the broker wire contract.
 //!
-//! Every W3 mutating broker request carries opaque IDs that the
-//! broker resolves against its **own trusted copy of the bundle**.
-//! The daemon never names raw paths, raw uids/gids, raw argv, raw
-//! nft rule text, raw routes or raw sysctl values — those derive
+//! These identifiers prevent the daemon from passing authority-bearing
+//! payloads to the broker. Every mutating broker request carries opaque
+//! IDs that the broker resolves against its **own trusted copy of the
+//! bundle**. The daemon never names raw paths, raw uids/gids, raw argv,
+//! raw nft rule text, raw routes or raw sysctl values — those derive
 //! exclusively from the broker-side `Bundle::find_*_intent` lookups
-//! anchored by these IDs. See plan.md §"W3 broker variant additions
-//! (wire-stable, audit-mandatory)" and the broker contract earlier
-//! in the plan.
+//! anchored by these IDs.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -83,10 +80,9 @@ opaque_id! {
     /// `NmUnmanagedEntry`, `HostsEntry`, etc.). The broker uses this
     /// to look up the typed intent in its own bundle copy; the
     /// daemon never passes inline rule text, route specs, sysctl
-    /// values, ifname sets, or hosts entries. Per plan.md §"W3
-    /// broker variant additions": "Bundle-derived intents are the
-    /// only authority for ApplyNftables / ApplyRoute / ApplySysctl
-    /// / ApplyNmUnmanaged / UpdateHostsFile."
+    /// values, ifname sets, or hosts entries. Bundle-derived intents
+    /// are the only authority for ApplyNftables / ApplyRoute /
+    /// ApplySysctl / ApplyNmUnmanaged / UpdateHostsFile.
     BundleOpId
 }
 
@@ -97,19 +93,18 @@ opaque_id! {
 }
 
 opaque_id! {
-    /// P2 ph2-store-sync: opaque identifier for a per-VM
-    /// store-view closure intent row (resolved against
-    /// `BundleResolver::find_store_view_intent` keyed by VM).
+    /// Opaque identifier for a per-VM store-view closure intent row
+    /// (resolved against `BundleResolver::find_store_view_intent`
+    /// keyed by VM).
     /// The daemon never names raw `/nix/store` closure paths on
     /// the wire — only this reference. Canonical form is the
     /// `intent_id_store_view(vm)` string (`"store-view:vm:<vm>"`).
     BundleClosureRef
 }
 
-/// Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`]
-/// (security-1). The broker derives the concrete path from the
-/// bundle anchored by `vm_id` + `path_class`; the daemon never
-/// passes a raw path.
+/// Path classifier for [`PrepareStateDir`] / [`PrepareRuntimeDir`].
+/// The broker derives the concrete path from the bundle anchored by
+/// `vm_id` + `path_class`; the daemon never passes a raw path.
 ///
 /// [`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir
 /// [`PrepareRuntimeDir`]: crate::broker_wire::BrokerRequest::PrepareRuntimeDir

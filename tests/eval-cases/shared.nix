@@ -30,9 +30,121 @@
 let
   flake = builtins.getFlake (toString flakeRoot);
   nixpkgs = flake.inputs.nixpkgs;
+  lib = nixpkgs.lib;
   defaultSystem = "x86_64-linux";
 
-  pkgsFor =
+  # ---------------------------------------------------------------------
+  # Minimal NixOS option surface (the eval-speed win).
+  #
+  # The assertions gate only ever forces `config.assertions`, which reads
+  # just `config.users.users` (membership) plus `config.nixling.*`. It
+  # does NOT need nixpkgs' ~1,370-module `nixosSystem` baseModules — those
+  # only matter for building a real system. Booting them per case cost
+  # ~28s each (26 cases ≈ 13 min).
+  #
+  # Instead we `lib.evalModules` with ONLY:
+  #   * nixpkgs' self-contained `misc/assertions.nix` (declares the
+  #     `assertions` / `warnings` options nixling writes to), and
+  #   * sink declarations (`types.anything`) for every other top-level
+  #     NixOS namespace nixling's modules *write* to, so those definitions
+  #     are accepted. The sinks are never forced (config.assertions does
+  #     not read them), so they cost nothing.
+  # Marginal per-case cost drops from ~28s to ~0.6s. This mirrors how
+  # nixpkgs tests its own module system (lib/tests/modules.sh): minimal
+  # `evalModules` over fixtures, never `nixosSystem`.
+  assertionsModule = nixpkgs + "/nixos/modules/misc/assertions.nix";
+
+  # Top-level NixOS namespaces nixling's modules assign to. If nixling
+  # grows a write to a new top-level NixOS namespace, add it here (a
+  # missing sink surfaces loudly as `option <ns> does not exist`, never
+  # as a silent wrong result).
+  sinkNamespaces = [
+    "users"
+    "system"
+    "services"
+    "environment"
+    "boot"
+    "networking"
+    "security"
+    "documentation"
+    "time"
+    "nix"
+    "i18n"
+    "hardware"
+    "fileSystems"
+    "swapDevices"
+    "powerManagement"
+    "programs"
+    "console"
+    "fonts"
+    "sound"
+    "virtualisation"
+    "specialisation"
+    "zramSwap"
+    "xdg"
+    "qt"
+  ];
+
+  mkSink =
+    name:
+    { lib, ... }:
+    {
+      options.${name} = lib.mkOption {
+        type = lib.types.anything;
+        default = { };
+      };
+    };
+
+  # `systemd` needs a faithful-enough shape because the gate reads back
+  # two sub-options: `systemd.services` (membership checks) and
+  # `systemd.tmpfiles.rules` (a `listOf str` that MUST concatenate across
+  # modules — a bare `types.anything` reports conflicting list defs
+  # instead of merging). Everything else under `systemd` stays freeform.
+  systemdSink =
+    { lib, ... }:
+    {
+      options.systemd = lib.mkOption {
+        default = { };
+        type = lib.types.submodule {
+          freeformType = lib.types.attrsOf lib.types.anything;
+          options.services = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+          };
+          options.tmpfiles = lib.mkOption {
+            default = { };
+            type = lib.types.submodule {
+              freeformType = lib.types.attrsOf lib.types.anything;
+              options.rules = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+              };
+            };
+          };
+        };
+      };
+    };
+
+  # `nixpkgs` is read by vm-evaluator.nix (`config.nixpkgs.config`), so
+  # its sink seeds a `.config` attr.
+  nixpkgsSink =
+    { lib, ... }:
+    {
+      options.nixpkgs = lib.mkOption {
+        type = lib.types.anything;
+        default = { config = { }; };
+      };
+    };
+
+  sinkModules = (builtins.map mkSink sinkNamespaces) ++ [
+    systemdSink
+    nixpkgsSink
+  ];
+
+  # Memoize pkgs per system at the top level so the (pure, deterministic)
+  # `import nixpkgs { inherit system; ... }` thunk is shared across every
+  # case with the same system instead of being re-imported per case.
+  importPkgs =
     system:
     import nixpkgs {
       inherit system;
@@ -40,6 +152,11 @@ let
         allowUnsupportedSystem = true;
       };
     };
+  pkgsX86 = importPkgs "x86_64-linux";
+  pkgsAarch64 = importPkgs "aarch64-linux";
+  pkgsFor =
+    system:
+    if system == "aarch64-linux" then pkgsAarch64 else if system == "x86_64-linux" then pkgsX86 else importPkgs system;
 
   # Base consumer module identical to the one mk_expr produced in the
   # legacy bash harness. Every case stacks its override on top.
@@ -83,6 +200,27 @@ let
     }
   );
 
+  # Build the raw module-system evaluation for ONE case. Shared by the
+  # batched `evalCase` below and by the shell gate's per-case fallback
+  # (`mk_expr` in tests/assertions-eval.sh) so both paths use identical
+  # eval semantics.
+  mkEval =
+    { override, system ? defaultSystem }:
+    lib.evalModules {
+      modules = [
+        assertionsModule
+        flake.nixosModules.default
+        baseModule
+        override
+      ]
+      ++ sinkModules;
+      specialArgs = {
+        inherit lib;
+        pkgs = pkgsFor system;
+        modulesPath = nixpkgs + "/nixos/modules";
+      };
+    };
+
   # Evaluate ONE case. Force `config.assertions` via tryEval so any
   # mkOption type-check throw or `assert lib.assertMsg ... ` somewhere
   # in the module body surfaces as `evalSucceeded = false` with the
@@ -97,15 +235,7 @@ let
       system = caseSpec.system or defaultSystem;
       override = caseSpec.override;
 
-      nixos = nixpkgs.lib.nixosSystem {
-        inherit system;
-        pkgs = pkgsFor system;
-        modules = [
-          flake.nixosModules.default
-          baseModule
-          override
-        ];
-      };
+      nixos = mkEval { inherit override system; };
 
       # Try to read the assertions list. If a module-evaluation throw
       # fires before assertions are computable, tryEval catches it.
@@ -176,5 +306,5 @@ let
 
 in
 {
-  inherit evalCase mkBatch baseModule defaultSystem pkgsFor;
+  inherit evalCase mkEval mkBatch baseModule defaultSystem pkgsFor lib;
 }

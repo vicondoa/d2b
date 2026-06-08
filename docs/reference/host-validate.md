@@ -1,16 +1,15 @@
-# `nixling host validate` — composite W18 readiness preflight
-
-**Plan:** P5 ph5-p5-host-validate-verb.
+# `nixling host validate` — composite default-switch readiness preflight
 
 `nixling host validate` is the operator-facing one-command preflight
 the operator runs after `nixos-rebuild switch` and before flipping
 `nixling.daemonExperimental.enable = true`. It is the umbrella verb
-that produces the per-wave evidence records consumed by the W18
-auto-flip gate (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
+that produces the per-wave evidence records consumed by the
+default-switch auto-flip gate
+(`nixos-modules/options-daemon.nix:validationEvidencePresent`).
 
 ## What it does
 
-1. Iterates the W18 readiness waves in the deterministic catalog
+1. Iterates the default-switch readiness waves in the deterministic catalog
    order (`w4Fu`, `w5Fu`, `w6Fu`, `w7Fu`, `w8Fu`, `w9Fu`, `p0`,
    `p0Fu`, `p1`, `p2`, `p3`, `p4`, `p5`, `p6`, `p7`). The catalog
    is sourced from `packages/nixling/src/host_validate.rs::WAVE_CATALOG`
@@ -25,7 +24,7 @@ auto-flip gate (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
    every declared validator is present and readable on disk.
 3. In `--apply` mode, writes the canonical evidence record
    `/var/lib/nixling/validated/<wave>.json` for every `ready`
-   wave; the W18 gate then accepts that wave as `validated`.
+   wave; the default-switch gate then accepts that wave as `validated`.
 
 The verb does NOT execute the per-wave shell validators itself
 — those are Layer-2 integration tests that typically require live
@@ -34,8 +33,8 @@ operator runs them out-of-band; the validators that already
 emit their own per-role evidence file (e.g.
 `tests/minijail-validator-swtpm.sh` → `p1-swtpm.json`) continue to do
 so. `host validate --apply` is the umbrella attestation that
-produces the per-wave `<wave>.json` files the W18 readiness option
-consumes.
+produces the per-wave `<wave>.json` files the default-switch
+readiness option consumes.
 
 ## Usage
 
@@ -58,14 +57,14 @@ neither is given — matching every other `host *` verb).
 | `--apply` | Writes evidence for every `ready` wave. Returns exit 78 if any wave is still `missing` (operator must run the listed validators first). |
 | `--wave <name>` | Restrict to a single wave (validated against the catalog; unknown values surface the typed `unknown-wave` envelope, exit 78). |
 | `--operator-signature <sig>` | Override the per-wave operator signature. By default the verb computes a deterministic `sha256:` digest of `hostname \| wave \| scripts_dir \| timestamp`. |
-| `--evidence-dir <path>` | Override the evidence directory. Defaults to `/var/lib/nixling/validated` (the W18 path). Tests use a scratch dir; operators should never override this in production. |
+| `--evidence-dir <path>` | Override the evidence directory. Defaults to `/var/lib/nixling/validated` (the default-switch evidence path). Tests use a scratch dir; operators should never override this in production. |
 | `--scripts-dir <path>` | Override the validator scripts directory. Defaults to `/run/current-system/sw/share/nixling/tests` (installed) → `./tests` (dev). Override with `NIXLING_VALIDATE_SCRIPTS_DIR`. |
 | `--json` / `--human` | Render JSON (machine-consumable) vs human-readable text. JSON is default-suitable for the `nixling` JSON contract. |
 
 ## Evidence schema
 
 Each evidence file written by `--apply` is a single JSON object on
-disk with exactly the three fields the W18 gate requires:
+disk with exactly the three fields the default-switch gate requires:
 
 ```json
 {
@@ -101,8 +100,8 @@ or whose `timestamp` / `operatorSignature` are absent or empty.
 | `p7` | _(no per-host validator; readiness is gate-output only)_ |
 
 The two `(no validator)` waves report status `no-validators`. They
-intentionally do not write an evidence file — the W18 readiness
-gate for `p6`/`p7` is driven entirely by Layer-1 panel output
+intentionally do not write an evidence file — the default-switch
+readiness gate for `p6`/`p7` is driven entirely by Layer-1 panel output
 (`tests/legacy-unit-denylist-eval.sh`, `tests/static.sh` green, the
 v1.0 docs blast-radius pass), not by per-host attestation.
 
@@ -141,8 +140,8 @@ sudo nixos-rebuild switch --flake .#myhost
 
 The daemon also auto-writes an evidence record on the first
 successful op of each kind (see the Critical-subsystems "Control
-plane (W2+)" row in [`AGENTS.md`](../../AGENTS.md) and the W18 entry
-in [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)),
+plane" row in [`AGENTS.md`](../../AGENTS.md) and the default-switch
+entry in [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)),
 so a long-running host typically picks up evidence over time even
 without running this verb. The verb exists so that **fresh** consumer
 hosts do not hit the validation cliff between
@@ -151,7 +150,7 @@ implementation has already shipped in-tree.
 
 ## Related
 
-- [`AGENTS.md` § "Critical subsystems / Control plane (W2+)"](../../AGENTS.md) — W18 default-switch contract.
+- [`AGENTS.md` § "Critical subsystems / Control plane"](../../AGENTS.md) — default-switch contract.
 - [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) — full flip timeline.
 - [`docs/reference/error-codes.md`](./error-codes.md) — `--apply-or-dry-run-required` and `unknown-wave` envelopes.
 - [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh) — Layer-1 regression gate.

@@ -1,4 +1,4 @@
-//! W5-H3: `crosvm device video-decoder` sidecar argv generator.
+//! `crosvm device video-decoder` sidecar argv generator.
 //!
 //! Pure Rust function that emits the argv for the per-VM
 //! `nixling-<vm>-video.service` video decode sidecar per
@@ -23,14 +23,14 @@
 use serde::{Deserialize, Serialize};
 
 // =========================================================================
-// kernel-8 wire-contract pins (P1)
+// Wire-contract pins
 // =========================================================================
 //
 // `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device.patch`
 // hard-codes the virtio-media wire shape that this sidecar speaks to the
 // guest through cloud-hypervisor. These constants are NOT user-tunable
 // argv flags — they live in the CH patch and the crosvm vhost-user-media
-// backend. We mirror them here so the P1 byte-parity golden
+// backend. We mirror them here so the byte-parity golden
 // (`tests/golden/runner-shape/video-argv-minimal.txt`) captures the full
 // effective wire shape, and any future drift in the CH patch surfaces as
 // a golden diff in CI even though no argv changed.
@@ -73,8 +73,8 @@ pub const VHOST_USER_MEDIA_PROTOCOL_FLAGS: &str = "BACKEND_REQ|REPLY_ACK|SHMEM_M
 /// `mem32_allocator`) changes the guest-visible BAR layout.
 pub const VHOST_USER_MEDIA_MMIO_ALLOCATOR: &str = "pci-mem64";
 
-/// Render the kernel-8 wire-contract pins as a single deterministic line
-/// that the golden parity test byte-compares. Format is `KEY=VALUE`
+/// Render the wire-contract pins as a single deterministic line that the
+/// golden parity test byte-compares. Format is `KEY=VALUE`
 /// space-separated; order is frozen.
 pub fn wire_contract_snapshot() -> String {
     format!(
@@ -108,25 +108,21 @@ impl VideoBackend {
 
 /// All inputs required to render the video-decoder argv.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VideoArgvInput {
-    /// Absolute store path to the `crosvm` binary (the W5 video
-    /// component overlays `cargoBuildFeatures += [video-decoder,
+    /// Absolute store path to the `crosvm` binary (the video component
+    /// overlays `cargoBuildFeatures += [video-decoder,
     /// vaapi, media]` against `pkgs.crosvm`).
     pub crosvm_binary_path: String,
     /// VM name; used by [`exec_arg0`] only.
     pub vm_name: String,
     /// `--socket-path` value. Per host.nix:
-    /// `/run/nixling-video/<vm>/video.sock` (the W5 video module
-    /// uses its own `RuntimeDirectory = nixling-video/<vm>` rather
+    /// `/run/nixling-video/<vm>/video.sock` (the video module uses its
+    /// own `RuntimeDirectory = nixling-video/<vm>` rather
     /// than sharing `/run/nixling/vms/<vm>/`).
     pub socket_path: String,
     /// `--backend` selector.
     pub backend: VideoBackend,
-    /// Free-form additional crosvm args. Caller is responsible for
-    /// quoting; each entry is emitted as-is in order at the end.
-    #[serde(default)]
-    pub extra_args: Vec<String>,
 }
 
 /// Errors the video argv generator can return.
@@ -151,7 +147,7 @@ pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoA
     if input.socket_path.is_empty() {
         return Err(VideoArgvError::EmptySocketPath);
     }
-    let mut argv: Vec<String> = vec![
+    Ok(vec![
         input.crosvm_binary_path.clone(),
         "device".to_owned(),
         "video-decoder".to_owned(),
@@ -159,11 +155,7 @@ pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoA
         input.socket_path.clone(),
         "--backend".to_owned(),
         input.backend.as_str().to_owned(),
-    ];
-    for extra in &input.extra_args {
-        argv.push(extra.clone());
-    }
-    Ok(argv)
+    ])
 }
 
 /// `arg0` for the video sidecar. Matches the systemd unit name
@@ -185,7 +177,6 @@ mod tests {
             vm_name: "corp-desktop".to_owned(),
             socket_path: "/run/nixling-video/corp-desktop/video.sock".to_owned(),
             backend: VideoBackend::Vaapi,
-            extra_args: Vec::new(),
         }
     }
 
@@ -259,23 +250,27 @@ mod tests {
     }
 
     #[test]
-    fn extra_args_appended_in_order() {
-        let mut input = audit_input();
-        input.extra_args = vec!["--debug".to_owned()];
-        let argv = generate_video_argv(&input).unwrap();
-        assert_eq!(argv.last().unwrap(), "--debug");
-    }
-
-    #[test]
     fn backend_string_round_trip() {
         assert_eq!(VideoBackend::Vaapi.as_str(), "vaapi");
     }
 
-    /// P1 byte-parity snapshot: the line printed here is byte-compared
+    #[test]
+    fn rejects_unknown_extra_args_field() {
+        let json = r#"{
+            "crosvmBinaryPath": "/nix/store/CROSVMVIDEOCROSVMVIDEO-crosvm/bin/crosvm",
+            "vmName": "corp-desktop",
+            "socketPath": "/run/nixling-video/corp-desktop/video.sock",
+            "backend": "vaapi",
+            "extraArgs": ["--debug"]
+        }"#;
+        assert!(serde_json::from_str::<VideoArgvInput>(json).is_err());
+    }
+
+    /// Byte-parity snapshot: the line printed here is byte-compared
     /// against `tests/golden/runner-shape/video-argv-minimal.txt` by
     /// `tests/video-argv-shape.sh`. The snapshot includes both the argv
-    /// the daemon will exec AND the kernel-8 wire-contract pins from the
-    /// CH `0003-vhost-user-media-device.patch`, so any drift in either
+    /// the daemon will exec AND the wire-contract pins from the CH
+    /// `0003-vhost-user-media-device.patch`, so any drift in either
     /// surface is caught by a single byte diff.
     #[test]
     fn audit_parity_snapshot_line() {

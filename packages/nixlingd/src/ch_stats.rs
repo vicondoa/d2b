@@ -1,4 +1,4 @@
-//! P3 ph3-p3-ch-exporter-retire: per-VM Cloud Hypervisor stats
+//! Per-VM Cloud Hypervisor stats
 //! scraper folded into the daemon's `/metrics` endpoint.
 //!
 //! Background. The legacy `nixling-ch-exporter.service` was a host
@@ -147,7 +147,10 @@ fn ch_get_json(socket: &Path, path: &str) -> Result<Vec<u8>, std::io::Error> {
     let mut raw = Vec::with_capacity(2048);
     stream.read_to_end(&mut raw)?;
     split_http_body(&raw).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "ch: malformed http response")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ch: malformed http response",
+        )
     })
 }
 
@@ -169,9 +172,7 @@ fn split_http_body(raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Extract `(state, vcpu_count, memory_bytes)` from a CH
@@ -217,9 +218,13 @@ pub fn render_ch_stats(
         "# HELP nixling_vm_state Cloud Hypervisor VM state exported as a one-hot gauge per state label.\n",
     );
     out.push_str("# TYPE nixling_vm_state gauge\n");
-    out.push_str("# HELP nixling_vm_running Whether the host currently considers the VM running.\n");
+    out.push_str(
+        "# HELP nixling_vm_running Whether the host currently considers the VM running.\n",
+    );
     out.push_str("# TYPE nixling_vm_running gauge\n");
-    out.push_str("# HELP nixling_vm_ch_vcpu_count Boot vCPU count reported by Cloud Hypervisor vm.info.\n");
+    out.push_str(
+        "# HELP nixling_vm_ch_vcpu_count Boot vCPU count reported by Cloud Hypervisor vm.info.\n",
+    );
     out.push_str("# TYPE nixling_vm_ch_vcpu_count gauge\n");
     out.push_str("# HELP nixling_vm_ch_memory_bytes Configured guest memory in bytes reported by Cloud Hypervisor vm.info.\n");
     out.push_str("# TYPE nixling_vm_ch_memory_bytes gauge\n");
@@ -243,7 +248,11 @@ pub fn render_ch_stats(
             }
         }
         for st in &states {
-            let v = if Some(*st) == stats.state.as_deref() { 1 } else { 0 };
+            let v = if Some(*st) == stats.state.as_deref() {
+                1
+            } else {
+                0
+            };
             let escaped = escape_label_value(st);
             out.push_str(&format!(
                 "nixling_vm_state{{{labels},state=\"{escaped}\"}} {v}\n"
@@ -345,14 +354,12 @@ mod tests {
     #[test]
     fn render_uses_only_vm_env_role_labels() {
         let source = StubSource::new(&[]);
-        let body = render_ch_stats(
-            &[vm("corp-vm", "work", "workload")],
-            &source,
-            &|_: &str| false,
+        let body = render_ch_stats(&[vm("corp-vm", "work", "workload")], &source, &|_: &str| {
+            false
+        });
+        assert!(
+            body.contains("nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0")
         );
-        assert!(body.contains(
-            "nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"
-        ));
         // No topology labels by default.
         assert!(!body.contains("bridge="));
         assert!(!body.contains("tap="));
@@ -369,9 +376,9 @@ mod tests {
             &NullChStatsSource,
             &|_: &str| false,
         );
-        assert!(body.contains(
-            "nixling_vm_ch_api_up{vm=\"ghost\",env=\"work\",role=\"workload\"} 0"
-        ));
+        assert!(
+            body.contains("nixling_vm_ch_api_up{vm=\"ghost\",env=\"work\",role=\"workload\"} 0")
+        );
     }
 
     #[test]
@@ -397,12 +404,11 @@ mod tests {
             );
             assert!(body.contains(&line), "missing line: {line}\n--\n{body}");
         }
-        assert!(body.contains(
-            "nixling_vm_running{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 1"
-        ));
-        assert!(body.contains(
-            "nixling_vm_ch_vcpu_count{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 4"
-        ));
+        assert!(
+            body.contains("nixling_vm_running{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 1")
+        );
+        assert!(body
+            .contains("nixling_vm_ch_vcpu_count{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 4"));
         assert!(body.contains(
             "nixling_vm_ch_memory_bytes{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 2147483648"
         ));
@@ -419,11 +425,9 @@ mod tests {
                 memory_bytes: None,
             },
         )]);
-        let body = render_ch_stats(
-            &[vm("weird", "work", "workload")],
-            &source,
-            &|_: &str| false,
-        );
+        let body = render_ch_stats(&[vm("weird", "work", "workload")], &source, &|_: &str| {
+            false
+        });
         assert!(body.contains(
             "nixling_vm_state{vm=\"weird\",env=\"work\",role=\"workload\",state=\"Crashing\"} 1"
         ));
@@ -443,11 +447,9 @@ mod tests {
                 memory_bytes: None,
             },
         )]);
-        let body = render_ch_stats(
-            &[vm("noinfo", "work", "workload")],
-            &source,
-            &|_: &str| false,
-        );
+        let body = render_ch_stats(&[vm("noinfo", "work", "workload")], &source, &|_: &str| {
+            false
+        });
         assert!(!body.contains("nixling_vm_ch_vcpu_count{vm=\"noinfo\""));
         assert!(!body.contains("nixling_vm_ch_memory_bytes{vm=\"noinfo\""));
     }
@@ -492,16 +494,32 @@ mod tests {
     #[test]
     fn vms_are_rendered_in_input_order() {
         let source = StubSource::new(&[
-            ("a", ChVmStats { api_up: true, ..Default::default() }),
-            ("b", ChVmStats { api_up: false, ..Default::default() }),
+            (
+                "a",
+                ChVmStats {
+                    api_up: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "b",
+                ChVmStats {
+                    api_up: false,
+                    ..Default::default()
+                },
+            ),
         ]);
         let body = render_ch_stats(
             &[vm("a", "work", "workload"), vm("b", "work", "workload")],
             &source,
             &|_: &str| false,
         );
-        let pos_a = body.find("nixling_vm_ch_api_up{vm=\"a\"").expect("a present");
-        let pos_b = body.find("nixling_vm_ch_api_up{vm=\"b\"").expect("b present");
+        let pos_a = body
+            .find("nixling_vm_ch_api_up{vm=\"a\"")
+            .expect("a present");
+        let pos_b = body
+            .find("nixling_vm_ch_api_up{vm=\"b\"")
+            .expect("b present");
         assert!(pos_a < pos_b);
     }
 }

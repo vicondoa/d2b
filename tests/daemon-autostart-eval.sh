@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/daemon-autostart-eval.sh — P2 ph2-p2-daemon-autostart.
+# tests/daemon-autostart-eval.sh—
 #
 # Asserts the static surface of the nixlingd autostart contract:
 #

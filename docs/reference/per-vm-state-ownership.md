@@ -12,16 +12,14 @@ via a VM-start preflight wired into nixlingd
 (`ownership_preflight::preflight` →
 `TypedError::OwnershipMatrixDrift`).
 
-Tracked in plan task `ph2-p2-ownership-matrix` (see plan.md §"Ownership
-matrix for `/var/lib/nixling/vms/<vm>/`" — nixos-r2-3 expanded).
+This page documents the current ownership matrix the daemon enforces.
 
 ## CRITICAL: hardlink-farm carve-out
 
-> /var/lib/nixling/vms/<vm>/ ownership matrix (critical detail in P2):
-> per-VM hardlink farm shares inodes with /nix/store; `setfacl -R` on
-> per-VM store propagates ACLs INTO /nix/store and breaks ssh
-> `safe_path()` checks. NEVER setfacl recursively across the per-VM
-> store.
+> Critical detail: the per-VM hardlink farm shares inodes with
+> `/nix/store`; `setfacl -R` on the per-VM store propagates ACLs into
+> `/nix/store` and breaks ssh `safe_path()` checks. Never run
+> recursive ACL changes across the per-VM store.
 
 The `store` subdirectory under `/var/lib/nixling/vms/<vm>/` is a
 hardlink farm: every file in it is a hardlink whose inode is shared
@@ -52,10 +50,10 @@ Both layers carry a dedicated unit test:
 | Path (relative to `/var/lib/nixling/vms/<vm>/`) | Owner | Group | Mode | Recursive | Rationale |
 |---|---|---|---|---|---|
 | `.` | `nixlingd` | `users` | `2770` | false | Per-VM state root. `setgid` so role users (runner / gpu / swtpm) inherit the group on files they create. |
-| `state` | `nixlingd` | `nixling-launcher` | `0750` | false | Daemon-owned per-VM state (`audio-state.json`, etc.). |
+| `state` | `nixlingd` | `nixling` | `0750` | false | Daemon-owned per-VM state (`audio-state.json`, etc.). |
 | `swtpm` | `nixling-<vm>-swtpm` | `nixling-<vm>-swtpm` | `0700` | false | **CRITICAL SUBSYSTEM** (AGENTS.md): per-VM TPM 2.0 NVRAM. Wiping or rechowning this directory looks like device tampering to any IdP (Entra ID / Intune / BitLocker-class policies) and forces re-enrollment. Owned by the per-VM swtpm runner principal. |
-| `sshd-host-keys` | `nixlingd` | `nixling-launcher` | `0750` | false | Container for per-VM sshd host keys. The daemon refuses to start the VM if any leaf has drifted (see `ph2-p2-ssh-host-key-preflight`). |
-| `host-keys` | `nixlingd` | `nixling-launcher` | `0750` | false | Known-hosts pin store for per-VM ssh host key fingerprints. |
+| `sshd-host-keys` | `nixlingd` | `nixling` | `0750` | false | Container for per-VM sshd host keys. The daemon refuses to start the VM if any leaf has drifted (see [ssh-host-key-preflight.md](./ssh-host-key-preflight.md)). |
+| `host-keys` | `nixlingd` | `nixling` | `0750` | false | Known-hosts pin store for per-VM ssh host key fingerprints. |
 | `store` | `nixlingd` | `users` | `2775` | **false (carve-out)** | Per-VM `/nix/store` hardlink farm. See the CRITICAL section above. The enforcer NEVER recurses into this path; the matrix verifies only the top-level dir's owner/group/mode. |
 | `store-meta` | `nixlingd` | `users` | `2775` | false | StoreSync metadata sibling: `current` symlink, per-generation marker, gcroots. Although not hardlinked into `/nix/store`, `recursive` is kept false so the "no recursive ownership ops on per-VM store state" rule applies uniformly. |
 

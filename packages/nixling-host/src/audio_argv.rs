@@ -1,4 +1,4 @@
-//! W5-H2: vhost-device-sound audio sidecar argv generator.
+//! vhost-device-sound audio sidecar argv generator.
 //!
 //! Pure Rust function that emits the argv for the per-VM
 //! `nixling-<vm>-snd.service` audio sidecar per
@@ -74,8 +74,7 @@ pub enum AudioArgvError {
     },
     EmptyVmName,
     EmptySocketPath,
-    /// W5-H6 panel finding #2 + W5 GPT-5.5 panel notable #1: the
-    /// audio sidecar binary path MUST be the per-VM copy at
+    /// The audio sidecar binary path MUST be the per-VM copy at
     /// `/run/nixling/vms/<vm>/nixling-<vm>` (so libpipewire's
     /// `init_prgname()` derives `application.name = "nixling-<vm>"`
     /// from `/proc/self/exe`). Any other path — including a
@@ -89,9 +88,9 @@ pub enum AudioArgvError {
     },
 }
 
-/// W5 GPT-5.5 panel notable #1: enforce the EXACT per-VM-copy path
-/// shape rather than the W5-H6 shallow "no /nix/store/" denylist.
-/// The broker / sidecar installer guarantees that this path exists
+/// Enforce the EXACT per-VM-copy path shape rather than the shallow
+/// "no /nix/store/" denylist. The broker / sidecar installer guarantees
+/// that this path exists
 /// as a root-owned regular file at spawn time; this generator
 /// refuses any other shape.
 fn expected_audio_sidecar_path(vm_name: &str) -> String {
@@ -108,7 +107,7 @@ pub fn generate_audio_argv(input: &AudioArgvInput) -> Result<Vec<String>, AudioA
     if input.vm_name.is_empty() {
         return Err(AudioArgvError::EmptyVmName);
     }
-    // W5 GPT-5.5 panel notable #1: strict per-VM-copy path enforcement.
+    // Strict per-VM-copy path enforcement.
     let expected = expected_audio_sidecar_path(&input.vm_name);
     if input.sidecar_binary_path != expected {
         return Err(AudioArgvError::SidecarBinaryPathNotPerVmCopy {
@@ -167,8 +166,8 @@ mod tests {
         assert!(joined.contains("--backend pipewire"));
     }
 
-    /// P1 audio: byte-parity snapshot printed for the
-    /// `tests/audio-argv-shape.sh` golden gate against
+    /// Byte-parity snapshot printed for the `tests/audio-argv-shape.sh`
+    /// golden gate against
     /// `tests/golden/runner-shape/audio-argv-minimal.txt`.
     #[test]
     fn audit_minimal_snapshot_line() {
@@ -194,8 +193,8 @@ mod tests {
         ));
     }
 
-    /// W5-H6 panel finding #2: direct Nix-store paths must be
-    /// refused because they bypass libpipewire's `application.name`
+    /// Direct Nix-store paths must be refused because they bypass
+    /// libpipewire's `application.name`
     /// derivation (see module docstring for rationale).
     #[test]
     fn rejects_nix_store_direct_path() {
@@ -209,8 +208,8 @@ mod tests {
         ));
     }
 
-    /// W5 GPT-5.5 panel notable #1: even /run/current-system
-    /// symlinks (which would canonicalize INTO /nix/store) are
+    /// Even /run/current-system symlinks (which would canonicalize INTO
+    /// /nix/store) are
     /// refused by the strict per-VM-copy match.
     #[test]
     fn rejects_run_current_system_symlink() {
@@ -222,8 +221,8 @@ mod tests {
         ));
     }
 
-    /// W5 GPT-5.5 panel notable #1: another VM's per-VM copy is
-    /// also refused — the binary path is keyed on the input's
+    /// Another VM's per-VM copy is also refused — the binary path is
+    /// keyed on the input's
     /// `vm_name`.
     #[test]
     fn rejects_other_vms_per_vm_copy() {

@@ -1,23 +1,19 @@
-# Daemon lifecycle (W4 main wave)
+# Daemon lifecycle
 
-This document captures the daemon-owned VM lifecycle that lands in W4
-main. It is the source-of-truth explanation for the per-VM DAG, the
-readiness predicates, the supervisor budgets, the state persistence
-contract, the restart reconciliation rules, and the daemon-level
+This document captures the daemon-owned VM lifecycle. It is the
+source-of-truth explanation for the per-VM DAG, the readiness
+predicates, the supervisor budgets, the state persistence contract,
+the restart reconciliation rules, and the daemon-level
 `[pending restart]` semantics.
 
-The wire surface (W4-H5 `SpawnRunner` broker variant) is stable;
-broker-side execution of `SpawnRunner` lands in **W4-fu** (the
-follow-up wave). Every `nixling vm <verb> --apply` today returns
-the documented W3 typed `daemon-down` envelope; `--dry-run` returns
-the DAG the supervisor will drive when W4-fu ships.
+The `SpawnRunner` broker path described here is part of the live
+control plane.
 
 ## Per-VM process DAG
 
 Each VM declared in the public manifest gets its own
 [`VmProcessDag`](../reference/manifest-schema.md) under
-`processes.json`. The W4 headless alpha Tier-1 shape is a linear
-5-node DAG:
+`processes.json`. The headless shape is a linear 5-node DAG:
 
 ```text
 host-reconcile
@@ -35,9 +31,9 @@ Roles, from
 - `store-virtiofs-preflight` — validates the per-VM virtiofs share
   set against the trusted bundle's
   [`runner_shape`](../reference/runner-shape-audit.md) preflight.
-- `virtiofsd` — one instance per `microvm.shares` row. W4 alpha
-  ships the four-share shape from the W0b audit
-  (`ro-store`, `nl-meta`, `nl-hkeys`, `nl-ssh-host`).
+- `virtiofsd` — one instance per `microvm.shares` row. The current
+  headless shape uses four shares: `ro-store`, `nl-meta`,
+  `nl-hkeys`, and `nl-ssh-host`.
 - `cloud-hypervisor-runner` — the CH binary launched against the
   argv emitted by [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs).
 - `guest-ssh-readiness` — daemon-side probe that the guest is
@@ -47,12 +43,12 @@ Optional roles wired by per-VM features:
 
 - `swtpm` + `swtpm-pre-start-flush` when
   `nixling.vms.<vm>.tpm.enable = true` — TPM 2.0 socket sidecar
-  with the W3-invariant `swtpm_ioctl -i --unix <ctrl>` pre-start
+  with the documented `swtpm_ioctl -i --unix <ctrl>` pre-start
   flush.
 - `vsock-relay` when `nixling.observability.enable = true` — the
   guest→host OTLP relay sidecar.
-- `gpu` / `video` / `audio` — W5 deliverables; the W4 main wave
-  ships only the headless shape, no graphics/audio/USBIP roles.
+- `gpu` / `video` / `audio` — feature-gated roles not present in the
+  headless shape described here.
 
 ## Topological execution + fail-fast
 
@@ -67,14 +63,14 @@ The relevant pure-Rust surface lives in
   closed with `DagError::UnknownNode { edge }`.
 - `DagExecutor<R: NodeRunner>` — drives the topo-sorted DAG through
   an async-trait `NodeRunner`. The production daemon wires the
-  W4-H5 `SpawnRunner` broker variant behind the trait; tests use
-  an in-memory `FakeRunner`.
+  `SpawnRunner` broker variant behind the trait; tests use an
+  in-memory `FakeRunner`.
 - On the first node failure the executor stops issuing spawn calls
   and marks every remaining node as
   `NodeOutcome::Skipped { predecessor }`. The returned
   `DagRunReport` always lists every node in topo order so callers
   can render `ready` / `failed` / `skipped` exhaustively in the
-  W3 typed-error envelope.
+  typed-error envelope.
 
 ## Readiness predicates
 
@@ -112,7 +108,7 @@ NodeBudget {
 
 Defaults match the Tier-1 headless alpha target. Per-node overrides
 land via the trusted bundle row; the supervisor never accepts
-caller-supplied budget tweaks (security-1: the daemon never names a
+caller-supplied budget tweaks (the daemon never names a
 spawn-related authority field across the wire).
 
 ## State persistence + restart reconciliation
@@ -145,12 +141,9 @@ On daemon startup the supervisor:
    comm with spaces and parens via the LAST-`)` split).
 3. Classifies the snapshot as one of:
    - `ReconciliationOutcome::Adopt` — `(pid, start_time_ticks)`
-     matches. **In W4-fu** the supervisor re-opens the pidfd via
+     matches. The supervisor re-opens the pidfd via
      `nix::sys::pidfd::pidfd_open(pid)` and re-registers the slot
-     in the W3 s1 `PidfdTable`. **In W4 main** the reconciliation
-     module only classifies the outcome; the actual `pidfd_open`
-     call lands together with the broker-side `SpawnRunner`
-     execution in W4-fu.
+     in the `PidfdTable`.
    - `ReconciliationOutcome::Quarantine { observed_start_time_ticks }`
      — PID still exists, but `start_time_ticks` drifted. The PID
      was reused by an unrelated process. The slot is parked with
@@ -166,24 +159,21 @@ On daemon startup the supervisor:
      parsed. Treated as quarantine because we cannot prove
      safety of re-adoption.
 
-Per the W3 s1 pidfd contract, raw-pid kill/wait is **forbidden**
-outside the reconciliation path. Reconciliation is the only context
-where the daemon validates `(pid, start_time_ticks)` against the
-trusted snapshot before deciding to use raw-pid semantics for the
-re-adoption window — and even there, the moment the pidfd is
-re-opened the daemon switches back to `pidfd_send_signal`
-exclusively for signal delivery (the v1.1 reaper for SpawnRunner
-children is the broker, not the daemon — per
+Raw-pid kill/wait is **forbidden** outside the reconciliation path.
+Reconciliation is the only context where the daemon validates
+`(pid, start_time_ticks)` against the trusted snapshot before
+considering raw-pid semantics for the re-adoption window — and even
+there, the moment the pidfd is re-opened the daemon switches back to
+`pidfd_send_signal` exclusively for signal delivery. The broker, not
+the daemon, reaps `SpawnRunner` children; see
 [ADR 0018](../adr/0018-microvm-nix-removal.md) § "broker-as-parent
-reaping model"; the daemon does not `waitid(P_PIDFD)` SpawnRunner
-children in v1.1+ because `waitid(P_PIDFD)` only works for the
-calling process's own children and the broker is the parent).
+reaping model".
 
 ## Daemon-level `[pending restart]`
 
-The W3 CLI already surfaces a per-VM `[pending restart]` (when the
-VM's `current` symlink diverges from its `booted` symlink). W4 adds
-the daemon-binary equivalent.
+The CLI already surfaces a per-VM `[pending restart]` (when the
+VM's `current` symlink diverges from its `booted` symlink). This
+same idea also applies to the daemon binary itself.
 
 On startup the daemon writes
 [`DaemonVersionFile`](../../packages/nixlingd/src/daemon_version.rs)
@@ -200,7 +190,8 @@ to `/run/nixling/version`:
 
 The CLI reads the file and runs `std::fs::canonicalize` against the
 on-disk install path (`/run/current-system/sw/bin/nixlingd` on NixOS,
-the Tier-0 install path otherwise). `compute_restart_status` returns:
+the non-NixOS install path otherwise). `compute_restart_status`
+returns:
 
 - `DaemonRestartStatus::UpToDate` — paths match.
 - `DaemonRestartStatus::PendingRestart { running_path, on_disk_path }`
@@ -215,42 +206,30 @@ the Tier-0 install path otherwise). `compute_restart_status` returns:
 The status command renders the banner via `restart_status_banner`
 alongside the per-VM `[pending restart]` annotations.
 
-## Virtiofsd watchdog (P2)
+## Virtiofsd watchdog
 
-Before P2 the per-share `nixling-<vm>-virtiofsd@<share>.service`
+The old per-share `nixling-<vm>-virtiofsd@<share>.service`
 ExecStopPost-style bash health check, driven by the
-`nixling-vfsd-watchdog@<vm>.{timer,service}` pair, was the only
-surface that noticed a virtiofsd sidecar dying mid-run. **v1.0
-(P2 baseline):** detection folded into the daemon's pidfd reaper.
-**v1.1+ (per ADR 0018 § "broker-as-parent reaping model"):** the
-broker is the parent + sole reaper of every SpawnRunner child
-(including Virtiofsd); the daemon observes via the broker's
-`ChildExited` / `OneShotComplete` RPC notifications (per ADR 0010
-+ ADR 0018 wire spec). The daemon's typed state machine — not a
-bash one-shot — decides what happens next in both versions; the
-v1.1 update is WHO reaps (broker, not daemon).
+`nixling-vfsd-watchdog@<vm>.{timer,service}` pair, has been replaced
+by daemon/broker pidfd supervision. The broker is the parent and sole
+reaper of every `SpawnRunner` child (including Virtiofsd); the daemon
+observes via the broker's `ChildExited` / `OneShotComplete` RPC
+notifications and its own duplicated pidfd handle. The daemon's typed
+state machine — not a bash one-shot — decides what happens next.
 
-Each virtiofsd runner the broker spawns is registered:
+Each virtiofsd runner the broker spawns is registered in two places:
 
-- **v1.0**: the daemon's W3 s1 pidfd table under its `(vm,
-  role_id)` key; the daemon's pidfd reaper observes a pidfd
-  exit and calls
-  [`supervisor::pidfd::handle_runner_exit`](../../packages/nixlingd/src/supervisor/pidfd.rs)
-  with `(exit_code, signal)` from `waitid(P_PIDFD)`.
-- **v1.1+**: the broker registers a parent-side pidfd-table
-  entry with `terminal_on_exit: true` (per ADR 0018) and reaps
-  via `waitid(P_PIDFD)`; on reap, the broker emits a
-  `ChildExited{vm, role_id, exit_code, signal}` RPC to the
-  daemon. The daemon's pidfd-table entry receives a SCM_RIGHTS
-  DUP of the broker's pidfd (per the v1.1+ Fd-ownership
-  contract in
-  [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
-  § "Fd ownership table") used only for `pidfd_send_signal`
-  + poll observability. On `ChildExited` RPC, the daemon
-  invokes `supervisor::pidfd::handle_runner_exit` with the
-  `(exit_code, signal)` from the broker's reap, NOT from a
-  local `waitid` (the daemon is not the parent and cannot
-  reap; `waitid(P_PIDFD)` would return `ECHILD`).
+- the broker's parent-side pidfd table, where it is reaped via
+  `waitid(P_PIDFD)`; and
+- the daemon's pidfd table under its `(vm, role_id)` key, where the
+  duplicated pidfd is used only for `pidfd_send_signal` and poll
+  observability.
+
+On `ChildExited` RPC, the daemon invokes
+[`supervisor::pidfd::handle_runner_exit`](../../packages/nixlingd/src/supervisor/pidfd.rs)
+with the `(exit_code, signal)` from the broker's reap, NOT from a
+local `waitid` (the daemon is not the parent and cannot reap;
+`waitid(P_PIDFD)` would return `ECHILD`).
 
 The handler:
 
@@ -274,20 +253,21 @@ The handler:
    wraps it into the existing `OpAuditRecord` envelope before
    appending to `/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
 
-The per-share systemd template (`microvm-virtiofsd@<vm>.service` /
-`nixling-vfsd-watchdog@<vm>`) stays on disk until the P6 deletion
-sweep; P2 only owns the in-daemon detection-and-degradation path.
+The in-daemon detection-and-degradation path has replaced the old
+per-share systemd template/watchdog combination
+(`microvm-virtiofsd@<vm>.service` /
+`nixling-vfsd-watchdog@<vm>`).
 
 ## References
 
 - [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) — CH
   argv shape + per-role minijail decision.
 - [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-  — pidfd handoff + cgroup-v2 delegation (v1.1 update: the v1.0
-  `PR_SET_CHILD_SUBREAPER` contract is SUPERSEDED for the
+  — pidfd handoff + cgroup-v2 delegation. The older
+  `PR_SET_CHILD_SUBREAPER` contract is superseded for the
   SpawnRunner-child population per ADR 0018 § "set-booted race-free
-  serialization" — NEITHER broker NOR daemon claims subreaper for
-  SpawnRunner children).
+  serialization" — neither broker nor daemon claims subreaper for
+  SpawnRunner children.
 - [ADR 0014](../adr/0014-w3-modules-devices-runner-shape.md) —
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) — wire
@@ -295,7 +275,7 @@ sweep; P2 only owns the in-daemon detection-and-degradation path.
 - [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs)
   / [`virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
   / [`swtpm_argv`](../../packages/nixling-host/src/swtpm_argv.rs) —
-  pure argv generators feeding the W4-H5 broker spawn op.
+  pure argv generators feeding the broker `SpawnRunner` op.
 - [`nixlingd::supervisor::dag`](../../packages/nixlingd/src/supervisor/dag.rs)
   / [`state`](../../packages/nixlingd/src/supervisor/state.rs)
   / [`pidfd`](../../packages/nixlingd/src/supervisor/pidfd.rs) — the

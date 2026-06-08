@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
-# W3 static invariant: every W3-added security-sensitive DTO under
-# `nixling-core::host_w3` carries `#[serde(deny_unknown_fields)]` (per
-# AGENTS.md "Manifest bundle" policy + plan §"W3 schema/version bump
-# rules" + plan §"W3 host.json per-field schema gold-file drift gate").
+# Static invariant: every security-sensitive DTO under
+# `nixling-core::host_w3` carries `#[serde(deny_unknown_fields)]` per
+# the AGENTS.md "Manifest bundle" policy and schema drift rules.
 #
-# This is the W3 extension of `tests/static-invariant-deny-unknown-
+# This companion gate extends `tests/static-invariant-deny-unknown-
 # fields.sh`: that gate covers the v1 schemas (bundle / host /
-# processes / privileges / closures); this one verifies the W3 DTO
+# processes / privileges / closures); this one verifies the DTO
 # attribute is present in the Rust source for every named type, so a
-# regression that silently drops `deny_unknown_fields` from a W3 DTO
-# fails the static gate.
-#
-# Owner: H3 (Nix emitters + DTO additions). H4 wires this script into
-# the top-level `tests/static.sh` driver in a separate commit.
+# regression that silently drops `deny_unknown_fields` from a DTO fails
+# the static gate.
 
 set -euo pipefail
 
@@ -23,9 +19,7 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 . "$HERE/lib.sh"
 
 W3_DTOS=(
-  # host_w3.rs — security-sensitive types per plan §"W3 broker variant
-  # additions" + plan §"W3 host.json per-field schema gold-file drift
-  # gate":
+  # host_w3.rs — security-sensitive broker and schema drift types:
   "IfNameMapping"
   "BridgePortFlagsW3"
   "KernelModuleEntry"
@@ -34,7 +28,7 @@ W3_DTOS=(
   "HostsEntry"
   "NmUnmanagedEntry"
   "FirewallCoexistencePolicy"
-  # host.rs — W3 additions to HostJson (networking-2 + virt-1):
+  # host.rs — additions to HostJson:
   "HostChConfig"
 )
 

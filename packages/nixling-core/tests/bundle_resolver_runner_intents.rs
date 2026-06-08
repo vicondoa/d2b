@@ -1,11 +1,11 @@
-//! v1.1-P3 regression coverage: BundleResolver runner-intent loading
-//! must succeed for a representative `vm start --apply` shape.
+//! Regression coverage: BundleResolver runner-intent loading must succeed
+//! for a representative `vm start --apply` shape.
 //!
 //! Context: during the v1.0 closeout side-task,
 //! `nixling vm start --apply <vm>` from the new CLI returned an
-//! `internal-io` envelope on the operator's live host. The v1.1-P3
-//! plan calls for a focused integration test that exercises the
-//! resolver against a fixture bundle whose shape mirrors the live
+//! `internal-io` envelope on the operator's live host. This focused
+//! integration test exercises the resolver against a fixture bundle whose
+//! shape mirrors the live
 //! `/etc/nixling/bundle.json`. This file lands that regression
 //! coverage: the test constructs a tempdir bundle with a non-empty
 //! `processes.json` containing a `CloudHypervisorRunner` node (the
@@ -47,8 +47,7 @@ fn write_private(path: &Path, content: &[u8]) {
         .expect("create file")
         .write_all(content)
         .expect("write file");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o640))
-        .expect("set 0640");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o640)).expect("set 0640");
 }
 
 fn minimal_host_json() -> Vec<u8> {
@@ -252,9 +251,7 @@ fn bundle_resolver_loads_runner_intents_for_workload_vm() {
     // The cloud-hypervisor and virtiofsd nodes are both runner-shaped
     // (vs HostReconcile/StoreVirtiofsPreflight/GuestSshReadiness which
     // are readiness-only and skipped by build_runner_intents).
-    let ch_present = intent_ids
-        .iter()
-        .any(|id| id.contains("cloud-hypervisor"));
+    let ch_present = intent_ids.iter().any(|id| id.contains("cloud-hypervisor"));
     let vfsd_present = intent_ids.iter().any(|id| id.contains("virtiofsd"));
     assert!(
         ch_present,

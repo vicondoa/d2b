@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # v1.1-final: `microvm` flake input DROPPED per ADR 0018.
+    # `microvm` flake input DROPPED per ADR 0018.
     # The nixling NixOS substrate owns its per-VM evaluator via
     # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
     # Runner argv generation lives in the Rust crate
@@ -24,8 +24,8 @@
     in
     {
       # The public surface area — populated incrementally by the
-      # refactor plan. Phase 2b (this commit) wires `nixosModules.default`
-      # for real after refactoring `host.nix`'s `{ inputs, ... }:`
+      # refactor plan. This wires `nixosModules.default` for real
+      # after refactoring `host.nix`'s `{ inputs, ... }:`
       # module-arg into a closure-passed partial application (see
       # `./nixos-modules/default.nix` for the wiring + rationale).
       #
@@ -33,7 +33,7 @@
       #
       #   imports = [ inputs.nixling.nixosModules.default ];
       #
-      # Phase 1+ will populate the remaining surface:
+      # Future work will populate the remaining surface:
       #   packages.<sys>       — patched cloud-hypervisor, crosvm, etc.
       #   apps.<sys>           — the `nixling` CLI as a runnable app
       #   templates.default    — `nix flake init -t github:vicondoa/nixling`
@@ -45,12 +45,12 @@
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
       in {
-        manpages = pkgs.runCommandNoCC "nixling-manpages" { } ''
+        manpages = pkgs.runCommand "nixling-manpages" { } ''
           install -Dm644 ${./docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
           ${pkgs.gzip}/bin/gzip -n -c ${./docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
         '';
 
-        completions = pkgs.runCommandNoCC "nixling-completions" { } ''
+        completions = pkgs.runCommand "nixling-completions" { } ''
           install -Dm644 ${./docs/completions/nixling.bash} "$out/share/bash-completion/completions/nixling"
           install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
@@ -95,8 +95,8 @@
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
         '';
-        # W3 (w2-rust-tests-golden-fragility-w3) — rust-tests reaches
-        # repo-level fixtures under tests/golden/ (compile-time
+        # Rust tests reach repo-level fixtures under tests/golden/
+        # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
         # runtime fixture-path reads from unit/integration tests).
         # Compose a sandbox src that holds packages/ plus those fixture
@@ -117,7 +117,7 @@
           src = rustPackagesSrc;
           sourceRoot = "nixling-rust-src/packages";
           cargoLock.lockFile = ./packages/Cargo.lock;
-          # W2fu4 H16 — repo-local .cargo/config.toml files set
+          # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
           # have sccache on PATH (and even if it did, sccache wants
           # a writable cache dir + network for distributed builds).
@@ -156,7 +156,7 @@
 
         # cargo-deny and cargo-audit (via the rustsec crate) require the
         # advisory DB to be a git repository.  Wrap the fetchFromGitHub
-        # source tree in a minimal git repo so gix::open() succeeds.
+        # source tree in a minimal git repo so gix::open succeeds.
         advisoryDbGit = pkgs.runCommand "rustsec-advisory-db-git" {
           nativeBuildInputs = [ pkgs.git ];
         } ''

@@ -382,15 +382,15 @@ for the exact predicate.
 - [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
 - [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
 
-## W3 daemon-backed variant (experimental)
+## Daemon-backed variant (experimental)
 
 The flake exposes a sibling `nixosConfigurations` output,
 `multi-env-daemon-experimental`, that exercises the v0.4.0
 per-env `mtu` / `mssClamp` / `lan.allowEastWest` knobs together
 with the site-level `allowUnsafeEastWest` acknowledgement, and
-opts one VM into the experimental `nixlingd` supervisor (W3 Tier
-0 mixed mode per plan §"W3 daemon-vs-legacy migration boundary").
-The legacy `nixosConfigurations.demo` variant is unchanged.
+opts one VM into the experimental `nixlingd` supervisor for mixed
+legacy and daemon-backed evaluation. The legacy
+`nixosConfigurations.demo` variant is unchanged.
 
 What the variant changes on top of `configuration.nix`:
 
@@ -474,15 +474,14 @@ template instances, same `restartIfChanged = false` policy, same
 
 `host prepare` (the operator UX described in
 [`docs/how-to/host-prepare.md`](../../docs/how-to/host-prepare.md),
-assembled by the W3 integrator from per-scope fragments) is the
-verb that materialises the daemon-owned host state on Tier 0:
+documents the verb that materialises the daemon-owned host state on
+Tier 0:
 bridges, TAPs, nftables, sysctls, NetworkManager unmanaged
 config, `/etc/hosts`. On an all-legacy bundle it reports
 `nothing-to-do`; on a mixed bundle it reconciles only the
 daemon-owned + unambiguously nixling-owned resources; on an
-all-daemon bundle it reconciles the full host state. See plan
-§"W3 daemon-vs-legacy migration boundary" for the exact
-sub-case table.
+all-daemon bundle it reconciles the full host state. See the
+host-prepare guide for details.
 
 ### Trying both variants
 

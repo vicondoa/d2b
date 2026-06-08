@@ -111,7 +111,7 @@ microvm.graphics.enable = true;
 (which you could keep as an overlay one-liner on
 `pkgs.cloud-hypervisor`).
 
-## L1.7 — cargoVendor hash verification (P5 W6)
+## L1.7 — cargoVendor hash verification
 
 When bumping CH (`pkgs/spectrum-ch/default.nix`) or the crosvm pin used for the GPU sidecar,
 manually verify the `cargoDeps` / `cargoVendor` hash by running `nix-build` and comparing to

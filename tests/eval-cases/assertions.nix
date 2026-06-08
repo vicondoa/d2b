@@ -1,4 +1,4 @@
-# W3a-1 (test-1): consolidated case table for the legacy
+# Consolidated case table for the legacy
 # `tests/assertions-eval.sh` gate. ONE `nix-instantiate --eval --strict
 # --json` of this file returns the per-case `failingMessages` /
 # `evalSucceeded` map; the shell wrapper then asserts each case's
@@ -52,7 +52,7 @@ shared.mkBatch {
       );
     };
 
-    # W2 naming surface — VM names must start with a letter and only
+    # Naming surface — VM names must start with a letter and only
     # use lowercase alnum + '-'.
     "vm-name-invalid" = {
       expectedSubstring = "VM name must match the regex ^[a-z][a-z0-9-]*$";
@@ -78,7 +78,7 @@ shared.mkBatch {
       );
     };
 
-    # W2 naming surface — 'launcher' is reserved.
+    # Naming surface — 'launcher' is reserved.
     "vm-name-reserved-launcher" = {
       expectedSubstring = "'launcher' is reserved";
       override = (
@@ -103,7 +103,7 @@ shared.mkBatch {
       );
     };
 
-    # W2 naming surface — user-declared VMs may not consume sys-* prefix.
+    # Naming surface — user-declared VMs may not consume sys-* prefix.
     "vm-name-reserved-sys-prefix" = {
       expectedSubstring = "names starting with 'sys-' are reserved";
       override = (
@@ -128,7 +128,7 @@ shared.mkBatch {
       );
     };
 
-    # W2 naming surface — env names share the same leading-letter rule.
+    # Naming surface — env names share the same leading-letter rule.
     "env-name-invalid" = {
       expectedSubstring = "env name must match the regex ^[a-z][a-z0-9-]*$";
       override = (
@@ -312,7 +312,7 @@ shared.mkBatch {
       );
     };
 
-    # Phase 4 — graphics.enable on aarch64-linux must trip the
+    # graphics.enable on aarch64-linux must trip the
     # host.nix platform gate.
     "platform-gate-graphics-aarch64" = {
       expectedSubstring = "graphics/audio components are";
@@ -325,7 +325,7 @@ shared.mkBatch {
       );
     };
 
-    # Phase 4 — audio.enable on aarch64-linux must also trip the gate.
+    # audio.enable on aarch64-linux must also trip the gate.
     "platform-gate-audio-aarch64" = {
       expectedSubstring = "graphics/audio components are";
       system = "aarch64-linux";

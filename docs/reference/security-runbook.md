@@ -113,8 +113,8 @@ broker-spawned runners on the per-env DAG under
 `SignalRunner` op dispatched through the daemon — e.g. detach
 the device through `nixling usb detach <vm> --apply` which the
 broker translates into a SIGTERM on the per-env usbipd runner.
-(The pre-P6 `nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`
-systemd units were retired in P6; the equivalent operator action
+(The legacy `nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`
+systemd units were retired in v1.0; the equivalent operator action
 no longer goes through `systemctl stop`.)
 
 ### 3. Clear stale locks only after detach is confirmed

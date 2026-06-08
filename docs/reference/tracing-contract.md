@@ -1,8 +1,8 @@
 # Tracing contract (bounded-cardinality span attributes)
 
-> **Status**: codified in **P3** (`ph3-p3-tracing-contract`); enforced by
-> the static gate `tests/tracing-contract-lint.sh`. Roadmap row
-> [observability-5](../../README.md) in the panel matrix.
+> **Status**: codified and enforced by the static gate
+> `tests/tracing-contract-lint.sh`. Tracked on the
+> observability roadmap.
 
 The nixling daemon (`nixlingd`) and the privileged broker
 (`nixling-priv-broker`) both emit OpenTelemetry spans and structured
@@ -60,14 +60,14 @@ than emitting the path itself.
 
 | Pattern                                                | Why forbidden                                                | Gated since |
 | ------------------------------------------------------ | ------------------------------------------------------------ | ----------- |
-| `bundle = %X.display()` / `bundle = ?X.display()`      | High cardinality (`/nix/store/<hash>-bundle`); leaks host store layout. | **P0fu3 H2** (`b6f4ac9`) |
-| `bundle_path = %X` / `bundle_path = ?X`                | Same as `bundle =`; alias must also be refused.              | **P0fu3 H2** |
-| `keys_dir = %X.display()`                              | Per-VM sshd state dir — encode via `vm` + bounded `outcome`. | **P1fu1 observability-r1-1** (`58aaac8`) |
-| `path = %X.display()` inside `ssh_host_key_preflight`  | Same path-leak class at `debug!` level.                      | **P2fu2 observability-r2** (`cbd2169`) |
-| `/nix/store/...` **string literal** inside a `tracing!` arg | Pins the host store hash into the trace backend.        | **P0fu3 H2**  |
-| `argv = …`, `cmdline = …`, `command_line = …`          | Argv may contain operator-supplied content / secrets.        | this gate (P3) |
-| `secret`, `password`, `token`, `private_key`           | Credential leak.                                             | this gate (P3) |
-| `stdout = …`, `stderr = …` carrying child-process bytes | Command output not bounded; flows through typed envelope.   | this gate (P3) |
+| `bundle = %X.display()` / `bundle = ?X.display()`      | High cardinality (`/nix/store/<hash>-bundle`); leaks host store layout. | `b6f4ac9` |
+| `bundle_path = %X` / `bundle_path = ?X`                | Same as `bundle =`; alias must also be refused.              | `b6f4ac9` |
+| `keys_dir = %X.display()`                              | Per-VM sshd state dir — encode via `vm` + bounded `outcome`. | `58aaac8` |
+| `path = %X.display()` inside `ssh_host_key_preflight`  | Same path-leak class at `debug!` level.                      | `cbd2169` |
+| `/nix/store/...` **string literal** inside a `tracing!` arg | Pins the host store hash into the trace backend.        | `b6f4ac9`  |
+| `argv = …`, `cmdline = …`, `command_line = …`          | Argv may contain operator-supplied content / secrets.        | this gate |
+| `secret`, `password`, `token`, `private_key`           | Credential leak.                                             | this gate |
+| `stdout = …`, `stderr = …` carrying child-process bytes | Command output not bounded; flows through typed envelope.   | this gate |
 
 ## How the contract is enforced
 
@@ -83,12 +83,11 @@ than emitting the path itself.
 3. **Code review** — new `tracing!` call sites in PR review are scored
    against this allowlist. Reviewers should reject any per-bundle or
    per-store-path attr and point the author at the bounded-attr +
-   audit-record pattern landed by the P0fu3 / P1fu1 / P2fu1 / P2fu2
-   closures.
+   audit-record pattern established by the historical closures.
 
 ## Worked examples (from the historical closures)
 
-### P0fu3 H2 — broker bundle-load span (canonical reference)
+### Broker bundle-load span (canonical reference)
 
 Before (`packages/nixling-priv-broker/src/runtime.rs`, pre-`b6f4ac9`):
 
@@ -96,13 +95,13 @@ Before (`packages/nixling-priv-broker/src/runtime.rs`, pre-`b6f4ac9`):
 tracing::info!(
     bundle = %bundle_path.display(),     // FORBIDDEN: per-bundle store path
     nft = resolver.nft_intent_ids().count(),
-    "W12 bundle resolver loaded"
+    "Bundle resolver loaded"
 );
 tracing::error!(
     bundle = %bundle_path.display(),     // FORBIDDEN
     path = %path.display(),              // FORBIDDEN: leaks tampered artifact path
     reason = %reason,
-    "P0 bundle tamper-resistance check failed"
+    "Bundle tamper-resistance check failed"
 );
 ```
 
@@ -112,21 +111,21 @@ After (current, post-`b6f4ac9`):
 tracing::info!(
     load_outcome = "ok",                 // bounded closed-set
     nft = resolver.nft_intent_ids().count(),
-    "W12 bundle resolver loaded"
+    "Bundle resolver loaded"
 );
 tracing::error!(
     load_outcome = "tampered",           // bounded
     reason = %reason,                    // typed-error Reason enum
-    "P0 bundle tamper-resistance check failed"
+    "Bundle tamper-resistance check failed"
 );
 ```
 
 The bundle path itself remains operator-recoverable via the typed
 `BundleTampered` envelope (exit 60) and the broker audit log.
 
-### P1fu1 + P2fu2 — ssh-host-key-preflight
+### ssh-host-key-preflight
 
-The same shape closed `observability-r1-1` and `observability-r2`:
+The same shape closed the observability findings:
 `path = %keys_dir.display()` and `path = %path.display()` inside
 `ssh_host_key_preflight.rs` were replaced with
 `outcome = "skipped-keys-dir-absent"` / `outcome = "key-entry-ok"`

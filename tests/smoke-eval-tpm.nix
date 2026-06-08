@@ -115,7 +115,7 @@ let
     builtins.hasAttr "nixlingMigrateOwnership"
       nixos.config.system.activationScripts;
 
-  # P6 (ph6-remove-systemd-emission): the per-VM
+  # The per-VM
   # `nixling-<vm>-swtpm.service` units were deleted along with
   # host-sidecars.nix. The TPM sidecar is now spawned by the
   # nixling priv-broker as `SpawnRunner{role: Swtpm}`; the

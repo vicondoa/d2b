@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P6 invariant gate: assert host-otel-relay-acl.nix is no
+# v1.1 invariant gate: assert host-otel-relay-acl.nix is no
 # longer imported via the public default.nix entry point. The OTel
 # host-bridge + per-VM relay ACL contract migrated into the broker
 # pre-spawn pipeline at `packages/nixling-priv-broker/src/runtime.rs`

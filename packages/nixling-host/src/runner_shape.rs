@@ -1,11 +1,9 @@
-//! W3 runner-shape preflight + CH net-handoff probe.
+//! Runner-shape preflight + CH net-handoff probe.
 //!
-//! Per plan.md §"W3 runner-shape preflight" and §"W3 Cloud Hypervisor
-//! net handoff probe", the W3 host check consumes `host.json`,
-//! `processes.json`, and `closures/<vm>.json` runner-parity data and
-//! validates them **without** launching CH. The same module derives
-//! the recorded net-handoff mode (`tap-fd` preferred, `persistent-tap`
-//! fallback) that W4 will consume.
+//! The host check consumes `host.json`, `processes.json`, and
+//! `closures/<vm>.json` runner-parity data and validates them **without**
+//! launching CH. The same module derives the recorded net-handoff mode
+//! (`tap-fd` preferred, `persistent-tap` fallback) for later consumers.
 //!
 //! Everything in this module is pure: real-host wiring lives in the
 //! daemon/CLI, and the L1c canary
@@ -50,7 +48,7 @@ pub enum NetHandoffProbeError {
     /// packaged CH binary.
     NeitherSupported,
     /// Only modes that require `CAP_NET_ADMIN` in the runner are
-    /// available. W3 forbids `CAP_NET_ADMIN` in long-lived runners.
+    /// available. Long-lived runners must not hold `CAP_NET_ADMIN`.
     RequiresCapNetAdmin,
 }
 
@@ -66,8 +64,8 @@ pub enum NetHandoffProbeOutcome {
 
 /// Probes the CH net-handoff support surface from `--help` argv output.
 ///
-/// W3 prefers `tap-fd`. If `--net` accepts the `fd=` form (the CH
-/// argv parser exposes this as `fd=<n>` in `--net help`), `tap-fd` is
+/// Prefer `tap-fd`. If `--net` accepts the `fd=` form (the CH argv
+/// parser exposes this as `fd=<n>` in `--net help`), `tap-fd` is
 /// selected. Otherwise the older `tap=<name>` form is selected as
 /// `persistent-tap`. If neither token appears, the probe fails closed.
 pub fn probe_ch_net_handoff_mode(ch_help_text: &str) -> NetHandoffProbeOutcome {
@@ -111,8 +109,7 @@ pub struct RunnerShapePreflightInput {
     pub declared_runner_argv: Vec<DeclaredRunnerEntry>,
     /// CH API socket path declarations from `host.json`.
     pub ch_api_socket_paths: Vec<ChApiSocket>,
-    /// vsock transport entries; W3 requires Unix-socket-backed vsock
-    /// only.
+    /// vsock transport entries; Unix-socket-backed vsock only.
     pub vsock_transports: Vec<VsockTransport>,
     /// virtiofsd / swtpm sidecar declarations cross-checked against
     /// the `processes.json` DAG.
@@ -266,7 +263,7 @@ pub fn runner_shape_preflight(
                 kind: RunnerShapeKind::VsockTransportInvalid,
                 subject: vt.vm.clone(),
                 detail: format!(
-                    "vsock transport {:?} must be unix-socket-backed in W3",
+                    "vsock transport {:?} must be unix-socket-backed",
                     vt.transport
                 ),
             });
@@ -418,7 +415,7 @@ mod tests {
 
     #[test]
     fn parity_drift_fixture_fails_closed() {
-        // W3 H2: parse the on-disk parity-drift golden fixture
+        // Parse the on-disk parity-drift golden fixture
         // (tests/golden/runner-shape/parity-drift.json) and drive
         // runner_shape_preflight against it. Every fail-closed class
         // in the fixture must surface.
@@ -543,12 +540,12 @@ fn resolve_bundle_path(bundle_root: &Path, path_str: &str) -> PathBuf {
     }
 }
 
-/// Production entry point for the W3 runner-shape preflight. Consumes
+/// Production entry point for the runner-shape preflight. Consumes
 /// every enabled VM's `host.json`, `processes.json`, and
 /// `closures/<vm>.json` artifacts plus a packaged Cloud Hypervisor
 /// binary; produces a [`RunnerShapeReport`] surfaced by `host check`.
 ///
-/// Validation surface (per plan.md §"W3 runner-shape preflight"):
+/// Validation surface:
 ///
 /// 1. Supported headless CH capability rows match the packaged binary
 ///    (probe `ch --help` and compare against `host.json`'s

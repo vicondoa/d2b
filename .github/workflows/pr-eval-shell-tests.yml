@@ -1,0 +1,129 @@
+name: pr-eval-shell-tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  eval-shell-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      # ---------------------------------------------------------------------------
+      # Phase 1: static text/grep eval tests — no Nix required, instant.
+      # ---------------------------------------------------------------------------
+      - name: Static eval tests (text/grep, no Nix required)
+        run: |
+          set -euo pipefail
+          for t in \
+            tests/preflight-disk-space.sh \
+            tests/adr-0015-presence-eval.sh \
+            tests/agents-md-rewrite-eval.sh \
+            tests/broker-caps-eval.sh \
+            tests/broker-socket-activation-eval.sh \
+            tests/broker-systemd-unit-eval.sh \
+            tests/changelog-v1-cut-eval.sh \
+            tests/cli-nix-consumers-eval.sh \
+            tests/daemon-autostart-eval.sh \
+            tests/daemon-experimental-warning-eval.sh \
+            tests/daemon-metrics-eval.sh \
+            tests/host-json-drift-gate.sh \
+            tests/host-prep-dag-eval.sh \
+            tests/host-validate-verb-eval.sh \
+            tests/kernel-module-matrix-eval.sh \
+            tests/legacy-unit-denylist-eval.sh \
+            tests/loki-label-cardinality-eval.sh \
+            tests/manpage-completeness-eval.sh \
+            tests/microvm-nix-absent-eval.sh \
+            tests/minijail-version-check.sh \
+            tests/no-bash-exec-eval.sh \
+            tests/otel-acl-migration-eval.sh \
+            tests/p2-deliverable-gate-inventory.sh \
+            tests/polkit-allowlist-eval.sh \
+            tests/privileges-doc-completeness-eval.sh \
+            tests/processes-json-eval.sh \
+            tests/restart-policy-eval.sh \
+            tests/state-dir-acl-eval.sh \
+            tests/static-invariant-uid0.sh \
+            tests/stop-dag-reconcile-eval.sh \
+            tests/supervisor-option-absent-eval.sh \
+            tests/tap-dag-contract-doc-eval.sh \
+            tests/tempo-budget-eval.sh \
+            tests/tracing-contract-lint.sh \
+            tests/vfsd-watchdog-retired-eval.sh \
+            tests/video-sidecar-hardening-eval.sh \
+            tests/vm-submodule-cutover-eval.sh \
+            tests/vm-submodule-eval.sh \
+            tests/wave-evidence-schema-eval.sh \
+          ; do
+            if [ -f "$t" ]; then
+              echo "==> $t"
+              bash "$t"
+            fi
+          done
+
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # ---------------------------------------------------------------------------
+      # Phase 2: Nix eval tests — require `nix` on PATH.
+      # ---------------------------------------------------------------------------
+      - name: Nix eval tests
+        run: |
+          set -euo pipefail
+          for t in \
+            tests/assertions-eval.sh \
+            tests/autostart-wiring-eval.sh \
+            tests/broker-bundle-path-eval.sh \
+            tests/kernel-modules-parity-eval.sh \
+            tests/net-vm-network-eval.sh \
+            tests/observability-eval.sh \
+            tests/per-vm-state-ownership-eval.sh \
+            tests/principal-uid-collision-eval.sh \
+            tests/readiness-waves-eval.sh \
+            tests/runner-shape-snapshot.sh \
+            tests/umask-roundtrip-eval.sh \
+            tests/store-overlay-emit-eval.sh \
+            tests/usbip-gating-eval.sh \
+            tests/bridge-ipv6-boot-sysctl-eval.sh \
+            tests/v1.1-kernel-floor-eval.sh \
+            tests/w18-default-flip-eval.sh \
+          ; do
+            if [ -f "$t" ]; then
+              echo "==> $t"
+              bash "$t"
+            fi
+          done
+
+      # ---------------------------------------------------------------------------
+      # Phase 3: Cargo/Rust unit tests — self-bootstrap via `nix shell` when
+      # cargo is not on PATH.  No live daemon, no KVM, no privileged broker.
+      # ---------------------------------------------------------------------------
+      - name: Cargo/Rust eval tests
+        run: |
+          set -euo pipefail
+          for t in \
+            tests/broker-export-audit.sh \
+            tests/broker-scm-rights-fd-lifecycle.sh \
+            tests/bundle-drift.sh \
+            tests/cli-rust-native-audit.sh \
+            tests/cli-vm-verbs-eval.sh \
+            tests/net-vm-bundle-gate-eval.sh \
+            tests/ssh-host-key-preflight-eval.sh \
+            tests/stub-no-socket.sh \
+            tests/usbip-state-machine-eval.sh \
+          ; do
+            if [ -f "$t" ]; then
+              echo "==> $t"
+              bash "$t"
+            fi
+          done

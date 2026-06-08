@@ -1,4 +1,4 @@
-# tests/smoke-eval-graphics.nix — W5 H9 regression test.
+# tests/smoke-eval-graphics.nix — regression test.
 #
 # Mirrors tests/smoke-eval.nix but declares ONE graphics-enabled VM.
 # Graphics VMs trip the cli.nix `vmLaunchScript` codepath that reads
@@ -72,15 +72,52 @@ let
             };
           };
         };
+
+        nixling.vms.demo-gfx-x = {
+          enable = true;
+          env = "work";
+          index = 12;
+          ssh.user = "alice";
+          graphics.enable = true;
+          graphics.xwayland.enable = true;
+          config = {
+            networking.hostName = lib.mkDefault "demo-gfx-x";
+            users.users.alice = {
+              isNormalUser = true;
+              uid = 1000;
+            };
+          };
+        };
       })
     ];
   };
+
+  defaultProxyExec =
+    nixos.config.nixling._computed.demo-gfx.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
+  xProxyExec =
+    nixos.config.nixling._computed.demo-gfx-x.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
+  defaultSessionVars =
+    nixos.config.nixling._computed.demo-gfx.config.environment.sessionVariables;
+  xSessionVars =
+    nixos.config.nixling._computed.demo-gfx-x.config.environment.sessionVariables;
 in
+  assert lib.assertMsg (!(lib.hasInfix "--x-display" defaultProxyExec))
+    "default graphics VM should omit --x-display";
+  assert lib.assertMsg (!(lib.hasInfix "--xwayland-binary" defaultProxyExec))
+    "default graphics VM should omit --xwayland-binary";
+  assert lib.assertMsg (!(defaultSessionVars ? DISPLAY))
+    "default graphics VM should not set DISPLAY";
+  assert lib.assertMsg (lib.hasInfix "--x-display=0" xProxyExec)
+    "graphics.xwayland.enable = true should include --x-display";
+  assert lib.assertMsg (lib.hasInfix "--xwayland-binary=" xProxyExec)
+    "graphics.xwayland.enable = true should include --xwayland-binary";
+  assert lib.assertMsg (xSessionVars.DISPLAY == ":0")
+    "graphics.xwayland.enable = true should set DISPLAY";
   # Force the readOnly path by strictly evaluating the manifest in
   # addition to the toplevel build. `deepSeq` ensures we don't
   # accept a thunk that lazily skips the manifest assignment.
   #
-  # v0.1.6 Test-H5 (Spec correction #34): also force the GPU
+  # Spec correction #34: also force the GPU
   # sidecar's serviceConfig.DeviceAllow list so a regression that
   # drops `/dev/net/tun rw` (the v0.1.4 fix for graphics VMs unable
   # to attach to their tap) surfaces here. Cloud-hypervisor needs
@@ -88,8 +125,7 @@ in
   # upstream microvm.nix's microvm-tap-interfaces@<vm> helper;
   # without the DeviceAllow entry the GPU sidecar crashes early
   # with "Couldn't open /dev/net/tun / Operation not permitted".
-  # v0.1.6 Test-H5 (Spec correction #34) DEFERRED after P6
-  # (ph6-remove-systemd-emission): the GPU sidecar is no longer a
+  # Spec correction #34 (DEFERRED): the GPU sidecar is no longer a
   # systemd unit. The graphics VM is spawned by the nixling
   # priv-broker as `SpawnRunner{role: Gpu}`, which carries the
   # equivalent `/dev/net/tun` device-cgroup grant in

@@ -9,26 +9,21 @@ people changing the framework.
 ## What this is
 
 Nixling is an opinionated NixOS desktop microVM framework that
-owns its microVM substrate end-to-end (**v1.1 removed the
-historical [microvm.nix] flake dependency**). **From v1.0 the
-control plane is daemon-only: `nixlingd` supervises every per-VM
-DAG and `nixling-priv-broker` dispatches every audited host
-mutation.** Per-VM systemd templates, host-singleton framework
-services, and the bash CLI were removed wholesale at the v0.4.x →
-v1.0.0 boundary (see
-[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md)); the
-microvm.nix substrate was removed in v1.1
-(see [ADR 0018](./docs/adr/0018-microvm-nix-removal.md)).
+owns its microVM substrate end-to-end. The control plane is
+**daemon-only**: `nixlingd` supervises every per-VM DAG and
+`nixling-priv-broker` dispatches every audited host mutation.
+There are no per-VM systemd templates, no host-singleton framework
+services, and no legacy bash CLI; see
+[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) for the
+binding architectural decision.
 
-What the framework still provides: per-env isolated networks with an
+What the framework provides: per-env isolated networks with an
 auto-declared NAT/DHCP "net VM", a per-VM `/nix/store` hardlink farm,
 toggleable per-VM components (graphics, TPM, USBIP, audio), and the
 versioned bundle/manifest contract that grounds the broker dispatcher.
 See [README.md](./README.md) and
 [`docs/explanation/design.md`](./docs/explanation/design.md) for the
 full picture and threat model.
-
-[microvm.nix]: https://github.com/microvm-nix/microvm.nix
 
 ## Repo layout
 
@@ -92,20 +87,20 @@ nix flake check --no-build --all-systems
 #    broader review loop and after doc/shell-only rebases.
 bash tests/static-fast-tier0.sh
 
-# 3. Fast PR-loop gate (W3a-3). Catches parse / shellcheck / flake
-#    check / rust workspace / W1 bundle invariants / W3 host-prepare
+# 3. Fast PR-loop gate. Catches parse / shellcheck / flake
+#    check / rust workspace / bundle invariants / host-prepare
 #    canaries / cross-cutting drift in ~13 min cold (~2 min warm),
 #    ~520 G peak /nix/store. Run before every commit and after every
 #    rebase. Does NOT exercise the eval gates, mid-tier consumer-config
-#    evals, manifest contract, W2 broker daemons, per-example
+#    evals, manifest contract, broker daemons, per-example
 #    flake-check, or audio component — those land in tier (4) below.
 bash tests/static-fast.sh
 
 # 4. Full panel/wave-exit gate (the canonical Layer 1 set). Adds
 #    smoke-eval, assertions-eval, observability-eval, mid-tier evals,
-#    manifest contract, W2 control-plane gates, per-example flake-
-#    check, cli-contract-coverage, cli-json-drift. ~30-90 min cold,
-#    peak disk capped at ~400 G via per-phase nix store gc (W3a-4).
+#    manifest contract, control-plane gates, per-example flake-check,
+#    cli-contract-coverage, cli-json-drift. ~30-90 min cold,
+#    peak disk capped at ~400 G via per-phase nix store gc.
 #    Set NL_GATE_DISK_BUDGET_GIB=300 to fail-closed at the phase
 #    boundary if free disk drops below the budget.
 bash tests/static.sh
@@ -114,15 +109,15 @@ bash tests/static.sh
 #    useful standalone while iterating):
 bash tests/assertions-eval.sh        # consolidated batch eval +
                                      # fallback for the 3 throw cases
-                                     # (W3a-1): ~13 min cold (was 32)
+                                     # (~13 min cold)
 nix-instantiate --eval --strict \
   -E 'let f = import ./tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath' \
   >/dev/null
 bash tests/net-vm-network-eval.sh    # net VM networkd config invariants
 bash tests/usbip-gating-eval.sh      # host-side USBIP gating + env scoping
-bash tests/cli-json.sh               # daemon CLI JSON envelope contract (P6-rewritten; daemon-only)
-bash tests/legacy-unit-denylist-eval.sh  # P6 fail-closed gate (ADR 0015)
-bash tests/agents-md-rewrite-eval.sh # P6 docs invariant (this file's end-state)
+bash tests/cli-json.sh               # daemon CLI JSON envelope contract
+bash tests/legacy-unit-denylist-eval.sh  # fail-closed gate (ADR 0015)
+bash tests/agents-md-rewrite-eval.sh # AGENTS.md docs invariant
 ```
 
 Layer-2 integration tests (`tests/nixling-store.sh`) require a live
@@ -157,6 +152,34 @@ git merge --no-ff phase-a phase-b phase-c
 If two branches touch the same lines, fall back to a normal
 sequential merge with conflict resolution — octopus only works for
 clean disjoint scopes.
+
+#### Finish-of-work invariant: merge back into the primary clone
+
+A worktree is a workspace, not a destination. When an agent's scope
+is done — implementation green, tests green, panel signed off — the
+agent merges the worktree branch back into `main` in the **primary
+clone (`projects/nixling`)** before declaring the task complete.
+Finished work sitting on a side worktree branch is not done; it is
+"awaiting integration", which is a state the agent owns, not a state
+the agent leaves for the operator.
+
+Concretely, the agent that owns a worktree:
+
+1. Verifies green on the worktree (`cargo test --workspace`, the
+   relevant `tests/*.sh` gates, panel signoff for plan-driven work).
+2. From the primary clone (`/home/paydro/projects/nixling`),
+   fast-forwards (or octopus-merges, per the rules above) the
+   worktree's `phase-<name>` branch into `main`.
+3. If there is unrelated dirty WIP in the primary clone (operator
+   was editing in place), stash it, do the merge, pop the stash,
+   resolve any textual conflicts in a way that preserves both sets
+   of changes, then leave the operator's WIP unstaged so they can
+   commit it on their own terms.
+4. Audits sibling worktrees (`git worktree list`) for branches
+   whose tip is unmerged but represents abandoned/superseded work;
+   flag those for the operator rather than silently dropping them.
+
+Only after the merge lands does the agent call `task_complete`.
 
 #### Integrator-prep-first pattern (W3 onwards)
 
@@ -223,17 +246,17 @@ behaviour described here, update this file in the same commit.
 
 ### Naming conventions
 
-From v1.0 the framework declares **exactly three** root-visible
-units. There is no `nixling@<vm>`-style per-VM unit; `nixlingd`
-supervises every per-VM DAG in-process and hands fds to spawned
-runners via the broker's `SpawnRunner` / `OpenPidfd` ops.
+The framework declares **exactly three** root-visible units. There
+is no `nixling@<vm>`-style per-VM unit; `nixlingd` supervises every
+per-VM DAG in-process and hands fds to spawned runners via the
+broker's `SpawnRunner` / `OpenPidfd` ops.
 
 | Resource                                | Pattern                                |
 | --------------------------------------- | -------------------------------------- |
 | Public daemon (supervisor)              | `nixlingd.service`                     |
 | Privileged broker socket                | `nixling-priv-broker.socket`           |
 | Privileged broker service               | `nixling-priv-broker.service`          |
-| Lifecycle permission group              | `nixling-launchers` (singleton)        |
+| Lifecycle permission group              | `nixling` (singleton)                  |
 
 VM names are validated at eval time:
 
@@ -289,18 +312,18 @@ back to `nixlingd` over `SCM_RIGHTS` as pidfds, and reconciled
 against the persisted DAG state under
 `/var/lib/nixling/supervisor/state.json`.
 
-The `restartIfChanged = false` invariant from v0.1.5 is no longer
-needed on per-VM units (none are emitted). It still applies to the
-two daemon units themselves:
+The `restartIfChanged = false` invariant applies to the two daemon
+units themselves (no per-VM units are emitted):
 
 - `nixlingd.service` carries `restartIfChanged = false`; rebuilds
   do not cycle a running daemon. Operators apply pending daemon
   changes explicitly via `nixling host doctor` (reports the
   pending-restart state) and `systemctl restart nixlingd` once the
   supervisor reconciliation window is acceptable.
-- `nixling-priv-broker.service` is socket-activated and idle-exits;
-  it picks up new code on the next dispatch and never holds
-  in-flight session state across requests.
+- `nixling-priv-broker.service` is socket-activated. It reloads the
+  current bundle resolver for each accepted request so a running broker
+  does not dispatch stale runner intents after a switch, and it never
+  holds in-flight session state across requests.
 
 Drift detection moves from per-VM symlinks into the daemon's
 state file. `nixling vm list` flags any VM where the running
@@ -385,37 +408,35 @@ the panel gate. When in doubt, run the panel. A two-hour panel that
 catches one HIGH finding is cheaper than re-doing two days of
 integration.
 
-Canonical precedent: the v0.2.0 observability Wave-1 panel returned
+Canonical precedent: an early observability Wave-1 panel returned
 0/8 sign-offs with 11 HIGH findings. `tests/static.sh` caught none of
 them. This is the canonical "you can't test your way out of needing a
 panel" data point.
 
-### Default observability panel
+### Default panel
 
 | Engineer          | Focus |
 |-------------------|-------|
-| `software`        | Shell + Nix shape of every new module, `cli.nix` instrumentation, idempotency of socat sidecars, error handling in `nixling-ch-exporter`. |
-| `test`            | Coverage of new option schema, vsock CID collision cases, restart-policy gate extension, manifest schema drift, what could regress invisibly. |
-| `nixos`           | Module wiring, `lib.mkForce` / `lib.mkDefault` correctness, option declarations, systemd unit composition, `restartIfChanged = false` invariant on every new sidecar. |
-| `networking`      | Reviews that vsock genuinely removes IP from the data path, sanity-checks that `network.nix` is **unchanged**, audits firewall posture across all envs, confirms no DHCP/DNS regression in the obs env. |
-| `security`        | Vsock attack surface vs the existing virtio devices, host-relay trust posture, capability sets / syscall filters on every new unit, telemetry-label PII review, retention defaults. |
-| `product`         | Default-off opt-in shape, naming surface across `nixling.observability.*`, operator UX (Grafana URL discovery, lite-mode story), deprecation policy for the eventual `socat → nixling-otel-relay` Rust binary swap. |
-| `docs`            | Diataxis adherence in `docs/{reference,how-to,explanation}/`, CHANGELOG entries, manifest-schema md↔json drift, AGENTS.md updates landing in the same commit as the load-bearing changes they describe. |
-| `observability`   | Cardinality of metric labels, span attribute hygiene (no secrets/cmd output/store paths), Loki label-set sizing, Tempo retention vs disk budget, Grafana datasource provisioning correctness. |
+| `software`        | Shell + Nix shape of every new module, daemon instrumentation, idempotency of sidecars, error handling in metric exporters. |
+| `test`            | Coverage of new option schema, vsock CID collision cases, restart-policy gates, manifest schema drift, and what could regress invisibly. |
+| `nixos`           | Module wiring, `lib.mkForce` / `lib.mkDefault` correctness, option declarations, systemd unit composition, and activation ordering. |
+| `networking`      | Network surface changes, firewall posture across envs, DHCP/DNS regressions, bridge isolation, and routing invariants. |
+| `security`        | Attack surface, host-relay trust posture, capability sets / syscall filters, authz boundaries, telemetry-label PII review, and retention defaults. |
+| `rust`            | Rust API shape, error propagation, unsafe/FFI boundaries, schema generation, workspace dependency direction, and testability. |
+| `product`         | Operator UX, naming surface, migration/deprecation policy, default-off opt-in shape, and actionable error messages. |
+| `docs`            | Diataxis adherence in `docs/{reference,how-to,explanation}/`, CHANGELOG entries, schema md↔json drift, and AGENTS.md updates landing with load-bearing changes. |
+| `observability`   | Cardinality of metric labels, span attribute hygiene (no secrets/cmd output/store paths), log/audit shape, retention, and dashboard/exporter correctness. |
+| `kernel`          | pidfd, cgroup, namespace, mount, signal, ioctl, and filesystem semantics; kernel-version assumptions and Linux API edge cases. |
 
-This is the default composition for the in-progress v0.2.0
-observability track.
+Older commits and [CHANGELOG.md](CHANGELOG.md) entries may reference
+the historical six-engineer security-hardening roster (`nixos`, `rust`,
+`software`, `test`, `networking`, `security`) or the earlier
+observability-specific roster. The unified default panel above
+supersedes both for new work.
 
-### Historical security-hardening panel
-
-The original panel for the v0.1.x security-hardening work had six
-engineers: `nixos`, `rust`, `software`, `test`, `networking`, and
-`security`. That context helps when older commits or
-[CHANGELOG.md](CHANGELOG.md) entries refer to a panel sweep.
-
-The currently canonical roster files live in the host-local
-`/etc/nixos/scripts/panel-engineers-security.txt` and
-`/etc/nixos/scripts/panel-engineers-observability.txt`.
+Host-local roster files under `/etc/nixos/scripts/` are operator
+configuration and are out of scope for this repository; keep repo docs
+focused on the review contract rather than paydro-specific files.
 
 ### Commit-tag mapping
 
@@ -460,26 +481,22 @@ In that implementation, the roster is selected per plan via
 | File                                  | Role                                                                                         |
 | ------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `tests/static-fast-tier0.sh`          | **Tier-0 sub-60s fast gate.** Bash syntax + `shellcheck` on repo entrypoints and helpers; no Nix eval/build work. |
-| `tests/static-fast.sh`                | **Fast PR-loop gate.** Parse / `shellcheck` / `flake check` / rust workspace / bundle invariants / host-prepare canaries / cross-cutting drift without the full wave-exit panel set. |
+| `tests/static-fast.sh`                | **Fast PR-loop gate.** Parse / `shellcheck` / `flake check` / rust workspace / bundle invariants / host-prepare canaries / cross-cutting drift without the full panel-exit set. |
 | `tests/static.sh`                     | **Top-level Layer-1 gate.** Parse, `flake check`, smoke evals, assertion/observability/USBIP/autostart/restart-policy eval gates, manifest contract, per-example flake checks. Runs from repo root; override with `ROOT=<path>`. |
 | `tests/smoke-eval.nix`                | Workload smoke: minimal consumer-style nixosSystem, builder's native system.                 |
 | `tests/smoke-eval-graphics.nix`       | Same shape, with `graphics.enable = true`. x86_64-only.                                      |
 | `tests/smoke-eval-tpm.nix`            | TPM host-surface regression gate: swtpm parent-dir ACLs, swtpm flush helper, runner socket ACLs, and ownership-migration invariants. |
 | `tests/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
-| `tests/assertions-eval.sh`            | 10 negative cases: CIDR overlap, platform gate, missing `waylandUser`, etc. Each must fail eval with the expected message. |
+| `tests/assertions-eval.sh`            | Negative assertion cases (CIDR overlap, naming invariants, platform gate, missing `waylandUser`, reserved-path invariants, boot-cleaned `tmpDir`, etc.). Each bad case must fail eval with the expected message. |
 | `tests/usbip-gating-eval.sh`          | Host-side USBIP gating: absent until both host + enabled-VM opt-ins are set, and scoped to opted-in envs only. |
-| `tests/assertions-eval.sh`            | 10 negative cases: CIDR overlap, platform gate, missing `waylandUser`, etc. Each must fail eval with the expected message. |
-| `tests/assertions-eval.sh`            | Negative assertion cases: CIDR overlap, naming invariants, platform gate, missing `waylandUser`, etc. Each must fail eval with the expected message. |
-| `tests/net-vm-network-eval.sh`        | Net VM networkd-config invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`. |
-| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
-| `tests/bridge-isolation-runtime.sh`   | Hermetic runtime bridge-isolation test: net-VM port stays reachable, workload taps stay isolated even after peer-style MAC spoofing. |
-| `tests/assertions-eval.sh`            | 10 negative cases: CIDR overlap, platform gate, missing `waylandUser`, etc. Each must fail eval with the expected message. |
-| `tests/net-vm-network-eval.sh`        | Net VM networkd-config invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`. |
-| `tests/assertions-eval.sh`            | Negative assertion cases plus reserved-path invariants (`stateDir`, `store.stateDir`) and the boot-cleaned `tmpDir` rule. Each bad case must fail eval with the expected message. |
 | `tests/net-vm-network-eval.sh`        | Net VM networkd + nftables invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS, cross-env drops, and east-west toggles. |
-| `tests/legacy-unit-denylist-eval.sh`  | P6 fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |
+| `tests/volume-mounts-eval.sh`         | Declared `microvm.volumes` invariant: Cloud Hypervisor disk serials and guest `fileSystems` mounts stay aligned, and duplicate/reserved/overlong serials fail eval. |
+| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
+| `tests/state-dir-acl-runtime.sh`      | **Layer-2 + root-only.** Skips unless `NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh` is run. `.github/workflows/layer2-runtime-with-sudo.yml` is **manual-dispatch only** on a self-hosted `nixling-sudo` runner — never `pull_request` (panel R9 security: passwordless-sudo on PR-controlled checkout). Maintainers dispatch via `gh workflow run layer2-runtime-with-sudo.yml --ref <ref>` after review. See `CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted runner". |
+| `tests/bridge-isolation-runtime.sh`   | Hermetic runtime bridge-isolation test: net-VM port stays reachable, workload taps stay isolated even after peer-style MAC spoofing. |
+| `tests/legacy-unit-denylist-eval.sh`  | Fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |
 | `tests/adr-0015-presence-eval.sh`     | Asserts the daemon-only ADR exists, carries the canonical header, and is cross-referenced from `AGENTS.md`. |
-| `tests/agents-md-rewrite-eval.sh`     | Asserts `AGENTS.md` does not describe the bash CLI or per-VM systemd templates as live framework surfaces (P6 docs invariant). |
+| `tests/agents-md-rewrite-eval.sh`     | Asserts `AGENTS.md` does not describe the legacy bash CLI or retired per-VM systemd templates as live framework surfaces. |
 | `tests/nixling-store.sh`              | Layer 2, optional. Per-VM `/nix/store` hardlink farm + `nixling vm switch` lifecycle. Requires a live host. |
 | `tests/lib.sh`                        | Shared shell helpers (logging, skip-detection, root-path derivation).                        |
 
@@ -508,7 +525,88 @@ iteration step, and CI also runs
 inside the example directory without coupling the root flake to the
 sibling input.
 
+## Versioning & changelog
+
+The project follows [Semantic Versioning](https://semver.org/) and
+[Keep a Changelog](https://keepachangelog.com/). The CHANGELOG is
+organised **by version**, never by development phase.
+
+### Changelog lifecycle
+
+- **While a version is in development**, entries accumulate under the
+  top `## [Unreleased]` block. Because `[Unreleased]` is a
+  pre-release staging area, it MAY carry fine-grained process detail
+  (wave/phase/follow-up/finding notes) if that helps the people
+  cutting the release reason about what landed.
+- **When a version is cut**, the `[Unreleased]` block is renamed to
+  `## [X.Y.Z] - YYYY-MM-DD` and its contents are **summarised by
+  version**:
+  - Collapse any per-wave/per-phase substructure into the standard
+    Keep-a-Changelog groups (`Added`, `Changed`, `Fixed`,
+    `Deprecated`, `Removed`, `Security`). There are no
+    `### Added (W6)`-style subsection headers in a released section.
+  - Strip every internal process marker — wave/phase/revision/
+    follow-up/panel/round/finding tags such as `W3`, `W4-fu`,
+    `( W1fu3 H20 )`, `P6`, `D5/P2.3` — from the released prose.
+  - Each released section reads as a coherent, consumer-facing
+    summary of what changed, not as a log of how the work was
+    organised internally.
+- A fresh empty `## [Unreleased]` block is left at the top after a
+  cut. `manifestVersion` / `bundleVersion` bumps and breaking
+  changes always get an explicit released entry.
+
+### Process markers stay out of shipped artifacts
+
+Internal development bookkeeping — wave tags (`W3`, `W4-fu`,
+`W2-followup`), phase tags (`P0`–`P7`, `v1.1-P4`, `ph6-…`),
+decision codes (`D5/P2.3`), follow-up/round/finding refs
+(`fu3`, `H20`, `(rust-1)`) — is for organising work, not for
+shipping. Do **not** introduce these markers into:
+
+- source comments in `nixos-modules/`, `pkgs/`, or `packages/`;
+- shipped docs prose under `docs/{reference,how-to,explanation}/`,
+  `README.md`, `SECURITY.md`, or example READMEs;
+- any user-facing CLI surface (`clap` `about`/`help`/`long_help`
+  text, error/observed-state messages, JSON envelope fields);
+- released CHANGELOG sections.
+
+These markers are still expected and welcome in the contexts where
+they are load-bearing:
+
+- planning artifacts (a session `plan.md`, the wave/parallelization
+  graph) and pre-release CHANGELOG `[Unreleased]`;
+- this file and the other process docs (Panel review, Commit
+  conventions, `## Daemon-only end-state (P6 onward)`) that
+  *document* the methodology;
+- `docs/adr/**` — ADRs are dated historical records and may name the
+  wave/phase that produced a decision;
+- commit messages and PR descriptions on in-development feature
+  branches (see Commit conventions).
+
+Note the deliberate exception: the consumer-facing
+`nixling.defaultSwitchReadiness.<wave>` option namespace (keys
+`w4Fu`…`p7`), its `readinessWaveSpecs` schema, and the
+`/var/lib/nixling/validated/<wave>.json` evidence contract use
+`wave`/phase tokens as **functional identifiers**. Those are part of
+the public option/schema surface and are not bookkeeping; leave them.
+
+### Landing changes (PR workflow)
+
+`main` is protected: changes land via pull requests, not direct
+pushes. Develop on a feature branch (or worktree), validate locally
+against the gates above, open a PR, let CI / panel review run, then
+squash-merge. The detailed wave-tag commit convention in
+[Commit conventions](#commit-conventions) applies to in-development
+commits on those feature branches; `main` itself is maintained as a
+by-release history.
+
 ## Commit conventions
+
+> The trailing wave-tag scheme below applies to in-development
+> commits on feature branches / worktrees, where wave/phase tags are
+> load-bearing planning context. It does not license process markers
+> in shipped code, docs, or released CHANGELOG sections — see
+> [Versioning & changelog](#versioning--changelog).
 
 - **Subject.** Short, imperative, prefixed with the touched
   area: `net: fix 10-eth-dhcp neutralization`,
@@ -667,13 +765,14 @@ Touch these only with a clear plan and a corresponding test run.
 | TPM persistence (per-VM swtpm)      | `/var/lib/nixling/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/nixling-host/src/swtpm_argv.rs` and supervised by `nixlingd` as a child of the VM's DAG | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The state directory's ACLs are asserted by `tests/smoke-eval-tpm.nix`. |
 | USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `nixlingd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker — there is no per-env `nixling-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
 | GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `nixlingd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `nixlingd` no longer terminates CH — pidfd handoff means the child outlives a daemon reconnect — but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
-| Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned (`manifestVersion`; bumped to 3 in P2 for the daemon-only end-state). Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
+| Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/nixling-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `nixling-<vm>-video` principal, not `nixling-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |
+| Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
 | Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/nixling-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:nixlingd` 0640 and ground every broker/sandbox/runner behaviour. `nixling-core` DTOs are canonical; committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/bundle-drift.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
-| Control plane — `nixlingd` + `nixling-priv-broker` | `packages/nixling-ipc/**` + `packages/nixling-core/**` + `packages/nixlingd/**` + `packages/nixling-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/nixling/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `nixling-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `nixlingd.service` carries `Wants=nixling-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker drops to the `nixlingd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:nixlingd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `nixling.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/nixlingd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
-| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. The planned `ph6-p6-supervisor-removed-assertion` (eval-time rejection of the retired `nixling.vms.<vm>.supervisor` option) is **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1 plan in `plan.md`); v1.0 retains the option for backward-compat with consumer flakes pinning pre-v1.0 manifests. The companion v1.1 ADRs are [ADR 0017 (no bash fallbacks)](./docs/adr/0017-no-bash-fallbacks-invariant.md) and [ADR 0018 (microvm.nix removal)](./docs/adr/0018-microvm-nix-removal.md). |
-| Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `nixling-launchers` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. The polkit allowlist that used to grant per-VM start/stop is retired (ADR 0015); wiring anything else into the group inverts the threat model. |
+| Control plane — `nixlingd` + `nixling-priv-broker` | `packages/nixling-ipc/**` + `packages/nixling-core/**` + `packages/nixlingd/**` + `packages/nixling-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/nixling/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `nixling-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `nixlingd.service` carries `Wants=nixling-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `nixlingd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:nixlingd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `nixling.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/nixlingd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
+| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. |
+| Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `nixling` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. |
 | SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `nixling keys rotate` MUST NOT touch consumer-supplied keys. |
-| virtiofsd sandbox model (v1.1.2)    | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/nixling-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-VM runner principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` (with `--readonly` for ro-store shares). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md) and SUPERSEDES the retired [ADR 0003](./docs/adr/0003-minijail-provisioning-and-sandbox-interface.md) carve-out. Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
+| virtiofsd sandbox model             | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/nixling-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-VM runner principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` (with `--readonly` for ro-store shares). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md). Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
 
 ## Don'ts (security-relevant)
 
@@ -698,9 +797,9 @@ Touch these only with a clear plan and a corresponding test run.
   `tests/agents-md-rewrite-eval.sh` gates fail closed on
   regressions.
 - **Don't reintroduce a bash CLI fallback or env-knob escape
-  hatch.** `NIXLING_LEGACY_BASH_OPT_IN` and `NIXLING_LEGACY_CLI`
-  were retired in P6; `NIXLING_NATIVE_ONLY` is a no-op only
-  because P4 cli-up documented it.
+  hatch.** The Rust CLI is the only operator surface;
+  `NIXLING_LEGACY_BASH_OPT_IN`, `NIXLING_LEGACY_CLI`, and
+  `NIXLING_NATIVE_ONLY` are no-ops.
 - **Don't commit secrets, hostnames, real user identifiers, or
   real network ranges.** Use generic names (`alice`,
   `corp-vm`, `work`, `personal`) and RFC1918 / RFC5737 ranges
@@ -714,8 +813,17 @@ Touch these only with a clear plan and a corresponding test run.
   `nixpkgs.url` casually.** The overlay surface is part of
   the public ABI and overlay churn rebuilds the world for
   every consumer.
+- **Don't leak internal process markers into shipped artifacts.**
+  Wave/phase/revision/follow-up/finding tags (`W3`, `W4-fu`, `P6`,
+  `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts,
+  pre-release `[Unreleased]`, ADRs, this file's process sections,
+  and feature-branch commits — never in shipped source comments,
+  shipped docs prose, CLI help/error text, or released CHANGELOG
+  sections. See [Versioning & changelog](#versioning--changelog).
+  The functional `nixling.defaultSwitchReadiness.<wave>` option
+  surface is the one deliberate exception.
 
-## W3 cgroup slice naming + ownership-marker conventions
+## cgroup slice naming + ownership-marker conventions
 
 The privileged broker's host-prepare dispatch (see the Control plane
 row above) carries two operational conventions that ground every
@@ -766,25 +874,20 @@ the rationale.
 
 ## Daemon-only end-state (P6 onward)
 
-From v1.0.0, the framework declares **exactly three** root-visible
-units: `nixlingd.service`, `nixling-priv-broker.socket`, and
+The framework declares **exactly three** root-visible units:
+`nixlingd.service`, `nixling-priv-broker.socket`, and
 `nixling-priv-broker.service`. The binding architectural decision
 is recorded in
-[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md); this section
-is the operating manual's pointer to the end-state and the cleanup
-commits that produced it.
+[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md).
 
-### What this section is for
-
-Agents working on the framework after P6 land **must** treat the
-following as the contract:
+Agents working on the framework MUST treat the following as the
+contract:
 
 - The CLI is the Rust `nixling` binary, full stop. There is no bash
-  fallback bridge, no `NIXLING_LEGACY_BASH_OPT_IN`, and no
-  `NIXLING_LEGACY_CLI`. `NIXLING_NATIVE_ONLY` remains as a no-op
-  documented in P4 cli-up.
-- There are no framework-declared per-VM systemd units. The
-  per-VM lifecycle DAG runs inside `nixlingd`; spawned runners
+  fallback bridge; `NIXLING_LEGACY_BASH_OPT_IN`, `NIXLING_LEGACY_CLI`,
+  and `NIXLING_NATIVE_ONLY` are no-ops.
+- There are no framework-declared per-VM systemd units. The per-VM
+  lifecycle DAG runs inside `nixlingd`; spawned runners
   (cloud-hypervisor, virtiofsd, swtpm, vhost-user-sound, USBIP
   attach) are launched by the broker's `SpawnRunner` op and handed
   back to `nixlingd` as pidfds via `OpenPidfd` / `SCM_RIGHTS`.
@@ -793,59 +896,16 @@ following as the contract:
   `nixling-net-route-preflight`, `nixling-audit-check[.timer]`,
   `microvms.target`). Their work either moved into `nixlingd` or
   was retired with the metric / signal it produced.
-- The `nixling.vms.<vm>.supervisor` option is retained in v1.0 source
-  for backward-compat with consumer flakes pinning pre-v1.0 manifests
-  (the framework's Tier 0 detection still branches on it); the
-  v1.0-intended hard removal + eval-time rejection assertion is
-  **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1
-  plan in `plan.md`; the v1.1 follow-through is also tracked by
-  [ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md) and
-  [ADR 0018](./docs/adr/0018-microvm-nix-removal.md)). Setting
-  `supervisor = "nixlingd"` requires
-  `nixling.daemonExperimental.enable = true`.
-- The polkit allowlist for `nixling-launcher` is retired.
-  `nixling-launchers` group membership + `SO_PEERCRED` at
+- The `nixling.vms.<vm>.supervisor` option has been removed; setting
+  it fails eval with a typed friendly message.
+- The polkit allowlist for legacy launcher groups is retired.
+  `nixling` group membership + `SO_PEERCRED` at
   `public.sock` accept time is the **only** lifecycle authorisation
   surface.
-- There is no `v0 → v1` manifest auto-rewriter. Consumers follow
-  [`docs/how-to/migrate-nixling-v0-to-v1.md`](./docs/how-to/migrate-nixling-v0-to-v1.md)
-  (landed in P7) to regenerate their `configuration.nix`.
+- The Rust CLI does not invoke bash. `tests/no-bash-exec-eval.sh`
+  is the fail-closed gate ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
 
-### Cleanup commits
-
-The P6 cleanup landed across a sequence of focused commits whose
-canonical tags are `( P6 )` and `( P6 <slice> )`:
-
-- `ph6-p6-cli-nix-migrations` — relocates every `cli.nix` consumer
-  (host-audit, options surface, store activation, desktop wrappers,
-  audio state helper, observability store-sync references) ahead of
-  the deletion sweep.
-- `ph6-remove-systemd-emission` — deletes `host-wrapper.nix`,
-  `host-sidecars.nix`, `components/audio/host.nix`,
-  `components/video/host.nix`, `host-ch-exporter.nix`,
-  `host-otel-relay-acl.nix`, `cli.nix`, and the bash `scripts/`
-  entrypoints. The AGENTS.md rewrite (this file) is folded into the
-  same commit by the integrator.
-- `ph6-p6-supervisor-removed-assertion` — was planned to add the
-  eval-time rejection of `nixling.vms.<vm>.supervisor`; **scheduled
-  for v1.1-P2** (per ADR 0015 § Decision and the v1.1 plan). The
-  option remains in v1.0 source for backward-compat with consumer
-  flakes pinning pre-v1.0 manifests; the v1.0-intended hard removal
-  will land in v1.1-P2.
-- `ph6-p6-polkit-retire` — retires the `nixling-launcher` polkit
-  rules; the group itself remains declared for permission-boundary
-  continuity.
-- `ph6-p6-unit-denylist-gate` — adds
-  [`tests/legacy-unit-denylist-eval.sh`](./tests/legacy-unit-denylist-eval.sh),
-  the fail-closed regression gate enumerating every retired unit
-  pattern.
-- `ph6-p6-default-switch-doc`,
-  `ph6-p6-doc-blast-radius`,
-  `ph6-p6-privileges-doc-final`,
-  `ph6-p6-adr-0015` — rewrite the doc tree (Diataxis quadrants) for
-  the daemon-only end-state.
-
-### Verification
+### Verification gates
 
 - `tests/legacy-unit-denylist-eval.sh` asserts that no example's
   `nixos-rebuild dry-build` output emits a retired unit name.
@@ -855,28 +915,28 @@ canonical tags are `( P6 )` and `( P6 <slice> )`:
 - `tests/agents-md-rewrite-eval.sh` asserts AGENTS.md itself does
   not mention the bash CLI or per-VM systemd templates as live
   surfaces (only as historical / retired context).
-- P6 host exit criterion: on a v1.0 test host,
+- Host exit criterion: on a deployed host,
   `systemctl list-units --no-pager --all | grep -E '^(nixling|microvm)' | wc -l`
   returns `3`.
 
 ## References
 
 - [docs/adr/0015-daemon-only-clean-break.md](./docs/adr/0015-daemon-only-clean-break.md)
-  — **the binding architectural decision** for the v1.0
-  daemon-only end-state: `nixlingd` + `nixling-priv-broker` are the
-  only persistent root surfaces; per-VM systemd templates, host
-  singletons, and the bash CLI are deleted in P6 with no
-  deprecation window. Supersedes the migration-mode plumbing in
-  [ADR 0007](./docs/adr/0007-bash-coexistence-and-migration.md).
-  Every section of this AGENTS.md rewrite resolves to ADR 0015 as
-  the source of truth.
+  — **the binding architectural decision** for the daemon-only
+  end-state: `nixlingd` + `nixling-priv-broker` are the only
+  persistent root surfaces.
+- [docs/adr/0017-no-bash-fallbacks-invariant.md](./docs/adr/0017-no-bash-fallbacks-invariant.md)
+  — the Rust CLI never invokes bash; CI gates enforce no new
+  `Command::new("bash")` sites.
+- [docs/adr/0018-microvm-nix-removal.md](./docs/adr/0018-microvm-nix-removal.md)
+  — nixling owns its per-VM substrate via `vm-options.nix` +
+  `vm-evaluator.nix`; the `microvm.nix` flake input is gone.
 - [docs/adr/0021-broker-user-namespace-for-virtiofsd.md](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md)
-  — **v1.1.2 virtiofsd sandbox decision**: broker pre-establishes a
-  single-entry user namespace via `clone3(CLONE_NEWUSER)` so
-  virtiofsd runs fake-root inside the NS while exposing **zero**
-  host capabilities. SUPERSEDES the [ADR 0003](./docs/adr/0003-minijail-provisioning-and-sandbox-interface.md)
-  `requiresStartRoot` carve-out. Any change to the virtiofsd
-  minijail profile or argv shape MUST preserve this contract.
+  — broker pre-establishes a single-entry user namespace via
+  `clone3(CLONE_NEWUSER)` so virtiofsd runs fake-root inside the
+  NS while exposing **zero** host capabilities. Any change to the
+  virtiofsd minijail profile or argv shape MUST preserve this
+  contract.
 - [README.md](./README.md) — consumer-facing intro, install,
   manual integration walkthrough.
 - [CHANGELOG.md](./CHANGELOG.md) — Keep-a-Changelog, entries
@@ -887,17 +947,22 @@ canonical tags are `( P6 )` and `( P6 <slice> )`:
 - [docs/explanation/daemon-lifecycle.md](./docs/explanation/daemon-lifecycle.md)
   — daemon DAG executor, pidfd handoff, supervisor reconciliation.
 - [docs/reference/privileges.md](./docs/reference/privileges.md) —
-  authoritative broker op catalogue (daemon-only end-state).
+  authoritative broker op catalogue.
 - [docs/reference/daemon-api.md](./docs/reference/daemon-api.md) —
   `public.sock` wire surface, audit format, retention.
 - [docs/reference/manifest-schema.md](./docs/reference/manifest-schema.md)
   + [docs/reference/manifest-schema.json](./docs/reference/manifest-schema.json)
-  — the manifest contract (v3 from P2 onward).
+  — the manifest contract.
 - [docs/reference/cli-contract.md](./docs/reference/cli-contract.md) —
   CLI lifecycle FSM, signal semantics, exit codes, JSON vs human
   output.
 - [docs/how-to/migrate-nixling-v0-to-v1.md](./docs/how-to/migrate-nixling-v0-to-v1.md)
-  — consumer migration guide for v0.x → v1.0 (landed in P7).
+  — consumer migration guide for v0.x → v1.0.
+- [docs/how-to/migrate-nixling-v1-0-to-v1-1.md](./docs/how-to/migrate-nixling-v1-0-to-v1-1.md)
+  — consumer migration guide for v1.0 → v1.1.
+- [docs/how-to/migrate-nixling-v1-1-to-v1-2.md](./docs/how-to/migrate-nixling-v1-1-to-v1-2.md)
+  — consumer migration guide for v1.1 → v1.2, including the
+  canonical `nixling` lifecycle group rename.
 - [docs/how-to/migrating-from-microvm.md](./docs/how-to/migrating-from-microvm.md)
   — option mapping for users coming from raw microvm.nix
   (scoped to new installs).

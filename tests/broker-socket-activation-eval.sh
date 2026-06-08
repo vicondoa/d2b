@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0 socket-activation eval gate.
+# Socket-activation eval gate.
 #
 # Asserts that host-broker.nix wires up nixling-priv-broker correctly for
 # socket activation.  Specifically it must hold that:

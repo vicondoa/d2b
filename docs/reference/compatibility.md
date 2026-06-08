@@ -36,9 +36,9 @@ release history in [`CHANGELOG.md`](../../CHANGELOG.md).
   branch name: e.g. `nixos-24.11` implies NixOS 24.11 hosts, while
   `nixos-unstable` is the rolling unstable branch.
 
-## W3 host-prepare tier matrix (v0.4.0 baseline)
+## Host-prepare tier matrix (v0.4.0 baseline)
 
-W3 introduces the privileged broker host-prepare contract. Tiers
+The privileged broker host-prepare contract defines tiers
 gate which host verbs are supported per platform and what level of
 pre-merge verification each row carries. The authoritative source
 is [`docs/reference/support-matrix.md`](support-matrix.md); this
@@ -62,9 +62,8 @@ table is the at-a-glance summary.
 > daemon-unreachable surfaces `daemon-down` (exit 1). Tier 0
 > (every VM declares `supervisor = "systemd"`) returns the typed
 > `tier-0-legacy-uses-nixos-module` envelope (exit 78). The
-> historical "W3fu2 H2 staged-not-implemented" disposition was
-> retired in P3 when the broker live ops landed; see ADR 0015 and
-> the P3 entry in CHANGELOG.
+> historical staged-not-implemented disposition is retired now that
+> the broker live ops have landed; see ADR 0015 and CHANGELOG.
 
 The full ADR rationale for what is and is not supported lives in
 [ADR 0008 — Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md).

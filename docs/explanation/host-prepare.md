@@ -1,22 +1,22 @@
 # Explanation: how `nixling host prepare` works
 
-> Diataxis: explanation. Conceptual model for the W3 host-prepare
+> Diataxis: explanation. Conceptual model for the host-prepare
 > contract. If you are looking for the operator walkthrough, read
 > [`docs/how-to/host-prepare.md`](../how-to/host-prepare.md); if you
 > are looking for the catalog of privileged operations, read
 > [`docs/reference/privileges.md`](../reference/privileges.md).
 
-> **W3 status note (W3fu3 H1).** The conceptual model below describes
-> the final W3+W4 design. At W3 today, `host check` and `host prepare
-> --dry-run` / `host destroy --dry-run` are fully wired and exercise
-> the broker's read-only audit path. The mutating `host prepare
-> --apply` / `host destroy --apply` verbs are wired live in v1.0
-> (ADR 0015 daemon-only): they dispatch through the broker reconcile
-> ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`,
-> `ApplyNmUnmanaged`). Broker failures surface a typed `broker-error`
-> envelope (exit 78); daemon-unreachable surfaces `daemon-down`
-> (exit 1). On Tier 0 (every VM declares `supervisor = "systemd"`)
-> the verb returns `tier-0-legacy-uses-nixos-module` (exit 78). See
+> The conceptual model below describes the current host-prepare
+> design. `host check` and `host prepare --dry-run` /
+> `host destroy --dry-run` exercise the broker's read-only audit
+> path. The mutating `host prepare --apply` /
+> `host destroy --apply` verbs dispatch through the broker reconcile
+> ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
+> `UpdateHostsFile`, `ApplyNmUnmanaged`). Broker failures surface a
+> typed `broker-error` envelope (exit 78); daemon-unreachable
+> surfaces `daemon-down` (exit 1). On hosts where every VM keeps
+> `supervisor = "systemd"`, the verb returns
+> `tier-0-legacy-uses-nixos-module` (exit 78). See
 > [`docs/reference/compatibility.md`](../reference/compatibility.md)
 > and ADR 0015.
 
@@ -52,8 +52,8 @@ to `nixling-priv-broker` over a `0600` private Unix socket
 
 This is the trust boundary. Compromise of `nixlingd` cannot escalate
 to arbitrary host mutation beyond the declared broker enum variants.
-See [`SECURITY.md`](../../SECURITY.md) § W3 trust-boundary delta for
-the corresponding threat-model statement.
+See [`SECURITY.md`](../../SECURITY.md) for the corresponding
+threat-model statement.
 
 ## cgroup delegation
 
@@ -85,28 +85,23 @@ table and uses `pidfd_send_signal` for control (and for VM-scoped
 sidecars whose parent is the daemon, `waitid(P_PIDFD)` for reap) —
 never raw PID kill/wait.
 
-**SpawnRunner-child supervision** (v1.1 SUPERSEDES the v1.0 model
-per [ADR 0018](../adr/0018-microvm-nix-removal.md) § "set-booted
-race-free serialization" / "broker-as-parent reaping model"): the
-broker is the PARENT of every v1.1 `SpawnRunner` child and reaps
-via `waitid(P_PIDFD)` on its own pidfd-table entry; the daemon is
-an OBSERVER (it receives a duplicated pidfd via `SCM_RIGHTS` for
-BootedNotify identity verification and lifecycle signalling but
-does NOT reap). Per ADR 0011 Decision item 8's v1.1 supersession,
-NEITHER the broker NOR `nixlingd` claims `PR_SET_CHILD_SUBREAPER`
-for the SpawnRunner-child population in v1.1 — making either side
-a subreaper would silently re-parent unrelated host processes into
-the daemon/broker, breaking the audit/lifecycle model. The
-historical v1.0 `nixlingd` PR_SET_CHILD_SUBREAPER self-test
-described in earlier drafts of this section is explicitly REMOVED
-in v1.1; ADR 0018 is the operative contract.
+**SpawnRunner-child supervision.** The broker is the parent of every
+`SpawnRunner` child and reaps via `waitid(P_PIDFD)` on its own
+pidfd-table entry; the daemon is an observer (it receives a
+duplicated pidfd via `SCM_RIGHTS` for BootedNotify identity
+verification and lifecycle signalling but does not reap). Per
+[ADR 0018](../adr/0018-microvm-nix-removal.md) § "set-booted
+race-free serialization" / "broker-as-parent reaping model",
+neither the broker nor `nixlingd` claims `PR_SET_CHILD_SUBREAPER`
+for the SpawnRunner-child population — making either side a
+subreaper would silently re-parent unrelated host processes into
+the daemon/broker, breaking the audit/lifecycle model.
 
-## What the W3 host verbs may mutate
+## What the host verbs may mutate
 
-The W3 host CLI splits read-only and mutating behaviour across distinct
+The host CLI splits read-only and mutating behaviour across distinct
 verbs (canonical contract in
-[`docs/how-to/host-prepare.md`](../how-to/host-prepare.md) and the
-plan's "W3 CLI host verb scope table"):
+[`docs/how-to/host-prepare.md`](../how-to/host-prepare.md)):
 
 - `nixling host check` — no mutation. Opens read-only file descriptors,
   reads `cgroup.controllers`, walks `/proc/modules`, reads
@@ -141,7 +136,8 @@ plan's "W3 CLI host verb scope table"):
   any matching VM is still running (`vm-still-running-refused`). Never
   touches foreign ownership markers.
 - `nixling host doctor --read-only` — no mutation. Surfaces
-  W4-blocking findings without acting. Mandatory `--read-only` flag.
+  load-bearing findings without acting. Mandatory `--read-only`
+  flag.
 - `nixling host install --dry-run` — no mutation. Prints the
   synthesized 5-step installer preview.
 - `nixling host install --apply` — live daemon → broker
@@ -158,7 +154,7 @@ host-prepare IPv6-off ordering (ADR 0012). The broker therefore
 treats NM/networkd coexistence as a fail-closed predicate.
 
 **When the NM unmanaged config is written.** Per the 5-step IPv6-off
-ordering (ADR 0012, plan §"W3 IPv6-off ordering"), the broker writes
+ordering (ADR 0012), the broker writes
 the unmanaged drop-in
 (`/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf`, marker block
 `# nixling-managed begin` / `# nixling-managed end`) **pre-create** —
@@ -172,17 +168,18 @@ and the broker confirms via `nmcli -t -f DEVICE,STATE device status`
 that the nixling ifname is `unmanaged` does it proceed to link create.
 
 **How systemd-networkd hosts are handled.** systemd-networkd is
-**detection-only** in W3 — the broker never writes a `*.network` or
+**detection-only** — the broker never writes a `*.network` or
 `*.link` file. The host-prepare path probes for an active
 systemd-networkd that is managing the nixling ifname prefix
 (`nl-`/`nlv-`) by reading `/run/systemd/network/*.link` and the
 `networkctl status` JSON output. If the prefix is being actively
 managed, the broker refuses to create the link unless a
-configured-unmanaged file (typically `/etc/systemd/network/00-nixling-unmanaged.network`
-shipped by the operator's NixOS module or distro packaging) is
-present with the matching prefix in its `[Match] Name=` block. Without
-that explicit acknowledgement the operator's networkd installation
-would race the broker for ownership, so W3 refuses with
+configured-unmanaged file (typically
+`/etc/systemd/network/00-nixling-unmanaged.network` shipped by the
+operator's NixOS module or distro packaging) is present with the
+matching prefix in its `[Match] Name=` block. Without that explicit
+acknowledgement the operator's networkd installation would race the
+broker for ownership, so the broker refuses with
 `nm-managed-foreign-conflict` (the same error code as the NM path).
 
 **Why coexistence fails closed.** A foreign manager can:
@@ -207,12 +204,13 @@ contention.
 broker records the detection result as `manager_detected: none` in
 the `ApplyNmUnmanaged` audit record, writes nothing under
 `/etc/NetworkManager/`, and proceeds with link create + IPv6-off
-ordering. This is the typical NixOS Tier 0 daemon-mode and Arch
-Tier 2 case.
+ordering. This is the typical daemon-mode case on hosts that do not
+run NetworkManager.
 
 Cross-references:
 
-- [ADR 0012 — W3 IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md);
+- [ADR 0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+  — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults;
 - [`docs/how-to/host-prepare.d/network.md`](../how-to/host-prepare.d/network.md) — operator walkthrough of the 5-step ordering.
 
 ## Tier behavior
@@ -221,27 +219,28 @@ Tier behavior is fully described in
 [`docs/reference/support-matrix.md`](../reference/support-matrix.md).
 Conceptually:
 
-- **Tier 0 (NixOS)**: `host prepare --apply` is refused. The NixOS
-  module owns the prepare contract. Tier 0 still uses the daemon for
+- **NixOS hosts**: `host prepare --apply` is refused. The NixOS
+  module owns the prepare contract, while the daemon still owns
   runtime supervision.
-- **Tier 1 (Ubuntu 24.04)**: at W3 today, `host check` and
-  `host prepare --dry-run` enumerate the full reconcile plan
-  (including the five-step IPv6-off ordering with NetworkManager 1.46
-  reload, ADR 0012); `--apply` is wired live in v1.0 through the
-  broker reconcile ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
-  `UpdateHostsFile`, `ApplyNmUnmanaged`) per ADR 0015.
-- **Tier 1-later / Tier 2**: best-effort. `host check` and
-  `--dry-run` still apply every fail-closed check today; `--apply`
-  routes through the same broker live ops with the same exit-78
-  typed-envelope behaviour on failure. The audit log is the system
-  of record across all tiers.
+- **Ubuntu 24.04 hosts**: `host check` and `host prepare --dry-run`
+  enumerate the full reconcile plan (including the five-step
+  IPv6-off ordering with NetworkManager 1.46 reload, ADR 0012);
+  `--apply` dispatches through the broker reconcile ops
+  (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`,
+  `ApplyNmUnmanaged`) per ADR 0015.
+- **Best-effort hosts**: `host check` and `--dry-run` still apply
+  every fail-closed check; `--apply` routes through the same broker
+  live ops with the same exit-78 typed-envelope behaviour on
+  failure. The audit log is the system of record across the support
+  matrix.
 
 ## Mixed legacy/daemon operation
 
-Per ADR 0007, a host may run in `legacy-systemd`, `daemon-experimental`,
-or `daemon-default` mode. The W3 broker only runs in the daemon modes;
-single-writer conflicts between the legacy systemd path and a daemon-
-backed VM surface as `single-writer-conflict` and are fail-closed.
+A host may still contain legacy-systemd state or daemon-managed
+state, but the broker only runs in the daemon-managed path.
+Single-writer conflicts between the legacy systemd path and a
+daemon-backed VM surface as `single-writer-conflict` and are
+fail-closed.
 
 ## Recovery runbook
 
@@ -264,7 +263,7 @@ If `host prepare --apply` fails partway through, the operator runbook is:
    or **roll back** the nixling-owned state with `host destroy --apply`
    followed by an admin-approved fresh `host prepare --apply`.
 5. **Rotate** any role-scoped secrets that the audit log surfaces as
-   touched (the W3 broker enum has no secret-bearing variants today;
+   touched (the current broker enum has no secret-bearing variants;
    any future ones will be flagged `secret: yes` in
    [`docs/reference/privileges.md`](../reference/privileges.md)).
 6. **Resume the broker** with `nixling admin broker --resume`.
@@ -274,12 +273,10 @@ GitHub Security Advisory disclosure — read [`SECURITY.md`](../../SECURITY.md).
 
 ## Net-route preflight & operator-only mode
 
-> **v1.0 daemon-only (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)).**
-> The pre-P6 `nixling-net-route-preflight.service` host singleton
-> (`nixos-modules/network.nix`) was deleted in P6; the daemon owns
-> the equivalent self-check directly inside `nixlingd`'s startup
-> path. See ADR 0015 § "What gets removed" and the P6 CHANGELOG
-> entry for the full retired-surfaces inventory.
+> There is no `nixling-net-route-preflight.service` host singleton.
+> The daemon owns the equivalent self-check directly inside
+> `nixlingd`'s startup path; see
+> [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
 On every startup, `nixlingd` probes each env's LAN bridge under
 `/sys/class/net/<bridge>/operstate` (existence + `operstate != down`).
@@ -330,7 +327,7 @@ its remediation field points back to this section.
 - [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md) — cgroup algorithm.
 - [`docs/reference/inet-nixling-chains.md`](../reference/inet-nixling-chains.md) — nftables chain layout.
 - [`docs/reference/support-matrix.md`](../reference/support-matrix.md) — tier matrix.
-- [`SECURITY.md`](../../SECURITY.md) — W3 trust-boundary threat-model delta.
+- [`SECURITY.md`](../../SECURITY.md) — trust-boundary threat-model delta.
 - ADRs [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md),
   [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md),
   [0013](../adr/0013-w3-firewall-coexistence-policy.md),

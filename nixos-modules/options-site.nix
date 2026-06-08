@@ -1,10 +1,10 @@
 # nixling.site.* — host-level site knobs that every VM inherits,
 # plus the top-level `nixling.hostLanCidrs` list. Extracted from
-# options.nix in Phase 2c (split-options) for reviewability.
+# options.nix for reviewability.
 { lib, ... }:
 
 {
-  # Site-specific knobs (Phase 2b — extracted from previously-hard-
+  # Site-specific knobs extracted from previously-hard-
   # coded references to the maintainer's host setup). Every option
   # here is opt-in: leaving the defaults gives you a fully headless
   # framework with no Wayland integration and no nixling-managed SSH
@@ -61,8 +61,7 @@
         default = "tap-fd";
         example = "persistent-tap";
         description = ''
-          Cloud Hypervisor net-handoff mode for long-lived runners
-          (W3 virt-1). The emitted `host.json.ch.netHandoffMode`
+          Cloud Hypervisor net-handoff mode for long-lived runners The emitted `host.json.ch.netHandoffMode`
           records this declared value; the broker's `host check`
           probes the packaged CH binary at runtime and fails closed
           with `ch-net-handoff-not-supported` if neither mode
@@ -93,11 +92,11 @@
           to remove are logged but do not break the audit-write path).
           Set to `0` to disable pruning entirely (unbounded retention).
 
-          **Reserved at W4a-H1.** The broker accepts
+          **Reserved.** The broker accepts
           `--audit-retention-days <N>` and the runtime prune-on-rotate
           loop is shipping in `packages/nixling-priv-broker/src/audit.rs`,
           but the NixOS module does not yet spawn the broker
-          (`nixlingd` does so at runtime in a future W4 sub-phase, and
+          (`nixlingd` does so at runtime in a future wiring, and
           this option's value will then thread through
           `daemon-config.json` → `nixlingd` → `nixling-priv-broker
           serve --audit-retention-days <value>`). Until that wiring
@@ -105,9 +104,23 @@
           broker defaults to 14 days regardless.
 
           The option is exposed now so consumer NixOS configs can
-          declare their intended retention ahead of the W4 wiring;
-          the W4 main wave will pick the value up without a config
+          declare their intended retention ahead of the wiring;
+          the runtime path will pick the value up without a config
           break.
+        '';
+      };
+    };
+
+    activation = {
+      failClosedOnLegacyGid = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          When true, the nixlingGroupMigration helper performs a
+          post-migration scan of `/var/lib/nixling` and `/run/nixling`
+          and fails activation if any file still has a legacy lifecycle-group numeric gid. Off by default;
+          operators flip this to true after confirming clean migration
+          on their host.
         '';
       };
     };
@@ -133,19 +146,62 @@
       '';
     };
 
+    waylandDisplay = lib.mkOption {
+      type = lib.types.strMatching "^wayland-[0-9]+$";
+      default = "wayland-0";
+      example = "wayland-1";
+      description = ''
+        Basename of the host primary compositor's Wayland socket under
+        `/run/user/<waylandUser-uid>/`. The GPU sidecar opens this
+        socket (`--wayland-sock /run/user/<uid>/<waylandDisplay>`),
+        the minijail profile bind-mounts it into the sidecar mount
+        namespace, and the privileged broker grants the sidecar uid an
+        ACL on exactly this host path.
+
+        Defaults to `wayland-0`, correct when the host compositor is
+        the first Wayland server on the seat. Set this to the actual
+        socket name when it is not — for example **niri** commonly
+        lands on `wayland-1`. A mismatch makes the GPU sidecar fail
+        with `vhost-user connection closed` (the socket it was told to
+        open does not exist) and the broker refuse the ACL
+        (`refusing setfacl on …/wayland-0: expected Socket`), so the
+        graphics VM cannot start.
+
+        Find the live value with `echo "$WAYLAND_DISPLAY"` inside the
+        host compositor session, or
+        `ls /run/user/<uid>/ | grep '^wayland-'`.
+
+        Note: this is a static per-host value. A future enhancement
+        (tracked in TODO.md) will source the display from the
+        operator's environment at `nixling vm start` time so a single
+        host can serve operators on different compositor sockets.
+      '';
+    };
+
+    audio.inputTargetNode = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "alsa_input.pci-0000_00_1f.3.analog-stereo";
+      description = ''
+        Optional PipeWire node.name to force nixling VM microphone
+        streams to when `nixling.mic = "on"`. Leave at `null` to let
+        WirePlumber's normal default-source policy choose the host
+        input. Set this on hosts whose default-source metadata does not
+        auto-link capture clients reliably.
+      '';
+    };
+
     launcherUsers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "alice" ];
       description = ''
-        Users to add to the `nixling-launcher` group. Members of that
-        group get a polkit grant to run start/stop/restart against
-        the framework's own systemd units without a password prompt
-        (see `nixos-modules/host-polkit.nix` for the exact-unit
-        allowlist).
+        Users to add to the `nixling` lifecycle group. Members of that
+        group can connect to the daemon public socket and perform
+        lifecycle operations.
 
         When `nixling.daemonExperimental.enable = true`, the same user
-        list is also added to the daemon-facing `nixling-launchers`
+        list is also added to the canonical `nixling`
         socket ACL group.
 
         The framework does NOT create the users — declare them in
@@ -178,7 +234,7 @@
       description = ''
         Directory where the framework generates and stores
         per-VM SSH host keys. Mode 0700 owned by root, with a per-
-        key ACL granting read access to the `nixling-launcher` group
+        key ACL granting read access to the `nixling` group
         (so the CLI can drive `ssh` to each VM without sudo).
 
         Default tracks `${"$"}{stateDir}/keys`. If you override
@@ -194,8 +250,7 @@
         same path. Overriding this option in v0.1.0 will leave
         those stale entries on disk; the per-VM key flow itself
         still works because everything goes through host-keys.nix.
-        Full alignment lands in v0.2.0
-        (`med-findings-postrelease`: `keysDir-threading`).
+        Full alignment lands in v0.2.0.
       '';
     };
 

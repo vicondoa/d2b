@@ -1,8 +1,7 @@
-//! W3 host-prepare module: `bridge_port` — owned by scope s2.
+//! Host-prepare bridge-port module.
 //!
-//! Implements the per-role bridge port flag defaults table per
-//! plan.md §"W3 bridge-port flag readback (every flag, every role)"
-//! plus the validators that gate east-west bridges behind the
+//! Implements the per-role bridge port flag defaults table plus the
+//! validators that gate east-west bridges behind the
 //! `env.lan.allowEastWest` + `site.allowUnsafeEastWest` double opt-in.
 //!
 //! The complete flag set this module covers (every flag, every role):
@@ -14,8 +13,7 @@ use nixling_core::host_w3::TapRoleW3;
 use serde::{Deserialize, Serialize};
 
 /// Complete bridge-port flag readback record. Mirrors every flag the
-/// W3 plan requires the broker to readback after every
-/// `SetBridgePortFlags`.
+/// broker reads back after every `SetBridgePortFlags`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BridgePortFlagSet {

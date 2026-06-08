@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# W1 Layer-1 gate: nixling-core DTO -> committed JSON Schema drift.
+# nixling-core DTO -> committed JSON Schema drift.
 #
 # When cargo is not on PATH, re-execute through `nix shell` to acquire
 # the toolchain (same bootstrap as tests/rust-workspace-checks.sh,
-# resolved through the W0afu1 finding). The pinned rust-toolchain.toml
+# resolved through the finding). The pinned rust-toolchain.toml
 # under packages/ governs the version once cargo is reachable.
 
 set -euo pipefail
@@ -31,7 +31,7 @@ if [ ! -d docs/reference/schemas ]; then
 fi
 
 # Self-bootstrap toolchain through nix shell when cargo isn't on PATH.
-# Matches the W0afu1 pattern in tests/rust-workspace-checks.sh.
+# Matches the pattern in tests/rust-workspace-checks.sh.
 if [ -z "${NIXLING_BUNDLE_DRIFT_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "bundle-drift: neither cargo nor nix is on PATH"

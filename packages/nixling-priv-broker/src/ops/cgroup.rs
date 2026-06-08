@@ -1,9 +1,7 @@
 //! Broker-side cgroup operation handlers (`DelegateCgroupV2`,
 //! `OpenCgroupDir`).
 //!
-//! Owned by W3 scope **s1**. Implements the plan-named broker contract
-//! from plan.md §"W3 broker variant additions" + §"W3 cgroup v2
-//! delegation algorithm":
+//! Implements the broker contract for cgroup v2 delegation:
 //!
 //! - paths are re-derived from the trusted bundle (`BundlePaths`),
 //!   never from caller input; the wire request only names the
@@ -40,7 +38,7 @@ use super::AuditDecision;
 pub(crate) const DEFAULT_DELEGATED_PARENT_SLICE: &str = "/sys/fs/cgroup/nixling.slice";
 
 /// Sub-error for [`super::OpError::Cgroup`]. Stays kebab-case to match
-/// the W3 audit `error_kind` field.
+/// the audit `error_kind` field.
 #[derive(Debug)]
 pub enum CgroupOpError {
     /// The host-side cgroup algorithm returned an error.
@@ -198,8 +196,7 @@ pub trait AuditSink {
     );
 }
 
-/// Per-variant audit fields (plan.md §"W3 broker variant additions"
-/// → `DelegateCgroupV2`/`OpenCgroupDir` rows).
+/// Per-variant audit fields for `DelegateCgroupV2`/`OpenCgroupDir` rows.
 #[derive(Debug, Clone, Default)]
 pub struct AuditFields {
     pub slice_path: Option<PathBuf>,

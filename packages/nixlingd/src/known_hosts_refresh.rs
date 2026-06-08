@@ -1,5 +1,5 @@
-//! P2 ph2-known-hosts-refresh: daemon-side replacement for the
-//! per-VM `nixling-known-hosts-refresh@<vm>.service` systemd
+//! Daemon-side replacement for the per-VM
+//! `nixling-known-hosts-refresh@<vm>.service` systemd
 //! oneshot (defined in `nixos-modules/host-known-hosts.nix`).
 //!
 //! That unit ran a shell script that:
@@ -16,8 +16,8 @@
 //!      rewrite.
 //!
 //! The daemon-only end state moves the side effect into the typed
-//! broker `RunRotateKnownHost` op (already wired in W8/W8-fu and
-//! reachable today via the public `rotateKnownHost` verb — see
+//! broker `RunRotateKnownHost` op (reachable today via the public
+//! `rotateKnownHost` verb — see
 //! `dispatch_broker_rotate_known_host` in `lib.rs`). This module
 //! splits that work into:
 //!
@@ -42,9 +42,7 @@
 
 use nixling_core::bundle_resolver::intent_id_rotate_known_host;
 use nixling_core::manifest_v04::ManifestV04;
-use nixling_ipc::broker_wire::{
-    RunRotateKnownHostRequest, RunRotateKnownHostResponse,
-};
+use nixling_ipc::broker_wire::{RunRotateKnownHostRequest, RunRotateKnownHostResponse};
 use nixling_ipc::types::BundleOpId;
 
 use crate::typed_error::TypedError;
@@ -196,9 +194,7 @@ pub fn refresh_known_hosts<B: RotateKnownHostBroker>(
     match build_refresh_intent(vm, manifest) {
         RefreshIntent::Skip { vm, reason } => RefreshOutcome::Skipped { vm, reason },
         RefreshIntent::Rotate {
-            vm,
-            broker_request,
-            ..
+            vm, broker_request, ..
         } => match broker.rotate(broker_request) {
             Ok(response) => RefreshOutcome::Rotated { vm, response },
             Err(err) => RefreshOutcome::Failed {
@@ -255,7 +251,9 @@ mod tests {
 
     fn manifest_with(vms: Vec<VmEntry>) -> ManifestV04 {
         ManifestV04 {
-            manifest: ManifestMeta { manifest_version: 3 },
+            manifest: ManifestMeta {
+                manifest_version: 3,
+            },
             observability: ObservabilityMeta {
                 ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
@@ -283,8 +281,7 @@ mod tests {
 
     #[test]
     fn skip_for_net_vm() {
-        let manifest =
-            manifest_with(vec![vm_entry("sys-test-net", true, Some("192.0.2.1"))]);
+        let manifest = manifest_with(vec![vm_entry("sys-test-net", true, Some("192.0.2.1"))]);
         let intent = build_refresh_intent("sys-test-net", &manifest);
         assert!(matches!(
             intent,
@@ -319,8 +316,7 @@ mod tests {
 
     #[test]
     fn rotate_intent_is_deterministic() {
-        let manifest =
-            manifest_with(vec![vm_entry("personal-dev", false, Some("192.0.2.20"))]);
+        let manifest = manifest_with(vec![vm_entry("personal-dev", false, Some("192.0.2.20"))]);
         let a = build_refresh_intent("personal-dev", &manifest);
         let b = build_refresh_intent("personal-dev", &manifest);
         assert_eq!(a, b);
@@ -336,9 +332,7 @@ mod tests {
         assert_eq!(static_ip, "192.0.2.20");
         assert_eq!(broker_request.vm, "personal-dev");
         assert_eq!(
-            broker_request
-                .bundle_rotate_known_host_intent_ref
-                .as_str(),
+            broker_request.bundle_rotate_known_host_intent_ref.as_str(),
             "rotate-known-host:vm:personal-dev"
         );
         assert!(broker_request.tracing_span_id.is_none());
@@ -392,8 +386,7 @@ mod tests {
 
     #[test]
     fn refresh_skips_without_calling_broker() {
-        let manifest =
-            manifest_with(vec![vm_entry("sys-test-net", true, Some("192.0.2.1"))]);
+        let manifest = manifest_with(vec![vm_entry("sys-test-net", true, Some("192.0.2.1"))]);
         let broker = RecordingBroker::new();
         let outcome = refresh_known_hosts("sys-test-net", &manifest, &broker);
         assert_eq!(
@@ -403,7 +396,10 @@ mod tests {
                 reason: SkipReason::NetVm,
             }
         );
-        assert!(broker.calls.borrow().is_empty(), "skip must not call broker");
+        assert!(
+            broker.calls.borrow().is_empty(),
+            "skip must not call broker"
+        );
     }
 
     /// Integration test for the idempotency contract: invoking
@@ -416,15 +412,22 @@ mod tests {
     /// intent layer.
     #[test]
     fn refresh_runs_idempotently() {
-        let manifest =
-            manifest_with(vec![vm_entry("personal-dev", false, Some("192.0.2.20"))]);
+        let manifest = manifest_with(vec![vm_entry("personal-dev", false, Some("192.0.2.20"))]);
         let broker = RecordingBroker::new();
 
         let first = refresh_known_hosts("personal-dev", &manifest, &broker);
         let second = refresh_known_hosts("personal-dev", &manifest, &broker);
 
-        let (RefreshOutcome::Rotated { vm: v1, response: r1 },
-             RefreshOutcome::Rotated { vm: v2, response: r2 }) = (&first, &second)
+        let (
+            RefreshOutcome::Rotated {
+                vm: v1,
+                response: r1,
+            },
+            RefreshOutcome::Rotated {
+                vm: v2,
+                response: r2,
+            },
+        ) = (&first, &second)
         else {
             panic!("expected both refreshes to rotate; got {first:?} / {second:?}");
         };

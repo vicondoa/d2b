@@ -1,16 +1,17 @@
-//! `UsbipBindFirewallRule` broker op (W3 s3, skeleton-only).
+//! `UsbipBindFirewallRule` broker op.
 //!
-//! Adds a source-based nft carve-out rule before the broad allow/drop
-//! rule in `inet nixling`'s `forward` chain. The ordering invariant is
-//! enforced by [`nixling_host::nftables::NftBatch::assert_carveout_ordering`].
+//! Adds the trusted-bundle USBIP nft carve-out rule before broad
+//! allow/drop rules in `inet nixling`. The live path inserts the
+//! resolved env TCP/3240 expression into the `input` chain for the
+//! host-side proxy listener. The ordering invariant is enforced by
+//! [`nixling_host::nftables::NftBatch::assert_carveout_ordering`].
 //!
-//! The full `UsbipBind`/`UsbipUnbind`/`UsbipProxyReconcile` UX
-//! (live device routing) is OUT of W3 scope and lives in W6;
-//! [`refuse_w6_operation`] is the explicit fail-closed handler used by
-//! the broker dispatch table when one of those W6 variants is invoked
-//! at W3.
+//! The full `UsbipBind`/`UsbipUnbind`/`UsbipProxyReconcile` UX (live
+//! device routing) is handled separately; [`refuse_w6_operation`] is the
+//! explicit fail-closed handler used by the broker dispatch table when
+//! one of those live-routing variants is invoked before support.
 
-use nixling_host::nftables::{add_usbip_firewall_carveout, BusId, NftBatch, NftError, Sha256};
+use nixling_host::nftables::{BusId, ChainHook, NftBatch, NftError, Sha256};
 use serde::{Deserialize, Serialize};
 
 /// Audit-event payload for `UsbipBindFirewallRule`. Combined with the
@@ -33,8 +34,13 @@ pub struct UsbipBindFirewallRuleDecision {
 
 /// Insert the per-busid firewall carve-out rule. Returns the typed
 /// decision (batch + audit row) for the broker runtime.
-pub fn bind_firewall_rule(bus_id: &BusId) -> Result<UsbipBindFirewallRuleDecision, NftError> {
-    let batch = add_usbip_firewall_carveout(bus_id)?;
+pub fn bind_firewall_rule(
+    mut batch: NftBatch,
+    bus_id: &BusId,
+    rule_expr: &str,
+) -> Result<UsbipBindFirewallRuleDecision, NftError> {
+    batch.add_usbip_carveout_expr(ChainHook::Input, bus_id, rule_expr)?;
+    batch.assert_carveout_ordering()?;
     let rule_hash = batch.canonical_hash();
     Ok(UsbipBindFirewallRuleDecision {
         batch,
@@ -45,9 +51,9 @@ pub fn bind_firewall_rule(bus_id: &BusId) -> Result<UsbipBindFirewallRuleDecisio
     })
 }
 
-/// USBIP operations explicitly OUT of W3 scope. These are refused with
-/// the `unknown-operation` kebab-case discriminant + audit per plan.md
-/// §"W3 broker variant additions" (`defaultForUnknown: deny`).
+/// USBIP operations explicitly outside this firewall-rule skeleton.
+/// These are refused with the `unknown-operation` kebab-case
+/// discriminant + audit (`defaultForUnknown: deny`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum W6UsbipOperation {
@@ -66,8 +72,8 @@ impl W6UsbipOperation {
     }
 }
 
-/// Refusal-audit payload emitted when a W6 USBIP UX operation is
-/// dispatched at W3.
+/// Refusal-audit payload emitted when a USBIP UX operation is
+/// dispatched before support.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefusedW6Audit {
@@ -75,9 +81,10 @@ pub struct RefusedW6Audit {
     pub reason: &'static str,
 }
 
-/// Fail-closed handler for W6-scoped USBIP variants. Returns the audit
-/// payload the broker runtime writes; the wire-level response is
-/// `broker-unimplemented` per the W2 broker enum disposition contract.
+/// Fail-closed handler for USBIP live-routing variants. Returns the
+/// audit payload the broker runtime writes; the wire-level response is
+/// `broker-unimplemented` per the legacy broker enum disposition
+/// contract.
 pub fn refuse_w6_operation(op: W6UsbipOperation) -> RefusedW6Audit {
     RefusedW6Audit {
         operation: op,
@@ -91,15 +98,29 @@ mod tests {
 
     #[test]
     fn bind_firewall_rule_produces_audit_with_busid_and_hash() {
-        let decision = bind_firewall_rule(&BusId::new("1-1.4")).unwrap();
+        let decision = bind_firewall_rule(
+            nixling_host::nftables::build_inet_nixling_chains(),
+            &BusId::new("1-1.4"),
+            "iifname \"br-work-up\" tcp dport 3240 accept",
+        )
+        .unwrap();
         assert_eq!(decision.audit.busid, "1-1.4");
         // Rule hash matches the rendered batch canonical hash.
         assert_eq!(decision.audit.rule_hash, decision.batch.canonical_hash());
+        let script = decision.batch.render_nft_script();
+        assert!(script.contains("chain input"));
+        assert!(script.contains("iifname \"br-work-up\" tcp dport 3240 accept"));
+        assert!(!script.contains("usbip-1-1.4\" accept"));
     }
 
     #[test]
     fn carveout_ordering_invariant_via_op() {
-        let decision = bind_firewall_rule(&BusId::new("2-3.1")).unwrap();
+        let decision = bind_firewall_rule(
+            nixling_host::nftables::build_inet_nixling_chains(),
+            &BusId::new("2-3.1"),
+            "iifname \"br-work-up\" tcp dport 3240 accept",
+        )
+        .unwrap();
         decision.batch.assert_carveout_ordering().unwrap();
     }
 

@@ -1,10 +1,9 @@
-//! P3 `ph3-p3-net-route-degraded-mode` (foundational P3 deliverable):
-//! daemon-side replacement for the `nixling-net-route-preflight.service`
+//! Daemon-side replacement for the `nixling-net-route-preflight.service`
 //! host singleton.
 //!
 //! # Why this preflight exists
 //!
-//! Pre-P3, foundational network sanity (each env's LAN bridge exists
+//! Previously, foundational network sanity (each env's LAN bridge exists
 //! and is `up`) was asserted by a oneshot systemd singleton
 //! (`nixling-net-route-preflight.service` in
 //! [`nixos-modules/network.nix`]) that ran at boot, shelled out to
@@ -13,9 +12,9 @@
 //! Every `nixling@<vm>.service` carried `Requires=` on that unit, so
 //! a missing bridge fail-closed all VM starts at the unit-dep level.
 //!
-//! P3 retires that singleton in favour of running the equivalent
-//! check inside `nixlingd` itself, with two upgrades over the bash
-//! shape:
+//! The daemon-only path retires that singleton in favour of running the
+//! equivalent check inside `nixlingd` itself, with two upgrades over the
+//! bash shape:
 //!
 //! 1. The result feeds the autostart layer's pre-degraded set, so a
 //!    failed env's VMs surface in `nixling status` as
@@ -25,8 +24,8 @@
 //!    [`OperatorOnlyMode`], where the autostart pass is skipped
 //!    entirely and the SOLE mutating recovery verb is
 //!    `nixling host reconcile --network --apply`. This matches the
-//!    plan's `networking-2` rule: "bridge/route self-check failure
-//!    does NOT make nixlingd refuse to serve. Read-only
+//!    rule: "bridge/route self-check failure does NOT make nixlingd
+//!    refuse to serve. Read-only
 //!    status/doctor/audit available. Per-env starts blocked. SOLE
 //!    mutating recovery verb: nixling host reconcile --network
 //!    --apply."
@@ -56,9 +55,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nixling_core::host::{HostJson, IfName, NetEnv};
 use serde::{Deserialize, Serialize};
 
-/// Default number of consecutive failed preflight passes that
-/// graduates the daemon into [`OperatorOnlyMode::Engaged`]. Per
-/// plan.md `ph3-p3-net-route-degraded-mode`: "if the daemon detects
+/// Default number of consecutive failed preflight passes that graduates
+/// the daemon into [`OperatorOnlyMode::Engaged`]: "if the daemon detects
 /// on startup that no autostart attempt has succeeded in N
 /// consecutive tries (e.g. 3), enter operator-only mode".
 pub const DEFAULT_DEGRADED_MODE_THRESHOLD: u32 = 3;
@@ -168,6 +166,30 @@ pub trait BridgeProbe {
     fn probe(&self, bridge: &IfName) -> EnvPreflightStatus;
 }
 
+/// Returns `true` if the operstate value indicates the bridge is
+/// sufficiently up for nixling's routing requirements.
+///
+/// Accepted values (all case-insensitive):
+/// - `"up"` — fully operational.
+/// - `"unknown"` — drivers that don't implement carrier detection;
+///   common on virtual bridges with no active ports.
+/// - `"no-carrier"` — bridge is administratively up but has no
+///   active member ports, which is normal on cold-boot environments
+///   before any VM has started (D16). The kernel raises this instead
+///   of `"down"` when the interface was explicitly brought up but
+///   no lower-layer is passing traffic yet.
+///
+/// This function is called only for nixling-declared bridges
+/// (`br-<env>-lan` / `br-<env>-up`). All callers of
+/// [`SysClassNetProbe`] flow through [`run_net_route_preflight`]
+/// which sources bridge names exclusively from the daemon's
+/// `HostJson` artifact — verified in `lib.rs` at startup.
+fn operstate_acceptable(trimmed: &str) -> bool {
+    trimmed.eq_ignore_ascii_case("up")
+        || trimmed.eq_ignore_ascii_case("unknown")
+        || trimmed.eq_ignore_ascii_case("no-carrier")
+}
+
 /// Production probe: reads `/sys/class/net/<bridge>/operstate`.
 #[derive(Debug, Clone, Default)]
 pub struct SysClassNetProbe;
@@ -185,12 +207,7 @@ impl BridgeProbe for SysClassNetProbe {
             Ok(_) => match fs::read_to_string(dir.join("operstate")) {
                 Ok(state) => {
                     let trimmed = state.trim();
-                    // "up" or "unknown" (drivers without carrier
-                    // signal) both satisfy the up requirement. "down"
-                    // (or anything else like "lowerlayerdown") is a
-                    // fail-closed signal.
-                    if trimmed.eq_ignore_ascii_case("up") || trimmed.eq_ignore_ascii_case("unknown")
-                    {
+                    if operstate_acceptable(trimmed) {
                         EnvPreflightStatus::Pass
                     } else {
                         EnvPreflightStatus::BridgeDown {
@@ -595,5 +612,77 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert!(all[0].ok);
         assert_eq!(all[0].source, "reconcile");
+    }
+
+    // --- D16: NO-CARRIER operstate tolerance tests ---
+    //
+    // These tests exercise `operstate_acceptable` via a thin
+    // `OperstateTestProbe` that mirrors the exact conditional used in
+    // `SysClassNetProbe::probe`, so a regression in the production
+    // code will also break the probe-level assertions below.
+
+    struct OperstateTestProbe {
+        state: String,
+    }
+
+    impl BridgeProbe for OperstateTestProbe {
+        fn probe(&self, _bridge: &IfName) -> EnvPreflightStatus {
+            let trimmed = self.state.trim();
+            if operstate_acceptable(trimmed) {
+                EnvPreflightStatus::Pass
+            } else {
+                EnvPreflightStatus::BridgeDown {
+                    operstate: trimmed.to_owned(),
+                }
+            }
+        }
+    }
+
+    fn operstate_report(state: &str) -> EnvPreflightStatus {
+        let envs = vec![env("corp", "br-corp-lan")];
+        let probe = OperstateTestProbe {
+            state: state.to_owned(),
+        };
+        run_net_route_preflight_for_envs(&envs, &probe)
+            .outcomes
+            .into_iter()
+            .next()
+            .unwrap()
+            .status
+    }
+
+    #[test]
+    fn no_carrier_operstate_yields_pass() {
+        assert_eq!(operstate_report("NO-CARRIER"), EnvPreflightStatus::Pass);
+    }
+
+    #[test]
+    fn lowercase_no_carrier_operstate_yields_pass() {
+        assert_eq!(operstate_report("no-carrier"), EnvPreflightStatus::Pass);
+    }
+
+    #[test]
+    fn mixed_case_operstate_yields_pass() {
+        assert_eq!(operstate_report("No-Carrier"), EnvPreflightStatus::Pass);
+    }
+
+    #[test]
+    fn genuinely_down_operstate_still_yields_bridge_down() {
+        assert_eq!(
+            operstate_report("down"),
+            EnvPreflightStatus::BridgeDown {
+                operstate: "down".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn lowerlayerdown_still_yields_bridge_down() {
+        assert_eq!(
+            operstate_report("lowerlayerdown"),
+            EnvPreflightStatus::BridgeDown {
+                operstate: "lowerlayerdown".to_owned(),
+            }
+        );
     }
 }

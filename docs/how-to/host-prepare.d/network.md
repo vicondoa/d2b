@@ -1,13 +1,13 @@
-# How to: prepare the host network (W3 s2 fragment)
+# How to: prepare the host network
 
-> Diataxis: how-to. Operator-facing walkthrough for the W3 bridge /
+> Diataxis category: guide. Operator-facing walkthrough for the bridge /
 > TAP / NetworkManager / IPv6 / `/etc/hosts` reconcile. The full
-> `docs/how-to/host-prepare.md` document is assembled by the W3
-> integrator from per-scope fragments under `docs/how-to/host-prepare.d/`.
+> `docs/how-to/host-prepare.md` document is assembled from fragments
+> under `docs/how-to/host-prepare.d/`.
 
 ## Scope
 
-This fragment covers the W3 s2 deliverables:
+This fragment covers the network reconcile deliverables:
 
 - bridge + TAP lifecycle (`CreateTapFd`, `CreatePersistentTap`,
   `SetBridgePortFlags`);
@@ -36,7 +36,7 @@ sudo nixling host prepare --dry-run
 # IPv6-off readback gate. Fails closed on drift.
 sudo nixling host prepare --apply
 
-# Reverses the W3 s2 mutations only (bridges, TAPs, NM drop-in,
+# Reverses the host-prepare mutations only (bridges, TAPs, NM drop-in,
 # /etc/hosts managed block, IPv6 sysctls). Foreign state untouched.
 sudo nixling host destroy --apply
 ```
@@ -104,8 +104,8 @@ between the step-3 write and the step-5 readback is the
 ### Fedora 40+ (Tier 1-later)
 
 - NM 1.48. Same reload command as Ubuntu.
-- `firewalld` is active by default. W3 s3 detects `firewalld` and
-  refuses to apply the `inet nixling` table unless an explicit
+- `firewalld` is active by default. Host prepare detects `firewalld`
+  and refuses to apply the `inet nixling` table unless an explicit
   coexistence policy is declared in the bundle (`refuse` is the
   default).
 
@@ -138,15 +138,15 @@ mode in `host.json` under `host.ch.netHandoffMode`:
 - `ch-net-handoff-not-supported`: neither mode satisfies the
   declared VM network resources without `CAP_NET_ADMIN`. **Host
   prepare fails closed**. Remediation is recorded under
-  `docs/reference/support-matrix.d/s4-tier-modules.md`. W4 consumes
-  the recorded mode; W3 ships L2 confirmation tests for both modes
-  and the failure case.
+  `docs/reference/support-matrix.d/s4-tier-modules.md`. The recorded
+  mode is consumed by runner planning; L2 confirmation tests cover
+  both modes and the failure case.
 
 ## Host LAN CIDR derivation
 
 `nixling host check` reports the detected host LAN CIDRs and any
 `ambiguous-host-lan` finding (point-to-point / VPN-like links). The
-derivation rule (plan.md §"W3 host LAN CIDR derivation"):
+derivation rule:
 
 - skip nixling-owned links (by prefix);
 - skip loopback (`lo`);

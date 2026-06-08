@@ -1,4 +1,4 @@
-//! P3 ph3-usbipd-perenv: daemon-side per-env usbipd autostart.
+//! Daemon-side per-env usbipd autostart.
 //!
 //! Retires the 9 per-env usbipd systemd units declared by
 //! `nixos-modules/network.nix`
@@ -15,14 +15,13 @@
 //! Execution is wired by [`execute_usbipd_perenv_autostart`], which
 //! dispatches one `SpawnRunner` per spec through the broker.
 //!
-//! The transitional NixOS units ship through P3 → P5 in
-//! belt-and-braces fashion; this module's spawn path runs alongside
-//! them and is idempotent: a duplicate `SpawnRunner` for an existing
+//! The transitional NixOS units shipped in belt-and-braces fashion;
+//! this module's spawn path runs alongside them and is idempotent: a
+//! duplicate `SpawnRunner` for an existing
 //! `(vm_id, role_id)` pidfd is rejected fail-closed by the daemon's
 //! pidfd table, so re-entry on SIGHUP or bundle-reload is safe.
 //!
-//! See plan.md row `ph3-usbipd-perenv` and the scheduled-for-removal
-//! header in `nixos-modules/network.nix`.
+//! See the retired-unit header in `nixos-modules/network.nix`.
 
 use std::collections::BTreeSet;
 
@@ -50,12 +49,12 @@ pub const PER_ENV_USBIPD_BACKEND_PORT_BASE: u16 = 3241;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PerEnvUsbipdRole {
-    /// Long-lived `usbipd -4 --tcp-port <port>`. Loopback-bound by
-    /// the surrounding iptables drop rules.
+    /// Long-lived `usbipd -4 --tcp-port <port>`. `usbipd` binds all
+    /// interfaces; the broker-managed `inet nixling` input chain drops
+    /// non-loopback ingress to the backend port.
     Backend,
-    /// `systemd-socket-proxyd 127.0.0.1:<port>`. Long-lived; the
-    /// systemd shape uses socket activation, the daemon shape spawns
-    /// directly.
+    /// Self-binding TCP proxy from `<env host uplink IP>:3240` to
+    /// `127.0.0.1:<port>`. Long-lived and broker-spawned directly.
     Proxy,
 }
 
@@ -89,8 +88,8 @@ pub struct PerEnvUsbipdSpec {
 impl PerEnvUsbipdSpec {
     /// `intent_id` the broker resolves against the trusted bundle.
     /// Matches `intent_id_runner(vm_id, role_id)` so a single
-    /// processes-json DAG row per (env, role) keeps wiring trivial
-    /// when the Nix bundle catches up in P6.
+    /// processes-json DAG row per (env, role) keeps wiring trivial when
+    /// the Nix bundle catches up.
     pub fn intent_id(&self) -> String {
         nixling_core::bundle_resolver::intent_id_runner(&self.vm_id, self.role.role_id())
     }
@@ -115,7 +114,7 @@ pub fn derive_per_env_usbipd_specs(manifest: &ManifestV04) -> Vec<PerEnvUsbipdSp
     // exactly — both sides use `lib.attrNames envs` / sorted env
     // names from the same source of truth.
     let mut all_envs: BTreeSet<String> = BTreeSet::new();
-    for (_, vm) in &manifest.vms {
+    for vm in manifest.vms.values() {
         if let Some(env) = &vm.env {
             all_envs.insert(env.clone());
         }
@@ -126,7 +125,7 @@ pub fn derive_per_env_usbipd_specs(manifest: &ManifestV04) -> Vec<PerEnvUsbipdSp
     // yubikey opt-in AND a non-null usbipd_host_ip. Order matches
     // env_index.
     let mut usbip_envs: BTreeSet<String> = BTreeSet::new();
-    for (_, vm) in &manifest.vms {
+    for vm in manifest.vms.values() {
         let Some(env) = vm.env.clone() else { continue };
         if vm.usbip_yubikey && vm.usbipd_host_ip.is_some() {
             usbip_envs.insert(env);
@@ -179,9 +178,9 @@ pub enum PerEnvUsbipdOutcome {
     /// Broker `SpawnRunner` returned `BundleIntentMissing`. The
     /// transitional NixOS units are still serving the env; the
     /// daemon-side spawn becomes load-bearing once
-    /// `processes-json.nix` grows `sys-<env>-usbipd` DAGs (the P6
-    /// retire-singletons work). Surfaced as `SkippedPendingBundle`
-    /// so the journal record is grep-able without being noisy.
+    /// `processes-json.nix` grows `sys-<env>-usbipd` DAGs. Surfaced as
+    /// `SkippedPendingBundle` so the journal record is grep-able without
+    /// being noisy.
     SkippedPendingBundle,
     /// Broker dispatch returned a different typed error. `reason`
     /// is the broker error kind (already redacted for launcher peers
@@ -250,9 +249,9 @@ pub trait PerEnvUsbipdSpawner: Send + Sync + 'static {
     ///
     /// Implementations MUST translate `BrokerError::BundleIntentMissing`
     /// (typed kind `bundle-intent-missing`) into
-    /// [`PerEnvUsbipdOutcome::SkippedPendingBundle`] so the
-    /// transitional window (P3 → P5) doesn't fail-closed before the
-    /// bundle gains `sys-<env>-usbipd` DAG rows.
+    /// [`PerEnvUsbipdOutcome::SkippedPendingBundle`] so the transitional
+    /// window doesn't fail-closed before the bundle gains
+    /// `sys-<env>-usbipd` DAG rows.
     fn spawn(&self, spec: &PerEnvUsbipdSpec) -> PerEnvUsbipdOutcome;
 }
 
@@ -433,9 +432,9 @@ mod tests {
         ]);
         let specs = derive_per_env_usbipd_specs(&m);
         let envs: Vec<&str> = specs.iter().map(|s| s.env.as_str()).collect();
-        assert!(envs.iter().any(|e| *e == "obs"));
-        assert!(envs.iter().any(|e| *e == "work"));
-        assert!(!envs.iter().any(|e| *e == "personal"));
+        assert!(envs.contains(&"obs"));
+        assert!(envs.contains(&"work"));
+        assert!(!envs.contains(&"personal"));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 > Reference for the `graphics` component module.
 > Source: [`nixos-modules/components/graphics.nix`](../../nixos-modules/components/graphics.nix)
-> Host-side wiring: [`nixos-modules/host-sidecars.nix`](../../nixos-modules/host-sidecars.nix), [`nixos-modules/host-users.nix`](../../nixos-modules/host-users.nix)
+> Host-side wiring: [`nixos-modules/processes-json.nix`](../../nixos-modules/processes-json.nix), [`nixos-modules/minijail-profiles.nix`](../../nixos-modules/minijail-profiles.nix), [`nixos-modules/host-users.nix`](../../nixos-modules/host-users.nix)
 
 ## What this component does
 
@@ -12,11 +12,12 @@ cross-domain channel. The guest sees a normal Wayland session
 (`WAYLAND_DISPLAY=wayland-1`, `GDK_BACKEND=wayland`, etc.); a
 `wayland-proxy-virtwl` user service inside the guest relays surfaces
 to the host's `wayland-0` socket via virtio-gpu. The hypervisor is
-forced to `cloud-hypervisor` (vendored spectrum-os build) and
-microvm.nix's runner spawns `crosvm device gpu` as the vhost-user-gpu
-sidecar. The whole sidecar pipeline (CH + crosvm-gpu) runs on the
-host as the dedicated per-VM `nixling-<vm>-gpu` system user, not as
-the operator's Wayland user.
+forced to the vendored spectrum-os Cloud Hypervisor build. `nixlingd`
+supervises the daemon-owned process DAG and asks `nixling-priv-broker`
+to spawn the GPU sidecar (`crosvm device gpu`) and the
+cloud-hypervisor runner as pidfd-tracked runners. The GPU sidecar runs
+as the dedicated per-VM `nixling-<vm>-gpu` system user, not as the
+operator's Wayland user.
 
 ## Options (host-side)
 
@@ -24,6 +25,7 @@ the operator's Wayland user.
 |---|---|---|---|
 | `nixling.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `nixling.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
+| `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
 Site-level dependency:
 
@@ -39,6 +41,7 @@ under `mkIf vm'.graphics.enable`:
 ```nix
 (lib.mkIf vm'.graphics.enable {
   nixling.graphics.crossDomainTrusted = vm'.graphics.crossDomainTrusted;
+  nixling.graphics.virglVideo = vm'.graphics.virglVideo;
 })
 ```
 
@@ -48,33 +51,25 @@ The matching guest-visible option lives in the imported
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `nixling.graphics.crossDomainTrusted` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When false, a shell shim wraps `crosvm` and strips `cross-domain` from the `--params` JSON before invoking the real binary. |
+| `nixling.graphics.virglVideo` | bool | `false` | Resolved guest-side mirror of the per-VM flag. When true, the patched crosvm/rutabaga build passes `VIRGL_RENDERER_USE_VIDEO` to virglrenderer. |
 
 ## Host-side resources created
 
 - **`nixling-<vm>-gpu` system user + group** (declared in
-  [`host-users.nix`](../../nixos-modules/host-users.nix)).
-  `SupplementaryGroups = [ "kvm" ]`. Created once per graphics VM.
-- **`nixling-<vm>-gpu.service`** (in
-  [`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)) — runs
-  the entire `microvm-run` pipeline (cloud-hypervisor + crosvm-gpu
-  sidecar) as the `nixling-<vm>-gpu` user. `wants`/`after`
-  `nixling-<vm>-swtpm.service` and `nixling-<vm>-snd.service` (each
-  only present if the respective component is enabled).
-  - `ExecStartPre`: `setfacl -m u:nixling-<vm>-gpu:rw /run/user/<wayland-uid>/wayland-0`.
-  - `BindPaths`: `/run/user/<wayland-uid>/wayland-0:/run/nixling-gpu/<vm>/wayland-0` — only the socket is visible inside the sidecar's mount namespace, not the parent directory.
-  - `ExecStopPost`: `setfacl -x u:nixling-<vm>-gpu /run/user/<wayland-uid>/wayland-0`.
-  - `Restart = "no"` — graphics VMs are launched interactively from a Plasma terminal via `nixling vm start`; restart-on-failure would re-attempt a doomed start.
-  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — the GPU sidecar IS the cloud-hypervisor process. A `nixos-rebuild switch` updates the unit file but does NOT cycle the running CH. Use `nixling vm restart <vm>` to apply pending changes. See [`design.md`](../explanation/design.md#why-doesnt-nixos-rebuild-switch-restart-vms) for rationale. (Pre-v0.1.7 this was `unitConfig.X-RestartIfChanged = false`, which is silently ignored by NixOS's switch logic — v0.1.7 corrected it.)
-  - `ExecStartPre` (v0.1.5+) replicates upstream `microvm-set-booted_-start`: `rm -f booted && ln -s $(readlink current) booted` so graphics VMs maintain the per-VM `booted` symlink that the pending-restart indicator compares against `current`. Headless VMs get this from `microvm-set-booted@<vm>.service`; graphics VMs bypass that template, so the GPU sidecar owns it instead.
-- **/dev/kvm + /dev/dri/renderD128 + /dev/net/tun device allow** via
-  `DevicePolicy = "closed"` + explicit `DeviceAllow` (no
-  `PrivateDevices`). `/dev/net/tun` (v0.1.4+) is required because
-  cloud-hypervisor calls `open("/dev/net/tun") +
-  ioctl(TUNSETIFF, …)` to attach to the workload's tap. The tap
-  itself is created by upstream microvm.nix's
-  `microvm-tap-interfaces@<vm>.service` helper (which runs as
-  root with CAP_NET_ADMIN); the sidecar only needs access to the
-  cdev to attach.
+  [`host-users.nix`](../../nixos-modules/host-users.nix)). It is a
+  per-VM runner principal and is separate from the host Wayland user.
+- **Daemon process nodes** in `processes.json`: `gpu` (or
+  `gpu-render-node`) and `cloud-hypervisor-runner`. `nixlingd`
+  supervises both through the broker `SpawnRunner` / pidfd path; no
+  per-VM graphics systemd service is emitted.
+- **`/run/nixling-gpu/<vm>/`** for role-local sockets and bind-mount
+  destinations. The broker mounts only the host `wayland-0` socket into
+  the GPU runner namespace; the parent `/run/user/<uid>` tree is not
+  bind-mounted into the runner.
+- **Device allowlist** from the minijail profile. Normal GPU runners
+  use the closed device set needed by cloud-hypervisor/crosvm; the
+  render-node-only profile uses broker-prepared fd passing instead of
+  broad host device access.
 - **fontconfig defaults** — `dejavu_fonts`, `liberation_ttf`,
   `noto-fonts` are added to `fonts.packages` so the guest's monospace
   alias resolves to DejaVu Sans Mono and `foot` doesn't warn.
@@ -126,32 +121,34 @@ The matching guest-visible option lives in the imported
 - With `crossDomainTrusted = false`, every `--params` payload reaching
   `crosvm device gpu` has `cross-domain` stripped — verifiable via
   `ps -fC crosvm` on the host.
+- With `graphics.virglVideo = true`, the GPU process node carries the
+  non-blocking status marker
+  `component-specific:graphics.virglVideo=true`, and the patched
+  crosvm/rutabaga build passes `VIRGL_RENDERER_USE_VIDEO` to
+  virglrenderer. This is experimental and remains default-off.
 - `graphics.enable = true` is x86_64-linux only. `checkVmPlatform`
   in `host.nix` throws an eval-time error naming the VM if the host
   is `aarch64-linux`.
 
-## Lifecycle (v0.1.5+)
+## Lifecycle
 
-The GPU sidecar IS the cloud-hypervisor process. There is no
-separate `microvm@<vm>` wrapper for graphics VMs — `nixling vm start
-<vm>` from a Plasma terminal starts `nixling-<vm>-gpu.service`
-directly via polkit, and that service's ExecStart is the
-`microvm-run` binary the framework built into the per-VM closure.
+Graphics lifecycle is daemon-supervised. `nixling vm start <vm>` sends
+the request to `nixlingd`; the daemon evaluates the per-VM DAG and uses
+the broker to spawn `gpu` / `gpu-render-node`, optional sidecars, and
+`cloud-hypervisor-runner` in dependency order. Runners are tracked by
+pidfd and are stopped/restarted through the same daemon/broker path.
 
 Implications:
 
 - **`nixos-rebuild switch` does NOT restart the running VM.**
-  All per-VM lifecycle services (including this one) carry
-  `restartIfChanged = false`. After a rebuild, `nixling list`
+  `nixlingd.service` itself carries `restartIfChanged = false`.
+  After a rebuild, `nixling list`
   flags the VM with `[pending restart]` if its `current` closure
   has drifted from `booted`. Apply with `nixling vm restart <vm>`.
 
-- **`booted` symlink is owned by this sidecar.** `ExecStartPre`
-  runs `rm -f booted && ln -s $(readlink current) booted` so the
-  per-VM `booted`/`current` mismatch detection (the basis of
-  `[pending restart]`) works for graphics VMs the same way it
-  works for headless VMs via `microvm-set-booted@<vm>`. Cleared
-  by `ExecStopPost`.
+- **`booted` symlink is owned by the daemon start path.** The daemon
+  updates per-VM `booted`/`current` state so pending-restart detection
+  works for graphics and headless VMs without per-VM systemd units.
 
 - **`nixling status <vm>` reports `pending-restart: yes/no`** with
   both store paths and the exact remediation command.
@@ -161,32 +158,16 @@ for the full lifecycle rationale.
 
 ## Hardening notes
 
-`nixling-<vm>-gpu.service` sandboxing (in
-[`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)):
+The GPU runner authority comes from the emitted minijail profile and
+the broker `SpawnRunner` plan, not a per-VM service template:
 
-- `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
-  `PrivateTmp`, `ProtectKernelTunables/Modules`,
-  `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`,
-  `ProtectProc=invisible`, `LockPersonality`,
-  `RestrictNamespaces`, `SystemCallArchitectures=native`.
-- `SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ]`.
-- `RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" "AF_VSOCK" ]` —
-  `AF_VSOCK` is required because cloud-hypervisor uses vsock for
-  `sd_notify`, `AF_NETLINK` for the tap helper.
-- `DevicePolicy = "closed"` + explicit `DeviceAllow` for `/dev/kvm`,
-  `/dev/dri/renderD128`, and `/dev/net/tun`. `PrivateDevices` is
-  intentionally NOT set (it would override the explicit allow
-  list). `/dev/net/tun` (v0.1.4+) is required because
-  cloud-hypervisor `open()`s the cdev to attach to the workload's
-  tap (created upstream by `microvm-tap-interfaces@<vm>`); without
-  it the VM crashes at boot with "Cannot create virtio-net device
-  / Couldn't open /dev/net/tun / Operation not permitted".
-- **`MemoryDenyWriteExecute` is intentionally OMITTED.** crosvm's
-  GPU command-buffer translation needs `PROT_WRITE+PROT_EXEC` JIT
-  pages; MDWE would SIGSEGV the sidecar on first frame. This is the
-  documented exception versus the audio sidecar's template.
-- `ReadWritePaths` exposes only `/var/lib/nixling/vms/<vm>` and
-  `/run/nixling-gpu/<vm>`.
+- zero host capabilities unless a role-specific profile explicitly
+  grants them;
+- broker-controlled argv and environment;
+- role-local writable paths under `/var/lib/nixling/vms/<vm>` and
+  `/run/nixling-gpu/<vm>`;
+- closed or fd-passed device access depending on the GPU profile;
+- pidfd registration and broker audit for every spawned runner.
 
 The spectrum-ch CH build itself carries upstream spectrum-os
 sandboxing; the crosvm device gpu seccomp `.bpf` files are present
@@ -214,11 +195,10 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
   trips after a nixpkgs bump that touches `crosvm` without a matching
   spectrum-ch re-test. Read the vhost-user-gpu wire-protocol notes
   in the module header, re-test, then bump `testedWithCrosvmRev`.
-- **Sidecar permission denied on the wayland socket.** The
-  `ExecStartPre` ACL grant only works when the wayland session is
-  already running as `nixling.site.waylandUser` at start time. If a
-  graphics VM fails on `setfacl: ... wayland-0: No such file or
-  directory`, the operator's session isn't live.
+- **Sidecar permission denied on the Wayland socket.** The host
+  `wayland-0` socket must exist for `nixling.site.waylandUser` before
+  the VM starts. If the socket is absent, the broker cannot bind the
+  session socket into the GPU runner namespace.
 - **Cross-domain forwarding silently disabled.** With
   `crossDomainTrusted = false` (the default) GUI apps still work via
   virgl2 + standard virtio-gpu, but advanced cross-domain features
@@ -227,8 +207,9 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 ## See also
 
 - [Design / threat model](../explanation/design.md)
-- [Manifest schema](./manifest-schema.md) — the per-VM `nixling-<vm>-gpu`
-  unit is exposed under the manifest's `units.gpu` field.
+- [Manifest schema](./manifest-schema.md) — graphics state is surfaced
+  through the evaluated bundle and daemon status, not a per-VM
+  systemd unit.
 - [CLI contract](./cli-contract.md) — `nixling vm start <vm>` /
   `nixling vm stop <vm>` lifecycle.
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —

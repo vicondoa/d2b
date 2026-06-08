@@ -1,7 +1,7 @@
 # `inet nixling` chain layout (reference)
 
-Authoritative reference for the W3 named-table layout owned by scope
-s3. Source of truth for any tool that needs to introspect or vendor
+Authoritative reference for the named-table layout. Source of truth
+for any tool that needs to introspect or vendor
 the nixling firewall surface.
 
 > Architectural rationale and rejected alternatives live in
@@ -12,7 +12,7 @@ the nixling firewall surface.
 ## Table
 
 Exactly one named table: **`inet nixling`**. The `inet` family is used
-so the same rule covers IPv4 and IPv6 (W3 disables IPv6 on nixling
+so the same rule covers IPv4 and IPv6 (nixling disables IPv6 on
 links via per-link sysctl; the `inet` family hedges against future
 IPv6 enablement without re-engineering the chain layout).
 
@@ -30,18 +30,22 @@ IPv6 enablement without re-engineering the chain layout).
 - `prerouting` at `-150` is equal to the canonical `mangle` priority.
   At this priority `inet nixling` sees packets before per-VM bridge
   forwarding decisions are taken. Equal priority to mangle is safe in
-  the `inet nixling` namespace because W3 deliberately does not
+  the `inet nixling` namespace because nixling deliberately does not
   allocate a `mangle` hook here; foreign tables use other families
   and/or other priorities.
 - `forward`, `output`, `input` at `-5` sit just before the canonical
   `filter` priority (`0`). This lets `inet nixling` decide allow vs
   drop before any later filter chain can re-evaluate. The default
   policy on `forward` is `drop` so cross-VM east-west isolation
-  defaults closed.
+  defaults closed. The `input` chain keeps policy `accept` for host
+  coexistence, but USBIP is explicitly default-denied there: backend
+  ports are dropped on non-loopback ingress, and TCP/3240 is dropped
+  unless an active `UsbipBindFirewallRule` inserts the env-specific
+  carve-out ahead of the generic drop.
 
 ### No `raw` / `mangle` / `nat` hooks
 
-W3 intentionally allocates none of these. Adding any requires a new
+Nixling intentionally allocates none of these. Adding any requires a new
 ADR. Rationale is in
 [ADR 0013 §"Chain layout"](../adr/0013-w3-firewall-coexistence-policy.md).
 
@@ -64,9 +68,13 @@ byte-stable across repeat-apply.
 
 Inside any chain that contains both per-flow carve-outs and a generic
 allow/drop, the carve-outs MUST sort before the generic rule.
-`UsbipBindFirewallRule` is the W3 instance of this pattern:
-`add_usbip_carveout` inserts the per-busid rule at the first
-non-specific position in the `forward` chain.
+`UsbipBindFirewallRule` is the instance of this pattern:
+the trusted host batch carries a generic `input` drop for TCP/3240,
+and the live broker path inserts the trusted-bundle env TCP/3240
+carve-out ahead of that drop for the host-side USBIP proxy listener.
+The trusted host batch also drops USBIP backend ports on non-loopback
+ingress so `usbipd`'s `0.0.0.0` bind is reachable only through the
+host-local proxy path.
 
 The invariant is checked by
 `nixling_host::nftables::NftBatch::assert_carveout_ordering`. A

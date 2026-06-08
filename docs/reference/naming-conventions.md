@@ -8,17 +8,38 @@ Canonical reference for host-visible nixling naming. AGENTS.md and the design do
 | --- | --- | --- |
 | Daemon | `nixlingd.service` | v1.0 non-root daemon; the only persistent user-facing system unit nixling declares besides the broker (per ADR 0015). |
 | Privileged broker | `nixling-priv-broker.{socket,service}` | v1.0 socket-activated privileged dispatcher for every audited host mutation. |
-| Per-VM runner leaves | `nixling.slice/<vm>/<role>` | v1.0 broker-spawned runner cgroup leaves (replaces pre-P6 `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}.service`). |
-| Per-env runner leaves | `nixling.slice/sys-<env>/usbipd-{backend,proxy}` | v1.0 broker-spawned per-env USBIP runners (replaces pre-P6 `nixling-sys-<env>-usbipd-{backend,proxy}.service`). |
-| Pre-P6 per-VM lifecycle wrapper | `nixling@<vm>.service` | Retired in P6 (per ADR 0015); v1.0 lifecycle dispatches through `nixlingd` → broker `SpawnRunner` instead. |
+| Per-VM runner leaves | `nixling.slice/<vm>/<role>` | v1.0 broker-spawned runner cgroup leaves (replaces legacy `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}.service`). |
+| Per-env runner leaves | `nixling.slice/sys-<env>/usbipd-{backend,proxy}` | v1.0 broker-spawned per-env USBIP runners (replaces legacy `nixling-sys-<env>-usbipd-{backend,proxy}.service`). |
+| Legacy per-VM lifecycle wrapper | `nixling@<vm>.service` | Retired in v1.0 (per ADR 0015); v1.0 lifecycle dispatches through `nixlingd` → broker `SpawnRunner` instead. |
 | Upstream backend | `microvm@<vm>.service` | microvm.nix's own template; still emitted in v1.0 for direct-debug bypass but not the lifecycle-of-record. |
-| Pre-P6 per-VM sidecars | `nixling-<vm>-<purpose>.service` | Pre-P6 sidecar systemd templates (`gpu`, `video`, `snd`, `swtpm`, `store-sync`). Retired in P6; the broker now spawns the corresponding runners on the per-VM DAG. |
+| Legacy per-VM sidecars | `nixling-<vm>-<purpose>.service` | Legacy sidecar systemd templates (`gpu`, `video`, `snd`, `swtpm`, `store-sync`). Retired in v1.0; the broker now spawns the corresponding runners on the per-VM DAG. |
 | Virtiofsd exception | `microvm-virtiofsd@<vm>.service` | Upstream microvm.nix unit; rename to `nixling-<vm>-virtiofsd` is tracked for a future release. |
-| Pre-P6 per-env system services | `nixling-sys-<env>-<purpose>.service` | Example: `nixling-sys-corp-usbipd-proxy.service`. Retired in P6 (per ADR 0015); in v1.0 the broker spawns the equivalent runners under `nixling.slice/sys-<env>/<role>`. |
-| Pre-P6 host singleton services | `nixling-<role>.service` | Examples: `nixling-ch-exporter.service`, `nixling-otel-host-bridge.service`. All retired in P3/P6; ADR 0015 § "What gets removed" lists the full retired inventory. |
-| Auto-declared net VM | `nixling@sys-<env>-net.service` | Framework-reserved net VM per env (pre-P6 wrapper-unit name; in v1.0 dispatched through `nixlingd` → broker like every other VM). |
-| Pre-P6 per-VM system users | `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}` | Pre-P6 framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `nixling.slice/<vm>/<role>`. Notable exceptions: `nixling-<vm>-store-sync` runs as root (no dedicated user) and `nixling-<vm>-gpu` is shared by the GPU and video runners. |
-| Launcher group | `nixling-launchers` | v1.0 group allowed to talk to `nixlingd` over `/run/nixling/public.sock` (mode 0660, group `nixling-launchers`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-P6 singular `nixling-launcher` polkit allowlist was retired in P6 (per ADR 0015) along with the per-VM systemd units it was used to gate. |
+| Legacy per-env system services | `nixling-sys-<env>-<purpose>.service` | Example: `nixling-sys-corp-usbipd-proxy.service`. Retired in v1.0 (per ADR 0015); in v1.0 the broker spawns the equivalent runners under `nixling.slice/sys-<env>/<role>`. |
+| Legacy host singleton services | `nixling-<role>.service` | Examples: `nixling-ch-exporter.service`, `nixling-otel-host-bridge.service`. All retired by v1.0; ADR 0015 § "What gets removed" lists the full retired inventory. |
+| Auto-declared net VM | `nixling@sys-<env>-net.service` | Framework-reserved net VM per env (legacy wrapper-unit name; in v1.0 dispatched through `nixlingd` → broker like every other VM). |
+| Legacy per-VM system users | `nixling-<vm>-{gpu,video,snd,swtpm,store-sync}` | Legacy framework-managed per-VM service users; in v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the same user identities are preserved as the broker-spawned runner uids under `nixling.slice/<vm>/<role>`. Notable exceptions: `nixling-<vm>-store-sync` runs as root (no dedicated user) and `nixling-<vm>-gpu` is shared by the GPU and video runners. |
+| Launcher group | `nixling` | v1.2 Unix group allowed to talk to `nixlingd` over `/run/nixling/public.sock` (mode 0660, group `nixling`). Authorisation is enforced via SO_PEERCRED at accept time. The pre-v1.2 `nixling-launcher` / `nixling-launchers` groups are empty migration tombstones only. |
+
+## Broker caller-role audit labels
+
+The broker emits `peer_role` / caller-role values into
+`/etc/nixling/privileges.json` and every line of
+`/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
+
+| Label | Class | Stability |
+| --- | --- | --- |
+| `nixling-launcher` | lifecycle/launcher principal (members authorized by the daemon to call `public.sock`) | **Stable** — permanent audit-class identifier |
+| `nixling-admin` | administrative principal | **Stable** — permanent audit-class identifier |
+
+These are stable broker audit/authz class labels. They are distinct
+from the live Unix group name (`nixling` from v1.2 onward; previously
+`nixling-launcher` and `nixling-launchers`). Audit consumers must not
+cross-reference `peer_role == "nixling-launcher"` with Unix group
+membership: the audit label is a class identifier, not a group lookup.
+
+See [ADR 0015](../adr/0015-daemon-only-clean-break.md) for the
+daemon-only authz/audit invariants that make these labels stable across
+host-side group renames.
 
 ## VM and env identifiers
 
@@ -54,12 +75,12 @@ These constraints let the CLI, manifest, and host-side units resolve resources m
 - `nixling@sys-corp-net.service`
 - `br-corp-up`, `br-corp-lan`, `corp-u2`, `corp-l2`
 
-## W3 host-prepare network IfName conventions
+## Host-prepare network IfName conventions
 
-The W3 host-prepare wave introduces a separate name space for the
-bridges and TAPs the privileged broker creates on the host on
-behalf of a daemon-backed VM (per ADR 0012 — W3 IPv6-off sysctl set,
-hash-derived IfName, bridge-port defaults):
+Host prepare introduces a separate name space for the bridges and TAPs
+the privileged broker creates on the host on behalf of a daemon-backed
+VM (per ADR 0012 — IPv6-off sysctl set, hash-derived IfName,
+bridge-port defaults):
 
 - Every broker-created host interface is named
   `nl-<10-char hash>` for bridges and `nlv-<10-char hash>` for TAPs.
@@ -76,7 +97,7 @@ hash-derived IfName, bridge-port defaults):
   `ifname-collision` rather than racing at apply time.
 - The legacy per-env bridges (`br-<env>-up`, `br-<env>-lan`,
   `<env>-u2`, `<env>-l2`) belong to the **legacy-systemd** mode
-  and are unchanged by W3. They live in a disjoint name space and
+  and are unchanged. They live in a disjoint name space and
   coexist with daemon-mode `nl-*`/`nlv-*` names on the same host.
 
 `IFNAMSIZ` enforcement is a hard predicate on every broker-derived
@@ -132,5 +153,5 @@ unambiguously.
 - [Design explanation](../explanation/design.md)
 - [USB/IP component reference](./components-usbip.md)
 - [tests/README.md](../../tests/README.md)
-- [ADR 0012 — W3 IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-- [W3 host-prepare how-to](../how-to/host-prepare.md)
+- [ADR 0012 — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+- [Host-prepare how-to](../how-to/host-prepare.md)

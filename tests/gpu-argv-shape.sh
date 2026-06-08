@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P1 Gpu role byte-parity gate.
+# Gpu role byte-parity gate.
 #
 # Compares the snapshot line emitted by
 # `nixling_host::gpu_argv::tests::daemon_input_snapshot_line` against

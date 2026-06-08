@@ -1,5 +1,5 @@
-//! P2 `ph2-p2-net-vm-bundle-gate`: net-VM start preflight that refuses
-//! to bring up a `sys-<env>-net` VM when the on-disk dnsmasq.conf
+//! Net-VM start preflight that refuses to bring up a `sys-<env>-net` VM
+//! when the on-disk dnsmasq.conf
 //! hash diverges from the hash the trusted bundle implies for that
 //! env.
 //!
@@ -46,9 +46,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use nixling_core::bundle_resolver::{
-    intent_id_hosts_host, intent_id_nft_env, BundleResolver,
-};
+use nixling_core::bundle_resolver::{intent_id_hosts_host, intent_id_nft_env, BundleResolver};
 use sha2::Digest as _;
 
 /// Default parent dir holding `<env>.conf` for each net VM.
@@ -105,15 +103,15 @@ impl BundleGateDrift {
     /// via `tracing::warn!`.
     pub fn reason(&self) -> String {
         match self {
-            Self::EnvMissing { vm } => format!(
-                "net VM '{vm}' has no env in manifest; cannot resolve dnsmasq scope"
-            ),
+            Self::EnvMissing { vm } => {
+                format!("net VM '{vm}' has no env in manifest; cannot resolve dnsmasq scope")
+            }
             Self::ConfigMissing { env, .. } => format!(
                 "dnsmasq.conf for env '{env}' is missing; bundle/dnsmasq render did not run"
             ),
-            Self::ConfigReadFailed { env, detail, .. } => format!(
-                "dnsmasq.conf for env '{env}' could not be read: {detail}"
-            ),
+            Self::ConfigReadFailed { env, detail, .. } => {
+                format!("dnsmasq.conf for env '{env}' could not be read: {detail}")
+            }
             Self::HashMismatch {
                 env,
                 expected,
@@ -241,9 +239,7 @@ pub fn check_net_vm_bundle_gate(
         return BundleGateOutcome::NotANetVm;
     }
     let Some(env) = entry.env.as_deref() else {
-        return BundleGateOutcome::Drift(BundleGateDrift::EnvMissing {
-            vm: vm.to_owned(),
-        });
+        return BundleGateOutcome::Drift(BundleGateDrift::EnvMissing { vm: vm.to_owned() });
     };
 
     let path = dnsmasq_dir.join(format!("{env}.conf"));
@@ -283,8 +279,7 @@ mod tests {
     use nixling_core::bundle_resolver::BundleResolver;
     use nixling_core::host::HostJson;
     use nixling_core::manifest_v04::{
-        ManifestMeta, ManifestV04, ObservabilityMeta, ChExporterMeta, VmEntry,
-        VmObservability,
+        ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmObservability,
     };
     use nixling_core::processes::ProcessesJson;
     use std::collections::BTreeMap;
@@ -386,7 +381,9 @@ mod tests {
         };
 
         let manifest = ManifestV04 {
-            manifest: ManifestMeta { manifest_version: 3 },
+            manifest: ManifestMeta {
+                manifest_version: 3,
+            },
             observability: ObservabilityMeta {
                 ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,

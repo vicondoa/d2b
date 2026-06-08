@@ -1,5 +1,5 @@
-//! P3 `ph3-p3-usbip-state-machine`: typed, per-busid state machine
-//! that pins the canonical bring-up order for a USBIP-passthrough
+//! Typed, per-busid state machine that pins the canonical bring-up order
+//! for a USBIP-passthrough
 //! device the daemon (via the privileged broker) attaches into a
 //! target VM.
 //!
@@ -24,10 +24,8 @@
 //!   guest USB transfer races readiness and looks like a `usbip:
 //!   error: connect failed`.
 //!
-//! AGENTS.md's "Critical subsystems" row for the control plane
-//! (specifically the per-env USBIP rollout referenced from the
-//! "P3 ph3-p3-usbip-state-machine" plan row) pins the canonical
-//! order as:
+//! AGENTS.md's "Critical subsystems" row for the control plane pins the
+//! canonical order as:
 //!
 //! ```text
 //! modprobe → lock → withhold → firewall → backend → bind → proxy
@@ -202,8 +200,7 @@ pub fn build_usbip_plan(
         });
     }
 
-    let firewall_id =
-        nixling_core::bundle_resolver::intent_id_usbip_firewall(env, busid);
+    let firewall_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(env, busid);
     if resolver.find_usbip_firewall_intent(&firewall_id).is_none() {
         return Err(TypedError::UsbipStepFailed {
             busid: busid.to_owned(),
@@ -448,8 +445,8 @@ mod tests {
         for &step in &CANONICAL_STEPS {
             let plan = synthetic_plan();
             let mut exec = FixtureExecutor::failing(step, "fixture: synthetic failure");
-            let (report, err) = execute_usbip_plan(&plan, &mut exec)
-                .expect_err("failure path should return Err");
+            let (report, err) =
+                execute_usbip_plan(&plan, &mut exec).expect_err("failure path should return Err");
 
             match err {
                 TypedError::UsbipStepFailed {

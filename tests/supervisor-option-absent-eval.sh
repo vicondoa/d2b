@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# v1.1-P2 invariant gate: assert
+# v1.1 invariant gate: assert
 #   (a) `supervisor = lib.mkOption` is absent from
 #       `nixos-modules/options-vms.nix` (productive declaration gone), and
 #   (b) the defense-in-depth assertion in `nixos-modules/assertions.nix`
 #       catches consumers that still set `nixling.vms.<vm>.supervisor`.
 #
-# Note: the original v1.1-P2 plan called for a per-submodule
+# Note: the original v1.1 plan called for a per-submodule
 # `mkRemovedOptionModule [ "supervisor" ]` shim in
 # `nixos-modules/options-vms-removed.nix`. That shim works for
 # top-level removed options but cannot be wired into an

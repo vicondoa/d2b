@@ -2,10 +2,10 @@
 
 **Diataxis category:** reference.
 
-This document is the W2 command contract for the single user-facing
-`nixling` entry point. It covers the legacy compatibility verbs, the
-Rust-owned shim surfaces (`audio`, `console`), and the read-only /
-daemon-backed commands that now go through `nixlingd`.
+This document is the command contract for the single user-facing
+`nixling` entry point. It covers the CLI surfaces that are fully
+owned in Rust, including the read-only and daemon-backed commands
+that go through `nixlingd`.
 
 Examples use the smoke topology from the Layer-1 fixtures: one workload
 VM (`corp-vm`) and one auto-declared net VM (`sys-work-net`) in the
@@ -15,37 +15,30 @@ than literal byte-for-byte goldens unless the corresponding
 
 ## Scope and conventions
 
-> **v1.1-P1 (2026-Q2):** the bash fallback was *removed wholesale*
-> per ADR 0017 "No bash fallbacks invariant". Previous wording in this
-> document spoke of the W14c bridge as "retired"; v1.1 deletes the
-> `should_fallback_to_legacy` / `exec_legacy_passthrough` helpers,
-> drops the `NIXLING_LEGACY_BASH_OPT_IN` / `NIXLING_LEGACY_CLI_PATH`
-> env-var contract, and codifies the invariant via the
-> `tests/no-bash-exec-eval.sh` 3-mode gate. The Rust CLI in v1.1+
-> never executes bash. Every verb that previously degraded to bash on
-> `not-yet-implemented` or `daemon-down` now surfaces a typed envelope
-> (`not-yet-implemented` exit 78, `daemon-down` exit 1) — see
-> [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
+> There is no bash fallback. The Rust CLI never executes bash, and
+> the no-bash invariant is enforced by
+> `tests/no-bash-exec-eval.sh`. Verbs that used to degrade to bash on
+> `not-yet-implemented` or `daemon-down` now surface typed
+> envelopes (`not-yet-implemented` exit 78, `daemon-down` exit 1) —
+> see [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
 > for the multi-line block format used on those envelopes. `nixling
 > up/down/restart/list` are first-class top-level aliases for `vm
 > start/stop/restart/list` and route through the same daemon path.
 
 - Command headings use the dispatched **leaf** form (`keys list`,
-  `audio mic`, `status --check-bridges`) because W2 disposition is
+  `audio mic`, `status --check-bridges`) because disposition is
   assigned at that granularity.
 - `--json` always means: emit one newline-terminated JSON document on
   stdout and keep progress or warnings on stderr.
 - Non-zero rows link into [`error-codes.md`](./error-codes.md) only when
   the failure is part of the stable typed-error model. Success and raw
   POSIX signal exits are listed inline without a docs anchor.
-- v1.0 (per ADR 0015) retired the v0.4.0 bash CLI as the compatibility
-  baseline. Commands marked `legacy-bash` were retired in P6 and
+- There is no bash CLI fallback. Commands marked `retired-bash`
   return a typed exit-78 envelope when invoked; commands marked
-  `rust-native shim` own help / argument parsing in Rust and
-  (post-P7fu2) return the same typed exit-78 envelope in v1.0
-  because their daemon-native backends are queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017);
-  commands marked `rust-native` stay on the daemon/public-socket or
-  native planner path.
+  `rust-native shim` own help / argument parsing in Rust but still
+  return the same typed exit-78 envelope where their daemon-native
+  backends are not yet shipped; commands marked `rust-native` stay on
+  the daemon/public-socket or native planner path.
 
 ## Command reference
 
@@ -110,16 +103,19 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
 ]
 ```
 
-**W2 disposition:** `rust-native` — Pure read-only inventory query; the W2 daemon can answer it without mutating host or guest state.
+**Disposition:** `rust-native` — Pure read-only inventory query; the daemon can answer it without mutating host or guest state.
 
-Rows are ordered by VM name because the historical bash implementation (retired in P6) iterated `jq keys[]`; W2 + post-P6 daemon-native paths keep that ordering contract.
+Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
 ### `vm start`
 
 **Synopsis:** `nixling vm start <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm start` is a W14 LiveNative headless-lifecycle verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`vm start` is a daemon-native headless-lifecycle verb. If neither
+mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+--dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
+through the daemon.
 
 **Flags**
 
@@ -143,33 +139,42 @@ Rows are ordered by VM name because the historical bash implementation (retired 
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling up` exit table is preserved in this file as history.
+There is no bash fallback. Daemon-unreachable returns `daemon-down`
+(exit 1), and the old `nixling up` exit table is preserved in this
+file as history.
 
 **Human example**
 
 ```text
 $ nixling vm start corp-vm --apply
-vm start corp-vm: spawned pid=4242 start_time_ticks=123456789 (supervisor pidfd-table integration is W4-fu-fu; helper closes the received pidfd after proving the wire round-trip)
+vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `SpawnRunner` (commit `ee6ed0b`).
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
+  `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+  unrecognised. Broker failures surface on stderr with the redacted
+  public-safe remediation and exit `78`.
+- Live path: `nixlingd` → broker `SpawnRunner`.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- There is no bash execution path for this verb.
 ### `vm stop`
 
 **Synopsis:** `nixling vm stop <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm stop` is a W14 LiveNative headless-lifecycle verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`vm stop` is a daemon-native headless-lifecycle verb. If neither
+mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+--dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
+through the daemon.
 
 **Flags**
 
@@ -193,33 +198,49 @@ vm start corp-vm: spawned pid=4242 start_time_ticks=123456789 (supervisor pidfd-
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling down` exit table is preserved in this file as history.
+There is no bash fallback. Daemon-unreachable returns `daemon-down`
+(exit 1), and the old `nixling down` exit table is preserved in this
+file as history.
+
+Pidfd `EPERM` while stopping a per-VM-UID runner used to surface as
+typed `broker-error` exit 78. Current `--apply` recovers that specific
+case by asking the broker to run `SignalRunner`; if the broker reports
+`signaled=true`, `vm stop` exits 0. True broker failures — unreachable
+broker, dispatch errors, unexpected responses, or `signaled=false` —
+still surface as `broker-error` / exit 78.
 
 **Human example**
 
 ```text
 $ nixling vm stop corp-vm --apply
-vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true; W4-fu-fu supervisor pending actual pidfd signal delivery)
+vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true)
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `SignalRunner` (commit `dd6e0bd`).
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
+  `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+  unrecognised. Broker failures surface on stderr with the redacted
+  public-safe remediation and exit `78`.
+- Live path: `nixlingd` → broker `SignalRunner`.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- There is no bash execution path for this verb.
 ### `vm restart`
 
 **Synopsis:** `nixling vm restart <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`vm restart` is a W14 LiveNative headless-lifecycle verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`vm restart` is a daemon-native headless-lifecycle verb. If neither
+mutation flag is set, stderr emits `nixling: NOTICE: defaulting to
+--dry-run` and the CLI defaults to `--dry-run`; `--apply` routes
+through the daemon.
 
 **Flags**
 
@@ -243,26 +264,33 @@ vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-ru
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
-| `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling restart` exit table is preserved in this file as history.
+There is no bash fallback. Daemon-unreachable returns `daemon-down`
+(exit 1), and the old `nixling restart` exit table is preserved in
+this file as history.
 
 **Human example**
 
 ```text
 $ nixling vm restart corp-vm --apply
-vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true; W4-fu-fu supervisor pending actual pidfd signal delivery); vm start corp-vm: spawned pid=4242 start_time_ticks=123456789 (supervisor pidfd-table integration is W4-fu-fu; helper closes the received pidfd after proving the wire round-trip)
+vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner request for role ch-runner (signal=term, signaled=true); vm start corp-vm: spawned pid=4242 start_time_ticks=123456789
 ```
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `SignalRunner` (stop phase; commit `dd6e0bd`) then `SpawnRunner` (start phase; commit `ee6ed0b`).
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable
+  surfaces `daemon-down` exit 1; native-handler-deferred surfaces
+  `not-yet-implemented` exit 78; `broker-error` exit 78.
+- `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` are
+  unrecognised. Broker failures surface on stderr with the redacted
+  public-safe remediation and exit `78`.
+- Live path: `nixlingd` → broker `SignalRunner` for the stop phase,
+  then `SpawnRunner` for the start phase.
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- There is no bash execution path for this verb.
 
 ### `vm list`
 
@@ -378,7 +406,7 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 }
 ```
 
-**W2 disposition:** `rust-native` — Status is a W2 read-only daemon RPC, including the frozen per-VM JSON shape.
+**Disposition:** `rust-native` — Status is a read-only daemon RPC, including the frozen per-VM JSON shape.
 
 ### `status --check-bridges`
 
@@ -414,7 +442,7 @@ br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up
 br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```
 
-**W2 disposition:** `rust-native` — The bridge-health probe is part of the W2 read-only status surface, even though reconcile remains deferred.
+**Disposition:** `rust-native` — The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
 
 ### `usb attach`
 
@@ -424,8 +452,8 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP bind plan without mutating host state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to run `UsbipBind` followed by `UsbipProxyReconcile` for the selected VM/busid pair. |
+| `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan without mutating host state. |
+| `--apply` | boolean | `false` | Ask `nixlingd` to run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, then run `UsbipProxyReconcile` for the selected VM/busid pair. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -449,10 +477,10 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 
 ```text
 $ nixling usb attach corp-vm 1-2 --dry-run
-nixling usb attach --dry-run: would bind busid '1-2' for vm 'corp-vm' and reconcile the USBIP proxy
+nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
 ```
 
-**W2 disposition:** `rust-native` — The native CLI now drives the daemon → broker `UsbipBind` / `UsbipProxyReconcile` path directly.
+**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly.
 
 ### `usb detach`
 
@@ -490,7 +518,7 @@ $ nixling usb detach corp-vm 1-2 --dry-run
 nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm' and reconcile the USBIP proxy
 ```
 
-**W2 disposition:** `rust-native` — The native CLI now drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
 
 ### `usb probe`
 
@@ -526,7 +554,7 @@ VM                       ENV          BUSID        STATUS   OWNER
 corp-vm                  work         1-2          bound    corp-vm
 ```
 
-**W2 disposition:** `rust-native` — Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+**Disposition:** `rust-native` — Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
 
 ### `console`
 
@@ -562,7 +590,7 @@ Connected to corp-vm serial console.
 Use ~. to detach.
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio status`
 
@@ -600,7 +628,7 @@ sidecar:  inactive
 device:   detached
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio mic`
 
@@ -641,7 +669,7 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio speaker`
 
@@ -682,7 +710,7 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio off`
 
@@ -722,7 +750,7 @@ sidecar:  inactive
 device:   detached
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `build`
 
@@ -732,7 +760,7 @@ device:   detached
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Build does not take command-line flags in v0.4.0 or W2. |
+| _(none)_ | — | — | Build does not take command-line flags in v0.4.0 or v1.0. |
 
 **Arguments**
 
@@ -757,14 +785,14 @@ nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-s
   GC root: /var/lib/nixling/vms/corp-vm/result
 ```
 
-**W2 disposition:** `rust-native` — Build is a native non-destructive planner that renders the W7a eval/build preview without falling back to bash.
+**Disposition:** `rust-native` — Build is a native non-destructive planner that renders the eval/build preview without falling back to bash.
 ### `switch`
 
 **Synopsis:** `nixling switch <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`switch` is a W14 LiveNative activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`switch` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -790,7 +818,7 @@ nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-s
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling switch` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling switch` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -801,20 +829,20 @@ nixling switch --apply executed via the native daemon → broker path (vm=corp-v
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Switch` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `boot`
 
 **Synopsis:** `nixling boot <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`boot` is a W14 LiveNative activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`boot` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -840,7 +868,7 @@ nixling switch --apply executed via the native daemon → broker path (vm=corp-v
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling boot` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling boot` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -851,20 +879,20 @@ nixling boot --apply executed via the native daemon → broker path (vm=corp-vm,
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Boot` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `test`
 
 **Synopsis:** `nixling test <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`test` is a W14 LiveNative activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`test` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -890,7 +918,7 @@ nixling boot --apply executed via the native daemon → broker path (vm=corp-vm,
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling test` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling test` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -901,20 +929,20 @@ nixling test --apply executed via the native daemon → broker path (vm=corp-vm,
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Test` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `rollback`
 
 **Synopsis:** `nixling rollback <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`rollback` is a W14 LiveNative activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`rollback` is a daemon-native activation verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -940,7 +968,7 @@ nixling test --apply executed via the native daemon → broker path (vm=corp-vm,
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling rollback` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling rollback` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -951,13 +979,13 @@ nixling rollback --apply executed via the native daemon → broker path (vm=corp
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunActivation` with `ActivationMode::Rollback` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 
 ### `generations`
@@ -994,14 +1022,14 @@ $ nixling generations corp-vm
   (corp-vm is not running — start it and try again)
 ```
 
-**W2 disposition:** `rust-native` — Generations is a native W7a introspection surface that reports current/booted symlink targets without falling back to bash.
+**Disposition:** `rust-native` — Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash.
 ### `gc`
 
 **Synopsis:** `nixling gc [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`gc` is a W14 LiveNative host-store maintenance verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`gc` is a daemon-native host-store maintenance verb. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1026,7 +1054,7 @@ $ nixling generations corp-vm
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling gc` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling gc` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -1037,20 +1065,20 @@ nixling gc --apply executed via the native daemon → broker path (retainedStore
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunGc` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `trust`
 
 **Synopsis:** `nixling trust <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`trust` is a W14 LiveNative host-key TOFU mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`trust` is a daemon-native host-key TOFU mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1076,7 +1104,7 @@ nixling gc --apply executed via the native daemon → broker path (retainedStore
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-The historical bash fallback was retired in P6 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The pre-P6 `nixling trust` exit table is preserved in this file as history.
+The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling trust` exit table is preserved in this file as history.
 
 **Human example**
 
@@ -1087,20 +1115,20 @@ nixling trust --apply executed via the native daemon → broker path (vm=corp-vm
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunHostKeyTrust` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `rotate-known-host`
 
 **Synopsis:** `nixling rotate-known-host <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`rotate-known-host` is a W14 LiveNative host-key rotation mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`rotate-known-host` is a daemon-native host-key rotation mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1126,7 +1154,7 @@ nixling trust --apply executed via the native daemon → broker path (vm=corp-vm
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in P6; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
+In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
 
 **Human example**
 
@@ -1137,13 +1165,13 @@ nixling rotate-known-host --apply executed via the native daemon → broker path
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunRotateKnownHost` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 
 ### `keys list`
@@ -1168,7 +1196,7 @@ nixling rotate-known-host --apply executed via the native daemon → broker path
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in P6). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `1` | `nixlingd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in v1.0). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape inherited from the `keys` subcommand dispatcher. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1196,7 +1224,7 @@ corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 }
 ```
 
-**W2 disposition:** `rust-native` — Keys list is a native W8 inventory preview that reports the managed-key resolution placeholders without falling back to bash.
+**Disposition:** `rust-native` — Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash.
 
 ### `keys show`
 
@@ -1230,14 +1258,14 @@ $ nixling keys show corp-vm
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519.pub
 ```
 
-**W2 disposition:** `rust-native` — Keys show is a native W8 preview that reports daemon-resolved key metadata placeholders without falling back to bash.
+**Disposition:** `rust-native` — Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash.
 ### `keys rotate`
 
 **Synopsis:** `nixling keys rotate <vm> [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`keys rotate` is a W14 LiveNative managed-key mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`keys rotate` is a daemon-native managed-key mutation. If neither mutation flag is set, the CLI prints the v0.4 parity notice and defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1263,7 +1291,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519
 | `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in P6; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
+In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
 
 **Human example**
 
@@ -1274,13 +1302,13 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `RunKeysRotate` (commit `7de9194`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 
 ### `audit`
@@ -1291,7 +1319,7 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--strict` | boolean | `false` | Preserve the strict-audit semantics (extra invariants; warns become errors). v1.0+ never falls back to bash regardless of flag; the historical bash-strict path was retired in P6 per ADR 0015. |
+| `--strict` | boolean | `false` | Preserve the strict-audit semantics (extra invariants; warns become errors). v1.0+ never falls back to bash regardless of flag; the historical bash-strict path was retired in v1.0 per ADR 0015. |
 | `--human` | boolean | `false` when stdout is not a TTY; otherwise effectively `true` unless `--json` is present | Force the human summary format. |
 | `--json` | boolean | `false` | Force the JSON document on stdout even on a TTY. The JSON document shape is stable across v1.0 → v1.1 unless a schema bump is annotated in the audit schema (`./cli-output/audit.schema.json`); v1.0 baseline preserves the audit object shape. |
 
@@ -1356,7 +1384,7 @@ $ nixling audit --human
 }
 ```
 
-**W2 disposition:** `rust-native` — Audit is part of the W2 read-only daemon surface and keeps both human and JSON output contracts.
+**Disposition:** `rust-native` — Audit is part of the read-only daemon surface and keeps both human and JSON output contracts.
 
 ### `host check`
 
@@ -1367,7 +1395,7 @@ $ nixling audit --human
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--strict` | boolean | `false` | Promote advisory runner-parity and prerequisite warnings to the failure exit code. |
-| `--read-only` | boolean | `true` in W2 | Compatibility alias that makes the no-mutation posture explicit. In W2 the command is always read-only, so the flag is accepted but does not widen capability. |
+| `--read-only` | boolean | `true` | Compatibility alias that makes the no-mutation posture explicit. The command is always read-only, so the flag is accepted but does not widen capability. |
 | `--human` | boolean | `false` | Force the human host-check summary on stdout. |
 | `--json` | boolean | `false` | Emit the stable host-check report document on stdout. |
 
@@ -1395,7 +1423,7 @@ PASS
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present
 
 WARN
-- firewalld-coexistence: firewalld is active; W2 reports coexistence but does not mutate host rules
+- firewalld-coexistence: firewalld is active; coexistence is reported but host rules are not mutated
 ```
 
 **`--json` example** — schema: [`host-check.schema.json`](./cli-output/host-check.schema.json); prose companion: [`host-check.md`](./cli-output/host-check.md).
@@ -1419,8 +1447,8 @@ WARN
       "id": "firewalld-coexistence",
       "severity": "warn",
       "required": false,
-      "message": "firewalld is active; keep the host ruleset unchanged in W2",
-      "remediation": "Use W3 host prepare for automated firewall reconcile."
+      "message": "firewalld is active; keep the host ruleset unchanged",
+      "remediation": "Use host prepare for automated firewall reconcile."
     }
   ],
   "runnerParity": [
@@ -1434,16 +1462,16 @@ WARN
 }
 ```
 
-**W2 disposition:** `rust-native` — Host check is a W2 read-only daemon RPC by design; mutation is explicitly deferred to W3 host prepare.
+**Disposition:** `rust-native` — Host check is a read-only daemon RPC by design; mutation is explicitly handled by host prepare.
 
-The command never mutates nftables, cgroups, users, or runtime directories in W2. `--read-only` is therefore part of the compatibility surface, not a capability toggle.
+The command never mutates nftables, cgroups, users, or runtime directories. `--read-only` is therefore part of the compatibility surface, not a capability toggle.
 ### `host prepare`
 
 **Synopsis:** `nixling host prepare [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`host prepare` is a W14 LiveNative host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1468,7 +1496,7 @@ The command never mutates nftables, cgroups, users, or runtime directories in W2
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal, Tier-0 mixed single-writer conflict, or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`single-writer-conflict`](./error-codes.md#single-writer-conflict), [`broker-error`](./error-codes.md#broker-error) |
 
-In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in P6; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
+In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
 
 **Human example**
 
@@ -1479,20 +1507,20 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: wired through `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (commit `ee6ed0b`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 ### `host destroy`
 
 **Synopsis:** `nixling host destroy [--dry-run | --apply] [--human | --json]`
 
 **Status**
 
-`host destroy` is a W14 LiveNative host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native (P4 cli-up removed the W14c bash fallback).
+`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
 
 **Flags**
 
@@ -1517,7 +1545,7 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal or typed `broker-error` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`broker-error`](./error-codes.md#broker-error) |
 
-In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in P6; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
+In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
 
 **Human example**
 
@@ -1528,22 +1556,22 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
+- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
 - LiveNative: same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (commit `ee6ed0b`; reverse-order hardening in `b73e28f`).
 
 **Bash**
 
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
 
-### `host reconcile-otel-acls` (v1.1-P6 reserved)
+### `host reconcile-otel-acls` (reserved)
 
 **Synopsis:** `nixling host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
 
 Reconciles per-VM OTel relay/bridge filesystem ACLs to the
 current bundle's intended state. Replaces the v0.4-era
-`host-otel-relay-acl.nix` activation script (retired in v1.1-P6
+`host-otel-relay-acl.nix` activation script (retired in v1.1
 per [ADR 0018](../adr/0018-microvm-nix-removal.md) "Host-OTel
 ACL migration table"). Invoked from
 `system.activationScripts.nixlingReconcileOtelAcls` on every
@@ -1578,7 +1606,7 @@ mid-cycle reconciliation.
   I/O failure during the reconcile).
 - Exit 2: `#usage` (invalid flag combination).
 
-**JSON output shape** (committed in v1.1-P6 with full schema in
+**JSON output shape** (committed in v1.1 with full schema in
 `cli-output/host-reconcile-otel-acls.schema.json`):
 
 ```json
@@ -1599,19 +1627,19 @@ mid-cycle reconciliation.
 
 **Native**
 
-- v1.1-P6 introduces this verb. v1.0 has no equivalent surface
+- v1.1 introduces this verb. v1.0 has no equivalent surface
   (the legacy `host-otel-relay-acl.nix` script is bash, not a
   daemon-dispatched CLI op).
 - Daemon-unreachable surfaces `#daemon-down` exit 1 per the
   v1.1 typed-envelope contract.
 - No bash fallback exists per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md).
 
-### `host doctor` (W3 / P3)
+### `host doctor`
 
 **Synopsis:** `nixling host doctor --read-only [--human] [--json]`
 
-Read-only daemon-path health probe. P3 extends the W3 baseline (broker
-socket + daemon socket + audit-log shape) with structured liveness for
+Read-only daemon-path health probe. The baseline broker socket, daemon
+socket, and audit-log checks are extended with structured liveness for
 the broker-spawned singletons and the recovery report files the daemon
 persists during startup. Probed surfaces:
 
@@ -1632,18 +1660,18 @@ persists during startup. Probed surfaces:
   [`daemon-autostart`](./daemon-autostart.md)).
 
 Doctor never calls a privileged broker operation. The `--read-only`
-flag is currently mandatory; mutation forms are W4 deliverables. The
+flag is currently mandatory; mutation forms are later deliverables. The
 full JSON schema lives at
 [`cli-output/host-doctor.schema.json`](./cli-output/host-doctor.schema.json);
 prose is in [`cli-output/host-doctor.md`](./cli-output/host-doctor.md).
-Legacy P2 top-level fields (`broker_ready`, `findings[]`, `summary`,
+Legacy top-level fields (`broker_ready`, `findings[]`, `summary`,
 `exitCode`) are preserved verbatim.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--read-only` | boolean | (required) | Acknowledge that this invocation does not mutate host state. Mandatory at W3. |
+| `--read-only` | boolean | (required) | Acknowledge that this invocation does not mutate host state. Mandatory. |
 | `--human` | boolean | `false` | Force the human doctor summary on stdout. |
 | `--json` | boolean | `false` | Emit the stable doctor report document on stdout. |
 
@@ -1663,9 +1691,9 @@ Legacy P2 top-level fields (`broker_ready`, `findings[]`, `summary`,
 | `0` | Every check passed. | — |
 | `1` | At least one check is `warn`, none are `fail`. | [`host-check-warning`](./error-codes.md#host-check-warning) |
 | `2` | At least one check is `fail` (e.g. required kernel module missing, autostart VM failed, broker socket unreachable). | [`host-check-warning`](./error-codes.md#host-check-warning) |
-| `78` | Missing required `--read-only` flag (W3 doctor is read-only; mutation forms are W4). | [`--read-only-required`](./error-codes.md#--read-only-required) |
+| `78` | Missing required `--read-only` flag (doctor is read-only; mutation forms are later deliverables). | [`--read-only-required`](./error-codes.md#--read-only-required) |
 
-**W3 disposition:** `rust-native`.
+**Disposition:** `rust-native`.
 
 ### `host install`
 
@@ -1677,7 +1705,7 @@ failures surface the typed `broker-error` envelope with exit `78`;
 they do **not** fall back to bash. If the daemon socket is
 unreachable, the verb surfaces the typed `daemon-down` envelope with
 exit `1` (the v1.0 daemon-only contract; the historical bash
-fallback was retired in P6).
+fallback was retired in v1.0).
 
 **Flags**
 
@@ -1698,18 +1726,18 @@ fallback was retired in P6).
 | `0` | Dry-run plan rendered or daemon → broker apply succeeded. | — |
 | `78` | Missing `--dry-run` / `--apply`, or the daemon → broker apply path returned `broker-error`. | [`--apply-or-dry-run-required`](./error-codes.md#--apply-or-dry-run-required), [`broker-error`](./error-codes.md#broker-error) |
 
-**W15 disposition:** `rust-native` (`--apply` dispatches through daemon → broker `RunHostInstall`).
+**Disposition:** `rust-native` (`--apply` dispatches through daemon → broker `RunHostInstall`).
 
 ### `migrate`
 
 **Synopsis:** `nixling migrate (--dry-run | --apply) [--human | --json]`
 
-`migrate` is the W9 migration analyzer. `--dry-run` reports the current
+`migrate` is the migration analyzer. `--dry-run` reports the current
 deployment-shape tier plus the stable migration checklist. Per-VM
 supervisor classification is still unavailable on the public manifest, so
 the planner keeps that limitation explicit and points operators at
 `nixling status <vm>` for per-VM truth. `--apply` uses the daemon-first
-W15 bridge and broker `RunMigrate` path.
+bridge and broker `RunMigrate` path.
 
 **Flags**
 
@@ -1734,7 +1762,7 @@ W15 bridge and broker `RunMigrate` path.
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Missing explicit `--dry-run`/`--apply` or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`--apply-or-dry-run-required`](./error-codes.md#--apply-or-dry-run-required), [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
-In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in P6; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
+In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
 
 **Human example**
 
@@ -1752,17 +1780,17 @@ is the live mutation path when you are ready.
   surfaces `daemon-down` exit 1; native-handler-deferred surfaces
   [`not-yet-implemented`](./error-codes.md#not-yet-implemented) exit 78;
   [`broker-error`](./error-codes.md#broker-error) exit 78. The historical
-  bash fallback was retired in P6 (per ADR 0015).
-- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in P6; in v1.0 (ADR 0015) the daemon-only contract is the only path. Native refusals stay on the typed envelope, and broker failures surface with exit `78`.
+  bash fallback was retired in v1.0 (per ADR 0015).
+- The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Native refusals stay on the typed envelope, and broker failures surface with exit `78`.
 - Dry-run analysis is pure Rust; `--apply` dispatches through `nixlingd` →
   broker `RunMigrate`.
 
 **Bash**
 
   `nixling migrate` path directly.
-- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
+- In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
 
-**W15 disposition:** `rust-native` — dry-run analysis is native, and
+**Disposition:** `rust-native` — dry-run analysis is native, and
 `--apply` uses daemon → broker `RunMigrate` when available.
 
 ### `auth status`
@@ -1827,16 +1855,16 @@ denied commands:
 }
 ```
 
-**W2 disposition:** `rust-native` — Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
+**Disposition:** `rust-native` — Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
 
 ## Dispatch capability table
 
 | Command | Current disposition | Rationale |
 | --- | --- | --- |
 | `list` | `rust-native` | Pure read-only inventory query; the daemon answers it without mutating host or guest state. |
-| `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
+| `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm list` | `rust-native` placeholder | Reserves the daemon-side runtime-view contract, but today returns an explicit empty inventory until live runner enumeration is wired through this surface. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
@@ -1846,23 +1874,23 @@ denied commands:
 | `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio speaker` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native speaker grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio off` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native `off` shorthand is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `build` | `rust-native` | Build is a native non-destructive planner that renders the W7a eval/build preview without falling back to bash. |
-| `switch` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `boot` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `test` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `rollback` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `generations` | `rust-native` | Generations is a native W7a introspection surface that reports current/booted symlink targets without falling back to bash. |
-| `gc` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunGc` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `trust` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunHostKeyTrust` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `rotate-known-host` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunRotateKnownHost` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `keys list` | `rust-native` | Keys list is a native W8 inventory preview that reports the managed-key resolution placeholders without falling back to bash. |
-| `keys show` | `rust-native` | Keys show is a native W8 preview that reports daemon-resolved key metadata placeholders without falling back to bash. |
-| `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
+| `build` | `rust-native` | Build is a native non-destructive planner that renders the eval/build preview without falling back to bash. |
+| `switch` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `boot` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `test` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `rollback` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `generations` | `rust-native` | Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash. |
+| `gc` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunGc` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `trust` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunHostKeyTrust` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `rotate-known-host` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunRotateKnownHost` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `keys list` | `rust-native` | Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash. |
+| `keys show` | `rust-native` | Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash. |
+| `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `audit` | `rust-native` | Audit is part of the daemon surface and keeps both human and JSON output contracts. |
 | `host check` | `rust-native` | Host check is a read-only daemon RPC by design. |
-| `host prepare` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
-| `host destroy` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the reverse-order daemon-backed host-reconcile sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
+| `host prepare` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `host destroy` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the reverse-order daemon-backed host-reconcile sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
-| `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
+| `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |

@@ -6,10 +6,11 @@
 #     redirected device as /dev/hidraw<N> inside the VM kernel.
 #   - usbip CLI tools so the guest can issue `usbip attach`.
 #
-# The HOST-side bits (usbipd-virbr0.service, usbip-host kernel
-# module, udev rules granting kvm-group access to Yubico hidraw +
-# raw USB nodes) live in host.nix because they're shared across
-# VMs and depend on the host bridge being up.
+# The HOST-side bits (broker-spawned per-env usbipd/proxy runners,
+# usbip-host kernel module, udev rules granting kvm-group access to
+# Yubico hidraw + raw USB nodes) live outside this guest component
+# because they're shared across VMs and depend on the host bridge
+# being up.
 #
 # The hot-plug ceremony (bind on host, attach in VM, cleanup on
 # exit) lives in the `nixling` CLI (modules/nixling/cli.nix).

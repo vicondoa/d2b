@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/cli-vm-verbs-eval.sh — P4 cli-up layer-1 gate.
+# tests/cli-vm-verbs-eval.sh— cli-up layer-1 gate.
 #
 # Asserts the Rust CLI's `up/down/restart/list` verbs (and their
 # `vm start/stop/restart/list` aliases) are fully daemon-native:

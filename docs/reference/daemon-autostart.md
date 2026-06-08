@@ -1,4 +1,4 @@
-# Daemon autostart contract (P2 ph2-p2-daemon-autostart)
+# Daemon autostart contract
 
 `nixlingd` runs a single **autostart pass** on startup that brings
 per-env net VMs and workload VMs up in a controlled, degraded-aware
@@ -38,20 +38,17 @@ bundle. The shape is intentionally simple so two operators on the
 same bundle always see the same order (Net VMs first, then
 workloads):
 
-1. **Phase 1 — Net VMs.** Every VM where `is_net_vm = true`
-   (i.e., the auto-declared `sys-<env>-net` VMs from
+1. **Net VMs.** Every VM where `is_net_vm = true` (i.e., the
+   auto-declared `sys-<env>-net` VMs from
    `nixos-modules/network.nix`). Sorted by `(env, vm-name)`.
-2. **Phase 2 — Workloads.** Every other VM, sorted by
-   `(env, vm-name)` so workloads pin to their env's net VM in plan
-   order.
+2. **Workloads.** Every other VM, sorted by `(env, vm-name)` so
+   workloads pin to their env's net VM in plan order.
 
-Today the `autostart` flag is derived heuristically: every VM the
-manifest knows about is autostart-eligible **unless** it is a
-graphics VM (graphics VMs are barred from autostart by
+The daemon currently derives the `autostart` flag heuristically:
+every VM the manifest knows about is autostart-eligible **unless**
+it is a graphics VM (graphics VMs are barred from autostart by
 `nixos-modules/assertions.nix` SWArch-M9 — they have no Wayland
-session at boot). Post-P6 the bundle gains a first-class
-`autostart: bool` field per VM and the heuristic becomes a direct
-field read; the contract shape does not change.
+session at boot).
 
 VMs with `autostart = false` remain in the plan (so a future
 `nixling status --plan` can surface the full picture) but
@@ -62,12 +59,12 @@ not a failure.
 
 ## Concurrency cap
 
-Both phases honour a single concurrency cap N
+Both stages honour a single concurrency cap N
 (`nixling.daemon.autostart.parallelism`, default `3`):
 
-- up to N net VMs start in parallel in Phase 1;
-- once Phase 1 settles (every net VM has reached a terminal
-  outcome), up to N workloads start in parallel in Phase 2.
+- up to N net VMs start in parallel in stage 1;
+- once stage 1 settles (every net VM has reached a terminal
+  outcome), up to N workloads start in parallel in stage 2.
 
 Values `< 1` are clamped to `1`. The cap is enforced with a
 `tokio::sync::Semaphore`; each per-VM start runs on a
@@ -79,7 +76,7 @@ sync I/O.
 Failures are isolated, not abortive:
 
 - A net VM failure (`Outcome::Failed`) does NOT block sibling net
-  VMs in other envs. Once Phase 1 ends, every workload whose env
+  VMs in other envs. Once stage 1 ends, every workload whose env
   has a failed net VM is recorded as `Outcome::Degraded` with a
   human-readable `reason` pointing at the upstream failure. The
   workload's start machinery is **not** dispatched.
@@ -148,10 +145,10 @@ workloads grouped by env.
   eval gate that asserts the public Rust surface, the NixOS
   option default + override, the daemon-side wiring, and the
   documentation cross-references.
-- The full Layer-2 smoke (`tests/daemon-autostart-smoke.sh`,
-  planned by `ph2-p2-daemon-autostart`) is out of scope for this
-  page — it brings up a real 2-env × 2-workload fixture and
-  asserts the net-VM-first envelope on hardware-like state.
+- The full Layer-2 smoke (`tests/daemon-autostart-smoke.sh`) is
+  out of scope for this page — it brings up a real 2-env × 2-workload
+  fixture and asserts the net-VM-first envelope on hardware-like
+  state.
 
 ## Cross-references
 

@@ -1,4 +1,4 @@
-# ph2-p2-ownership-matrix: typed declaration of the per-VM state
+# typed declaration of the per-VM state
 # directory ownership matrix.
 #
 # Every leaf path under /var/lib/nixling/vms/<vm>/ has a canonical
@@ -7,12 +7,12 @@
 # minijail profiles describe WHAT a runner role may write, this
 # matrix describes WHO OWNS each subdirectory and WITH WHICH MODE.
 #
-# CRITICAL — hardlink farm carve-out (plan.md P2 critical detail).
+# CRITICAL — hardlink farm carve-out.
 # /var/lib/nixling/vms/<vm>/store/ is a per-generation hardlink farm
 # whose inodes are SHARED with /nix/store. `setfacl -R` (or `chmod -R`,
 # `chown -R`) recursively across that subtree propagates ACLs INTO
 # /nix/store via the shared inodes, which breaks the openssh
-# `safe_path()` checks on the per-VM ssh host keys (and any other
+# `safe_path` checks on the per-VM ssh host keys (and any other
 # uid-sensitive consumer of /nix/store). Every entry in the matrix
 # below carries an explicit `recursive` field that defaults to `false`;
 # the `store` entry MUST keep `recursive = false` and the enforcer
@@ -52,7 +52,7 @@ let
     (mkEntry {
       path = "state";
       owner = "nixlingd";
-      group = "nixling-launcher";
+      group = "nixling";
       mode = "0750";
       description = "Daemon-owned per-VM state subdirectory (audio-state.json, etc.).";
     })
@@ -71,17 +71,17 @@ let
     (mkEntry {
       path = "sshd-host-keys";
       owner = "nixlingd";
-      group = "nixling-launcher";
+      group = "nixling";
       mode = "0750";
       description = ''
         Container for per-VM sshd host keys. The daemon refuses to start
-        the VM if any leaf has drifted (see ph2-p2-ssh-host-key-preflight).
+        the VM if any leaf has drifted.
       '';
     })
     (mkEntry {
       path = "host-keys";
       owner = "nixlingd";
-      group = "nixling-launcher";
+      group = "nixling";
       mode = "0750";
       description = "Known-hosts pin store for per-VM ssh host key fingerprints.";
     })
@@ -89,7 +89,7 @@ let
       path = "store";
       owner = "nixlingd";
       group = "users";
-      mode = "2775";
+      mode = "0755";
       recursive = false;
       description = ''
         CRITICAL CARVE-OUT: per-VM /nix/store hardlink farm. Inodes are
@@ -105,7 +105,7 @@ let
       path = "store-meta";
       owner = "nixlingd";
       group = "users";
-      mode = "2775";
+      mode = "0755";
       recursive = false;
       description = ''
         StoreSync metadata sibling to `store/`. Holds the `current`

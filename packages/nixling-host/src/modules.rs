@@ -1,7 +1,6 @@
-//! W3 kernel-module matrix and probe order.
+//! Kernel-module matrix and probe order.
 //!
-//! Implements the four-step probe order from plan.md §"W3 kernel-module
-//! probe order":
+//! Implements the four-step kernel-module probe order:
 //!
 //! 1. `/proc/sys/kernel/modules_disabled` — if `1`, every `required`
 //!    module that is neither built-in nor loaded forces a closed-fail
@@ -18,8 +17,8 @@
 //!
 //! Mutation (`modprobe`) lives in the broker — see
 //! `nixling_priv_broker::ops::modprobe`. This module is pure read-only
-//! preflight and exposes deterministic parsers so the L1c canary matrix
-//! (plan.md §"W3 pre-merge canary matrix") can drive it with fixtures.
+//! preflight and exposes deterministic parsers so the canary matrix can
+//! drive it with fixtures.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -212,7 +211,7 @@ pub fn read_loaded_modules_at(proc_modules: &Path, sys_module_dir: &Path) -> Loa
 /// Reads `/lib/modules/$(uname -r)/modules.builtin`. Returns an empty
 /// set on failure; the production probe order falls back to
 /// `modules.builtin.bin` via [`read_builtin_modules_with_fallback`]
-/// per plan.md §"W3 kernel-module probe order" step 3.
+/// in step 3.
 pub fn read_builtin_modules() -> BuiltinModuleSet {
     let release = uname_release().unwrap_or_default();
     let primary = PathBuf::from(format!("/lib/modules/{release}/modules.builtin"));
@@ -254,8 +253,7 @@ pub fn read_builtin_modules_with_fallback_at(primary: &Path, fallback: &Path) ->
 }
 
 /// Reads the host kernel config. Tries `/boot/config-$(uname -r)`
-/// first; falls back to `/proc/config.gz` per plan.md
-/// §"W3 kernel-module probe order" step 4. Kernel config is treated
+/// first; falls back to `/proc/config.gz` in step 4. Kernel config is treated
 /// as **secondary** evidence; failure returns `None` and the
 /// loaded+builtin path drives the decision.
 pub fn read_kernel_config() -> Option<KernelConfig> {
@@ -403,8 +401,7 @@ pub struct ModuleProbeResult {
     /// the bridge-nf-call sysctl recommendation downstream.
     pub br_netfilter_present: bool,
     /// Per-link sysctl recommendations the probe surfaces when
-    /// `br_netfilter` is present (plan.md §"W3 kernel-module probe
-    /// order" tail).
+    /// `br_netfilter` is present.
     pub bridge_nf_recommendations: Vec<BridgeNfRecommendation>,
 }
 

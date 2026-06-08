@@ -1,4 +1,4 @@
-//! `ApplySysctl` op (W3 s2).
+//! `ApplySysctl` op.
 //!
 //! Per-link writes only; fail-closed on drift readback. The IPv6-off
 //! sysctl set is defined in `nixling_host::netlink::IPV6_OFF_SYSCTLS`;
@@ -144,7 +144,7 @@ impl std::fmt::Display for ApplyWithReadbackError {
 
 impl std::error::Error for ApplyWithReadbackError {}
 
-/// W12 runtime entry-point for `ApplySysctl`.
+/// Runtime entry-point for `ApplySysctl`.
 ///
 /// Keep the dispatch surface anchored on `ops::sysctl` so future
 /// per-key verification logic can land here without another runtime

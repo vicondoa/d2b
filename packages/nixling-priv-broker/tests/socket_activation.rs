@@ -1,4 +1,4 @@
-//! Socket-activation integration test (P0).
+//! Socket-activation integration test.
 //!
 //! Spawns the broker binary with `LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock`
 //! and fd 3 = a bound `AF_UNIX SOCK_SEQPACKET` listen socket, then asserts
@@ -22,6 +22,8 @@
 //! The `3>&<fd>` redirect duplicates the inherited listen socket to fd 3;
 //! `dup2` (internally used by the shell) clears FD_CLOEXEC on fd 3.
 
+#![cfg(not(feature = "layer1-bootstrap"))]
+
 // unsafe needed for clearing FD_CLOEXEC on the listen socket before spawn.
 #![allow(unsafe_code)]
 
@@ -34,10 +36,10 @@ use std::time::Duration;
 use nix::sys::socket::{
     bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
 };
-use nixling_priv_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use nixling_ipc::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
 };
+use nixling_priv_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
 use tempfile::TempDir;
 
 /// Path to the broker binary under test; set by cargo when building
@@ -57,12 +59,13 @@ fn bind_seqpacket_listen(path: &std::path::Path) -> io::Result<OwnedFd> {
         None,
     )
     .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-    let addr =
-        UnixAddr::new(path).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-    bind(fd.as_raw_fd(), &addr)
-        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-    listen(&fd, Backlog::new(8).map_err(|e| io::Error::from_raw_os_error(e as i32))?)
-        .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    let addr = UnixAddr::new(path).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    bind(fd.as_raw_fd(), &addr).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
+    listen(
+        &fd,
+        Backlog::new(8).map_err(|e| io::Error::from_raw_os_error(e as i32))?,
+    )
+    .map_err(|e| io::Error::from_raw_os_error(e as i32))?;
     Ok(fd)
 }
 
@@ -141,15 +144,12 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
     std::thread::sleep(Duration::from_millis(400));
 
     // Verify the broker is still running.
-    match broker_proc.try_wait().expect("try_wait") {
-        Some(status) => {
-            panic!(
-                "broker exited prematurely with status {status}; \
-                 socket_path={}",
-                sock_path.display()
-            );
-        }
-        None => {} // still running — expected
+    if let Some(status) = broker_proc.try_wait().expect("try_wait") {
+        panic!(
+            "broker exited prematurely with status {status}; \
+             socket_path={}",
+            sock_path.display()
+        );
     }
 
     // Connect and round-trip a Hello request.

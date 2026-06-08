@@ -1,4 +1,4 @@
-# Kernel-module check (P3)
+# Kernel-module check
 
 Operator reference for the daemon-startup self-check that verifies the
 kernel-module matrix the running bundle requires is loaded into the
@@ -136,4 +136,4 @@ the table above. Run it after editing either side.
   matrix (mutating side: `modprobe` allow/deny).
 * `packages/nixling-host/src/modules.rs` — the four-step host probe
   (`/proc/modules` + builtin + `/boot/config-*`) the broker uses;
-  the P3 daemon check is a *consumer* of `LoadedModuleSet`.
+  the daemon check is a *consumer* of `LoadedModuleSet`.

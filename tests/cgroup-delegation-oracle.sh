@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# W3 s1 L1c gate: cgroup v2 delegation canary matrix.
+# Cgroup v2 delegation canary matrix.
 #
 # Plan ref: ~/.copilot/session-state/<id>/plan.md
-#   §"W3 cgroup v2 delegation algorithm" (8-step contract)
-#   §"W3 pre-merge canary matrix" rows owned by s1:
+#   §" cgroup v2 delegation algorithm" (8-step contract)
+#   §" pre-merge canary matrix" rows owned by s1:
 #     - cgroup-delegation-refused
 #     - cgroup-v2-unified-not-present
 #     - cgroup-controllers-missing
@@ -15,7 +15,7 @@
 # corresponds to a named `cargo test` in `nixling-host` (raw algorithm)
 # or `nixling-priv-broker` (broker variant + audit record).
 #
-# Per AGENTS.md "W3 tests/static.sh ownership rule": this script is
+# Per AGENTS.md " tests/static.sh ownership rule": this script is
 # scope-owned by s1; the integrator wires it into the `tests/static.sh`
 # parallel-gate pool in a separate commit.
 
@@ -42,7 +42,8 @@ declare -a HOST_CANARIES=(
   cgroup::tests::detects_internal_processes
   cgroup::tests::refuses_threaded_cgroups
   cgroup::tests::rejects_partition_root_writes
-  cgroup::tests::vm_subtree_creates_chowned_leaf
+  cgroup::tests::vm_subtree_creates_chowned_per_vm_interior
+  cgroup::tests::vm_role_leaf_creates_chowned_per_role_leaf_under_vm_interior
   cgroup::tests::cpuset_inheritance_fills_empty_files
 )
 

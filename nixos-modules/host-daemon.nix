@@ -3,7 +3,7 @@
 let
   cfg = config.nixling;
 
-  # v1.1.1fu11: filter out `target/` dev caches from the source
+  # filter out `target/` dev caches from the source
   # so the Nix copy stays small (workspace target alone is ~17 GB).
   packagesSrc = lib.cleanSourceWith {
     src = ../packages;
@@ -19,7 +19,7 @@ let
     cargoLock.lockFile = ../packages/Cargo.lock;
     cargoBuildFlags = [ "--package" "nixlingd" ];
     doCheck = false;
-    # v1.1.1: strip the dev-only sccache rustc-wrapper (see
+    # strip the dev-only sccache rustc-wrapper (see
     # host-broker.nix for full rationale). Writing the empty
     # rustc-wrapper into .cargo/config.toml shadows the dev
     # value without touching the parent cargo config.
@@ -39,9 +39,9 @@ EOF
     '';
   };
 
-  # v1.1.1: the user-facing CLI is now the Rust nixling crate
-  # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in P6;
-  # v1.1.1 ships the daemon-native Rust CLI as the only
+  # the user-facing CLI is now the Rust nixling crate
+  # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in;
+  # ships the daemon-native Rust CLI as the only
   # `nixling` binary on the host.
   nixlingCliPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling";
@@ -66,8 +66,7 @@ EOF
     '';
   };
 
-  # v1.1.2fu19 panel-security R2 critical must-fix: small
-  # fd-safe activation helper that the host activation snippets
+  # Small fd-safe activation helper that the host activation snippets
   # call instead of `[ -L ] / [ -f ] / find -type f` shell
   # check-then-act patterns. Lives in nixling-host because it
   # only depends on libc + nix; no IPC; no async runtime.
@@ -94,7 +93,7 @@ EOF
     '';
   };
 
-  nixlingCliShellArtifactsPackage = pkgs.runCommandNoCC "nixling-cli-shell-artifacts" { } ''
+  nixlingCliShellArtifactsPackage = pkgs.runCommand "nixling-cli-shell-artifacts" { } ''
     install -Dm644 ${../docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
     ${pkgs.gzip}/bin/gzip -n -c ${../docs/manpages/nixling.1} > "$out/share/man/man1/nixling.1.gz"
     install -Dm644 ${../docs/completions/nixling.bash} "$out/share/bash-completion/completions/nixling"
@@ -109,7 +108,7 @@ EOF
     locksDir = "/run/nixling/locks";
     daemonUser = "nixlingd";
     daemonGroup = "nixlingd";
-    publicSocketGroup = "nixling-launchers";
+    publicSocketGroup = "nixling";
     launcherUsers = cfg.site.launcherUsers;
     adminUsers = cfg.site.adminUsers;
     serverVersion = "0.4.0";
@@ -154,29 +153,35 @@ in
   };
 
   config = lib.mkIf cfg.daemonExperimental.enable {
+    # DEPRECATED v1.2: kept as migration tombstone for the
+    # nixling-launcher{,s} → nixling rename. No module references the
+    # legacy groups; no user is a member. The empty declaration
+    # preserves the legacy gid in /etc/group so the
+    # nixlingGroupMigration helper can match by numeric gid on direct
+    # upgrades. Slated for removal in v1.3 after one release of
+    # confirmed clean migration.
     users.groups.nixling-launchers = { };
     users.groups.nixlingd = { };
 
     users.users =
       (lib.genAttrs cfg.site.launcherUsers (_: {
-        extraGroups = [ "nixling-launchers" ];
+        extraGroups = [ "nixling" ];
       }))
       // {
         nixlingd = {
           isSystemUser = true;
           group = "nixlingd";
           description = "nixling daemon user";
-          # v1.1.1fu14 B5: nixlingd MUST be a supplementary
-          # member of nixling-launchers so it can `chown(path,
+          # nixlingd MUST be a supplementary member of nixling so it
+          # can `chown(path,
           # None, Some(gid))` the public socket to the launcher
           # group on bind. Without this membership, the chown(2)
           # call returns EPERM (kernel allows chown-to-gid only
           # for one of the caller's groups, real/effective/
-          # supplementary). Documented bug observed in v1.1.1fu13
-          # live-deploy: the daemon failed at startup with
+          # supplementary). The daemon failed at startup with
           # "internal-io" when chown(public.sock, -1, 1000)
           # returned EPERM.
-          extraGroups = [ "nixling-launchers" ];
+          extraGroups = [ "nixling" ];
         };
       };
 
@@ -190,7 +195,7 @@ in
     };
 
     systemd.tmpfiles.rules = [
-      # W3fu2 H5 (nixos-1): nixlingd runs non-root, so it must own
+      # nixlingd runs non-root, so it must own
       # /run/nixling, /run/nixling/locks, /run/nixling/state, and the
       # daemon.lock file. /etc/nixling and /var/lib/nixling stay
       # root-owned and group-readable by nixlingd (the broker
@@ -199,24 +204,23 @@ in
       # config + bundle/host/processes are root:nixlingd 0640 so the
       # daemon reads without write.
       #
-      # W3fu5 H3 (security-1): /run/nixling is group-owned by
-      # `nixling-launchers` (mode 0750) so launcher users — members
-      # of `nixling-launchers` via the daemon-config.json
+      # /run/nixling is group-owned by
+      # `nixling` (mode 0750) so launcher users — members
+      # of `nixling` via the daemon-config.json
       # `publicSocketGroup` — can `x` (traverse) the directory to
-      # reach `public.sock`. With nixlingd:nixling-launchers 0750:
+      # reach `public.sock`. With nixlingd:nixling 0750
       # owner nixlingd has rwx (read/write the dir; bind/remove the
-      # socket); group nixling-launchers has r-x (list contents +
+      # socket); group nixling has r-x (list contents +
       # traverse to the socket file); world has --- (no access). The
-      # public socket itself is mode 0660 group nixling-launchers
+      # public socket itself is mode 0660 group nixling
       # (see packages/nixlingd/src/lib.rs::bind_public_socket).
-      "d /run/nixling 0750 nixlingd nixling-launchers -"
+      "d /run/nixling 0750 nixlingd nixling -"
       "f /run/nixling/daemon.lock 0640 nixlingd nixlingd -"
-      # W3 (virt-3): /run/nixling/locks holds per-VM `flock(LOCK_EX |
+      # /run/nixling/locks holds per-VM `flock(LOCK_EX |
       # LOCK_NB)` files taken by the daemon for the entire `up` /
-      # `prepare` / `destroy` mutation window. Mode 0700 nixlingd:
+      # `prepare` / `destroy` mutation window. Mode 0700 nixlingd
       # nixlingd so only the daemon (and root) can open the lock file.
-      # H1 owns the in-daemon `flock` call; H3 owns the tmpfiles/
-      # ownership setup. Cleared on every boot via the standard
+      # Cleared on every boot via the standard
       # tmpfiles `d` rule semantics.
       "d /run/nixling/locks 0700 nixlingd nixlingd -"
       "d /run/nixling/state 0700 nixlingd nixlingd -"
@@ -225,7 +229,7 @@ in
     ];
 
     systemd.services.nixlingd = {
-      # P0 (ph0-daemon-restart-if-changed): restartIfChanged = false is
+      # restartIfChanged = false is
       # required at the TOP LEVEL of systemd.services.<name> — NOT inside
       # serviceConfig or unitConfig. NixOS's switch-to-configuration only
       # reads the top-level NixOS option; the unitConfig.X-RestartIfChanged
@@ -243,18 +247,18 @@ in
       description = "nixling daemon skeleton";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
-      # v1.1.1 live-deploy fu9: bypass the kernel-module fatal check
-      # because this host's kernel (linux-7.0.5) has the guest-side
+      # Bypass the kernel-module fatal check because this host's kernel
+      # (linux-7.0.5) has the guest-side
       # virtio modules (virtio_console, virtio_net, virtio_fs,
       # drm_virtio_gpu) built-in (=y) rather than loadable (=m),
       # which the daemon's lsmod-based check mis-reads as "missing".
-      # See packages/nixlingd/src/lib.rs P3 ph3-p3-kernel-module-check
-      # block for the operator-override env var.
+      # See packages/nixlingd/src/lib.rs for the operator-override
+      # env var.
       environment.NIXLING_SKIP_KERNEL_MODULE_CHECK = "1";
       serviceConfig = {
         Type = "simple";
-        # W3fu2 H5 (nixos-1): W3 cgroup v2 delegation requires the
-        # long-lived daemon to be non-root so the broker can fchown
+        # cgroup v2 delegation requires the long-lived daemon to be
+        # non-root so the broker can fchown
         # the nixling.slice subtree to the daemon's uid/gid. Running
         # the daemon as root contradicts the delegation contract in
         # docs/reference/cgroup-delegation.md and ADR 0011 ("the
@@ -270,17 +274,20 @@ in
         AmbientCapabilities = [ "" ];
         PrivateTmp = true;
         ProtectHome = true;
-        RestrictAddressFamilies = [ "AF_UNIX" ];
+        # AF_UNIX: public.sock + broker IPC. AF_INET/AF_INET6
+        # daemon-side guest-ssh-readiness probes use TCP connect(2)
+        # to the VM's declared static IP.
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
-        # W3fu2 H5 (nixos-1): supplementary group so the daemon can
-        # create /run/nixling/public.sock with group ownership
-        # nixling-launchers (the documented launcher discovery group).
+        # Supplementary group so the daemon can create
+        # /run/nixling/public.sock with group ownership
+        # nixling (the documented launcher discovery group).
         # The matching publicSocketGroup field in
-        # daemon-config.json already declares nixling-launchers as
+        # daemon-config.json already declares nixling as
         # the public socket group; this SupplementaryGroups entry
         # gives the systemd unit's primary uid the second gid it
         # needs to chgrp the socket.
-        SupplementaryGroups = [ "nixling-launchers" ];
+        SupplementaryGroups = [ "nixling" ];
       };
     };
   };

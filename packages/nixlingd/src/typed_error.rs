@@ -53,8 +53,8 @@ pub enum TypedError {
         path: PathBuf,
         reason: String,
     },
-    /// P2 ph2-p2-ownership-matrix: refusal raised by the VM-start
-    /// preflight when a per-VM state subdirectory has drifted from
+    /// Refusal raised by the VM-start preflight when a per-VM state
+    /// subdirectory has drifted from
     /// the typed ownership matrix declared in
     /// `nixos-modules/options-ownership-matrix.nix`. `path` points
     /// at the first drifted entry; `drift_reason` is the full
@@ -65,8 +65,8 @@ pub enum TypedError {
         path: PathBuf,
         drift_reason: String,
     },
-    /// P2 ph2-p2-ssh-host-key-preflight: refusal raised by the
-    /// VM-start preflight when `/var/lib/nixling/vms/<vm>/sshd-host-keys`
+    /// Refusal raised by the VM-start preflight when
+    /// `/var/lib/nixling/vms/<vm>/sshd-host-keys`
     /// or one of its `ssh_host_*_key` leaves has drifted from the
     /// canonical posture (directory mode/owner enforced separately by
     /// `ownership_preflight`; each key file must be a non-symlink
@@ -78,8 +78,8 @@ pub enum TypedError {
         path: PathBuf,
         drift: String,
     },
-    /// P2 ph2-p2-net-vm-bundle-gate: refusal raised by the
-    /// VM-start preflight for `sys-<env>-net` VMs when the on-disk
+    /// Refusal raised by the VM-start preflight for `sys-<env>-net` VMs
+    /// when the on-disk
     /// dnsmasq.conf hash diverges from the bundle's expectation.
     /// `env` is the env scope (e.g. `corp`, `personal`, `obs`);
     /// `expected` and `actual` are 64-char lowercase SHA-256 hex
@@ -95,8 +95,8 @@ pub enum TypedError {
         actual: String,
         reason: String,
     },
-    /// P3 ph3-p3-kernel-module-check: daemon refusal raised on
-    /// startup when one or more REQUIRED kernel modules (see
+    /// Daemon refusal raised on startup when one or more REQUIRED kernel
+    /// modules (see
     /// [`crate::kernel_module_check`]) are neither loaded into
     /// `/proc/modules` nor detected built-in. `missing` is the
     /// stable, comma-separated list of module names (KVM
@@ -104,8 +104,8 @@ pub enum TypedError {
     HostKernelModulesMissing {
         missing: String,
     },
-    /// P3 ph3-p3-otelbridge-readiness: typed annotation raised
-    /// when the broker-spawned `RunnerRole::OtelHostBridge`
+    /// Typed annotation raised when the broker-spawned
+    /// `RunnerRole::OtelHostBridge`
     /// runner did not satisfy the readiness gate
     /// (pidfd registration + obs vsock host socket present, the
     /// proxy for "socket accept succeeded + first OTLP forward
@@ -120,8 +120,8 @@ pub enum TypedError {
         vm: String,
         elapsed_ms: u128,
     },
-    /// P3 `ph3-p3-net-route-degraded-mode`: returned when the
-    /// daemon is in operator-only mode (consecutive net-route
+    /// Returned when the daemon is in operator-only mode (consecutive
+    /// net-route
     /// preflight failures crossed the configured threshold) and
     /// the caller invokes a per-env mutating verb. Read-only
     /// verbs (`status`, `host doctor --read-only`, `audit`) stay
@@ -131,8 +131,8 @@ pub enum TypedError {
         consecutive_failures: u32,
         failed_envs: Vec<String>,
     },
-    /// P3 ph3-p3-usbip-state-machine: returned by the per-busid
-    /// USBIP state machine when any step in the canonical order
+    /// Returned by the per-busid USBIP state machine when any step in
+    /// the canonical order
     /// (`modprobe → lock → withhold → firewall → backend → bind →
     /// proxy`) fails. `busid` is the host-side bus identifier
     /// (e.g. `1-2`); `step` is the typed
@@ -225,13 +225,13 @@ impl TypedError {
             Self::BundleDnsmasqDrift { .. } => 63,
             Self::HostKernelModulesMissing { .. } => 64,
             Self::OtelHostBridgeReadinessTimeout { .. } => 65,
-            // P3 ph3-p3-net-route-degraded-mode shares the kind class
-            // with otel-host-bridge-readiness (operator-only mode) but
+            // Net-route degraded mode shares the kind class with
+            // otel-host-bridge-readiness (operator-only mode) but
             // gets its own exit code 66 so operators can correlate the
             // failure to the network preflight (not the obs bridge).
             Self::NetRoutePreflightDegraded { .. } => 66,
-            // P3 ph3-p3-usbip-state-machine: per-busid USBIP bring-up
-            // failure. Distinct exit code so operators can grep for
+            // Per-busid USBIP bring-up failure. Distinct exit code so
+            // operators can grep for
             // it across hosts independently of the kernel-module
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.

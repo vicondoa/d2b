@@ -1,10 +1,7 @@
-# Host-prep DAG (P2)
+# Host-prep DAG
 
-> Status: **P2 ph2-dag-host-prep**. The Rust scaffold + typed broker
-> request variants land in this commit; the live broker handlers for
-> `SeedDnsmasqLease`, `BindMountFromHardlinkFarm`,
-> `OwnershipMatrixCheck`, and `SshHostKeyPreflight` follow in later
-> P2/P3 commits.
+> Status: canonical. This page describes the daemon-side host-prep
+> scaffold and the typed broker request variants it dispatches.
 
 The host-prep DAG is the daemon-side replacement for the per-VM
 systemd templates that the framework used to ship to do host
@@ -14,11 +11,11 @@ preparation immediately before starting a VM:
 | ------------------------------------------------------------ | --------------------------------------------------------------------------- |
 | `microvm-tap-interfaces@<vm>.service` (tap fd creation)      | `BringUpTapInterface` (broker `CreateTapFd` / `CreatePersistentTap`)        |
 | `microvm-tap-interfaces@<vm>.service` (vhost-net fd open)    | `PreOpenVhostNetFd` (broker `OpenVhostNet`)                                 |
-| `microvm-setup@<vm>.service` (dnsmasq lease seed)            | `SeedDnsmasqLease` (broker `SeedDnsmasqLease`, P2 stub)                     |
-| `microvm-setup@<vm>.service` (store-view bind)               | `BindMountFromHardlinkFarm` (broker `BindMountFromHardlinkFarm`, P2 stub)   |
-| ad-hoc nft drop-in installs                                  | `ApplyNftablesRules` (broker `ApplyNftables`, W3 live)                      |
-| per-VM ownership matrix preflights (today: scattered)        | `OwnershipMatrixCheck` (P2 sibling agent)                                   |
-| ad-hoc ssh-host-key drift checks (today: missing)            | `SshHostKeyPreflight` (P2 sibling agent)                                    |
+| `microvm-setup@<vm>.service` (dnsmasq lease seed)            | `SeedDnsmasqLease` (broker `SeedDnsmasqLease`; typed scaffold)              |
+| `microvm-setup@<vm>.service` (store-view bind)               | `BindMountFromHardlinkFarm` (broker `BindMountFromHardlinkFarm`; typed scaffold) |
+| ad-hoc nft drop-in installs                                  | `ApplyNftablesRules` (broker `ApplyNftables`; live)                         |
+| per-VM ownership matrix preflights                           | `OwnershipMatrixCheck` (daemon preflight; see [`per-vm-state-ownership.md`](./per-vm-state-ownership.md)) |
+| ad-hoc ssh-host-key drift checks                             | `SshHostKeyPreflight` (daemon preflight; see [`ssh-host-key-preflight.md`](./ssh-host-key-preflight.md)) |
 
 Together these are the **only** per-VM host-prep work the daemon
 performs before invoking the per-VM process DAG
@@ -28,24 +25,23 @@ DAG.
 
 ## Canonical step set
 
-The complete step set for a workload VM (10 steps after P2fu1
-kernel-r1-1 — see "Canonical ordering" below for the dependency
-edge diagram):
+The complete step set for a workload VM (see "Canonical ordering"
+below for the dependency-edge diagram):
 
 1. `<vm>:ssh-host-key-preflight` — preflight, no deps
 2. `<vm>:ownership-matrix-check` — preflight, no deps
-3. `<vm>:apply-nm-unmanaged` — preflight, no deps; P2fu1 step that
-   marks the per-VM tap-parent bridge as unmanaged in NetworkManager
-   BEFORE tap creation so NM doesn't race the broker `TUNSETIFF` +
-   `dev set master`
+3. `<vm>:apply-nm-unmanaged` — preflight, no deps; marks the per-VM
+   tap-parent bridge as unmanaged in NetworkManager BEFORE tap
+   creation so NM doesn't race the broker `TUNSETIFF` + `dev set
+   master`
 4. `<vm>:apply-nftables-rules` — deps: `ssh-host-key-preflight`,
    `ownership-matrix-check`, `apply-nm-unmanaged`
 5. `<vm>:bring-up-tap-interface` — deps: `apply-nftables-rules`
-6. `<vm>:apply-sysctl` — P2fu1 step running AFTER tap creation so
+6. `<vm>:apply-sysctl` — runs AFTER tap creation so
    `/proc/sys/net/ipv4/conf/<ifname>/` entries exist; deps:
    `bring-up-tap-interface`
-7. `<vm>:set-bridge-port-flags` — P2fu1 step pinning `learning off`,
-   `flood off`, `mcast_to_unicast off`; deps: `apply-sysctl`
+7. `<vm>:set-bridge-port-flags` — pins `learning off`, `flood off`,
+   `mcast_to_unicast off`; deps: `apply-sysctl`
 8. `<vm>:pre-open-vhost-net-fd` — deps: `set-bridge-port-flags`
    (waits for the bridge-port flags to be pinned before vhost-net
    adopts the path)
@@ -85,23 +81,23 @@ function of the bundle.
 
 Each step dispatches **exactly one** typed broker op. The daemon
 never names raw paths/uids/argv on the wire; every step carries an
-opaque `BundleStepRef` (per W3fu1 H1 security-1) that the broker
-resolves against its own copy of the bundle.
+opaque `BundleStepRef` that the broker resolves against its own
+copy of the bundle.
 
 | Step                          | Broker op (`nixling_ipc::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
 | ----------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live (W3); P2fu1 added as DAG step BEFORE tap creation so NetworkManager doesn't race the broker's `TUNSETIFF` + `dev set master` and pull the link down. Replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
-| `BringUpTapInterface`         | `CreateTapFd` (or `CreatePersistentTap`)                 | Live (W3 s2); P2 vm_start wiring deferred to per-VM intent rows                        |
-| `ApplySysctl`                 | `ApplySysctl`                                            | Live (W3); P2fu1 added as DAG step AFTER tap creation so per-tap `/proc/sys/net/ipv4/conf/<ifname>/` entries exist. Replaces the sysctl-apply leaf of `microvm-setup@<vm>.service`. |
-| `SetBridgePortFlags`          | `SetBridgePortFlags`                                     | Live (W3); P2fu1 added as DAG step AFTER `ApplySysctl` so `learning off`, `flood off`, `mcast_to_unicast off` reflect the final per-tap config. Replaces the `bridge link set` leaf of `microvm-tap-interfaces@<vm>.service`. |
-| `PreOpenVhostNetFd`           | `OpenVhostNet`                                           | Live (W3 s4); P2 vm_start wiring deferred to per-VM intent rows                        |
-| `SeedDnsmasqLease`            | `SeedDnsmasqLease`                                       | Typed scaffold (returns `Unimplemented { target_wave: "P2" }`); live handler P2/P3     |
-| `BindMountFromHardlinkFarm`   | `BindMountFromHardlinkFarm`                              | Typed scaffold (returns `Unimplemented { target_wave: "P2" }`); live handler P2/P3     |
-| `ApplyNftablesRules`          | `ApplyNftables`                                          | Live (W3); resolves via `BundleResolver::find_nft_intent`                              |
-| `OwnershipMatrixCheck`        | `OwnershipMatrixCheck`                                   | Live (P2 ph2-p2-ownership-matrix); typed daemon-side enforcer in `nixlingd::ownership_preflight` |
-| `SshHostKeyPreflight`         | `SshHostKeyPreflight`                                    | Live (P2 ph2-p2-ssh-host-key-preflight); typed daemon-side check in `nixlingd::ssh_host_key_preflight` |
+| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs before tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
+| `BringUpTapInterface`         | `CreateTapFd` (or `CreatePersistentTap`)                 | Live; the per-VM start path resolves the tap intent row and creates or reuses the tap as needed. |
+| `ApplySysctl`                 | `ApplySysctl`                                            | Live; runs after tap creation so per-tap `/proc/sys/net/ipv4/conf/<ifname>/` entries exist, and replaces the sysctl-apply leaf of `microvm-setup@<vm>.service`. |
+| `SetBridgePortFlags`          | `SetBridgePortFlags`                                     | Live; runs after `ApplySysctl` so `learning off`, `flood off`, and `mcast_to_unicast off` reflect the final per-tap config, replacing the `bridge link set` leaf of `microvm-tap-interfaces@<vm>.service`. |
+| `PreOpenVhostNetFd`           | `OpenVhostNet`                                           | Live; waits for bridge-port flags to be pinned before vhost-net adopts the path. |
+| `SeedDnsmasqLease`            | `SeedDnsmasqLease`                                       | Typed scaffold; the live handler remains deferred. |
+| `BindMountFromHardlinkFarm`   | `BindMountFromHardlinkFarm`                              | Typed scaffold; the live handler remains deferred. |
+| `ApplyNftablesRules`          | `ApplyNftables`                                          | Live; resolves via `BundleResolver::find_nft_intent`. |
+| `OwnershipMatrixCheck`        | `OwnershipMatrixCheck`                                   | Live; typed daemon-side enforcer in `nixlingd::ownership_preflight`. |
+| `SshHostKeyPreflight`         | `SshHostKeyPreflight`                                    | Live; typed daemon-side check in `nixlingd::ssh_host_key_preflight`. |
 
-**Canonical ordering (P2fu1 kernel-r1-1)**:
+**Canonical ordering**:
 
 ```text
 SshHostKeyPreflight \
@@ -127,10 +123,9 @@ PreOpenVhostNetFd            (depends on SetBridgePortFlags — bridge flags pin
 BindMountFromHardlinkFarm           (depends on OwnershipMatrixCheck)
 ```
 
-This sequence is the daemon-side equivalent of the systemd dependency
-graph `microvm-setup@<vm>.service` + `microvm-tap-interfaces@<vm>.service`
-emitted today. The per-VM systemd templates are scheduled for removal
-in the P6 deletion sweep.
+This sequence is the daemon-side equivalent of the retired systemd
+dependency graph `microvm-setup@<vm>.service` +
+`microvm-tap-interfaces@<vm>.service`.
 
 ## Failure semantics
 
@@ -160,22 +155,18 @@ Today the daemon **logs** the planned host-prep DAG on every VM
 start (so the gate set `tests/host-prep-dag-eval.sh` and operators
 can audit the planned step set) but only dispatches the broker ops
 when `NIXLING_HOST_PREP_DAG_EXECUTE=1` is set in the daemon's
-environment. This gate is removed once the P2/P3 broker handlers
-listed above stop returning `Unimplemented`.
+environment. This gate remains in place while the deferred broker
+handlers listed above still return `Unimplemented`.
 
 ## Cross-references
 
 - **Operating manual**: `AGENTS.md` §"Critical subsystems — handle
-  with care" row "Control plane (W2+)" — this DAG lives in the
+  with care" row "Control plane" — this DAG lives in the
   control-plane scope and the operator-facing failure envelope is
   emitted by `nixlingd::dispatch_broker_vm_start`.
-- **Plan**: `~/.copilot/session-state/<id>/plan.md` §"Phase 2:
-  daemon-side host-prep replaces per-VM systemd templates" and
-  task `ph2-dag-host-prep`.
 - **Module docs**: `packages/nixling-host/src/host_prep_dag.rs` —
   authoritative step kind definitions and topo-sort algorithm.
-- **Sibling P2 agents**:
-  - `ph2-p2-ownership-matrix` (owns the `OwnershipMatrixCheck`
-    broker handler + `nixling_host::ownership_matrix`).
-  - `ph2-p2-ssh-host-key-preflight` (owns the `SshHostKeyPreflight`
-    broker handler).
+- [`per-vm-state-ownership.md`](./per-vm-state-ownership.md) — the
+  `OwnershipMatrixCheck` preflight contract.
+- [`ssh-host-key-preflight.md`](./ssh-host-key-preflight.md) — the
+  `SshHostKeyPreflight` contract.

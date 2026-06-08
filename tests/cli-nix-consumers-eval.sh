@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# tests/cli-nix-consumers-eval.sh — P6 ph6-p6-cli-nix-migrations
+# tests/cli-nix-consumers-eval.sh—
 # regression gate.
 #
 # Asserts that every consumer of `nixos-modules/cli.nix` has been
-# relocated before the sibling `ph6-remove-bash-cli` agent deletes
+# relocated before the sibling deletion removes
 # the file. The only acceptable references to cli.nix in the tree
 # are:
 #
@@ -130,7 +130,7 @@ done
 ok "no live import ./cli.nix outside cli.nix / this gate"
 
 # 6. Sanity: cli.nix still exists on disk in this commit (the
-#    sibling ph6-remove-bash-cli agent owns the actual deletion).
+#    sibling agent owns the actual deletion).
 #    If the file is gone, the gate trivially passes — that's the
 #    desired post-sibling-merge end state.
 if [ -f nixos-modules/cli.nix ]; then

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# W3 s1 L1c gate: pidfd handoff contract.
+# Pidfd handoff contract.
 #
 # Plan ref: ~/.copilot/session-state/<id>/plan.md
-#   §"W3 pidfd handoff contract"
+#   §" pidfd handoff contract"
 #
 # Asserts:
 #   - SCM_RIGHTS transports a pidfd from broker → daemon with CLOEXEC
@@ -16,7 +16,7 @@
 #   - `nixlingd::supervisor::pidfd::set_child_subreaper_with_self_test`
 #     succeeds and is idempotent.
 #
-# Per AGENTS.md "W3 tests/static.sh ownership rule": this script is
+# Per AGENTS.md " tests/static.sh ownership rule": this script is
 # scope-owned by s1; the integrator wires it into `tests/static.sh` in
 # a separate commit.
 

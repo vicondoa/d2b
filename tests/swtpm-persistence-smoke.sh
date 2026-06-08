@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/swtpm-persistence-smoke.sh — P1 critical-subsystem regression.
+# tests/swtpm-persistence-smoke.sh— critical-subsystem regression.
 #
-# Plan: ph1-p1-swtpm-persistence.
+# Plan:.
 #
 # This is the END-TO-END regression for the AGENTS.md "Critical
 # subsystems" guard on /var/lib/nixling/vms/<vm>/swtpm. The narrower

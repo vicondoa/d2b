@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assert W0a Rust CLI/daemon stubs exit cleanly without leaving runtime state.
+# Assert Rust CLI/daemon stubs exit cleanly without leaving runtime state.
 
 set -euo pipefail
 

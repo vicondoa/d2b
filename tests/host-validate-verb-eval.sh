@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/host-validate-verb-eval.sh — P5 ph5-p5-host-validate-verb Layer-1 gate.
+# tests/host-validate-verb-eval.sh— Layer-1 gate.
 #
 # Asserts the operator-facing `nixling host validate` composite
 # preflight verb:
@@ -9,8 +9,8 @@
 #      either, per the --apply-or-dry-run-required envelope).
 #   2. The wave vocabulary in the verb's catalog
 #      (`packages/nixling/src/host_validate.rs::WAVE_CATALOG`) is
-#      byte-identical to the W18 readiness vocabulary in
-#      `nixos-modules/options-daemon.nix:readinessWaveSpecs`. The W18
+#      byte-identical to the readiness vocabulary in
+#      `nixos-modules/options-daemon.nix:readinessWaveSpecs`. The
 #      auto-flip gate
 #      (`options-daemon.nix:validationEvidencePresent`) consumes these
 #      evidence records; drift between the two surfaces silently
@@ -19,7 +19,7 @@
 #      validator presence map; no evidence is written; exit 0.
 #   4. `--apply --wave p1` (or any wave with all validators present)
 #      writes `/var/lib/nixling/validated/<wave>.json` with the
-#      canonical W18 schema fields:
+#      canonical schema fields:
 #         - wave (string equal to <wave>)
 #         - timestamp (non-empty string)
 #         - operatorSignature (non-empty string)
@@ -67,7 +67,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------
-# Phase 1: build the nixling CLI binary used by the gate.
+# Build the nixling CLI binary used by the gate.
 # Honour the AGENTS.md "Disk hygiene contract" by reusing the
 # shared cargo target dir; honour the integrator instruction to
 # unset RUSTC_WRAPPER for these dev builds.
@@ -102,9 +102,9 @@ fi
 log "  setup: using BIN=$BIN"
 
 # ---------------------------------------------------------------
-# Phase 2: wave-vocabulary parity between the Rust catalog and
+# Wave-vocabulary parity between the Rust catalog and
 # nixos-modules/options-daemon.nix:readinessWaveSpecs. This is the
-# load-bearing W18 contract check.
+# load-bearing contract check.
 # ---------------------------------------------------------------
 
 CATALOG_FILE="$ROOT/packages/nixling/src/host_validate.rs"
@@ -143,7 +143,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# Phase 3: scratch fixtures.
+# Scratch fixtures.
 # ---------------------------------------------------------------
 
 SCRATCH=$(nl_mktemp -d -t nixling-host-validate-eval)
@@ -169,7 +169,7 @@ done <<<"$catalog_scripts"
 pass_check "phase3: staged $(printf '%s\n' "$catalog_scripts" | wc -l) validator stubs"
 
 # ---------------------------------------------------------------
-# Phase 4: refusal when neither --dry-run nor --apply is given.
+# Refusal when neither --dry-run nor --apply is given.
 # ---------------------------------------------------------------
 
 set +e
@@ -187,7 +187,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# Phase 5: --dry-run --json reports every wave; no evidence written.
+# --dry-run --json reports every wave; no evidence written.
 # ---------------------------------------------------------------
 
 set +e
@@ -220,7 +220,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# Phase 6: --apply --wave p1 writes the canonical evidence record.
+# --apply --wave p1 writes the canonical evidence record.
 # ---------------------------------------------------------------
 
 rm -rf "$EVIDENCE" && mkdir -p "$EVIDENCE"
@@ -267,7 +267,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# Phase 7: --apply with missing validators refuses (exit 78,
+# --apply with missing validators refuses (exit 78,
 # evidence NOT written).
 # ---------------------------------------------------------------
 
@@ -291,7 +291,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# Phase 8: --apply --wave bogus returns the unknown-wave envelope.
+# --apply --wave bogus returns the unknown-wave envelope.
 # ---------------------------------------------------------------
 
 set +e

@@ -5,7 +5,7 @@
 > passthrough device is attached to a target VM.
 >
 > Source: [`packages/nixlingd/src/usbip_state_machine.rs`](../../packages/nixlingd/src/usbip_state_machine.rs).
-> Plan row: `ph3-p3-usbip-state-machine` (P3).
+> Plan row: USBIP state-machine hardening.
 > Canonical-order anchor: [AGENTS.md "Critical subsystems"](../../AGENTS.md#critical-subsystems--handle-with-care).
 
 ## Why a state machine

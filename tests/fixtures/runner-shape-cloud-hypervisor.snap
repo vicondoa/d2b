@@ -1,0 +1,38 @@
+# argv
+microvm@personal-dev
+--cpus
+boot=1
+--watchdog
+--kernel
+/nix/store/<HASH>-linux-6.18.33-dev/vmlinux
+--initramfs
+/nix/store/<HASH>-initrd-linux-6.18.33/initrd
+--cmdline
+earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 root=fstab loglevel=4 lsm=landlock,yama,bpf init=/nix/store/<HASH>-nixos-system-personal-dev-26.05pre-git/init
+--seccomp
+true
+--memory
+shared=on,size=512M
+--platform
+oem_strings=[io.systemd.credential:vmm.notify_socket=vsock-stream:2:8888]
+--console
+null
+--serial
+tty
+--vsock
+cid=7616218,socket=/var/lib/nixling/vms/personal-dev/notify.vsock
+--fs
+socket=/run/nixling/vms/personal-dev/ro-store.sock,tag=ro-store
+socket=/run/nixling/vms/personal-dev/nl-meta.sock,tag=nl-meta
+socket=/run/nixling/vms/personal-dev/nl-hkeys.sock,tag=nl-hkeys
+socket=/run/nixling/vms/personal-dev/nl-ssh-host.sock,tag=nl-ssh-host
+--api-socket
+/var/lib/nixling/vms/personal-dev/personal-dev.sock
+--net
+mac=02:00:07:5E:AA:0A,tap=personal-l10
+--tpm
+socket=/run/nixling/vms/personal-dev/tpm.sock
+# deviceBinds
+/dev/kvm
+/dev/vhost-net
+/dev/net/tun

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/multi-env-daemon-backed.sh — Layer-1 gate for the W3 s5
+# tests/multi-env-daemon-backed.sh— Layer-1 gate for the s5
 # daemon-backed `examples/multi-env` variant.
 #
 # Asserts:
@@ -30,7 +30,7 @@
 #   4. Emitted `vms.json` (manifest) for the daemon-experimental
 #      variant does NOT contain a `microvm@work-app.service` or
 #      `nixling@work-app.service` reference (work-app is daemon-
-#      supervised; single-writer invariant per plan §"W3 daemon-vs-
+#      supervised; single-writer invariant per plan §" daemon-vs-
 #      legacy migration boundary").
 #   5. Emitted `processes.json` for the daemon-experimental variant
 #      drops the per-node systemd `unit` field for every node of the
@@ -41,8 +41,8 @@
 #      contains `microvm@work-app.service` and `microvm@personal-app.service`.
 #
 # This script does NOT mutate host state; it only evaluates the
-# in-tree example flake. Scratch state goes under repo-local
-# scratch via `nl_mktemp` so the W2fu4 H8/H9 reaper can clean it.
+# in-tree example flake. Scratch state goes under repo-local scratch via
+# `nl_mktemp` so the reaper can clean it.
 
 set -uo pipefail
 

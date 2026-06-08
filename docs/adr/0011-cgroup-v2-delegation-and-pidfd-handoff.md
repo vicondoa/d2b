@@ -227,6 +227,22 @@ W3 must pick:
    `nixlingd` does NOT set `PR_SET_CHILD_SUBREAPER` in v1.1;
    the R11 kernel reviewer flagged this contradiction.
 
+   **Updated v1.2 (D7).** The broker now runs a dedicated background
+   Tokio SIGCHLD reap loop for SpawnRunner children. On SIGCHLD it
+   iterates the broker's pidfd registry and calls `waitid(P_PIDFD,
+   WEXITED|WNOHANG)` on each registered child pidfd, removing exited
+   entries from the registry and recording a typed `ChildReaped`
+   event. The event is written to the broker audit log for forensics
+   and also buffered in-memory (256-entry FIFO) for daemon pickup via
+   the additive `PollChildReaped` IPC request. `nixlingd` records
+   those notifications in its `BrokerReapLog` and, on
+   `waitid(P_PIDFD, ... WNOWAIT)` returning `ECHILD`, treats the
+   broker notification as authoritative and returns immediately
+   instead of re-entering `/proc` polling. Responsibility remains the
+   same: the broker is the direct parent and the sole reaper for the
+   SpawnRunner-child population; neither broker nor daemon becomes a
+   subreaper.
+
 ## Rejected alternatives
 
 ### libcgroup

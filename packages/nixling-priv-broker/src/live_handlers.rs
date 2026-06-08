@@ -1,4 +1,4 @@
-//! W4-fu live broker request handlers.
+//! Live broker request handlers.
 //!
 //! These functions execute the side-effectful work for the broker's
 //! production dispatch path — `pidfd_open(2)` + start-time
@@ -16,12 +16,15 @@
 //!
 //! Unit-tested with `FakeReconcileExecutor` (for reconcile
 //! handlers) and pure-data assertions (for the spawn preflight).
-//! The `pidfd_open` and `clone3` paths require a live kernel and
-//! are exercised by the broker integration tests (broker-pidfd-
-//! adopt-roundtrip.sh, W4-fu broker-spawn-runner-smoke.sh).
+//! The `pidfd_open` and `clone3` paths require a live kernel and are
+//! exercised by the broker integration tests (broker-pidfd-adopt-roundtrip.sh
+//! and broker-spawn-runner-smoke.sh).
 
-use std::os::fd::OwnedFd;
+use std::fs::File;
+use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::ops::exec_reconcile::{
     GeneratedSshKey, IpRouteVerb, ReconcileExecError, ReconcileExecutor,
@@ -35,6 +38,7 @@ use nixling_core::bundle_resolver::{
 use nixling_core::minijail_profile::CgroupPlacement;
 use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::ActivationMode;
+use rustix::fs::{Mode, OFlags, ResolveFlags, CWD};
 
 /// Aggregate error type for live handlers. Kept narrow so the
 /// dispatch layer can match on the precise failure shape.
@@ -69,19 +73,19 @@ pub enum LiveHandlerError {
     },
     /// Reconcile executor returned an error.
     ReconcileExec(ReconcileExecError),
-    /// W13 (W6-fu) per-busid lock failure (already-held, owner
-    /// mismatch on release, or I/O error on lock root).
+    /// Per-busid lock failure (already-held, owner mismatch on release,
+    /// or I/O error on lock root).
     UsbipLock(String),
-    /// W15 (W9-fu) host install / migrate writer failure.
+    /// Host install / migrate writer failure.
     HostInstall(String),
-    /// W14 LiveNative activation / GC / key-management failures that
-    /// are not raw executor errors.
+    /// Activation / GC / key-management failures that are not raw
+    /// executor errors.
     Activation(String),
     Gc(String),
     KeysRotate(String),
     HostKey(String),
-    /// W12 NetworkManager reload failure after writing the unmanaged
-    /// config snippet.
+    /// NetworkManager reload failure after writing the unmanaged config
+    /// snippet.
     NmReload(String),
 }
 
@@ -129,7 +133,7 @@ pub struct OpenPidfdResult {
     pub verified_start_time_ticks: u64,
 }
 
-/// W4-fu live broker `OpenPidfd` handler.
+/// Live broker `OpenPidfd` handler.
 ///
 /// Performs the open-AND-verify atomically:
 /// 1. `pidfd_open(pid)`.
@@ -139,10 +143,9 @@ pub struct OpenPidfdResult {
 /// 5. On mismatch: drop the pidfd (closing it) and return
 ///    [`LiveHandlerError::PidfdRace`].
 ///
-/// This closes the W*-fu GPT-5.5 panel CRITICAL pid-reuse race
-/// — the daemon's pre-call /proc read is augmented by the broker's
-/// post-open re-check so the returned pidfd is provably bound to
-/// the original process.
+/// This closes the critical pid-reuse race — the daemon's pre-call
+/// /proc read is augmented by the broker's post-open re-check so the
+/// returned pidfd is provably bound to the original process.
 pub fn live_open_pidfd(
     pid: i32,
     expected_start_time_ticks: u64,
@@ -179,7 +182,7 @@ pub fn live_open_pidfd(
     })
 }
 
-/// W4-fu live broker `ApplyNftables` handler. Wraps the
+/// Live broker `ApplyNftables` handler. Wraps the
 /// `exec_reconcile::ReconcileExecutor::apply_nft_script` call.
 pub fn live_apply_nftables(
     executor: &dyn ReconcileExecutor,
@@ -191,7 +194,7 @@ pub fn live_apply_nftables(
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
-/// W4-fu live broker `ApplySysctl` handler.
+/// Live broker `ApplySysctl` handler.
 pub fn live_apply_sysctl(
     executor: &dyn ReconcileExecutor,
     key: &str,
@@ -202,8 +205,8 @@ pub fn live_apply_sysctl(
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
-/// W4-fu live broker `UpdateHostsFile` handler. Atomic write with
-/// fsync via the executor.
+/// Live broker `UpdateHostsFile` handler. Atomic write with fsync via
+/// the executor.
 pub fn live_update_hosts_file(
     executor: &dyn ReconcileExecutor,
     path: &Path,
@@ -215,7 +218,7 @@ pub fn live_update_hosts_file(
         .map_err(LiveHandlerError::ReconcileExec)
 }
 
-/// W4-fu live broker `ApplyRoute` handler.
+/// Live broker `ApplyRoute` handler.
 pub fn live_apply_route(
     executor: &dyn ReconcileExecutor,
     ip_binary: &Path,
@@ -667,7 +670,7 @@ impl NmReloadMethod {
     }
 }
 
-/// W12 live broker `ApplyNmUnmanaged` handler.
+/// Live broker `ApplyNmUnmanaged` handler.
 pub fn live_apply_nm_unmanaged(
     executor: &dyn ReconcileExecutor,
     intent: &nixling_core::bundle_resolver::ResolvedNmUnmanagedIntent,
@@ -745,7 +748,7 @@ where
     }
 }
 
-/// W13 (W6-fu) live broker `UsbipBind` handler.
+/// Live broker `UsbipBind` handler.
 ///
 /// 1. Acquire `/run/nixling/locks/usbip/<bus_id>` for `vm_name`
 ///    (refuses if another VM already owns the busid).
@@ -774,13 +777,12 @@ pub fn live_usbip_bind(
     Ok(())
 }
 
-/// W13 (W6-fu) live broker `UsbipUnbind` handler.
+/// Live broker `UsbipUnbind` handler.
 ///
 /// 1. Verify the lock's recorded owner matches `vm_name` BEFORE
-///    touching usbip. This is the kernel-panel HIGH fix: pre-W14b
-///    the unbind shellout ran first, so a stale-but-authenticated
-///    request from VM A could detach VM B's device before the
-///    owner-mismatch was caught at release_lock time.
+///    touching usbip. The unbind shellout previously ran first, so a
+///    stale-but-authenticated request from VM A could detach VM B's
+///    device before the owner-mismatch was caught at release_lock time.
 /// 2. Run `usbip unbind --busid <bus_id>` via the executor.
 /// 3. Release `/run/nixling/locks/usbip/<bus_id>` (re-verifies
 ///    owner; missing lock is idempotent).
@@ -813,15 +815,13 @@ pub fn live_usbip_unbind(
     Ok(())
 }
 
-/// W15 (W9-fu live host install): run the bundle-resolved
-/// systemd unit install + `--enable` / `--start` flow against
-/// the host's systemctl binary. Returns a typed response the
-/// daemon echoes back to the operator.
+/// Run the bundle-resolved systemd unit install + `--enable` /
+/// `--start` flow against the host's systemctl binary. Returns a typed
+/// response the daemon echoes back to the operator.
 ///
-/// W16 (W3 ifname unification): the W15 install path now also
-/// writes the canonical `host-runtime.json` artifact (the broker's
-/// view of the per-env / per-VM ifnames) so downstream consumers
-/// can read it as a single source of truth.
+/// The install path also writes the canonical `host-runtime.json`
+/// artifact (the broker's view of the per-env / per-VM ifnames) so
+/// downstream consumers can read it as a single source of truth.
 pub fn live_run_host_install(
     executor: &dyn ReconcileExecutor,
     intent: &nixling_core::bundle_resolver::ResolvedInstallerIntent,
@@ -832,10 +832,9 @@ pub fn live_run_host_install(
     live_run_host_install_with_runtime(executor, intent, enable, start, no_start, None)
 }
 
-/// W16 variant that also accepts a host-runtime artifact to write
-/// alongside the installer artifacts. The W12+W15 broker dispatch
-/// path constructs the runtime from the loaded bundle resolver and
-/// passes it through.
+/// Variant that also accepts a host-runtime artifact to write alongside
+/// the installer artifacts. The broker dispatch path constructs the
+/// runtime from the loaded bundle resolver and passes it through.
 pub fn live_run_host_install_with_runtime(
     executor: &dyn ReconcileExecutor,
     intent: &nixling_core::bundle_resolver::ResolvedInstallerIntent,
@@ -906,9 +905,9 @@ where
         artifacts_written.push(artifact.path.display().to_string());
     }
 
-    // W16: write the host-runtime.json snapshot. Always overwrites
-    // because the broker is the single writer and the artifact is
-    // the runtime view of the bundle (it tracks the live install).
+    // Write the host-runtime.json snapshot. Always overwrites because
+    // the broker is the single writer and the artifact is the runtime
+    // view of the bundle (it tracks the live install).
     if let Some(runtime) = host_runtime {
         let parent = runtime.path.parent().ok_or_else(|| {
             LiveHandlerError::HostInstall(format!(
@@ -1245,10 +1244,9 @@ pub(crate) fn update_host_runtime_nft_hash(
     Ok(())
 }
 
-/// W15 (W9-fu migrate writer): execute the bundle-resolved
-/// migration plan. Today writes a marker file recording the
-/// migration record per VM; the daemon supervisor's pidfd-table
-/// hand-off ships with the W4-fu-fu supervisor live wiring.
+/// Execute the bundle-resolved migration plan. Today writes a marker
+/// file recording the migration record per VM; the daemon supervisor's
+/// pidfd-table hand-off uses the supervisor live wiring.
 pub fn live_run_migrate(
     executor: &dyn ReconcileExecutor,
     intent: &nixling_core::bundle_resolver::ResolvedMigrateIntent,
@@ -1305,7 +1303,7 @@ fn chrono_like_utc_now_string() -> String {
     format!("unix-{secs}")
 }
 
-/// W13 (W6-fu) live broker `UsbipProxyReconcile` handler.
+/// Live broker `UsbipProxyReconcile` handler.
 ///
 /// Walks each (bus_id, vm_name, lock_path) tuple from the trusted
 /// bundle and asserts the lockfile (if present) records the
@@ -1313,11 +1311,10 @@ fn chrono_like_utc_now_string() -> String {
 /// if every present lock matches expected ownership. Missing locks
 /// are treated as "not bound" (no-op).
 ///
-/// W13 deliberately does NOT auto-rebind: reconcile-after-restart
-/// is the daemon's responsibility (the daemon classifies each
-/// existing claim against the bundle and either issues `UsbipBind`
-/// or `UsbipUnbind` to resolve drift). This handler is the
-/// validation half.
+/// This handler deliberately does NOT auto-rebind: reconcile-after-restart
+/// is the daemon's responsibility (the daemon classifies each existing
+/// claim against the bundle and either issues `UsbipBind` or
+/// `UsbipUnbind` to resolve drift). This handler is the validation half.
 pub fn live_usbip_proxy_reconcile(
     expectations: &[(String, String, std::path::PathBuf)],
 ) -> Result<(), LiveHandlerError> {
@@ -1411,12 +1408,11 @@ fn ensure_runner_cgroup_leaf<B: nixling_host::cgroup::CgroupBackend>(
         return Ok(None);
     };
     let leaf_path = cgroup_leaf_path(parent_slice, &vm, &role_segments);
-    // v1.1.1 live-deploy fu9: always materialize the cgroup leaf
-    // dir tree even when placement.delegated == false. The
-    // delegated flag is about controller delegation (enabling
-    // subtree control), not whether the directory exists. The
-    // broker spawn path always needs the leaf to write the
-    // child pid into cgroup.procs.
+    // Always materialize the cgroup leaf dir tree even when
+    // placement.delegated == false. The delegated flag is about
+    // controller delegation (enabling subtree control), not whether the
+    // directory exists. The broker spawn path always needs the leaf to
+    // write the child pid into cgroup.procs.
     let slice = crate::ops::cgroup::create_nixling_slice(
         backend,
         unified_hierarchy_root,
@@ -1466,7 +1462,8 @@ fn prepare_runner_cgroup_fd(
         Path::new(crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE),
         uid,
         gid,
-    )? else {
+    )?
+    else {
         return Ok(None);
     };
     let fd = open(
@@ -1480,6 +1477,60 @@ fn prepare_runner_cgroup_fd(
     Ok(Some(fd))
 }
 
+/// Maps known internal seccomp policy ref names to the `DeviceClass`
+/// sets that define their ioctl allowlist.
+///
+/// These correspond 1-to-1 to the `seccompPolicyRef` values emitted by
+/// `nixos-modules/minijail-profiles.nix`. A non-absolute `policy_ref`
+/// NOT present in this map is an unknown policy and returns an error.
+pub(crate) fn policy_ref_device_classes(
+    policy_ref: &str,
+) -> Option<&'static [nixling_host::devices::DeviceClass]> {
+    use nixling_host::devices::DeviceClass;
+    match policy_ref {
+        // cloud-hypervisor-runner binds /dev/kvm + /dev/vhost-net + /dev/net/tun.
+        // Returns empty (permissive BPF) — KVM uses 100+ ioctls and
+        // /dev/kvm access is gated by ACL on the device node + per-VM UID.
+        // BPF enforcement of KVM ioctl matrix is tracked for a future
+        // release (requires complete matrix from CH 52 source). The
+        // stabilization choice is to install permissive BPF so Seccomp:2
+        // remains visible to the doctor probe without breaking CH spawn.
+        "w1-cloud-hypervisor-runner" => Some(&[]),
+        // virtiofsd accesses /dev/fuse via read/write; FUSE_NO_IOCTL
+        // sentinel → permissive BPF (FUSE mount handshake needs ioctls).
+        "w1-virtiofsd" => Some(&[DeviceClass::Fuse]),
+        // host-reconcile, store-virtiofs-preflight, guest-ssh-readiness:
+        // no device binds → permissive BPF (these run nix toolchain
+        // which uses many ioctls for terminal/file operations).
+        "w1-host-reconcile" | "w1-store-virtiofs-preflight" | "w1-guest-ssh-readiness" => Some(&[]),
+        // swtpm is a software TPM emulator; no hardware device ioctls,
+        // but it uses terminal/file ioctls during init → permissive BPF.
+        "w1-swtpm" => Some(&[]),
+        // gpu sidecar binds the full GPU device set.
+        // Returns empty (permissive BPF) — same reasoning as KVM: DRM
+        // ioctl surface is huge; ACL on /dev/dri/* + per-VM UID is
+        // the primary control.
+        "w1-gpu" => Some(&[]),
+        // Render-node-only broker-pre-NS GPU sidecar (ADR 0021).
+        // Render node uses small DRM ioctl set; matrix is representative.
+        // Keep restrictive BPF.
+        "w1-gpu-render-node" => Some(&[DeviceClass::Dri]),
+        // video decoder sidecar uses /dev/dri for DRM ioctls.
+        // Same as gpu: permissive due to incomplete DRM ioctl matrix.
+        "w1-video" => Some(&[]),
+        // audio sidecar connects to PipeWire socket; PipewireSocket has
+        // no ioctl entries → permissive BPF (libpipewire uses ioctls).
+        "w1-audio" => Some(&[DeviceClass::PipewireSocket]),
+        // vsock-relay and otel-host-bridge: pre-opened fds only, no device ioctls.
+        "w1-vsock-relay" | "w1-otel-host-bridge" => Some(&[]),
+        // usbipd backend attaches to /dev/usbip-host; small ioctl matrix complete.
+        "w1-usbip" => Some(&[DeviceClass::UsbipHost]),
+        // USBIP proxy only binds/listens/connects TCP sockets; no device ioctls.
+        "w1-usbip-proxy" => Some(&[]),
+        _ => None,
+    }
+}
+
 fn load_runner_seccomp(
     plan: &SpawnRunnerPlan,
 ) -> Result<Option<crate::sys::pidfd_sys::SeccompProgram>, LiveHandlerError> {
@@ -1491,18 +1542,353 @@ fn load_runner_seccomp(
                     detail: format!("load seccomp program {policy_path}: {err}"),
                 })
         }
+        // Compile BPF from the ioctl_policy matrix for known internal
+        // policy refs. The Ok(None) silent-skip deferral from
+        // v1.1.2-final is retired.
         Some(policy_ref) => {
+            let classes = policy_ref_device_classes(policy_ref).ok_or_else(|| {
+                LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "InvalidSeccompPolicy: unknown internal policy ref {policy_ref:?}"
+                    ),
+                }
+            })?;
             tracing::debug!(
                 seccomp_policy_ref = %policy_ref,
-                "spawn runner seccomp policy ref not resolved to an absolute path; skipping filter load"
+                device_classes = ?classes,
+                "compiling seccomp BPF from ioctl_policy matrix"
             );
-            Ok(None)
+            let compiled = nixling_host::seccomp::compile_ioctl_policy_to_bpf(classes);
+            Ok(Some(crate::sys::pidfd_sys::SeccompProgram::from_compiled(
+                compiled,
+            )))
         }
         None => Ok(None),
     }
 }
 
-/// W4-fu live broker `SpawnRunner` handler.
+#[derive(Debug, Clone, Copy)]
+enum AclPathKind {
+    Directory,
+    Socket,
+    CharDevice,
+}
+
+fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(), String> {
+    let fd = match rustix::fs::openat2(
+        CWD,
+        path,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::NO_SYMLINKS,
+    ) {
+        Ok(fd) => fd,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let file = File::from(fd);
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("fstat {}: {err}", path.display()))?;
+    let file_type = metadata.file_type();
+    let matches_kind = match kind {
+        AclPathKind::Directory => file_type.is_dir(),
+        AclPathKind::Socket => file_type.is_socket(),
+        AclPathKind::CharDevice => file_type.is_char_device(),
+    };
+    if !matches_kind {
+        return Err(format!(
+            "refusing setfacl on {}: expected {:?}, mode=0o{:o}",
+            path.display(),
+            kind,
+            std::os::unix::fs::MetadataExt::mode(&metadata)
+        ));
+    }
+
+    crate::sys::pidfd_sys::run_setfacl_on_fd(file.as_fd(), acl_spec)
+        .map_err(|err| format!("setfacl {acl_spec} on {}: {err}", path.display()))
+}
+
+fn setfacl_verified_device(
+    path: &Path,
+    operation: &str,
+    acl_spec: &str,
+    missing_ok: bool,
+) -> Result<(), String> {
+    // setfacl refuses /proc/<pid>/fd/<N> for character devices on
+    // this host, so device nodes use exact-path setfacl after
+    // openat2(RESOLVE_NO_SYMLINKS) verifies the allowlisted /dev node
+    // is a char device. Callers only pass closed-set broker constants
+    // (/dev/kvm, /dev/vhost-net, /dev/net/tun, /dev/dri/renderD128),
+    // never bundle- or user-supplied arbitrary paths.
+    let fd = match rustix::fs::openat2(
+        CWD,
+        path,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::NO_SYMLINKS,
+    ) {
+        Ok(fd) => fd,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && missing_ok => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let file = File::from(fd);
+    let before = verified_char_device_metadata(path, &file)?;
+    let output = Command::new("/run/current-system/sw/bin/setfacl")
+        .arg(operation)
+        .arg(acl_spec)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| format!("spawn setfacl for {}: {err}", path.display()))?;
+    if output.status.success() {
+        let after_fd = match rustix::fs::openat2(
+            CWD,
+            path,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS,
+        ) {
+            Ok(fd) => fd,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && missing_ok => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "post-setfacl openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
+                    path.display()
+                ));
+            }
+        };
+        let after_file = File::from(after_fd);
+        let after = verified_char_device_metadata(path, &after_file)?;
+        if before != after {
+            if operation == "-m" {
+                if let Some(revoke_spec) = acl_spec.rsplit_once(':').map(|(entry, _)| entry) {
+                    let _ = Command::new("/run/current-system/sw/bin/setfacl")
+                        .arg("-x")
+                        .arg(revoke_spec)
+                        .arg(path)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+            }
+            return Err(format!(
+                "setfacl target changed while applying ACL on {}: before={before:?} after={after:?}",
+                path.display()
+            ));
+        }
+        Ok(())
+    } else {
+        Err(format!(
+            "setfacl {} {} on {} failed status={:?}: {}",
+            operation,
+            acl_spec,
+            path.display(),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeviceIdentity {
+    dev: u64,
+    ino: u64,
+    rdev: u64,
+}
+
+fn verified_char_device_metadata(path: &Path, file: &File) -> Result<DeviceIdentity, String> {
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("fstat {}: {err}", path.display()))?;
+    if !metadata.file_type().is_char_device() {
+        return Err(format!(
+            "refusing setfacl on {}: expected CharDevice, mode=0o{:o}",
+            path.display(),
+            metadata.mode()
+        ));
+    }
+    Ok(DeviceIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        rdev: metadata.rdev(),
+    })
+}
+
+fn env_value<'a>(plan: &'a SpawnRunnerPlan, key: &str) -> Option<&'a str> {
+    plan.env
+        .iter()
+        .filter_map(|entry| entry.split_once('='))
+        .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
+}
+
+pub(crate) fn live_grant_verified_device_acl(
+    path: &Path,
+    uid: u32,
+) -> Result<(), LiveHandlerError> {
+    live_set_verified_device_acl(path, uid, "-m", &format!("u:{uid}:rw"), "grant", false)
+}
+
+pub(crate) fn live_revoke_verified_device_acl(
+    path: &Path,
+    uid: u32,
+) -> Result<(), LiveHandlerError> {
+    live_set_verified_device_acl(path, uid, "-x", &format!("u:{uid}"), "revoke", true)
+}
+
+fn live_set_verified_device_acl(
+    path: &Path,
+    uid: u32,
+    operation: &str,
+    acl_spec: &str,
+    verb: &str,
+    missing_ok: bool,
+) -> Result<(), LiveHandlerError> {
+    setfacl_verified_device(path, operation, acl_spec, missing_ok).map_err(|detail| {
+        LiveHandlerError::Activation(format!(
+            "{verb} USBIP device ACL for runner uid {uid}: {detail}"
+        ))
+    })
+}
+
+fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    if plan.uid == 0 {
+        return Ok(());
+    }
+    for device in &plan.mount_policy.device_binds {
+        match device.as_str() {
+            "/dev/kvm" | "/dev/vhost-net" | "/dev/net/tun" | "/dev/dri/renderD128" => {
+                setfacl_verified_device(
+                    Path::new(device),
+                    "-m",
+                    &format!("u:{}:rw", plan.uid),
+                    true,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!("refresh device ACL for runner uid {}: {detail}", plan.uid),
+                })?;
+            }
+            _ => {}
+        }
+    }
+
+    if matches!(
+        plan.seccomp_policy_ref.as_deref(),
+        Some("w1-audio" | "w1-gpu" | "w1-gpu-render-node")
+    ) {
+        let runtime_dir =
+            env_value(plan, "PIPEWIRE_RUNTIME_DIR").or_else(|| env_value(plan, "XDG_RUNTIME_DIR"));
+        if let Some(runtime_dir) = runtime_dir {
+            let runtime = Path::new(runtime_dir);
+            setfacl_fd_safe(
+                runtime,
+                &format!("u:{}:rx", plan.uid),
+                AclPathKind::Directory,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh session runtime ACL for runner uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            for socket in ["pipewire-0", "wayland-0", "pulse/native"] {
+                setfacl_fd_safe(
+                    &runtime.join(socket),
+                    &format!("u:{}:rwx", plan.uid),
+                    AclPathKind::Socket,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "refresh session socket ACL {socket} for runner uid {}: {detail}",
+                        plan.uid
+                    ),
+                })?;
+            }
+        }
+    }
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-video") {
+        let runtime_dir =
+            env_value(plan, "PIPEWIRE_RUNTIME_DIR").or_else(|| env_value(plan, "XDG_RUNTIME_DIR"));
+        if let Some(runtime_dir) = runtime_dir {
+            let runtime = Path::new(runtime_dir);
+            setfacl_fd_safe(
+                runtime,
+                &format!("u:{}:---", plan.uid),
+                AclPathKind::Directory,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "revoke session runtime ACL for video runner uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            for socket in ["pipewire-0", "wayland-0", "pulse/native"] {
+                let path = runtime.join(socket);
+                setfacl_fd_safe(
+                    &path,
+                    &format!("u:{}:---", plan.uid),
+                    AclPathKind::Socket,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "revoke session socket ACL for video runner uid {}: {detail}",
+                        plan.uid
+                    ),
+                })?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cloud_hypervisor_api_socket(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-cloud-hypervisor-runner") {
+        return None;
+    }
+    plan.argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--api-socket").then(|| PathBuf::from(&pair[1])))
+}
+
+fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            if api_socket.exists() {
+                match setfacl_fd_safe(&api_socket, "u:nixlingd:rwx", AclPathKind::Socket) {
+                    Ok(()) => return,
+                    Err(err) => {
+                        tracing::debug!(
+                            path = %api_socket.display(),
+                            error = %err,
+                            "cloud-hypervisor api socket ACL refresh not ready yet",
+                        );
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        tracing::warn!(
+            path = %api_socket.display(),
+            "cloud-hypervisor api socket ACL refresh timed out",
+        );
+    });
+}
+
+/// Live broker `SpawnRunner` handler.
 ///
 /// 1. Validates the plan via `ops::spawn_runner::preflight`.
 /// 2. Builds the CString triple for execve.
@@ -1523,27 +1909,64 @@ pub fn live_spawn_runner(
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan)?;
     let cgroup_procs_fd = prepare_runner_cgroup_fd(&plan.cgroup_placement)?;
+    refresh_spawn_runner_acls(&plan)?;
+    let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
+
+    // Pre-open /dev/dri/renderD128 for gpu-render-node broker-pre-NS
+    // spawns (ADR 0021).
+    //
+    // Detection: seccomp_policy_ref == "w1-gpu-render-node" AND
+    // user_namespace.is_some() (both conditions must hold; the policy
+    // ref is the canonical identifier for the render-node-only profile
+    // and avoids introducing a new SpawnRunnerPlan field).
+    //
+    // The fd is opened here (parent side, before clone3(CLONE_NEWUSER))
+    // so the DAC permission check runs as the broker UID — the child's
+    // user-NS UID mapping provides no host-side access. The OwnedFd is
+    // moved into RunnerIsolationSpec.pre_opened_device_fds; the broker
+    // sys layer dup2's it to RENDER_NODE_INHERITED_FD (10) in the child
+    // closure before execve. The crosvm argv carries
+    // --gpu-device-node /proc/self/fd/10 as the render node path.
+    let pre_opened_device_fds: Vec<std::os::fd::OwnedFd> = if plan.seccomp_policy_ref.as_deref()
+        == Some("w1-gpu-render-node")
+        && plan.user_namespace.is_some()
+    {
+        let render_fd = crate::ops::device::open_device_fd(
+            std::path::Path::new("/dev/dri/renderD128"),
+            true, // read-write: render nodes require rw for DRI ioctls
+        )
+        .map_err(|e| LiveHandlerError::SpawnFailed {
+            detail: format!("pre-open /dev/dri/renderD128 for gpu-render-node: {e}"),
+        })?;
+        vec![render_fd]
+    } else {
+        vec![]
+    };
+
     let isolation = crate::sys::pidfd_sys::RunnerIsolationSpec {
         capabilities: plan.capabilities.clone(),
         namespaces: plan.namespaces.clone(),
         seccomp_program,
         mount_policy: plan.mount_policy.clone(),
         cgroup_procs_fd,
-        // v1.1.1fu14: plumb through the user-NS spec from the
-        // role profile. When Some, the broker pre-creates the
-        // user NS and writes uid_map/gid_map; the child runs
-        // fake-root inside with no host-side capabilities.
-        // Used by virtiofsd (ADR 0021) for least-privilege FS
-        // serving.
-        user_namespace: plan.user_namespace.map(|spec| {
-            crate::sys::pidfd_sys::UserNamespaceSpec {
+        // Plumb through the user-NS spec from the role profile. When
+        // Some, the broker pre-creates the user NS and writes
+        // uid_map/gid_map; the child runs fake-root inside with no
+        // host-side capabilities. Used by virtiofsd (ADR 0021) for
+        // least-privilege FS serving.
+        user_namespace: plan
+            .user_namespace
+            .map(|spec| crate::sys::pidfd_sys::UserNamespaceSpec {
                 host_uid_for_zero: spec.host_uid_for_zero,
                 host_gid_for_zero: spec.host_gid_for_zero,
-            }
-        }),
-        // v1.1.2fu36: plumb the role profile's umask through to the
-        // child. None = inherit broker umask (current behaviour).
+            }),
+        // Plumb the role profile's umask through to the child. None =
+        // inherit broker umask (current behaviour).
         umask: plan.umask,
+        // Pre-opened render node fd (or empty vec for all other roles).
+        // The sys layer dup2's it to fd 10 in the user-NS child before
+        // execve.
+        pre_opened_device_fds,
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -1558,6 +1981,9 @@ pub fn live_spawn_runner(
     .map_err(|e| LiveHandlerError::SpawnFailed {
         detail: e.to_string(),
     })?;
+    if let Some(path) = api_socket_acl_path {
+        grant_daemon_api_socket_acl(path);
+    }
 
     let start_time_ticks =
         crate::sys::pidfd_sys::read_proc_stat_start_time(outcome.pid).map_err(|e| {
@@ -2228,8 +2654,8 @@ mod tests {
             }],
             nix_store_read_only: false,
             hide_device_nodes_by_default: false,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
+            device_binds: Vec::new(),
+            bind_mounts: Vec::new(),
         }
     }
 
@@ -2266,11 +2692,10 @@ mod tests {
                 .join("virtiofsd-ro-store")
         );
         assert!(backend.directory_exists(&leaf));
-        // v1.1.1fu11: DEFAULT_DELEGATED_PARENT_SLICE is now the
-        // top-level `/sys/fs/cgroup/nixling.slice` (systemd
-        // top-level slice naming convention). The leaf path lives
-        // under that, so the slice MUST exist for the leaf to
-        // exist.
+        // DEFAULT_DELEGATED_PARENT_SLICE is the top-level
+        // `/sys/fs/cgroup/nixling.slice` (systemd top-level slice naming
+        // convention). The leaf path lives under that, so the slice MUST
+        // exist for the leaf to exist.
         assert!(backend.directory_exists(Path::new("/sys/fs/cgroup/nixling.slice")));
         assert_eq!(
             backend
@@ -2345,8 +2770,8 @@ mod tests {
                 writable_paths: vec![],
                 nix_store_read_only: false,
                 hide_device_nodes_by_default: false,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
             },
             cgroup_placement: test_cgroup_placement(),
             root_carve_out: true,

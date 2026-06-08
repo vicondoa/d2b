@@ -3,7 +3,7 @@
 > Reference for the `audio` component module.
 > Source (host): [`nixos-modules/components/audio/host.nix`](../../nixos-modules/components/audio/host.nix)
 > Source (guest): [`nixos-modules/components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix)
-> CLI: `packages/nixling/src/lib.rs` (`nixling audio …`); pre-P6 bash CLI in `nixos-modules/cli.nix` was retired in P6 per ADR 0015
+> CLI: `packages/nixling/src/lib.rs` (`nixling audio …`); there is no bash helper for this surface.
 
 ## What this component does
 
@@ -14,21 +14,17 @@ session. On the host the sidecar appears as a PipeWire client named
 inside the guest, normal PipeWire + ALSA + PulseAudio compat stacks
 work on top of the virtio-snd card.
 
-Each VM has independent **mic** and **speaker** grants. State of
-record was (pre-P6) a per-VM JSON file at
-`/var/lib/nixling/vms/<vm>/state/audio-state.json`; the pre-P6
-`nixling audio` bash CLI subcommand mutated it under flock. The
-sidecar publishes the resolved mic/speaker state as custom
+Each VM has independent **mic** and **speaker** grants. The
+host-side state file is `/var/lib/nixling/vms/<vm>/state/audio-state.json`.
+The sidecar publishes the resolved mic/speaker state as custom
 PipeWire properties (`nixling.mic`, `nixling.speaker`); a
 host-side `client.conf.d` rule reads those properties and
 null-routes the corresponding stream direction with
 `target.object = "-1"` when it's `off`. Setting `audio.enable = true`
-only enables the *capability* — in v1.0 (per ADR 0015) the
-`nixling audio` Rust CLI verbs are rust-native shims that return
-typed `not-yet-implemented` exit-78 envelopes; the daemon-native
-audio control plane (state-file owner, flock holder, sidecar
-respawn coordinator) is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017).
-both directions default to `off` on first materialisation unless the
+only enables the *capability* — the current `nixling audio` Rust
+CLI verbs return typed `not-yet-implemented` exit-78 envelopes, so
+there is no daemon-native audio control plane yet. Both directions
+default to `off` on first materialisation unless the
 `allow{Mic,Speaker}ByDefault` options are flipped.
 
 When both directions are off, the guest-side
@@ -40,8 +36,8 @@ When both directions are off, the guest-side
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `nixling.vms.<vm>.audio.enable` | bool | `false` | Enable per-VM audio capability. Incompatible with `autostart = true` (asserted at eval). Implies `hypervisor = cloud-hypervisor`. |
-| `nixling.vms.<vm>.audio.allowMicByDefault` | bool | `false` | Initial value of the `mic` field when the per-VM state file is first materialised. Consulted at creation time only; subsequent edits via `nixling audio …` persisted pre-P6 (the v1.0 Rust CLI shim returns exit-78 per ADR 0015 until the daemon-native audio control plane lands in v1.2+ unscheduled — v1.1 only delivers typed-envelope rendering+remediation per ADR 0017). |
-| `nixling.vms.<vm>.audio.allowSpeakerByDefault` | bool | `false` | Initial value of the `speaker` field when the per-VM state file is first materialised. Same edit-survives semantics (pre-P6; daemon-native control deferred to v1.2+ unscheduled). |
+| `nixling.vms.<vm>.audio.allowMicByDefault` | bool | `false` | Initial value of the `mic` field when the per-VM state file is first materialised. Consulted at creation time only. |
+| `nixling.vms.<vm>.audio.allowSpeakerByDefault` | bool | `false` | Initial value of the `speaker` field when the per-VM state file is first materialised. Consulted at creation time only. |
 | `nixling.vms.<vm>.audio.users` | list of str | `[ ]` (defaults to `[ ssh.user ]` if non-null) | Guest-side usernames added to the `audio` group inside the VM. virtio-snd exposes `/dev/snd/*` as `0660 root:audio`; non-logind-active users need explicit group membership. |
 
 Site-level dependency:
@@ -49,6 +45,7 @@ Site-level dependency:
 | Option | Type | Required when | Description |
 |---|---|---|---|
 | `nixling.site.waylandUser` | nullable str | any VM has `audio.enable = true` | The host's primary Wayland session user. Its `/run/user/<uid>/pipewire-0` socket is bind-mounted into the sidecar's private mount namespace. Eval fails clearly if unset. |
+| `nixling.site.audio.inputTargetNode` | nullable str | optional | PipeWire `node.name` to force VM microphone streams to when `nixling.mic = "on"`. Leave `null` to let WirePlumber auto-select the default source. Useful on hosts where capture clients are not auto-linked reliably. |
 
 ## Options (guest-side propagation)
 
@@ -73,93 +70,77 @@ The matching guest-visible option (declared in
 
 ## Host-side resources created
 
-> **v1.0 status (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)):**
-> the pre-P6 `nixling-<vm>-snd.service` systemd unit was retired in P6
-> and respawned by the broker's `SpawnRunner` DAG under the
-> `nixling.slice/<vm>/snd` cgroup leaf. The hardening shape (uid,
-> caps, SupplementaryGroups, etc.) documented below is preserved
-> as the minijail-profile contract the broker enforces on the
-> runner spawn — the difference is the supervisor (broker pidfd
-> table instead of systemd's service manager). The bullets below
-> use the historical systemd unit identifier for traceability.
->
-> The `nixling audio mic|speaker|status` CLI verbs in v1.0 are
-> rust-native shims that return a typed `not-yet-implemented`
-> envelope (exit 78 per ADR 0015); the daemon-native audio
-> control plane is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). The pre-P6 bash audio
-> orchestration in `cli.nix` was retired in P6.
+> There is no `nixling-<vm>-snd.service` systemd unit. The broker
+> spawns the audio runner under `nixling.slice/<vm>/snd`, and the
+> hardening shape documented below is enforced as the runner
+> contract. The `nixling audio mic|speaker|status` CLI verbs are
+> rust-native shims that currently return a typed
+> `not-yet-implemented` envelope.
 
 Per audio-enabled VM:
 
 - **`nixling-<vm>-snd` system user + group**
   ([`host-users.nix`](../../nixos-modules/host-users.nix)).
-- **`nixling.slice/<vm>/snd` runner** (pre-P6 `nixling-<vm>-snd.service`)
+- **`nixling.slice/<vm>/snd` runner**
   ([`components/audio/host.nix`](../../nixos-modules/components/audio/host.nix))
-  — vhost-user-sound sidecar, broker-spawned via the v1.0 daemon
-  DAG (pre-P6 it was a systemd system service). Runs as
-  `nixling-<vm>-snd:nixling-<vm>-snd`, `SupplementaryGroups = [ "audio" ]`.
-  Started on demand by the v1.0 audio control plane (queued for
-  v1.2+ unscheduled — v1.1 only delivers typed-envelope rendering+remediation per ADR 0017;
-  pre-P6 it was spawned by `nixling audio mic|speaker on <vm>`
-  through the bash CLI's audioArgsScript).
-  belt-and-suspenders fallback at VM boot). Started *and* ordered
-  before `nixling-<vm>-gpu.service` via the latter's `wants`/`after`.
+  — vhost-user-sound sidecar, broker-spawned via the daemon DAG.
+  Runs as `nixling-<vm>-snd:nixling-<vm>-snd`,
+  `SupplementaryGroups = [ "audio" ]`. The runner is started on
+  demand, with a belt-and-suspenders fallback at VM boot, and is
+  ordered before the GPU runner.
   - `RuntimeDirectory = "nixling/vms/<vm>"`, mode 0700.
   - `BindPaths` binds `/run/user/<wayland-uid>/pipewire-0` into the
     sidecar's private runtime dir; the sidecar never sees
     `/run/user/<uid>` itself.
-  - `ExecStartPre`:
-    1. `setfacl -m u:nixling-<vm>-snd:rw /run/user/<uid>/pipewire-0`.
-    2. `install` a per-VM copy of `vhost-device-sound` at
-       `/run/nixling/vms/<vm>/nixling-<vm>` (so libpipewire's
-       `init_prgname()` derives `application.name = "nixling-<vm>"`
-       from `/proc/self/exe` — argv[0]/symlink tricks don't work).
-    3. Read `audio-state.json` and emit `PIPEWIRE_PROPS` into
-       `/run/nixling/vms/<vm>/snd.env` with `application.name`,
-       `node.name`, `node.description`, `nixling.mic`,
-       `nixling.speaker`.
-  - `ExecStart`: `/run/nixling/vms/<vm>/nixling-<vm> --socket
-    /run/nixling/vms/<vm>/snd.sock --backend pipewire`.
+  - The broker-spawned runner environment sets
+    `PIPEWIRE_RUNTIME_DIR=/run/user/<uid>`,
+    `XDG_RUNTIME_DIR=/run/user/<uid>`, and `PIPEWIRE_PROPS` with
+    `application.name = "nixling-<vm>"`, `node.name =
+    "nixling-<vm>"`, and `node.description = "nixling <vm>"`.
+    This gives plasma-pa / pavucontrol a per-VM host application name
+    without executing a mutable runtime-dir binary.
+  - `ExecStart`: `vhost-device-sound --socket
+    /run/nixling/vms/<vm>/snd.sock --backend pipewire` with argv[0]
+    set to `nixling-<vm>-snd`.
   - `ExecStartPost`: polls for `snd.sock` up to 30 s, then
     `setfacl -m u:nixling-<vm>-gpu:x /run/nixling/vms/<vm>` and
     `setfacl -m u:nixling-<vm>-gpu:rw .../snd.sock`. Fails the unit
     hard if the socket never materialises.
   - `Restart = "no"` — on-demand only.
 - **State file** `/var/lib/nixling/vms/<vm>/state/audio-state.json`
-  (mode 0640, owner `root:nixling-launcher`), initial contents
+  (mode 0640, owner `root:nixling`), initial contents
   `{"mic":"<allowMic>","speaker":"<allowSpeaker>"}`. The containing
-  `state/` directory is mode 0750 `root:nixling-launcher`. ACLs
+  `state/` directory is mode 0750 `root:nixling`. ACLs
   grant `nixling-<vm>-gpu` `rx` on the directory and `r` on the
   file so the GPU sidecar can read state at VM-boot time without
-  joining `nixling-launcher`.
+  joining `nixling`.
 - **Lock file** `/run/nixling/audio-<vm>.lock`, mode 0660,
-  `root:nixling-launchers`. The pre-P6 bash CLI took flock on it
-  before mutating the state file; in v1.0 (per ADR 0015) the
-  Rust CLI shim returns exit-78 and does NOT acquire this lock.
-  The v1.2+ unscheduled daemon-native audio control plane will reclaim flock
-  ownership on the broker side.
-- **vhost-device-sound v0.3.0** vendored at
-  `pkgs/vhost-device-sound/` (nixpkgs ships v0.2.0 with a known
-  PipeWire-backend format-negotiation bug). Added to
+  `root:nixling`. The current Rust CLI shim returns
+  exit-78 and does not acquire this lock because the daemon-native
+  audio control plane is not yet available.
+- **`vhost-device-sound`** vendored at
+  `pkgs/vhost-device-sound/` because the nixpkgs version has a known
+  PipeWire-backend format-negotiation bug. Added to
   `environment.systemPackages` for ad-hoc operator debugging.
 
 Per any audio-enabled host (emitted when at least one VM has
 `audio.enable = true`):
 
-- **PipeWire `client.conf.d/90-nixling.conf` `stream.rules`** —
-  matches `nixling.mic = "off"` + `media.class =
-  "Stream/Input/Audio"` (capture block) and `nixling.speaker = "off"`
-  + `media.class = "Stream/Output/Audio"` (playback block); applies
-  `target.object = "-1"`, `node.dont-reconnect = true`,
-  `node.dont-fallback = true`, `node.linger = true`. The block fires
-  only when the named direction is `off`; the other direction
-  continues to auto-route via WirePlumber's normal default-target
-  hook.
+- **PipeWire `client.conf.d/90-nixling.conf` `stream.rules`** stamps
+  early block properties for disabled directions.
+- The broker stamps final `PIPEWIRE_PROPS` at audio-runner spawn time
+  from `audio-state.json`: `application.name`, `node.name`,
+  `node.description`, `nixling.vm`, `nixling.mic`, and
+  `nixling.speaker`. When `nixling.site.audio.inputTargetNode` is
+  set and mic is `on`, the broker also adds `target.object` so the
+  vhost-device-sound capture stream links to that host source at
+  creation time. When no explicit input target is configured and the
+  direction is `on`, WirePlumber's normal default-target hook selects
+  the host source.
 
-CLI (`nixling audio` in the v1.0 Rust CLI — currently a rust-native
-shim that returns typed `not-yet-implemented` exit-78 per ADR 0015;
-daemon-native audio control queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Pre-P6 bash CLI in
-`cli.nix` was retired in P6):
+CLI (`nixling audio` in the Rust CLI — currently a rust-native shim
+that returns typed `not-yet-implemented` exit-78; there is no bash
+helper and no daemon-native audio control plane yet):
 
 - `nixling audio mic on|off <vm>`
 - `nixling audio speaker on|off <vm>`
@@ -167,7 +148,7 @@ daemon-native audio control queued for v1.2+ (unscheduled; v1.1 only delivers th
 - `nixling audio status` / `nixling audio status <vm>` — reports
   current grant state per VM.
 
-## Lifecycle (v0.1.5+)
+## Lifecycle
 
 `nixling-<vm>-snd.service` carries `restartIfChanged = false`
 (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
@@ -216,7 +197,7 @@ In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix
 ## Runtime invariants
 
 - The sidecar's `application.name` in plasma-pa / `wpctl status` is
-  always `nixling-<vm>` (derived from `/proc/self/exe`). Per-stream
+  always `nixling-<vm>` (set through `PIPEWIRE_PROPS`). Per-stream
   mute/volume in plasma-pa applies to that client.
 - When both directions are `off`, no virtio-snd device is attached
   to CH and no sidecar process exists. Setting either direction on
@@ -257,18 +238,18 @@ sidecar-as-system-service. Compared to the GPU sidecar template:
 - `ReadWritePaths = [ "/run/nixling/vms/<vm>" ]`.
 - `BindPaths` exposes only `pipewire-0`, not the parent runtime
   directory.
-- The per-VM binary copy at `/run/nixling/vms/<vm>/nixling-<vm>`
-  is owned `root:root 0755`; the sidecar (running as
-  `nixling-<vm>-snd`) gets r-x via traditional perms, never w.
+- The sidecar executable stays in the immutable Nix store. The
+  per-VM host-visible name is provided through `PIPEWIRE_PROPS`,
+  avoiding executable copies in the writable runtime directory.
 
 `audio-state.json`:
 
 - Lives in a root-owned non-group-writable subdir `state/` (mode
-  0750 `root:nixling-launcher`). The parent
+  0750 `root:nixling`). The parent
   `/var/lib/nixling/vms/<vm>/` remains `microvm:kvm 2775` so the
   CLI can take the audio lock and write temp files there, but no
   kvm-group process can unlink/replace the state file.
-- File mode 0640 `root:nixling-launcher`. Read by the GPU sidecar
+- File mode 0640 `root:nixling`. Read by the GPU sidecar
   via an explicit named-user ACL grant for `nixling-<vm>-gpu`.
 
 ## Common gotchas / failure modes

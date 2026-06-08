@@ -65,7 +65,8 @@ The contracts. Stable interfaces a consumer can depend on.
   - [`reference/components-graphics.md`](./reference/components-graphics.md) —
     `nixling.vms.<vm>.graphics.*` (virtio-gpu + Wayland cross-domain).
   - [`reference/components-video.md`](./reference/components-video.md) —
-    the per-VM `vhost-device-video` sidecar used by graphics VMs.
+    optional graphics VM H264 decode via patched CH `--vhost-user-media`
+    and patched crosvm `device video-decoder`.
   - [`reference/components-tpm.md`](./reference/components-tpm.md) —
     `nixling.vms.<vm>.tpm.*` (per-VM swtpm 2.0).
   - [`reference/components-usbip.md`](./reference/components-usbip.md) —
@@ -97,14 +98,14 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 - [`how-to/migrate-nixling-v0-to-v1.md`](./how-to/migrate-nixling-v0-to-v1.md) —
   **primary v0.x → v1.0 operator runbook**. Manifest schema bump,
   bash CLI removal, per-VM systemd template retirement, host singleton
-  retirement, polkit allowlist removal, W18 default flip, whole-migration
-  rollback. Also documents v1.1 deferred verbs and daemon-down
+  retirement, polkit allowlist removal, default-switch auto-flip,
+  whole-migration rollback. Also documents v1.1 deferred verbs and daemon-down
   rendering pointers (`audit` / `console` / `audio` / `keys`).
 - [`how-to/uninstall-nixling.md`](./how-to/uninstall-nixling.md) —
   rollback and uninstall runbook for both NixOS and host-install
   scaffold paths.
 - [`how-to/hardware-smoke-walkthrough.md`](./how-to/hardware-smoke-walkthrough.md) —
-  operator procedure for the W19/W20 manual hardware/platform smokes.
+  operator procedure for the manual hardware/platform smokes.
 - [`how-to/migrating-from-microvm.md`](./how-to/migrating-from-microvm.md) —
   port an existing `microvm.nix` deployment onto `nixling`: option
   mapping, step-by-step procedure, troubleshooting.

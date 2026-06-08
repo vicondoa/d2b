@@ -215,6 +215,13 @@
           "description": "Stable node id used by edges.",
           "type": "string"
         },
+        "planOps": {
+          "description": "v1.2 broker-executed plan operations that run before the runner spawns. The daemon sends only the opaque `vm_id`; the broker resolves these ops from the trusted bundle.\n\nBackward-compatible: omitted from JSON when empty (serde default).",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SpawnRunnerPlanOp"
+          }
+        },
         "profile": {
           "description": "Typed minijail metadata for this role.",
           "allOf": [
@@ -298,6 +305,13 @@
           "type": "string",
           "enum": [
             "gpu"
+          ]
+        },
+        {
+          "description": "Optional GPU/graphics sidecar — render-node-only mode (fd-passing, no device bind-mounts). Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).",
+          "type": "string",
+          "enum": [
+            "gpu-render-node"
           ]
         },
         {
@@ -390,6 +404,25 @@
               "type": "string",
               "enum": [
                 "unix-socket-exists"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "A Unix stream socket is present and listening, checked non-destructively.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "unix-socket-listening"
               ]
             },
             "value": {
@@ -535,7 +568,7 @@
           "type": "string"
         },
         "seccompPolicyRef": {
-          "description": "Seccomp policy reference only; syscall allowlists are W3-owned.",
+          "description": "Seccomp policy reference only; syscall allowlists are owned elsewhere.",
           "type": [
             "string",
             "null"
@@ -546,9 +579,108 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        },
+        "umask": {
+          "description": "v1.1.2fu36: file-creation mask installed in the spawned child before execve. See `MinijailProfile::umask` for the rationale. Roles that bind shared Unix sockets (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare `0o007` so downstream consumers (cloud-hypervisor) can connect via the per-VM-runtime default ACL.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "userNamespace": {
+          "description": "v1.1.1fu14 (ADR 0021): when `Some`, the broker pre-establishes a per-runner user namespace and writes uid_map/gid_map. The child runs fake-root inside the NS; host-side `caps` should be empty. Set by virtiofsd (v1.1.2 ADR 0021) and swtpm (v1.2) roles. Older bundles omit this field; deserialize defaults to None.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RoleUserNamespace"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "RoleUserNamespace": {
+      "description": "v1.1.1fu14 — single-entry uid_map/gid_map declaration for the per-role user namespace. See ADR 0021.",
+      "type": "object",
+      "required": [
+        "hostGidForZero",
+        "hostUidForZero"
+      ],
+      "properties": {
+        "hostGidForZero": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hostUidForZero": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SpawnRunnerPlanOp": {
+      "description": "v1.2 additive plan operation emitted by `processes.json` for runner nodes that require broker-side pre-spawn work.\n\nTag-dispatched via `#[serde(tag = \"kind\")]` so the manifest JSON uses `{ \"kind\": \"diskInit\", ... }` shape (camelCase per bundle schema conventions).\n\nBackward-compatible per invariant I4: the field is absent from JSON when empty (`skip_serializing_if = \"Vec::is_empty\"` on `ProcessNode::plan_ops`), so older bundles always deserialize cleanly.",
+      "oneOf": [
+        {
+          "description": "Create and pre-allocate a disk image file if absent.\n\nUsed for the per-VM writable store overlay disk (`store-overlay.img`). The broker validates `target_path` is under `/var/lib/nixling/vms/`, creates the file with `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via `fallocate`, and sets mode + ownership.",
+          "type": "object",
+          "required": [
+            "ifAbsent",
+            "kind",
+            "mode",
+            "ownerGid",
+            "ownerUid",
+            "sizeBytes",
+            "targetPath"
+          ],
+          "properties": {
+            "ifAbsent": {
+              "description": "When `true`, skip creation if the file already exists (idempotent re-run).",
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "diskInit"
+              ]
+            },
+            "mode": {
+              "description": "Unix permission bits in octal (e.g. `0o600` = 384 decimal).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "ownerGid": {
+              "description": "Owner GID.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "ownerUid": {
+              "description": "Owner UID — typically the per-VM runner UID.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "sizeBytes": {
+              "description": "Pre-allocated size in bytes (broker calls `fallocate`).",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "targetPath": {
+              "description": "Absolute host path for the new disk image.",
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "VmProcessDag": {
       "description": "Process DAG for one VM.",
@@ -590,7 +722,7 @@
       "additionalProperties": false
     },
     "VmProcessInvariants": {
-      "description": "v0.4.0 invariants preserved in the W1 process contract.",
+      "description": "v0.4.0 invariants preserved in the process contract.",
       "type": "object",
       "required": [
         "perVmAuditPipeline",

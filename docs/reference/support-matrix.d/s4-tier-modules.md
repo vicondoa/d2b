@@ -1,4 +1,4 @@
-# Tier modules + devices (W3 s4 fragment)
+# Tier modules + devices
 
 Reference fragment listing kernel-module + device-node requirements
 per support tier. The integrator assembles this into

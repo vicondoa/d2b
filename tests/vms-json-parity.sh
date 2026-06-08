@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 Layer-1 gate: public vms.json remains byte-compatible with v0.4.0.
+# Public vms.json remains byte-compatible with v0.4.0.
 
 set -euo pipefail
 
@@ -23,8 +23,8 @@ fi
 render_vms_json() {
   local out=$2
   local cached
-  # W2fu3 follow-up: under static.sh parallelism, multiple gates compete on
-  # the nix daemon when each runs its own nix-instantiate. Use the W1fu5
+  # Follow-up: under static.sh parallelism, multiple gates compete on
+  # the nix daemon when each runs its own nix-instantiate. Use the
   # shared smoke-render cache (already prewarmed serially by static.sh
   # before the parallel pool fires) instead of re-rendering.
   if cached=$(nl_smoke_vms_json 2>/dev/null) && [ -s "$cached" ]; then

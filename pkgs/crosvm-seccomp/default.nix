@@ -32,7 +32,7 @@ let
   crosvmSeccomp = pkgs.runCommand "crosvm-seccomp-policies-x86_64"
     {
       nativeBuildInputs = [ pkgs.minijail-tools ];
-      # Phase 4 multi-arch: pinned crosvm sparseCheckout is the
+      # Multi-arch: pinned crosvm sparseCheckout is the
       # `jail/seccomp/x86_64/` directory, and the compiled .bpf files
       # are produced via minijail-tools' x86_64 syscall table. There
       # is no aarch64 counterpart to load here (crosvm's aarch64 jail

@@ -2,7 +2,7 @@
 
 let
   cfg = config.nixling;
-  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
@@ -29,7 +29,7 @@ let
   closureArtifact = name:
     let
       top = "${vmTopOf name}";
-      # v1.1.1: per-VM declared runner is null (broker generates
+      # per-VM declared runner is null (broker generates
       # argv in Rust via packages/nixling-host/src/*_argv.rs); the
       # bundle's `declaredRunner` / `runnerParityPath` are kept in
       # the schema for tooling that still reads them but rendered
@@ -83,7 +83,7 @@ in
     type = lib.types.unspecified;
     readOnly = true;
     internal = true;
-    description = "Internal W1 per-VM schema-v1 closures/<vm>.json artifact metadata.";
+    description = "Internal per-VM schema-v1 closures/<vm>.json artifact metadata.";
   };
 
   config = {

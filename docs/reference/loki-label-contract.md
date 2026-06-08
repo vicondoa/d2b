@@ -1,6 +1,6 @@
 # Loki label contract for nixling logs
 
-Status: canonical (P3 — `ph3-p3-loki-label-contract`).
+Status: canonical.
 Audience: anyone changing the Alloy configs under
 [`nixos-modules/components/observability/`](../../nixos-modules/components/observability/)
 or the daemon-side OtelHostBridge that forwards into the obs VM.
@@ -126,5 +126,5 @@ in the same commit, and the new labels MUST conform to this contract.
 
 - [`docs/reference/components-observability.md`](./components-observability.md)
   — option surface for the observability stack.
-- `ph3-p3-tracing-contract` (P3 sibling) — trace span attribute hygiene.
-- `ph3-p3-prometheus-otlp-shape` (P3 sibling) — metric label cardinality budget.
+- [`tracing-contract.md`](./tracing-contract.md) — trace span attribute hygiene.
+- [`daemon-metrics.md`](./daemon-metrics.md) — metric label cardinality budget.

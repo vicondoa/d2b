@@ -1,11 +1,8 @@
-//! W3 host-prepare module: `cgroup`.
+//! Host-prepare cgroup module.
 //!
-//! Owned by scope **s1** (cgroup v2 delegation + pidfd) per the W3
-//! file-ownership map.
-//!
-//! Implements the 8-step cgroup v2 delegation algorithm from plan.md
-//! §"W3 cgroup v2 delegation algorithm" plus the chown / kill-scope /
-//! no-internal-process / partition-member / non-root-delegation rules.
+//! Implements the 8-step cgroup v2 delegation algorithm plus the chown /
+//! kill-scope / no-internal-process / partition-member /
+//! non-root-delegation rules.
 //!
 //! ## Invariants enforced here
 //!
@@ -37,14 +34,13 @@
 //! O_NOFOLLOW + RESOLVE_BENEATH` and fd-relative `fchown` / writes) and
 //! the in-memory [`fake::FakeCgroupBackend`] (gated behind
 //! `cfg(any(test, feature = "fake-backends"))`) share the same algorithm.
-//! L1c canary tests drive the algorithm through the fake backend per
-//! plan.md §"W3 pre-merge canary matrix".
+//! L1c canary tests drive the algorithm through the fake backend.
 
 use std::fmt;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
-/// Cgroup v2 controllers tracked by the W3 delegation algorithm.
+/// Cgroup v2 controllers tracked by the delegation algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Controller {
     Cpu,
@@ -63,7 +59,7 @@ impl Controller {
         Controller::Cpuset,
     ];
 
-    /// Subtree-enable order per plan.md §"W3 cgroup v2 delegation algorithm" step 3.
+    /// Subtree-enable order for the delegation algorithm.
     pub const ENABLE_ORDER: &'static [Controller] = &[
         Controller::Cpu,
         Controller::Memory,
@@ -136,9 +132,9 @@ impl EnabledControllers {
     }
 }
 
-/// Canonical W3 cgroup error codes. The discriminant string matches the
-/// plan-named kebab-case error code that flows through the CLI golden
-/// table and into the broker audit record `error_kind` field.
+/// Canonical cgroup error codes. The discriminant string matches the
+/// kebab-case error code that flows through the CLI golden table and
+/// into the broker audit record `error_kind` field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CgroupError {
     /// Unified hierarchy probe failed — `/sys/fs/cgroup/cgroup.controllers`
@@ -167,16 +163,15 @@ pub enum CgroupError {
         path: PathBuf,
         controller: Controller,
     },
-    /// Threaded cgroup encountered — forbidden in W3.
+    /// Threaded cgroup encountered — forbidden.
     ThreadedCgroupForbidden { path: PathBuf },
-    /// Attempt to write `cpuset.cpus.partition` (W3 forbids partition
-    /// roots; ancestors and `nixling.slice` stay `member`).
+    /// Attempt to write `cpuset.cpus.partition` (partition roots are
+    /// forbidden; ancestors and `nixling.slice` stay `member`).
     CgroupPartitionRootForbidden { path: PathBuf },
     /// Subtree-control write on `parent` enabled `controller` (the
     /// re-read of `parent/cgroup.subtree_control` confirmed it) but the
     /// child cgroup's `cgroup.controllers` does not advertise the
-    /// controller. Per plan.md §"W3 cgroup v2 delegation algorithm"
-    /// step 3 the delegation must fail closed before chown.
+    /// controller. The delegation must fail closed before chown.
     CgroupControllerNotExposedToChild {
         controller: Controller,
         parent: PathBuf,
@@ -265,7 +260,7 @@ impl fmt::Display for CgroupError {
             CgroupError::CgroupPartitionRootForbidden { path } => {
                 write!(
                     f,
-                    "cpuset.cpus.partition write rejected on {} (W3 stays member)",
+                    "cpuset.cpus.partition write rejected on {} (stays member)",
                     path.display()
                 )
             }
@@ -429,8 +424,7 @@ pub fn prepare_cpuset_inheritance<B: CgroupBackend>(
 /// Step 3: enable controllers in `cgroup.subtree_control` in the strict
 /// order, verifying re-read after each individual enable. When `child`
 /// is `Some`, the child cgroup's `cgroup.controllers` file is also
-/// re-read after each enable per plan.md §"W3 cgroup v2 delegation
-/// algorithm" step 3 ("Each enable is verified by re-reading
+/// re-read after each enable ("Each enable is verified by re-reading
 /// cgroup.subtree_control AND cgroup.controllers on the child").
 pub fn enable_subtree_controllers<B: CgroupBackend>(
     backend: &B,
@@ -494,7 +488,7 @@ pub fn enable_subtree_controllers_with_child<B: CgroupBackend>(
 pub fn assert_partition_member_only(path: &Path, key: &str) -> Result<(), CgroupError> {
     debug_assert!(
         key != "cpuset.cpus.partition",
-        "W3 forbids writing cpuset.cpus.partition (stay 'member' at {})",
+        "writing cpuset.cpus.partition is forbidden (stay 'member' at {})",
         path.display()
     );
     if key == "cpuset.cpus.partition" {
@@ -555,8 +549,8 @@ pub fn cgroup_kill_leaf_only<B: CgroupBackend>(
 }
 
 /// Step 6: chown the entire delegated subtree to `nixlingd`. Performs
-/// fd-based `fchown` (via the backend); never path-based per W3
-/// filesystem path-safety rules.
+/// fd-based `fchown` (via the backend); never path-based per filesystem
+/// path-safety rules.
 pub fn chown_subtree_to_nixlingd<B: CgroupBackend>(
     backend: &B,
     path: &Path,
@@ -586,7 +580,7 @@ pub fn chown_subtree_to_nixlingd<B: CgroupBackend>(
 /// Step end-to-end (broker entry): create `nixling.slice` under the
 /// unified hierarchy with the canonical enable sequence + chown.
 ///
-/// The ordering matches plan.md §"W3 cgroup v2 delegation algorithm":
+/// The ordering is:
 ///
 /// 1. probe + require controllers at root;
 /// 2. mkdir `nixling.slice` (so the child exists for the verification
@@ -704,8 +698,8 @@ pub fn create_vm_role_leaf<B: CgroupBackend>(
 /// Reads/writes funnel through `rustix::fs::openat` with `O_NOFOLLOW`
 /// so symlink swaps on the cgroup root are refused; writes do
 /// `O_WRONLY | O_NOFOLLOW`, never `open(path)`. `fchown` is performed
-/// fd-based against an open `O_PATH | O_NOFOLLOW` descriptor per
-/// plan.md §"W3 filesystem path-safety tests".
+/// fd-based against an open `O_PATH | O_NOFOLLOW` descriptor per the
+/// filesystem path-safety tests.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RealCgroupBackend;
 
@@ -784,8 +778,7 @@ impl CgroupBackend for RealCgroupBackend {
         //
         // Documented in
         // [`docs/reference/cgroup-delegation.md`](../../../docs/reference/cgroup-delegation.md)
-        // § Path-safety contract; the v1.1.1 fix matches the v1.1-P0
-        // ADR commitment in
+        // § Path-safety contract; the v1.1.1 fix matches the ADR commitment in
         // [ADR 0018 § "Path-safety: O_PATH + fchownat(AT_EMPTY_PATH)"](../../../docs/adr/0018-microvm-nix-removal.md#path-safety-o_path--fchownataT_EMPTY_PATH).
         let fd = open(
             path,
@@ -865,8 +858,8 @@ pub mod fake {
             }
         }
 
-        /// Seed a stock unified hierarchy with the canonical W3
-        /// controller set advertised at `root`.
+        /// Seed a stock unified hierarchy with the canonical controller
+        /// set advertised at `root`.
         pub fn seed_unified(&self, root: &Path) {
             let mut inner = self.inner.lock().unwrap();
             inner.dirs.insert(root.to_path_buf());

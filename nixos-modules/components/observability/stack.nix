@@ -1,6 +1,6 @@
 # Observability stack guest component for the auto-declared stack VM.
 #
-# Wave-2 todo: `component-stack`.
+# TODO: `component-stack`.
 # This module will install Grafana, Prometheus, Loki, Tempo, and the
 # inbound vsock receiver inside `sys-obs-stack`.
 { config, lib, pkgs, ... }:
@@ -37,7 +37,7 @@ let
   obsIngressSocket = "${alloyRuntimeDir}/obs-ingress.sock";
   stackHostName = config.networking.hostName;
 
-  # P5 ph5-p5-tempo-budget — canonical tempo retention + sampling
+  # Canonical tempo retention + sampling
   # policy. Per-tenant overrides are emitted as a separate YAML file
   # because Tempo's inline `overrides.defaults.*` form covers only
   # the default tenant; per-tenant rows (the critical tenant getting
@@ -275,7 +275,7 @@ let
       ''
 
       ''
-        // P5 ph5-p5-tempo-budget — tempo retention + sampling budget.
+        // Tempo retention + sampling budget.
         // Pipeline shape:
         //   otelcol.receiver.otlp.ingress.traces
         //     -> otelcol.processor.tail_sampling.tempo_budget
@@ -463,7 +463,7 @@ in
           stack VM. Applies to the default Tempo tenant
           (`sampling.defaultTenant`). See
           [docs/reference/tempo-retention-sampling.md] for the
-          canonical policy (P5 `ph5-p5-tempo-budget`).
+          canonical policy.
         '';
       };
 
@@ -479,7 +479,7 @@ in
           window so post-incident forensics on framework-critical
           events (SpawnRunner failures, BundleTampered,
           broker authz denials, etc.) stay queryable beyond the
-          default 7-day budget. P5 `ph5-p5-tempo-budget`.
+          default 7-day budget.
         '';
       };
     };
@@ -490,8 +490,7 @@ in
         default = "kind";
         description = ''
           Span attribute key inspected to decide whether a span
-          belongs to the critical Tempo tenant. P5
-          `ph5-p5-tempo-budget`.
+          belongs to the critical Tempo tenant.
         '';
       };
 
@@ -503,7 +502,7 @@ in
           `sampling.criticalAttribute`) that pins a span into the
           critical Tempo tenant — sampled at
           `sampling.criticalRatio` and retained for
-          `retention.tracesCritical`. P5 `ph5-p5-tempo-budget`.
+          `retention.tracesCritical`.
         '';
       };
 
@@ -513,7 +512,7 @@ in
         description = ''
           Sampling ratio for critical spans, 0.0–1.0. Pinned to
           1.0 by the canonical policy so every critical span is
-          retained. P5 `ph5-p5-tempo-budget`.
+          retained.
         '';
       };
 
@@ -525,8 +524,7 @@ in
           for non-critical spans, 0.0–1.0. Pinned to 0.1 by the
           canonical policy to keep per-VM trace volume inside
           the disk budget documented in
-          docs/reference/tempo-retention-sampling.md. P5
-          `ph5-p5-tempo-budget`.
+          docs/reference/tempo-retention-sampling.md.
         '';
       };
 
@@ -535,7 +533,7 @@ in
         default = "nixling-critical";
         description = ''
           Tempo tenant id (set as `X-Scope-OrgID`) that critical
-          spans are routed to. P5 `ph5-p5-tempo-budget`.
+          spans are routed to.
         '';
       };
 
@@ -544,8 +542,7 @@ in
         default = "nixling-default";
         description = ''
           Tempo tenant id (set as `X-Scope-OrgID`) that
-          non-critical spans are routed to. P5
-          `ph5-p5-tempo-budget`.
+          non-critical spans are routed to.
         '';
       };
     };
@@ -738,7 +735,7 @@ in
     services.tempo = {
       enable = true;
       settings = {
-        # P5 ph5-p5-tempo-budget — enable multi-tenancy so per-tenant
+        # Enable multi-tenancy so per-tenant
         # retention overrides apply. Alloy attaches the X-Scope-OrgID
         # header per critical / default span via two OTLP exporters
         # downstream of the tail-sampling processor.
@@ -769,7 +766,7 @@ in
             block_retention = cfg.retention.tracesCritical;
           };
         };
-        # Per P5 policy: default tenant -> `retention.traces` (7d);
+        # Policy: default tenant -> `retention.traces` (7d);
         # critical tenant -> `retention.tracesCritical` (30d) via the
         # per_tenant_override_config file generated above.
         overrides = {
@@ -813,7 +810,7 @@ in
           # Keep the login form available even when anonymous Viewer
           # is enabled, so operators can still sign in as nixling-admin
           # for admin tasks (contact points, dashboard provisioning,
-          # plugin install). (panel-w3r3 product-1)
+          # plugin install).
           disable_login_form = false;
         };
         # Anonymous dashboards stay opt-in for trusted single-host LAN
@@ -874,7 +871,7 @@ in
             access = "proxy";
             url = "http://127.0.0.1:${toString tempoHttpPort}";
             editable = false;
-            # P5 ph5-p5-tempo-budget — multitenancy is on; default
+            # Multitenancy is on; default
             # Tempo datasource queries the default tenant. A sibling
             # `Tempo (Critical)` datasource (uid = `tempo-critical`)
             # queries the critical tenant.
@@ -920,11 +917,11 @@ in
               };
             };
             secureJsonData = {
-              httpHeaderValue1 = cfg.sampling.defaultTenant;
+              httpHeaderValue1 = "$__env{NIXLING_TEMPO_DEFAULT_TENANT}";
             };
           }
           {
-            # P5 ph5-p5-tempo-budget — sibling Tempo datasource that
+            # Sibling Tempo datasource that
             # queries the critical tenant (`X-Scope-OrgID =
             # ${cfg.sampling.criticalTenant}`). Critical spans are
             # retained for `retention.tracesCritical` (default 30d)
@@ -944,7 +941,7 @@ in
               };
             };
             secureJsonData = {
-              httpHeaderValue1 = cfg.sampling.criticalTenant;
+              httpHeaderValue1 = "$__env{NIXLING_TEMPO_CRITICAL_TENANT}";
             };
           }
         ];
@@ -972,6 +969,10 @@ in
       "secret_key:${grafanaSecretKeySource}"
       "admin_password:${grafanaAdminPasswordSource}"
     ];
+    systemd.services.grafana.environment = {
+      NIXLING_TEMPO_DEFAULT_TENANT = cfg.sampling.defaultTenant;
+      NIXLING_TEMPO_CRITICAL_TENANT = cfg.sampling.criticalTenant;
+    };
 
     # NOTE: as of v0.2.0, the framework generates the Grafana secret
     # key and admin password on the HOST (see

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# P1 usbip per-role minijail validator.
+# Usbip per-role minijail validator.
 #
-# Per plan.md §"P1 per-role minijail validator inventory":
+# Per plan.md §" per-role minijail validator inventory":
 #
 #   - positive path: under the Usbip profile, exec `usbip version`
 #     (low-impact probe — no sysfs touch, no busid bind; linux
@@ -98,8 +98,8 @@ if [ "${NL_LIVE:-0}" = "1" ]; then
     log "  SKIP layer-2: $layer2_reason"
   else
     # Precondition: usbip-host module must be loaded. modprobe is the
-    # broker's pre-step (kernel-7); validator only checks the
-    # postcondition. Per plan: if not loaded -> SKIPPED, not FAILED.
+    # broker's pre-step; validator only checks the postcondition. If not
+    # loaded -> SKIPPED, not FAILED.
     if ! grep -qE '^usbip_host( |$)' /proc/modules 2>/dev/null; then
       layer2_reason="usbip-host module not loaded (run modprobe usbip-host as the broker pre-step)"
       log "  SKIP layer-2: $layer2_reason"

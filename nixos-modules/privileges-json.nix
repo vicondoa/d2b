@@ -223,6 +223,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "host reconcile-otel-acls --apply",
+    "subject": "host/observability",
+    "scope": "global",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "host destroy --apply",
     "subject": "host",
     "scope": "global",
@@ -1120,6 +1132,103 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "DeregisterRunnerPidfd",
+    "subject": "runner",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "PollChildReaped",
+    "subject": "runner",
+    "scope": "global",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "StoreSync",
+    "subject": "store",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "SeedDnsmasqLease",
+    "subject": "network",
+    "scope": "per-VM/env",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "BindMountFromHardlinkFarm",
+    "subject": "mount/store",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "OwnershipMatrixCheck",
+    "subject": "host",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "SshHostKeyPreflight",
+    "subject": "ssh-host-key",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "metadata-only",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "DiskInit",
+    "subject": "disk",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "SpawnRunner",
     "subject": "vm-runner",
     "scope": "per-VM/role",
@@ -1147,7 +1256,7 @@ in
     type = lib.types.unspecified;
     readOnly = true;
     internal = true;
-    description = "Internal W1 schema-v1 privileges.json artifact metadata.";
+    description = "Internal schema-v1 privileges.json artifact metadata.";
   };
 
   config = {

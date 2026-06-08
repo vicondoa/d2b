@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/examples-with-observability-eval.sh — P7 ph7-p7-with-observability-example
+# tests/examples-with-observability-eval.sh—
 # gate.
 #
 # Asserts that `examples/with-observability/` evaluates cleanly via

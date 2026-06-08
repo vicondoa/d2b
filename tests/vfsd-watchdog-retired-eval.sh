@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P7 invariant gate: assert nixling-vfsd-watchdog@.{service,timer}
+# v1.1 invariant gate: assert nixling-vfsd-watchdog@.{service,timer}
 # definitions are absent from `nixos-modules/store.nix`. The wedge-
 # detection logic moved into the broker's Virtiofsd `SpawnRunner`
 # role supervisor (pidfd poll + cgroup.events probe at the same

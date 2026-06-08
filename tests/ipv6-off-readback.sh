@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/ipv6-off-readback.sh — W3 s2 L1c canary.
+# tests/ipv6-off-readback.sh— canary.
 #
-# Drives the 5-step IPv6-off sequence (plan.md §"W3 IPv6-off ordering")
+# Drives the 5-step IPv6-off sequence (plan.md §" IPv6-off ordering")
 # through the nixling-host fake netlink backend:
 #
 #   1. pre-create (NM unmanaged + reload command precondition)
@@ -11,7 +11,7 @@
 #   5. readback gate (fail closed on drift)
 #
 # Asserts the canonical canaries `ipv6-sysctl-drift` and
-# `nm-reload-required` from plan.md §"W3 pre-merge canary matrix".
+# `nm-reload-required` from plan.md §" pre-merge canary matrix".
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -1,10 +1,10 @@
-//! P5 ph5-p5-host-validate-verb: `nixling host validate` composite
+//! `nixling host validate` composite
 //! preflight verb.
 //!
 //! This module ships the operator-facing one-command preflight that
 //! must run after a fresh `nixos-rebuild switch` and before flipping
 //! `nixling.daemonExperimental.enable = true`. It iterates the known
-//! W18 readiness waves (mirrored from
+//! readiness waves (mirrored from
 //! `nixos-modules/options-daemon.nix:readinessWaveSpecs`) in a
 //! deterministic order; for each wave it discovers the per-wave
 //! Layer-2 validator scripts shipped in `tests/` and reports their
@@ -16,15 +16,15 @@
 //!   * `--apply`: writes the canonical evidence record
 //!     `/var/lib/nixling/validated/<wave>.json` for every wave whose
 //!     declared validators are all present on disk. The record shape
-//!     is the W18 contract enforced by
+//!     is the readiness contract enforced by
 //!     `options-daemon.nix:validationEvidencePresent`:
 //!     `{"wave": "<wave>", "timestamp": "<UTC ISO-8601>", "operatorSignature": "<sha256:...>"}`
 //!     The operator signature is computed from
 //!     `hostname | wave | bundle_path | timestamp` unless the
 //!     operator overrides it via `--operator-signature <sig>`.
 //!
-//! The daemon's W18 auto-flip gate consumes these evidence files —
-//! see the Critical-subsystems "Control plane (W2+)" row in AGENTS.md
+//! The daemon's default-switch auto-flip gate consumes these evidence
+//! files — see the Critical-subsystems "Control plane" row in AGENTS.md
 //! and `docs/reference/default-switch-and-deprecation.md`.
 //!
 //! This verb is intentionally a thin orchestrator: it does NOT
@@ -36,7 +36,7 @@
 //! their own evidence records (e.g. `tests/minijail-validator-swtpm.sh`
 //! → `p1-swtpm.json`) continue to do so; this verb is the umbrella
 //! preflight that produces the per-wave `<wave>.json` records the
-//! W18 readiness option consumes.
+//! readiness option consumes.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,12 +44,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// Canonical location the W18 auto-flip gate reads from. Mirrors
-/// `nixos-modules/options-daemon.nix:validationEvidenceDir`.
+/// Canonical location the default-switch auto-flip gate reads from.
+/// Mirrors `nixos-modules/options-daemon.nix:validationEvidenceDir`.
 pub const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/nixling/validated";
 
-/// One known W18 readiness wave plus the per-wave Layer-2 validator
-/// scripts the operator is expected to have exercised before
+/// One known readiness wave plus the per-wave Layer-2 validator scripts
+/// the operator is expected to have exercised before
 /// attesting via `host validate --apply`.
 ///
 /// The wave-name vocabulary MUST stay byte-identical with
@@ -57,9 +57,8 @@ pub const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/nixling/validated";
 /// `tests/host-validate-verb-eval.sh` enforces parity.
 #[derive(Debug, Clone, Copy)]
 pub struct WaveSpec {
-    /// Wave id, e.g. `"p1"` or `"w5Fu"`. Matches the file basename
-    /// the W18 readiness option consumes
-    /// (`/var/lib/nixling/validated/<wave>.json`).
+    /// Wave id, e.g. `"p1"` or `"w5Fu"`. Matches the file basename the
+    /// readiness option consumes (`/var/lib/nixling/validated/<wave>.json`).
     pub wave: &'static str,
     /// Short human-readable summary of what the wave covers.
     pub summary: &'static str,
@@ -74,17 +73,17 @@ pub struct WaveSpec {
 pub const WAVE_CATALOG: &[WaveSpec] = &[
     WaveSpec {
         wave: "w4Fu",
-        summary: "W4-fu headless daemon + supervisor path (Ubuntu Tier-1 smoke).",
+        summary: "Headless daemon + supervisor path (Ubuntu Tier-1 smoke).",
         validators: &["nixlingd-startup-smoke.sh"],
     },
     WaveSpec {
         wave: "w5Fu",
-        summary: "W5-fu minijail profiles + GPU/audio/video argv generators (hardware smoke).",
+        summary: "Minijail profiles + GPU/audio/video argv generators (hardware smoke).",
         validators: &["hardware-smoke-gpu-yubikey.sh"],
     },
     WaveSpec {
         wave: "w6Fu",
-        summary: "W6-fu USBIP live executors + per-busid lock (hardware smoke).",
+        summary: "USBIP live executors + per-busid lock (hardware smoke).",
         validators: &[
             "hardware-smoke-gpu-yubikey.sh",
             "usbip-state-machine-eval.sh",
@@ -92,22 +91,22 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "w7Fu",
-        summary: "W7-fu store-lifecycle verbs + admin auth.",
+        summary: "Store-lifecycle verbs + admin auth.",
         validators: &["per-vm-state-ownership-eval.sh"],
     },
     WaveSpec {
         wave: "w8Fu",
-        summary: "W8-fu keys/trust/rotate-known-host live wiring.",
+        summary: "Keys/trust/rotate-known-host live wiring.",
         validators: &["ssh-host-key-preflight-eval.sh"],
     },
     WaveSpec {
         wave: "w9Fu",
-        summary: "W9-fu host install + migrate live broker ops.",
+        summary: "Host install + migrate live broker ops.",
         validators: &["harness-ubuntu-eval.sh"],
     },
     WaveSpec {
         wave: "p0",
-        summary: "P0 daemon-only foundation (broker socket-activation + bundle digest verify).",
+        summary: "Daemon-only foundation (broker socket-activation + bundle digest verify).",
         validators: &[
             "broker-socket-activation-eval.sh",
             "broker-caps-eval.sh",
@@ -116,12 +115,12 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p0Fu",
-        summary: "P0fu cgroup delegation + per-artifact hash verification.",
+        summary: "Cgroup delegation + per-artifact hash verification.",
         validators: &["broker-bundle-path-eval.sh"],
     },
     WaveSpec {
         wave: "p1",
-        summary: "P1 per-role minijail profiles + byte-parity argv generators.",
+        summary: "Per-role minijail profiles + byte-parity argv generators.",
         validators: &[
             "minijail-validator-cloud-hypervisor.sh",
             "minijail-validator-virtiofsd.sh",
@@ -136,7 +135,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p2",
-        summary: "P2 daemon-side host-prep + ownership matrix + manifestVersion=3.",
+        summary: "Daemon-side host-prep + ownership matrix + manifestVersion=3.",
         validators: &[
             "per-vm-state-ownership-eval.sh",
             "daemon-autostart-eval.sh",
@@ -145,7 +144,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p3",
-        summary: "P3 host singletons retired + daemon health endpoint.",
+        summary: "Host singletons retired + daemon health endpoint.",
         validators: &[
             "observability-eval.sh",
             "daemon-metrics-eval.sh",
@@ -154,22 +153,22 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p4",
-        summary: "P4 vm start/stop/restart/list daemon-native end-to-end.",
+        summary: "VM start/stop/restart/list daemon-native end-to-end.",
         validators: &["cli-vm-verbs-eval.sh", "desktop-wrapper-contract-eval.sh"],
     },
     WaveSpec {
         wave: "p5",
-        summary: "P5 first-run validation UX (this verb + daemon auto-write on first op).",
+        summary: "First-run validation UX (this verb + daemon auto-write on first op).",
         validators: &["host-validate-verb-eval.sh"],
     },
     WaveSpec {
         wave: "p6",
-        summary: "P6 legacy systemd template emission + bash CLI removed.",
+        summary: "Legacy systemd template emission + bash CLI removed.",
         validators: &[],
     },
     WaveSpec {
         wave: "p7",
-        summary: "P7 docs blast-radius + v1.0 cut.",
+        summary: "Docs blast-radius + v1.0 cut.",
         validators: &[],
     },
 ];
@@ -434,10 +433,9 @@ fn maybe_write_evidence(
             // Status stays `Missing` — operator must fix.
         }
         WaveStatus::NoValidators => {
-            // No host-local validator → no operator-attested
-            // evidence is meaningful for this wave. Leave the
-            // record absent so the W18 gate falls back to
-            // gate-output-only logic.
+            // No host-local validator → no operator-attested evidence is
+            // meaningful for this wave. Leave the record absent so the
+            // default-switch gate falls back to gate-output-only logic.
             report.detail = format!(
                 "{} — operator attestation not applicable; rely on Layer-1 gate output",
                 report.detail
@@ -530,8 +528,8 @@ fn read_hostname() -> String {
 // ---------------------------------------------------------------
 // Minimal in-tree SHA-256 (no extra crate dep).
 // FIPS-180-4 reference. Used ONLY for the operator-signature label —
-// not a cryptographic boundary; the load-bearing W18 trust signal is
-// "evidence file exists with the canonical schema" (see
+// not a cryptographic boundary; the load-bearing default-switch trust
+// signal is "evidence file exists with the canonical schema" (see
 // options-daemon.nix:validationEvidencePresent).
 // ---------------------------------------------------------------
 
@@ -782,7 +780,7 @@ mod tests {
 
     #[test]
     fn wave_catalog_ids_match_options_daemon_nix() {
-        // The W18 readiness gate vocabulary lives in
+        // The readiness gate vocabulary lives in
         // nixos-modules/options-daemon.nix:readinessWaveSpecs.
         // Keep them in sync: the eval gate
         // tests/host-validate-verb-eval.sh enforces this from the

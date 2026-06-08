@@ -156,7 +156,7 @@ check_optional "nixling@" "P6 deletion — daemon supervisor + broker SpawnRunne
 check "microvm@"
 check "microvm-virtiofsd@full-vm"
 check_optional "nixling-full-vm-swtpm" "P6 deletion — broker SpawnRunner{Swtpm}"
-# P6 (ph6-remove-systemd-emission): the per-VM nixling-<vm>-snd /
+# The per-VM nixling-<vm>-snd /
 # -video / -gpu sidecars and the nixling-otel-relay@ template have
 # been deleted; their replacements are broker `SpawnRunner` runners
 # (Audio / Video / Gpu / OtelHostBridge) and carry no
@@ -166,7 +166,7 @@ check_optional "nixling-full-vm-swtpm" "P6 deletion — broker SpawnRunner{Swtpm
 # same reason. Checks retained: the upstream `microvm@` and
 # `microvm-virtiofsd@` per-VM templates (still emitted by upstream
 # microvm.nix via the `microvm.vms` translation in host.nix), the
-# per-VM swtpm sidecar (host-sidecars.nix deletion in P6 took the
+# per-VM swtpm sidecar (host-sidecars.nix deletion in took the
 # top-level `nixling-<vm>-swtpm` service with it — listed here only
 # so a re-introduction regresses the gate), and the in-guest
 # observability vsock relays.
@@ -187,7 +187,7 @@ check "obs:nixling-otel-vsock-in"
 # The obs VM's nixling-otel-vsock-in.service is still covered in
 # observability-eval.sh, which evaluates the stack VM's guest config.
 
-# ph0-daemon-restart-if-changed (P0): assert that nixlingd.service
+# Assert that nixlingd.service
 # carries restartIfChanged = false when daemonExperimental.enable = true.
 # nixlingd is the long-lived supervisor whose pidfd owns the child runner
 # DAG; a rebuild-triggered restart would tear down all in-flight VM

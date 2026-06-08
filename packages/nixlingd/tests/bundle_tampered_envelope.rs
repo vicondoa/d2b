@@ -45,6 +45,7 @@ fn write_with_mode(path: &std::path::Path, content: &[u8], mode: u32) {
         .expect("write file");
 }
 
+#[allow(dead_code)]
 fn set_mode(path: &std::path::Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set permissions");
 }

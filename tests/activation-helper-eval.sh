@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 # tests/activation-helper-eval.sh — Layer-1 smoke/regression test for
-# the v1.1.2fu19 nixling-activation-helper binary.
+# the nixling-activation-helper binary.
 #
 # The helper replaces previous shell-script `[ -L ]` / `[ -f ]` /
-# `find -type f` activation patterns that had TOCTOU windows. Per
-# panel-test R3 must-fix, it needs committed Layer-1 coverage
-# proving:
+# `find -type f` activation patterns that had TOCTOU windows. This
+# test provides committed Layer-1 coverage proving:
 #   - --help exits 0 and prints usage
 #   - missing flags exit 1 with informative error
 #   - regular-file happy path: creates file with correct uid/gid/mode/size
 #   - existing-file re-assert path (size-mib=0): preserves contents,
 #     re-applies uid/gid/mode
-#   - symlink refusal exit 2 (panel-security R2 critical TOCTOU fix)
-#   - FIFO refusal exit 2 (panel-rust+software R3 must-fix)
+#   - symlink refusal exit 2 (critical TOCTOU fix)
+#   - FIFO refusal exit 2
 #   - directory refusal exit 2 (wrong file type)
 #   - enforce-dir-posture happy path
 #   - enforce-dir-posture symlink refusal
@@ -201,8 +200,7 @@ fi
 # may run before the directory exists).
 ok "enforce-dir-posture on missing path is idempotent (no-op exit 0)"
 
-# v1.1.2fu23 panel-security R4 critical must-fix tests:
-# fd-safe setfacl-on-path + chown-if-orphan verbs.
+# fd-safe setfacl-on-path + chown-if-orphan verb tests.
 
 # --- (11) setfacl-on-path: happy path --------------------------------
 
@@ -286,8 +284,8 @@ else
 fi
 
 # --- (17) ensure-regular-file: intermediate-symlink refusal (RESOLVE_NO_SYMLINKS) ---
-# Panel-security R5 critical must-fix: openat2 + RESOLVE_NO_SYMLINKS
-# refuses symlinks at ANY component, not just the final segment.
+# openat2 + RESOLVE_NO_SYMLINKS refuses symlinks at ANY component, not
+# just the final segment.
 
 mkdir "$SCRATCH/inner-dir"
 ln -s "$SCRATCH/inner-dir" "$SCRATCH/inner-link"

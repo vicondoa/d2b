@@ -1,13 +1,13 @@
-//! W8-fu: live SSH-key fingerprint + public-key probe.
+//! Live SSH-key fingerprint + public-key probe.
 //!
 //! Pure-ish module that shells out to `ssh-keygen -lf <path>` and
 //! `ssh-keygen -y -f <path>` for the public-fingerprint and
-//! public-key extraction respectively. Returns structured results
-//! for the W8 `nixling keys show` CLI surface.
+//! public-key extraction respectively. Returns structured results for
+//! the `nixling keys show` CLI surface.
 //!
 //! The broker is the only caller with read access to the per-VM
 //! private key at `<nixling.site.keysDir>/<vm>_ed25519` (0640
-//! root:nixling-launcher per `nixos-modules/host-keys.nix`); this
+//! root:nixling per `nixos-modules/host-keys.nix`); this
 //! module's input is therefore expected to be the PUBLIC key path
 //! (`<keysDir>/<vm>_ed25519.pub`) for `nixling keys show`, and the
 //! private key path only for the broker-side rotate op which runs

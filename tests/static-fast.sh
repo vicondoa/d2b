@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/static-fast.sh — tier-2 PR-loop subset of tests/static.sh
-# (W3a-3 layer split).
+# (layer split).
 #
 # This is NOT the sub-60s first-pass gate. For the lightweight syntax /
 # shell-lint presubmit, run tests/static-fast-tier0.sh. static-fast.sh is
@@ -12,19 +12,19 @@
 #   * shellcheck --severity=warning on every .sh
 #   * nix flake check --no-build --all-systems
 #   * rust-workspace-checks (cargo workspace check / clippy / fmt)
-#   * W1 bundle/schema static gates (12 tests, ~3 min)
-#   * W3 host-prepare gates (17 tests, ~1 min — pure shell)
+#   * bundle/schema static gates (12 tests, ~3 min)
+#   * host-prepare gates (17 tests, ~1 min— pure shell)
 #   * static-rust-dependency-direction (parse-only)
 #   * cross-cutting drift gates (error-codes, manpage-completion,
 #     daemon-api-drift)
 #
 # Skipped vs tests/static.sh (run those in the full panel gate):
 #   - smoke-eval-*.nix (5 toplevel evals, ~4 min, ~50 G disk)
-#   - assertions-eval + observability-eval (~37 min after W3a-1)
+#   - assertions-eval + observability-eval (~37 min after)
 #   - mid-tier evals (autostart, net-vm, restart-policy, video, usbip,
 #     bridge-isolation) — ~9 min, each materializes a system closure
 #   - manifest contract (~1 min)
-#   - W2 control-plane gates (~12 min cargo + broker test daemons)
+#   - control-plane gates (~12 min cargo + broker test daemons)
 #   - per-example/template flake-check (~3 min wall but ~700 G disk)
 #   - cli-contract-coverage (~7 min cold; builds nixling CLI binary
 #     to validate parser/help against docs)
@@ -32,7 +32,7 @@
 #     golden against live CLI output)
 #   - audio component (Layer 2; requires live host)
 #
-# Measured cold-cache run (W3a-3 baseline at HEAD f5a44b7): ~13 min
+# Measured cold-cache run (baseline at HEAD f5a44b7): ~13 min
 # wall, ~520 G `/nix/store` peak. Warm-cache: ~2 min. Full
 # tests/static.sh remains the canonical panel + wave-exit gate.
 
@@ -95,12 +95,12 @@ run_gate() {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 1: preflight
+# Preflight
 # ---------------------------------------------------------------------------
 run_gate "tests/preflight-disk-space.sh" "bash '$ROOT/tests/preflight-disk-space.sh'"
 
 # ---------------------------------------------------------------------------
-# Phase 2: parse + lint
+# Parse + lint
 # ---------------------------------------------------------------------------
 log "==> Layer 1 fast: parse + lint"
 
@@ -134,17 +134,22 @@ run_gate "shellcheck --severity=warning on all nixling shell scripts" "
   shellcheck --severity=warning -x \$files
 "
 
+run_gate "tests/legacy-group-name-denylist-self-test.sh" "bash '$ROOT/tests/legacy-group-name-denylist-self-test.sh'"
+run_gate "tests/legacy-group-name-denylist.sh" "bash '$ROOT/tests/legacy-group-name-denylist.sh'"
+run_gate "tests/group-rename-semantic-eval.sh" "bash '$ROOT/tests/group-rename-semantic-eval.sh'"
+run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-migration-fresh-install-eval.sh'"
+
 run_gate "nix flake check --no-build --all-systems" '
   nix flake check "'$ROOT'" --no-build --all-systems
 '
 
 # ---------------------------------------------------------------------------
-# Phase 3: rust workspace
+# Rust workspace
 # ---------------------------------------------------------------------------
 run_gate "tests/rust-workspace-checks.sh" "bash '$ROOT/tests/rust-workspace-checks.sh'"
 
 # ---------------------------------------------------------------------------
-# Phase 4: W1 bundle/schema static gates (pure shell + small Nix evals)
+#  bundle/schema static gates (pure shell + small Nix evals)
 # ---------------------------------------------------------------------------
 log "==> W1 bundle/schema static gates"
 for gate in \
@@ -166,7 +171,7 @@ for gate in \
 done
 
 # ---------------------------------------------------------------------------
-# Phase 5: W3 host-prepare gates (mostly pure shell; some need cargo)
+#  Host-prepare gates (mostly pure shell; some need cargo)
 # ---------------------------------------------------------------------------
 log "==> W3 host-prepare gates"
 
@@ -200,6 +205,7 @@ for gate in \
   runner-shape-preflight \
   ch-argv-shape \
   dag-topo \
+  video-contract-eval \
   sidecar-argv-shape \
   w6-argv-shape \
   device-node-matrix; do
@@ -209,7 +215,7 @@ for gate in \
 done
 
 # ---------------------------------------------------------------------------
-# Phase 7: cross-cutting drift gates (cheap parse + small Rust builds)
+# Cross-cutting drift gates (cheap parse + small Rust builds)
 # ---------------------------------------------------------------------------
 for gate in \
   static-rust-dependency-direction \

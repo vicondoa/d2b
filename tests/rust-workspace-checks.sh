@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W0a Rust workspace checks. Called by tests/static.sh only when packages/ exists.
+# Rust workspace checks. Called by tests/static.sh only when packages/ exists.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
@@ -36,6 +36,8 @@ export pinned_channel
 
 workspace_target_dir=$(nl_cargo_target_dir workspace)
 broker_target_dir=$(nl_cargo_target_dir broker)
+broker_layer1_target_dir=$(nl_mktemp .nixling-broker-layer1-target.XXXXXX)
+add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
 
 nl_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
@@ -162,19 +164,21 @@ CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$
 ok "broker cargo check (default features = real wire dispatch)"
 
 log "--> cargo check --workspace --features layer1-bootstrap (broker workspace, legacy probe-* harness)"
-CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
 ok "broker cargo check --features layer1-bootstrap"
 
 log "--> cargo test --workspace (broker workspace, default features = real wire dispatch)"
+rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
 CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
 ok "broker cargo test (default features = real wire dispatch)"
 
 log "--> cargo test --workspace --features layer1-bootstrap (broker workspace, legacy probe-* harness)"
-CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
 ok "broker cargo test --features layer1-bootstrap"
 
 cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
 cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
+cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/nixlingd/target"
 
 schema_out="$ROOT/packages/xtask/out"

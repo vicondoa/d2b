@@ -1,5 +1,4 @@
-//! `CreateTapFd` + `CreatePersistentTap` + `SetBridgePortFlags` ops
-//! (W3 s2).
+//! `CreateTapFd` + `CreatePersistentTap` + `SetBridgePortFlags` ops.
 //!
 //! - `CreateTapFd`: broker opens `/dev/net/tun` + `TUNSETIFF` and
 //!   returns the fd via `SCM_RIGHTS`. The runner has no
@@ -9,19 +8,16 @@
 //! - `CreatePersistentTap`: fallback when CH does not support
 //!   `tap-fd`. Broker calls `TUNSETPERSIST` + `TUNSETOWNER` /
 //!   `TUNSETGROUP` so the runner uid/gid can open the device node.
-//! - `SetBridgePortFlags`: every flag, every role per plan.md
-//!   §"W3 bridge-port flag readback".
+//! - `SetBridgePortFlags`: every flag, every role with readback.
 //!
-//! NetworkManager unmanaged gate (W3 plan §"W3 IPv6-off ordering"
-//! step 1): the broker MUST NOT create the link until the prior
-//! `ApplyNmUnmanaged` op has either confirmed every declared ifname
-//! is `unmanaged` (NM present + reload + readback ok), or recorded
-//! a `NotApplicable` outcome because NM was absent and the bundle's
-//! firewall coexistence policy permits a clean coexistence (no NM
-//! detected → `coexist`). The previous wave hardcoded
-//! `nm_unmanaged_applied = true`; per W3 work-review finding
-//! kernel-3 the actual prior-op outcome is threaded into
-//! [`TapCreateGate`] and a missing gate refuses with
+//! NetworkManager unmanaged gate: the broker MUST NOT create the link
+//! until the prior `ApplyNmUnmanaged` op has either confirmed every
+//! declared ifname is `unmanaged` (NM present + reload + readback ok),
+//! or recorded a `NotApplicable` outcome because NM was absent and the
+//! bundle's firewall coexistence policy permits a clean coexistence (no
+//! NM detected → `coexist`). The previous implementation hardcoded
+//! `nm_unmanaged_applied = true`; the actual prior-op outcome is now
+//! threaded into [`TapCreateGate`] and a missing gate refuses with
 //! `nm-unmanaged-pre-create-required`.
 
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor, SystemLiveExec};

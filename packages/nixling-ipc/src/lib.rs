@@ -15,31 +15,27 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 pub const PUBLIC_SOCKET_PATH: &str = "/run/nixling/public.sock";
 pub const BROKER_SOCKET_PATH: &str = "/run/nixling/priv.sock";
 
-/// W3 wire-protocol version. W2 shipped pre-versioned `Hello`
-/// negotiation via [`SemverRange`]; W3 layers an explicit
-/// `PROTOCOL_VERSION` constant on top so the
-/// `nixling-priv-broker`/`nixlingd` skew gate (plan.md §"W3 wire-compat
-/// / version-skew gate") can refuse strangers without a full version
-/// negotiation round-trip.
+/// Wire-protocol version. Earlier builds negotiated via [`SemverRange`];
+/// the current broker handshake layers an explicit `PROTOCOL_VERSION`
+/// constant on top so the `nixling-priv-broker`/`nixlingd` skew gate can
+/// refuse strangers without a full version negotiation round-trip.
 ///
-/// W3fu1 H1 (security-1) bumps the constant from 2 → 3 because the
-/// W3 mutating broker variants now carry **only opaque IDs**: the
-/// daemon no longer passes inline nft text, route specs, sysctl
-/// values, hosts entries, NM ifname sets, paths, uids/gids, argv,
-/// env, caps, or seccomp profiles across the wire. Old W3-prep
-/// callers that send the W2 payload shape are refused with
+/// This constant was bumped from 2 → 3 when mutating broker variants
+/// became **opaque ID** only: the daemon no longer passes inline nft text,
+/// route specs, sysctl values, hosts entries, NM ifname sets, paths,
+/// uids/gids, argv, env, caps, or seccomp profiles across the wire. Legacy
+/// callers that send the old payload shape are refused with
 /// `wire-version-mismatch`.
 pub const PROTOCOL_VERSION: u32 = 3;
 
-/// Broker operation capability set advertised at handshake time per
-/// plan.md §"W3 wire-compat / version-skew gate (pre-merge)". The
-/// daemon and broker compare their respective sets and refuse W3-only
-/// operations with `wire-version-mismatch` when either side is older.
+/// Broker operation capability set advertised at handshake time. The
+/// daemon and broker compare their respective sets and refuse operations
+/// with `wire-version-mismatch` when either side is older.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerCapabilities {
     /// Wire protocol version (matches [`PROTOCOL_VERSION`] when both
-    /// sides are on the same W3 minor).
+    /// sides support the same protocol).
     pub protocol_version: u32,
     /// Stable broker operation tags this side supports. Wire-equivalent
     /// to [`broker_wire::BrokerRequest`] variant discriminants; encoded
@@ -48,16 +44,16 @@ pub struct BrokerCapabilities {
 }
 
 impl BrokerCapabilities {
-    /// W3 capabilities advertised by an up-to-date broker. The list
-    /// includes both pre-W3 variants that survive the W3 contract and
+    /// Capabilities advertised by an up-to-date broker. The list
+    /// includes both legacy variants that survive the current contract and
     /// every variant listed in [`W3BrokerOperation::all`].
     pub fn w3() -> Self {
         let mut operations: Vec<String> = W3BrokerOperation::all()
             .iter()
             .map(|op| op.wire_tag().to_owned())
             .collect();
-        // W2 variants that remain wire-stable in W3 but are not in the
-        // closed W3-only enum (so they're not auto-included above).
+        // Legacy variants that remain wire-stable but are not in the
+        // closed operation enum (so they're not auto-included above).
         operations.extend(
             [
                 "Hello",
@@ -418,14 +414,13 @@ mod tests {
 
     #[test]
     fn invalid_ifname_bubbles_up_as_typed_error() {
-        // W3fu2 H1 (rust-1 / security-1): CreateTapFd no longer
-        // carries `ifnameDerived` on the wire; the broker derives
-        // the ifname server-side from the trusted bundle row keyed
-        // by `role_id` + `vm_id`. The "invalid ifname bubbles up"
-        // case from the W3fu1 wire was reframed to assert that the
-        // dropped field is fail-closed-rejected at the wire layer
-        // with `wire-unknown-field`, preventing a future caller
-        // from supplying it.
+        // CreateTapFd no longer carries `ifnameDerived` on the wire;
+        // the broker derives the ifname server-side from the trusted
+        // bundle row keyed by `role_id` + `vm_id`. The legacy "invalid
+        // ifname bubbles up" case was reframed to assert that the dropped
+        // field is fail-closed-rejected at the wire layer with
+        // `wire-unknown-field`, preventing a future caller from supplying
+        // it.
         let frame = encode_frame(&serde_json::json!({
             "kind": "CreateTapFd",
             "payload": {
@@ -453,8 +448,8 @@ mod tests {
 
     #[test]
     fn protocol_version_is_w3_opaque_id_baseline() {
-        // W3fu1 H1 (security-1) bumped this from 2 → 3 when the
-        // mutating broker variants became opaque-ID-only.
+        // This was bumped from 2 → 3 when the mutating broker variants
+        // became opaque-ID-only.
         assert_eq!(PROTOCOL_VERSION, 3);
     }
 

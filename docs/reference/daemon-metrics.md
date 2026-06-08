@@ -6,6 +6,20 @@
 > Implementation: [`packages/nixlingd/src/metrics.rs`](../../packages/nixlingd/src/metrics.rs).
 > Static gate: [`tests/daemon-metrics-eval.sh`](../../tests/daemon-metrics-eval.sh).
 
+> **v1.2 status — scrapable endpoint deferred.** The in-process
+> registry described below is wired and exercised by the daemon
+> (`broker-fallback` and friends record correctly), but the actual
+> scrapable HTTP `/metrics` listener is **deferred to a later release** —
+> see [`TODO.md`](../../TODO.md) "scrapable /metrics endpoint for
+> nixlingd". An attempt to multiplex HTTP through the public
+> `SOCK_SEQPACKET` socket was reverted because Prometheus scrapers
+> require `SOCK_STREAM`. A later release will land a dedicated
+> `SOCK_STREAM` metrics socket (loopback) per the same
+> trust model as the broker. Until then `metrics-endpoint` in
+> `nixling host doctor` warns by design, and the URL/port shape
+> below documents the *intended* contract — not a currently
+> reachable endpoint.
+
 ## Endpoint shape
 
 `nixlingd` exposes a **Prometheus text-format scrape endpoint**
@@ -63,7 +77,7 @@ declared schema; see "Cardinality bounds" below.
 
 - **Type:** histogram
 - **Labels:** `step`
-- **Step values:** one of the W3 host-prepare DAG step IDs documented
+- **Step values:** one of the host-prepare DAG step IDs documented
   in [`docs/reference/host-prep-dag.md`](./host-prep-dag.md)
   (e.g. `nft`, `route`, `sysctl`, `hosts`, `nm-unmanaged`,
   `usbip-firewall`, `cgroup-delegate`).

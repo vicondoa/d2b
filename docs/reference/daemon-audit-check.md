@@ -1,4 +1,4 @@
-# Daemon audit-check (P3 retire)
+# Daemon audit-check
 
 Operator reference for the in-daemon replacement for the retired
 `nixling-audit-check.{service,timer}` host singleton + timer that
@@ -6,20 +6,20 @@ previously validated broker audit log shape on a 24h cadence.
 
 Source of truth: `packages/nixlingd/src/audit_check.rs`.
 
-Phase: P3 `ph3-p3-audit-check-retire` (folds the host singleton into
-the unprivileged daemon's health surface).
+This folds the host singleton into the unprivileged daemon's health
+surface.
 
 ## What it replaces
 
-| Pre-P3 host singleton                          | P3+ replacement                                         |
+| Legacy host singleton                          | Replacement                                             |
 | ---------------------------------------------- | ------------------------------------------------------- |
 | `nixling-audit-check.service` (oneshot)        | `GET /health/audit-check` on the daemon's HTTP surface  |
 | `nixling-audit-check.timer` (`OnCalendar=daily`) | Supervisor event-loop sweep every 5 minutes (default) |
 
-Both legacy units are still declared in `nixos-modules/host-audit.nix`
-with `scheduled-for-removal-in-P6` markers in their `description` so
-operators see the deprecation in `systemctl status` output. P6
-removes them outright.
+Both legacy units were declared in `nixos-modules/host-audit.nix`
+with scheduled-removal markers in their `description` so operators saw
+the deprecation in `systemctl status` output. v1.0 removes them
+outright.
 
 ## What the check asserts
 

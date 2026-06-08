@@ -52,38 +52,33 @@ pub struct AuditEntry<'a> {
 
 /// Structured audit log writer.
 ///
-/// W3fu1 H1 (security-2, software-6, rust-2) replaced the original W2
-/// single-file `/var/lib/nixling/broker-audit.log` shape with a
-/// **daily-rotated JSONL log** under
-/// `/var/lib/nixling/audit/broker-<utc-date>.jsonl` per plan.md
-/// §"Broker audit event schema (W3 baseline)" and the typed
-/// [`OpAuditRecord`] header. **W4 retire-shim** drops the legacy
-/// single-file path entirely: every record — `write_entry`
-/// (`AuditEntry` shape) and `write_op_record` (`OpAuditRecord`
-/// shape) alike — lands in the day's `broker-<utc-date>.jsonl`
-/// file. `ExportBrokerAudit` consumers and the
-/// `broker-export-audit.sh` / `broker-socket-acl.sh` Layer-1 gates
-/// migrate atomically: they now read the day's daily file (or the
-/// full directory enumeration) instead of the legacy single file.
+/// Structured audit log writer for daily-rotated JSONL records under
+/// `/var/lib/nixling/audit/broker-<utc-date>.jsonl`. The legacy
+/// single-file `/var/lib/nixling/broker-audit.log` path was retired:
+/// every record — `write_entry` (`AuditEntry` shape) and
+/// `write_op_record` (`OpAuditRecord` shape) alike — lands in the day's
+/// `broker-<utc-date>.jsonl` file. `ExportBrokerAudit` consumers and
+/// the `broker-export-audit.sh` / `broker-socket-acl.sh` Layer-1 gates
+/// migrate atomically: they now read the day's daily file (or the full
+/// directory enumeration) instead of the legacy single file.
 #[derive(Debug)]
 pub struct AuditLog {
-    /// Directory holding the daily-rotated W3 records
+    /// Directory holding the daily-rotated records
     /// (`<audit_dir>/broker-<utc-date>.jsonl`).
     audit_dir: PathBuf,
-    /// Open append-fd for the current UTC day's W3 record file.
-    /// Refreshed on day-boundary crossings via [`Self::append_to_daily`].
+    /// Open append-fd for the current UTC day's record file. Refreshed
+    /// on day-boundary crossings via [`Self::append_to_daily`].
     daily: Mutex<DailyAppender>,
     /// `0640 root:nixlingd` group target for the daily files.
     expected_gid: u32,
     test_mode: bool,
-    /// W4a-H1: how many days of daily rotated audit files to retain.
-    /// 0 disables pruning. Default 14 (matches the docs claim in
-    /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md`
-    /// "Control plane (W2+)"). Operators that need bounded retention
-    /// finally have it: prune runs on every day-boundary rotation in
-    /// `append_to_daily` and on `open()`. Pruning is best-effort —
-    /// errors are logged via the broker tracing but do not fail the
-    /// write path.
+    /// How many days of daily rotated audit files to retain. 0 disables
+    /// pruning. Default 14 (matches the docs claim in
+    /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md` "Control
+    /// plane"). Operators that need bounded retention have it: prune
+    /// runs on every day-boundary rotation in `append_to_daily` and on
+    /// `open()`. Pruning is best-effort — errors are logged via the
+    /// broker tracing but do not fail the write path.
     retention_days: u32,
     #[cfg(test)]
     captured_records: Option<Arc<Mutex<Vec<OwnedOpAuditRecord>>>>,
@@ -102,7 +97,7 @@ impl AuditLog {
         test_mode: bool,
         retention_days: u32,
     ) -> io::Result<Self> {
-        // W4 retire-shim: refuse symlink on the audit dir.
+        // Refuse symlink on the audit dir.
         if let Ok(metadata) = fs::symlink_metadata(audit_dir) {
             if metadata.file_type().is_symlink() {
                 return Err(io::Error::new(
@@ -143,9 +138,9 @@ impl AuditLog {
             captured_records: None,
         };
 
-        // W4a-H1: prune on open so a long-stopped daemon catches up.
-        // Best-effort: log + ignore errors (caller should not fail to
-        // start the daemon because of a stale-file cleanup hiccup).
+        // Prune on open so a long-stopped daemon catches up. Best-effort:
+        // log + ignore errors (caller should not fail to start the daemon
+        // because of a stale-file cleanup hiccup).
         if let Err(err) = log.prune_expired_daily_files() {
             // We don't have tracing in scope here; rely on the broker
             // runtime to surface this via its own log if it cares.
@@ -193,12 +188,12 @@ impl AuditLog {
         self.audit_dir.join(format!("broker-{date}.jsonl"))
     }
 
-    /// W2-compat short-record writer. New W3 op dispatch arms call
-    /// [`Self::write_op_record`] instead. The `AuditEntry` JSONL
-    /// shape is still produced for back-compat with the
-    /// `broker-socket-acl.sh` gate (which greps `caller_uid`); all
-    /// records — `AuditEntry` and `OpAuditRecord` alike — land in
-    /// the day's daily file under `audit_dir`.
+    /// Legacy short-record writer. New op dispatch arms call
+    /// [`Self::write_op_record`] instead. The `AuditEntry` JSONL shape
+    /// is still produced for back-compat with the `broker-socket-acl.sh`
+    /// gate (which greps `caller_uid`); all records — `AuditEntry` and
+    /// `OpAuditRecord` alike — land in the day's daily file under
+    /// `audit_dir`.
     pub fn write_entry(
         &self,
         op: &str,
@@ -223,7 +218,7 @@ impl AuditLog {
         self.append_json_line(&entry)
     }
 
-    /// W2-compat short-record writer for errored outcomes that need
+    /// Legacy short-record writer for errored outcomes that need
     /// admin-visible diagnostics in `nixling audit --strict`.
     pub fn write_error_entry(
         &self,
@@ -257,7 +252,7 @@ impl AuditLog {
         self.append_to_daily(line.as_bytes())
     }
 
-    /// Append one W3 [`OpAuditRecord`] to the day's daily file.
+    /// Append one [`OpAuditRecord`] to the day's daily file.
     pub fn write_op_record(&self, record: &OpAuditRecord<'_>) -> io::Result<()> {
         #[cfg(test)]
         if let Some(capture) = &self.captured_records {
@@ -269,6 +264,37 @@ impl AuditLog {
         let line = record.to_jsonl();
         self.append_to_daily(line.as_bytes())?;
         Ok(())
+    }
+
+    /// Append a `ChildReaped` forensics record to the daily audit log.
+    /// Both the real-time IPC channel and the audit channel receive the
+    /// event (distinct sinks: IPC for daemon, audit for post-mortem
+    /// forensics).
+    pub fn write_child_reaped(
+        &self,
+        notif: &nixling_ipc::broker_wire::ChildReapedNotification,
+    ) -> io::Result<()> {
+        #[derive(serde::Serialize)]
+        struct ChildReapedAuditEntry<'a> {
+            ts: u128,
+            op: &'static str,
+            runner_id: &'a str,
+            pid: i32,
+            exit_status: &'a nixling_ipc::broker_wire::ChildExitStatus,
+            reaped_at_ms: i64,
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        self.append_json_line(&ChildReapedAuditEntry {
+            ts,
+            op: "ChildReaped",
+            runner_id: &notif.runner_id,
+            pid: notif.pid,
+            exit_status: &notif.exit_status,
+            reaped_at_ms: notif.reaped_at_ms,
+        })
     }
 
     /// Convenience helper used by error paths that still build their
@@ -335,8 +361,7 @@ impl AuditLog {
         let today = utc_date_string();
         let rotated = today != guard.date_utc;
         if rotated {
-            // Plan §"W3 /run/nixling atomic state invariants":
-            // rotations swap the fd via reopen + atomic rename. We
+            // Rotations swap the fd via reopen + atomic rename. We
             // reopen the new day's file in O_APPEND; the old file is
             // closed by replacing it (drop runs).
             let new_path = self.audit_dir.join(format!("broker-{today}.jsonl"));
@@ -361,10 +386,10 @@ impl AuditLog {
         Ok(())
     }
 
-    /// W4a-H1: delete any `broker-YYYY-MM-DD.jsonl` files whose date
-    /// stamp is older than `retention_days` days ago in UTC. Returns
-    /// the number of files removed (debug aid; the runtime tracing
-    /// uses this to surface retention activity).
+    /// Delete any `broker-YYYY-MM-DD.jsonl` files whose date stamp is
+    /// older than `retention_days` days ago in UTC. Returns the number
+    /// of files removed (debug aid; the runtime tracing uses this to
+    /// surface retention activity).
     ///
     /// Filename is the source of truth — we never parse JSON to
     /// inspect record timestamps. Operators who manually drop in
@@ -520,10 +545,9 @@ fn open_append_cloexec(path: &Path, expected_gid: u32, test_mode: bool) -> io::R
         .open(path)?;
     path_safe::fchmod(file.as_fd(), 0o640)?;
     set_root_nixlingd_acl(&file, expected_gid, test_mode)?;
-    // Refresh fd flags from a rustix view; this also asserts the
-    // file descriptor was opened with the expected mode bits per
-    // plan.md §"W3 /run/nixling atomic state invariants" ("audit log
-    // opened once at broker start via O_APPEND | O_CLOEXEC").
+    // Refresh fd flags from a rustix view; this also asserts the file
+    // descriptor was opened with the expected mode bits via
+    // O_APPEND | O_CLOEXEC.
     let raw = file.as_raw_fd();
     let _ = raw; // intentional: rustix audit cross-check stays a static cast
     let _ = (
@@ -583,19 +607,17 @@ fn ymd_from_unix(unix: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
-/// W4a-H1: inverse of [`ymd_from_unix`]. Returns days since the unix
-/// epoch (1970-01-01) for the supplied Y-M-D, or `None` for
-/// out-of-range / impossible dates. Civil-to-days (Howard Hinnant,
-/// public domain).
+/// Inverse of [`ymd_from_unix`]. Returns days since the unix epoch
+/// (1970-01-01) for the supplied Y-M-D, or `None` for out-of-range /
+/// impossible dates. Civil-to-days (Howard Hinnant, public domain).
 ///
-/// W4afu1 test-2: validates calendar correctness via the
-/// round-trip check (`ymd_from_unix(result * 86400) == (y, m, d)`).
-/// Invalid calendar dates like 2023-02-29 or 2024-02-30 fail this
-/// round-trip because the underlying Hinnant algorithm normalizes
-/// out-of-range days into the next month, producing a different
-/// (y, m, d) on decode. We treat any normalization as `None` so
-/// `prune_expired_daily_files` doesn't trust a filename like
-/// `broker-2024-02-30.jsonl` as a real date.
+/// Validates calendar correctness via the round-trip check
+/// (`ymd_from_unix(result * 86400) == (y, m, d)`). Invalid calendar
+/// dates like 2023-02-29 or 2024-02-30 fail this round-trip because the
+/// underlying Hinnant algorithm normalizes out-of-range days into the
+/// next month, producing a different (y, m, d) on decode. We treat any
+/// normalization as `None` so `prune_expired_daily_files` doesn't trust
+/// a filename like `broker-2024-02-30.jsonl` as a real date.
 fn unix_days_from_ymd(y: i32, m: u32, d: u32) -> Option<i64> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
         return None;
@@ -691,10 +713,10 @@ mod tests {
 
     #[test]
     fn unix_days_from_ymd_rejects_invalid_calendar_dates() {
-        // W4afu1 test-2: dates that pass the 1..=31 day check but
-        // don't actually exist in the calendar (Feb 30, Apr 31,
-        // Feb 29 on a non-leap year) must round-trip to a
-        // different (y, m, d), which the new guard catches.
+        // Dates that pass the 1..=31 day check but don't actually exist
+        // in the calendar (Feb 30, Apr 31, Feb 29 on a non-leap year)
+        // must round-trip to a different (y, m, d), which the guard
+        // catches.
         assert_eq!(
             unix_days_from_ymd(2023, 2, 29),
             None,

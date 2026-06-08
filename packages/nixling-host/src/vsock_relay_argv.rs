@@ -1,8 +1,8 @@
-//! W6-H1: vsock relay argv generator.
+//! vsock relay argv generator.
 //!
-//! Pure Rust function emitting the socat argv for the per-VM vsock
-//! relay sidecars used by `nixling.observability.*`. The W3
-//! observability work shipped three shapes documented in
+//! Pure Rust function emitting the socat argv for the per-VM vsock relay
+//! sidecars used by `nixling.observability.*`. The observability work
+//! shipped three shapes documented in
 //! `nixos-modules/components/observability/{host,guest,stack}.nix`:
 //!
 //! - **stack-vm vsock-in**: `socat VSOCK-LISTEN:14317,fork,...
@@ -25,14 +25,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One side of a socat pipe. The W6 generator stitches two
+/// One side of a socat pipe. The generator stitches two
 /// [`SocatEndpoint`] entries together with the documented socat
 /// option set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum SocatEndpoint {
     /// `UNIX-LISTEN:<path>` with the standard fork/reuseaddr/mode
-    /// options the W3 obs harness uses.
+    /// options the observability harness uses.
     UnixListen {
         path: String,
         /// `max-children=N` cap; obs harness uses 16 for the guest
@@ -97,13 +97,13 @@ impl SocatEndpoint {
 pub struct VsockRelayArgvInput {
     /// Absolute store path to the `socat` binary.
     pub socat_binary_path: String,
-    /// VM / role context for [`exec_arg0`]. The W3 obs harness uses
-    /// `nixling-otel-relay@<vm>` for guest→host relays and
+    /// VM / role context for [`exec_arg0`]. The observability harness
+    /// uses `nixling-otel-relay@<vm>` for guest→host relays and
     /// `nixling-otel-vsock-in` for the obs stack VM listener.
     pub relay_name: String,
-    /// Left side of the pipe (the LISTEN side). The W6 generator
-    /// emits `-d -d` (debug) before the endpoints, matching the
-    /// W3 obs harness's ExecStart shape.
+    /// Left side of the pipe (the LISTEN side). The generator emits
+    /// `-d -d` (debug) before the endpoints, matching the observability
+    /// harness's ExecStart shape.
     pub source: SocatEndpoint,
     /// Right side of the pipe (the CONNECT side).
     pub sink: SocatEndpoint,
@@ -124,13 +124,12 @@ pub enum VsockRelayArgvError {
     EmptyEndpoint {
         which: String,
     },
-    /// W6 invariant: the source MUST be a LISTEN side (one of
-    /// UnixListen / VsockListen). Two CONNECTs back-to-back would
-    /// require socat to run both as clients — that's a different
-    /// shape (proxy chain) the W6 harness does not support.
+    /// The source MUST be a LISTEN side (one of UnixListen / VsockListen).
+    /// Two CONNECTs back-to-back would require socat to run both as clients
+    /// — that's a different shape (proxy chain) the harness does not support.
     SourceMustBeListen,
-    /// W6-H5 panel finding #1 (CRITICAL): socat's address syntax is
-    /// `<type>:<address-data>[,option[,option...]]`. A UNIX path
+    /// socat's address syntax is `<type>:<address-data>[,option[,option...]]`.
+    /// A UNIX path
     /// containing a comma (or any other socat option-syntax
     /// character) injects arbitrary socat options when interpolated
     /// into `UNIX-LISTEN:<path>,fork,...`. The fix refuses any path
@@ -144,10 +143,10 @@ pub enum VsockRelayArgvError {
     },
 }
 
-/// W6-H5 panel finding #1 (CRITICAL) + W6 GPT-5.5 panel notable #1:
-/// validate a UDS path against socat option-syntax injection. The W3
-/// obs harness path namespace (`/run/nixling/...`, `/var/lib/nixling/...`)
-/// only ever contains ASCII letters / digits / `_-./`; refusing
+/// Validate a UDS path against socat option-syntax injection. The
+/// observability harness path namespace (`/run/nixling/...`,
+/// `/var/lib/nixling/...`) only ever contains ASCII letters / digits /
+/// `_-./`; refusing
 /// anything else closes the historic denylist gap (the v1 denylist
 /// missed `:` which socat treats as an address-parameter separator,
 /// plus `[]{}()` and various control chars). Switched to an
@@ -178,8 +177,8 @@ fn endpoint_non_empty(e: &SocatEndpoint, which: &str) -> Result<(), VsockRelayAr
                     which: which.to_owned(),
                 });
             }
-            // W6-H5 panel finding #1 (CRITICAL): refuse socat
-            // address-syntax metacharacters in the path. See
+            // Refuse socat address-syntax metacharacters in the path.
+            // See
             // VsockRelayArgvError::PathContainsSocatMetachar.
             if let Some(c) = socat_unsafe_metachar(path) {
                 return Err(VsockRelayArgvError::PathContainsSocatMetachar {
@@ -218,7 +217,7 @@ pub fn generate_vsock_relay_argv(
 
     let mut argv: Vec<String> = vec![
         input.socat_binary_path.clone(),
-        // The W3 obs harness uses `-d -d` (double-debug) so the
+        // The observability harness uses `-d -d` (double-debug) so the
         // relay logs each connection. Pinned here so generator
         // output diff'd against the harness ExecStart stays stable.
         "-d".to_owned(),
@@ -244,7 +243,7 @@ pub fn exec_arg0(input: &VsockRelayArgvInput) -> Result<String, VsockRelayArgvEr
 mod tests {
     use super::*;
 
-    /// W3 obs harness stack-vm vsock-in shape:
+    /// Observability harness stack-vm vsock-in shape:
     /// `socat -d -d VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr UNIX-CONNECT:/run/nixling/obs-ingress.sock`
     fn audit_stack_vsock_in() -> VsockRelayArgvInput {
         VsockRelayArgvInput {
@@ -261,7 +260,7 @@ mod tests {
         }
     }
 
-    /// W3 obs harness guest egress shape:
+    /// Observability harness guest egress shape:
     /// `socat -d -d UNIX-LISTEN:<sock>,fork,max-children=16,reuseaddr,mode=0660 VSOCK-CONNECT:2:14317`
     fn audit_guest_egress() -> VsockRelayArgvInput {
         VsockRelayArgvInput {
@@ -434,9 +433,8 @@ mod tests {
         assert_eq!(parsed, input);
     }
 
-    /// W6-H5 panel finding #1 (CRITICAL): refuse socat path
-    /// injection attempts via comma / quote / semicolon / whitespace
-    /// in UDS paths.
+    /// Refuse socat path injection attempts via comma / quote /
+    /// semicolon / whitespace in UDS paths.
     #[test]
     fn rejects_unix_listen_path_with_comma_injection() {
         let mut input = audit_guest_egress();
@@ -487,9 +485,8 @@ mod tests {
         ));
     }
 
-    /// W6-H5 panel finding #5 (NOTABLE): explicit test for
-    /// UnixListen → UnixConnect shape (the production W3 obs
-    /// host-bridge path uses it).
+    /// Explicit test for UnixListen → UnixConnect shape (the production
+    /// observability host-bridge path uses it).
     #[test]
     fn unix_listen_to_unix_connect_shape_is_supported() {
         let input = VsockRelayArgvInput {
@@ -510,10 +507,9 @@ mod tests {
         assert!(argv[4].starts_with("UNIX-CONNECT:"));
     }
 
-    /// W6 GPT-5.5 panel notable #1: socat treats `:` as an
-    /// address-parameter separator. The W6-H5 denylist missed it;
-    /// the GPT-5.5 fix switched to an allowlist `[A-Za-z0-9_./-]`
-    /// which closes `:`, brackets, and any other socat
+    /// socat treats `:` as an address-parameter separator. The previous
+    /// denylist missed it; the fix switched to an allowlist
+    /// `[A-Za-z0-9_./-]` which closes `:`, brackets, and any other socat
     /// option-syntax character.
     #[test]
     fn rejects_path_with_colon() {
@@ -539,7 +535,7 @@ mod tests {
         ));
     }
 
-    /// P1 vsock-relay golden parity: argv.join(" ") byte-equals the
+    /// Vsock-relay golden parity: argv.join(" ") byte-equals the
     /// matching line in tests/golden/runner-shape/vsock-relay-argv-minimal.txt.
     /// Two shapes covered (EXEC form is OtelHostBridge's golden):
     ///   line 0 -> stack-vm vsock-in fixture (audit_stack_vsock_in)

@@ -2,7 +2,7 @@
 
 Schema: [`host-check.schema.json`](./host-check.schema.json)
 
-W2 host check is intentionally **read-only**. The JSON report is shaped
+Host check is intentionally **read-only**. The JSON report is shaped
 for both humans and automation: a short summary, a machine-readable list
 of individual checks, and a runner-parity appendix keyed by VM.
 
@@ -28,11 +28,11 @@ of individual checks, and a runner-parity appendix keyed by VM.
 - `checks[]` is emitted in the same logical order as the human report.
 - `runnerParity[]` is ordered by VM name.
 - `remediation` is present and may be `null`; no other documented fields
-  are nullable in W2.
+  are nullable.
 
 ## Stability promise
 
-The field names above and the `severity` enum are the stable W2 contract.
+The field names above and the `severity` enum are the stable contract.
 Check messages and remediation strings may be clarified over time, but
 new semantics belong in new `id` values rather than by changing the
 meaning of an existing one.
@@ -46,7 +46,7 @@ PASS
 - cgroup-v2: /sys/fs/cgroup/cgroup.controllers is present
 
 WARN
-- firewalld-coexistence: firewalld is active; W2 reports coexistence but does not mutate host rules
+- firewalld-coexistence: firewalld is active; coexistence is reported but host rules are not mutated
 ```
 
 ## JSON example
@@ -70,8 +70,8 @@ WARN
       "id": "firewalld-coexistence",
       "severity": "warn",
       "required": false,
-      "message": "firewalld is active; keep the host ruleset unchanged in W2",
-      "remediation": "Use W3 host prepare for automated firewall reconcile."
+      "message": "firewalld is active; keep the host ruleset unchanged",
+      "remediation": "Use host prepare for automated firewall reconcile."
     }
   ],
   "runnerParity": [

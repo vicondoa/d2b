@@ -1,6 +1,6 @@
 # Auto-declared observability stack VM.
 #
-# Wave-1 todo: `auto-obs-vm`.
+# TODO: `auto-obs-vm`.
 # When `nixling.observability.enable = true`, materialise the reserved
 # observability env and the headless stack VM that will later host the
 # single-host Grafana/Prometheus/Loki/Tempo sink.

@@ -22,12 +22,12 @@ status.
 ## Ordering and null handling
 
 - The top-level array is ordered by `name`.
-- No fields are omitted in W2.
+- No fields are omitted.
 - `env` and `staticIp` are the only nullable fields.
 
 ## Stability promise
 
-The field set and the three `status` enum values are part of the W2
+The field set and the three `status` enum values are part of the
 compatibility contract. Human table spacing may change; the JSON shape
 may not change without an intentional schema update.
 

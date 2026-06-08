@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# tests/video-sidecar-hardening-eval.sh — DEFERRED after
-# ph6-remove-systemd-emission.
+# tests/video-sidecar-hardening-eval.sh — DEFERRED after daemon-only cutover.
 #
-# Pre-P6 this gate locked in the systemd-unit hardening of the
+# Before the daemon-only cutover, this gate locked in the systemd-unit hardening of the
 # per-VM `nixling-<vm>-video.service` (RestrictAddressFamilies =
 # [AF_UNIX], RestrictNamespaces=true, SystemCallFilter pinning,
 # empty Capability{BoundingSet,Ambient}).
 #
-# P6 deletes `nixos-modules/components/video/host.nix` along with
+# Deletes `nixos-modules/components/video/host.nix` along with
 # every `nixling-<vm>-video` systemd unit. The video sidecar is now
 # spawned by the nixling priv-broker as `SpawnRunner{role: Video}`;
 # the broker applies the equivalent hardening at fork time via its
 # canonical cap-set + seccomp profile (see
 # `packages/nixling-priv-broker/src/runners/video.rs` and the
-# broker-caps-eval P0 gate).
+# broker-caps-eval gate).
 #
 # Eval-time assertion of the surviving runner-side hardening is
 # being added in a follow-up (broker-video-hardening-eval); until

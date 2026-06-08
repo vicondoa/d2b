@@ -132,9 +132,9 @@ pub mod wire {
             #[serde(default)]
             opaque_target_id: Option<String>,
         },
-        /// P2 ph2-store-sync bootstrap probe stub. Real dispatch lives
-        /// in the production runtime; the bootstrap brokerage returns
-        /// `Unimplemented { target_wave: "P2" }`.
+        /// Store-sync bootstrap probe stub. Real dispatch lives in the
+        /// production runtime; the bootstrap brokerage returns a typed
+        /// `Unimplemented` target_wave envelope.
         StoreSync {
             #[serde(default)]
             opaque_target_id: Option<String>,
@@ -452,10 +452,10 @@ pub mod wire {
 impl wire::CallerRole {
     pub fn for_display(&self) -> &'static str {
         match self {
-            wire::CallerRole::AdminUid { .. } => "AdminUid",
-            wire::CallerRole::LauncherUid { .. } => "LauncherUid",
+            wire::CallerRole::AdminUid { .. } => "nixling-admin",
+            wire::CallerRole::LauncherUid { .. } => "nixling-launcher",
             wire::CallerRole::RootUid { .. } => "RootUid",
-            wire::CallerRole::NotAuthorized => "NotAuthorized",
+            wire::CallerRole::NotAuthorized => "nixling-not-authorized",
         }
     }
 }

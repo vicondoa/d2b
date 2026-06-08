@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# tests/usbip-firewall-skeleton.sh — W3 s3 L1c canary gate.
+# tests/usbip-firewall-skeleton.sh— canary gate.
 #
 # Asserts:
 #
 #   1. `UsbipBindFirewallRule` inserts a per-busid carve-out rule BEFORE
 #      the generic allow/drop in `inet nixling`'s `forward` chain
 #      (the "specific carve-outs before generic" ordering invariant
-#      from plan.md §"W3 broker variant additions");
+#      from plan.md §" broker variant additions");
 #   2. the audit row carries `busid` + `rule_hash`;
 #   3. `UsbipBind`, `UsbipUnbind`, `UsbipProxyReconcile` are refused
-#      with the `unknown-operation` discriminant (W6 scope, not W3).
+#      with the `unknown-operation` discriminant (scope, not).
 
 set -euo pipefail
 
@@ -69,7 +69,7 @@ CARGO_TARGET_DIR="$broker_target_dir" cargo test \
   --nocapture
 ok "broker: UsbipBind/Unbind/ProxyReconcile refused with unknown-operation"
 
-# Static grep so the W6 boundary cannot be silently elided.
+# Static grep so the boundary cannot be silently elided.
 log "--> static grep: W6 USBIP UX variants explicitly refused"
 for op in UsbipBind UsbipUnbind UsbipProxyReconcile; do
   if ! grep -q "$op" "$ROOT/packages/nixling-priv-broker/src/ops/usbip_firewall.rs"; then

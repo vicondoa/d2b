@@ -1,4 +1,4 @@
-//! W4-fu broker reconcile-op executors.
+//! Broker reconcile-op executors.
 //!
 //! Pure `ops/*.rs` modules already compute the reconcile decisions
 //! (audit envelope + the nft script / route specs / sysctl entries
@@ -16,9 +16,9 @@
 //!   feature = "fake-backends"))]`) that records intent for
 //!   unit-test assertions without touching the live host.
 //!
-//! The split lets the broker dispatch take a trait object so the
-//! W4-fu integration tests (and the test-harness L1c canaries) can
-//! drive every executor path without root.
+//! The split lets the broker dispatch take a trait object so integration
+//! tests (and the test-harness L1c canaries) can drive every executor
+//! path without root.
 
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
@@ -131,9 +131,9 @@ pub trait ReconcileExecutor: Send + Sync {
         route_spec: &str,
     ) -> Result<(), ReconcileExecError>;
 
-    /// W13 (W6-fu): run `usbip <subcommand> --busid <bus_id>`.
-    /// Refuses non-absolute `usbip_binary`. Bus id is validated by
-    /// the caller via `nixling_host::usbip_argv::validate_bus_id`.
+    /// Run `usbip <subcommand> --busid <bus_id>`. Refuses non-absolute
+    /// `usbip_binary`. Bus id is validated by the caller via
+    /// `nixling_host::usbip_argv::validate_bus_id`.
     fn run_usbip(
         &self,
         usbip_binary: &Path,
@@ -141,15 +141,15 @@ pub trait ReconcileExecutor: Send + Sync {
         bus_id: &str,
     ) -> Result<(), ReconcileExecError>;
 
-    /// W7/W14: build or reconcile the per-VM hardlink farm generation
-    /// that the native activation flow runs from.
+    /// Build or reconcile the per-VM hardlink farm generation that the
+    /// native activation flow runs from.
     fn prepare_store_view(
         &self,
         intent: &ResolvedStoreViewIntent,
     ) -> Result<(), ReconcileExecError>;
 
-    /// W7/W14: prepare the per-role mount-namespace staging root under
-    /// the VM's state dir and return the bind-mount target path.
+    /// Prepare the per-role mount-namespace staging root under the VM's
+    /// state dir and return the bind-mount target path.
     fn setup_mount_namespace(
         &self,
         vm: &str,
@@ -158,7 +158,7 @@ pub trait ReconcileExecutor: Send + Sync {
         mount_root: &Path,
     ) -> Result<PathBuf, ReconcileExecError>;
 
-    /// W14: run the activation script from the prepared store view.
+    /// Run the activation script from the prepared store view.
     fn run_activation_script(
         &self,
         mode_arg: &str,
@@ -166,11 +166,11 @@ pub trait ReconcileExecutor: Send + Sync {
         mount_view_path: &Path,
     ) -> Result<String, ReconcileExecError>;
 
-    /// W14 LiveNative: host GC fallback shellout.
+    /// Host GC fallback shellout.
     fn run_gc(&self, keep_generations: Option<u32>) -> Result<String, ReconcileExecError>;
 
-    /// W14 LiveNative: generate a replacement ed25519 keypair and atomically
-    /// publish it at `key_path` + `key_path.pub`.
+    /// Generate a replacement ed25519 keypair and atomically publish it
+    /// at `key_path` + `key_path.pub`.
     fn run_ssh_keygen(
         &self,
         key_path: &Path,
@@ -178,10 +178,10 @@ pub trait ReconcileExecutor: Send + Sync {
     ) -> Result<GeneratedSshKey, ReconcileExecError>;
 }
 
-/// W13: USBIP subcommand selector mirrored from
-/// `nixling_host::usbip_argv::UsbipSubcommand` so callers in the
-/// broker don't need to depend on the host crate just to dispatch
-/// one of two strings.
+/// USBIP subcommand selector mirrored from
+/// `nixling_host::usbip_argv::UsbipSubcommand` so callers in the broker
+/// don't need to depend on the host crate just to dispatch one of two
+/// strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipSubcommand {
@@ -222,7 +222,7 @@ impl IpRouteVerb {
 /// Production executor. Shells out via `std::process::Command`.
 pub struct SystemReconcileExecutor;
 
-/// W3 live-op helper surface shared by the broker dispatch arms.
+/// Live-op helper surface shared by the broker dispatch arms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemLiveExec {
     nixlingd_uid: u32,

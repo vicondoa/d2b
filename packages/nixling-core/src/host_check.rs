@@ -423,9 +423,9 @@ impl ProbeSource {
     }
 
     /// Read an arbitrary `/proc/sys` key written in dotted form
-    /// (e.g. `net.bridge.bridge-nf-call-iptables`). W3fu5 H4
-    /// (networking-1): used to enforce `HostJson.kernel_modules[].sysctls`
-    /// when a module is loaded/built-in. Fixture mode looks up the
+    /// (e.g. `net.bridge.bridge-nf-call-iptables`). Used to enforce
+    /// `HostJson.kernel_modules[].sysctls` when a module is loaded/built-in.
+    /// Fixture mode looks up the
     /// dotted key directly in `HostCheckFixture.sysctls`.
     fn module_sysctl_value(&self, dotted_key: &str) -> Result<Option<String>, ProbeError> {
         if let Some(fixture) = &self.fixture {
@@ -493,7 +493,7 @@ where
             "kernel-version",
             HostCheckSeverity::Pass,
             format!("kernel {} satisfies the >= 6.6 requirement", kernel_release),
-            "Keep a 6.6+ kernel available for W2 daemon experiments.",
+            "Keep a 6.6+ kernel available for daemon experiments.",
         )
     } else {
         finding(
@@ -624,7 +624,7 @@ where
                     "kernel module `{}` remains deferred to a later wave",
                     module.module
                 ),
-                "No W2 action required.",
+                "No action required.",
             ),
         };
         findings.push(HostCheckFinding {
@@ -637,8 +637,8 @@ where
             details,
         });
 
-        // W3fu5 H4 (networking-1): when a module is loaded or
-        // built-in, enforce its declared `sysctls`. The HostJson
+        // When a module is loaded or built-in, enforce its declared
+        // `sysctls`. The HostJson
         // entries are `key=value` strings (e.g.
         // `net.bridge.bridge-nf-call-iptables=0`) emitted by the Nix
         // module. For br_netfilter this catches the documented
@@ -659,7 +659,7 @@ where
                                 "host.json kernelModules[{}].sysctls entry `{}` is not in `key=value` form",
                                 module.module, entry
                             ),
-                            remediation: "Emit each kernelModules[].sysctls entry as `<dotted.key>=<value>` (W3fu5 H4 contract).".to_owned(),
+                            remediation: "Emit each kernelModules[].sysctls entry as `<dotted.key>=<value>`.".to_owned(),
                             vm: None,
                             detail: Some(module.feature.clone()),
                             details: BTreeMap::from([
@@ -738,7 +738,7 @@ where
             "nftables-table",
             HostCheckSeverity::Warn,
             "`nft list ruleset --json` did not show an `inet nixling` table".to_owned(),
-            "Apply host networking preparation in W3 (`nixling host prepare --apply`) when that command lands.",
+            "Apply host networking preparation (`nixling host prepare --apply`) when that command lands.",
         )
     });
 
@@ -970,8 +970,7 @@ fn probe_error(step: impl Into<String>, detail: impl Into<String>) -> ProbeError
 
 #[cfg(test)]
 mod module_sysctl_tests {
-    //! W3fu5 H4 (networking-1): coverage for the new
-    //! `kernel_modules[].sysctls` enforcement in
+    //! Coverage for `kernel_modules[].sysctls` enforcement in
     //! [`host_check::run`]. Each test constructs a HostJson with a
     //! single `br_netfilter` module entry that declares the three
     //! documented bridge-nf-call sysctls, then runs `host_check`
@@ -1158,8 +1157,8 @@ mod module_sysctl_tests {
     fn br_netfilter_sysctl_missing_fails_closed() {
         // br_netfilter loaded but /proc/sys returned None (missing
         // sysctl). The previous behavior silently skipped enforcement;
-        // W3fu5 H4 makes it Fail closed — operators must explicitly
-        // set the documented value.
+        // this makes it fail closed — operators must explicitly set the
+        // documented value.
         let fixture = baseline_fixture(true);
         let host = br_netfilter_host(true);
         let report = run_with_fixture(&host, fixture, std::iter::empty(), false)

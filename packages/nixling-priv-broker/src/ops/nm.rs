@@ -1,4 +1,4 @@
-//! `ApplyNmUnmanaged` op (W3 s2).
+//! `ApplyNmUnmanaged` op.
 //!
 //! Writes one nixling-prefixed file under
 //! `/etc/NetworkManager/conf.d/00-nixling-unmanaged.conf` that
@@ -8,9 +8,9 @@
 //! DEVICE,STATE device status`. Rollback on failure. Foreign NM
 //! files are never modified.
 //!
-//! See plan.md §"W3 NetworkManager reload" — the reload command is
-//! explicitly `nmcli general reload conf`, NOT `nmcli connection
-//! reload` (the latter only reloads connection profiles).
+//! The reload command is explicitly `nmcli general reload conf`, NOT
+//! `nmcli connection reload` (the latter only reloads connection
+//! profiles).
 
 use crate::ops::exec_reconcile::ReconcileExecutor;
 use crate::sys::path_safe;
@@ -28,7 +28,7 @@ pub struct ApplyNmRequest {
     pub conf_path: PathBuf,
     pub entries: Vec<NmUnmanagedEntry>,
     /// Detected NM version, if any. `None` means NM was not detected
-    /// (no-op + log per plan.md §"W3 NetworkManager reload").
+    /// (no-op + log).
     pub nm_version: Option<String>,
     /// `nmcli -t -f DEVICE,STATE device status` output (so this
     /// function is unit-testable without invoking nmcli).
@@ -154,7 +154,7 @@ pub fn parse_device_status(output: &str) -> Vec<(String, String)> {
 
 /// Verifies every declared nixling ifname is in state `unmanaged`.
 /// A state of `managed`/`connected`/`activated` for a declared
-/// nixling ifname is the `nm-managed-foreign-conflict` finding.
+/// nixling ifname is reported as `nm-managed-foreign-conflict`.
 pub fn verify_all_unmanaged(
     entries: &[NmUnmanagedEntry],
     device_status: &str,
@@ -240,11 +240,11 @@ fn rollback(path: &Path, prior: Option<&str>) -> io::Result<()> {
     }
 }
 
-/// W12 runtime entry-point for `ApplyNmUnmanaged`.
+/// Runtime entry-point for `ApplyNmUnmanaged`.
 ///
 /// The dispatcher now lands on `ops::nm` even though the live path is
-/// still a thin wrapper. That preserves a stable integration point for a
-/// future coexistence/reload-verification wave.
+/// still a thin wrapper. That preserves a stable integration point for
+/// future coexistence/reload-verification work.
 pub fn apply_with_reload(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedNmUnmanagedIntent,

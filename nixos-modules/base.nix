@@ -43,8 +43,8 @@ in
   systemd.network.enable = lib.mkDefault true;
   services.resolved.enable = lib.mkDefault true;
 
-  # IPv6 is off by default for nixling VMs (Phase 2b: networking
-  # hardening, planning-round panel finding #23). The bridge plumbing,
+  # IPv6 is off by default for nixling VMs (networking
+  # hardening). The bridge plumbing,
   # nftables rules in net.nix, and dnsmasq are all IPv4-only by
   # construction; auto-configured IPv6 link-local addresses (which
   # systemd-networkd would assign by default) leak unintended
@@ -69,8 +69,8 @@ in
     settings = {
       PermitRootLogin = lib.mkDefault "no";
       PasswordAuthentication = lib.mkDefault false;
-      # Spec H3 / P1r2: also disable keyboard-interactive so workload
-      # VMs only advertise publickey. Otherwise sshd offers
+      # Also disable keyboard-interactive so workload VMs only
+      # advertise publickey. Otherwise sshd offers
       # "publickey,keyboard-interactive" and an attacker can attempt
       # PAM-driven prompts.
       KbdInteractiveAuthentication = lib.mkDefault false;

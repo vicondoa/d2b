@@ -122,14 +122,14 @@ it from one place:
 - **`nixlingd.service`** — non-root daemon, supervisor of every
   per-VM DAG, owner of state under `/var/lib/nixling/`,
   socket-activated `public.sock` (mode 0660, group
-  `nixling-launchers`), `restartIfChanged = false`.
+  `nixling`), `restartIfChanged = false`.
 - **`nixling-priv-broker.socket` + `nixling-priv-broker.service`** —
   socket-activated privileged broker (see
   [ADR 0002](0002-non-root-daemon-and-privileged-broker.md)),
   dispatcher for every audited host mutation
   (see [`docs/reference/privileges.md`](../reference/privileges.md)),
   append-only audit log at `/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
-- **The `nixling-launchers` group** — the lifecycle permission
+- **The `nixling` group** — the lifecycle permission
   boundary. Membership in this group plus `SO_PEERCRED` at
   `public.sock` accept time is the only authorisation surface for
   `nixling vm {start,stop,restart,switch}`.

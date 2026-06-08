@@ -1,5 +1,5 @@
-//! ph2-p2-ownership-matrix: VM-start preflight that invokes the
-//! `nixling_host::ownership_matrix` enforcer against the per-VM
+//! VM-start preflight that invokes the `nixling_host::ownership_matrix`
+//! enforcer against the per-VM
 //! state directory before any broker dispatch occurs.
 //!
 //! See `nixos-modules/options-ownership-matrix.nix` for the typed
@@ -17,18 +17,16 @@
 //! Real ownership drift (`Drift` / `ChildDrift`) is fail-closed.
 
 use nix::unistd::{Gid, Group, Uid, User};
-use nixling_host::ownership_matrix::{
-    check_ownership_matrix, OwnershipEntry, OwnershipMismatch,
-};
+use nixling_host::ownership_matrix::{check_ownership_matrix, OwnershipEntry, OwnershipMismatch};
 use std::path::Path;
 
 /// Specification of one matrix row in symbolic (username/group-name)
 /// form. Mirrors the entries declared in
 /// `nixos-modules/options-ownership-matrix.nix`.
 ///
-/// Kept as plain data so the daemon can construct the canonical
-/// matrix without depending on a bundle-format change in P2 — the
-/// per-bundle override path lands in a follow-up commit that wires
+/// Kept as plain data so the daemon can construct the canonical matrix
+/// without depending on a bundle-format change — the per-bundle override
+/// path lands in a follow-up commit that wires
 /// `nixling.daemon.perVmStateOwnershipMatrix` into the bundle.
 struct EntrySpec {
     path: &'static str,
@@ -49,7 +47,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
     EntrySpec {
         path: "state",
         owner_template: "nixlingd",
-        group_template: "nixling-launcher",
+        group_template: "nixling",
         mode: 0o0750,
         recursive: false,
     },
@@ -63,14 +61,14 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
     EntrySpec {
         path: "sshd-host-keys",
         owner_template: "nixlingd",
-        group_template: "nixling-launcher",
+        group_template: "nixling",
         mode: 0o0750,
         recursive: false,
     },
     EntrySpec {
         path: "host-keys",
         owner_template: "nixlingd",
-        group_template: "nixling-launcher",
+        group_template: "nixling",
         mode: 0o0750,
         recursive: false,
     },
@@ -78,7 +76,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         path: "store",
         owner_template: "nixlingd",
         group_template: "users",
-        mode: 0o2775,
+        mode: 0o0755,
         // HARDLINK FARM CARVE-OUT — must stay false. The
         // `nixling_host::ownership_matrix::should_recurse` invariant
         // additionally rejects recursion into `store` regardless of
@@ -89,7 +87,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         path: "store-meta",
         owner_template: "nixlingd",
         group_template: "users",
-        mode: 0o2775,
+        mode: 0o0755,
         recursive: false,
     },
 ];
@@ -235,16 +233,11 @@ pub fn render_drift_message(vm: &str, drift: &[OwnershipMismatch]) -> String {
                     axes.push(format!("group {}→{}", expected.gid, actual.gid));
                 }
                 if drift_reason.mode {
-                    axes.push(format!(
-                        "mode {:o}→{:o}",
-                        expected.mode, actual.mode
-                    ));
+                    axes.push(format!("mode {:o}→{:o}", expected.mode, actual.mode));
                 }
                 let _ = write!(s, "{} ({})", path.display(), axes.join(", "));
             }
-            OwnershipMismatch::ChildDrift {
-                path, actual, ..
-            } => {
+            OwnershipMismatch::ChildDrift { path, actual, .. } => {
                 let _ = write!(
                     s,
                     "{} (child drift uid={} gid={} mode={:o})",

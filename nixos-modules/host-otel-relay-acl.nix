@@ -252,7 +252,7 @@ let
       refresh_acl_set "g:nixling-otel-relay" relay_stack_keep_dirs relay_stack_keep_sockets "vsock.sock" --x
       refresh_acl_set "g:kvm" relay_listener_keep_dirs relay_listener_keep_sockets "vsock.sock_${toString obsOtlpPort}" --x
       refresh_acl_set "g:nixling-otel-bridge" bridge_keep_dirs bridge_keep_sockets "vsock.sock"
-      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted nixling-ch-exporter.service (P3 ph3-p3-ch-exporter-retire)
+      # retired: ch-exporter group ACL refresh — transitional remnant of the deleted nixling-ch-exporter.service
       refresh_acl_set "g:nixling-ch-exporter" ch_keep_dirs ch_keep_sockets "%VM%.sock"
     '';
   };
@@ -275,10 +275,10 @@ lib.mkMerge [
       "nixling observability vsock relay"
       "nixling-otel-relay";
 
-    # P6 ph6-remove-systemd-emission: the per-VM
-    # `nixling-otel-relay@<vm>.service` was deleted; the observability
-    # vsock relay is now broker-spawned via SpawnRunner{role:
-    # VsockRelay}. The .serviceConfig extension below was a no-op
+    # The per-VM `nixling-otel-relay@<vm>.service` was deleted; the
+    # observability vsock relay is now broker-spawned via
+    # SpawnRunner{role: VsockRelay}. The .serviceConfig extension below
+    # was a no-op
     # against a missing service after the deletion. Removed.
   })
 
@@ -289,9 +289,9 @@ lib.mkMerge [
       "nixling observability host bridge"
       "nixling-otel-bridge";
 
-    # P6 ph6-remove-systemd-emission: `nixling-otel-host-bridge.service`
+    # `nixling-otel-host-bridge.service`
     # was deleted; the OTel host bridge is now broker-spawned via
-    # SpawnRunner{role: OtelHostBridge} (P1 ph1-p1-otelbridge-role).
+    # SpawnRunner{role: OtelHostBridge}.
     # The .serviceConfig extension below was a no-op against a missing
     # service after the deletion. Removed.
   })

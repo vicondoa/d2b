@@ -30,11 +30,11 @@ consumers should key by name rather than rely on object-order.
 - The top-level object always contains every field above.
 - Nested per-VM/per-env maps may be empty when nothing is running.
 - Later minor releases may add nested properties inside existing maps,
-  but they should not remove or rename the top-level keys in W2.
+  but they should not remove or rename the top-level keys.
 
 ## Stability promise
 
-W2 treats the **top-level key set** as stable. Nested objects are also
+The **top-level key set** is stable. Nested objects are also
 contracted, but additive nested fields are the preferred compatibility
 path for later minor releases.
 

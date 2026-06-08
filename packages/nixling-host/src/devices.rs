@@ -1,7 +1,6 @@
-//! W3 device-node matrix readback + validators.
+//! Device-node matrix readback + validators.
 //!
-//! Per plan.md §"W3 host-check boundary vs W4 mount namespace", W3
-//! does **read-only preflight** on `/dev/kvm`, `/dev/net/tun`,
+//! Host-check does **read-only preflight** on `/dev/kvm`, `/dev/net/tun`,
 //! `/dev/vhost-net`, `/dev/fuse`, plus the optional accelerator/USBIP/
 //! TPM/vfio matrix. Mutation (ACL fixup, fd handoff) lives in the
 //! broker (`nixling_priv_broker::ops::device`); this module exposes
@@ -15,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Device class taxonomy. The W3 ioctl-allowlist derivation
+/// Device class taxonomy. The ioctl-allowlist derivation
 /// (`crate::ioctl_policy`) consumes the same enum so role → ioctl
 /// resolution is single-sourced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -33,8 +32,8 @@ pub enum DeviceClass {
     UsbipHost,
     Tpm,
     Vfio,
-    /// P1 kernel-3: cross-domain Wayland needs /dev/udmabuf to wrap
-    /// imported guest dmabufs for the host compositor. The Gpu role
+    /// Cross-domain Wayland needs /dev/udmabuf to wrap imported guest
+    /// dmabufs for the host compositor. The Gpu role
     /// claims this class via the per-role device matrix.
     Udmabuf,
 }
@@ -52,8 +51,8 @@ impl DeviceClass {
             Self::Dri => "/dev/dri",
             Self::NvidiaCtl => "/dev/nvidiactl",
             Self::NvidiaUvm => "/dev/nvidia-uvm",
-            // P1 kernel-3 corrected: NVIDIA primary device node is
-            // /dev/nvidia<N> (per-card), not /dev/nvidia-render. The
+            // NVIDIA primary device node is /dev/nvidia<N> (per-card),
+            // not /dev/nvidia-render. The
             // matrix-loader is responsible for instantiating per-card
             // paths (/dev/nvidia0, /dev/nvidia1, …); default is the
             // single-GPU happy path /dev/nvidia0.
@@ -229,9 +228,8 @@ pub enum DeviceValidation {
 impl DeviceValidation {
     /// `true` when this validation result should fail-close the host
     /// check for a `required: true` entry. `GroupUnverifiable` is a
-    /// warning and does NOT fail-close per plan §"W3 host-check
-    /// boundary": it surfaces the finding without blocking
-    /// dev-environment workflows.
+    /// warning and does NOT fail-close: it surfaces the finding without
+    /// blocking dev-environment workflows.
     pub fn is_fail_closed(&self) -> bool {
         matches!(
             self,

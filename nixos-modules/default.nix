@@ -6,11 +6,9 @@
 # sub-module that needs flake inputs get them via partial
 # application instead of through `_module.args.inputs`. The latter
 # infinite-recurses on host.nix's import-list resolution; the
-# planning-round NixOS reviewer flagged this in Critical #5 and we
-# carry the deep-eval regression test in the smoke flake under
-# tests/.
+# deep-eval regression test in the smoke flake covers this wiring.
 #
-# Sub-modules consuming `inputs`:
+# Sub-modules consuming `inputs`
 #   * `host.nix` — `imports = [ inputs.microvm.nixosModules.host ]`
 #     (the original case the partial-application wiring was built
 #     for).
@@ -34,7 +32,7 @@
     ./assertions.nix
     ./network.nix
     (import ./host.nix { inherit inputs; })
-    # v1.1-P6: host-otel-relay-acl.nix retired per ADR 0018.
+    # host-otel-relay-acl.nix retired per ADR 0018.
     # The OTel host-bridge + per-VM relay ACL contract moved into the
     # broker pre-spawn pipeline (`SpawnRunner{role: OtelHostBridge}`
     # in `packages/nixling-priv-broker/src/runtime.rs`). The retired
@@ -47,7 +45,7 @@
     # their VMs via `nixling.vms.<name> = ...` in their own NixOS
     # module, which is merged into nixling.vms here via option-system
     # semantics. There is no public file with example VMs (yet —
-    # examples/ in Phase 6 will demonstrate the pattern).
+    # examples/ will demonstrate the pattern).
     ./observability-vm.nix
     ./store.nix
     ./manifest.nix
@@ -57,8 +55,7 @@
     ./privileges-json.nix
     ./closures-json.nix
     ./minijail-profiles.nix
-    # P6 ph6-p6-cli-nix-migrations + ph6-remove-systemd-emission:
-    # both cli.nix (bash CLI package) and host-ch-exporter.nix (host
+    # Both cli.nix (bash CLI package) and host-ch-exporter.nix (host
     # singleton scraper folded into daemon /metrics) are now retired.
     # See tests/cli-nix-consumers-eval.sh + tests/legacy-unit-denylist-eval.sh
     # for the static gates.
@@ -69,7 +66,7 @@
 
   # Entra ID / Himmelblau is NOT auto-imported here — it lives in
   # the sibling `vicondoa/nixos-entra-id` flake. Consumers bring
-  # it in per-VM:
+  # it in per-VM
   #
   #   nixling.vms.<vm>.config.imports = [
   #     inputs.nixos-entra-id.nixosModules.default

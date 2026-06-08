@@ -26,11 +26,12 @@ process role referenced from `processes.json`.
   installed in the spawned child via `umask(2)` immediately before
   `execve(2)`. `null` (the default) inherits the broker's umask
   (current behaviour). Sidecar roles that bind shared Unix sockets
-  (vhost-user-sound at `snd.sock`, crosvm-gpu at `gpu.sock`, swtpm at
-  `tpm.sock`) declare `umask = 7` (octal `0o007`) so the resulting
-  sockets are mode 0660 — combined with the per-VM-runtime default ACL
-  granting cloud-hypervisor's UID rwx, the named-user ACL becomes
-  effective (mask:rw, not mask:---). The broker rejects values
+  (vhost-user-sound at `snd.sock`, crosvm-gpu at `gpu.sock`, crosvm
+  video at `video.sock`, swtpm at `tpm.sock`) declare `umask = 7`
+  (octal `0o007`) so the resulting sockets are mode 0660/0770 —
+  combined with the per-VM-runtime default ACL granting
+  cloud-hypervisor's UID rwx, the named-user ACL becomes effective
+  (mask:rw, not mask:---). The broker rejects values
   greater than `0o777` at exec time with `CHILD_EXIT_INVALID_UMASK=75`.
 
 ## Contract notes

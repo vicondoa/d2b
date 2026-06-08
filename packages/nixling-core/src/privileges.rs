@@ -132,7 +132,7 @@ fn operation_schema(_gen: &mut SchemaGenerator) -> Schema {
         ..Default::default()
     };
     obj.metadata = Some(Box::new(Metadata {
-        description: Some("Closed W1 public CLI/API and broker operation name.".to_owned()),
+        description: Some("Closed public CLI/API and broker operation name.".to_owned()),
         ..Default::default()
     }));
     Schema::Object(obj)
@@ -303,6 +303,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         &["nixling-admin"],
         true,
         SecretAccess::PossiblePathsOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "host reconcile-otel-acls --apply",
+        "host/observability",
+        "global",
+        &["nixling-admin"],
+        true,
+        SecretAccess::MetadataOnly,
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
@@ -720,12 +730,12 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
-    // W3fu1 H1 (rust-4): the cgroup delegation op only chowns
+    // The cgroup delegation op only chowns
     // /sys/fs/cgroup/nixling.slice and its descendants; it does not
-    // destroy data. Plan.md §"W3 broker variant additions" classes
-    // it `Destructive: no (chown only)`. The W3 W2-baseline row
-    // above incorrectly marked it destructive; align with the W3
-    // typed flag table in `privileges_w3::W3BrokerOperation::flags`.
+    // destroy data. The broker variant plan classes it
+    // `Destructive: no (chown only)`. The earlier baseline row
+    // above incorrectly marked it destructive; align with the
+    // typed broker flag table.
     row(
         "DelegateCgroupV2",
         "cgroup",
@@ -756,7 +766,7 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
-    // W4-fu OpenPidfd: daemon-side reconcile-and-adopt. The
+    // OpenPidfd handles daemon-side reconcile-and-adopt. The
     // broker calls pidfd_open(pid) AND re-verifies field-22
     // start-time atomically, returning the fd via SCM_RIGHTS.
     row(
@@ -1049,9 +1059,89 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         BrokerRequirement::Yes,
         AuditMode::Yes,
     ),
-    // W4-H5: spawning a CH / virtiofsd / swtpm role. Wire-stable only
-    // in W4 main; the broker dispatcher returns `Unimplemented` until
-    // the W4-fu broker-side spawn implementation lands.
+    row(
+        "DeregisterRunnerPidfd",
+        "runner",
+        "per-VM",
+        &["nixling-launcher", "nixling-admin"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "PollChildReaped",
+        "runner",
+        "global",
+        &["nixlingd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "StoreSync",
+        "store",
+        "per-VM",
+        &["nixlingd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "SeedDnsmasqLease",
+        "network",
+        "per-VM/env",
+        &["nixlingd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "BindMountFromHardlinkFarm",
+        "mount/store",
+        "per-VM",
+        &["nixlingd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "OwnershipMatrixCheck",
+        "host",
+        "per-VM",
+        &["nixlingd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "SshHostKeyPreflight",
+        "ssh-host-key",
+        "per-VM",
+        &["nixlingd"],
+        false,
+        SecretAccess::MetadataOnly,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "DiskInit",
+        "disk",
+        "per-VM",
+        &["nixlingd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    // Spawning a CH / virtiofsd / swtpm role. The broker dispatcher
+    // returns `Unimplemented` until the broker-side spawn implementation
+    // lands.
     row(
         "SpawnRunner",
         "vm-runner",
@@ -1117,7 +1207,7 @@ impl From<&OperationAuthzRow> for OperationAuthz {
 }
 
 impl PrivilegesJson {
-    /// Builds the canonical W1 privileges matrix from the const rows.
+    /// Builds the canonical privileges matrix from the const rows.
     pub fn w1(schema_version: impl Into<String>) -> Self {
         Self {
             schema_version: schema_version.into(),

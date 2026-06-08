@@ -1,4 +1,4 @@
-//! W4-fu broker SpawnRunner preflight + spawn helper.
+//! Broker SpawnRunner preflight + spawn helper.
 //!
 //! The broker's `SpawnRunner` dispatch resolves the daemon's opaque
 //! `bundle_runner_intent_ref` into the full launch context (binary
@@ -40,15 +40,14 @@ pub struct SpawnRunnerPlan {
     pub seccomp_policy_ref: Option<String>,
     pub mount_policy: MountPolicy,
     pub cgroup_placement: CgroupPlacement,
-    /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
-    /// pre-establishes a single-entry user namespace for this
-    /// runner. The child is fake-root inside the namespace
-    /// (all caps within the user-NS scope) and the host-side
-    /// `capabilities` set should be empty. Currently consumed
-    /// by virtiofsd roles for least-privilege FS serving.
+    /// When `Some`, the broker pre-establishes a single-entry user
+    /// namespace for this runner. The child is fake-root inside the
+    /// namespace (all caps within the user-NS scope) and the host-side
+    /// `capabilities` set should be empty. Currently consumed by
+    /// virtiofsd roles for least-privilege FS serving (ADR 0021).
     pub user_namespace: Option<UserNamespaceSpec>,
-    /// v1.1.2fu36: file-creation mask the broker installs in the
-    /// spawned child before execve. See `MinijailProfile::umask`.
+    /// File-creation mask the broker installs in the spawned child
+    /// before execve. See `MinijailProfile::umask`.
     pub umask: Option<u32>,
 }
 
@@ -84,11 +83,10 @@ pub enum SpawnRunnerError {
     BinaryNotFound {
         path: String,
     },
-    /// uid 0 without an ADR carve-out. The W3 ADR 0003 §"per-role
-    /// minijail" rule pins that long-lived runners do not start
-    /// as root; carve-outs require an explicit `adr_carve_out`
-    /// field on the bundle row, surfaced as
-    /// `SpawnRunnerPlanInput::root_carve_out`.
+    /// uid 0 without an ADR carve-out. ADR 0003 §"per-role minijail"
+    /// pins that long-lived runners do not start as root; carve-outs
+    /// require an explicit `adr_carve_out` field on the bundle row,
+    /// surfaced as `SpawnRunnerPlanInput::root_carve_out`.
     RootRequiresCarveOut,
     /// `supplementary_groups` contained the primary gid; redundant
     /// and ambiguous, refuse.
@@ -115,7 +113,7 @@ impl std::fmt::Display for SpawnRunnerError {
             Self::EnvEntryWithNul { index } => write!(f, "env[{index}] contains NUL"),
             Self::BinaryNotFound { path } => write!(f, "binary {path} does not exist"),
             Self::RootRequiresCarveOut => {
-                f.write_str("uid 0 requires an explicit ADR carve-out (W3 ADR 0003)")
+                f.write_str("uid 0 requires an explicit ADR carve-out (ADR 0003)")
             }
             Self::SupplementaryGroupContainsPrimaryGid { gid } => write!(
                 f,
@@ -151,13 +149,12 @@ pub struct SpawnRunnerPlanInput {
     /// Set to `true` only by unit tests so the preflight skips
     /// the binary-exists check.
     pub skip_binary_exists_check: bool,
-    /// v1.1.1fu14 (ADR 0021): when `Some`, broker creates a
-    /// per-runner user namespace and writes uid_map/gid_map. The
-    /// in-NS UID 0 maps to the supplied host UID. virtiofsd
-    /// roles set this to gain fake-root semantics with zero
-    /// host-side caps.
+    /// When `Some`, broker creates a per-runner user namespace and
+    /// writes uid_map/gid_map. The in-NS UID 0 maps to the supplied host
+    /// UID. virtiofsd roles set this to gain fake-root semantics with
+    /// zero host-side caps (ADR 0021).
     pub user_namespace: Option<UserNamespaceSpec>,
-    /// v1.1.2fu36: optional umask installed before execve.
+    /// Optional umask installed before execve.
     pub umask: Option<u32>,
 }
 /// [`SpawnRunnerPlan`].
@@ -286,8 +283,8 @@ mod tests {
             }],
             nix_store_read_only: true,
             hide_device_nodes_by_default: true,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
+            device_binds: Vec::new(),
+            bind_mounts: Vec::new(),
         }
     }
 
@@ -463,13 +460,13 @@ mod tests {
         assert_eq!(argv[0].to_string_lossy(), "microvm@corp-vm");
     }
 
-    // v1.1.1fu14 (ADR 0021) — user_namespace round-trips.
+    // user_namespace round-trips (ADR 0021).
     //
     // The preflight is pure data; we only verify that the
-    // user_namespace field round-trips from the input to the
-    // resulting plan unchanged. Actual broker spawn behaviour
-    // is exercised in `sys::tests::clone3_spawn_runner_*` and
-    // in the integration tests under `live_handlers.rs`.
+    // user_namespace field round-trips from the input to the resulting
+    // plan unchanged. Actual broker spawn behaviour is exercised in
+    // `sys::tests::clone3_spawn_runner_*` and in the integration tests
+    // under `live_handlers.rs`.
 
     #[test]
     fn user_namespace_round_trips_none() {

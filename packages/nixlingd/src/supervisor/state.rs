@@ -1,4 +1,4 @@
-//! W4-H6: daemon state persistence + restart reconciliation.
+//! Daemon state persistence + restart reconciliation.
 //!
 //! On every supervisor transition the daemon writes a
 //! [`RunnerSnapshotRecord`] to
@@ -15,25 +15,22 @@
 //!    [`ReconciliationOutcome::Missing`].
 //!
 //! Adopt — record can be re-opened with `pidfd_open(pid)` and the
-//! supervisor resumes ownership. **In W4 main this classifier only
-//! returns the `Adopt` outcome; the actual `pidfd_open` call is wired
-//! in W4-fu together with the broker-side `SpawnRunner` execution.**
+//! supervisor resumes ownership. The classifier returns the `Adopt`
+//! outcome; the actual `pidfd_open` call is wired together with the
+//! broker-side `SpawnRunner` execution.
 //!
-//! Quarantine — `(pid, start_time)` drifted; the slot is parked and
-//! the W3 typed-error envelope surfaces `quarantine-pid-drift` so the
-//! operator can decide whether to kill (`pidfd_send_signal` after a
+//! Quarantine — `(pid, start_time)` drifted; the slot is parked and the
+//! typed-error envelope surfaces `quarantine-pid-drift` so the operator
+//! can decide whether to kill (`pidfd_send_signal` after a
 //! one-shot ADR carve-out) or wait out the stale process.
 //!
 //! Missing — `/proc/<pid>/` is gone; the snapshot is removed.
 //!
 //! This module is the **pure parser + classification surface**; the
 //! filesystem snapshot store is behind a trait so tests can drive the
-//! reconciler without touching `/var/lib/`. The production daemon
-//! will wire the W4-H5 `SpawnRunner` response into the
-//! FilesystemSnapshotStore and re-open pidfds via
-//! `nix::sys::pidfd::pidfd_open` in **W4-fu** (the broker-side
-//! `SpawnRunner` execution wave). W4 main ships the classification
-//! surface only.
+//! reconciler without touching `/var/lib/`. The production daemon wires
+//! the `SpawnRunner` response into the FilesystemSnapshotStore and
+//! re-opens pidfds via `nix::sys::pidfd::pidfd_open`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,15 +39,15 @@ use nixling_ipc::broker_wire::RunnerRole;
 use serde::{Deserialize, Serialize};
 
 /// One persisted runner slot. Mirrors what the daemon learnt from a
-/// successful W4-H5 SpawnRunner response, kept stable on disk so
-/// post-restart reconciliation has authoritative
-/// `(pid, start_time_ticks, role)` plus the W3-s1 pidfd table key.
+/// successful SpawnRunner response, kept stable on disk so post-restart
+/// reconciliation has authoritative `(pid, start_time_ticks, role)` plus
+/// the pidfd table key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunnerSnapshotRecord {
-    /// VM name (matches W3 s1 `PidfdKey::vm_id`).
+    /// VM name (matches `PidfdKey::vm_id`).
     pub vm: String,
-    /// Per-VM role identifier (matches W3 s1 `PidfdKey::role_id`).
+    /// Per-VM role identifier (matches `PidfdKey::role_id`).
     pub role_id: String,
     /// Which runner kind: CH / virtiofsd / swtpm.
     pub role: RunnerRole,
@@ -222,9 +219,9 @@ pub fn reconcile(
     ReconciliationReport { entries }
 }
 
-// ---- W4-fu: live reconcile-and-adopt ----
+// ---- Live reconcile-and-adopt ----
 
-/// W4-fu: wraps the pure [`reconcile`] classifier with the actual
+/// Wraps the pure [`reconcile`] classifier with the actual
 /// `pidfd_open(2)` adoption call. For each snapshot the classifier
 /// returns `Adopt` for, this function opens a fresh pidfd (which
 /// the kernel guarantees refers to that exact process — pidfds do
@@ -268,8 +265,7 @@ pub fn reconcile(
 ///
 /// - tests: deterministic fake that returns canned outcomes.
 ///
-/// W*-fu GPT-5.5 panel finding #1 (CRITICAL): the W3 s1 pidfd
-/// contract requires `(pid, start_time)` verification AFTER
+/// The pidfd contract requires `(pid, start_time)` verification AFTER
 /// `pidfd_open`, not just before. Without it, a pid reused between
 /// the /proc check and the pidfd_open call would yield a pidfd to
 /// an unrelated process. This trait's contract bakes the post-open
@@ -434,13 +430,12 @@ impl SnapshotStore for FilesystemSnapshotStore {
             path: path.display().to_string(),
             detail: e.to_string(),
         })?;
-        // W4 GPT-5.5 panel notable: full crash-durable write —
-        // write_all + sync_all on the tmp file BEFORE rename, then
-        // fsync the parent dir AFTER rename so the directory entry
-        // itself reaches disk. This protects against host power
-        // loss in addition to process crash (the W4-H6 docs claimed
-        // "tmp+rename leaves the previous snapshot intact" which
-        // is true for process crash but not power loss).
+        // Full crash-durable write — write_all + sync_all on the tmp file
+        // BEFORE rename, then fsync the parent dir AFTER rename so the
+        // directory entry itself reaches disk. This protects against host
+        // power loss in addition to process crash (the docs claimed
+        // "tmp+rename leaves the previous snapshot intact" which is true
+        // for process crash but not power loss).
         let tmp = path.with_extension("json.tmp");
         {
             use std::io::Write;
@@ -873,7 +868,7 @@ mod tests {
         assert!(res.is_err());
     }
 
-    // ---- W4-fu reconcile_and_adopt tests ----
+    // ---- reconcile_and_adopt tests ----
 
     /// Fake PidfdOpener that lets tests configure per-pid success or
     /// failure without invoking SYS_pidfd_open.

@@ -1,4 +1,4 @@
-//! P0fu2 integration test: tampered bundle → BrokerResponse::Error { kind: "bundle-tampered" }.
+//! Integration test: tampered bundle → BrokerResponse::Error { kind: "bundle-tampered" }.
 //!
 //! Verifies that when the broker's `try_load_resolver` path encounters a
 //! bundle that fails its tamper-resistance check, the resulting
@@ -14,7 +14,9 @@
 mod broker_tampered {
     use nixling_core::bundle_resolver::BundleVerifyPolicy;
     use nixling_ipc::broker_wire::BrokerResponse;
-    use nixling_priv_broker::runtime::{probe_bundle_load_response, probe_bundle_load_response_with_policy};
+    use nixling_priv_broker::runtime::{
+        probe_bundle_load_response, probe_bundle_load_response_with_policy,
+    };
     use std::fs;
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt;

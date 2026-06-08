@@ -1,13 +1,13 @@
-# Why W2 uses OFD state locks
+# Why the daemon uses OFD state locks
 
-W2 introduces daemon-owned state, but it still has to preserve the same
+Daemon-owned state still has to preserve the same
 single-writer invariant that the legacy systemd/bash path relied on:
 only one control-plane owner may act on the daemon itself, and only one
 owner may manipulate a given VM at a time.
 
 ## Why OFD locks instead of classic POSIX advisory locks?
 
-W2 uses Linux **open-file-description (OFD) locks** via
+The daemon uses Linux **open-file-description (OFD) locks** via
 `fcntl(F_OFD_SETLK)` rather than classic process-scoped POSIX advisory
 locks.
 
@@ -24,12 +24,12 @@ That choice is deliberate:
   file description disappears, the kernel releases the lock.
 
 The lock file may still remain on disk after a crash; the **lock does
-not**. W2 therefore treats file presence as non-authoritative and relies
+not**. The daemon therefore treats file presence as non-authoritative and relies
 on the kernel lock state, not on stale filenames or mtimes.
 
 ## Lock files
 
-W2 uses two lock scopes:
+The daemon uses two lock scopes:
 
 - daemon singleton: `/run/nixling/daemon.lock`
   - owner/group: `root:nixlingd`
@@ -47,7 +47,7 @@ independent VMs to proceed concurrently.
 The lock paths sit under `/run/nixling`, which means the parent path is
 part of the trust boundary.
 
-W2 therefore validates that the parent directories are real directories,
+The daemon therefore validates that the parent directories are real directories,
 not symlinks, before opening the lock file:
 
 - `/run/nixling` must be owned by `root:root` and remain a real
@@ -69,14 +69,14 @@ and continue. No manual “stale lock” deletion is required for correctness.
 
 ### Stale file cleanup
 
-A stale **file** is not a stale **lock**. W2 may truncate or recreate the
+A stale **file** is not a stale **lock**. The daemon may truncate or recreate the
 existing lock file once it has re-established the parent-directory
 invariants, but it must never decide ownership from file existence
 alone.
 
 ### Future supervisor fork inheritance
 
-This is the main reason W2 pays the OFD-lock complexity up front. If a
+This is the main reason the daemon pays the OFD-lock complexity up front. If a
 future supervisor model forks from the daemon and intentionally inherits
 the lock fd, the lock stays associated with that open file description.
 That lets the child take over supervision without a transient unlock
@@ -84,6 +84,6 @@ window. The converse also matters: if the parent exits but the child
 still holds the inherited fd, the lock remains valid until the child
 closes it.
 
-In short: OFD locks model the ownership transfer W2 expects later,
+In short: OFD locks model the ownership transfer the daemon may need later,
 whereas classic POSIX locks model “one process, one lock table,” which
 is the wrong abstraction for daemon/supervisor handoff.

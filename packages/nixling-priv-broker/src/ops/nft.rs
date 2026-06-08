@@ -1,4 +1,4 @@
-//! `ApplyNftables` broker op implementation (W3 s3).
+//! `ApplyNftables` broker op implementation.
 //!
 //! Re-derives the `inet nixling` chain layout from the trusted bundle,
 //! refuses unless the detected firewall manager matches the bundle's
@@ -6,11 +6,11 @@
 //! `nft list table inet nixling -j` both periodically and right before
 //! every VM start. Foreign tables are NEVER flushed.
 //!
-//! Per plan.md §"W3 broker variant additions" the audit envelope for
-//! `ApplyNftables` carries: `table_hash_before`, `table_hash_after`,
-//! `coexistence_policy`, `manager_detected`. This module exposes those
-//! fields through [`ApplyNftablesAudit`]; the broker runtime writes the
-//! JSON envelope per the common header in plan §2313-2324.
+//! The audit envelope for `ApplyNftables` carries:
+//! `table_hash_before`, `table_hash_after`, `coexistence_policy`,
+//! `manager_detected`. This module exposes those fields through
+//! [`ApplyNftablesAudit`]; the broker runtime writes the JSON envelope
+//! with the common header.
 
 use crate::live_handlers::LiveHandlerError;
 use crate::ops::exec_reconcile::{ReconcileExecError, ReconcileExecutor};
@@ -238,7 +238,7 @@ impl std::fmt::Display for ApplyWithCoexistenceError {
 
 impl std::error::Error for ApplyWithCoexistenceError {}
 
-/// W12 runtime entry-point for `ApplyNftables`.
+/// Runtime entry-point for `ApplyNftables`.
 ///
 /// Refuses fail-closed when the loaded `host.json` says the detected
 /// manager must not coexist, then parses the emitted script back into a
@@ -256,20 +256,20 @@ pub fn apply_with_coexistence(
     let canonical = batch.canonical_hash().to_string();
     let persisted_hash = read_persisted_nft_hash(&persisted_nft_hash_path())
         .map_err(ApplyWithCoexistenceError::ReconcileExec)?;
-    let drift_expected_hash = select_drift_expected_hash(
-        canonical.as_str(),
-        expected_table_hash,
-        persisted_hash.as_deref(),
-    );
-    let observed_table_hash = if drift_expected_hash.is_some() {
-        match read_live_table_json_optional(nft_binary, batch.table_family, batch.table_name)
-            .map_err(ApplyWithCoexistenceError::ReconcileExec)?
-        {
-            Some(json) => Some(hash_inet_nixling_table(&json).to_string()),
-            None => Some("absent".to_owned()),
-        }
+    let live_table_json =
+        read_live_table_json_optional(nft_binary, batch.table_family, batch.table_name)
+            .map_err(ApplyWithCoexistenceError::ReconcileExec)?;
+    let (drift_expected_hash, observed_table_hash) = if let Some(json) = live_table_json {
+        (
+            select_drift_expected_hash(
+                canonical.as_str(),
+                expected_table_hash,
+                persisted_hash.as_deref(),
+            ),
+            Some(hash_inet_nixling_table(&json).to_string()),
+        )
     } else {
-        None
+        (None, None)
     };
     apply_with_coexistence_inner(
         executor,
@@ -312,9 +312,17 @@ fn apply_with_coexistence_inner(
             });
         }
     }
-    crate::live_handlers::live_apply_nftables(executor, nft_binary, script_body)
+    let replace_script = render_owned_table_replace_script(&batch, script_body);
+    crate::live_handlers::live_apply_nftables(executor, nft_binary, &replace_script)
         .map_err(map_live_nft_error)?;
     Ok(canonical.as_str().to_owned())
+}
+
+fn render_owned_table_replace_script(batch: &NftBatch, script_body: &str) -> String {
+    format!(
+        "table {} {}\ndelete table {} {}\n{}",
+        batch.table_family, batch.table_name, batch.table_family, batch.table_name, script_body
+    )
 }
 
 fn map_live_nft_error(err: LiveHandlerError) -> ApplyWithCoexistenceError {
@@ -326,7 +334,7 @@ fn map_live_nft_error(err: LiveHandlerError) -> ApplyWithCoexistenceError {
     }
 }
 
-fn read_live_table_json_optional(
+pub fn read_live_table_json_optional(
     nft_binary: &Path,
     family: &str,
     table: &str,
@@ -511,6 +519,7 @@ mod tests {
             ReconcileOp::ApplyNftScript { binary, script } => {
                 assert!(binary.ends_with("nft"));
                 assert!(script.contains("inet nixling"));
+                assert!(script.starts_with("table inet nixling\ndelete table inet nixling\n"));
             }
             other => panic!("unexpected op: {other:?}"),
         }

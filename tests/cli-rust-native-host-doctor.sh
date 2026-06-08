@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P3 ph3-p3-host-doctor-extended: integration coverage for the
+# Integration coverage for the
 # extended `nixling host doctor --read-only` verb. Exercises:
 #   - missing daemon state → warnings
 #   - broker socket reachable / unreachable
@@ -27,6 +27,7 @@ cli=$(nl_cli_native_bin)
 state_dir="$scratch/daemon-state"
 mkdir -p "$state_dir"
 
+# shellcheck disable=SC2034  # reserved for future socket-stub tests
 stub_socket="$scratch/never-exists.sock"
 broker_socket="$scratch/broker.sock"
 public_socket="$scratch/public.sock"
@@ -67,12 +68,12 @@ jq -e '.broker_ready == false' "$scratch/baseline.json" >/dev/null \
 jq -e '
   .checks
   | (map(.name) | sort)
-  == ["autostart-status","broker-ready","daemon-ready","kernel-module-matrix","metrics-endpoint","otel-host-bridge-runner","usbipd-runners"]
+  == ["autostart-status","bridge-ipv6-sysctl","broker-ready","broker-reap-health","daemon-ready","kernel-module-matrix","metrics-endpoint","otel-host-bridge-runner","pre-ns-posture","seccomp-bpf-loaded","usbipd-runners"]
 ' "$scratch/baseline.json" >/dev/null \
   || { fail "baseline doctor checks[] missing expected check names"; jq '.checks | map(.name)' "$scratch/baseline.json" >&2; exit 1; }
 jq -e '.summary.fail >= 1 and .summary.warn >= 4' "$scratch/baseline.json" >/dev/null \
   || { fail "baseline doctor summary mismatch"; jq '.summary' "$scratch/baseline.json" >&2; exit 1; }
-ok "baseline doctor reports 7 checks; broker_ready=false (fail) + warns; exit=2"
+ok "baseline doctor reports 11 checks (7 baseline + 4 D18 v1.2 probes); broker_ready=false (fail) + warns; exit=2"
 
 # --- 3. pidfd-table.json with bridge + usbipd → both runners pass ---
 cat > "$state_dir/pidfd-table.json" <<EOF
@@ -191,8 +192,7 @@ env \
   NIXLING_DAEMON_STATE_DIR="$state_dir" \
   NIXLING_METRICS_URL="http://127.0.0.1:1/metrics" \
   "$cli" host doctor --read-only --human \
-    > "$scratch/human.out" 2> "$scratch/human.err"
-rc_human=$?
+    > "$scratch/human.out" 2> "$scratch/human.err" || true
 set -e
 grep -Fq "host doctor --read-only: summary pass=" "$scratch/human.out" \
   || { fail "human renderer missing summary line"; cat "$scratch/human.out"; exit 1; }

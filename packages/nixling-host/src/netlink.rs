@@ -1,8 +1,8 @@
-//! W3 host-prepare module: `netlink` — owned by scope s2.
+//! Host-prepare netlink module.
 //!
 //! Defines the contract surface for the rtnetlink-backed bridge/TAP
-//! reconcile + the IPv6-off sysctl readback per plan.md §"W3 IPv6-off
-//! ordering with NetworkManager / systemd-networkd".
+//! reconcile + the IPv6-off sysctl readback ordering with
+//! NetworkManager / systemd-networkd.
 //!
 //! The 5-step ordered sequence per plan.md is encoded by
 //! [`ipv6_off_sequence`] which drives:
@@ -20,17 +20,16 @@
 //! broker (which has `unsafe_code = "deny"` and a quarantined `sys.rs`
 //! for the netlink + SCM_RIGHTS dance). This module defines the
 //! [`NetlinkBackend`] trait both backends implement, plus a
-//! [`fake::FakeBackend`] used by the L1c canary tests (see plan.md
-//! §"W3 pre-merge canary matrix" rows `ipv6-sysctl-drift`,
-//! `bridge-port-flag-drift`).
+//! [`fake::FakeBackend`] used by the L1c canary tests for
+//! `ipv6-sysctl-drift` and `bridge-port-flag-drift`.
 
 use crate::bridge_port::{BridgePortFlagSet, BridgePortPolicyError};
 use crate::ifname::{DerivedRole, IfName};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// The full IPv6-off sysctl set per plan.md §"W3 IPv6-off ordering"
-/// step 3, keyed by sysctl leaf name (interface-scoped path is
+/// The full IPv6-off sysctl set, keyed by sysctl leaf name
+/// (interface-scoped path is
 /// `net.ipv6.conf.<ifname>.<leaf>` or `net.ipv4.conf.<ifname>.<leaf>`).
 pub const IPV6_OFF_SYSCTLS: &[Ipv6OffSysctl] = &[
     Ipv6OffSysctl {
@@ -233,7 +232,7 @@ pub trait NetlinkBackend {
     fn br_netfilter_loaded(&mut self) -> Result<bool, NetlinkError>;
 }
 
-/// Drives the W3 IPv6-off 5-step ordered sequence over an arbitrary
+/// Drives the IPv6-off 5-step ordered sequence over an arbitrary
 /// [`NetlinkBackend`]. Step 1 (NM unmanaged) is the broker's
 /// responsibility and is therefore represented here only as a
 /// precondition flag — the caller must have invoked the broker NM op

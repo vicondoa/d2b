@@ -163,7 +163,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # in the real binary's output.
   doInstallCheck = false;
 
-  # P5 W2: the crosvm rev this CH build has been QA'd against as the
+  # The crosvm rev this CH build has been QA'd against as the
   # GPU sidecar partner. graphics.nix asserts at eval time that
   # `pkgs.crosvm.src.rev` still matches this value; a mismatch means
   # nixpkgs moved crosvm independently of this vendored CH and the
@@ -172,7 +172,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # message numbers expected by rust-vmm/vhost v0.22).
   passthru.testedWithCrosvmRev = "4c80bf3523cf84114054209d88a7af3eefd8423f";
 
-  # Phase 4 multi-arch: deliberately we do NOT set
+  # Multi-arch: deliberately we do NOT set
   # `meta.platforms = [ "x86_64-linux" ]` on this overrideAttrs even
   # though spectrum-ch *is* logically x86_64-only (its GPU patches
   # and the bumped `vhost` rev pair with the x86_64-only crosvm
@@ -180,7 +180,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   # unconditionally via `environment.systemPackages` for the
   # `ch-remote` watchdog tool, and Nix's check-meta runs at eval
   # time the moment we override `meta` here — which would break the
-  # headless-on-aarch64 invariant Phase 4 explicitly preserves.
+  # headless-on-aarch64 invariant we explicitly preserve.
   # nixpkgs's own `pkgs.cloud-hypervisor` already carries
   # `meta.platforms = [ "x86_64-linux" ]`; we inherit that
   # constraint at build time without forcing an eval-time refusal

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P4 invariant gate: assert the deprecation warning text for
+# v1.1 invariant gate: assert the deprecation warning text for
 # `nixling.daemonExperimental.enable` is locked into
 # `nixos-modules/assertions.nix` so operators see the same string
 # in nixos-rebuild output AND the migration guide.

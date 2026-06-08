@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/manpage-completeness-eval.sh — P7 manpage completeness gate.
+# tests/manpage-completeness-eval.sh— manpage completeness gate.
 #
 # Asserts that every top-level clap subcommand declared in
 # `packages/nixling/src/lib.rs` (`enum NativeCommand { ... }`) is

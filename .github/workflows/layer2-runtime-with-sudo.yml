@@ -1,0 +1,52 @@
+name: layer2-runtime-with-sudo
+
+# v1.2fu58: opt-in Layer-2 with-sudo workflow that exercises
+# adversarial coverage for the `/var/lib/nixling` traversal ACL
+# (and future Layer-2 host-state tests that need root).
+#
+# RUNNER REQUIREMENT: a self-hosted runner labeled `nixling-sudo`
+# must be registered for this workflow to execute. See
+# CONTRIBUTING.md § "Provisioning the nixling-sudo self-hosted
+# runner" for setup.
+#
+# SECURITY: this job runs `sudo -n -E bash tests/...` on a
+# passwordless-sudo self-hosted runner. It is therefore intentionally
+# `workflow_dispatch`-only and is NOT triggered automatically on
+# `pull_request`. Running PR-controlled checkout contents under
+# passwordless sudo on a persistent self-hosted runner would allow any
+# contributor to execute arbitrary root commands on the runner host
+# (panel R9 security-1 + networking-1). Maintainers manually dispatch
+# this workflow against a reviewed ref after PRs land, or against a
+# trusted contributor's branch they have inspected, via:
+#
+#   gh workflow run layer2-runtime-with-sudo.yml --ref <ref>
+#
+# REVIEWER CHECKLIST — PRs that touch any of the following paths
+# should be Layer-2-dispatched after review (the list mirrors what
+# would have been `paths`-filtered if this were a `pull_request`
+# trigger):
+#
+#   - nixos-modules/host-activation.nix
+#   - nixos-modules/host-activation.d/state-dir-acl.sh
+#   - nixos-modules/host-keys.nix
+#   - tests/state-dir-acl-*.sh
+#   - .github/workflows/layer2-runtime-with-sudo.yml
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  state-dir-acl-runtime:
+    runs-on: [self-hosted, nixling-sudo]
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Layer-2 with-sudo state-dir-acl test
+        env:
+          NL_RUN_LAYER2_WITH_SUDO: "1"
+        run: sudo -n -E bash tests/state-dir-acl-runtime.sh

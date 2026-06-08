@@ -1,4 +1,4 @@
-//! W4-H4: per-VM DAG executor.
+//! Per-VM DAG executor.
 //!
 //! Pure orchestration logic that consumes a
 //! [`nixling_core::processes::VmProcessDag`], topo-sorts the nodes,
@@ -12,8 +12,8 @@
 //!
 //! Fail-fast: any node whose spawn or readiness wait returns an error
 //! aborts the DAG; the executor returns the per-node history so far so
-//! the caller can surface a structured error envelope (and the W3
-//! typed-error wire shape).
+//! the caller can surface a structured error envelope and typed-error
+//! wire shape.
 //!
 //! Per ADR 0014 §"runner-shape preflight" the readiness predicates the
 //! executor honours are the [`nixling_core::processes::ReadinessPredicate`]
@@ -24,7 +24,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::time::Duration;
 
 use nixling_core::processes::{DagEdge, NodeId, ProcessNode, ReadinessPredicate, VmProcessDag};
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// Default timeout for the api-ready phase in split-readiness mode.
+pub const DEFAULT_API_TIMEOUT_SECONDS: u64 = 60;
+/// Exit code constant for api-ready timeout in strict mode.
+pub const EXIT_API_TIMEOUT: i32 = 33;
 
 /// Result of executing a single DAG node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,8 +40,8 @@ pub enum NodeOutcome {
     /// per-node deadline.
     Ready,
     /// Spawn or readiness wait failed; the carried message is the
-    /// runner's error string (the W3 typed-error wire shape upstream
-    /// of here translates this into the envelope `code`).
+    /// runner's error string (the typed-error wire shape upstream of
+    /// here translates this into the envelope `code`).
     Failed { reason: String },
     /// Node was reached but skipped because a predecessor failed and
     /// the executor is unwinding. Recorded so the caller can render
@@ -51,6 +57,61 @@ pub struct NodeHistory {
     pub outcome: NodeOutcome,
 }
 
+/// State of the api-ready phase for a split-readiness runner node.
+/// Serializes as `"yes"`, `"pending"`, `"timeout"`, or
+/// `{"error": "<reason>"}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiReadyState {
+    Yes,
+    Pending,
+    Timeout,
+    Error { reason: String },
+}
+
+impl Serialize for ApiReadyState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Yes => serializer.serialize_str("yes"),
+            Self::Pending => serializer.serialize_str("pending"),
+            Self::Timeout => serializer.serialize_str("timeout"),
+            Self::Error { reason } => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("error", reason)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiReadyState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Helper {
+            Unit(String),
+            Error { error: String },
+        }
+
+        match Helper::deserialize(deserializer)? {
+            Helper::Unit(value) => match value.as_str() {
+                "yes" => Ok(ApiReadyState::Yes),
+                "pending" => Ok(ApiReadyState::Pending),
+                "timeout" => Ok(ApiReadyState::Timeout),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown api-ready state: {other}"
+                ))),
+            },
+            Helper::Error { error } => Ok(ApiReadyState::Error { reason: error }),
+        }
+    }
+}
+
 /// Aggregate report returned by [`DagExecutor::run`]. Always lists
 /// every node in topo order — pending/skipped entries are explicit
 /// rather than absent.
@@ -60,6 +121,9 @@ pub struct DagRunReport {
     pub vm: String,
     pub history: Vec<NodeHistory>,
     pub overall_ok: bool,
+    /// Split readiness state for the runner node. None when not in split mode.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub api_ready: Option<ApiReadyState>,
 }
 
 /// Errors the DAG validation layer surfaces. These are different from
@@ -95,11 +159,20 @@ impl Default for NodeBudget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitReadinessMode {
+    /// Default (--strict): wait for BOTH process-alive AND api-ready. Fail-closed on timeout.
+    #[default]
+    Strict,
+    /// --no-wait-api: exit on process-alive success; api-ready state = Pending.
+    NoWaitApi,
+}
+
 /// Abstraction over "spawn this node and wait for it to be ready".
 /// Implementations:
 ///
-/// - production: dispatches through the W4-H5 broker `SpawnRunner`
-///   variant, registers the returned pidfd in
+/// - production: dispatches through the broker `SpawnRunner` variant,
+///   registers the returned pidfd in
 ///   [`crate::supervisor::pidfd::PidfdTable`], and runs each
 ///   [`ReadinessPredicate`] against the live runtime;
 /// - tests: a deterministic in-memory fake that records call order
@@ -113,6 +186,34 @@ pub trait NodeRunner: Send + Sync {
         readiness: &[ReadinessPredicate],
         budget: NodeBudget,
     ) -> Result<(), String>;
+
+    /// Spawn + process-alive check. Returns within ≤ 100 ms.
+    /// Default: calls spawn_and_wait_ready with empty predicates.
+    async fn spawn_and_check_process_alive(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        budget: NodeBudget,
+    ) -> Result<(), String> {
+        self.spawn_and_wait_ready(vm, node, &[], budget).await
+    }
+
+    /// Api-ready probe (slow path).
+    /// Default: returns Yes if no predicates, else Pending.
+    async fn probe_api_ready(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        readiness: &[ReadinessPredicate],
+        timeout: Duration,
+    ) -> ApiReadyState {
+        let _ = (vm, node, timeout);
+        if readiness.is_empty() {
+            ApiReadyState::Yes
+        } else {
+            ApiReadyState::Pending
+        }
+    }
 }
 
 /// Pure topo-sort. Returns nodes in dependency order: any node whose
@@ -191,6 +292,12 @@ pub fn topo_sort(dag: &VmProcessDag) -> Result<Vec<NodeId>, DagError> {
     Ok(sorted)
 }
 
+fn uses_split_readiness(readiness: &[ReadinessPredicate]) -> bool {
+    readiness
+        .iter()
+        .any(|predicate| matches!(predicate, ReadinessPredicate::ApiSocketInfo(_)))
+}
+
 /// Executor that drives a topo-sorted DAG through a [`NodeRunner`].
 pub struct DagExecutor<R: NodeRunner> {
     runner: R,
@@ -260,6 +367,100 @@ impl<R: NodeRunner> DagExecutor<R> {
             vm: dag.vm.clone(),
             history,
             overall_ok,
+            api_ready: None,
+        })
+    }
+
+    pub async fn run_split(
+        &self,
+        dag: &VmProcessDag,
+        mode: SplitReadinessMode,
+        api_timeout: Duration,
+    ) -> Result<DagRunReport, DagError> {
+        let order = topo_sort(dag)?;
+        let nodes_by_id: HashMap<NodeId, &ProcessNode> =
+            dag.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+
+        let mut history: Vec<NodeHistory> = Vec::with_capacity(order.len());
+        let mut failed_predecessor: Option<NodeId> = None;
+        let mut overall_ok = true;
+        let mut api_ready = None;
+        let mut no_wait_completed = false;
+
+        for node_id in order {
+            if no_wait_completed {
+                continue;
+            }
+            if let Some(failed) = &failed_predecessor {
+                history.push(NodeHistory {
+                    node_id,
+                    outcome: NodeOutcome::Skipped {
+                        predecessor: failed.clone(),
+                    },
+                });
+                continue;
+            }
+
+            let node = nodes_by_id
+                .get(&node_id)
+                .expect("topo sort emitted unknown node id");
+            let result = if uses_split_readiness(&node.readiness) {
+                match self
+                    .runner
+                    .spawn_and_check_process_alive(&dag.vm, node, self.budget)
+                    .await
+                {
+                    Ok(()) => match mode {
+                        SplitReadinessMode::NoWaitApi => {
+                            api_ready = Some(ApiReadyState::Pending);
+                            no_wait_completed = true;
+                            Ok(())
+                        }
+                        SplitReadinessMode::Strict => {
+                            let state = self
+                                .runner
+                                .probe_api_ready(&dag.vm, node, &node.readiness, api_timeout)
+                                .await;
+                            api_ready = Some(state.clone());
+                            match state {
+                                ApiReadyState::Yes => Ok(()),
+                                ApiReadyState::Pending => Err("api-ready pending".to_owned()),
+                                ApiReadyState::Timeout => Err("api-ready timeout".to_owned()),
+                                ApiReadyState::Error { reason } => {
+                                    Err(format!("api-ready error: {reason}"))
+                                }
+                            }
+                        }
+                    },
+                    Err(reason) => Err(reason),
+                }
+            } else {
+                self.runner
+                    .spawn_and_wait_ready(&dag.vm, node, &node.readiness, self.budget)
+                    .await
+            };
+
+            match result {
+                Ok(()) => history.push(NodeHistory {
+                    node_id,
+                    outcome: NodeOutcome::Ready,
+                }),
+                Err(reason) => {
+                    overall_ok = false;
+                    failed_predecessor = Some(node_id.clone());
+                    history.push(NodeHistory {
+                        node_id,
+                        outcome: NodeOutcome::Failed { reason },
+                    });
+                }
+            }
+        }
+
+        Ok(DagRunReport {
+            vm: dag.vm.clone(),
+            history,
+            overall_ok,
+            api_ready,
         })
     }
 }
@@ -267,45 +468,24 @@ impl<R: NodeRunner> DagExecutor<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nixling_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+    use nixling_core::minijail_profile::CgroupPlacement;
     use nixling_core::processes::{
-        DagEdge, NodeId, ProcessNode, ProcessRole, RoleProfile, VmProcessDag, VmProcessInvariants,
+        DagEdge, NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants,
     };
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn dummy_profile() -> RoleProfile {
-        RoleProfile {
-            profile_id: "dummy".to_owned(),
-            uid: 0,
-            gid: 0,
-            adr_carve_out: None,
-            caps: vec![],
-            namespaces: NamespaceSet {
-                mount: false,
-                pid: false,
-                net: false,
-                ipc: false,
-                uts: false,
-                user: false,
-            },
-            seccomp_policy_ref: None,
-            mount_policy: MountPolicy {
-                read_only_paths: vec![],
-                writable_paths: vec![],
-                nix_store_read_only: true,
-                hide_device_nodes_by_default: true,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
-            },
-            cgroup_placement: CgroupPlacement {
+    fn dummy_profile() -> nixling_core::processes::RoleProfile {
+        nixling_core::test_support::RoleProfileBuilder::new()
+            .with_profile_id("dummy")
+            .with_uid(0)
+            .with_gid(0)
+            .with_cgroup_placement(CgroupPlacement {
                 subtree: "system.slice/nixling-test".to_owned(),
                 controllers: vec![],
                 delegated: false,
-            },
-            user_namespace: None,
-            umask: None,
-        }
+            })
+            .build()
     }
 
     fn dummy_node(id: &str, role: ProcessRole) -> ProcessNode {
@@ -318,6 +498,7 @@ mod tests {
             env: vec![],
             profile: dummy_profile(),
             readiness: vec![],
+            plan_ops: vec![],
         }
     }
 
@@ -364,6 +545,23 @@ mod tests {
                     reason: "guest SSH probe needs running guest".to_owned(),
                 },
             ],
+            invariants: dummy_invariants(),
+        }
+    }
+
+    fn split_readiness_dag() -> VmProcessDag {
+        let mut ch = dummy_node("ch", ProcessRole::CloudHypervisorRunner);
+        ch.readiness = vec![ReadinessPredicate::ApiSocketInfo(
+            "/run/nixling/vms/corp-vm/ch.sock".to_owned(),
+        )];
+        VmProcessDag {
+            vm: "corp-vm".to_owned(),
+            nodes: vec![dummy_node("host-reconcile", ProcessRole::HostReconcile), ch],
+            edges: vec![DagEdge {
+                from: NodeId("host-reconcile".to_owned()),
+                to: NodeId("ch".to_owned()),
+                reason: "host before ch".to_owned(),
+            }],
             invariants: dummy_invariants(),
         }
     }
@@ -558,6 +756,51 @@ mod tests {
         }
     }
 
+    struct FakeSplitRunner {
+        spawn_order: Mutex<Vec<String>>,
+        api_ready_result: ApiReadyState,
+    }
+
+    impl FakeSplitRunner {
+        fn observed_order(&self) -> Vec<String> {
+            self.spawn_order.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NodeRunner for FakeSplitRunner {
+        async fn spawn_and_wait_ready(
+            &self,
+            _vm: &str,
+            node: &ProcessNode,
+            _readiness: &[ReadinessPredicate],
+            _budget: NodeBudget,
+        ) -> Result<(), String> {
+            self.spawn_order.lock().unwrap().push(node.id.0.clone());
+            Ok(())
+        }
+
+        async fn spawn_and_check_process_alive(
+            &self,
+            _vm: &str,
+            node: &ProcessNode,
+            _budget: NodeBudget,
+        ) -> Result<(), String> {
+            self.spawn_order.lock().unwrap().push(node.id.0.clone());
+            Ok(())
+        }
+
+        async fn probe_api_ready(
+            &self,
+            _vm: &str,
+            _node: &ProcessNode,
+            _readiness: &[ReadinessPredicate],
+            _timeout: Duration,
+        ) -> ApiReadyState {
+            self.api_ready_result.clone()
+        }
+    }
+
     #[tokio::test]
     async fn executor_runs_all_nodes_in_topo_order_on_success() {
         let runner = FakeRunner::default();
@@ -569,7 +812,7 @@ mod tests {
             assert!(report
                 .history
                 .iter()
-                .all(|h| matches!(h.outcome, NodeOutcome::Ready)));
+                .all(|h| matches!(&h.outcome, NodeOutcome::Ready)));
             executor.runner.observed_order()
         };
         let expected = vec![
@@ -678,6 +921,138 @@ mod tests {
         assert!(report.overall_ok);
     }
 
+    #[tokio::test]
+    async fn split_readiness_passes_when_process_alive_but_api_slow() {
+        let runner = FakeSplitRunner {
+            spawn_order: Mutex::new(Vec::new()),
+            api_ready_result: ApiReadyState::Timeout,
+        };
+        let executor = DagExecutor::new(runner);
+        let started = std::time::Instant::now();
+        let report = executor
+            .run_split(
+                &split_readiness_dag(),
+                SplitReadinessMode::NoWaitApi,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert!(started.elapsed() <= Duration::from_millis(100));
+        assert_eq!(report.api_ready, Some(ApiReadyState::Pending));
+        assert!(report.overall_ok);
+        assert_eq!(
+            executor.runner.observed_order(),
+            vec!["host-reconcile", "ch"]
+        );
+        assert!(report
+            .history
+            .iter()
+            .all(|entry| matches!(&entry.outcome, NodeOutcome::Ready)));
+    }
+
+    #[tokio::test]
+    async fn no_wait_api_stops_after_split_node_even_when_later_readiness_exists() {
+        let mut dag = split_readiness_dag();
+        dag.nodes
+            .push(dummy_node("ssh-ready", ProcessRole::GuestSshReadiness));
+        dag.edges.push(DagEdge {
+            from: NodeId("ch".to_owned()),
+            to: NodeId("ssh-ready".to_owned()),
+            reason: "guest ssh after ch".to_owned(),
+        });
+        let runner = FakeSplitRunner {
+            spawn_order: Mutex::new(Vec::new()),
+            api_ready_result: ApiReadyState::Timeout,
+        };
+        let executor = DagExecutor::new(runner);
+        let report = executor
+            .run_split(&dag, SplitReadinessMode::NoWaitApi, Duration::from_secs(60))
+            .await
+            .unwrap();
+
+        assert!(report.overall_ok);
+        assert_eq!(report.api_ready, Some(ApiReadyState::Pending));
+        assert_eq!(
+            executor.runner.observed_order(),
+            vec!["host-reconcile", "ch"]
+        );
+        assert!(
+            !report
+                .history
+                .iter()
+                .any(|entry| entry.node_id == NodeId("ssh-ready".to_owned())),
+            "no-wait-api should not wait for guest SSH readiness after process-alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn split_readiness_strict_fails_on_api_timeout() {
+        let runner = FakeSplitRunner {
+            spawn_order: Mutex::new(Vec::new()),
+            api_ready_result: ApiReadyState::Timeout,
+        };
+        let executor = DagExecutor::new(runner);
+        let report = executor
+            .run_split(
+                &split_readiness_dag(),
+                SplitReadinessMode::Strict,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(report.api_ready, Some(ApiReadyState::Timeout));
+        assert!(!report.overall_ok);
+        assert_eq!(
+            executor.runner.observed_order(),
+            vec!["host-reconcile", "ch"]
+        );
+        assert!(matches!(
+            report.history.as_slice(),
+            [
+                NodeHistory {
+                    outcome: NodeOutcome::Ready,
+                    ..
+                },
+                NodeHistory {
+                    outcome: NodeOutcome::Failed { reason },
+                    ..
+                },
+            ] if reason == "api-ready timeout"
+        ));
+    }
+
+    #[test]
+    fn api_ready_state_serializes_expected_shapes() {
+        assert_eq!(
+            serde_json::to_value(ApiReadyState::Yes).unwrap(),
+            serde_json::json!("yes")
+        );
+        assert_eq!(
+            serde_json::to_value(ApiReadyState::Pending).unwrap(),
+            serde_json::json!("pending")
+        );
+        assert_eq!(
+            serde_json::to_value(ApiReadyState::Timeout).unwrap(),
+            serde_json::json!("timeout")
+        );
+        assert_eq!(
+            serde_json::to_value(ApiReadyState::Error {
+                reason: "boom".to_owned(),
+            })
+            .unwrap(),
+            serde_json::json!({ "error": "boom" })
+        );
+        assert_eq!(
+            serde_json::from_value::<ApiReadyState>(serde_json::json!({ "error": "boom" }))
+                .unwrap(),
+            ApiReadyState::Error {
+                reason: "boom".to_owned(),
+            }
+        );
+    }
+
     #[test]
     fn report_round_trip_serializable() {
         let report = DagRunReport {
@@ -701,6 +1076,7 @@ mod tests {
                 },
             ],
             overall_ok: false,
+            api_ready: None,
         };
         let json = serde_json::to_string(&report).unwrap();
         let parsed: DagRunReport = serde_json::from_str(&json).unwrap();

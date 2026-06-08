@@ -43,21 +43,20 @@ shape, remediation hint, and docs anchor.
 | <a id="wire-unknown-field"></a>`#wire-unknown-field` | `wire-unknown-field` | `22` | `daemon-api/request` | {type_name} rejected unknown field `{field}` | Remove fields that are not documented for this request or response type. |
 | <a id="wire-ifname-invalid"></a>`#wire-ifname-invalid` | `wire-ifname-invalid` | `23` | `daemon-api/request` | wire interface name is invalid: {reason} | Use a Linux interface name that fits in IFNAMSIZ-1 and only contains [A-Za-z0-9_-]. |
 | <a id="wire-malformed-json"></a>`#wire-malformed-json` | `wire-malformed-json` | `24` | `daemon-api/request` | {type_name} could not be decoded from JSON (opaque reason: {opaque_reason}) | Send a complete JSON object that matches the documented wire schema. |
-| <a id="broker-unimplemented"></a>`#broker-unimplemented` | `broker-unimplemented` | `30` | `daemon-api/broker` | broker operation {operation} is reserved for wave {target_wave} and is not callable in this build | Use the legacy-systemd path for this operation until the target wave lands. |
+| <a id="broker-unimplemented"></a>`#broker-unimplemented` | `broker-unimplemented` | `30` | `daemon-api/broker` | broker operation {operation} is not implemented in this build | Upgrade to a build that implements this operation. |
 | <a id="broker-validation-failed"></a>`#broker-validation-failed` | `broker-validation-failed` | `31` | `daemon-api/broker` | broker validation failed for opaque target {what} | Re-render the trusted bundle artifacts and retry with the newly emitted opaque identifiers. |
 | <a id="manifest-parse-error"></a>`#manifest-parse-error` | `manifest-parse-error` | `40` | `status` | could not parse manifest artifact {artifact} (opaque reason: {opaque_reason}) | Re-render the manifest bundle and retry with the committed schema-compatible artifact set. |
-| <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break in P2 does not ship a compatibility window. |
+| <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break does not ship a compatibility window. |
 | <a id="internal-io"></a>`#internal-io` | `internal-io` | `50` | `daemon-api/internal` | an internal I/O step failed (opaque reason: {opaque_reason}) | Retry the command; if the error persists, inspect the daemon logs with the opaque reason token. |
 | <a id="bundle-tampered"></a>`#bundle-tampered` | `bundle-tampered` | `60` | `bundle-load` | bundle artifact {path} failed tamper-resistance check: {reason} | Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state. |
 <!-- END AUTO-GENERATED: error-table -->
 
-## W3 CLI host-verb refusal envelope
+## CLI host-verb refusal envelope
 
-W3 ships the CLI host-verb skeletons (`nixling host prepare`,
-`host destroy`, `host doctor`, `host install`) with a richer 7-field
-operator-UX envelope distinct from the typed daemon-API envelope
-above. Plan.md §"W3 CLI contract docs + per-error golden table"
-mandates the shape `{ kind, code, exit_code, what_was_checked,
+The CLI host verbs (`nixling host prepare`, `host destroy`,
+`host doctor`, `host install`) use a richer 7-field operator-UX
+envelope distinct from the typed daemon-API envelope above. The
+shape is `{ kind, code, exit_code, what_was_checked,
 observed_state, remediation, docs_anchor }`; the goldens under
 `tests/golden/cli-output/host-*-*.{json,txt}` are the authoritative
 spec.
@@ -70,37 +69,34 @@ The relationship between the two envelopes:
   `nixlingd`, the broker, and the wire layer emit. CLI surfaces that
   proxy daemon-API responses (e.g. `host check`, `auth status`,
   `audit`) deserialize and re-render this shape.
-- **W3 CLI host-verb refusal envelope** (the 7-field shape used by
-  the host verbs above) is what the CLI itself emits when it
-  intercepts a request before reaching the daemon, e.g. Tier-0
-  legacy refusals, missing-flag usage errors, or typed
-  `daemon-down` / `broker-error` / `not-yet-implemented` carve-outs.
-  The richer
+- **CLI host-verb refusal envelope** (the 7-field shape used by the
+  host verbs above) is what the CLI itself emits when it intercepts
+  a request before reaching the daemon, e.g. legacy refusals,
+  missing-flag usage errors, or typed `daemon-down` /
+  `broker-error` / `not-yet-implemented` carve-outs. The richer
   `what_was_checked` / `observed_state` pair gives operators the
   context the typed envelope's bare `message` field omits.
 
 Both envelopes anchor into the catalog below; the CLI's `code`
-matches an `#anchor` here. W4 may unify the two shapes once the
-typed `Error` enum gains the cli-side variants it would need; until
-then, the goldens are the contract.
+matches an `#anchor` here. The goldens are the contract.
 
 | docs anchor | code | exit code | what_was_checked | observed_state |
 | --- | --- | --- | --- | --- |
-| <a id="daemon-down"></a>`#daemon-down` | `daemon-down` | `1` | Daemon connectivity at `/run/nixling/public.sock` and broker dispatch readiness. | `nixlingd` is reachable but the W3 `host prepare/destroy --apply` API surface is still gated behind `nixling.daemonExperimental.enable`; the W4 integrator wires it on once the typed-intent emitters ship. |
-| <a id="broker-error"></a>`#broker-error` | `broker-error` | `78` | Daemon → broker execution for `nixling <verb> --apply`. | The daemon reached the live broker executor, but the broker refused or failed the request. |
-| <a id="not-yet-implemented"></a>`#not-yet-implemented` | `not-yet-implemented` | `78` | Whether the requested native surface is shipped in this release. | The CLI/daemon has the verb shell, but the concrete backend is still deferred to a follow-up wave; v1.0 daemon-only (ADR 0015) returns the typed `not-yet-implemented` envelope with exit 78 instead of falling back to bash. |
-| <a id="--read-only-required"></a>`#--read-only-required` | `--read-only-required` | `78` | `host doctor` invocation flags. | `--read-only` flag missing. The W3 doctor verb is read-only; mutation forms are W4 deliverables. |
+| <a id="daemon-down"></a>`#daemon-down` | `daemon-down` | `1` | Daemon connectivity at `/run/nixling/public.sock` and broker dispatch readiness. | `nixlingd` is reachable but the requested `host prepare/destroy --apply` API surface is still gated behind `nixling.daemonExperimental.enable`. |
+| <a id="broker-error"></a>`#broker-error` | `broker-error` | `78` | Daemon → broker execution for `nixling <verb> --apply`. | The daemon reached the live broker executor, but the broker refused or failed the request. Disk-init failures use a `broker-error:DiskInit:<broker-kind>` shape when the broker fails while creating the per-VM `store-overlay.img` via `fallocate` + `mkfs.ext4`. |
+| <a id="not-yet-implemented"></a>`#not-yet-implemented` | `not-yet-implemented` | `78` | Whether the requested native surface is shipped in this release. | The CLI/daemon has the verb shell, but the concrete backend is still deferred; the CLI returns a typed exit-78 envelope instead of falling back to bash. |
+| <a id="--read-only-required"></a>`#--read-only-required` | `--read-only-required` | `78` | `host doctor` invocation flags. | `--read-only` flag missing. The current `host doctor` verb is read-only; mutation forms are separate surfaces. |
 | <a id="--apply-or-dry-run-required"></a>`#--apply-or-dry-run-required` | `--apply-or-dry-run-required` | `78` | `host prepare` / `host destroy` / `host install` invocation flags. | Neither `--dry-run` nor `--apply` was provided; these host verbs require one of the two to disambiguate plan vs mutate. |
 
 Note: the `tier-0-legacy-uses-nixos-module` and
 `single-writer-conflict` codes are anchored further down in the
-"W3 host-prepare audit decision codes" catalog because they
+"host-prepare audit decision codes" catalog because they
 originate as broker-side audit decisions; the CLI re-uses the same
 docs anchors when intercepting them before reaching the broker.
 
-## W3 host-prepare audit decision codes
+## Host-prepare audit decision codes
 
-The W3 host-prepare wave (cgroup delegation + pidfd handoff, network
+The host-prepare path (cgroup delegation + pidfd handoff, network
 reconcile, firewall coexistence, modules + devices + runner-shape)
 introduces a family of **kebab-case audit decision codes** that the
 privileged broker writes to its append-only audit log
@@ -109,9 +105,9 @@ privileged broker writes to its append-only audit log
 generated table above; they are the broker's structured
 fail-closed reasons that map back to the audit record schema in
 [`docs/reference/privileges.md`](privileges.md) § "Audit record
-schema (W3 baseline)".
+schema".
 
-When surfaced through the daemon API, every W3 audit decision code
+When surfaced through the daemon API, every audit decision code
 folds into the generic typed errors above:
 
 - A `denied-refused` decision → `broker-validation-failed`
@@ -129,14 +125,14 @@ small typed-error catalog above, while operators reading the audit
 log get the fine-grained kebab-case reason that the broker
 recorded.
 
-### W3 audit decision code catalog
+### Audit decision code catalog
 
 | Audit code | Owner ADR | Origin op(s) | Maps to typed error |
 | --- | --- | --- | --- |
 | <a id="cgroup-controllers-missing"></a>`cgroup-controllers-missing` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-v2-unified-not-present"></a>`cgroup-v2-unified-not-present` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-delegation-refused"></a>`cgroup-delegation-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
-| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (v1.1-P10 addition; broker-mediated only — no daemon-direct `cgroup.kill` writes in v1.1+ per [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
+| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (broker-mediated only — no daemon-direct `cgroup.kill` writes; see [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
 | <a id="ifname-too-long"></a>`ifname-too-long` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `CreateTapFd`, `CreatePersistentTap` | `wire-ifname-invalid` |
 | <a id="ifname-collision"></a>`ifname-collision` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | bundle render + `CreateTapFd` | `broker-validation-failed` |
 | <a id="bridge-port-flag-drift"></a>`bridge-port-flag-drift` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `SetBridgePortFlags` | `broker-validation-failed` |
@@ -163,23 +159,19 @@ recorded.
 | <a id="single-writer-conflict"></a>`single-writer-conflict` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | any host-prepare op when legacy systemd + daemon coexist | `broker-validation-failed` |
 | <a id="ch-net-handoff-not-supported"></a>`ch-net-handoff-not-supported` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | runner-shape preflight | `broker-validation-failed` |
 | <a id="runner-shape-drift"></a>`runner-shape-drift` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | runner-shape preflight | `broker-validation-failed` |
-| <a id="tier-0-legacy-uses-nixos-module"></a>`tier-0-legacy-uses-nixos-module` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | `host prepare --apply` on Tier 0 | exit `78` (host-prepare carve-out) |
+| <a id="tier-0-legacy-uses-nixos-module"></a>`tier-0-legacy-uses-nixos-module` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | `host prepare --apply` on the legacy NixOS-module path | exit `78` (host-prepare carve-out) |
 
 `host check --apply` summarizes any `denied-refused` / `errored`
 decisions per VM and returns exit `2` (`#host-check-failure`) when
 any required prerequisite fails. Advisory-only `denied-refused`
-findings (Tier 1-later / Tier 2 hosts where the broker cannot
-positively confirm a prerequisite) return exit `1`
-(`#host-check-warning`).
+findings return exit `1` (`#host-check-warning`).
 
 ## Remediation rendering conventions
 
-> Added in v1.1-P0 (placeholder for v1.1-P1 implementation). The
-> reference shape below is normative for the migration-guide
-> cross-link remediation hint added in v1.1; v1.1-P1 lands the
-> Rust-side rendering changes in
-> `packages/nixling-core/src/error/remediation_rendering.rs` and
-> wires them into the typed-envelope `Display` impl for the four
+> The reference shape below is normative for the migration-guide
+> cross-link remediation hint. The Rust-side rendering changes live
+> in `packages/nixling-core/src/error/remediation_rendering.rs` and
+> are wired into the typed-envelope `Display` impl for the four
 > verbs listed below.
 
 Most typed-error envelopes render `Remediation:` as a single-line
@@ -202,22 +194,21 @@ The multi-line block format renders differently for the two verb
 categories described above:
 
 **Category 1 — Truly deferred verbs** (`console`, `audio`,
-`audit --strict`) emit
-`#not-yet-implemented` (exit 78) unconditionally in v1.0; the
-remediation block renders as:
+`audit --strict`) emit `#not-yet-implemented` (exit 78)
+unconditionally; the remediation block renders as:
 
 ```
 Remediation:
-  This subcommand was queued for v1.2+ (unscheduled).
+  This subcommand is queued for a later release.
   See the operator migration runbook:
     docs/how-to/migrate-nixling-v0-to-v1.md
   Specifically the "<verb-specific anchor>" section.
 ```
 
 **Category 2 — Daemon-down rendering pointers** (`audit` without
-`--strict`, `keys list`, `keys show`) emit `#daemon-down` (exit 1) only when
-the broker is stopped; otherwise the v1.0 successful invocation
-path runs normally. When `#daemon-down` does fire, the
+`--strict`, `keys list`, `keys show`) emit `#daemon-down` (exit 1)
+only when the broker is stopped; otherwise the successful
+invocation path runs normally. When `#daemon-down` does fire, the
 remediation block renders as:
 
 ```
@@ -225,14 +216,14 @@ Remediation:
   nixlingd is not reachable. Start the daemon and re-run:
     sudo systemctl start nixling-priv-broker.socket
     sudo systemctl start nixlingd.service
-  For full v1.0 operator runbook context, see:
+  For the full operator runbook context, see:
     docs/how-to/migrate-nixling-v0-to-v1.md
   Specifically the "<verb-specific anchor>" section.
 ```
 
 Indentation is exactly 2 spaces per nesting level; the URL on its
 own line ensures the full path is copy-paste-safe on terminals
-narrower than 80 columns (the v1.0 inline rendering wrapped the
+narrower than 80 columns (the old inline rendering wrapped the
 URL across lines on narrow terminals, breaking
 copy-paste). Operator-facing grep patterns previously matching
 `Remediation: <inline-hint>` on the four verbs above MUST switch
@@ -248,10 +239,8 @@ The four affected verbs and their migration-guide anchors are:
 - `nixling audio`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audio`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audio) (Category 1 — truly deferred)
 - `nixling keys list` / `nixling keys show`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 — daemon-down only)
 
-The v1.1-P1 panel review verifies the
-Rust `Display` impl matches this rendering convention byte-for-
-byte for the four verbs; goldens at
+The Rust `Display` impl is verified against this rendering
+convention byte-for-byte for the four verbs; goldens at
 `tests/golden/cli-output/audit-*-deferred.golden`,
-`console-deferred.golden`, `audio-deferred.golden`,
-`keys-deferred.golden` (new in v1.1-P1) lock the multi-line
-format.
+`console-deferred.golden`, `audio-deferred.golden`, and
+`keys-deferred.golden` lock the multi-line format.

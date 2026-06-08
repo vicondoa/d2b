@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# W4-H10 Layer-1 gate: per-VM DAG executor topology + reconciliation.
+# Per-VM DAG executor topology + reconciliation.
 #
-# Drives the W4-H4 supervisor::dag and W4-H6 supervisor::state +
-# W4-H8 daemon_version test surfaces so any regression in topo sort,
+# Drives the supervisor::dag and supervisor::state +
+# daemon_version test surfaces so any regression in topo sort,
 # fail-fast skip propagation, /proc/<pid>/stat parsing, or the
 # daemon pending-restart classifier surfaces on every PR-loop run.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/net-vm-bundle-gate-eval.sh — P2 ph2-p2-net-vm-bundle-gate
+# tests/net-vm-bundle-gate-eval.sh—
 # integration test for the daemon-side VM-start preflight that refuses
 # to bring up a `sys-<env>-net` VM when the on-disk dnsmasq.conf hash
 # diverges from the bundle's nft/route/hosts intent hash for that env.

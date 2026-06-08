@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# P1 Gpu role minijail profile validator.
+# Gpu role minijail profile validator.
 #
-# Per plan §"P1 per-role validators" + §"P1 capability matrix
-# (kernel-r2-4 corrected)": the Gpu role runs with EMPTY caps (no
-# CAP_SYS_NICE; the per-role smoke proves no NICE is needed at
+# The Gpu role runs with EMPTY caps (no CAP_SYS_NICE; the per-role
+# smoke proves no NICE is needed at
 # runtime), the broker-prepared bind set:
 #
 #   - /dev/kvm
 #   - /dev/dri/renderD128
 #   - /dev/nvidiactl
 #   - /dev/nvidia0          (corrected from the original
-#                           /dev/nvidia-render path the W3 device
+#                           /dev/nvidia-render path the device
 #                           taxonomy carried)
 #   - /dev/nvidia-uvm
 #   - /dev/udmabuf
@@ -20,7 +19,7 @@
 # and the closed-set seccomp/ioctl allowlist that includes the
 # DRM_IOCTL_VIRTGPU_* family (verified via the L1c
 # `nixling_host::ioctl_policy` derivation — Dri DeviceClass carries
-# the virtgpu set as of the P1 framework commit).
+# the virtgpu set as of the framework commit).
 #
 # This script:
 #
@@ -62,8 +61,8 @@ WAYLAND_UID="${NL_WAYLAND_UID:-1000}"
 SOURCE_WAYLAND="/run/user/${WAYLAND_UID}/wayland-0"
 BIND_TARGET="/run/nixling-gpu/${VM_NAME}/wayland-0"
 
-# Closed-set device bind matrix (plan kernel-r2-4 corrected: includes
-# /dev/udmabuf and the per-card /dev/nvidia0 path).
+# Closed-set device bind matrix: includes /dev/udmabuf and the per-card
+# /dev/nvidia0 path.
 DEVICE_BINDS=(
   "/dev/kvm"
   "${RENDER_NODE}"
@@ -103,7 +102,7 @@ assert_eq "${SOURCE_WAYLAND}" "/run/user/${WAYLAND_UID}/wayland-0" \
 assert_eq "${BIND_TARGET}" "/run/nixling-gpu/${VM_NAME}/wayland-0" \
   "P1 Gpu wayland bind-target (in-sandbox)"
 
-# P1 R2 closure (test-r2-1): cross-check that the broker's
+# Closure: cross-check that the broker's
 # role_device_classes(Gpu) source-of-truth matches DEVICE_BINDS. The
 # bundle resolver's allowed_device_classes for ProcessRole::Gpu is the
 # closed allowlist the broker uses for OpenDevice dispatch; it MUST
@@ -248,7 +247,7 @@ if [ "$have_cc" -eq 1 ] && [ "$have_render" -eq 1 ] && [ "$have_minijail" -eq 1 
   # the broker bundle; this is the smoke surface.
   policy="$scratch/gpu.bpf.policy"
   cat >"$policy" <<'POLICY'
-# P1 Gpu role smoke policy. Hard-coded allow list; everything else
+# Gpu role smoke policy. Hard-coded allow list; everything else
 # returns SIGSYS by minijail's default-deny.
 read: 1
 write: 1
@@ -411,3 +410,135 @@ else
 fi
 
 ok "tests/minijail-validator-gpu.sh: every P1 Gpu canary passed"
+
+# ---------------------------------------------------------------------------
+# v1.2— gpu-render-node broker-pre-NS profile shape assertions.
+# ---------------------------------------------------------------------------
+log "==> D5/P2.3: gpu-render-node minijail profile shape assertions"
+
+PROFILES_NIX="${ROOT}/nixos-modules/minijail-profiles.nix"
+PROCESSES_JSON_NIX="${ROOT}/nixos-modules/processes-json.nix"
+LIVE_HANDLERS="${ROOT}/packages/nixling-priv-broker/src/live_handlers.rs"
+SYS_RS="${ROOT}/packages/nixling-priv-broker/src/sys.rs"
+
+if [ ! -f "$PROFILES_NIX" ]; then
+  fail "minijail-profiles.nix not found at $PROFILES_NIX"
+  exit 1
+fi
+
+# 1. gpu-render-node mkProfile block present.
+if grep -q '"${profileIdFor name "gpu-render-node"}" = mkProfile' "$PROFILES_NIX"; then
+  ok "D5/P2.3: gpu-render-node mkProfile block present"
+else
+  fail "D5/P2.3: gpu-render-node mkProfile block MISSING"
+  exit 1
+fi
+
+# 2. userNamespace block present on gpu-render-node (ADR 0021).
+if awk '
+  /"\$\{profileIdFor name "gpu-render-node"\}" = mkProfile \{/ { inblock=1; depth=1; next }
+  inblock { if (/\{/) depth++; if (/\}/) depth--; if (depth==0) { inblock=0; next } }
+  inblock && /userNamespace[[:space:]]*=/ { found=1 }
+  END { exit (found ? 0 : 1) }
+' "$PROFILES_NIX" 2>/dev/null; then
+  ok "D5/P2.3: gpu-render-node profile declares userNamespace (ADR 0021)"
+else
+  fail "D5/P2.3: gpu-render-node profile MISSING userNamespace block"
+  exit 1
+fi
+
+# 3. userNamespace references gpu principal.
+if grep -q 'stablePrincipalId "nixling-\${name}-gpu"' "$PROFILES_NIX"; then
+  ok "D5/P2.3: gpu-render-node userNamespace references gpu principal"
+else
+  fail "D5/P2.3: gpu-render-node userNamespace missing gpu principal reference"
+  exit 1
+fi
+
+# 4. seccompPolicyRef = "w1-gpu-render-node".
+if grep -q 'seccompPolicyRef = "w1-gpu-render-node"' "$PROFILES_NIX"; then
+  ok "D5/P2.3: gpu-render-node seccompPolicyRef = \"w1-gpu-render-node\""
+else
+  fail "D5/P2.3: gpu-render-node missing seccompPolicyRef = \"w1-gpu-render-node\""
+  exit 1
+fi
+
+# 5. deviceBinds empty (fd-passing replaces bind-mounts).
+if awk '
+  /"\$\{profileIdFor name "gpu-render-node"\}" = mkProfile \{/ { inblock=1; depth=1; next }
+  inblock { if (/\{/) depth++; if (/\}/) depth--; if (depth==0) { inblock=0; next } }
+  inblock && /deviceBinds[[:space:]]*=[[:space:]]*\[[[:space:]]*\/dev/ { found_nonempty=1 }
+  END { exit (found_nonempty ? 1 : 0) }
+' "$PROFILES_NIX" 2>/dev/null; then
+  ok "D5/P2.3: gpu-render-node deviceBinds is empty (fd-passing replaces bind-mounts)"
+else
+  fail "D5/P2.3: gpu-render-node deviceBinds is non-empty — bind-mounts are skipped for user-NS spawns"
+  exit 1
+fi
+
+# 6. umask = 7 present (fu36 socket-ACL requirement).
+if awk '
+  /"\$\{profileIdFor name "gpu-render-node"\}" = mkProfile \{/ { inblock=1; depth=1; next }
+  inblock { if (/\{/) depth++; if (/\}/) depth--; if (depth==0) { inblock=0; next } }
+  inblock && /umask[[:space:]]*=[[:space:]]*7/ { found=1 }
+  END { exit (found ? 0 : 1) }
+' "$PROFILES_NIX" 2>/dev/null; then
+  ok "D5/P2.3: gpu-render-node umask = 7 (fu36 socket-ACL requirement)"
+else
+  fail "D5/P2.3: gpu-render-node missing umask = 7"
+  exit 1
+fi
+
+# 7. Profile gated on vm.graphics.renderNodeOnly.
+if grep -q 'vm.graphics.renderNodeOnly' "$PROFILES_NIX"; then
+  ok "D5/P2.3: gpu-render-node gated on vm.graphics.renderNodeOnly"
+else
+  fail "D5/P2.3: gpu-render-node missing vm.graphics.renderNodeOnly gate"
+  exit 1
+fi
+
+# 8. Broker live_handlers.rs maps w1-gpu-render-node → [DeviceClass::Dri].
+if [ -f "$LIVE_HANDLERS" ] && grep -q '"w1-gpu-render-node"' "$LIVE_HANDLERS"; then
+  ok "D5/P2.3: live_handlers.rs maps w1-gpu-render-node to device classes"
+else
+  fail "D5/P2.3: live_handlers.rs MISSING w1-gpu-render-node device-class entry"
+  exit 1
+fi
+
+# 9. sys.rs declares RENDER_NODE_INHERITED_FD.
+if [ -f "$SYS_RS" ] && grep -q 'RENDER_NODE_INHERITED_FD' "$SYS_RS"; then
+  ok "D5/P2.3: sys.rs declares RENDER_NODE_INHERITED_FD protocol constant"
+else
+  fail "D5/P2.3: sys.rs MISSING RENDER_NODE_INHERITED_FD"
+  exit 1
+fi
+
+# 10. sys.rs RunnerIsolationSpec has pre_opened_device_fds.
+if [ -f "$SYS_RS" ] && grep -q 'pre_opened_device_fds' "$SYS_RS"; then
+  ok "D5/P2.3: sys.rs RunnerIsolationSpec has pre_opened_device_fds field"
+else
+  fail "D5/P2.3: sys.rs MISSING pre_opened_device_fds on RunnerIsolationSpec"
+  exit 1
+fi
+
+# 11. processes-json.nix defines gpuRenderNodeRunner and emits gpu-render-node.
+if [ -f "$PROCESSES_JSON_NIX" ] && grep -q 'gpuRenderNodeRunner' "$PROCESSES_JSON_NIX"; then
+  ok "D5/P2.3: processes-json.nix defines gpuRenderNodeRunner"
+else
+  fail "D5/P2.3: processes-json.nix MISSING gpuRenderNodeRunner"
+  exit 1
+fi
+if [ -f "$PROCESSES_JSON_NIX" ] && grep -q '"gpu-render-node"' "$PROCESSES_JSON_NIX"; then
+  ok "D5/P2.3: processes-json.nix emits gpu-render-node role node"
+else
+  fail "D5/P2.3: processes-json.nix MISSING gpu-render-node role emission"
+  exit 1
+fi
+if [ -f "$PROCESSES_JSON_NIX" ] && grep -q 'gpu-device-node' "$PROCESSES_JSON_NIX"; then
+  ok "D5/P2.3: processes-json.nix carries --gpu-device-node /proc/self/fd/10 in argv"
+else
+  fail "D5/P2.3: processes-json.nix MISSING --gpu-device-node in gpuRenderNodeRunner argv"
+  exit 1
+fi
+
+log "==> D5/P2.3 gpu-render-node assertions PASSED"

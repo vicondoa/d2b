@@ -164,7 +164,7 @@ existing per-VM store tree is healthy.
 ### Rollback
 
 - Roll back by reverting the host generation and rebuilding (the
-  `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in P6
+  `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in v1.0
   along with the bash CLI; see ADR 0015 for the full removal list).
 - Do **not** manually delete `store-meta` generations just because
   you changed control-plane owners; both paths still expect the

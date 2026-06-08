@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/polkit-allowlist-eval.sh
 #
-# P6 ph6-p6-polkit-retire — asserts nixos-modules/host-polkit.nix
+# Asserts nixos-modules/host-polkit.nix
 # names ONLY daemon-only singleton units in its launcher allowlist:
 #
 #   * nixlingd.service
@@ -9,7 +9,7 @@
 #   * nixling-priv-broker.socket
 #
 # and contains NO references to retired per-VM / per-env unit shapes
-# (the W2-followup C1 exact-unit allowlist that pre-P6 generated entries
+# (the -followup C1 exact-unit allowlist that pre- generated entries
 # for `nixling@<vm>`, `nixling-<vm>-{gpu,snd,swtpm,store-sync}`,
 # `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`,
 # `nixling-audit-check`, and the per-VM `nixling-<vm>-gpu` → `-snd`
@@ -82,14 +82,14 @@ done
 # Structural invariants on the surviving polkit grant:
 #
 #   * still scoped to org.freedesktop.systemd1.manage-units
-#   * still scoped to the nixling-launcher group
+#   * still scoped to the nixling group
 #   * verb allowlist still restricts to start/stop/restart
 # ---------------------------------------------------------------------------
 grep -qF 'org.freedesktop.systemd1.manage-units' "$polkit" \
   || fail "$polkit lost the manage-units action-id guard"
 
-grep -qF 'isInGroup("nixling-launcher")' "$polkit" \
-  || fail "$polkit lost the nixling-launcher group guard"
+grep -qF 'isInGroup("nixling")' "$polkit" \
+  || fail "$polkit lost the nixling group guard"
 
 grep -qE 'verb !== "start".*verb !== "stop".*verb !== "restart"' "$polkit" \
   || fail "$polkit lost the start/stop/restart verb allowlist"

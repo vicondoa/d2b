@@ -1,4 +1,4 @@
-//! P0 integration tests: BundleResolver tamper-resistance verification.
+//! BundleResolver tamper-resistance integration tests.
 //!
 //! Each test creates a self-contained fake bundle root inside a
 //! `tempfile::TempDir` — the real `/etc/nixling` is never touched.
@@ -203,8 +203,7 @@ fn write_siblings(dir: &Path, policy: &BundleVerifyPolicy) {
 }
 
 fn set_mode_to(path: &Path, mode: u32) {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .expect("set permissions");
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set permissions");
 }
 
 /// Helper: assert `err` is `BundleTampered` with the given reason slug.
@@ -313,8 +312,7 @@ fn tamper_hash_mismatch() {
     // Rewrite so the bundleHash field value is intact but the other content
     // differs — replace the first occurrence of the bundleVersion value with
     // a different number to ensure the parsed Value changes.
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&with_hash).expect("parse with_hash");
+    let mut value: serde_json::Value = serde_json::from_slice(&with_hash).expect("parse with_hash");
     value["bundleVersion"] = serde_json::json!(99);
     let tampered = serde_json::to_vec(&value).expect("re-serialize tampered");
     write_private(&bundle_path, &tampered);
@@ -534,10 +532,7 @@ fn tamper_missing_bundle_hash_schema_v3() {
 
     // A future schema v3 bundle without bundleHash must also be rejected.
     // (The old `is_v2` check would have downgraded this to warning-only.)
-    write_private(
-        &bundle_path,
-        &minimal_bundle_json_no_hash_with_schema("v3"),
-    );
+    write_private(&bundle_path, &minimal_bundle_json_no_hash_with_schema("v3"));
 
     let policy = current_user_policy();
     let err = BundleResolver::load_with_policy(&bundle_path, &policy)

@@ -13,7 +13,7 @@
 # real /nix/store via hard links — zero extra disk usage beyond
 # directory entries.
 #
-# Layout (per VM, under /var/lib/nixling/vms/<vm>/):
+# Layout (per VM, under /var/lib/nixling/vms/<vm>/)
 #
 #   store/                          virtiofs → guest /nix/.ro-store
 #     <hash>-bash-5.3p9/            hardlink farm into /nix/store
@@ -47,7 +47,7 @@
 
 let
   cfg = config.nixling;
-  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
@@ -74,13 +74,13 @@ let
   # attrset, not the module function"). `system.build.toplevel` is the
   # nixos-system-<vm> derivation that virtiofsd would otherwise be
   # serving from the host's /nix/store. We snapshot per-VM closure
-  # info via `pkgs.closureInfo`, which gives us:
+  # info via `pkgs.closureInfo`, which gives us
   #   <out>/store-paths   newline list of every path in the closure
   #   <out>/registration  format consumed by `nix-store --load-db`
   vmTopOf = name: nl.vmToplevel config name;
 
   # The microvm.nix-generated "runner" derivation for this VM. It
-  # holds:
+  # holds
   #   bin/virtiofsd-run       (what microvm-virtiofsd@<vm>.service execs)
   #   bin/microvm-run         (what microvm@<vm>.service execs)
   #   bin/microvm-shutdown
@@ -102,7 +102,7 @@ let
   # supervisord conf has a top-level `user=root` directive (because
   # the unit historically ran as root). With the C1a User= drop to
   # `nl-virtiofs-<vm>` the kernel rejects supervisord's attempt to
-  # setuid to root and supervisord aborts with:
+  # setuid to root and supervisord aborts with
   #
   #     Error: Can't drop privilege as nonroot user
   #
@@ -116,13 +116,13 @@ let
   # pulled into vmClosureOf below so they are visible inside the
   # unit's bind-mounted per-VM /nix/store.
   #
-  # What the wrapper actually does:
+  # What the wrapper actually does
   #
   #   1. Locate microvm.nix's generated virtiofsd-run script + the
   #      supervisord conf it references.
   #   2. For each `command=<path>` entry in that conf (one per
   #      virtiofs share), copy <path> to a writable per-VM location
-  #      and sed-patch its hard-coded virtiofsd flags:
+  #      and sed-patch its hard-coded virtiofsd flags
   #
   #        --inode-file-handles=prefer  ->  --inode-file-handles=never
   #          (C1b — eliminates the daemon's runtime need for
@@ -153,9 +153,8 @@ let
     text = ''
       set -eu
 
-      # Belt-and-suspenders marker gate (security findings nixos-1 /
-      # software-1 / security-1). Two independent layers must both
-      # succeed before any virtiofsd child is spawned:
+      # Belt-and-suspenders marker gate. Two independent layers must both
+      # succeed before any virtiofsd child is spawned
       #
       #   1. ExecStartPre on the systemd unit (see store.nix) runs with
       #      `+` (host namespace, root, before any sandboxing) and
@@ -201,9 +200,9 @@ let
       # of /var/lib/nixling/vms/<vm>/ which is mode 2775 group=kvm for
       # graphics VMs. A kvm-group process could otherwise rename/swap
       # the patched script between write and supervisord-exec.
-      # Security finding P1r1 security-3.
+      # Security hardening.
       #
-      # P0 (ph0-runtime-dir-canonicalize): NEVER create or chmod
+      # NEVER create or chmod
       # /run/nixling here — host-daemon.nix owns that path when the
       # daemon is enabled, and host.nix's tmpfiles owns it in the
       # pre-daemon path. We only touch the per-VM leaf under it.
@@ -220,9 +219,9 @@ let
       # that exec's the actual virtiofsd binary with the share's
       # flags. We sed those flags in-place AND add --modcaps to
       # drop virtiofsd's runtime retain-set + --readonly to refuse
-      # any guest write attempt (security finding P1r1 security-2).
+      # any guest write attempt.
       #
-      # The retain set we drop:
+      # The retain set we drop
       #   chown, dac_override, fowner, fsetid, setuid, setgid,
       #   mknod, setfcap.
       # cap_dac_read_search is already dropped via
@@ -249,7 +248,7 @@ let
         # a virtiofsd invocation": either the script's `exec` line
         # invokes a binary whose path contains `virtiofsd`, or it
         # carries the `--shared-dir` flag that virtiofsd uniquely
-        # requires (security finding P1r3 software-3).
+        # requires.
         #
         # The previous gate keyed off the literal `--inode-file-handles`
         # token. That worked because microvm.nix's generator always
@@ -276,7 +275,7 @@ let
             -e 's/--xattr$//g' \
             "$origcmd" > "$patched.tmp"
 
-        # Fail-closed verification (security finding P1r2 software-2).
+        # Fail-closed verification.
         #
         # The sed substitution that injects --modcaps and --readonly
         # is anchored on the literal string `--inode-file-handles=prefer`.
@@ -360,12 +359,12 @@ let
   # The host-side sync helper. One script, invoked from systemd and
   # from `nixling build/switch/...`. Idempotent — re-running is cheap.
   #
-  # Usage:
+  # Usage
   #   nixling-store-sync <vm> <generation-dir>
   #     <vm>              VM name
   #     <generation-dir>  derivation output from vmGenerationOf
   #
-  # Steps:
+  # Steps
   #   1. Enter a private mount namespace; lazily unmount /nix/store so
   #      hardlinks from /nix/store/<x> to /var/lib/nixling/<x> work
   #      (see "Cross-mount hardlink trick" above).
@@ -380,7 +379,7 @@ let
   #   6. Write store-meta/generations/<N>/{system,store-paths,db.dump,meta.json}.
   #   7. Place a GC root under store-meta/gcroots/generation-<N>.
   #   8. Atomic-rename store-meta/current → generations/<N>.
-  #   9. Retention: compute the kept set:
+  #   9. Retention: compute the kept set
   #        - <N>                           the new generation
   #        - <R> matching the running VM, if any  (parse cmdline)
   #          (or the most-recent prior generation if VM down)
@@ -563,7 +562,7 @@ let
       KEEP=( "$NEXT_GEN" )
 
       RUNNING_TOP=""
-      # The microvm hypervisor's cmdline includes the system path:
+      # The microvm hypervisor's cmdline includes the system path
       # /var/lib/nixling/vms/<vm>/booted points at the runner; the runner
       # path embeds the system toplevel. We grep for the system store
       # path via cmdline of any process associated with this VM.
@@ -661,10 +660,13 @@ let
       done
       echo "  store/: -$REMOVED pruned"
 
-      # Permissions: microvm.nix's virtiofsd runs as user 'microvm'
-      # group 'kvm'; the store dir needs to be readable.
+      # Permissions: align store/ and store-meta/ directory inodes with
+      # the daemon ownership matrix (`nixlingd:users 0755`). The owner
+      # (`nixlingd`) can mutate directory entries during StoreSync; the
+      # broad `users` group gets read/execute only so local users cannot
+      # unlink or replace entries in the guest store view or metadata.
       #
-      # M4 / security-1: only chmod AND chown the directory inodes that
+      # Only chmod AND chown the directory inodes that
       # nixling creates (the per-VM /var/lib/nixling/vms/<vm>/store tree).
       # Recursive chmod or chown on the files would change the
       # hardlinked /nix/store inodes too, violating Nix store
@@ -673,7 +675,7 @@ let
       # have writable+exec perms (or unexpected group ownership) on
       # them. File inodes retain their upstream Nix store ownership
       # (root:root) and modes (0555 for executables, 0444 for data).
-      find "$STORE_DIR" "$META_DIR" -type d -exec chown root:kvm {} + 2>/dev/null || true
+      find "$STORE_DIR" "$META_DIR" -type d -exec chown nixlingd:users {} + 2>/dev/null || true
       find "$STORE_DIR" "$META_DIR" -type d -exec chmod 0755 {} + 2>/dev/null || true
 
       # Plant the per-VM marker (C1a). The microvm-virtiofsd@<vm>.service
@@ -724,7 +726,7 @@ in
     };
 
     # ---------------------------------------------------------------------------
-    # P6 ph6-p6-cli-nix-migrations: the previously-exposed internal
+    # the previously-exposed internal
     # options `nixling.store.package` and `nixling.store.generations`
     # were retired together with the bash CLI. The only consumer was
     # `cli.nix` (the `nixling switch` codepath); store.nix itself
@@ -764,17 +766,17 @@ in
     #
     # Also add a tiny second share for store-meta (db.dump + generation
     # info), mounted in the guest at /run/nixling-store-meta.
-    # v1.1-final: per-VM nix-store + meta + host-keys shares are
-    # injected by host.nix's composeVm pass directly (see
+    # Per-VM nix-store + meta + host-keys shares are injected by
+    # host.nix's composeVm pass directly (see
     # `nixos-modules/host.nix` composedConfig). store.nix used to
-    # write `nixling.vms = lib.mapAttrs ... { config.microvm.shares
+    # write `nixling.vms = lib.mapAttrs... { config.microvm.shares
     # = ...; }` here, but reading cfg.vms while writing to
     # nixling.vms causes module-system infinite recursion. The
     # shares injection moved into host.nix where the per-VM
     # composedConfig has direct access to the consumer's `vm`
     # struct without needing to round-trip through cfg.vms.
 
-    # v1.1-final: microvm-virtiofsd@<vm> systemd drop-ins REMOVED.
+    # microvm-virtiofsd@<vm> systemd drop-ins REMOVED.
     # The upstream `microvm-virtiofsd@.service` template doesn't
     # exist anymore (microvm.nix flake input dropped per ADR 0018);
     # the broker's Virtiofsd SpawnRunner role owns virtiofsd
@@ -788,7 +790,7 @@ in
     # no longer exists; deleted.
     systemd.services = {
 
-    # v1.1-P7: nixling-vfsd-watchdog@ template + per-VM enable units
+    # nixling-vfsd-watchdog@ template + per-VM enable units
     # + timer template RETIRED per ADR 0018. The vhost-user-fs wedge
     # detection moved into the broker's Virtiofsd `SpawnRunner` role
     # supervisor: the broker holds the pidfd via clone3(CLONE_PIDFD)
@@ -803,7 +805,7 @@ in
     # service additions.
     };
 
-    # v1.1-P7 retired:
+    # retired
     #   - systemd.services."nixling-vfsd-watchdog@"
     #   - systemd.services."nixling-vfsd-watchdog-<vm>-enable" (per-VM)
     #   - systemd.timers."nixling-vfsd-watchdog@"
@@ -817,9 +819,9 @@ in
     # sync helper directly (in-process; faster than systemd-start and
     # gives us synchronous error reporting in the activation log).
     #
-    # P0 (ph0-runtime-dir-canonicalize): /run/nixling is created by
-    # host-daemon.nix tmpfiles (nixlingd:nixling-launchers 0750) under
-    # daemonExperimental, or host.nix tmpfiles (root:nixling-launcher
+    # /run/nixling is created by
+    # host-daemon.nix tmpfiles (nixlingd:nixling 0750) under
+    # daemonExperimental, or host.nix tmpfiles (root:nixling
     # 0775) without it. This activation hook MUST NOT touch the parent
     # `/run/nixling` directory — only per-VM leaves.
     # ---------------------------------------------------------------------------
@@ -837,7 +839,7 @@ in
     '';
 
     # ---------------------------------------------------------------------------
-    # P1r2 — vhost-user reconnect resilience.
+    # �� vhost-user reconnect resilience.
     #
     # Background: when microvm-virtiofsd@<vm>.service is restarted while
     # microvm@<vm>.service is active, the cloud-hypervisor process keeps
@@ -853,7 +855,7 @@ in
     # for normal config changes; broken for changes that bounce
     # virtiofsd, because then microvm@ keeps running but its CH is sick.
     #
-    # Two layers of defense:
+    # Two layers of defense
     #
     #   1. Activation-time hint: if virtiofsd's drop-in for a given VM
     #      changed AND microvm@<vm> is currently active, log a clear
@@ -873,7 +875,7 @@ in
         (name: _: ''
           if /run/current-system/sw/bin/systemctl is-active --quiet microvm@${name}.service 2>/dev/null; then
             # systemctl show ExecStart --value returns
-            # "{ path=/nix/store/...; argv[]=...; ... }"; extract just
+            # "{ path=/nix/store/...; argv[]= ...;... }"; extract just
             # the /nix/store path so we can compare against the new
             # ExecStart line in overrides.conf, which is a raw path.
             cur_path=$(/run/current-system/sw/bin/systemctl show microvm-virtiofsd@${name}.service -p ExecStart --value 2>/dev/null \

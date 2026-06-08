@@ -37,7 +37,7 @@ export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 # concurrent runs per worktree on a single flock so the daemon only
 # sees one Layer-1 evaluator at a time.
 #
-# Implementation note (W2fu2 flock-fd fix): we use `flock(1)` as an exec
+# Implementation note (flock-fd fix): we use `flock(1)` as an exec
 # wrapper around a re-entry of this script ($0 --internal-locked). That
 # way the lock fd is OWNED BY THE flock(1) PROCESS, not by the inner
 # bash. Children spawned inside the gate (broker test daemons, etc.) do
@@ -54,7 +54,7 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
    && command -v flock >/dev/null 2>&1; then
   _STATIC_LOCK="$ROOT/.static-sh.lock"
   : > "$_STATIC_LOCK"
-  # W2fu4 H11 — leaked-sccache safety net. Cargo's `sccache` server
+  # Leaked-sccache safety net. Cargo's `sccache` server
   # daemonises off the bash that ran cargo and inherits the gate's
   # flock fd (fd 3). If a previous gate run didn't run `sccache
   # --stop-server` at exit, that sccache is still alive holding fd
@@ -146,7 +146,7 @@ reap_known_static_orphans() {
   # because the pattern `.nl-cleanups.*` matched globally; that emptied this
   # run's cleanups file mid-run and meant subsequent `add_cleanup` calls only
   # showed up in the freshly-recreated file, dropping any cleanups registered
-  # between lib.sh source and the reaper. Observed in the W2fu3 run where the
+  # between lib.sh source and the reaper. Observed in the run where the
   # current re-entry's own .nl-cleanups.<bashpid> was reaped at startup.
   local _self_cleanups_file="${NL_CLEANUPS_FILE:-}"
   local _self_cleanups_basename=""
@@ -205,8 +205,8 @@ nl_static_parallel_key() {
 # stat and the copy, the copy fails with
 #   error: path '//<flake source>/.static-timing.status.<name>' does
 #   not exist
-# (observed in W2 R2 product + networking reviewer runs at
-# cli-legacy-bash-dispatch / cli-json). Putting these under
+# (observed in cli-legacy-bash-dispatch / cli-json timing runs).
+# Putting these under
 # ${TMPDIR:-/tmp}/nixling-static-timing.$$/ keeps them per-static.sh
 # run, cleaned up by run_cleanups on EXIT, and invisible to flake
 # source capture.
@@ -341,7 +341,6 @@ reap_known_static_orphans
 # bootstrap below pulls multi-GiB into /nix/store via nix shell). Runs
 # AFTER the orphan reapers above so a recoverable-by-reap situation
 # isn't flagged spuriously, but BEFORE any nix-store realisation work.
-# (W2 work-review R2 finding — test reviewer.)
 nl_static_gate_begin "tests/preflight-disk-space.sh" "tests/preflight-disk-space.sh"
 bash "$ROOT/tests/preflight-disk-space.sh"
 ok "preflight-disk-space"
@@ -393,11 +392,11 @@ log "==> Layer 1: parse + eval"
 
 cd "$ROOT"
 
-# W2 layout: nixos-modules/ + components/. Old paths
+# Layout: nixos-modules/ + components/. Old paths
 # (modules/nixling/router.nix, modules/nixling/vms.nix,
 # modules/nixling/audio.nix, modules/nixling/audio-host.nix,
 # modules/nixling/entra-id.nix) are gone:
-#   * router.nix renamed to net.nix in W1.
+#   * router.nix renamed to net.nix.
 #   * vms.nix is NOT lifted into the public flake (consumers declare
 #     their own nixling.vms.<name> bindings).
 #   * audio.nix split into components/audio/{guest,host}.nix.
@@ -417,7 +416,7 @@ NL_FILES=(
   nixos-modules/host-users.nix
   nixos-modules/host-polkit.nix
   nixos-modules/host-activation.nix
-  # Removed by ph6-remove-systemd-emission + ph6-p6-cli-nix-migrations:
+  # Removed by +:
   #   nixos-modules/host-wrapper.nix     (nixling@<vm> template)
   #   nixos-modules/host-sidecars.nix    (nixling-<vm>-{gpu,swtpm})
   #   nixos-modules/host-known-hosts.nix (nixling-known-hosts-refresh@)
@@ -499,8 +498,8 @@ nl_static_gate_end "shellcheck --severity=warning on all nixling shell scripts"
 #
 # store.nix previously declared `nixling.store.package` and
 # `nixling.store.generations` as `readOnly + default` internal
-# options (the issue-#6 trap pattern). Both were retired in P6
-# (ph6-p6-cli-nix-migrations) together with the bash CLI. The lint
+# options (the issue-#6 trap pattern). Both were retired in
+#  together with the bash CLI. The lint
 # below still fails the gate if a future commit re-introduces
 # either option on store.nix's `config` surface.
 nl_static_gate_begin "readOnly + default + config trio lint" "readOnly + default + config trio lint"
@@ -587,7 +586,7 @@ else
 fi
 nl_static_gate_end "nix flake check --no-build --all-systems"
 
-# W3b H9 — smoke-eval gate. Forces a full module-system evaluation of
+# Smoke-eval gate. Forces a full module-system evaluation of
 # a minimal consumer-style nixosSystem importing nixling.nixosModules.default.
 # This catches regressions the bare `flake check` misses, e.g. lazy
 # strings inside writeShellApplication that don't fire until the
@@ -645,6 +644,11 @@ fi
 if [ -x "$ROOT/tests/usbip-gating-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
 fi
+if [ -x "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh" ]; then
+  # Asserts every declared bridge has a boot.kernel.sysctl entry that
+  # suppresses IPv6 at NixOS activation, closing the boot-time window.
+  nl_static_parallel_script_gate "tests/bridge-ipv6-boot-sysctl-eval.sh" "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh"
+fi
 if [ -x "$ROOT/tests/cli-json.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-json.sh" "$ROOT/tests/cli-json.sh"
 fi
@@ -660,15 +664,21 @@ fi
 if [ -x "$ROOT/tests/video-sidecar-hardening-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/video-sidecar-hardening-eval.sh" "$ROOT/tests/video-sidecar-hardening-eval.sh"
 fi
+if [ -x "$ROOT/tests/video-contract-eval.sh" ]; then
+  nl_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"
+fi
+if [ -x "$ROOT/tests/video-binary-contract.sh" ]; then
+  nl_static_parallel_script_gate "tests/video-binary-contract.sh" "$ROOT/tests/video-binary-contract.sh"
+fi
 if [ -x "$ROOT/tests/cli-vm-verbs-eval.sh" ]; then
   # P4fu1 software-r1 / test-r1 closure: wire the cli-vm-verbs Layer-1
   # gate so the bash-fallback removal stays regression-gated.
   nl_static_parallel_script_gate "tests/cli-vm-verbs-eval.sh" "$ROOT/tests/cli-vm-verbs-eval.sh"
 fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
-  # P6 ph6-p6-cli-nix-migrations: regression gate that asserts no
+  # Regression gate that asserts no
   # consumer of nixos-modules/cli.nix's outputs survives outside the
-  # file itself + this gate. Lets the sibling ph6-remove-bash-cli
+  # file itself + this gate. Lets the sibling
   # agent delete cli.nix without breaking framework eval.
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
@@ -678,8 +688,31 @@ fi
 if [ -x "$ROOT/tests/broker-bundle-path-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/broker-bundle-path-eval.sh" "$ROOT/tests/broker-bundle-path-eval.sh"
 fi
+if [ -x "$ROOT/tests/principal-uid-collision-eval.sh" ]; then
+  # v1.2— stablePrincipalId UID-collision eval: asserts
+  # every declared principal maps to a unique UID and every UID falls in
+  # [50000, 16827215]. Evaluated against examples/multi-env consumer flake.
+  nl_static_parallel_script_gate "tests/principal-uid-collision-eval.sh" "$ROOT/tests/principal-uid-collision-eval.sh"
+fi
+if [ -x "$ROOT/tests/umask-roundtrip-eval.sh" ]; then
+  # v1.2— umask end-to-end eval round-trip: asserts
+  # swtpm/gpu/audio umask=7 (0o007) propagates from minijail-profiles.nix
+  # through processesJson.data without silent pipeline drop.
+  nl_static_parallel_script_gate "tests/umask-roundtrip-eval.sh" "$ROOT/tests/umask-roundtrip-eval.sh"
+fi
+if [ -x "$ROOT/tests/store-overlay-emit-eval.sh" ]; then
+  # v1.2— assert DiskInit plan-op emitted in processes.json
+  # CH node when writableStoreOverlay is set.
+  nl_static_parallel_script_gate "tests/store-overlay-emit-eval.sh" "$ROOT/tests/store-overlay-emit-eval.sh"
+fi
+if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
+  # Declared microvm.volumes must emit stable CH disk serials and matching
+  # guest fileSystems entries. Without this, /var stays on tmpfs and
+  # identity-bearing services regenerate state on every VM restart.
+  nl_static_parallel_script_gate "tests/volume-mounts-eval.sh" "$ROOT/tests/volume-mounts-eval.sh"
+fi
 if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
-  # P5 ph5-p5-tempo-budget — static gate for the Tempo retention +
+  # Static gate for the Tempo retention +
   # sampling budget policy. Asserts Nix-side constants in
   # nixos-modules/components/observability/stack.nix +
   # options-observability.nix stay aligned with
@@ -687,38 +720,48 @@ if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/tempo-budget-eval.sh" "$ROOT/tests/tempo-budget-eval.sh"
 fi
 if [ -x "$ROOT/tests/w18-default-flip-eval.sh" ]; then
-  # P5 ph5-w18-flip — assert daemonExperimental.enable default
+  # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
   nl_static_parallel_script_gate "tests/w18-default-flip-eval.sh" "$ROOT/tests/w18-default-flip-eval.sh"
 fi
 if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
-  # P5 ph5-p5-host-validate-verb — Layer-1 gate for the
+  # Layer-1 gate for the
   # `nixling host validate --apply` verb that writes per-wave
   # evidence files.
   nl_static_parallel_script_gate "tests/host-validate-verb-eval.sh" "$ROOT/tests/host-validate-verb-eval.sh"
 fi
 if [ -x "$ROOT/tests/wave-evidence-schema-eval.sh" ]; then
-  # P5 ph5-p5-evidence-schema-doc — assert the canonical wave
+  # Assert the canonical wave
   # evidence schema doc + JSON Schema cover every wave declared
   # in options-daemon.nix.
   nl_static_parallel_script_gate "tests/wave-evidence-schema-eval.sh" "$ROOT/tests/wave-evidence-schema-eval.sh"
 fi
 if [ -x "$ROOT/tests/polkit-allowlist-eval.sh" ]; then
-  # P6 ph6-p6-polkit-retire — assert host-polkit.nix names ONLY
+  # Assert host-polkit.nix names ONLY
   # the daemon-only singleton units (nixlingd.service,
   # nixling-priv-broker.{service,socket}) and contains no
   # references to the retired per-VM / per-env unit shapes.
   nl_static_parallel_script_gate "tests/polkit-allowlist-eval.sh" "$ROOT/tests/polkit-allowlist-eval.sh"
 fi
 if [ -x "$ROOT/tests/legacy-unit-denylist-eval.sh" ]; then
-  # P6 ph6-p6-unit-denylist-gate — drift gate enforcing that no
-  # systemd unit name retired in Phase 6 reappears in nixos-modules/.
-  # EXPECTED-RED until ph6-remove-systemd-emission lands; the gate
+  # Drift gate enforcing that no
+  # systemd unit name retired in reappears in nixos-modules/.
+  # EXPECTED-RED until lands; the gate
   # is wired here so the deletion sweep has a machine-checkable
   # target to drive to green.
   nl_static_parallel_script_gate "tests/legacy-unit-denylist-eval.sh" "$ROOT/tests/legacy-unit-denylist-eval.sh"
 fi
-# P6fu1 software-r1 / test-r1: wire the remaining P6 doc/drift gates so
+# ADR index coverage guard (/ -class doc-drift).
+if [ -x "$ROOT/tests/adr-index-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/adr-index-coverage.sh" "$ROOT/tests/adr-index-coverage.sh"
+fi
+# I3 invariant enforcement (ADR 0022): no new v1.3 deferrals authored
+# during v1.2 stabilization. ADR 0022 documents this gate, so it must
+# stay wired.
+if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
+  nl_static_parallel_script_gate "tests/no-new-deferral.sh" "$ROOT/tests/no-new-deferral.sh"
+fi
+# Wire the remaining doc/drift gates so
 # the clean-break invariants are Layer-1 always-on.
 if [ -x "$ROOT/tests/adr-0015-presence-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/adr-0015-presence-eval.sh" "$ROOT/tests/adr-0015-presence-eval.sh"
@@ -732,16 +775,71 @@ fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
-# P6fu1 observability-r1: tracing-contract + daemon-metrics need static.sh wiring
+# tracing-contract + daemon-metrics need static.sh wiring.
 if [ -x "$ROOT/tests/tracing-contract-lint.sh" ]; then
   nl_static_parallel_script_gate "tests/tracing-contract-lint.sh" "$ROOT/tests/tracing-contract-lint.sh"
 fi
 if [ -x "$ROOT/tests/daemon-metrics-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/daemon-metrics-eval.sh" "$ROOT/tests/daemon-metrics-eval.sh"
 fi
+# Wire orphaned static-eval gates. These were previously not referenced
+# in any CI workflow or aggregator;
+# wired here so ci-coverage.sh structural guard passes.
+for _d13_gate in \
+  audio-argv-shape \
+  broker-socket-activation-eval \
+  broker-systemd-unit-eval \
+  cli-rust-native-host-doctor \
+  daemon-autostart-eval \
+  daemon-experimental-warning-eval \
+  gpu-argv-shape \
+  host-prep-dag-eval \
+  kernel-modules-parity-eval \
+  loki-label-cardinality-eval \
+  microvm-nix-absent-eval \
+  minijail-validator-audio \
+  minijail-validator-cloud-hypervisor \
+  minijail-validator-gpu \
+  minijail-validator-otel-host-bridge \
+  minijail-validator-swtpm \
+  minijail-validator-usbip \
+  minijail-validator-video \
+  minijail-validator-virtiofsd \
+  minijail-validator-vsock-relay \
+  net-vm-bundle-gate-eval \
+  no-bash-exec-eval \
+  otel-acl-migration-eval \
+  otel-host-bridge-argv-shape \
+  p2-deliverable-gate-inventory \
+  per-vm-state-ownership-eval \
+  processes-json-eval \
+  readiness-waves-eval \
+  release-tag-eval \
+  ssh-host-key-preflight-eval \
+  state-dir-acl-eval \
+  stop-dag-reconcile-eval \
+  supervisor-option-absent-eval \
+  tap-dag-contract-doc-eval \
+  usbip-argv-shape \
+  usbip-state-machine-eval \
+  v1.1-kernel-floor-eval \
+  vfsd-watchdog-retired-eval \
+  video-argv-shape \
+  vm-submodule-cutover-eval \
+  vm-submodule-eval; do
+  if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
+    nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
+  fi
+done
+unset _d13_gate
+# ci-coverage.sh structural guard (must run after all other tests
+# are registered above so it can attest the full set is wired).
+if [ -x "$ROOT/tests/ci-coverage.sh" ]; then
+  nl_static_parallel_script_gate "tests/ci-coverage.sh" "$ROOT/tests/ci-coverage.sh"
+fi
 nl_static_parallel_wait_all
 
-# W3a-4 — gc after smoke-eval + mid-tier eval pool. These two
+# Gc after smoke-eval + mid-tier eval pool. These two
 # clusters together materialize 5+ consumer-config toplevels +
 # 7 mid-tier eval gates, each pinning derivations under
 # /nix/var/nix/gcroots/auto/. The next phase (assertions +
@@ -772,16 +870,16 @@ if [ -x "$ROOT/tests/observability-eval.sh" ]; then
 fi
 nl_static_gate_end "tests/observability-eval.sh"
 
-# W3a-4 — release auto-gcroots accumulated by the smoke-eval pool +
+# Release auto-gcroots accumulated by the smoke-eval pool +
 # the two big eval gates (assertions/observability). Without this
-# the next major phase (manifest-contract + W1/W2 + per-example
+# the next major phase (manifest-contract + + per-example
 # flake-check) stacks its own derivations on top of the ones the
 # eval gates pinned, peaking /nix/store growth at ~1.2 TiB. The gc
 # costs ~30 s and caps the run-time peak at ~250-400 G.
 nl_phase_gc "post-eval-gates"
 nl_check_disk_budget "post-eval-gates" || fail "disk budget exhausted after eval gates"
 
-# Phase 5 (W4) — JSON manifest contract gate. Renders the manifest
+# JSON manifest contract gate. Renders the manifest
 # from the same smoke-eval consumer config and validates it against
 # docs/reference/manifest-schema.json (JSON Schema Draft 2020-12). Catches:
 #   - manifest.nix's computed values drifting from the documented
@@ -896,7 +994,7 @@ PYEOF
       fail "manifest-contract: undocumented per-VM fields in manifest: $(echo "$_UNDOC_FIELDS" | tr '\n' ' ')"
     fi
 
-    # 4. _manifest.manifestVersion must be present and >= 1 (Phase 5
+    # 4. _manifest.manifestVersion must be present and >= 1 (
     #    locked v1 as the first documented schema).
     _RENDERED_VERSION=$(jq -r '._manifest.manifestVersion // empty' "$_MANIFEST_JSON")
     if [ -n "$_RENDERED_VERSION" ] && [ "$_RENDERED_VERSION" -ge 1 ]; then
@@ -1047,7 +1145,7 @@ if [ -n "$SYS" ]; then
   else
     ok "no stale wireplumber.conf.d/90-nixling.conf (moved to pipewire client.conf.d)"
   fi
-  # Phase 4 C3: nixling-<vm>-snd.service is now a per-VM system service (not user).
+  # nixling-<vm>-snd.service is now a per-VM system service (not user).
   SYS_UNITS=$(find -L "$SYS" -path '*systemd/system*' -name 'nixling-*-snd.service' -print -quit 2>/dev/null || true)
   if [ -n "$SYS_UNITS" ]; then
     ok "nixling-<vm>-snd.service unit(s) present in system closure (system service)"
@@ -1062,7 +1160,7 @@ nl_static_gate_end "audio component"
 log "Layer 1 core gates OK"
 
 # -----------------------------------------------------------------------------
-# W0a — Layer-1 test self-inventory. Keep this before the example/template
+# Layer-1 test self-inventory. Keep this before the example/template
 # flake checks so adding a new executable Layer-1 tests/*.sh script without
 # wiring it into static.sh fails closed.
 # -----------------------------------------------------------------------------
@@ -1078,9 +1176,9 @@ fi
 nl_static_gate_end "tests/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
-# W0a — Rust workspace gate. packages/ lands on the parallel W0a s1 branch, so
+# Rust workspace gate. packages/ lands on the parallel s1 branch, so
 # this is a no-op on this isolated s2 branch and becomes a hard gate after the
-# W0a integration merge. tests/stub-no-socket.sh is invoked by
+# Integration merge. tests/stub-no-socket.sh is invoked by
 # rust-workspace-checks.sh after the cargo gates.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
@@ -1097,17 +1195,17 @@ fi
 nl_static_gate_end "tests/rust-workspace-checks.sh"
 
 # -----------------------------------------------------------------------------
-# W1 — bundle/schema drift, public vms.json parity, and static portability
-# invariants. These scripts skip with a clear log line on isolated W1 branches
+# bundle/schema drift, public vms.json parity, and static portability
+# invariants. These scripts skip with a clear log line on isolated branches
 # before the DTO/emitter/docs artifacts land, and become hard gates after the
-# W1 integration merge.
+# Integration merge.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "W1 bundle/schema static gates" "W1 bundle/schema static gates"
 nl_time_begin "W1 smoke cache prewarm"
 nl_smoke_vms_json >/dev/null
 nl_smoke_bundle_privileges_json >/dev/null
-# W3fu2 H4 (nixos-2 / networking-2): prewarm the host.json cache so
-# `tests/ifname-nix-rust-parity.sh` running in the W1 parallel pool
+# Prewarm the host.json cache so
+# `tests/ifname-nix-rust-parity.sh` running in the parallel pool
 # hits the cache instead of triggering a fresh `getFlake` against $ROOT
 # while sibling gates (`tests/vms-json-parity.sh`,
 # `tests/bundle-drift.sh`) still hold per-test scratch files inside
@@ -1116,9 +1214,9 @@ nl_smoke_bundle_privileges_json >/dev/null
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
 if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
-# W3fu1 H4 — host.json per-field schema gold-file drift gate (integrator-wired).
+# host.json per-field schema gold-file drift gate (integrator-wired).
 if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
-# W3fu2 H4 (nixos-2 / networking-2) — assert Nix-emitted ifNameMappings
+# Assert Nix-emitted ifNameMappings
 # pass the Rust looks_nixling_owned format gate.
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
@@ -1127,7 +1225,7 @@ if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script
 if [ -x "$HERE/static-invariant-writable-paths.sh" ]; then nl_static_parallel_script "tests/static-invariant-writable-paths.sh" "$HERE/static-invariant-writable-paths.sh"; fi
 if [ -x "$HERE/static-invariant-world-readable-leak.sh" ]; then nl_static_parallel_script "tests/static-invariant-world-readable-leak.sh" "$HERE/static-invariant-world-readable-leak.sh"; fi
 if [ -x "$HERE/static-invariant-deny-unknown-fields.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields.sh" "$HERE/static-invariant-deny-unknown-fields.sh"; fi
-# W3fu1 H3 — W3-DTO deny_unknown_fields static invariant (integrator-wired).
+# -DTO deny_unknown_fields static invariant (integrator-wired).
 if [ -x "$HERE/static-invariant-deny-unknown-fields-w3.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields-w3.sh" "$HERE/static-invariant-deny-unknown-fields-w3.sh"; fi
 if [ -x "$HERE/static-invariant-opaque-key-ids.sh" ]; then nl_static_parallel_script "tests/static-invariant-opaque-key-ids.sh" "$HERE/static-invariant-opaque-key-ids.sh"; fi
 if [ -x "$HERE/privileges-matrix-completeness.sh" ]; then nl_static_parallel_script "tests/privileges-matrix-completeness.sh" "$HERE/privileges-matrix-completeness.sh"; fi
@@ -1135,8 +1233,8 @@ nl_static_parallel_wait_all
 nl_static_gate_end "W1 bundle/schema static gates"
 
 # -----------------------------------------------------------------------------
-# W2 control-plane skeleton gates (per the W2 plan-of-record, plan.md §
-# "### W2: Rust workspace and API skeleton"). These cover the nixling-ipc
+# Control-plane skeleton gates (per the plan-of-record, plan.md §
+# "###: Rust workspace and API skeleton"). These cover the nixling-ipc
 # wire types, nixling-priv-broker dispatch, nixlingd socket auth + state
 # lock + version negotiation, the Rust-native CLI shim, generated docs +
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.
@@ -1163,8 +1261,8 @@ nl_time_end "W2 CLI smoke prewarm"
 if [ -x "$HERE/manifest-v04-roundtrip.sh" ]; then nl_static_parallel_script "tests/manifest-v04-roundtrip.sh" "$HERE/manifest-v04-roundtrip.sh"; fi
 if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "tests/broker-enum-disposition.sh" "$HERE/broker-enum-disposition.sh"; fi
 if [ -x "$HERE/broker-validate-bundle.sh" ]; then nl_static_parallel_script "tests/broker-validate-bundle.sh" "$HERE/broker-validate-bundle.sh"; fi
-# W3fu2 H7 (rust-2): pin layer1-bootstrap as the default broker feature
-# until W4 lands the production-shaped runtime.
+# Pin layer1-bootstrap as the default broker feature
+# until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
 if [ -x "$HERE/cli-rust-native-list.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-list.sh" "$HERE/cli-rust-native-list.sh"; fi
 if [ -x "$HERE/cli-rust-native-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-status.sh" "$HERE/cli-rust-native-status.sh"; fi
@@ -1175,7 +1273,7 @@ if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "t
 if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/error-codes-drift.sh" "$HERE/error-codes-drift.sh"; fi
 if [ -x "$HERE/manpage-completion-drift.sh" ]; then nl_static_parallel_script "tests/manpage-completion-drift.sh" "$HERE/manpage-completion-drift.sh"; fi
 if [ -x "$HERE/manpage-completeness-eval.sh" ]; then nl_static_parallel_script "tests/manpage-completeness-eval.sh" "$HERE/manpage-completeness-eval.sh"; fi
-# P7fu1 test-r1 closure: wire the remaining P7 gates.
+# Closure: wire the remaining gates.
 if [ -x "$HERE/changelog-v1-cut-eval.sh" ]; then nl_static_parallel_script "tests/changelog-v1-cut-eval.sh" "$HERE/changelog-v1-cut-eval.sh"; fi
 if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
 if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
@@ -1198,20 +1296,19 @@ if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bound
 nl_static_gate_end "W2 control-plane skeleton gates"
 
 # -----------------------------------------------------------------------------
-# W3 host-prepare static gates (per plan.md §"W3 tests/static.sh ownership
-# rule"). Scope agents s1-s5 write the standalone test scripts under
-# tests/; the integrator wires every gate into the parallel-gate pool here
-# in a single commit (this one). Each gate uses tests/lib.sh helpers, writes
-# scratch outside $FLAKE/$ROOT per W2fu4 H8/H9/H14/H15, does not create its
-# own flock, and inherits the post-gate nix store gc + sccache cleanup.
+# Host-prepare static gates. Standalone test scripts live under tests/;
+# the integrator wires every gate into the parallel-gate pool here. Each
+# gate uses tests/lib.sh helpers, writes scratch outside $FLAKE/$ROOT,
+# does not create its own flock, and inherits the post-gate nix store gc
+# + sccache cleanup.
 #
 # Carve-out: the `with-entra-id` example-flake check can fail with a
 # transient/external crates.io 403 against a `libhimmelblau`-/`kanidm-hsm-
 # crypto`-pinned vicondoa/nixos-entra-id revision. Set
 # `NL_SKIP_WITH_ENTRA_ID=1` to skip the per-example check for that one
 # example (the per-example loop honors the knob in the per-example block
-# below). Use only after one in-band retry; this is an explicit, panel-
-# justifiable W3 carve-out for an external dependency outage.
+# below). Use only after one in-band retry; this is an explicit carve-out
+# for an external dependency outage.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 # Group 1: pure / read-only gates (cgroup oracle, ifname collision, ioctl
@@ -1224,12 +1321,12 @@ if [ -x "$HERE/host-prepare-network.sh" ]; then nl_static_parallel_script "tests
 if [ -x "$HERE/ipv6-off-readback.sh" ]; then nl_static_parallel_script "tests/ipv6-off-readback.sh" "$HERE/ipv6-off-readback.sh"; fi
 if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
 if [ -x "$HERE/path-safety-violation-fs.sh" ]; then nl_static_parallel_script "tests/path-safety-violation-fs.sh" "$HERE/path-safety-violation-fs.sh"; fi
-# W3fu1 H4 — L3 distro-matrix pin parser/drift gate (integrator-wired).
+# L3 distro-matrix pin parser/drift gate (integrator-wired).
 if [ -x "$HERE/l3-pin-consistency.sh" ]; then nl_static_parallel_script "tests/l3-pin-consistency.sh" "$HERE/l3-pin-consistency.sh"; fi
 if [ -x "$HERE/nft-coexistence.sh" ]; then nl_static_parallel_script "tests/nft-coexistence.sh" "$HERE/nft-coexistence.sh"; fi
-# W3fu1 H4 — host-prepare idempotency no-op invariant (integrator-wired).
+# Host-prepare idempotency no-op invariant (integrator-wired).
 if [ -x "$HERE/host-prepare-idempotency.sh" ]; then nl_static_parallel_script "tests/host-prepare-idempotency.sh" "$HERE/host-prepare-idempotency.sh"; fi
-# W3fu1 H4 — ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
+# Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
 if [ -x "$HERE/ch-net-handoff-canary.sh" ]; then nl_static_parallel_script "tests/ch-net-handoff-canary.sh" "$HERE/ch-net-handoff-canary.sh"; fi
 if [ -x "$HERE/nft-foreign-rule-preservation.sh" ]; then nl_static_parallel_script "tests/nft-foreign-rule-preservation.sh" "$HERE/nft-foreign-rule-preservation.sh"; fi
 if [ -x "$HERE/usbip-firewall-skeleton.sh" ]; then nl_static_parallel_script "tests/usbip-firewall-skeleton.sh" "$HERE/usbip-firewall-skeleton.sh"; fi
@@ -1238,18 +1335,17 @@ if [ -x "$HERE/kernel-module-matrix-eval.sh" ]; then nl_static_parallel_script "
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
 if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tests/runner-shape-preflight.sh" "$HERE/runner-shape-preflight.sh"; fi
-# W4-H10 gates: CH / virtiofsd / swtpm argv generators + DAG executor
+# Gates: CH / virtiofsd / swtpm argv generators + DAG executor
 # + daemon state-persistence + [pending restart] machinery.
 if [ -x "$HERE/ch-argv-shape.sh" ]; then nl_static_parallel_script "tests/ch-argv-shape.sh" "$HERE/ch-argv-shape.sh"; fi
 if [ -x "$HERE/virtiofsd-argv-shape.sh" ]; then nl_static_parallel_script "tests/virtiofsd-argv-shape.sh" "$HERE/virtiofsd-argv-shape.sh"; fi
-# v1.1.2fu20 panel-test R3 must-fix: Layer-1 smoke for the
-# nixling-activation-helper binary (fd-safe activation primitives
-# per ADR 0021 + panel-security TOCTOU closures).
+# Layer-1 smoke for the nixling-activation-helper binary (fd-safe
+# activation primitives per ADR 0021 + TOCTOU closures).
 if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-# W5-H4 gate: GPU / audio / video sidecar argv generators.
+# GPU / audio / video sidecar argv generators.
 if [ -x "$HERE/sidecar-argv-shape.sh" ]; then nl_static_parallel_script "tests/sidecar-argv-shape.sh" "$HERE/sidecar-argv-shape.sh"; fi
-# W6-H3 gate: vsock-relay + USBIP argv generators.
+# Vsock-relay + USBIP argv generators.
 if [ -x "$HERE/w6-argv-shape.sh" ]; then nl_static_parallel_script "tests/w6-argv-shape.sh" "$HERE/w6-argv-shape.sh"; fi
 if [ -x "$HERE/minijail-version-check.sh" ]; then nl_static_parallel_script "tests/minijail-version-check.sh" "$HERE/minijail-version-check.sh"; fi
 if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
@@ -1262,13 +1358,15 @@ if [ -x "$HERE/l1c-privilege-oracle.sh" ]; then bash "$HERE/l1c-privilege-oracle
 if [ -x "$HERE/performance-budgets.sh" ]; then bash "$HERE/performance-budgets.sh" || fail "performance-budgets"; fi
 nl_static_gate_end "L1c and performance canaries"
 
-# W3a-4 — gc before per-example flake-check, which is the heaviest
+# Gc before per-example flake-check, which is the heaviest
 # disk-grower in the gate (each example materializes a full microvm
 # toplevel: kernel + initrd + systemd + qemu wrapper, ~150 G across
 # 5 examples).
 nl_phase_gc "post-w3-gates"
 nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 host-prepare gates"
 
+#  Runner-shape snapshot regression guards
+# (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind).
 nl_static_gate_begin "tests/runner-shape-snapshot.sh" "tests/runner-shape-snapshot.sh"
 if [ -x "$HERE/runner-shape-snapshot.sh" ]; then
   if bash "$HERE/runner-shape-snapshot.sh" >/dev/null 2>&1; then
@@ -1292,13 +1390,13 @@ fi
 nl_static_gate_end "tests/harness-ubuntu-eval.sh"
 
 # -----------------------------------------------------------------------------
-# W6 7b / W0a — per-example/template flake check. Each `examples/<name>/flake.nix`
+# 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`
 # pins `nixling.url = "path:../.."` so this runs the in-tree framework
 # without a network fetch. Eval-only (`--no-build --all-systems`); a
 # build-level gate already lives in the root flake's
-# `checks.<system>.*` (also W6 7b). `--no-write-lock-file` keeps the
+# `checks.<system>.*` (also 7b). `--no-write-lock-file` keeps the
 # gate read-only so validation never rewrites an example's pinned lock.
-# W0a adds templates/default/ to the same check surface. Skips gracefully
+# Adds templates/default/ to the same check surface. Skips gracefully
 # if examples/ or templates/default/ don't exist (some downstream consumers
 # may strip them).
 # -----------------------------------------------------------------------------
@@ -1326,7 +1424,7 @@ fi
 nl_static_parallel_wait_all
 if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
   if [ -n "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
-    # W3 carve-out: explicit operator opt-in to skip the with-entra-id
+    # Carve-out: explicit operator opt-in to skip the with-entra-id
     # per-example check when its pinned vicondoa/nixos-entra-id input
     # fails the cargo fetch with a crates.io 403 against the
     # `libhimmelblau` / `kanidm-hsm-crypto` versions in its lockfile.
@@ -1337,7 +1435,7 @@ if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
     if (cd "$ROOT/examples/with-entra-id" && nix flake check --no-build --all-systems --no-write-lock-file) >/dev/null 2>&1; then
       ok "example flake check: with-entra-id"
     else
-      # W3 H1: one in-band retry for the documented transient crates.io 403
+      # One in-band retry for the documented transient crates.io 403
       # on libhimmelblau-0.8.18 / kanidm-hsm-crypto-0.3.6 before failing
       # the gate. Set NL_SKIP_WITH_ENTRA_ID=1 to bypass after retries.
       log "  example flake check: with-entra-id  first attempt failed; retrying once (W3 carve-out)"
@@ -1381,7 +1479,7 @@ if [ -f "$ROOT/templates/default/flake.nix" ]; then
 }
 NIX
   (cd "$template_check_dir" && git init -q && git add flake.nix configuration.nix nixling-static-overrides.nix)
-  # W0fu1 test-3: run the template flake's own nixosConfigurations
+  # Run the template flake's own nixosConfigurations
   # wiring, not only the root eval-template check. The copied scratch
   # flake differs only by adding a test-only module that neutralizes
   # intentional TODO sentinels and by overriding nixling to this tree.
@@ -1395,7 +1493,7 @@ nl_static_gate_end "per-example/template flake check"
 log "Layer 1 examples/templates OK"
 log "Static checks OK"
 
-# W2fu3 disk-gate-end-gc: the gate realises significant nix store content
+# Disk-gate-end-gc: the gate realises significant nix store content
 # (per-example NixOS toplevels, manifest_v04 closures, smoke artifacts).
 # Each `nix shell`, `nix flake check`, and `nix build` registers an
 # auto-gcroot under /nix/var/nix/gcroots/auto/ so the realised paths
@@ -1405,7 +1503,7 @@ log "Static checks OK"
 # safe.
 #
 # Without this step, repeated static.sh runs accrete ~1 GiB/run and
-# fill the volume after a few iterations (observed at the W2fu3
+# fill the volume after a few iterations (observed at the
 # integration boundary today).
 #
 # Bypass with NL_POST_GATE_GC=0 if you're debugging a gate failure and
@@ -1423,7 +1521,7 @@ if [ "${NL_POST_GATE_GC:-1}" != "0" ] && command -v nix-store >/dev/null 2>&1; t
   fi
 fi
 
-# W2fu4 H6 — opt-in deep GC of OLD GENERATIONS, not just unreferenced paths.
+# Opt-in deep GC of OLD GENERATIONS, not just unreferenced paths.
 # `nix store gc` above only removes paths nothing references. Old NixOS
 # system generations under /nix/var/nix/profiles/system are auto-gcroots
 # so they pin their entire closure forever (today reclaimed 471 GiB by
@@ -1466,7 +1564,7 @@ if [ "${NL_POST_GATE_DEEP_GC:-0}" = "1" ] && command -v nix-collect-garbage >/de
   fi
 fi
 
-# W2fu4 H11 — stop the sccache server before we release the gate
+# Stop the sccache server before we release the gate
 # flock. Cargo spawns sccache as a long-running daemon on first
 # RUSTC_WRAPPER=sccache invocation. Sccache forks off the bash that
 # cargo ran, INHERITING fd 3 (the lock fd that flock-wrap passed

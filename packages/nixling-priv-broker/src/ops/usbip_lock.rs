@@ -1,4 +1,4 @@
-//! W13 (W6-fu) per-busid USBIP lock helper.
+//! Per-busid USBIP lock helper.
 //!
 //! Per `nixling_core::host::UsbipBusidLock`, every USBIP-capable VM
 //! claims its busid via a daemon-owned exclusivity lock at
@@ -21,7 +21,7 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl std::fmt::Display for UsbipLockError {
 impl std::error::Error for UsbipLockError {}
 
 /// Create the parent dir for a busid lock file.
-pub fn ensure_lock_root(parent: &Path) -> Result<(), UsbipLockError> {
+pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
     use rustix::fs::OFlags;
 
     let full_parent = if parent.is_absolute() {
@@ -166,7 +166,7 @@ pub fn ensure_lock_root(parent: &Path) -> Result<(), UsbipLockError> {
             detail: "path-safety-violation: lock root has no components".to_owned(),
         });
     }
-    Ok(())
+    Ok(current_fd)
 }
 
 /// Acquire a per-busid lock; refuses if already held.
@@ -180,14 +180,17 @@ pub fn acquire_lock(
         path: lock_path.to_path_buf(),
         detail: e.to_string(),
     })?;
-    if let Some(parent) = full_lock_path.parent() {
-        ensure_lock_root(parent)?;
-    }
-    let (parent_fd, lock_name) = parent_fd_and_name(&full_lock_path).map_err(|e| {
-        UsbipLockError::Io {
-            path: full_lock_path.clone(),
-            detail: e.to_string(),
-        }
+    let parent = full_lock_path.parent().ok_or_else(|| UsbipLockError::Io {
+        path: full_lock_path.clone(),
+        detail: format!(
+            "path-safety-violation: {} has no parent",
+            full_lock_path.display()
+        ),
+    })?;
+    let parent_fd = ensure_lock_root(parent)?;
+    let lock_name = lock_basename(&full_lock_path).map_err(|e| UsbipLockError::Io {
+        path: full_lock_path.clone(),
+        detail: e.to_string(),
     })?;
     match crate::sys::path_safe::create_file_at_safe(
         &parent_fd,
@@ -201,15 +204,12 @@ pub fn acquire_lock(
                 path: full_lock_path.clone(),
                 detail: e.to_string(),
             })?;
-            crate::sys::path_safe::fchown(
-                f.as_fd(),
-                Some(daemon_uid),
-                Some(daemon_gid),
-            )
-            .map_err(|e| UsbipLockError::Io {
-                path: full_lock_path.clone(),
-                detail: e.to_string(),
-            })?;
+            crate::sys::path_safe::fchown(f.as_fd(), Some(daemon_uid), Some(daemon_gid)).map_err(
+                |e| UsbipLockError::Io {
+                    path: full_lock_path.clone(),
+                    detail: e.to_string(),
+                },
+            )?;
             f.write_all(owner_vm.as_bytes())
                 .map_err(|e| UsbipLockError::Io {
                     path: full_lock_path.clone(),
@@ -226,7 +226,8 @@ pub fn acquire_lock(
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            let existing = read_owner(&full_lock_path).unwrap_or_else(|_| "<unreadable>".to_owned());
+            let existing =
+                read_owner(&full_lock_path).unwrap_or_else(|_| "<unreadable>".to_owned());
             Err(UsbipLockError::LockAlreadyHeld {
                 path: full_lock_path,
                 existing_owner: existing,
@@ -248,12 +249,11 @@ pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipL
         path: lock_path.to_path_buf(),
         detail: e.to_string(),
     })?;
-    let (parent_fd, lock_name) = parent_fd_and_name(&full_lock_path).map_err(|e| {
-        UsbipLockError::Io {
+    let (parent_fd, lock_name) =
+        parent_fd_and_name(&full_lock_path).map_err(|e| UsbipLockError::Io {
             path: full_lock_path.clone(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
     let observed = match read_owner_at(&parent_fd, &lock_name) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -271,16 +271,18 @@ pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipL
             observed,
         });
     }
-    crate::sys::path_safe::remove_path_safe(&parent_fd, &lock_name).or_else(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            Ok(())
-        } else {
-            Err(e)
-        }
-    }).map_err(|e| UsbipLockError::Io {
-        path: full_lock_path.clone(),
-        detail: e.to_string(),
-    })
+    crate::sys::path_safe::remove_path_safe(&parent_fd, &lock_name)
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .map_err(|e| UsbipLockError::Io {
+            path: full_lock_path.clone(),
+            detail: e.to_string(),
+        })
 }
 
 fn resolve_lock_path(path: &Path) -> std::io::Result<PathBuf> {
@@ -298,14 +300,73 @@ fn parent_fd_and_name(path: &Path) -> std::io::Result<(std::os::fd::OwnedFd, Str
             format!("path-safety-violation: {} has no parent", path.display()),
         )
     })?;
-    let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-        std::io::Error::new(
+    let name = lock_basename(path)?;
+    let parent_fd = open_existing_lock_parent(parent)?;
+    Ok((parent_fd, name))
+}
+
+fn lock_basename(path: &Path) -> std::io::Result<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "path-safety-violation: {} has no valid basename",
+                    path.display()
+                ),
+            )
+        })
+        .map(ToOwned::to_owned)
+}
+
+fn open_existing_lock_parent(parent: &Path) -> std::io::Result<OwnedFd> {
+    let full_parent = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(parent)
+    };
+    let mut current_fd = crate::sys::path_safe::open_dir_path_safe(Path::new("/"))?;
+    let mut saw_component = false;
+    for component in full_parent.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => continue,
+            std::path::Component::ParentDir => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "path-safety-violation: lock root must not contain ..: {}",
+                        full_parent.display()
+                    ),
+                ));
+            }
+            std::path::Component::Normal(part) => {
+                saw_component = true;
+                let name = part.to_str().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "lock root component is not valid UTF-8: {}",
+                            full_parent.display()
+                        ),
+                    )
+                })?;
+                current_fd = crate::sys::path_safe::open_at(
+                    current_fd.as_fd(),
+                    Path::new(name),
+                    rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY,
+                )?;
+            }
+            std::path::Component::Prefix(_) => unreachable!("unix paths never contain prefixes"),
+        }
+    }
+    if !saw_component {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("path-safety-violation: {} has no valid basename", path.display()),
-        )
-    })?;
-    let parent_fd = crate::sys::path_safe::open_dir_path_safe(parent)?;
-    Ok((parent_fd, name.to_owned()))
+            "path-safety-violation: lock root has no components",
+        ));
+    }
+    Ok(current_fd)
 }
 
 fn read_owner_at(parent_fd: &std::os::fd::OwnedFd, lock_name: &str) -> std::io::Result<String> {

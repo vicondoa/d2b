@@ -1,5 +1,5 @@
-//! W12 integration: send_json_frame_with_fds delivers JSON body +
-//! SCM_RIGHTS attachment in a single seqpacket frame.
+//! Integration: send_json_frame_with_fds delivers JSON body + SCM_RIGHTS
+//! attachment in a single seqpacket frame.
 //!
 //! This exercises the new `protocol::send_json_frame_with_fds`
 //! helper that the broker's `handle_connection` uses to return the

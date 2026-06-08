@@ -30,9 +30,9 @@ is_known_non_layer1() {
       return 0
       ;;
     static-fast.sh)
-      # W3a-3 PR-loop sibling tier (Tier 2 fast). Runs the
+      # PR-loop sibling tier (Tier 2 fast). Runs the
       # Layer-1 fast subset on its own; not invoked from static.sh.
-      # See AGENTS.md "Build & validate" / docs/CHANGELOG W3a entry.
+      # See AGENTS.md "Build & validate" / docs/CHANGELOG entry.
       return 0
       ;;
   esac

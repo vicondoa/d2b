@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # tests/minijail-validator-virtiofsd.sh
 #
-# P1 per-role minijail validator for the Virtiofsd sidecar role.
+# Per-role minijail validator for the Virtiofsd sidecar role.
 #
 # Two layers:
 #
 #   Layer 1 (always):
 #     - Asserts the Virtiofsd minijail profile shape in
 #       nixos-modules/minijail-profiles.nix matches the documented
-#       ADR 0003 W3 startup carve-out exactly. Per the kernel-r2-4
-#       corrected per-role cap matrix, Virtiofsd's *steady-state*
+#       ADR 0003 startup carve-out exactly. Per the documented per-role
+#       cap matrix, Virtiofsd's *steady-state*
 #       capability set is empty, but the --sandbox=namespace setup
 #       carve-out requires the closed set:
 #
@@ -26,7 +26,7 @@
 #
 #   Layer 2 (NL_LIVE=1):
 #     - Positive: exec `virtiofsd --version` under minijail0 with the
-#       documented W3 carve-out profile; assert exit 0.
+#       documented carve-out profile; assert exit 0.
 #     - Negative: virtiofsd does NOT use ptrace under any role
 #       contract. Probe ptrace under the same profile; assert
 #       SIGSYS (exit status 159 = 128 + 31).
@@ -34,7 +34,7 @@
 # Both Layer-2 paths are required to write the per-role evidence
 # record at /var/lib/nixling/validated/p1-virtiofsd.json.
 #
-# Schema of the evidence record (per plan Phase 1):
+# Schema of the evidence record (per plan):
 #
 #   { "wave": "p1-virtiofsd",
 #     "timestamp": "<RFC-3339 UTC>",
@@ -61,6 +61,7 @@ EVIDENCE_PATH=${NL_VALIDATED_DIR:-/var/lib/nixling/validated}/p1-virtiofsd.json
 # needs are available inside the user NS automatically; ZERO host
 # caps are required. This is the principle-of-least-privilege
 # model. See ADR 0021 + docs/adr/0021-broker-user-namespace-for-virtiofsd.md
+# shellcheck disable=SC2034
 EXPECTED_CAPS=()
 
 EXPECTED_CARVE_OUT="ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS"
@@ -195,7 +196,7 @@ assert_installed_profiles() {
 # Layer 2: live execution under minijail0 (NL_LIVE=1)
 # ---------------------------------------------------------------------------
 
-# Build a minijail0 argv encoding the W3 startup carve-out cap mask
+# Build a minijail0 argv encoding the startup carve-out cap mask
 # plus the closed set of namespaces virtiofsd actually needs.
 # This matches the role contract — namespace mount + ipc, no net,
 # no new privs.
@@ -302,7 +303,7 @@ PY
 
   # NOTE: minijail0 -S <policy> would apply the actual seccomp BPF
   # blob if we had one materialized. The plan defers the per-role
-  # seccomp blob to W1; here we approximate by relying on the
+  # seccomp blob to; here we approximate by relying on the
   # capability-only profile to demonstrate Layer-2 mechanics. When
   # the w1-virtiofsd seccomp policy file is materialized, swap in
   # `mj+=( -S "$policy_path" )` here so the negative probe binds to

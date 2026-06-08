@@ -1,6 +1,6 @@
 # Tempo retention + sampling policy
 
-Status: canonical (P5 — `ph5-p5-tempo-budget`).
+Status: canonical.
 Audience: anyone changing the trace pipeline under
 [`nixos-modules/components/observability/`](../../nixos-modules/components/observability/)
 or sizing the obs VM's `/var/lib/tempo` disk budget.

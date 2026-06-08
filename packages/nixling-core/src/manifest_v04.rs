@@ -8,10 +8,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
-/// P2 daemon-only end-state: the single supported `_manifest.manifestVersion`.
+/// Daemon-only end-state: the single supported `_manifest.manifestVersion`.
 ///
-/// Bumped from `2` to `3` by `ph2-p2-manifestversion-bump` to mark the
-/// daemon-only break: per-VM systemd unit reference fields that became
+/// Bumped from `2` to `3` to mark the daemon-only break: per-VM systemd
+/// unit reference fields that became
 /// meaningless once supervisor-mode shipped are removed from the
 /// consumer-facing shape. There is no legacy compatibility window —
 /// the broker / daemon refuse to load a bundle whose `vms.json` does
@@ -231,12 +231,10 @@ fn manifest_parse_reason(message: &str) -> &'static str {
 mod tests {
     use super::ManifestV04;
 
-    // W3 prep (w2-rust-tests-golden-fragility-w3): embed the golden
-    // fixtures via `include_str!` so the rust-tests sandbox does not
-    // need to read outside its `src` set. See plan.md §"W3 pre-existing
-    // follow-up assignments".
-    // P2 manifestVersion bump (ph2-p2-manifestversion-bump): the
-    // historical `vms.json-91d69b0` fixture pins `manifestVersion = 2`
+    // Embed the golden fixtures via `include_str!` so the rust-tests
+    // sandbox does not need to read outside its `src` set.
+    // The historical `vms.json-91d69b0` fixture pins
+    // `manifestVersion = 2`
     // and is retained as the frozen v2 baseline for the vms-json
     // parity gate. The current v3 baseline lives alongside it.
     const BASELINE_VMS_JSON: &str = include_str!("../../../tests/golden/vms.json-p2-v3");
@@ -304,8 +302,8 @@ mod tests {
         assert!(error.message().contains("opaque reason: name-key-mismatch"));
     }
 
-    // P2 ph2-p2-manifestversion-bump regression: the daemon-only end
-    // state pins `_manifest.manifestVersion` to a single supported
+    // Regression: the daemon-only end state pins
+    // `_manifest.manifestVersion` to a single supported
     // integer. A bundle stamped with the previous (legacy) version is
     // rejected with `manifest-version-mismatch`, and the new version
     // must load cleanly.

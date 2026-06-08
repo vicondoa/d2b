@@ -106,8 +106,8 @@ in
 
     # NOTE: the matching virtiofs share into sys-obs-stack is
     # declared in `nixos-modules/host.nix`'s composedConfig pass
-    # (v1.1-final moved it out of store.nix to avoid module-system
-    # infinite recursion). The share lives inside the per-VM
+    # (v1.1 moved it out of store.nix to avoid module-system infinite
+    # recursion). The share lives inside the per-VM
     # `microvm.shares` list at
     # `config.nixling._computed.sys-obs-stack.config.microvm.shares`.
     # Adding the share from here would lose to the mkForce in

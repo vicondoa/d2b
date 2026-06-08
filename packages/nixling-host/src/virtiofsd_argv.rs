@@ -1,4 +1,4 @@
-//! W4-H2: virtiofsd argv generator.
+//! virtiofsd argv generator.
 //!
 //! Pure Rust function that emits one virtiofsd argv per
 //! `microvm.shares` entry. The W0b runner-shape audit shows that the
@@ -17,8 +17,8 @@
 //! ```
 //!
 //! …plus an opportunistic `--rlimit-nofile 1048576` only when the
-//! process is running as uid 0. The W4 daemon path does not run
-//! virtiofsd as root — the broker spawns each instance under a
+//! process is running as uid 0. The daemon path does not run virtiofsd
+//! as root — the broker spawns each instance under a
 //! per-VM virtiofsd uid/gid — so the rlimit clause is omitted by
 //! default; callers that genuinely need it (raised broker carve-out)
 //! can pass it through [`VirtiofsdArgvInput::extra_args`].
@@ -82,12 +82,12 @@ pub struct VirtiofsdArgvInput {
     /// Mount tag the guest references (matches the CH `--fs tag=`).
     /// Used only by [`exec_arg0`] / the share argv generator caller.
     pub share_tag: String,
-    /// `--socket-path` value. The W0b audit uses a runner-cwd-relative
-    /// filename (`<vm>-virtiofs-<tag>.sock`); the W4 daemon uses an
-    /// absolute path under `/run/nixling/vms/<vm>/`. Either shape is
+    /// `--socket-path` value. The audit uses a runner-cwd-relative
+    /// filename (`<vm>-virtiofs-<tag>.sock`); the daemon uses an absolute
+    /// path under `/run/nixling/vms/<vm>/`. Either shape is
     /// honoured — the generator emits the string verbatim.
     pub socket_path: String,
-    /// `--socket-group` owner. Audit fixture pins `kvm`; the W4
+    /// `--socket-group` owner. Audit fixture pins `kvm`; the
     /// daemon-owned broker may move this to a dedicated
     /// `nixling-virtiofs` group per the ADR 0003 minijail split.
     pub socket_group: String,
@@ -130,7 +130,7 @@ pub enum VirtiofsdArgvError {
     /// `socket_path` was empty.
     EmptySocketPath,
     /// `socket_group` was empty (CH refuses to connect to a UDS with
-    /// no group owner under the W3 ADR-0003 minijail).
+    /// no group owner under the ADR-0003 minijail).
     EmptySocketGroup,
     /// `shared_dir` was empty.
     EmptySharedDir,

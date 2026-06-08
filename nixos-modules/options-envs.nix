@@ -2,10 +2,9 @@
 # materialised by network.nix into two host bridges (`br-<env>-up`
 # point-to-point host↔net-VM, `br-<env>-lan` net-VM↔workload-VMs),
 # an auto-generated headless net VM (`sys-<env>-net`), NAT/firewall,
-# and a per-env `nixling-sys-<env>-usbipd-proxy` instance. Workload
+# and a per-env broker-spawned USBIP proxy. Workload
 # VMs join an env by setting `nixling.vms.<name>.env = "<env>"` and
-# `index = <N>`. Extracted from options.nix in Phase 2c
-# (split-options) for reviewability.
+# `index = <N>`. Extracted from options.nix for reviewability.
 { lib, ... }:
 
 {
@@ -15,7 +14,7 @@
       (`br-<name>-up` and `br-<name>-lan`), an auto-declared headless
       net VM (`sys-<name>-net`) that NATs and firewalls the LAN, a
       dnsmasq DHCP/DNS server on the LAN, and a
-      `nixling-sys-<name>-usbipd-proxy` service on the host bound to
+      broker-spawned USBIP proxy on the host bound to
       the uplink IP.
 
       Workload VMs reference an env via `nixling.vms.<vm>.env`.
@@ -46,7 +45,7 @@
           description = ''
             Point-to-point CIDR between the host and the net VM.
             Host takes `.1`, net VM takes `.2`. The per-env usbipd
-            proxy (`nixling-sys-<env>-usbipd-proxy`) binds to the
+            proxy (`sys-<env>-usbipd`/`proxy` runner) binds to the
             host's `.1` here. Must be a /30. RFC 5737 reserves
             192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 as
             documentation ranges; pick a /30 inside one of those if

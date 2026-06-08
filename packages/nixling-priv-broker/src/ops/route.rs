@@ -1,4 +1,4 @@
-//! `ApplyRoute` op (W3 s2).
+//! `ApplyRoute` op.
 //!
 //! Deterministic owner table over [`RouteIntent`]; the actual netlink
 //! mutations are delegated to a backend trait so the L1c canary
@@ -87,10 +87,9 @@ pub fn route_key(intent: &RouteIntent) -> String {
 /// `ApplyRoute` entry: re-runs the shared `nixling_host::routes`
 /// preflight before producing the route diff. The runtime calls this
 /// from the broker dispatcher for the `ApplyRoute` op and the
-/// pre-VM-start hook (W3 plan §"W3 route preflight" in host prepare
-/// AND pre-VM-start). Per finding networking-3 the preflight call is
-/// shared with [`nixling_host::routes::run_route_preflight_for_vm`]
-/// so neither path can skip the firewall coexistence predicate.
+/// pre-VM-start hook. The preflight call is shared with
+/// [`nixling_host::routes::run_route_preflight_for_vm`] so neither path
+/// can skip the firewall coexistence predicate.
 pub fn apply(
     request: &ApplyRouteRequest,
     preflight: &nixling_host::routes::RoutePreflightInput<'_>,
@@ -154,13 +153,13 @@ impl std::fmt::Display for ApplyWithPreflightError {
 
 impl std::error::Error for ApplyWithPreflightError {}
 
-/// W12 runtime entry-point for `ApplyRoute`.
+/// Runtime entry-point for `ApplyRoute`.
 ///
 /// Keep the live dispatcher anchored on `ops::route` so future route
 /// ownership/coexistence work can harden this surface without another
 /// runtime refactor. Today we preflight the current route set, refuse a
 /// conflicting override, then call the live handler with `replace` for
-/// owned intents and `add` for foreign ones. W14 host destroy sets
+/// owned intents and `add` for foreign ones. Host destroy sets
 /// `destroy=true`, which skips the add/replace preflight and translates
 /// directly to `ip route del`.
 pub fn apply_with_preflight(

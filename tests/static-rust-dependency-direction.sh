@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 invariant: the Rust workspace dependency graph flows in one
+# The Rust workspace dependency graph flows in one
 # direction. Binaries (`nixling`, `nixlingd`) and the privileged
 # broker (`nixling-priv-broker`, currently a sibling workspace)
 # may depend on `nixling-ipc` and `nixling-core`. `nixling-ipc`
@@ -48,7 +48,7 @@ internal_deps() {
 declare -A WANT
 WANT["nixling-core"]=""
 WANT["nixling-ipc"]="nixling-core"
-# W3 prep: nixling-host depends only on nixling-core + nixling-ipc.
+# Prep: nixling-host depends only on nixling-core + nixling-ipc.
 WANT["nixling-host"]="nixling-core nixling-ipc"
 WANT["xtask"]="nixling-core nixling-ipc nixling nixlingd"
 WANT["nixling"]="nixling-core nixling-ipc"

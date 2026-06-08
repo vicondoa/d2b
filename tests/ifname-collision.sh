@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/ifname-collision.sh — W3 s2 L1b/L1c canary.
+# tests/ifname-collision.sh— canary.
 #
 # Covers:
 #   - ifname-too-long (>= 16 bytes) — emitter refuses

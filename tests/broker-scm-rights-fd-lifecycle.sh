@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 s3 Layer-1 gate: SCM_RIGHTS fd plumbing stays leak-free under fakes.
+# SCM_RIGHTS fd plumbing stays leak-free under fakes.
 
 set -euo pipefail
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tracing-contract-lint.sh — P3 ph3-p3-tracing-contract.
+# tests/tracing-contract-lint.sh—
 #
 # Static enforcement of the bounded-cardinality tracing-attribute
 # allowlist documented in docs/reference/tracing-contract.md.
@@ -9,20 +9,13 @@
 # if any of the historically-forbidden high-cardinality / leakable
 # attribute shapes appear.
 #
-# Closes the static-gate piece of:
-#   - observability-5  (P3 deliverable, plan row ph3-p3-tracing-contract)
-#
-# Forbidden patterns enforced here track the regressions already
-# landed under:
-#   - P0fu3 H2  (commit b6f4ac9) — removed bundle=%path / path=%path
-#                                   from the broker bundle-load span.
-#   - P1fu1 observability-r1-1 (commit 58aaac8) — removed
-#                                   path=%keys_dir.display() from the
-#                                   ssh-host-key-preflight tracing site.
-#   - P2fu1 observability-r1-1 (commit 48f4838) — bounded drift_kind
-#                                   (typed enum) attribute introduced.
-#   - P2fu2 observability-r2   (commit cbd2169) — removed the residual
-#                                   path=%path.display() debug! call.
+# Forbidden patterns enforced here track previously fixed regressions:
+#   - bundle=%path / path=%path were removed from the broker
+#     bundle-load span.
+#   - path=%keys_dir.display() was removed from the
+#     ssh-host-key-preflight tracing site.
+#   - drift_kind is bounded by a typed enum attribute.
+#   - the residual path=%path.display() debug! call was removed.
 #
 # Allowlist tail (cited verbatim from the contract doc):
 #   vm, env, role, step_id, operation, outcome, error_kind, op_count,
@@ -94,7 +87,7 @@ scan() {
 
 violations=0
 
-# -- 1. Bundle path identifiers (P0fu3 H2) -----------------------------
+# -- 1. Bundle path identifiers -----------------------------
 # `bundle = %X.display()`, `bundle = ?X.display()`, `bundle = %X` where
 # X plausibly carries a Path/PathBuf — we match any `bundle = %`/`?`
 # attribute with `.display()` or `_path` / `bundle_path` aliases.
@@ -106,7 +99,7 @@ scan "bundle_path = %X or bundle_path = ?X (alias of forbidden bundle attr)" \
   'bundle_path[[:space:]]*=[[:space:]]*[%?]' \
   || violations=$((violations + 1))
 
-# -- 2. ssh-host-key keys_dir leak (P1fu1 observability-r1-1) ----------
+# -- 2. ssh-host-key keys_dir leak -------------------------
 scan "keys_dir = %X.display() (P1fu1 — surface via outcome + audit instead)" \
   'keys_dir[[:space:]]*=[[:space:]]*[%?][^,]*\.display\(\)' \
   || violations=$((violations + 1))
@@ -149,7 +142,7 @@ if [ -n "$nix_store_hits" ]; then
   fi
 fi
 
-# -- 4. Argv / command-line content (this gate, P3) --------------------
+# -- 4. Argv / command-line content --------------------
 scan "argv = ... in tracing (forbidden — operator-supplied content; route via typed envelope)" \
   '(^|[^_a-zA-Z])argv[[:space:]]*=[[:space:]]*[%?]' \
   || violations=$((violations + 1))
@@ -162,7 +155,7 @@ scan "command_line = ... in tracing (forbidden — see argv rule)" \
   '(^|[^_a-zA-Z])command_line[[:space:]]*=[[:space:]]*[%?]' \
   || violations=$((violations + 1))
 
-# -- 5. Secrets / credential leaks (this gate, P3) ---------------------
+# -- 5. Secrets / credential leaks ---------------------
 scan "secret = ... in tracing (forbidden — credential leak)" \
   '(^|[^_a-zA-Z])secret[[:space:]]*=[[:space:]]*[%?]' \
   || violations=$((violations + 1))
@@ -179,7 +172,7 @@ scan "private_key = ... in tracing (forbidden — credential leak)" \
   'private_key[[:space:]]*=[[:space:]]*[%?]' \
   || violations=$((violations + 1))
 
-# -- 6. Child-process output bytes (this gate, P3) ---------------------
+# -- 6. Child-process output bytes ---------------------
 # stdout / stderr as %X attrs would dump child output into the trace
 # backend; the typed-error envelope is the right channel for that.
 scan "stdout = %X in tracing (forbidden — child output; route via typed envelope)" \

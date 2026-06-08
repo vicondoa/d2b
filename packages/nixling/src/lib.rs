@@ -42,18 +42,18 @@ const DEFAULT_PUBLIC_SOCKET: &str = "/run/nixling/public.sock";
 const DEFAULT_BROKER_SOCKET: &str = "/run/nixling/priv.sock";
 const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/nixling/runtime/host-runtime.json";
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
-const RUNTIME_UNKNOWN: &str = "unknown (daemon-experimental, W4 not landed)";
+const RUNTIME_UNKNOWN: &str = "unknown";
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
-/// P3 ph3-p3-host-doctor-extended: location of daemon-persisted
-/// state files (`pidfd-table.json`, `kernel-module-report.json`,
-/// `autostart-report.json`) that `nixling host doctor --read-only`
-/// inspects. Mirrors `nixlingd::DEFAULT_DAEMON_STATE_DIR`.
+/// Location of daemon-persisted state files (`pidfd-table.json`,
+/// `kernel-module-report.json`, `autostart-report.json`) that
+/// `nixling host doctor --read-only` inspects. Mirrors
+/// `nixlingd::DEFAULT_DAEMON_STATE_DIR`.
 const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
-/// P3 ph3-p3-prometheus-otlp-shape: canonical Prometheus scrape URL
-/// the doctor probes for reachability. See
-/// `docs/reference/daemon-metrics.md` and the privileges.md row for
-/// `ph3-p3-ch-exporter-retire`.
+/// Canonical Prometheus scrape URL the doctor probes for reachability.
+/// See `docs/reference/daemon-metrics.md`.
 const DEFAULT_METRICS_URL: &str = "http://127.0.0.1:9101/metrics";
+/// Exit code for api-ready timeout in strict mode.
+pub const EXIT_API_TIMEOUT: i32 = 33;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
@@ -90,6 +90,21 @@ pub struct StatusInventoryOutputV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ApiReadyStatusV1 {
+    Simple(ApiReadySimple),
+    WithError { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApiReadySimple {
+    Yes,
+    Pending,
+    Timeout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusVmOutputV2 {
     pub name: String,
@@ -101,6 +116,9 @@ pub struct StatusVmOutputV2 {
     pub runtime: String,
     pub declared_roles: Vec<String>,
     pub readiness: Vec<String>,
+    /// api-ready state from the last vm start in split mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_ready: Option<ApiReadyStatusV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity: Option<RunnerParityOutputV2>,
 }
@@ -112,32 +130,15 @@ pub struct StatusServicesOutputV2 {
     pub microvm: String,
     pub virtiofsd: String,
     pub gpu: Option<String>,
+    pub video: Option<String>,
     pub snd: Option<String>,
     pub swtpm: Option<String>,
 }
 
-/// v1.1.1 StatusOutputV3 per-VM service-state map.
+/// Per-VM service-state map (V3) — broker-spawn-aware status output.
 ///
-/// Per ADR 0018 § "StatusOutputV3 schema bump" + the v1.1.1
-/// migration-guide rename map. The v1.0/v1.1 StatusServicesOutputV2
-/// shape (single `microvm`/`snd`/`gpu` slots) is replaced by
-/// broker-spawn-aware fields:
-///
-/// | v1.0/v1.1 (V2)  | v1.1.1 (V3)            |
-/// | --------------- | ---------------------- |
-/// | `nixling`       | (deleted)              |
-/// | `microvm`       | `hypervisor`           |
-/// | `virtiofsd`     | `virtiofsd_per_share`  |
-/// | `gpu`           | `gpu`                  |
-/// | `snd`           | `audio`                |
-/// | `swtpm`         | `swtpm`                |
-/// | (new)           | `otel_relay`           |
-/// | (new)           | `otel_host_bridge`     |
-/// | (new)           | `usbip_backend_per_env`|
-/// | (new)           | `usbip_proxy_per_env`  |
-///
-/// All fields are optional so V3-emitting consumers can omit a role
-/// when the VM doesn't enable it. The wire shape uses camelCase
+/// All fields are optional so emitters can omit a role when the VM
+/// doesn't enable it. The wire shape uses camelCase
 /// + `deny_unknown_fields` to keep schema-drift gates honest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -172,11 +173,10 @@ pub struct StatusServicesOutputV3 {
 }
 
 impl StatusServicesOutputV3 {
-    /// v1.1.1 conversion shim: takes a V2 record and projects it
-    /// into V3 by applying the documented rename map. Used during
-    /// the v1.1 → v1.1.1 wire transition so callers consuming the
-    /// old V2 shape can be migrated incrementally without breaking
-    /// the bundle-resolver / status-output contract.
+    /// Conversion shim: takes a V2 record and projects it into V3
+    /// by applying the documented rename map. Used so callers
+    /// consuming the legacy V2 shape can be migrated incrementally
+    /// without breaking the bundle-resolver / status-output contract.
     pub fn from_v2(v2: &StatusServicesOutputV2) -> Self {
         let mut virtiofsd_per_share = std::collections::BTreeMap::new();
         // V2 had a single `virtiofsd` slot; we expose it under the
@@ -188,6 +188,8 @@ impl StatusServicesOutputV3 {
             hypervisor: Some(v2.microvm.clone()),
             virtiofsd_per_share,
             gpu: v2.gpu.clone(),
+            // V3 has no dedicated video field yet; keep V2 authoritative
+            // until a negotiated schema revision adds one.
             audio: v2.snd.clone(),
             swtpm: v2.swtpm.clone(),
             otel_relay: None,
@@ -355,7 +357,10 @@ pub struct AuthDeniedSubcommandV2 {
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "nixling v1.0 daemon-native CLI — daemon-only end-state per ADR 0015. Lifecycle verbs (vm start/stop/restart/list) dispatch exclusively to nixlingd + nixling-priv-broker. Compatibility verbs (console, audio) return a typed exit-78 envelope in v1.0 because their daemon-native surfaces are queued for v1.1+; the bash runtime that historically backed them was retired in P6. Daemon-first verbs (switch, gc, migrate, keys list/show, etc.) dispatch through the broker — see docs/reference/default-switch-and-deprecation.md for the per-verb matrix."
+    about = "nixling — opinionated NixOS desktop microVM CLI.",
+    long_about = "nixling — daemon-native CLI for nixling microVMs.\n\nAll mutating verbs dispatch through nixlingd and nixling-priv-broker. \
+        Read-only verbs (list, status, audit, host check) query the daemon or \
+        the static manifest. See `nixling <COMMAND> --help` for per-verb usage."
 )]
 struct NativeCli {
     #[command(subcommand)]
@@ -364,72 +369,52 @@ struct NativeCli {
 
 #[derive(Debug, Subcommand)]
 enum NativeCommand {
+    /// List declared VMs from the static manifest.
     List(ListArgs),
+    /// Show per-VM runtime status plus bridge health.
     Status(StatusArgs),
+    /// USBIP attach / detach / probe.
     Usb(UsbArgs),
-    /// Foreground serial console bridge for headless VMs. P7fu2:
-    /// the bash runtime that backed this verb pre-v1.0 was retired
-    /// in P6; the daemon-native console surface is queued for v1.1+.
-    /// Calling this in v1.0 surfaces a typed exit-78 envelope per
-    /// ADR 0015.
+    /// Foreground serial console bridge for headless VMs (not yet implemented).
     Console(ConsoleArgs),
-    /// Per-VM audio grant bridge. P7fu2: the bash runtime that
-    /// backed this verb pre-v1.0 was retired in P6; the
-    /// daemon-native audio surface is queued for v1.1+. Calling
-    /// this in v1.0 surfaces a typed exit-78 envelope per ADR 0015.
+    /// Per-VM audio grant bridge (not yet implemented).
     Audio(AudioArgs),
+    /// Tail the broker audit log.
     Audit(AuditArgs),
+    /// Host-side preflight, install, doctor, and reconcile verbs.
     Host(HostArgs),
+    /// Authorisation introspection.
     Auth(AuthArgs),
-    /// W4-H7 / P4: per-VM lifecycle verbs routed through `nixlingd`.
-    /// `--apply` is daemon-only; failure modes surface as typed
-    /// envelopes. `--dry-run` returns the DAG the supervisor would
-    /// drive.
+    /// Per-VM lifecycle verbs (start / stop / restart / list / status / konsole).
     Vm(VmArgs),
-    /// P4 alias for `vm start <vm>`. Daemon-native; no bash fallback.
+    /// Alias for `vm start <vm>`.
     Up(VmStartArgs),
-    /// P4 alias for `vm stop <vm>`. Daemon-native; no bash fallback.
+    /// Alias for `vm stop <vm>`.
     Down(VmStopArgs),
-    /// P4 alias for `vm restart <vm>`. Daemon-native; no bash fallback.
+    /// Alias for `vm restart <vm>`.
     Restart(VmRestartArgs),
-    /// W7-H1: `nixling build <vm>` — non-destructive eval+build of
-    /// the per-VM toplevel.
+    /// Non-destructive eval + build of the per-VM toplevel.
     Build(BuildArgs),
-    /// W7-H2: `nixling generations <vm>` — lists current/booted/N.
+    /// List current / booted / numbered generations for a VM.
     Generations(GenerationsArgs),
-    /// W7-H3: `nixling switch <vm> [--apply|--dry-run]` — atomic
-    /// activation. `--apply` dispatches through `nixlingd` → broker
-    /// `RunActivation` (v1.0 daemon-only per ADR 0015); `--dry-run`
-    /// returns the planned activation.
+    /// Atomically activate a new per-VM closure.
     Switch(SwitchArgs),
-    /// W7-H4: `nixling boot <vm>` — stage for next boot only.
+    /// Stage a per-VM closure for the next boot only.
     Boot(BootArgs),
-    /// W7-H5: `nixling test <vm>` — activate-but-rollback-on-reboot.
+    /// Activate a per-VM closure with rollback on reboot.
     Test(TestArgs),
-    /// W7-H6: `nixling rollback <vm>` — back to the previous
-    /// generation.
+    /// Roll a VM back to its previous generation.
     Rollback(RollbackArgs),
-    /// W7-H7: `nixling gc [--apply|--dry-run]` — store cleanup.
+    /// Garbage-collect the per-VM /nix/store hardlink farm.
     Gc(GcArgs),
-    /// W8: managed-key + trust lifecycle verbs (list / show /
-    /// rotate). `--apply` dispatches through `nixlingd` → broker
-    /// `RunKeysRotate` (v1.0 daemon-only per ADR 0015).
+    /// Managed-key lifecycle (list / show / rotate).
     Keys(KeysArgs),
-    /// W8: `nixling trust <vm>` (top-level, NOT under `keys`).
-    /// Trust a host key on first use (TOFU) through the daemon /
-    /// broker `RunHostKeyTrust` op. Bash runtime retired in P6.
+    /// Trust a VM's host key on first use (TOFU).
     Trust(KeysTrustArgs),
-    /// W8: `nixling rotate-known-host <vm>` (top-level, NOT under
-    /// `keys`). Rotate the consumer's recorded known-host entry
-    /// via the daemon / broker `RunRotateKnownHost` op. Bash
-    /// runtime retired in P6.
+    /// Rotate the consumer's recorded known-host entry for a VM.
     #[command(name = "rotate-known-host")]
     RotateKnownHost(KeysRotateKnownHostArgs),
-    /// W9: `nixling migrate` — analyze the current host config and
-    /// emit a migration plan to the daemon-experimental path.
-    /// `--apply` dispatches the broker `RunMigrate` op (daemon-only
-    /// since P6; the historical bash dispatch path was retired in
-    /// the same wave).
+    /// Analyse the host config and emit a migration plan.
     Migrate(MigrateArgs),
 }
 
@@ -524,47 +509,33 @@ struct HostArgs {
 
 #[derive(Debug, Subcommand)]
 enum HostCommand {
+    /// Read-only preflight: inventories host posture without mutation.
     Check(HostCheckArgs),
-    /// W3fu1 H1 (product-1, software-1): native `host prepare`
-    /// verb. `--apply` is mandatory for mutation; without it the
-    /// command refuses with `--apply-or-dry-run-required` exit 78.
+    /// Reconcile host-side state (bridges, nftables, sysctls). --apply mutates.
     Prepare(HostPrepareArgs),
-    /// W3fu1 H1: native `host destroy` verb. Same mandatory-flag
-    /// contract as `prepare`.
+    /// Tear down host-side state owned by nixling. --apply mutates.
     Destroy(HostDestroyArgs),
-    /// W3fu1 H1: native `host doctor` verb. `--read-only` is
-    /// mandatory.
+    /// Read-only deep diagnostics for the daemon + broker state.
     Doctor(HostDoctorArgs),
-    /// W15 (software-1, product-1): native `host install` routes
-    /// `--apply` through the daemon → broker `RunHostInstall` path.
+    /// Install nixlingd + broker units onto the host. --apply mutates.
     Install(HostInstallArgs),
-    /// P3 ph3-p3-net-route-degraded-mode: SOLE mutating recovery
-    /// verb after the daemon-side net-route preflight has engaged
-    /// operator-only mode. Re-runs the broker-side net slice of
-    /// `host prepare` (nftables host scope + per-env routes +
-    /// per-env ipv6 sysctls) and clears the persistent
-    /// consecutive-failure counter on success.
+    /// Recover host network state after the daemon engaged operator-only mode.
     Reconcile(HostReconcileArgs),
-    /// P5 ph5-p5-host-validate-verb: composite preflight that
-    /// inventories per-wave Layer-2 validators and (with `--apply`)
-    /// writes the canonical W18 evidence records consumed by
-    /// `nixos-modules/options-daemon.nix:validationEvidencePresent`.
+    /// Run the host-side validator suite and write evidence records.
     Validate(HostValidateArgs),
 }
 
 #[derive(Debug, Args)]
 struct HostValidateArgs {
-    /// Plan: report which W18 readiness waves WOULD be attested.
+    /// Plan: report which readiness validators WOULD be attested.
     /// No evidence is written.
     #[arg(long, conflicts_with = "apply")]
     dry_run: bool,
-    /// Apply: write the canonical
-    /// `/var/lib/nixling/validated/<wave>.json` evidence record for
+    /// Apply: write `/var/lib/nixling/validated/<wave>.json` for
     /// every wave whose declared validators are present on disk.
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
-    /// Restrict to a single wave (e.g. `--wave p1`). Other waves
-    /// are reported as `skipped`.
+    /// Restrict to a single wave. Other waves are reported as `skipped`.
     #[arg(long)]
     wave: Option<String>,
     /// Override the per-wave operator signature. When unset, the
@@ -572,8 +543,7 @@ struct HostValidateArgs {
     /// `hostname|wave|scripts_dir|timestamp`.
     #[arg(long, value_name = "SIGNATURE")]
     operator_signature: Option<String>,
-    /// Override the evidence directory. Default:
-    /// `/var/lib/nixling/validated` (the W18 gate path).
+    /// Override the evidence directory. Default: `/var/lib/nixling/validated`.
     #[arg(long, value_name = "PATH")]
     evidence_dir: Option<PathBuf>,
     /// Override the scripts directory. Default: best-effort
@@ -626,8 +596,7 @@ struct HostDestroyArgs {
 
 #[derive(Debug, Args)]
 struct HostDoctorArgs {
-    /// Mandatory: the W3 doctor verb is read-only. Mutation forms
-    /// are W4 deliverables.
+    /// Mandatory: doctor is read-only. Mutating forms are separate verbs.
     #[arg(long)]
     read_only: bool,
     #[arg(long, conflicts_with = "human")]
@@ -638,20 +607,19 @@ struct HostDoctorArgs {
 
 #[derive(Debug, Args)]
 struct HostInstallArgs {
-    /// W9: `--dry-run` reports the planned install steps.
+    /// Report the planned install steps without mutating.
     #[arg(long, conflicts_with_all = ["apply", "enable", "start", "no_start"])]
     dry_run: bool,
-    /// W15: `--apply` performs the install through the
-    /// daemon → broker `RunHostInstall` path.
+    /// Perform the install through the daemon → broker `RunHostInstall` path.
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
-    /// W9: After `--apply`, enable nixlingd.service via systemctl.
+    /// After `--apply`, enable nixlingd.service via systemctl.
     #[arg(long, conflicts_with = "dry_run", requires = "apply")]
     enable: bool,
-    /// W9: After `--apply --enable`, start nixlingd.service.
+    /// After `--apply --enable`, start nixlingd.service.
     #[arg(long, conflicts_with_all = ["dry_run", "no_start"], requires = "apply")]
     start: bool,
-    /// W9: Explicitly do NOT start nixlingd.service post-install.
+    /// Explicitly do NOT start nixlingd.service post-install.
     #[arg(long, conflicts_with_all = ["dry_run", "start"], requires = "apply")]
     no_start: bool,
     #[arg(long, conflicts_with = "human")]
@@ -662,10 +630,9 @@ struct HostInstallArgs {
 
 #[derive(Debug, Args)]
 struct HostReconcileArgs {
-    /// Required for P3: re-run the network slice of `host prepare`
-    /// and clear the daemon's net-route preflight counter. Today
-    /// this is the only available scope; future P-phases may add
-    /// other scopes (e.g. `--ownership`).
+    /// Re-run the network slice of `host prepare` and clear the
+    /// daemon's net-route preflight counter. Currently the only
+    /// available scope.
     #[arg(long)]
     network: bool,
     /// Plan the reconcile without mutating host state.
@@ -703,13 +670,14 @@ enum VmCommand {
     /// Daemon-side runtime view (different from `nixling list`, which
     /// is the static manifest view).
     List(VmListArgs),
-    /// v1.1.1fu14 C1 + v1.1.2fu18: open an SSH session to the
-    /// VM in a host terminal. Resolves the per-VM SSH key from
-    /// the bundle's `managed_keys.effective_key_path(<vm>)`
-    /// (honors `nixling.site.keysDir` + per-VM overrides; legacy
-    /// `/var/lib/nixling/keys/<vm>_ed25519` is fallback) and the
-    /// IP from the manifest's `static_ip`. Default terminal:
-    /// konsole.
+    /// Daemon-side readiness state for a VM (api-ready phase).
+    Status(VmStatusArgs),
+    /// Open an SSH session to the VM in a host terminal. Resolves
+    /// the per-VM SSH key from the bundle's
+    /// `managed_keys.effective_key_path(<vm>)` (honors
+    /// `nixling.site.keysDir` + per-VM overrides; legacy
+    /// `/var/lib/nixling/keys/<vm>_ed25519` is the fallback) and the
+    /// IP from the manifest's `static_ip`. Default terminal: konsole.
     Konsole(VmKonsoleArgs),
 }
 
@@ -723,6 +691,10 @@ struct VmStartArgs {
     /// Apply the DAG (drives the supervisor).
     #[arg(long, conflicts_with = "dry_run")]
     apply: bool,
+    /// Exit 0 on process-alive success without waiting for api-ready.
+    /// Default behavior is --strict (wait for both process-alive and api-ready).
+    #[arg(long, requires = "apply")]
+    no_wait_api: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -763,12 +735,20 @@ struct VmListArgs {
     human: bool,
 }
 
-/// v1.1.1fu14 C1: `nixling vm konsole <vm>` — open an SSH session to
-/// the VM in a host terminal. Resolves the per-VM SSH key from
-/// v1.1.1fu14 + v1.1.2fu18 product-panel must-fix wording.
-/// Spawn a terminal emulator (default `konsole`, overridable
-/// via `--terminal`) hosting an SSH session into the named VM.
-/// The SSH key is resolved from the bundle's
+#[derive(Debug, Args)]
+struct VmStatusArgs {
+    /// VM name.
+    vm: String,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+/// `nixling vm konsole <vm>` — open an SSH session to the VM in a
+/// host terminal. Spawn a terminal emulator (default `konsole`,
+/// overridable via `--terminal`) hosting an SSH session into the
+/// named VM. The SSH key is resolved from the bundle's
 /// `managed_keys.effective_key_path()` (which honors
 /// `nixling.site.keysDir` + per-VM overrides); the legacy
 /// `/var/lib/nixling/keys/<vm>_ed25519` is only the fallback when
@@ -810,7 +790,7 @@ struct VmKonsoleArgs {
     human: bool,
 }
 
-// ---- W7 store-lifecycle verbs ----
+// ---- store-lifecycle verbs ----
 
 #[derive(Debug, Args)]
 struct BuildArgs {
@@ -894,7 +874,7 @@ struct GcArgs {
     human: bool,
 }
 
-// ---- W8 keys + trust verbs ----
+// ---- keys + trust verbs ----
 
 #[derive(Debug, Args)]
 struct KeysArgs {
@@ -968,7 +948,7 @@ struct KeysTrustArgs {
     human: bool,
 }
 
-// ---- W9 migrate verb ----
+// ---- migrate verb ----
 
 #[derive(Debug, Args)]
 struct MigrateArgs {
@@ -1079,13 +1059,12 @@ struct Context {
     host_runtime_path: PathBuf,
     system_state_fixture: Option<SystemStateFixture>,
     auth_status_fixture: Option<AuthStatusFixture>,
-    /// P3 ph3-p3-host-doctor-extended: daemon-persisted state dir
-    /// (pidfd-table.json, kernel-module-report.json,
-    /// autostart-report.json). Override via `NIXLING_DAEMON_STATE_DIR`.
+    /// Daemon-persisted state dir (pidfd-table.json,
+    /// kernel-module-report.json, autostart-report.json).
+    /// Override via `NIXLING_DAEMON_STATE_DIR`.
     daemon_state_dir: PathBuf,
-    /// P3 ph3-p3-host-doctor-extended: Prometheus scrape URL the
-    /// doctor probes for reachability. Override via
-    /// `NIXLING_METRICS_URL`.
+    /// Prometheus scrape URL the doctor probes for reachability.
+    /// Override via `NIXLING_METRICS_URL`.
     metrics_url: String,
 }
 
@@ -1116,8 +1095,15 @@ impl Context {
     }
 
     fn load_bundle_context(&self) -> Result<Option<BundleContext>, CliFailure> {
-        if !self.bundle_path.exists() {
-            return Ok(None);
+        match self.bundle_path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(err) => {
+                return Err(CliFailure::new(
+                    1,
+                    format!("failed to inspect {}: {err}", self.bundle_path.display()),
+                ));
+            }
         }
         let bundle: Bundle = read_json_file(&self.bundle_path).map_err(|err| {
             CliFailure::new(
@@ -1201,7 +1187,6 @@ struct ManifestVm {
     graphics: bool,
     tpm: bool,
     audio: bool,
-    audio_service: String,
     usbip_yubikey: bool,
     static_ip: Option<String>,
     is_net_vm: bool,
@@ -1582,6 +1567,7 @@ fn dispatch(
             VmCommand::Stop(args) => cmd_vm_stop(context, args),
             VmCommand::Restart(args) => cmd_vm_restart(context, args),
             VmCommand::List(args) => cmd_vm_list(context, args),
+            VmCommand::Status(args) => cmd_vm_status(context, args),
             VmCommand::Konsole(args) => cmd_vm_konsole(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
@@ -1617,12 +1603,13 @@ fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
             .map(|vm| {
                 let current = current_symlink(context, vm);
                 let booted = booted_symlink(context, vm);
-                let pending_restart = is_pending_restart(
-                    vm,
-                    &vm_service_states(context, vm),
-                    current.as_deref(),
-                    booted.as_deref(),
-                );
+                let process_vm = bundle
+                    .as_ref()
+                    .and_then(|bundle| bundle.processes.as_ref())
+                    .and_then(|processes| processes.vms.iter().find(|entry| entry.vm == vm.name));
+                let services = vm_service_states(context, vm, process_vm);
+                let pending_restart =
+                    is_pending_restart(vm, &services, current.as_deref(), booted.as_deref());
                 ListItemOutputV2 {
                     name: vm.name.clone(),
                     env: vm.env.clone(),
@@ -1630,7 +1617,7 @@ fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
                     tpm: vm.tpm,
                     usbip: vm.usbip_yubikey,
                     static_ip: vm.static_ip.clone(),
-                    status: list_status_label(vm, context, pending_restart),
+                    status: list_status_label(vm, &services, pending_restart),
                     is_net_vm: vm.is_net_vm,
                     runner_parity_ok: bundle
                         .as_ref()
@@ -1663,7 +1650,7 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
         let output = StatusBridgeCheckOutputV2 {
             mode: "check-bridges".to_owned(),
             status: "not-yet-implemented".to_owned(),
-            message: "bridge reconciliation is deferred to W3; use `nixling host check --read-only` for advisory bridge-related probes".to_owned(),
+            message: "bridge reconciliation is not yet wired; use `nixling host check --read-only` for advisory bridge-related probes".to_owned(),
             runtime: RUNTIME_UNKNOWN.to_owned(),
         };
         if args.json {
@@ -1820,10 +1807,9 @@ fn map_host_check_severity(severity: host_check::HostCheckSeverity) -> HostCheck
     }
 }
 
-/// W3fu1 H1 (product-1, software-1): standard JSON error envelope
-/// per plan.md §"CLI surface and UX". Every native host-verb
-/// refusal emits this shape on stdout (JSON mode) or as a
-/// human-readable summary on stderr (default mode).
+/// Standard JSON error envelope. Every native host-verb refusal
+/// emits this shape on stdout (JSON mode) or as a human-readable
+/// summary on stderr (default mode).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HostErrorEnvelope {
@@ -1879,41 +1865,39 @@ fn emit_host_error(env: &HostErrorEnvelope, json: bool) -> Result<i32, CliFailur
     Ok(env.exit_code)
 }
 
-/// v1.1-P1: typed `daemon-down` envelope (exit 1) for verbs whose
-/// daemon-backed path cannot be reached. Per ADR 0017, the Rust CLI
-/// never executes bash; verbs that previously degraded into
-/// `exec_legacy_passthrough` now surface this envelope unconditionally.
+/// Typed `daemon-down` envelope (exit 1) for verbs whose
+/// daemon-backed path cannot be reached. The Rust CLI never executes
+/// bash; verbs surface this envelope when the daemon is unreachable.
 fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
         &format!("nixling {verb} requires nixlingd"),
         "daemon-down",
         1,
         "Daemon connectivity at /run/nixling/public.sock.",
-        "nixlingd is unreachable; v1.1 retired the bash fallback path per ADR 0017 — the daemon is the only operator surface.",
+        "nixlingd is unreachable; the daemon is the only operator surface for mutating verbs.",
         "Start nixlingd (systemctl start nixlingd nixling-priv-broker.socket) and re-run the same command. See docs/how-to/migrate-nixling-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
         "docs/reference/error-codes.md#daemon-down",
     )
 }
 
-/// v1.1-P1: typed `not-yet-implemented` envelope (exit 78) for verbs
-/// whose daemon-native handler has not landed yet. Per ADR 0017, no
-/// bash fallback ever satisfies these — operators receive the typed
-/// envelope and the migration-guide cross-link.
+/// Typed `not-yet-implemented` envelope (exit 78) for verbs whose
+/// daemon-native handler has not landed yet. No bash fallback ever
+/// satisfies these — operators receive the typed envelope and the
+/// migration-guide cross-link.
 fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
-        &format!("nixling {verb} has no daemon-native handler in v1.1"),
+        &format!("nixling {verb} has no daemon-native handler yet"),
         "not-yet-implemented",
         78,
-        &format!("Native daemon dispatch for `nixling {verb}` (post-v1.1 surface per ADR 0017)"),
-        "The daemon-native handler is scheduled for post-v1.1; v1.1 itself only delivers the typed envelope contract (no bash fallback). See docs/reference/error-codes.md#not-yet-implemented for the rendering convention.",
-        "Track the post-v1.1 surface schedule in CHANGELOG.md \"Unreleased\" / ADR 0017 § Negative consequences; the typed envelope is the only operator path until the native handler ships.",
+        &format!("Native daemon dispatch for `nixling {verb}`"),
+        "The daemon-native handler has not landed yet; the typed envelope contract is the only operator path until the native handler ships.",
+        "Track the surface schedule in CHANGELOG.md \"Unreleased\"; the typed envelope is the only operator path until the native handler ships.",
         "docs/reference/error-codes.md#not-yet-implemented",
     )
 }
 
 /// Bundle-derived deployment shape used by the `host prepare` /
-/// `host destroy` per-tier routing logic. Matches plan.md
-/// §"W3 daemon-vs-legacy migration boundary" Tier-0 sub-cases.
+/// `host destroy` per-tier routing logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeploymentShape {
     /// Every VM uses `supervisor = "systemd"` (Tier 0 all-legacy).
@@ -1945,8 +1929,9 @@ fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFail
     let Some(_bundle) = bundle else {
         return Ok(DeploymentShape::Tier0AllLegacy);
     };
-    // Bundle inspection of `supervisor` is W4+; for W3 fall back
-    // to all-daemon as documented in the per-tier routing table.
+    // Bundle inspection of `supervisor` is available in newer bundles;
+    // for older bundles fall back to all-daemon as documented in the
+    // per-tier routing table.
     Ok(DeploymentShape::AllDaemon)
 }
 
@@ -1980,9 +1965,9 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
             args.json,
         ),
         (_, true) => {
-            // W3 broker dispatch is staged in the privileged broker
-            // but the daemon path that wires the typed bundle
-            // intents through `nixlingd` is not yet shipping in
+            // Broker dispatch is staged in the privileged broker, but
+            // the daemon path that wires the typed bundle intents through
+            // `nixlingd` is not yet shipping in
             // bootstrap mode. Surface the same pending-impl envelope
             // the broker would emit so the human / JSON contract
             // stays stable.
@@ -1992,7 +1977,7 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                     "daemon-down",
                     1,
                     "Daemon connectivity at /run/nixling/public.sock and broker dispatch readiness.",
-                    "nixlingd is reachable but the W3 host-prepare API surface is still gated behind nixling.daemonExperimental.enable; the integrator wires it on once H2/H3 ship the typed intent emitters.",
+                    "nixlingd is reachable but the host-prepare API surface is still gated behind nixling.daemonExperimental.enable; the integrator wires it on once the typed intent emitters ship.",
                     "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                     "docs/reference/error-codes.md#daemon-down",
                 ),
@@ -2013,7 +1998,7 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                     DeploymentShape::AllDaemon => "all-daemon",
                 },
                 "planned": [],
-                "notes": "W3 host-prepare dry-run reports the planned reconcile without mutation; --apply mutates host state.",
+                "notes": "host-prepare dry-run reports the planned reconcile without mutation; --apply mutates host state.",
             });
             if args.json {
                 let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
@@ -2041,7 +2026,7 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 78,
                 "Every VM declares supervisor = \"systemd\"; host destroy is only valid when daemon-owned VMs exist.",
                 "tier-0-all-legacy",
-                "Migrate at least one VM to supervisor = \"nixlingd\". The historical `--legacy` bash-destroy escape hatch was retired in P6 (per ADR 0015).",
+                "Migrate at least one VM to supervisor = \"nixlingd\". The historical `--legacy` bash-destroy escape hatch was retired in v1.0 (per ADR 0015).",
                 "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
             ),
             args.json,
@@ -2054,7 +2039,7 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 "daemon-down",
                 1,
                 "Daemon connectivity and broker destroy dispatch readiness.",
-                "nixlingd is reachable but the W3 host-destroy API surface is still gated behind the typed-intent broker dispatch.",
+                "nixlingd is reachable but the host-destroy API surface is still gated behind the typed-intent broker dispatch.",
                 "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                 "docs/reference/error-codes.md#daemon-down",
             ),
@@ -2093,7 +2078,7 @@ fn cmd_host_doctor(context: &Context, args: &HostDoctorArgs) -> Result<i32, CliF
                 78,
                 "host doctor invocation flags.",
                 "--read-only flag missing",
-                "Re-run as `nixling host doctor --read-only`. The W3 doctor verb is read-only; mutation forms are W4 deliverables.",
+                "Re-run as `nixling host doctor --read-only`. The doctor verb is read-only; mutation forms are future deliverables.",
                 "docs/reference/error-codes.md#--read-only-required",
             ),
             args.json,
@@ -2148,11 +2133,11 @@ fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32,
                 host_validate::WAVE_CATALOG.iter().map(|w| w.wave).collect();
             return emit_host_error(
                 &host_error_envelope(
-                    "host validate --wave value is not a known W18 readiness wave",
+                    "host validate --wave value is not a known readiness wave",
                     "unknown-wave",
                     78,
                     "host validate --wave argument.",
-                    &format!("--wave {only} is not in the W18 readiness catalog"),
+                    &format!("--wave {only} is not in the readiness-wave catalog"),
                     &format!(
                         "Re-run with one of: {}. The catalog mirrors readinessWaveSpecs in nixos-modules/options-daemon.nix.",
                         known_list.join(", ")
@@ -2185,9 +2170,9 @@ fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32,
 fn cmd_host_install(
     context: &Context,
     args: &HostInstallArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    // W9-H1: host install --dry-run/--apply/--enable/--start/--no-start
+    // host install --dry-run/--apply/--enable/--start/--no-start
     // skeleton. --dry-run returns the planned 5-step install:
     // (1) place units, (2) write daemon-config.json, (3) bind sockets,
     // (4) optionally enable + start nixlingd.service, (5) emit smoke.
@@ -2226,11 +2211,11 @@ fn cmd_host_install(
         "planned_steps": [
             { "step": 1, "what": "place systemd units at /etc/systemd/system/nixlingd.service + nixling-priv-broker.socket" },
             { "step": 2, "what": "write daemon-config.json to /etc/nixling/daemon-config.json with paths matching the daemon's compiled-in defaults" },
-            { "step": 3, "what": "bind /run/nixling/public.sock + /run/nixling/priv.sock with the W3 socket ACLs (launcher / admin groups)" },
+            { "step": 3, "what": "bind /run/nixling/public.sock + /run/nixling/priv.sock with socket ACLs (launcher / admin groups)" },
             { "step": 4, "what": if args.enable && args.start { "systemctl enable --now nixlingd.service" } else if args.enable { "systemctl enable nixlingd.service" } else if args.no_start { "do NOT enable; operator starts manually" } else { "neither --enable nor --start specified: leave service inactive" } },
             { "step": 5, "what": "smoke: nixling auth status against /run/nixling/public.sock" },
         ],
-        "notes": "W15: dry-run preview retained; --apply routes through the daemon → broker RunHostInstall path.",
+        "notes": "dry-run preview; --apply routes through the daemon → broker RunHostInstall path.",
     });
     if args.json {
         let mut rendered = serde_json::to_string_pretty(&summary)
@@ -2248,10 +2233,10 @@ fn cmd_host_install(
 fn cmd_host_reconcile(
     context: &Context,
     args: &HostReconcileArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    // P3 ph3-p3-net-route-degraded-mode: SOLE mutating recovery
-    // verb for the daemon's net-route preflight degraded mode.
+    // SOLE mutating recovery verb for the daemon's net-route preflight
+    // degraded mode.
     // Mandatory flag pair (--dry-run XOR --apply) matches the rest
     // of the mutating verbs. `--network` is required because it is
     // the only scope today; routing without a scope flag would be
@@ -2278,7 +2263,7 @@ fn cmd_host_reconcile(
                 78,
                 "host reconcile invocation flags.",
                 "No reconcile scope was provided.",
-                "Re-run with `--network` (the only scope available in P3); future scopes will be added in later P-phases.",
+                "Re-run with `--network` (the only scope available today); future scopes will be added in later releases.",
                 "docs/explanation/host-prepare.md",
             ),
             args.json,
@@ -2317,15 +2302,14 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
 }
 
 fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
-    // The DAG the supervisor would drive. Mirrors the structure
-    // emitted by W3's processes::VmProcessDag exporter — for the W4
-    // headless alpha shape (host-reconcile → store-preflight →
-    // virtiofsd-ro-store → ch → ssh-ready) we summarize the node ids
-    // and the topological edges. The full per-role argv preview is
-    // a follow-up gate in W4-H10.
+    // The DAG the supervisor would drive. Mirrors the structure emitted
+    // by the processes::VmProcessDag exporter — for the headless alpha
+    // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
+    // → ssh-ready) we summarize the node ids and the topological edges.
+    // The full per-role argv preview is a follow-up gate.
     //
-    // W4 GPT-5.5 panel notable #2: `vm stop` walks the DAG in
-    // REVERSE topo order (terminate ch first, then virtiofsd, etc).
+    // `vm stop` walks the DAG in REVERSE topo order (terminate ch first,
+    // then virtiofsd, etc).
     // The dry-run summary reflects the current apply order so the
     // operator sees the same DAG the daemon bridge will drive.
     let stopping = matches!(verb, "stop");
@@ -2369,13 +2353,14 @@ fn cmd_vm_lifecycle_verb(
     vm: &str,
     dry_run: bool,
     apply: bool,
+    no_wait_api: bool,
     json: bool,
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     require_known_vm(context, vm, json)?;
     if flags.apply {
-        // P4 cli-up: vm lifecycle verbs are daemon-only. The W14c
-        // bash-translation bridge has been removed; any failure mode
+        // VM lifecycle verbs are daemon-only. The bash-translation
+        // bridge has been removed; any failure mode
         // surfaces as a typed envelope via `dispatch_mutating_verb`.
         let request_type = match verb {
             "start" => "vmStart",
@@ -2383,10 +2368,15 @@ fn cmd_vm_lifecycle_verb(
             "restart" => "vmRestart",
             other => other,
         };
+        let extra_fields = if no_wait_api {
+            serde_json::json!({ "vm": vm, "noWaitApi": true })
+        } else {
+            serde_json::json!({ "vm": vm })
+        };
         return dispatch_mutating_verb(
             context,
             request_type,
-            serde_json::json!({ "vm": vm }),
+            extra_fields,
             flags.dry_run,
             flags.apply,
             json,
@@ -2414,6 +2404,7 @@ fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure
         &args.vm,
         args.dry_run,
         args.apply,
+        args.no_wait_api,
         args.json,
     )
 }
@@ -2425,6 +2416,7 @@ fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> 
         &args.vm,
         args.dry_run,
         args.apply,
+        false,
         args.json,
     )
 }
@@ -2436,6 +2428,7 @@ fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFai
         &args.vm,
         args.dry_run,
         args.apply,
+        false,
         args.json,
     )
 }
@@ -2463,8 +2456,21 @@ fn cmd_vm_list(_context: &Context, args: &VmListArgs) -> Result<i32, CliFailure>
     Ok(0)
 }
 
-/// v1.1.1fu14 C1 + fu15 panel must-fixes: `nixling vm konsole <vm>` —
-/// spawn a terminal emulator hosting an SSH session into the named VM.
+fn cmd_vm_status(context: &Context, args: &VmStatusArgs) -> Result<i32, CliFailure> {
+    cmd_status(
+        context,
+        &StatusArgs {
+            json: args.json,
+            human: args.human,
+            check_bridges: false,
+            vm_flag: None,
+            vm: Some(args.vm.clone()),
+        },
+    )
+}
+
+/// `nixling vm konsole <vm>` — spawn a terminal emulator hosting an
+/// SSH session into the named VM.
 ///
 /// Resolution order:
 ///   - VM name → manifest entry → static_ip + ssh.user
@@ -2480,17 +2486,115 @@ fn cmd_vm_list(_context: &Context, args: &VmListArgs) -> Result<i32, CliFailure>
 /// host keys are nixling-managed and the host's known_hosts entry
 /// would change every VM rebuild (defeating the security check).
 ///
-/// fu15 panel-product must-fix: validate key existence + manifest
-/// entry BEFORE any --json output so machine consumers never see
-/// "success" JSON followed by an error envelope on stderr. fu15
-/// panel-product must-fix: --key resolves from bundle.managed_keys
-/// when --key is not given (consumer sites can override keysDir);
-/// the legacy /var/lib/nixling/keys path is only the last fallback.
-/// fu15 panel-product must-fix: drop the hardcoded username
-/// fallback; use $USER env var instead (still fails closed if
-/// unset). fu15 panel-rust should-fix: propagate setsid
-/// spawn-failure as a typed exit-1 envelope; the spawned terminal
-/// can fail to start even if setsid forks successfully.
+/// Note: konsole treats the private bundle as optional. If the bundle
+/// is unreadable to a launcher user, key resolution falls back to the
+/// stable `/var/lib/nixling/keys/<vm>_ed25519` path. Key-path EACCES
+/// still fails with an actionable permission message. The `--json`
+/// envelope contract is preserved: any CliFailure surfaces before any
+/// success-shape JSON is printed.
+/// Classify a `try_exists()` Err for konsole key/bundle path checks.
+/// PermissionDenied indicates the operator's shell session cannot
+/// traverse the parent directory — typically a missing
+/// `nixling` group ACL on `/var/lib/nixling`. Returns the
+/// actionable error string the CLI surfaces.
+fn konsole_eacces_remediation(kind: &str, path: &Path, err: &io::Error) -> String {
+    if err.kind() == io::ErrorKind::PermissionDenied {
+        format!(
+            "vm konsole: cannot access {kind} at {} \
+             (permission denied on parent directory; \
+             verify your shell session is a member of the \
+             `nixling` group: \
+             `id -nG | tr ' ' '\\n' | grep -x nixling`)",
+            path.display()
+        )
+    } else {
+        format!(
+            "vm konsole: cannot stat {kind} at {}: {err}",
+            path.display()
+        )
+    }
+}
+
+fn konsole_failure_envelope(message: &str) -> String {
+    let mut rendered = serde_json::to_string_pretty(&serde_json::json!({
+        "command": "vm konsole",
+        "error": "permission-denied",
+        "message": message,
+        "exit_code": 1,
+    }))
+    .expect("serialize vm konsole failure envelope");
+    rendered.push('\n');
+    rendered
+}
+
+fn konsole_access_failure(kind: &str, path: &Path, err: &io::Error, is_json: bool) -> CliFailure {
+    let message = konsole_eacces_remediation(kind, path, err);
+    CliFailure {
+        exit_code: 1,
+        rendered_stderr: is_json.then(|| konsole_failure_envelope(&message)),
+        message,
+    }
+}
+
+/// Konsole bundle-path resolution. Returns one of:
+///   - Ok(Some(<bundle-derived key path>)) — bundle exists and was
+///     read; the bundle's managed-keys path was computed.
+///   - Ok(None) — bundle file definitively does NOT exist (ENOENT) or
+///     is intentionally private to nixlingd (EACCES); caller should
+///     fall through to the stable `/var/lib/nixling/keys` path.
+///   - Err(CliFailure) — bundle exists but couldn't be read, OR
+///     stat'd with EACCES (parent dir unreadable; actionable
+///     `nixling` group-membership remediation), OR any
+///     other io::Error.
+fn konsole_resolve_bundle_key_path(
+    bundle_path: &Path,
+    vm_name: &str,
+    is_json: bool,
+) -> Result<Option<PathBuf>, CliFailure> {
+    match bundle_path.try_exists() {
+        Ok(true) => {
+            let bundle: Bundle = match read_json_file(bundle_path) {
+                Ok(bundle) => bundle,
+                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+                Err(err) => {
+                    return Err(CliFailure::new(
+                        1,
+                        format!(
+                            "vm konsole: failed to read bundle {}: {err}",
+                            bundle_path.display()
+                        ),
+                    ));
+                }
+            };
+            Ok(Some(bundle.managed_keys.effective_key_path(vm_name)))
+        }
+        Ok(false) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(err) => Err(konsole_access_failure("bundle", bundle_path, &err, is_json)),
+    }
+}
+
+/// Konsole key-existence validation. Three-arm match distinguishing
+/// ENOENT (genuine miss, fails with documented "ssh key not found
+/// at …" envelope) from EACCES (parent dir unreadable, fails with
+/// actionable group-membership remediation) from other io::Errors
+/// (surfaces inner error text). The `--json` envelope contract is
+/// preserved: a CliFailure is returned BEFORE any success-shape
+/// JSON is printed.
+fn konsole_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), CliFailure> {
+    match key_path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(CliFailure::new(
+            1,
+            format!(
+                "vm konsole: ssh key not found at {} (override with --key)",
+                key_path.display()
+            ),
+        )),
+        Err(err) => Err(konsole_access_failure("ssh key", key_path, &err, is_json)),
+    }
+}
+
 fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
     require_known_vm(context, &args.vm, args.json)?;
     let manifest = context.load_manifest()?;
@@ -2528,26 +2632,21 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
                 ),
             )
         })?;
-    // fu15 panel-product must-fix: resolve key path from bundle's
-    // managed_keys (which honors site keysDir + per-VM overrides)
-    // when --key is not given. Fall back to /var/lib/nixling/keys
-    // legacy path only when the bundle is absent (e.g. running
-    // pre-staging or in a hermetic test harness).
+    // v1.2fu57: konsole tolerates EACCES on key/bundle path.
+    //
+    // Pre-v1.2fu57: `.exists()` returns false on BOTH ENOENT (truly
+    // missing) AND EACCES (parent unreadable). On hosts where the
+    // operator is in `nixling` group but `/var/lib/nixling`
+    // lacks the launcher-group traversal ACL (the v1.2fu58 fix),
+    // the CLI saw EACCES and emitted "ssh key not found" — a
+    // misdiagnosis. v1.2fu57 distinguishes via `.try_exists()` +
+    // three-arm match in `konsole_resolve_bundle_key_path` /
+    // `konsole_validate_key_exists` helpers.
     let key_path = if let Some(p) = args.key.clone() {
         p
-    } else if context.bundle_path.exists() {
-        let bundle: Bundle = read_json_file(&context.bundle_path).map_err(|err| {
-            CliFailure::new(
-                1,
-                format!(
-                    "vm konsole: failed to read bundle {}: {err}",
-                    context.bundle_path.display()
-                ),
-            )
-        })?;
-        bundle.managed_keys.effective_key_path(&args.vm)
     } else {
-        PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm))
+        konsole_resolve_bundle_key_path(&context.bundle_path, &args.vm, args.json)?
+            .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
     };
 
     let terminal = &args.terminal;
@@ -2572,14 +2671,13 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
     // envelope on stderr, which is incoherent. Dry-run mode is
     // exempt: it explicitly does NOT spawn anything, so the key
     // file's existence is informational only.
-    if !args.dry_run && !key_path.exists() {
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "vm konsole: ssh key not found at {} (override with --key)",
-                key_path.display()
-            ),
-        ));
+    //
+    // v1.2fu57: three-arm match distinguishes ENOENT (genuine
+    // miss, fail) from EACCES (parent unreadable, fail with actionable
+    // group-membership remediation). Other io::Errors surface the inner
+    // error text.
+    if !args.dry_run {
+        konsole_validate_key_exists(&key_path, args.json)?;
     }
 
     if args.dry_run || args.json {
@@ -2610,48 +2708,23 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
     // Spawn detached so the CLI can exit while the terminal keeps
     // running. setsid --fork is the conventional Unix pattern for
     // fully detaching from the controlling tty/session.
-    let mut child = std::process::Command::new("setsid")
-        .arg("--fork")
-        .args(&argv)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|err| {
-            // fu17 panel-rust should-fix: emit typed envelope (not
-            // plain CliFailure text) so machine consumers parsing
-            // --json get a consistent error envelope shape via
-            // rendered_stderr instead of a bare "nixling: ..." line.
-            let operator_error = CoreError::internal_io(format!(
-                "vm konsole: failed to spawn `setsid --fork {}`: {err}",
-                terminal
-            ));
-            CliFailure {
-                exit_code: 1,
-                message: operator_error.message(),
-                rendered_stderr: render_operator_error(
-                    &operator_error,
-                    Some("vm konsole"),
-                ),
-            }
-        })?;
+    // fu17 panel-rust should-fix: emit typed envelope (not plain
+    // CliFailure text) so machine consumers parsing --json get a
+    // consistent error envelope shape via rendered_stderr instead of a
+    // bare "nixling: ..." line.
+    let mut child = spawn_detached_terminal(&argv, terminal)?;
     // setsid --fork exits immediately after forking the real child;
     // we wait for setsid to reap its fork-state but do NOT wait for
-    // the terminal itself (it lives independently). fu15 panel-rust
-    // should-fix + fu17 typed-envelope: propagate non-zero setsid
-    // exit as a typed envelope so operators see a structured error
-    // message instead of a silently-failed konsole.
+    // the terminal itself (it lives independently). Propagate a
+    // non-zero setsid exit as a typed envelope so operators see a
+    // structured error message instead of a silently-failed konsole.
     let status = child.wait().map_err(|err| {
-        let operator_error = CoreError::internal_io(format!(
-            "vm konsole: setsid wait failed: {err}"
-        ));
+        let operator_error =
+            CoreError::internal_io(format!("vm konsole: setsid wait failed: {err}"));
         CliFailure {
             exit_code: 1,
             message: operator_error.message(),
-            rendered_stderr: render_operator_error(
-                &operator_error,
-                Some("vm konsole"),
-            ),
+            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
         }
     })?;
     if !status.success() {
@@ -2662,16 +2735,13 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
         return Err(CliFailure {
             exit_code: 1,
             message: operator_error.message(),
-            rendered_stderr: render_operator_error(
-                &operator_error,
-                Some("vm konsole"),
-            ),
+            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
         });
     }
     Ok(0)
 }
 
-// ---- W7-H1..H7: store-lifecycle CLI verbs ----
+// ---- store-lifecycle CLI verbs ----
 
 fn w7_dry_run_summary(verb: &str, vm: Option<&str>) -> serde_json::Value {
     serde_json::json!({
@@ -2679,13 +2749,13 @@ fn w7_dry_run_summary(verb: &str, vm: Option<&str>) -> serde_json::Value {
         "mode": "dry-run",
         "vm": vm,
         "planned": [],
-        "notes": format!("nixling {verb} --dry-run reports the planned operation; --apply routes through nixlingd → broker (v1.0 daemon-only per ADR 0015; the historical bash fallback was retired in P6)."),
+        "notes": format!("nixling {verb} --dry-run reports the planned operation; --apply routes through nixlingd → broker."),
     })
 }
 
 fn cmd_build(context: &Context, args: &BuildArgs) -> Result<i32, CliFailure> {
     // build is non-destructive — always allowed; never returns
-    // daemon-down. The W7a non-destructive scope (build / generations
+    // daemon-down. The non-destructive scope (build / generations
     // / richer status) ships dry-run-shaped output today even
     // without --dry-run.
     require_known_vm(context, &args.vm, args.json)?;
@@ -2753,12 +2823,12 @@ fn w7_mutating_verb(
     dry_run: bool,
     apply: bool,
     json: bool,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
     let flags = require_mutation_flag(verb, dry_run, apply, json)?;
     require_known_vm(context, vm, json)?;
     if flags.apply {
-        // W14: daemon-first dispatch is live for activation verbs.
+        // Daemon-first dispatch is live for activation verbs.
         // The CLI only reaches the legacy bash surface when the daemon
         // explicitly defers or is unavailable.
         return dispatch_mutating_verb(
@@ -2848,11 +2918,15 @@ fn cmd_rollback(
     )
 }
 
-fn cmd_gc(context: &Context, args: &GcArgs, original_args: &[OsString]) -> Result<i32, CliFailure> {
+fn cmd_gc(
+    context: &Context,
+    args: &GcArgs,
+    _original_args: &[OsString],
+) -> Result<i32, CliFailure> {
     let flags = require_mutation_flag("gc", args.dry_run, args.apply, args.json)?;
     if flags.apply {
         // v1.0 daemon-only: --apply routes through nixlingd → broker
-        // (ADR 0015). The historical bash fallback was retired in P6;
+        // (ADR 0015). The historical bash fallback was retired in v1.0;
         // daemon-unreachable + native-handler-deferred surface typed
         // envelopes (exit-1 / exit-78).
         return dispatch_mutating_verb(
@@ -2876,7 +2950,7 @@ fn cmd_gc(context: &Context, args: &GcArgs, original_args: &[OsString]) -> Resul
     Ok(0)
 }
 
-// ---- W6: native usb CLI ----
+// ---- native usb CLI ----
 
 fn usb_json_mode(json: bool, human: bool) -> bool {
     if human {
@@ -2942,16 +3016,24 @@ fn usb_mutating_verb(
             json_mode,
         );
     }
+    let planned: Vec<&str> = if verb == "usb attach" {
+        vec![
+            "UsbipBind",
+            "UsbipBindFirewallRule",
+            "SpawnRunner(sys-<env>-usbipd/backend)",
+            "SpawnRunner(sys-<env>-usbipd/proxy)",
+            "UsbipProxyReconcile",
+        ]
+    } else {
+        vec!["UsbipUnbind", "UsbipProxyReconcile"]
+    };
     let summary = serde_json::json!({
         "command": verb,
         "mode": "dry-run",
         "vm": vm,
         "busId": bus_id,
-        "planned": match verb {
-            "usb attach" => ["UsbipBind", "UsbipProxyReconcile"],
-            _ => ["UsbipUnbind", "UsbipProxyReconcile"],
-        },
-        "notes": "W6 USBIP dry-run reports the daemon → broker bind/unbind + reconcile plan without mutating host state.",
+        "planned": planned,
+        "notes": "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, and reconcile plan without mutating host state.",
     });
     if json_mode {
         let mut rendered = serde_json::to_string_pretty(&summary)
@@ -2960,12 +3042,12 @@ fn usb_mutating_verb(
         print_stdout(&rendered);
     } else {
         let action = if verb == "usb attach" {
-            "bind"
+            "bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for"
         } else {
             "unbind"
         };
         print_stdout(&format!(
-            "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}' and reconcile the USBIP proxy\n"
+            "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
         ));
     }
     Ok(0)
@@ -2994,7 +3076,7 @@ fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailu
                 "USBIP probe requires a reachable nixlingd",
                 "daemon-down",
                 1,
-                "Daemon connectivity at /run/nixling/public.sock and W6 USBIP probe support.",
+                "Daemon connectivity at /run/nixling/public.sock and USBIP probe support.",
                 "nixlingd is unreachable or does not expose the native USBIP probe request.",
                 "Start nixlingd on the host, then re-run `nixling usb probe`.",
                 "docs/reference/error-codes.md#daemon-down",
@@ -3029,7 +3111,7 @@ fn render_usb_probe_human(entries: &[IpcUsbipProbeEntry]) -> String {
     out
 }
 
-// ---- W8: managed-keys + trust verbs ----
+// ---- managed-keys + trust verbs ----
 
 fn cmd_keys_list(
     context: &Context,
@@ -3129,13 +3211,13 @@ fn w8_mutating_verb(
     dry_run: bool,
     apply: bool,
     json: bool,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
     let flags = require_mutation_flag(&format!("keys {verb}"), dry_run, apply, json)?;
     require_known_vm(context, vm, json)?;
     if flags.apply {
         // v1.0 daemon-only: --apply routes through nixlingd → broker
-        // (ADR 0015). The historical bash fallback was retired in P6.
+        // (ADR 0015). The historical bash fallback was retired in v1.0.
         let request_type = match verb {
             "rotate" => "keysRotate",
             "trust" => "trust",
@@ -3156,7 +3238,7 @@ fn w8_mutating_verb(
         "mode": "dry-run",
         "vm": vm,
         "planned": [],
-        "notes": format!("W8 keys {verb} --dry-run: planned operation. --apply routes through nixlingd → broker RunKeysRotate with broker audit (v1.0 daemon-only per ADR 0015)."),
+        "notes": format!("nixling keys {verb} --dry-run: planned operation. --apply routes through nixlingd → broker RunKeysRotate with broker audit."),
     });
     if json {
         let mut rendered = serde_json::to_string_pretty(&summary)
@@ -3219,23 +3301,22 @@ fn cmd_keys_trust(
     )
 }
 
-// ---- W9 nixling migrate ----
+// ---- nixling migrate ----
 
 fn cmd_migrate(
     context: &Context,
     args: &MigrateArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag("migrate", args.dry_run, args.apply, args.json)?;
     let manifest = context.load_manifest()?;
     let shape = detect_deployment_shape(context)?;
     let vms: Vec<&ManifestVm> = manifest.vms();
 
-    // W9 migrate planner. Per-VM supervisor classification needs the
-    // consumer flake's `nixling.vms.<vm>.supervisor` setting, which
-    // the public manifest still does not expose. Per W*-fu GPT-5.5
-    // panel notable #1: the prior shape always claimed every VM
-    // needed migration, which is materially misleading on a
+    // Migrate planner. Per-VM supervisor classification needs the consumer
+    // flake's `nixling.vms.<vm>.supervisor` setting, which the public
+    // manifest still does not expose. The prior shape always claimed
+    // every VM needed migration, which is materially misleading on a
     // fully-daemon-managed host. The planner now honestly reports
     // "per-VM classification unavailable" and uses the
     // detect_deployment_shape() tier as the operative summary.
@@ -3248,8 +3329,8 @@ fn cmd_migrate(
     if flags.apply {
         // v1.0 daemon-only: --apply routes through nixlingd → broker
         // `RunMigrate` (ADR 0015). The historical bash fallback was
-        // retired in P6; daemon-unreachable surfaces a typed
-        // daemon-down envelope (exit-1).
+        // retired in v1.0; daemon-unreachable surfaces a typed daemon-down
+        // envelope (exit-1).
         let _ = vms;
         let _ = tier_str;
         return dispatch_mutating_verb(
@@ -3267,7 +3348,7 @@ fn cmd_migrate(
         "mode": "dry-run",
         "currentTier": tier_str,
         "classificationAvailable": false,
-        "perVmClassificationNote": "v1.1 (per ADR 0015) made every enabled VM daemon-supervised by default; the `nixling.vms.<vm>.supervisor` option was removed in v1.1-P2. Per-VM systemd-unit inspection still uses `nixling status <vm>`.",
+        "perVmClassificationNote": "v1.1 (per ADR 0015) made every enabled VM daemon-supervised by default; the `nixling.vms.<vm>.supervisor` option was removed in v1.1. Per-VM systemd-unit inspection still uses `nixling status <vm>`.",
         "totalVms": vms.len(),
         "vms": vms.iter().map(|vm| serde_json::json!({
             "name": vm.name,
@@ -3296,7 +3377,7 @@ fn cmd_migrate(
         ));
         print_stdout(
             "v1.1 daemon-only: every enabled VM is daemon-supervised; the per-VM\n\
-             `supervisor` option was removed in v1.1-P2 (ADR 0015). Use\n\
+             `supervisor` option was removed in v1.1 (ADR 0015). Use\n\
              `nixling status <vm>` to inspect each VM directly; `nixling migrate --apply`\n\
              is the live mutation path when you are ready.\n",
         );
@@ -3481,19 +3562,47 @@ fn resolve_selected_vm(args: &StatusArgs) -> Result<Option<String>, CliFailure> 
     }
 }
 
+/// Read the per-VM api-ready state file written by nixlingd on each DAG run.
+///
+/// The file lives at `{daemon_state_dir}/{vm_name}/api-ready.json` and contains
+/// `{"apiReady": <value>}` where the value mirrors `ApiReadyState`'s serialization:
+/// `"yes"` | `"pending"` | `"timeout"` | `{"error":"<reason>"}`.
+fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyStatusV1> {
+    let path = daemon_state_dir.join(vm_name).join("api-ready.json");
+    let bytes = fs::read(&path).ok()?;
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let raw = obj.get("apiReady")?;
+    match raw {
+        serde_json::Value::String(s) => match s.as_str() {
+            "yes" => Some(ApiReadyStatusV1::Simple(ApiReadySimple::Yes)),
+            "pending" => Some(ApiReadyStatusV1::Simple(ApiReadySimple::Pending)),
+            "timeout" => Some(ApiReadyStatusV1::Simple(ApiReadySimple::Timeout)),
+            _ => None,
+        },
+        serde_json::Value::Object(map) => {
+            map.get("error")
+                .and_then(|v| v.as_str())
+                .map(|e| ApiReadyStatusV1::WithError {
+                    error: e.to_owned(),
+                })
+        }
+        _ => None,
+    }
+}
+
 fn build_vm_status_output(
     context: &Context,
     vm: &ManifestVm,
     bundle: Option<&BundleContext>,
 ) -> StatusVmOutputV2 {
-    let service_states = vm_service_states(context, vm);
+    let process_vm = bundle
+        .and_then(|bundle| bundle.processes.as_ref())
+        .and_then(|processes| processes.vms.iter().find(|entry| entry.vm == vm.name));
+    let service_states = vm_service_states(context, vm, process_vm);
     let current = current_symlink(context, vm);
     let booted = booted_symlink(context, vm);
     let pending_restart =
         is_pending_restart(vm, &service_states, current.as_deref(), booted.as_deref());
-    let process_vm = bundle
-        .and_then(|bundle| bundle.processes.as_ref())
-        .and_then(|processes| processes.vms.iter().find(|entry| entry.vm == vm.name));
     let declared_roles = process_vm
         .map(|entry| {
             entry
@@ -3503,7 +3612,7 @@ fn build_vm_status_output(
                 .collect()
         })
         .unwrap_or_default();
-    let readiness = process_vm
+    let readiness: Vec<String> = process_vm
         .map(|entry| {
             entry
                 .nodes
@@ -3530,23 +3639,78 @@ fn build_vm_status_output(
         runtime: RUNTIME_UNKNOWN.to_owned(),
         declared_roles,
         readiness,
+        api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
         runner_parity,
     }
 }
 
-fn vm_service_states(context: &Context, vm: &ManifestVm) -> StatusServicesOutputV2 {
-    let gpu_unit = format!("nixling-{}-gpu.service", vm.name);
-    let swtpm_unit = format!("nixling-{}-swtpm.service", vm.name);
+fn vm_service_states(
+    context: &Context,
+    vm: &ManifestVm,
+    process_vm: Option<&nixling_core::processes::VmProcessDag>,
+) -> StatusServicesOutputV2 {
+    let has_role = |role: nixling_core::processes::ProcessRole| {
+        process_vm
+            .map(|entry| entry.nodes.iter().any(|node| node.role == role))
+            .unwrap_or(false)
+    };
+    let gpu_role_id = if has_role(nixling_core::processes::ProcessRole::GpuRenderNode) {
+        Some("gpu-render-node")
+    } else if has_role(nixling_core::processes::ProcessRole::Gpu) || vm.graphics {
+        Some("gpu")
+    } else {
+        None
+    };
     StatusServicesOutputV2 {
-        nixling: systemctl_state(context, &format!("nixling@{}.service", vm.name)),
-        microvm: systemctl_state(context, &format!("microvm@{}.service", vm.name)),
-        virtiofsd: systemctl_state(context, &format!("microvm-virtiofsd@{}.service", vm.name)),
-        gpu: vm.graphics.then(|| systemctl_state(context, &gpu_unit)),
-        snd: vm
-            .audio
-            .then(|| systemctl_state(context, &vm.audio_service)),
-        swtpm: vm.tpm.then(|| systemctl_state(context, &swtpm_unit)),
+        nixling: systemctl_state(context, "nixlingd.service"),
+        microvm: pidfd_role_state(context, &vm.name, "ch-runner"),
+        virtiofsd: pidfd_role_prefix_state(context, &vm.name, "virtiofsd"),
+        gpu: gpu_role_id.map(|role| pidfd_role_state(context, &vm.name, role)),
+        video: has_role(nixling_core::processes::ProcessRole::Video)
+            .then(|| pidfd_role_state(context, &vm.name, "video")),
+        snd: (has_role(nixling_core::processes::ProcessRole::Audio) || vm.audio)
+            .then(|| pidfd_role_state(context, &vm.name, "audio")),
+        swtpm: (has_role(nixling_core::processes::ProcessRole::Swtpm) || vm.tpm)
+            .then(|| pidfd_role_state(context, &vm.name, "swtpm")),
     }
+}
+
+fn pidfd_role_state(context: &Context, vm: &str, role: &str) -> String {
+    pidfd_role_state_matching(context, vm, |candidate| candidate == role)
+}
+
+fn pidfd_role_prefix_state(context: &Context, vm: &str, prefix: &str) -> String {
+    pidfd_role_state_matching(context, vm, |candidate| candidate.starts_with(prefix))
+}
+
+fn pidfd_role_state_matching<F>(context: &Context, vm: &str, role_matches: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    let path = context.daemon_state_dir.join("pidfd-table.json");
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return "stopped".to_owned(),
+        Err(_) => return "unknown".to_owned(),
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return "unknown".to_owned();
+    };
+    let running = value
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries.iter().any(|entry| {
+                entry.get("vm").and_then(Value::as_str) == Some(vm)
+                    && entry
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .map(&role_matches)
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if running { "running" } else { "stopped" }.to_owned()
 }
 
 fn current_symlink(context: &Context, vm: &ManifestVm) -> Option<String> {
@@ -3596,18 +3760,21 @@ fn service_state_counts_as_running(state: &str) -> bool {
     matches!(state, "active" | "activating" | "reloading")
 }
 
-fn list_status_label(vm: &ManifestVm, context: &Context, pending_restart: bool) -> String {
+fn list_status_label(
+    vm: &ManifestVm,
+    services: &StatusServicesOutputV2,
+    pending_restart: bool,
+) -> String {
     if vm.is_net_vm {
         "running".to_owned()
     } else if pending_restart {
         "pending-restart".to_owned()
+    } else if services.microvm == "unknown" {
+        "unknown".to_owned()
+    } else if vm_counts_as_running(vm, services) {
+        "running".to_owned()
     } else {
-        let services = vm_service_states(context, vm);
-        if vm_counts_as_running(vm, &services) {
-            "running".to_owned()
-        } else {
-            "stopped".to_owned()
-        }
+        "stopped".to_owned()
     }
 }
 
@@ -3620,6 +3787,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::Virtiofsd => "virtiofsd",
         nixling_core::processes::ProcessRole::Video => "video",
         nixling_core::processes::ProcessRole::Gpu => "gpu",
+        nixling_core::processes::ProcessRole::GpuRenderNode => "gpu-render-node",
         nixling_core::processes::ProcessRole::Audio => "audio",
         nixling_core::processes::ProcessRole::CloudHypervisorRunner => "cloud-hypervisor-runner",
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
@@ -3639,6 +3807,9 @@ fn readiness_name(readiness: &nixling_core::processes::ReadinessPredicate) -> St
         }
         nixling_core::processes::ReadinessPredicate::UnixSocketExists(value) => {
             format!("unix-socket-exists:{value}")
+        }
+        nixling_core::processes::ReadinessPredicate::UnixSocketListening(value) => {
+            format!("unix-socket-listening:{value}")
         }
         nixling_core::processes::ReadinessPredicate::TcpPort { host, port } => {
             format!("tcp-port:{host}:{port}")
@@ -3705,8 +3876,11 @@ fn render_status_vm_human(
             .clone()
             .unwrap_or_else(|| "stopped".to_owned())
     );
-    if let (Some(user), Some(ip)) = (&manifest_vm.ssh_user, &manifest_vm.static_ip) {
-        let _ = writeln!(text, "ssh: declared {user}@{ip}");
+    if let Some(video) = &output.services.video {
+        let _ = writeln!(text, "video: {video}");
+    }
+    if manifest_vm.ssh_user.is_some() && manifest_vm.static_ip.is_some() {
+        let _ = writeln!(text, "ssh: declared");
     }
     let _ = writeln!(
         text,
@@ -4122,7 +4296,55 @@ where
     Ok(())
 }
 
+#[cfg(test)]
+static TEST_STDOUT_CAPTURE: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(test)]
+static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
+    let _guard = TEST_STDOUT_CAPTURE_LOCK
+        .lock()
+        .expect("stdout capture lock poisoned");
+    {
+        let mut capture = TEST_STDOUT_CAPTURE
+            .lock()
+            .expect("stdout capture mutex poisoned");
+        *capture = Some(Vec::new());
+    }
+    let result = f();
+    let stdout = TEST_STDOUT_CAPTURE
+        .lock()
+        .expect("stdout capture mutex poisoned")
+        .take()
+        .expect("stdout capture active");
+    (result, stdout)
+}
+
+#[cfg(test)]
+fn reset_test_konsole_spawn_count() {
+    TEST_KONSOLE_SPAWN_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn test_konsole_spawn_count() -> usize {
+    TEST_KONSOLE_SPAWN_COUNT.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 fn print_stdout(text: &str) {
+    #[cfg(test)]
+    {
+        let mut capture = TEST_STDOUT_CAPTURE
+            .lock()
+            .expect("stdout capture mutex poisoned");
+        if let Some(buffer) = capture.as_mut() {
+            buffer.extend_from_slice(text.as_bytes());
+            return;
+        }
+    }
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());
 }
@@ -4150,15 +4372,42 @@ fn render_operator_error(error: &CoreError, owning_command: Option<&str>) -> Opt
     Some(rendered)
 }
 
+fn spawn_detached_terminal(
+    argv: &[String],
+    terminal: &str,
+) -> Result<std::process::Child, CliFailure> {
+    #[cfg(test)]
+    TEST_KONSOLE_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    std::process::Command::new("setsid")
+        .arg("--fork")
+        .args(argv)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            let operator_error = CoreError::internal_io(format!(
+                "vm konsole: failed to spawn `setsid --fork {}`: {err}",
+                terminal
+            ));
+            CliFailure {
+                exit_code: 1,
+                message: operator_error.message(),
+                rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
+            }
+        })
+}
+
 fn stdout_is_tty() -> bool {
     io::stdout().is_terminal()
 }
 
-/// v1.1-P1 / ADR 0017: the `should_fallback_to_legacy` /
-/// `exec_legacy_passthrough` pair were removed wholesale. Every verb
-/// the Rust CLI accepts dispatches to clap → typed-envelope; verbs
-/// clap rejects fall through to the parse-error path. No bash exec
-/// site survives in the binary crate.
+// ADR 0017: the `should_fallback_to_legacy` /
+// `exec_legacy_passthrough` pair were removed wholesale. Every verb
+// the Rust CLI accepts dispatches to clap → typed-envelope; verbs
+// clap rejects fall through to the parse-error path. No bash exec
+// site survives in the binary crate.
 
 /// W14c daemon mutating-verb outcome from
 /// [`try_daemon_mutating_verb`]. The CLI uses this to decide whether
@@ -4171,6 +4420,9 @@ enum DaemonVerbOutcome {
     Applied { summary: String },
     /// The daemon returned a rust-native dry-run plan.
     DryRunPlanned { summary: String },
+    /// The daemon kept the VM process alive but the api-ready phase
+    /// timed out in strict mode.
+    ApiReadyTimeout { summary: Option<String> },
     /// The daemon has the wire variant + dispatch row, but the
     /// per-verb native backend has not yet landed. CLI surfaces a
     /// typed `not-yet-implemented` envelope and exits 78 (v1.0
@@ -4317,6 +4569,7 @@ fn try_daemon_mutating_verb(
             summary: summary
                 .unwrap_or_else(|| format!("nixling {verb} --dry-run: plan synthesized by daemon")),
         }),
+        "api-ready-timeout" => Ok(DaemonVerbOutcome::ApiReadyTimeout { summary }),
         "not-yet-implemented" => Ok(DaemonVerbOutcome::NotYetImplemented {
             verb,
             target_wave,
@@ -4436,9 +4689,9 @@ fn broker_error_envelope(
     remediation: Option<&str>,
 ) -> HostErrorEnvelope {
     let op_name = format!("nixling {verb} --apply");
-    let default_observed_state = if let Some(target_wave) = target_wave {
+    let default_observed_state = if target_wave.is_some() {
         format!(
-            "The daemon reached the broker for `{op_name}`, but the broker refused or failed the request (target wave hint: {target_wave})."
+            "The daemon reached the broker for `{op_name}`, but the broker refused or failed the request (operation not yet implemented in this build)."
         )
     } else {
         format!(
@@ -4471,14 +4724,11 @@ fn broker_error_envelope(
     )
 }
 
-/// P4 cli-up: top-level dispatcher for mutating verbs. Runs the
-/// native daemon path; failure modes surface as typed envelopes
-/// (daemon-down exit-1, broker-error exit-78, not-yet-implemented
-/// exit-78) per ADR 0015. v1.1-P1 removed every bash-fallback
-/// escape hatch (NIXLING_LEGACY_BASH_OPT_IN / NIXLING_NATIVE_ONLY /
-/// NIXLING_LEGACY_CLI_PATH env vars are no longer honoured); the
+/// Top-level dispatcher for mutating verbs. Runs the native daemon
+/// path; failure modes surface as typed envelopes (daemon-down
+/// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
 /// Rust CLI dispatching through nixlingd → broker is the only
-/// operator path.
+/// operator path — no bash fallback.
 fn dispatch_mutating_verb(
     context: &Context,
     request_type: &str,
@@ -4497,6 +4747,11 @@ fn dispatch_mutating_verb(
         DaemonVerbOutcome::DryRunPlanned { summary } => {
             print_stdout(&format!("{summary}\n"));
             Ok(0)
+        }
+        DaemonVerbOutcome::ApiReadyTimeout { summary } => {
+            let msg = summary.unwrap_or_else(|| "vm start: api-ready timeout".to_owned());
+            print_stdout(&format!("{msg}\n"));
+            Ok(EXIT_API_TIMEOUT)
         }
         DaemonVerbOutcome::InvalidRequest { remediation } => {
             let msg = remediation.unwrap_or_else(|| "invalid mutating-verb request".to_owned());
@@ -4525,8 +4780,8 @@ fn dispatch_mutating_verb(
             target_wave,
             remediation,
         } => {
-            // v1.1-P1: bash fallback removed. Surface the typed
-            // envelope unconditionally.
+            // Bash fallback removed. Surface the typed envelope
+            // unconditionally.
             let tw = target_wave
                 .as_deref()
                 .unwrap_or("the matching W*-fu deferral");
@@ -4547,7 +4802,7 @@ fn dispatch_mutating_verb(
             )
         }
         DaemonVerbOutcome::Unreachable => {
-            // v1.1-P1: daemon-only. No bash fallback.
+            // Daemon-only. No bash fallback.
             emit_host_error(
                 &host_error_envelope(
                     "Daemon required for native --apply",
@@ -4851,7 +5106,10 @@ mod host_install_dispatch_tests {
         env,
         ffi::{OsStr, OsString},
         io,
-        os::fd::{AsRawFd as _, RawFd},
+        os::{
+            fd::{AsRawFd as _, RawFd},
+            unix::fs::PermissionsExt,
+        },
         path::PathBuf,
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -4868,10 +5126,10 @@ mod host_install_dispatch_tests {
     use serde_json::{json, Value};
 
     use super::{
-        broker_error_envelope, cmd_host_install, daemon_supported_features,
-        encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, Context,
-        HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag, SockType, UnixAddr,
-        MAX_FRAME_BYTES,
+        broker_error_envelope, cmd_host_install, cmd_vm_start, daemon_supported_features,
+        encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, ApiReadySimple,
+        ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag,
+        SockType, UnixAddr, VmStartArgs, MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -4911,11 +5169,13 @@ mod host_install_dispatch_tests {
         );
     }
 
+    #[allow(dead_code)] // EnvVarGuard is utility code used by tests that toggle env vars
     struct EnvVarGuard {
         key: &'static str,
         old: Option<OsString>,
     }
 
+    #[allow(dead_code)]
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
             let old = env::var_os(key);
@@ -5014,6 +5274,111 @@ mod host_install_dispatch_tests {
             original_args.push(OsString::from("--human"));
         }
         original_args
+    }
+
+    fn write_test_manifest(path: &PathBuf, vm: &str) {
+        let manifest = json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "audioService": format!("nixling-{vm}-audio.service"),
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+    }
+
+    fn run_vm_start_with_mock_daemon(
+        args: VmStartArgs,
+        response: Value,
+    ) -> (Result<i32, super::CliFailure>, Value) {
+        let socket_path = test_socket_path("vm-start", ".sock");
+        let manifest_path = test_socket_path("vm-start", ".manifest.json");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, &args.vm);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange_result = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                let request_bytes = recv_test_frame(accepted)?;
+                let request: Value = serde_json::from_slice(&request_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                request_tx
+                    .send(request)
+                    .expect("send request to test thread");
+
+                let response_bytes = serde_json::to_vec(&response)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                send_test_frame(accepted, &response_bytes)
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange_result.expect("mock daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let result = cmd_vm_start(&context, &args);
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receive daemon request");
+        server.join().expect("join mock daemon thread");
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        (result, request)
     }
 
     fn run_host_install_with_mock_daemon(
@@ -5131,8 +5496,8 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn native_help_requests_parse_natively_through_clap() {
-        // v1.1-P1: `should_fallback_to_legacy` was deleted. The
-        // equivalent invariant is now "clap accepts every help
+        // `should_fallback_to_legacy` was deleted. The equivalent
+        // invariant is now "clap accepts every help
         // request for a native root command without parse error".
         // We assert via `NativeCli::try_parse_from` directly.
         for argv in [
@@ -5237,7 +5602,9 @@ mod host_install_dispatch_tests {
         );
 
         assert_eq!(envelope.kind, "RunHostInstall failed");
-        assert!(envelope.observed_state.contains("target wave hint: W15"));
+        assert!(envelope
+            .observed_state
+            .contains("operation not yet implemented in this build"));
         assert_eq!(envelope.remediation, "generic remediation");
     }
 
@@ -5307,6 +5674,374 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn start_apply_no_wait_api_exits_zero_on_process_alive() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let args = VmStartArgs {
+            vm: "vm-a".to_owned(),
+            dry_run: false,
+            apply: true,
+            no_wait_api: true,
+            json: false,
+            human: false,
+        };
+        let (result, request) = run_vm_start_with_mock_daemon(
+            args,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "vm start",
+                "outcome": "applied",
+                "summary": "vm.vm-a: process-alive: ok; api-ready: pending",
+                "apiReady": "pending",
+            }),
+        );
+
+        assert_eq!(result.expect("vm start result"), 0);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("vmStart"));
+        assert_eq!(request.get("apply").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            request.get("noWaitApi").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn start_apply_strict_default_exits_nonzero_on_api_timeout() {
+        let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
+        let args = VmStartArgs {
+            vm: "vm-a".to_owned(),
+            dry_run: false,
+            apply: true,
+            no_wait_api: false,
+            json: false,
+            human: false,
+        };
+        let (result, request) = run_vm_start_with_mock_daemon(
+            args,
+            json!({
+                "type": "mutatingVerbResponse",
+                "verb": "vm start",
+                "outcome": "api-ready-timeout",
+                "summary": "vm.vm-a: process-alive: ok; api-ready: timeout",
+                "apiReady": "timeout",
+            }),
+        );
+
+        assert_eq!(result.expect("vm start result"), super::EXIT_API_TIMEOUT);
+        assert_eq!(request.get("type").and_then(Value::as_str), Some("vmStart"));
+        assert!(request.get("noWaitApi").is_none());
+    }
+
+    #[test]
+    fn vm_status_reads_api_ready_state_from_daemon_state_dir() {
+        let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let state_dir = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!(
+                "vm-status-api-ready-{}-{counter}",
+                std::process::id()
+            ));
+        let vm_dir = state_dir.join("vm-a");
+        std::fs::create_dir_all(&vm_dir).expect("create vm state dir");
+        std::fs::write(vm_dir.join("api-ready.json"), br#"{"apiReady":"timeout"}"#)
+            .expect("write api-ready.json");
+
+        let manifest_path = state_dir.join("vms.json");
+        write_test_manifest(&manifest_path, "vm-a");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: state_dir.clone(),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let manifest_bytes = std::fs::read(&manifest_path).expect("read manifest");
+        let manifest: std::collections::BTreeMap<String, super::ManifestVm> =
+            serde_json::from_slice(&manifest_bytes).expect("parse manifest");
+        let vm = manifest.get("vm-a").expect("vm-a in manifest");
+        let output = super::build_vm_status_output(&context, vm, None);
+
+        assert_eq!(
+            output.api_ready,
+            Some(ApiReadyStatusV1::Simple(ApiReadySimple::Timeout))
+        );
+        // Verify it also serialises correctly (regression guard).
+        let value = serde_json::to_value(&output).expect("serialize vm status");
+        assert_eq!(
+            value.get("apiReady").and_then(Value::as_str),
+            Some("timeout")
+        );
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn status_human_redacts_ssh_target_details() {
+        let output = super::StatusVmOutputV2 {
+            name: "vm-a".to_owned(),
+            env: Some("dev".to_owned()),
+            services: super::StatusServicesOutputV2 {
+                nixling: "inactive".to_owned(),
+                microvm: "inactive".to_owned(),
+                virtiofsd: "inactive".to_owned(),
+                gpu: Some("stopped".to_owned()),
+                video: None,
+                snd: None,
+                swtpm: None,
+            },
+            current: None,
+            booted: None,
+            pending_restart: false,
+            runtime: super::RUNTIME_UNKNOWN.to_owned(),
+            declared_roles: vec!["gpu".to_owned()],
+            readiness: Vec::new(),
+            api_ready: None,
+            runner_parity: None,
+        };
+        let manifest_vm = super::ManifestVm {
+            name: "vm-a".to_owned(),
+            env: Some("dev".to_owned()),
+            graphics: true,
+            tpm: false,
+            audio: false,
+            usbip_yubikey: false,
+            static_ip: Some("10.20.0.10".to_owned()),
+            is_net_vm: false,
+            state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
+            bridge: "nl-dev".to_owned(),
+            ssh_user: Some("alice".to_owned()),
+        };
+        let rendered = super::render_status_vm_human(&output, &manifest_vm, Vec::new());
+        assert!(rendered.contains("ssh: declared"));
+        assert!(!rendered.contains("alice@"));
+        assert!(!rendered.contains("10.20.0.10"));
+        assert!(!rendered.contains("video:"));
+        assert!(!rendered.contains("video-disabled:"));
+    }
+
+    #[test]
+    fn vm_service_states_use_pidfd_roles_for_daemon_only_runners() {
+        fn role_profile() -> nixling_core::processes::RoleProfile {
+            nixling_core::processes::RoleProfile {
+                profile_id: "test-profile".to_owned(),
+                uid: 1000,
+                gid: 1000,
+                adr_carve_out: None,
+                caps: Vec::new(),
+                namespaces: nixling_core::minijail_profile::NamespaceSet {
+                    mount: false,
+                    pid: false,
+                    net: false,
+                    ipc: false,
+                    uts: false,
+                    user: false,
+                },
+                seccomp_policy_ref: None,
+                mount_policy: nixling_core::minijail_profile::MountPolicy {
+                    read_only_paths: Vec::new(),
+                    writable_paths: Vec::new(),
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
+                    nix_store_read_only: true,
+                    hide_device_nodes_by_default: true,
+                },
+                cgroup_placement: nixling_core::minijail_profile::CgroupPlacement {
+                    subtree: "nixling.slice/test".to_owned(),
+                    controllers: Vec::new(),
+                    delegated: false,
+                },
+                user_namespace: None,
+                umask: None,
+            }
+        }
+
+        let state_dir = test_socket_path("pidfd-status-running", "");
+        std::fs::create_dir_all(&state_dir).expect("create daemon state dir");
+        std::fs::write(
+            state_dir.join("pidfd-table.json"),
+            br#"{"entries":[
+              {"vm":"vm-a","role":"ch-runner","pid":11,"startTimeTicks":1},
+              {"vm":"vm-a","role":"virtiofsd-ro-store","pid":12,"startTimeTicks":1},
+              {"vm":"vm-a","role":"gpu","pid":13,"startTimeTicks":1},
+              {"vm":"vm-a","role":"video","pid":14,"startTimeTicks":1},
+              {"vm":"vm-a","role":"audio","pid":15,"startTimeTicks":1}
+            ]}"#,
+        )
+        .expect("write pidfd table");
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: state_dir.clone(),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let vm = super::ManifestVm {
+            name: "vm-a".to_owned(),
+            env: Some("dev".to_owned()),
+            graphics: true,
+            tpm: false,
+            audio: true,
+            usbip_yubikey: false,
+            static_ip: None,
+            is_net_vm: false,
+            state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
+            bridge: "nl-dev".to_owned(),
+            ssh_user: None,
+        };
+        let dag = nixling_core::processes::VmProcessDag {
+            vm: "vm-a".to_owned(),
+            nodes: vec![
+                nixling_core::processes::ProcessNode {
+                    id: nixling_core::processes::NodeId("ch-runner".to_owned()),
+                    role: nixling_core::processes::ProcessRole::CloudHypervisorRunner,
+                    unit: None,
+                    binary_path: None,
+                    argv: Vec::new(),
+                    env: Vec::new(),
+                    profile: role_profile(),
+                    readiness: Vec::new(),
+                    plan_ops: Vec::new(),
+                },
+                nixling_core::processes::ProcessNode {
+                    id: nixling_core::processes::NodeId("video".to_owned()),
+                    role: nixling_core::processes::ProcessRole::Video,
+                    unit: None,
+                    binary_path: None,
+                    argv: Vec::new(),
+                    env: Vec::new(),
+                    profile: role_profile(),
+                    readiness: Vec::new(),
+                    plan_ops: Vec::new(),
+                },
+            ],
+            edges: Vec::new(),
+            invariants: nixling_core::processes::VmProcessInvariants {
+                swtpm_pre_start_flush: false,
+                per_vm_audit_pipeline: false,
+                usbip_gating: false,
+                tpm_ownership_migration_without_running_vm_mutation: false,
+            },
+        };
+        let services = super::vm_service_states(&context, &vm, Some(&dag));
+        assert_eq!(services.microvm, "running");
+        assert_eq!(services.virtiofsd, "running");
+        assert_eq!(services.gpu.as_deref(), Some("running"));
+        assert_eq!(services.video.as_deref(), Some("running"));
+        assert_eq!(services.snd.as_deref(), Some("running"));
+        assert_eq!(super::list_status_label(&vm, &services, false), "running");
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pidfd_role_state_unreadable_returns_unknown_not_stopped() {
+        let state_dir = test_socket_path("pidfd-unreadable", "");
+        std::fs::create_dir_all(&state_dir).expect("create daemon state dir");
+        std::fs::write(
+            state_dir.join("pidfd-table.json"),
+            br#"{"entries":[{"vm":"vm-a","role":"video","pid":123,"startTimeTicks":1}]}"#,
+        )
+        .expect("write pidfd table");
+        let mut perms = std::fs::metadata(&state_dir)
+            .expect("stat daemon state dir")
+            .permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&state_dir, perms).expect("make daemon state dir unreadable");
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: state_dir.clone(),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let state = super::pidfd_role_state(&context, "vm-a", "video");
+
+        let mut cleanup_perms = std::fs::metadata(&state_dir)
+            .expect("stat daemon state dir for cleanup")
+            .permissions();
+        cleanup_perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(&state_dir, cleanup_perms);
+        let _ = std::fs::remove_dir_all(&state_dir);
+
+        if nix::unistd::Uid::effective().is_root() {
+            assert_eq!(state, "running");
+        } else {
+            assert_eq!(state, "unknown");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn load_bundle_context_unreadable_path_returns_error_not_none() {
+        let parent = test_socket_path("bundle-unreadable", "");
+        std::fs::create_dir_all(&parent).expect("create bundle parent");
+        let mut perms = std::fs::metadata(&parent)
+            .expect("stat bundle parent")
+            .permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&parent, perms).expect("make bundle parent unreadable");
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: parent.join("bundle.json"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let result = context.load_bundle_context();
+
+        let mut cleanup_perms = std::fs::metadata(&parent)
+            .expect("stat bundle parent for cleanup")
+            .permissions();
+        cleanup_perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(&parent, cleanup_perms);
+        let _ = std::fs::remove_dir_all(&parent);
+
+        if nix::unistd::Uid::effective().is_root() {
+            assert!(matches!(result, Ok(None)));
+        } else {
+            let err = result.expect_err("unreadable bundle path must error");
+            assert!(err.message.contains("failed to inspect"));
+        }
+    }
+
+    #[test]
+    fn vm_status_subcommand_parses_natively() {
+        let cli = NativeCli::try_parse_from(["nixling", "vm", "status", "vm-a"])
+            .expect("vm status parse");
+        assert!(matches!(
+            cli.command,
+            super::NativeCommand::Vm(super::VmArgs {
+                command: super::VmCommand::Status(super::VmStatusArgs { vm, .. }),
+            }) if vm == "vm-a"
+        ));
+    }
+
+    #[test]
     fn daemon_mutating_verb_frame_serializes_host_install_flags() {
         let payload = super::daemon_mutating_verb_frame(
             "hostInstall",
@@ -5329,5 +6064,352 @@ mod host_install_dispatch_tests {
         assert_eq!(value.get("apply").and_then(Value::as_bool), Some(true));
         assert_eq!(value.get("enable").and_then(Value::as_bool), Some(true));
         assert_eq!(value.get("noStart").and_then(Value::as_bool), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod konsole_eacces_tests {
+    //! v1.2fu57: konsole tolerates EACCES on key/bundle path.
+    //!
+    //! Pre-v1.2fu57: `.exists()` returned false on both ENOENT and
+    //! EACCES, so an operator-in-`nixling` whose shell can't
+    //! traverse `/var/lib/nixling` saw "ssh key not found" — a
+    //! misdiagnosis. These tests verify the new three-arm match
+    //! distinguishes the two and emits an actionable error.
+
+    use std::fs;
+    use std::io;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde_json::json;
+
+    use super::{
+        cmd_vm_konsole, konsole_eacces_remediation, konsole_resolve_bundle_key_path,
+        konsole_validate_key_exists, Context, VmKonsoleArgs,
+    };
+
+    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Per-test scratch directory under `target/`. Distinct from the
+    /// existing `test_socket_path` helper because we need a real
+    /// directory we can chmod (not a path string).
+    fn test_dir(test_name: &str) -> PathBuf {
+        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!(
+                "konsole-eacces-{test_name}-{}-{counter}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    /// Cleanup helper: restore mode-0 parent to mode-0700 so
+    /// `remove_dir_all` can recurse during teardown.
+    fn restore_dir_for_cleanup(dir: &std::path::Path) {
+        if let Ok(meta) = fs::metadata(dir) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o700);
+            let _ = fs::set_permissions(dir, perms);
+        }
+    }
+
+    fn write_konsole_manifest(path: &std::path::Path, vm: &str) {
+        let manifest = json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "audioService": format!("nixling-{vm}-audio.service"),
+                "usbipYubikey": false,
+                "staticIp": "10.20.0.42",
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+    }
+
+    #[test]
+    fn vm_konsole_eacces_on_key_path_json_mode_emits_byte_exact_failure_envelope() {
+        let dir = test_dir("key-eacces-json");
+        let manifest_path = dir.join("vms.json");
+        let bundle_path = dir.join("bundle.json");
+        let parent = dir.join("locked-parent");
+        fs::create_dir(&parent).expect("create locked parent");
+        let key_path = parent.join("test-vm_ed25519");
+        write_konsole_manifest(&manifest_path, "test-vm");
+        fs::write(&bundle_path, b"{}").expect("write synthetic bundle path");
+        fs::write(&key_path, b"stub").expect("write key");
+        let mut perms = fs::metadata(&parent).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&parent, perms).expect("chmod parent");
+
+        let context = Context {
+            manifest_path,
+            bundle_path,
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = VmKonsoleArgs {
+            vm: "test-vm".to_owned(),
+            terminal: "konsole".to_owned(),
+            user: None,
+            host: Some("10.20.0.42".to_owned()),
+            key: Some(key_path.clone()),
+            dry_run: false,
+            json: true,
+            human: false,
+        };
+
+        super::reset_test_konsole_spawn_count();
+        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_konsole(&context, &args));
+
+        restore_dir_for_cleanup(&parent);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_eq!(stdout, b"", "--json failure must not print success JSON");
+        let failure = result.expect_err("EACCES key path must fail");
+        assert_ne!(failure.exit_code, 0);
+        assert!(
+            failure
+                .message
+                .contains("permission denied on parent directory"),
+            "expected PermissionDenied remediation, got: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("nixling"),
+            "expected launcher-group remediation, got: {}",
+            failure.message
+        );
+        let rendered = failure
+            .rendered_stderr
+            .as_ref()
+            .expect("--json EACCES failure must populate rendered_stderr");
+        let envelope: serde_json::Value =
+            serde_json::from_str(rendered).expect("rendered_stderr must be JSON");
+        assert_eq!(
+            envelope.get("command").and_then(serde_json::Value::as_str),
+            Some("vm konsole")
+        );
+        assert_eq!(
+            envelope.get("error").and_then(serde_json::Value::as_str),
+            Some("permission-denied")
+        );
+        assert_eq!(
+            envelope.get("message").and_then(serde_json::Value::as_str),
+            Some(failure.message.as_str())
+        );
+        assert_eq!(
+            envelope
+                .get("exit_code")
+                .and_then(serde_json::Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            super::test_konsole_spawn_count(),
+            0,
+            "key validation failure must happen before terminal spawn"
+        );
+    }
+
+    #[test]
+    fn vm_konsole_eacces_on_key_path_emits_permission_denied_cli_failure() {
+        let dir = test_dir("key-eacces");
+        let parent = dir.join("locked-parent");
+        fs::create_dir(&parent).expect("create parent");
+        let key_path = parent.join("test-vm_ed25519");
+        // Create the key file so that ONLY parent-traversal is the
+        // failure mode (not file absence). Then chmod parent to 0
+        // so try_exists returns Err(PermissionDenied).
+        fs::write(&key_path, b"stub").expect("write key");
+        let mut perms = fs::metadata(&parent).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&parent, perms).expect("chmod parent");
+
+        let result = konsole_validate_key_exists(&key_path, false);
+
+        restore_dir_for_cleanup(&parent);
+        let _ = fs::remove_dir_all(&dir);
+
+        let failure = result.expect_err("should fail with CliFailure");
+        assert_eq!(failure.exit_code, 1);
+        assert!(
+            failure.rendered_stderr.is_none(),
+            "non-json EACCES must keep plain CliFailure shape"
+        );
+        assert!(
+            failure
+                .message
+                .contains("permission denied on parent directory"),
+            "expected actionable PermissionDenied message, got: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("nixling"),
+            "expected group-membership remediation, got: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("id -nG"),
+            "expected exact membership-check command, got: {}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn vm_konsole_key_genuinely_missing_emits_existing_cli_failure() {
+        let dir = test_dir("key-missing");
+        let key_path = dir.join("absent-vm_ed25519");
+        // Do NOT create the file; parent is readable; try_exists
+        // returns Ok(false).
+
+        let result = konsole_validate_key_exists(&key_path, false);
+
+        let _ = fs::remove_dir_all(&dir);
+
+        let failure = result.expect_err("should fail with CliFailure");
+        assert_eq!(failure.exit_code, 1);
+        assert!(
+            failure.message.contains("ssh key not found at"),
+            "expected ENOENT-shaped message, got: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("override with --key"),
+            "expected --key hint, got: {}",
+            failure.message
+        );
+        assert!(
+            !failure.message.contains("permission denied"),
+            "ENOENT message must NOT include EACCES remediation, got: {}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn vm_konsole_key_present_passes_validation() {
+        let dir = test_dir("key-present");
+        let key_path = dir.join("present-vm_ed25519");
+        fs::write(&key_path, b"stub").expect("write key");
+
+        let result = konsole_validate_key_exists(&key_path, false);
+
+        let _ = fs::remove_dir_all(&dir);
+
+        result.expect("present key must validate");
+    }
+
+    #[test]
+    fn vm_konsole_eacces_on_bundle_path_falls_through_to_stable_key_path() {
+        // The trusted bundle is intentionally private to nixlingd on
+        // deployed hosts. Konsole must not require launcher users to
+        // read it; EACCES falls through to the stable managed-key path.
+        let dir = test_dir("bundle-eacces");
+        let parent = dir.join("locked-bundle-parent");
+        fs::create_dir(&parent).expect("create parent");
+        let bundle_path = parent.join("bundle.json");
+        fs::write(&bundle_path, b"{}").expect("write bundle");
+        let mut perms = fs::metadata(&parent).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&parent, perms).expect("chmod parent");
+
+        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
+
+        restore_dir_for_cleanup(&parent);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(result, Ok(None)),
+            "private bundle must fall through to stable key path, got: {:?}",
+            result.map(|opt| opt.map(|p| p.display().to_string())),
+        );
+    }
+
+    #[test]
+    fn vm_konsole_eacces_on_bundle_file_falls_through_to_stable_key_path() {
+        let dir = test_dir("bundle-file-eacces");
+        let bundle_path = dir.join("bundle.json");
+        fs::write(&bundle_path, br#"{"managedKeys":{"keysDir":"/tmp"}}"#).expect("write bundle");
+        let mut perms = fs::metadata(&bundle_path).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&bundle_path, perms).expect("chmod bundle");
+
+        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
+
+        let mut cleanup_perms = fs::metadata(&bundle_path).unwrap().permissions();
+        cleanup_perms.set_mode(0o600);
+        let _ = fs::set_permissions(&bundle_path, cleanup_perms);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(result, Ok(None)),
+            "private bundle file must fall through to stable key path, got: {:?}",
+            result.map(|opt| opt.map(|p| p.display().to_string())),
+        );
+    }
+
+    #[test]
+    fn vm_konsole_missing_bundle_returns_ok_none_for_legacy_fallback() {
+        // Bundle file does NOT exist; parent is readable. The helper
+        // returns Ok(None) so the caller falls through to the legacy
+        // /var/lib/nixling/keys path. This is the documented
+        // pre-staging / hermetic-test code path.
+        let dir = test_dir("bundle-missing");
+        let bundle_path = dir.join("absent-bundle.json");
+
+        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
+
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            matches!(result, Ok(None)),
+            "missing bundle must return Ok(None) for legacy fallback, got: {:?}",
+            result.map(|opt| opt.map(|p| p.display().to_string())),
+        );
+    }
+
+    #[test]
+    fn vm_konsole_eacces_remediation_text_includes_actionable_command() {
+        // Direct unit test of the remediation helper for both
+        // PermissionDenied (actionable) and Other (surface inner
+        // error) branches. Exercises the bare helper in isolation
+        // so the test stays meaningful even if the higher-level
+        // wrappers refactor.
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        let msg = konsole_eacces_remediation(
+            "ssh key",
+            std::path::Path::new("/var/lib/nixling/keys/test_ed25519"),
+            &denied,
+        );
+        assert!(msg.contains("permission denied on parent directory"));
+        assert!(msg.contains("nixling"));
+        assert!(msg.contains("/var/lib/nixling/keys/test_ed25519"));
+
+        let other = io::Error::new(io::ErrorKind::NotConnected, "stub other");
+        let msg = konsole_eacces_remediation("ssh key", std::path::Path::new("/tmp/other"), &other);
+        assert!(msg.contains("cannot stat ssh key at"));
+        assert!(msg.contains("stub other"));
+        assert!(!msg.contains("permission denied on parent directory"));
     }
 }

@@ -49,7 +49,7 @@ In scope:
 - The per-VM sidecars (`nixos-modules/host-sidecars.nix`, `nixos-modules/components/`).
 - The framework's SSH key management (`nixling-keys` activation, virtiofs injection).
 - Network isolation / NAT / firewalling (`nixos-modules/net.nix`, `nixos-modules/network.nix`).
-- The W0a/W0b Rust workspace (`packages/`) — bootstrap surface and supply-chain gates only; long-lived control-plane behavior lands in W2+ with its own SECURITY scope update.
+- The Rust workspace (`packages/`) — bootstrap surface, supply-chain gates, and long-lived control-plane behavior.
 
 Out of scope:
 - Vulnerabilities in upstream `nixpkgs`, `microvm.nix`, `cloud-hypervisor`, `crosvm`, `swtpm` — report those to their respective maintainers; we'll coordinate.
@@ -64,7 +64,7 @@ For the full threat model, see [`docs/explanation/design.md`](docs/explanation/d
 
 The short version: nixling defends against compromised-guest-userspace and cross-VM lateral movement. It does NOT defend against compromised host kernel, multi-user trust on a single host, or hardware-level adversaries.
 
-### Portability roadmap (W0b scope draft)
+### Portability roadmap
 
 The portability work introduces a non-root `nixlingd` daemon plus a
 minimal root-owned `nixling-priv-broker` (see ADRs 0001-0008 under
@@ -72,7 +72,7 @@ minimal root-owned `nixling-priv-broker` (see ADRs 0001-0008 under
 will introduce are:
 
 - A public CLI socket at `/run/nixling/nixlingd.sock` ACL'd to
-  `nixling-launcher` (daily lifecycle) and `nixling-admin`
+  `nixling` (daily lifecycle) and `nixling-admin`
   (destructive ops), authenticated by `SO_PEERCRED` plus the system
   account database — not by polkit at runtime.
 - A private broker socket at `/run/nixling/priv.sock` reachable only
@@ -113,13 +113,11 @@ Telemetry posture is preserved: `nixlingd` makes no outbound network
 connections by default; any future opt-in lands behind an explicit
 `--enable-diagnostics` flag and an update to this file.
 
-W2 ships the full rewrite of this section once the daemon code is in
-place; W0b only ships this scope draft so consumers can read the
-trust-boundary delta before the implementation lands.
+This section documents the daemon trust-boundary delta for consumers.
 
-### W3 trust-boundary delta (host-prepare wave)
+### Host-prepare trust-boundary delta
 
-W3 extends the broker's closed-enum surface to cover host-prepare
+The broker's closed-enum surface covers host-prepare
 mutation: cgroup v2 delegation + pidfd handoff (ADR 0011), per-link
 sysctls + bridge/TAP + NetworkManager unmanaged config + `/etc/hosts`
 managed-block + route preflight (ADR 0012), `inet nixling` nftables
@@ -146,13 +144,12 @@ The new trust-boundary statements are:
   (`/var/lib/nixling/audit/broker-<utc-date>.jsonl`) is
   root-owned, append-only via a pre-opened `O_APPEND` fd, and
   rotated daily. Retention defaults to 14 days, overridable via
-  `nixling.site.audit.retentionDays` (W4a-H1; set to `0` to
-  disable pruning). **Reserved at W4a-H1**: broker prune-on-
-  rotate is shipping, but the NixOS option is not yet threaded
-  into the broker invocation (W4 main wave); broker uses the
-  14-day default regardless of overrides until then. The pre-W3
-  legacy `/var/lib/nixling/broker-audit.log` compatibility shim
-  has been retired (W4 retire-shim): both the writer
+  `nixling.site.audit.retentionDays` (set to `0` to disable
+  pruning). **Reserved**: broker prune-on-rotate is shipping, but
+  the NixOS option is not yet threaded into the broker invocation;
+  broker uses the 14-day default regardless of overrides until
+  then. The legacy `/var/lib/nixling/broker-audit.log`
+  compatibility shim has been retired: both the writer
   (`AuditLog::write_entry` and `AuditLog::write_op_record`) and
   the reader (`AuditLog::export_lines`, which now enumerates the
   full daily-file directory in chronological order) operate
@@ -164,8 +161,9 @@ The new trust-boundary statements are:
   [`docs/explanation/host-prepare.md`](docs/explanation/host-prepare.md)
   § Recovery runbook.
 - USBIP live device routing (`UsbipBind`/`UsbipUnbind`/
-  `UsbipProxyReconcile`) is explicitly out of W3 scope; W3 ships
-  only the per-busid `UsbipBindFirewallRule` skeleton.
+  `UsbipProxyReconcile`) is explicitly out of scope for this
+  trust-boundary delta; only the per-busid
+  `UsbipBindFirewallRule` skeleton is covered.
 
 ## See also
 

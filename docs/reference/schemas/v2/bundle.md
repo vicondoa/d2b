@@ -10,7 +10,7 @@ find the current `host.json`, `processes.json`, `privileges.json`,
 ## Top-level fields
 
 - `schemaVersion` — schema directory/version for every referenced artifact.
-- `bundleVersion` — additive bundle contract rev (`4` in the current W15 tree).
+- `bundleVersion` — additive bundle contract rev (`4` in the current tree).
 - `publicManifestPath` — path to the public `vms.json` manifest.
 - `hostPath` — path to the private `host.json` artifact.
 - `processesPath` — path to the private `processes.json` artifact.

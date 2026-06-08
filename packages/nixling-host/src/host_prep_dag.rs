@@ -1,31 +1,29 @@
-//! P2 host-prep DAG: per-VM host preparation steps that the daemon
-//! executes via the broker before invoking the per-VM process DAG
+//! Host-prep DAG: per-VM host preparation steps that the daemon executes
+//! via the broker before invoking the per-VM process DAG
 //! (`nixlingd::supervisor::dag`).
 //!
 //! Background
 //! ----------
 //!
-//! Pre-P2 the framework relied on per-VM systemd templates
-//! (`microvm-tap-interfaces@<vm>.service`, `microvm-setup@<vm>.service`,
-//! `microvm-pci-devices@<vm>.service`, ...) to do tap-fd creation,
-//! vhost-net fd open, dnsmasq lease seeding, store-view bind-mounts,
-//! nftables rule installation, and ownership-matrix enforcement
-//! before the cloud-hypervisor runner could start.
+//! Before the daemon-only migration, the framework relied on per-VM
+//! systemd templates (`microvm-tap-interfaces@<vm>.service`,
+//! `microvm-setup@<vm>.service`, `microvm-pci-devices@<vm>.service`, ...)
+//! to do tap-fd creation, vhost-net fd open, dnsmasq lease seeding,
+//! store-view bind-mounts, nftables rule installation, and ownership-
+//! matrix enforcement before the cloud-hypervisor runner could start.
 //!
-//! P2 collapses those into a single typed DAG that the daemon walks
-//! in topo order on every VM start. Every step dispatches a typed
-//! broker op (per plan.md "P2 daemon-side host-prep replaces per-VM
-//! systemd templates"); failures surface as the typed
-//! [`HostPrepStepFailed`] error.
+//! The daemon-only migration collapses those into a single typed DAG that
+//! the daemon walks in topo order on every VM start. Every step dispatches
+//! a typed broker op; failures surface as the typed [`HostPrepStepFailed`]
+//! error.
 //!
-//! Scope split with sibling P2 deliverables
-//! ----------------------------------------
+//! Scope split with sibling deliverables
+//! -------------------------------------
 //!
-//! - [`HostPrepStepKind::OwnershipMatrixCheck`] is implemented by the
-//!   `ph2-p2-ownership-matrix` sibling agent
-//!   (`packages/nixling-host/src/ownership_matrix.rs`).
-//! - [`HostPrepStepKind::SshHostKeyPreflight`] is implemented by the
-//!   `ph2-p2-ssh-host-key-preflight` sibling agent.
+//! - [`HostPrepStepKind::OwnershipMatrixCheck`] is implemented by
+//!   `packages/nixling-host/src/ownership_matrix.rs`.
+//! - [`HostPrepStepKind::SshHostKeyPreflight`] is implemented by the SSH
+//!   host-key preflight module.
 //!
 //! This module defines the typed enum variants and dependency edges
 //! so other agents can wire the broker dispatch independently. The
@@ -39,11 +37,11 @@
 //! | -------------------------- | ---------------------------------------------------- |
 //! | `BringUpTapInterface`      | [`BrokerRequest::CreateTapFd`] / `CreatePersistentTap` |
 //! | `PreOpenVhostNetFd`        | [`BrokerRequest::OpenVhostNet`] (or `OpenDevice`)    |
-//! | `SeedDnsmasqLease`         | [`BrokerRequest::SeedDnsmasqLease`] *(P2 stub)*      |
-//! | `BindMountFromHardlinkFarm`| [`BrokerRequest::BindMountFromHardlinkFarm`] *(P2)*  |
+//! | `SeedDnsmasqLease`         | [`BrokerRequest::SeedDnsmasqLease`] *(stub)*         |
+//! | `BindMountFromHardlinkFarm`| [`BrokerRequest::BindMountFromHardlinkFarm`]         |
 //! | `ApplyNftablesRules`       | [`BrokerRequest::ApplyNftables`]                     |
-//! | `OwnershipMatrixCheck`     | [`BrokerRequest::OwnershipMatrixCheck`] *(P2 stub)*  |
-//! | `SshHostKeyPreflight`      | [`BrokerRequest::SshHostKeyPreflight`] *(P2 stub)*   |
+//! | `OwnershipMatrixCheck`     | [`BrokerRequest::OwnershipMatrixCheck`] *(stub)*     |
+//! | `SshHostKeyPreflight`      | [`BrokerRequest::SshHostKeyPreflight`] *(stub)*      |
 //!
 //! [`BrokerRequest::CreateTapFd`]: nixling_ipc::broker_wire::BrokerRequest::CreateTapFd
 //! [`BrokerRequest::OpenVhostNet`]: nixling_ipc::broker_wire::BrokerRequest::OpenVhostNet
@@ -132,27 +130,25 @@ pub enum HostPrepStepKind {
     /// **Net-VM-only**: workload VMs do not run dnsmasq, so the
     /// builder skips this step for them.
     SeedDnsmasqLease,
-    /// Per-VM `/var/lib/nixling/vms/<vm>/store-view` bind-mount
-    /// from the per-VM hardlink farm (`store/`). Dispatches the
-    /// `BindMountFromHardlinkFarm` broker op (P2 stub).
+    /// Per-VM `/var/lib/nixling/vms/<vm>/store-view` bind-mount from the
+    /// per-VM hardlink farm (`store/`). Dispatches the
+    /// `BindMountFromHardlinkFarm` broker op.
     BindMountFromHardlinkFarm,
     /// nftables fragment apply via broker `ApplyNftables`. Already
-    /// fully typed in W3; here we just register it as a DAG step.
-    /// The per-VM rules live in the bundle's `nft:env:<env>` intent.
+    /// fully typed; here we just register it as a DAG step. The per-VM
+    /// rules live in the bundle's `nft:env:<env>` intent.
     ApplyNftablesRules,
     /// Defence-in-depth ownership/mode/setgid invariants for
-    /// `/var/lib/nixling/vms/<vm>/`. Owned by sibling P2 agent
-    /// (`ph2-p2-ownership-matrix`). The dispatch arm here is a
-    /// typed placeholder; the sibling lands the real check.
+    /// `/var/lib/nixling/vms/<vm>/`. The dispatch arm here is a typed
+    /// placeholder; the ownership-matrix module lands the real check.
     OwnershipMatrixCheck,
     /// VM start preflight: refuse if
     /// `/var/lib/nixling/vms/<vm>/sshd-host-keys/ssh_host_*_key`
     /// opened with `O_NOFOLLOW` drifts from `root:root 0400`
     /// (rejects symlinks, owner/group mismatch, mode mismatch).
-    /// Owned by sibling P2 agent (`ph2-p2-ssh-host-key-preflight`).
     SshHostKeyPreflight,
-    // ---- P2fu1 kernel-r1-1 closure: explicit ordering for the
-    // microvm-tap-interfaces / microvm-setup tap path ----
+    // ---- Explicit ordering for the microvm-tap-interfaces /
+    // microvm-setup tap path ----
     /// Mark the per-VM tap parent bridge interfaces as unmanaged in
     /// NetworkManager via broker `ApplyNmUnmanaged`. Must run BEFORE
     /// tap creation so NetworkManager doesn't race the broker's
@@ -174,12 +170,11 @@ pub enum HostPrepStepKind {
     /// `microvm-tap-interfaces@<vm>.service`. Must run AFTER
     /// tap creation + bridge attach + sysctl apply.
     SetBridgePortFlags,
-    /// P3 `ph3-p3-net-route-degraded-mode`: daemon-side host-scope
-    /// preflight that verifies each env's LAN bridge exists and is
-    /// administratively up. Replaces the legacy
-    /// `nixling-net-route-preflight.service` host singleton
-    /// (scheduled for removal in P6). This is a typed-only step in
-    /// the host-prep enum: the daemon executes the check in its
+    /// Daemon-side host-scope preflight that verifies each env's LAN
+    /// bridge exists and is administratively up. Replaces the legacy
+    /// `nixling-net-route-preflight.service` host singleton (retired in
+    /// v1.0). This is a typed-only step in the host-prep enum: the
+    /// daemon executes the check in its
     /// startup path and in `dispatch_broker_host_reconcile`; it is
     /// NOT scheduled per-VM in the DAG today.
     HostNetRoutePreflight,
@@ -227,12 +222,11 @@ impl HostPrepStepKind {
     }
 }
 
-/// Opaque pointer into the trusted bundle for a single host-prep
-/// step (per W4-H5 bundle-resolved intent contract: the daemon
-/// never names raw paths/uids/argv on the broker wire).
+/// Opaque pointer into the trusted bundle for a single host-prep step.
+/// The daemon never names raw paths/uids/argv on the broker wire.
 ///
-/// The shape mirrors the W3 `BundleOpId` discipline; each step
-/// carries the IDs the broker needs to look up its intent row in
+/// The shape mirrors the `BundleOpId` discipline; each step carries the
+/// IDs the broker needs to look up its intent row in
 /// its own copy of the bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -546,7 +540,8 @@ pub fn topo_sort(steps: Vec<HostPrepStep>) -> Result<Vec<HostPrepStep>, CycleErr
 
     let mut ready: VecDeque<HostPrepStepId> = indeg
         .iter()
-        .filter_map(|(id, n)| (*n == 0).then(|| id.clone()))
+        .filter(|(_, n)| **n == 0)
+        .map(|(id, _)| id.clone())
         .collect();
     // BTreeMap iteration is already ordered, so `ready` is sorted.
 

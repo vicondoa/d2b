@@ -24,7 +24,7 @@
 #       - The host has at least one Audio Device, at least one Sink,
 #         at least one Source.
 #   2. Audio sidecar lifecycle
-#       - `systemctl start nixling-<vm>-snd.service` (system service, Phase 4 C3) creates
+#       - `systemctl start nixling-<vm>-snd.service` (system service) creates
 #         the listening UDS under /run/user/<uid>/ with group=kvm
 #         mode=0660; stop removes it.
 #       - The .service auto-activates via socket activation when
@@ -187,7 +187,7 @@ cleanup_audio() {
       log "cleanup: restoring $vm audio state to baseline $baseline"
       tmp=$(mktemp)
       printf '%s\n' "$baseline" > "$tmp"
-      sudo -A install -m 0640 -o root -g nixling-launcher -- "$tmp" "$f"
+      sudo -A install -m 0640 -o root -g nixling -- "$tmp" "$f"
       rm -f "$tmp"
       # IMPORTANT: do NOT stop the sidecar of a real VM in cleanup.
       # vhost-user is a one-shot connection: CH binds the socket once
@@ -322,7 +322,7 @@ test_host_has_audio_sinks_and_sources() {
 
 test_sidecar_unit_present() {
   log "test_sidecar_unit_present"
-  # Phase 4 C3: nixling-<vm>-snd.service is now a per-VM system service (not
+  # nixling-<vm>-snd.service is now a per-VM system service (not
   # a template, not user). Look for at least one such unit.
   if ! systemctl list-unit-files 'nixling-*-snd.service' --no-pager \
        --no-legend 2>/dev/null | grep -q 'nixling-.*-snd.service'; then
@@ -334,7 +334,7 @@ test_sidecar_unit_present() {
 
 test_sidecar_socket_lifecycle() {
   log "test_sidecar_socket_lifecycle"
-  # Phase 4 C3: nixling-<vm>-snd.service is a per-VM system service with
+  # nixling-<vm>-snd.service is a per-VM system service with
   # User=nixling-<vm>-snd.  Synthetic VM names (SCRATCH_VM) have no
   # declared system user so systemd refuses to start them ("Access denied").
   # Use the first stopped audio-enabled manifest VM instead so the user
@@ -644,7 +644,7 @@ test_zzz_host_audio_unchanged() {
 # and assert correct behaviour.
 #
 # Tests run as $NL_WAYLAND_USER (after re-exec). Writing to /var/lib/nixling/
-# requires sudo -A install to set root:nixling-launcher 0640 ownership.
+# requires sudo -A install to set root:nixling 0640 ownership.
 
 _M7_SCRATCH_VM="__nixling_m7test__"
 _M7_SCRATCH_DIR="$STATE_ROOT/$_M7_SCRATCH_VM"
@@ -652,11 +652,11 @@ _M7_STATE_FILE="$_M7_SCRATCH_DIR/state/audio-state.json"
 
 _m7_write_state() {
   sudo -A install -d -m 0755 -o root -g root "$_M7_SCRATCH_DIR" 2>/dev/null || true
-  sudo -A install -d -m 0750 -o root -g nixling-launcher "$_M7_SCRATCH_DIR/state" 2>/dev/null || true
+  sudo -A install -d -m 0750 -o root -g nixling "$_M7_SCRATCH_DIR/state" 2>/dev/null || true
   local tmp
   tmp=$(mktemp)
   printf '%s\n' "$1" > "$tmp"
-  sudo -A install -m 0640 -o root -g nixling-launcher "$tmp" "$_M7_STATE_FILE"
+  sudo -A install -m 0640 -o root -g nixling "$tmp" "$_M7_STATE_FILE"
   rm -f "$tmp"
 }
 
@@ -672,7 +672,7 @@ add_cleanup _m7_cleanup
 # (pre-rebuild) so callers can SKIP cleanly.
 _m7_run_helper() {
   local helper_path
-  # P6 ph6-p6-cli-nix-migrations: the `nixling.audioStateHelperPath`
+  # The `nixling.audioStateHelperPath`
   # internal option was retired together with the bash CLI surface,
   # so we no longer eval it out of the live config. Instead, locate
   # the helper by greping the nixling binary in the current system
@@ -754,7 +754,7 @@ test_audio_state_file_mode() {
       rc=1
       continue
     fi
-    assert_eq "$mode_owner" "640 root:nixling-launcher" "$vm: audio-state.json is mode 640 owner root:nixling-launcher" || rc=1
+    assert_eq "$mode_owner" "640 root:nixling" "$vm: audio-state.json is mode 640 owner root:nixling" || rc=1
   done
   return $rc
 }
@@ -762,7 +762,7 @@ test_audio_state_file_mode() {
 # ---------------------------------------------------------------------
 # security-r8-audio: end-to-end signal-path tests.
 #
-# History: the P4 refactor (audio sidecar moved from user service to
+# History: the refactor (audio sidecar moved from user service to
 # system service with nixling-<vm>-snd system user + ACL-gated socket)
 # silently broke the audio path in three distinct ways that all
 # slipped past the existing tests because none of them verified the

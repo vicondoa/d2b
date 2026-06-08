@@ -28,14 +28,14 @@ _LIB_HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 FLAKE=${FLAKE:-$(dirname "$_LIB_HERE")}
 # NL_LOG defaults outside $FLAKE so the append churn doesn't race
 # `builtins.getFlake (toString $FLAKE)` source captures during
-# flake-eval gates (W2fu4 H14 — test reviewer R3 finding). Operators
-# who need a stable in-tree log location can still override
+# flake-eval gates. Operators who need a stable in-tree log location
+# can still override
 # NL_LOG=$FLAKE/.nixling-test.log explicitly.
 NL_LOG=${NL_LOG:-${TMPDIR:-/tmp}/nixling-test.$$.log}
 # shellcheck disable=SC2034  # STATE_ROOT used by scripts that source this lib
 STATE_ROOT=/var/lib/nixling/vms
 
-# W2fu2: sccache-based cross-worktree dedupe of compiled rustc outputs.
+# Sccache-based cross-worktree dedupe of compiled rustc outputs.
 # Default storage location lives outside any single worktree's .cache so
 # multiple worktrees share a single rustc-output cache. Override with
 # SCCACHE_DIR=... locally to bypass.
@@ -70,7 +70,7 @@ nl_cargo_target_dir() {
   fi
   # Honor an explicit [build].target-dir if present; otherwise use the
   # cargo default ("<workspace-root>/target") for the scope. With the
-  # W2fu2 sccache-based dedup design, target-dir is intentionally NOT
+  # Sccache-based dedup design, target-dir is intentionally NOT
   # set, so each worktree gets its own per-worktree target/ and
   # compiled-output dedup happens cross-worktree via sccache.
   target_dir=$(sed -n 's/^[[:space:]]*target-dir[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$config" | head -1)
@@ -348,12 +348,12 @@ ssh_net_vm() {
 }
 
 # DEPRECATED back-compat alias. Older test scripts and ad-hoc tooling
-# call `ssh_router <vm>`; new code should call `ssh_net_vm`. The W2
+# call `ssh_router <vm>`; new code should call `ssh_net_vm`. The
 # rename of the per-env auto-VM (\`<env>-router\` → \`sys-<env>-net\`)
 # and of the manifest field (\`isRouter\` → \`isNetVm\`) means the
 # old name is misleading, but a hard rename in this commit would
-# break any caller carried over from the pre-W2 era. Remove after
-# all in-tree call sites have switched (Phase 7a).
+# break any caller carried over from the pre- era. Remove after
+# all in-tree call sites have switched.
 ssh_router() { ssh_net_vm "$@"; }
 
 # ---------- cleanup ----------
@@ -365,8 +365,7 @@ ssh_router() { ssh_net_vm "$@"; }
 # created/removed/appended between the kernel `stat` and the store
 # copy, the copy fails with
 #   error: path '//<flake source>/.nl-cleanups.<pid>' does not exist
-# (observed in W2 R2 product + networking reviewer runs at
-# cli-legacy-bash-dispatch / cli-json after the H8 timing-path fix).
+# (observed in cli-legacy-bash-dispatch / cli-json timing-path runs).
 #
 # Cleanups + scratch registry move to
 #   ${NL_BOOKKEEPING_DIR:-${TMPDIR:-/tmp}/nixling-bookkeeping}
@@ -489,10 +488,10 @@ nl_reap_scratch_orphans() {
   fi
 }
 
-# ---------- disk budget + per-phase GC (W3a-4) ----------
+# ---------- disk budget + per-phase GC ----------
 #
 # Full tests/static.sh peak /nix/store growth is ~1.2 TiB cold (per
-# the W3fu7 panel-round transcripts). The bulk of that growth is in
+# the panel-round transcripts). The bulk of that growth is in
 # transient derivations (kernel/initrd/systemd toplevels) that are
 # only retained via auto-gcroots created by `nix-shell` and
 # `nix flake check` inside individual gates. Running a focused
@@ -507,7 +506,7 @@ nl_reap_scratch_orphans() {
 # emergency watchdog to SIGTERM us mid-derivation.
 
 nl_disk_free_gib() {
-  # W4a R1 kernel-1: query the /nix/store filesystem specifically.
+  # Query the /nix/store filesystem specifically.
   # The gate's pressure and gc target are /nix/store; on hosts where
   # /nix is a separate mount or subvolume, `df /` would silently
   # report root-fs free space while the store fs is exhausted and
@@ -588,7 +587,7 @@ nl_check_disk_budget() {
 # NL_STATIC_CACHE was set at lib.sh source-time, which left
 # `_NL_SMOKE_FALLBACK` unbound and surfaced as a hard gate failure on
 # any code path that fell through `_nl_smoke_cache_dir`'s primary
-# branch (observed at the W1 bundle/schema gate after rust-workspace
+# branch (observed at the bundle/schema gate after rust-workspace
 # completed).
 if [ -z "${_NL_SMOKE_FALLBACK:-}" ]; then
   _NL_SMOKE_FALLBACK=$(nl_mktemp .nl-smoke-cache.XXXXXX)
@@ -716,8 +715,8 @@ nl_smoke_bundle_privileges_json() {
 }
 
 # Render the smoke `nixling._bundle.hostJson.jsonText` once per run and
-# emit its cached path. Used by W3fu2 H4
-# `tests/ifname-nix-rust-parity.sh` to assert the Nix-emitted
+# emit its cached path. Used by `tests/ifname-nix-rust-parity.sh` to assert
+# the Nix-emitted
 # `ifNameMappings[].derivedIfname` values pass the Rust
 # `looks_nixling_owned` predicate's format gate.
 nl_smoke_bundle_host_json() {

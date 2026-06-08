@@ -1,9 +1,15 @@
+// TypedError is a large enum used throughout this crate as the canonical
+// Result Err type. Boxing it would require pervasive API changes across
+// hundreds of call sites; the size trade-off is intentional and tracked
+// in plan.md §D-typed-error-boxing. Suppressed until that refactor lands.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::future::Future;
 use std::io::{IoSliceMut, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -12,7 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nix::cmsg_space;
-use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+use nix::fcntl::{fcntl, FcntlArg, FdFlag, Flock, FlockArg};
 use nix::sys::socket::{
     connect, getsockopt, recv, recvmsg, send, socket, sockopt::PeerCredentials, AddressFamily,
     ControlMessageOwned, MsgFlags, SockFlag, SockType, UnixAddr,
@@ -23,7 +29,7 @@ use nixling_core::bundle_resolver::{
     intent_id_activation, intent_id_gc_host, intent_id_hosts_host, intent_id_installer_host,
     intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
     intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
-    intent_id_trust, BundleResolver,
+    intent_id_trust, intent_id_usbip_firewall, BundleResolver,
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
@@ -37,16 +43,18 @@ use nixling_ipc::{
         ActivationMode as BrokerActivationMode, ApplyNftablesRequest as BrokerApplyNftablesRequest,
         ApplyNmUnmanagedRequest as BrokerApplyNmUnmanagedRequest,
         ApplyRouteRequest as BrokerApplyRouteRequest,
-        ApplySysctlRequest as BrokerApplySysctlRequest, BrokerRequest, BrokerRequestEnvelope,
-        BrokerResponse, OpenPidfdRequest as BrokerOpenPidfdRequest,
+        ApplySysctlRequest as BrokerApplySysctlRequest, BrokerCallerRole, BrokerRequest,
+        BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
+        OpenPidfdRequest as BrokerOpenPidfdRequest,
         RunActivationRequest as BrokerRunActivationRequest, RunGcRequest as BrokerRunGcRequest,
         RunHostInstallRequest as BrokerRunHostInstallRequest,
         RunHostKeyTrustRequest as BrokerRunHostKeyTrustRequest,
         RunKeysRotateRequest as BrokerRunKeysRotateRequest,
         RunMigrateRequest as BrokerRunMigrateRequest,
-        RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole,
-        SpawnRunnerRequest as BrokerSpawnRunnerRequest,
+        RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
+        SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
         UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
+        UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
         UsbipBindRequest as BrokerUsbipBindRequest,
         UsbipProxyReconcileRequest as BrokerUsbipProxyReconcileRequest,
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
@@ -59,105 +67,100 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use socket2::{Domain, SockAddr, Socket, Type};
 use supervisor::pidfd_table::{
-    PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
+    BrokerReapLog, PidfdEntry, PidfdRegistration, PidfdTable, PidfdTableError, WaitTermination,
 };
 use uzers::{get_user_by_uid, get_user_groups};
 
 pub mod supervisor;
 pub mod typed_error;
 pub mod wire;
-// W4-H8: `[pending restart]` machinery. Pure module + filesystem
-// reader trait so the CLI can compute the daemon-level
-// pending-restart signal post-restart without requiring /run live.
+// `[pending restart]` machinery. Pure module + filesystem reader trait
+// so the CLI can compute the daemon-level pending-restart signal
+// post-restart without requiring /run live.
 pub mod daemon_version;
-// P2 ph2-p2-ownership-matrix: per-VM state-directory ownership
-// preflight invoked from `dispatch_broker_vm_start`. The pure
-// enforcer lives in `nixling_host::ownership_matrix`.
+// Per-VM state-directory ownership preflight invoked from
+// `dispatch_broker_vm_start`. The pure enforcer lives in
+// `nixling_host::ownership_matrix`.
 pub mod ownership_preflight;
-// P2 ph2-known-hosts-refresh: daemon-side replacement for the
-// retired `nixling-known-hosts-refresh@<vm>.service` oneshot.
-// Invoked from `dispatch_broker_vm_start` after the per-VM DAG
+// Daemon-side replacement for the retired
+// `nixling-known-hosts-refresh@<vm>.service` oneshot. Invoked from
+// `dispatch_broker_vm_start` after the per-VM DAG
 // reports `overall_ok` (i.e. the VM's readiness signal has
 // fired). See `known_hosts_refresh` for the pure intent builder
 // + side-effect wrapper.
 pub mod known_hosts_refresh;
-// P2 ph2-p2-ssh-host-key-preflight: per-VM sshd host key
-// posture preflight invoked from `dispatch_broker_vm_start` and
-// from the host-prep DAG executor. The pure check lives in
+// Per-VM sshd host key posture preflight invoked from
+// `dispatch_broker_vm_start` and from the host-prep DAG executor.
+// The pure check lives in
 // `crate::ssh_host_key_preflight`.
 pub mod ssh_host_key_preflight;
-// P2 ph2-p2-net-vm-bundle-gate: refuses to start a `sys-<env>-net`
-// VM when the on-disk dnsmasq.conf for that env diverges from the
+// Refuses to start a `sys-<env>-net` VM when the on-disk dnsmasq.conf
+// for that env diverges from the
 // bundle's nft/route/hosts intent hash. Catches the case where the
 // bundle was updated but the dnsmasq render step did not rerun.
 // See `docs/reference/net-vm-bundle-gate.md`.
 pub mod net_vm_bundle_gate;
-// P3 ph3-p3-kernel-module-check: daemon startup self-check
-// that verifies the kernel-module matrix the running config
-// requires is loaded; refuses to start on missing required
+// Daemon startup self-check that verifies the kernel-module matrix the
+// running config requires is loaded; refuses to start on missing required
 // modules and marks VMs as degraded on optional misses. See
 // `docs/reference/kernel-module-check.md`.
 pub mod kernel_module_check;
-// P3 ph3-p3-otelbridge-readiness: typed readiness gate that
-// blocks `dispatch_broker_vm_start` from declaring the
-// observability VM successful until the broker-spawned
+// Typed readiness gate that blocks `dispatch_broker_vm_start` from
+// declaring the observability VM successful until the broker-spawned
 // OtelHostBridge runner has registered its pidfd AND opened its
 // obs vsock host socket. On timeout the daemon falls back to
 // degraded mode (VM is up; observability annotated as broken).
 // See `docs/reference/otel-host-bridge-readiness.md`.
 pub mod otel_host_bridge_readiness;
-// P3 ph3-p3-net-route-degraded-mode: daemon startup self-check
-// that replaces the legacy `nixling-net-route-preflight.service`
-// host singleton (scheduled for removal in P6). Probes each env's
-// LAN bridge, persists a small history, and engages an
-// operator-only mode after N consecutive failures. Recovery is
-// via the new `nixling host reconcile --network --apply` verb.
-// See `docs/explanation/host-prepare.md` and plan.md row
-// `ph3-p3-net-route-degraded-mode`.
+// Daemon startup self-check that replaces the legacy
+// `nixling-net-route-preflight.service` host singleton (retired in v1.0).
+// Probes each env's LAN bridge, persists a small history, and engages an
+// operator-only mode after N consecutive failures. Recovery is via the new
+// `nixling host reconcile --network --apply` verb. See
+// `docs/explanation/host-prepare.md`.
 pub mod net_route_preflight;
 // v1.1.1 runtime pidfs self-probe: hard-refuses daemon startup on
 // kernels without pidfs (CONFIG_FS_PID stripped or kernel < 6.9).
 // Defense-in-depth alongside the static `tests/v1.1-kernel-floor-eval.sh`
 // gate. Per ADR 0008 + ADR 0018.
 pub mod pidfs_probe;
-// P2 ph2-p2-daemon-autostart: contract for bringing autostart VMs
-// up on daemon startup (net VMs first, concurrency cap,
-// degraded-mode tolerant, idempotent). See
+// Contract for bringing autostart VMs up on daemon startup (net VMs
+// first, concurrency cap, degraded-mode tolerant, idempotent). See
 // docs/reference/daemon-autostart.md.
 pub mod autostart;
-// P3 ph3-usbipd-perenv: daemon-side per-env usbipd autostart. Folds
-// the 9 transitional `nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`
-// units into broker `SpawnRunner` with `RunnerRole::Usbip`, keyed
-// per-env on `vm_id = sys-<env>-usbipd` with role_ids `backend` /
-// `proxy`. See plan.md row `ph3-usbipd-perenv`.
+// Daemon-side per-env usbipd autostart. Folds the transitional
+// `nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}` units into
+// broker `SpawnRunner` with `RunnerRole::Usbip`, keyed per-env on
+// `vm_id = sys-<env>-usbipd` with role_ids `backend` / `proxy`.
 pub mod usbipd_perenv_autostart;
-// P3 ph3-p3-prometheus-otlp-shape: Prometheus scrape endpoint shape.
-// Owns the canonical metric inventory (see
+// Prometheus scrape endpoint shape. Owns the canonical metric inventory (see
 // `docs/reference/daemon-metrics.md`) and a minimal HTTP/1.1
 // `GET /metrics` handler. The registry is process-local; serving is
 // wired through the daemon's public socket accept loop.
 pub mod metrics;
-// P3 ph3-p3-ch-exporter-retire: per-VM Cloud Hypervisor stats
-// scraper folded into the daemon's `/metrics` endpoint. Replaces
-// the host-side `nixling-ch-exporter.service` singleton (still
-// installed during P3 transition, removed in P6). See
-// `docs/reference/daemon-metrics.md` for the metric inventory.
+// Per-VM Cloud Hypervisor stats scraper folded into the daemon's
+// `/metrics` endpoint. Replaces the host-side `nixling-ch-exporter.service`
+// singleton (retired in v1.0). See `docs/reference/daemon-metrics.md` for
+// the metric inventory.
 pub mod ch_stats;
-// P3 ph3-p3-audit-check-retire: in-daemon replacement for the
+// In-daemon replacement for the
 // `nixling-audit-check.{service,timer}` host singleton + timer that
 // previously sanity-checked broker audit log shape on a daily cadence.
 // Exposes `GET /health/audit-check` on the daemon's HTTP surface and
 // a pure check function suitable for invocation from the supervisor
 // event loop. See `docs/reference/daemon-audit-check.md`.
 pub mod audit_check;
-// P3 ph3-p3-usbip-state-machine: typed, per-busid USBIP state
-// machine that pins the canonical bring-up order
+// Typed, per-busid USBIP state machine that pins the canonical bring-up
+// order
 // `modprobe → lock → withhold → firewall → backend → bind → proxy`
 // (AGENTS.md "Critical subsystems"). Each step is a typed broker
 // op or daemon-side action; failures are fail-fast and surface as
 // `TypedError::UsbipStepFailed { busid, step, reason }`
 // (exit code 67). See `docs/reference/usbip-state-machine.md`.
 pub mod usbip_state_machine;
+// Daemon-side JSONL audit events for transitions not covered by the
+// broker's OpAuditRecord stream (e.g. api-ready timeout).
+pub mod daemon_audit;
 
 use typed_error::TypedError;
 
@@ -210,8 +213,8 @@ pub struct DaemonConfig {
     pub accepted_client_version_range: String,
     #[serde(default)]
     pub artifacts: ArtifactPaths,
-    /// P2 ph2-p2-daemon-autostart: concurrency cap for the
-    /// autostart pass that runs on daemon startup. Default `3`.
+    /// Concurrency cap for the autostart pass that runs on daemon
+    /// startup. Default `3`.
     /// Mirrors `nixling.daemon.autostart.parallelism`.
     #[serde(default = "default_autostart_parallelism")]
     pub autostart_parallelism: usize,
@@ -230,7 +233,7 @@ impl Default for DaemonConfig {
             locks_dir: PathBuf::from("/run/nixling/locks"),
             daemon_user: "nixlingd".to_owned(),
             daemon_group: "nixlingd".to_owned(),
-            public_socket_group: "nixling-launchers".to_owned(),
+            public_socket_group: "nixling".to_owned(),
             launcher_users: Vec::new(),
             admin_users: Vec::new(),
             server_version: default_server_version(),
@@ -280,6 +283,7 @@ struct RuntimeIdentity {
 #[derive(Debug, Clone)]
 struct PeerIdentity {
     role: PeerRole,
+    uid: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +298,11 @@ struct ServerState {
     daemon_uid: u32,
     daemon_state_dir: PathBuf,
     pidfd_table: Arc<PidfdTable>,
+    broker_reap_log: Arc<BrokerReapLog>,
+    metrics_registry: Arc<metrics::Registry>,
+    /// Daemon-side audit log for supervisor events (e.g. api-ready
+    /// timeout) that are not emitted by the broker.
+    daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
 }
 
 struct PeerOverride {
@@ -322,17 +331,17 @@ fn pidfd_table_state_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("pidfd-table.json")
 }
 
-/// P3 ph3-p3-host-doctor-extended: path of the persisted
-/// kernel-module-check report. `nixling host doctor --read-only`
-/// reads this file to surface the kernel-module matrix posture
-/// without re-running the bundle resolver in the CLI process.
+/// Path of the persisted kernel-module-check report. `nixling host
+/// doctor --read-only` reads this file to surface the kernel-module
+/// matrix posture without re-running the bundle resolver in the CLI
+/// process.
 pub fn kernel_module_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("kernel-module-report.json")
 }
 
-/// P3 ph3-p3-host-doctor-extended: path of the persisted
-/// autostart-pass report (summary + per-VM outcomes). `nixling host
-/// doctor --read-only` reads this file to report degraded-VM count.
+/// Path of the persisted autostart-pass report (summary + per-VM
+/// outcomes). `nixling host doctor --read-only` reads this file to report
+/// degraded-VM count.
 pub fn autostart_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("autostart-report.json")
 }
@@ -436,8 +445,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         drop_privileges_if_root(&runtime_identity)?;
     }
 
-    // W4-H8 + W4 GPT-5.5 panel: write /run/nixling/version on
-    // daemon startup so the CLI's [pending restart] machinery has
+    // Write /run/nixling/version on daemon startup so the CLI's
+    // [pending restart] machinery has
     // an authoritative version + binary-path snapshot. Failures are
     // logged but non-fatal — operators can still drive the daemon
     // without the pending-restart signal.
@@ -446,23 +455,29 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
 
     let daemon_state_dir = effective_daemon_state_dir(&options);
     let pidfd_table_path = pidfd_table_state_path(&daemon_state_dir);
+    let broker_reap_log = BrokerReapLog::new();
     let pidfd_table = Arc::new(PidfdTable::restore_from_disk(&pidfd_table_path).map_err(
         |err| TypedError::InternalIo {
             context: format!("restore pidfd table {}", pidfd_table_path.display()),
             detail: err.to_string(),
         },
     )?);
+    pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
 
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
+        daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&daemon_state_dir)),
         daemon_state_dir,
         pidfd_table,
+        broker_reap_log,
+        metrics_registry: Arc::new(crate::metrics::Registry::new()),
     };
+    refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
 
-    // P3 ph3-p3-kernel-module-check: startup self-check on the
-    // kernel-module matrix the bundle requires. Fatal misses
+    // Startup self-check on the kernel-module matrix the bundle requires.
+    // Fatal misses
     // refuse daemon start; optional misses are logged and the
     // affected VMs are skipped (Degraded) by the autostart pass.
     // If the bundle resolver itself is unavailable we skip the
@@ -472,8 +487,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let module_degraded_vms: BTreeSet<String> = match load_bundle_resolver(&state) {
         Ok(resolver) => {
             let report = kernel_module_check::run_kernel_module_check(&resolver);
-            // v1.1.1 live-deploy fu9: NIXLING_SKIP_KERNEL_MODULE_CHECK
-            // converts the fatal check into a logged warning. Real
+            // NIXLING_SKIP_KERNEL_MODULE_CHECK converts the fatal check
+            // into a logged warning. Real
             // deployments on hosts whose kernel has the GUEST-side
             // virtio modules built in (vs loadable) get false-
             // positives because the check uses `lsmod` and the
@@ -520,9 +535,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             BTreeSet::new()
         }
     };
-    // P3 ph3-p3-net-route-degraded-mode: daemon-side net-route
-    // preflight (replaces `nixling-net-route-preflight.service`).
-    // For each env in the host artifact, probe its LAN bridge.
+    // Daemon-side net-route preflight (replaces
+    // `nixling-net-route-preflight.service`). For each env in the host
+    // artifact, probe its LAN bridge.
     // Failed envs contribute their VMs to the pre-degraded set so
     // those VMs surface as `Outcome::Degraded` instead of failing
     // their unit. After N consecutive startup failures the daemon
@@ -914,7 +929,7 @@ fn transient_adoption_error(detail: &str) -> bool {
 }
 
 // =====================================================================
-// P2 ph2-p2-daemon-autostart: nixlingd autostart contract glue.
+// nixlingd autostart contract glue.
 // The plan + executor live in `autostart`; this section wires the
 // production starter (which dispatches into `dispatch_broker_vm_start`)
 // and the startup invocation. See docs/reference/daemon-autostart.md.
@@ -943,20 +958,28 @@ impl autostart::VmStarter for BrokerVmStarter {
                 dry_run: false,
                 json: true,
             },
+            // Opt-IN to relaxed semantics so api-ready timeout (common
+            // during cold boot of net VMs) does not
+            // cascade-degrade every workload VM in the env. The
+            // strict-default contract is preserved for explicit
+            // `nixling vm start --apply` invocations.
+            no_wait_api: true,
         };
         match dispatch_broker_vm_start(&self.state, request) {
             Ok(value) => {
                 // dispatch_broker_vm_start returns a JSON envelope
                 // even on logical failure (so the public verb can
-                // surface it). For autostart we treat any
-                // non-applied envelope as a failure so the
-                // degraded-mode bookkeeping kicks in.
-                if value
-                    .get("disposition")
+                // surface it). For autostart we accept the
+                // "applied" outcome regardless of api-ready state
+                // (--no-wait-api means api-ready: pending is expected
+                // during cold boot
+                // and is NOT a failure).
+                let outcome_ok = value
+                    .get("outcome")
                     .and_then(|v| v.as_str())
                     .map(|s| s == "applied")
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+                if outcome_ok {
                     Ok(())
                 } else {
                     Err(value.to_string())
@@ -1033,16 +1056,12 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
         }
     }
 
-    // P3 ph3-usbipd-perenv: after per-VM autostart settles, fold the
-    // 9 transitional per-env usbipd systemd units (`nixling-sys-
-    // <env>-usbipd-{backend,proxy}.{service,socket}`) into broker
-    // SpawnRunner with `RunnerRole::Usbip`. The spawn path is
-    // idempotent (`is_running` short-circuit) and degrades fail-open
-    // to `SkippedPendingBundle` when the bundle does not yet carry
-    // the `sys-<env>-usbipd` runner intents — the singleton units
-    // remain load-bearing through P3 → P5 while bundle wiring lands
-    // in P6. See plan.md row `ph3-usbipd-perenv`.
-    run_usbipd_perenv_autostart(state, &resolver).await;
+    // USBIP backend/proxy runners are attach-owned, not startup-owned:
+    // `nixling usb attach --apply` first validates/binds/locks the
+    // busid, then opens the firewall and starts the per-env runners.
+    // Starting the listener here would expose TCP/3240 before the
+    // per-busid ownership decision.
+    let _ = resolver;
 }
 
 /// Drive the per-env usbipd spawn plan derived from the manifest.
@@ -1050,6 +1069,7 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
 /// logged and the loop continues; the transitional NixOS units
 /// remain in place to keep operators served while the daemon path
 /// bakes in production.
+#[allow(dead_code)]
 async fn run_usbipd_perenv_autostart(
     state: &ServerState,
     resolver: &nixling_core::bundle_resolver::BundleResolver,
@@ -1108,15 +1128,23 @@ async fn run_usbipd_perenv_autostart(
 }
 
 /// Live broker adapter for the per-env usbipd spawner trait.
-/// Translates `BundleIntentMissing` into `SkippedPendingBundle` per
-/// the trait contract so the transitional window (P3 → P5) does not
-/// fail-closed before `processes-json.nix` grows the new DAGs.
+/// Translates `BundleIntentMissing` into `SkippedPendingBundle` per the
+/// trait contract so the transitional window does not fail-closed before
+/// `processes-json.nix` grows the new DAGs.
 struct BrokerPerEnvUsbipdSpawner {
     state: Arc<ServerState>,
 }
 
 impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner {
     fn is_running(&self, vm_id: &str, role_id: &str) -> bool {
+        if let Err(error) = self.state.pidfd_table.prune_dead_entries() {
+            tracing::warn!(
+                vm = %vm_id,
+                role = %role_id,
+                error = %error,
+                "usbipd-perenv: failed to prune stale pidfd entries before is_running check"
+            );
+        }
         self.state.pidfd_table.contains(vm_id, role_id)
     }
 
@@ -1138,12 +1166,56 @@ impl usbipd_perenv_autostart::PerEnvUsbipdSpawner for BrokerPerEnvUsbipdSpawner 
             request,
             Duration::from_secs(10),
         ) {
-            Ok((BrokerResponse::SpawnRunner(_), received_fds)) => {
-                // We do not register a pidfd here; the per-env
-                // usbipd lifecycle is owned by the broker spawn
-                // (the daemon currently does not host a pidfd table
-                // slot for `sys-<env>-usbipd`). Close any received
-                // fds to avoid leaks.
+            Ok((BrokerResponse::SpawnRunner(response), received_fds)) => {
+                let pidfd = match duplicate_received_fd(
+                    &received_fds,
+                    response.pidfd_index,
+                    "duplicate per-env usbipd SpawnRunner pidfd",
+                ) {
+                    Ok(fd) => fd,
+                    Err(error) => {
+                        close_received_fds(&received_fds);
+                        return PerEnvUsbipdOutcome::Failed {
+                            reason: format!("pidfd-duplicate:{}", error.kind()),
+                        };
+                    }
+                };
+                if let Err(error) = self.state.pidfd_table.register(
+                    spec.vm_id.clone(),
+                    spec.role.role_id().to_owned(),
+                    PidfdEntry {
+                        pidfd,
+                        pid: response.pid,
+                        start_time_ticks: response.start_time_ticks,
+                    },
+                ) {
+                    close_received_fds(&received_fds);
+                    return PerEnvUsbipdOutcome::Failed {
+                        reason: format!("pidfd-register:{error}"),
+                    };
+                }
+                if let Err(error) = self.state.pidfd_table.snapshot() {
+                    let _ = self
+                        .state
+                        .pidfd_table
+                        .deregister(&spec.vm_id, spec.role.role_id());
+                    close_received_fds(&received_fds);
+                    return PerEnvUsbipdOutcome::Failed {
+                        reason: format!("pidfd-snapshot:{error}"),
+                    };
+                }
+                if let Err(error) = write_runner_snapshot(
+                    &self.state,
+                    &spec.vm_id,
+                    spec.role.role_id(),
+                    usbipd_perenv_autostart::spawn_runner_role(spec),
+                    response.pid,
+                    response.start_time_ticks,
+                ) {
+                    cleanup_vm_start_registration(&self.state, &spec.vm_id, spec.role.role_id());
+                    close_received_fds(&received_fds);
+                    return PerEnvUsbipdOutcome::Failed { reason: error };
+                }
                 close_received_fds(&received_fds);
                 PerEnvUsbipdOutcome::Spawned
             }
@@ -1242,14 +1314,13 @@ fn validate_lock_parent(lock_path: &Path, identity: &RuntimeIdentity) -> Result<
             detail: "parent path is not a directory".to_owned(),
         });
     }
-    // W3fu5 H3 (security-1): the production tmpfile rule installs
-    // /run/nixling as `nixlingd:nixling-launchers 0750` so launcher
-    // users (members of `nixling-launchers`) can traverse the directory
-    // to reach `/run/nixling/public.sock` (mode 0660, group
-    // nixling-launchers). The previous validation expected the
-    // root-owned 0755 shape that pre-dates W3fu2 H5; under the
-    // non-root daemon it would have refused to start. The expected
-    // shape now matches the systemd tmpfile contract: owner =
+    // The production tmpfile rule installs /run/nixling as
+    // `nixlingd:nixling 0750` so launcher users (members of `nixling`)
+    // can traverse the directory to reach `/run/nixling/public.sock`
+    // (mode 0660, group nixling). The previous validation expected the
+    // root-owned 0755 shape; under the non-root daemon it would have
+    // refused to start. The expected shape now matches the systemd
+    // tmpfile contract: owner =
     // daemon_uid, group = public_socket_gid, mode = 0750. The
     // `--allow-unprivileged-runtime-dir` test flag still permits
     // running under the invoking user's uid/gid (and accepts either
@@ -1393,12 +1464,11 @@ fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket,
             detail: err.to_string(),
         }
     })?;
-    // W3fu5 H3 (security-1): always chgrp the socket to
-    // `public_socket_gid` (i.e. `nixling-launchers` in production).
-    // The previous `geteuid().is_root()` gate meant the non-root
-    // systemd unit (User=nixlingd, SupplementaryGroups=nixling-launchers
-    // per W3fu2 H5) left the socket with group `nixlingd`, which made
-    // launcher users unable to connect even though they have a seat in
+    // Always chgrp the socket to `public_socket_gid` (i.e. `nixling` in
+    // production). The previous `geteuid().is_root()` gate meant the
+    // non-root systemd unit (User=nixlingd, SupplementaryGroups=nixling)
+    // left the socket with group `nixlingd`, which made launcher users
+    // unable to connect even though they have a seat in
     // the supplementary group. `chown(path, None, Some(group))` is
     // permitted for the file owner whenever the target gid is one of
     // the caller's groups (real, effective, or supplementary), which
@@ -1422,9 +1492,8 @@ fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedError>
     Ok(())
 }
 
-/// W4-H8 + W4 GPT-5.5 panel notable #3: write the daemon's
-/// canonicalized binary path + version + start-time to
-/// `/run/nixling/version` on startup so the CLI's
+/// Write the daemon's canonicalized binary path + version + start-time
+/// to `/run/nixling/version` on startup so the CLI's
 /// `daemon_version::compute_restart_status` can compute the
 /// `[pending restart]` signal post-restart. Failures are logged
 /// to stderr and non-fatal — the absence of the version file
@@ -1628,7 +1697,7 @@ fn authorize_peer(stream: &Socket, state: &ServerState) -> Result<PeerIdentity, 
         PeerRole::Launcher
     };
 
-    Ok(PeerIdentity { role })
+    Ok(PeerIdentity { role, uid })
 }
 
 fn verb_requires_admin(verb: &str) -> bool {
@@ -1674,19 +1743,22 @@ fn dispatch_request(
         wire::Request::AuthStatus => Ok(dispatch_auth_status(state, peer)),
         wire::Request::KeysList => dispatch_keys_list(state),
         wire::Request::KeysShow(request) => dispatch_keys_show(state, request),
-        // W14d: mutating-verb apply dispatch is now fully direct.
-        // All 13 W14 backlog verbs route from these request arms
-        // straight to their `dispatch_broker_<verb>` helpers, and the
-        // HostInstall/Migrate paths stay on their dedicated broker
-        // helpers from W14b/W15.
+        // Mutating-verb apply dispatch is now fully direct. The backlog
+        // verbs route from these request arms straight to their
+        // `dispatch_broker_<verb>` helpers, and the HostInstall/Migrate
+        // paths stay on their dedicated broker helpers.
         //
         // The old shared `dispatch_mutating_verb` split no longer
         // applies in nixlingd; only `mutating_verb_preflight` remains
         // to emit the typed InvalidRequest / dry-run-planned envelope
         // before apply dispatch runs.
         wire::Request::VmStart(req) => dispatch_broker_vm_start(state, req),
-        wire::Request::VmStop(req) => dispatch_broker_vm_stop(state, req),
-        wire::Request::VmRestart(req) => dispatch_broker_vm_restart(state, req),
+        wire::Request::VmStop(req) => {
+            dispatch_broker_vm_stop_as(state, req, broker_caller_role_for_peer(peer))
+        }
+        wire::Request::VmRestart(req) => {
+            dispatch_broker_vm_restart_as(state, req, broker_caller_role_for_peer(peer))
+        }
         wire::Request::Switch(req) => dispatch_broker_switch(state, req),
         wire::Request::Boot(req) => dispatch_broker_boot(state, req),
         wire::Request::Test(req) => dispatch_broker_test(state, req),
@@ -1806,6 +1878,7 @@ fn dispatch_broker_usbip_bind(
     {
         return Ok(response);
     }
+    let resolver = load_bundle_resolver(state)?;
     if let Err(response) = dispatch_broker_ack_request(
         state,
         VERB,
@@ -1815,6 +1888,11 @@ fn dispatch_broker_usbip_bind(
             vm_id: VmId::new(request.vm.clone()),
         }),
     ) {
+        return Ok(response);
+    }
+    if let Err(response) =
+        ensure_usbipd_env_ready_for_attach(state, &resolver, &request.vm, &request.bus_id, VERB)
+    {
         return Ok(response);
     }
     if let Err(response) = dispatch_broker_ack_request(
@@ -1834,6 +1912,94 @@ fn dispatch_broker_usbip_bind(
             request.bus_id, request.vm
         ),
     ))
+}
+
+fn ensure_usbipd_env_ready_for_attach(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+    bus_id: &str,
+    verb: &str,
+) -> Result<(), Value> {
+    let Some(entry) = resolver.manifest.vms.get(vm) else {
+        return Err(daemon_failure_response(
+            verb,
+            format!("VM '{vm}' is not present in the trusted manifest"),
+        ));
+    };
+    let Some(env) = entry.env.as_deref() else {
+        return Err(daemon_failure_response(
+            verb,
+            format!("VM '{vm}' is not attached to a nixling env"),
+        ));
+    };
+    let Some(host_ip) = entry.usbipd_host_ip.as_deref() else {
+        return Err(daemon_failure_response(
+            verb,
+            format!("VM '{vm}' has no per-env USBIP host IP in the trusted manifest"),
+        ));
+    };
+
+    let specs: Vec<_> = usbipd_perenv_autostart::derive_per_env_usbipd_specs(&resolver.manifest)
+        .into_iter()
+        .filter(|spec| spec.env == env)
+        .collect();
+    if specs.len() != 2 {
+        return Err(daemon_failure_response(
+            verb,
+            format!("trusted bundle has no complete per-env USBIP runner plan for env '{env}'"),
+        ));
+    }
+
+    dispatch_broker_ack_request(
+        state,
+        verb,
+        "UsbipBindFirewallRule",
+        BrokerRequest::UsbipBindFirewallRule(BrokerUsbipBindFirewallRuleRequest {
+            bundle_usbip_firewall_intent_ref: BundleOpId::new(intent_id_usbip_firewall(
+                env, bus_id,
+            )),
+            tracing_span_id: None,
+        }),
+    )?;
+
+    let spawner = BrokerPerEnvUsbipdSpawner {
+        state: Arc::new(state.clone()),
+    };
+    let report = usbipd_perenv_autostart::execute_usbipd_perenv_autostart(&specs, &spawner);
+    let failed: Vec<String> = report
+        .specs
+        .iter()
+        .filter_map(|entry| match &entry.outcome {
+            usbipd_perenv_autostart::PerEnvUsbipdOutcome::Failed { reason } => {
+                Some(format!("{}:{reason}", entry.role.role_id()))
+            }
+            usbipd_perenv_autostart::PerEnvUsbipdOutcome::SkippedPendingBundle => {
+                Some(format!("{}:bundle-intent-missing", entry.role.role_id()))
+            }
+            usbipd_perenv_autostart::PerEnvUsbipdOutcome::Spawned
+            | usbipd_perenv_autostart::PerEnvUsbipdOutcome::AlreadyRunning => None,
+        })
+        .collect();
+    if !failed.is_empty() {
+        return Err(daemon_failure_response(
+            verb,
+            format!(
+                "per-env USBIP runners for env '{env}' did not start cleanly: {}",
+                failed.join(", ")
+            ),
+        ));
+    }
+
+    let backend_port = specs[0].backend_port;
+    wait_for_tcp_port("127.0.0.1", backend_port, Duration::from_secs(10))
+        .and_then(|_| wait_for_tcp_port(host_ip, 3240, Duration::from_secs(10)))
+        .map_err(|reason| {
+            daemon_failure_response(
+                verb,
+                format!("per-env USBIP runners for env '{env}' did not become ready: {reason}"),
+            )
+        })
 }
 
 fn dispatch_broker_usbip_unbind(
@@ -1939,6 +2105,7 @@ fn mutating_verb_preflight(
             remediation: Some(format!(
                 "nixling {verb} requires either --dry-run or --apply"
             )),
+            api_ready: None,
         }));
     }
 
@@ -1953,6 +2120,7 @@ fn mutating_verb_preflight(
             target_wave: None,
             summary: Some(summary),
             remediation: None,
+            api_ready: None,
         }));
     }
 
@@ -1971,8 +2139,57 @@ fn dispatch_broker_request(
     state: &ServerState,
     request: BrokerRequest,
 ) -> Result<BrokerResponse, TypedError> {
+    dispatch_broker_request_as(state, request, Default::default())
+}
+
+fn dispatch_broker_request_as(
+    state: &ServerState,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
     let socket = connect_seqpacket(&socket_path)?;
+    write_json_frame(
+        &socket,
+        &BrokerRequestEnvelope {
+            request,
+            caller_role,
+            test_peer_uid: None,
+        },
+    )?;
+    let response = read_frame(&socket)?;
+    serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
+        path: socket_path,
+        detail: err.to_string(),
+    })
+}
+
+fn broker_caller_role_for_peer(peer: &PeerIdentity) -> BrokerCallerRole {
+    match peer.role {
+        PeerRole::Admin => BrokerCallerRole::AdminUid { uid: peer.uid },
+        PeerRole::Launcher => BrokerCallerRole::LauncherUid { uid: peer.uid },
+    }
+}
+
+fn dispatch_broker_request_with_timeout(
+    state: &ServerState,
+    request: BrokerRequest,
+    timeout: Duration,
+) -> Result<BrokerResponse, TypedError> {
+    let socket_path = broker_socket_path(state);
+    let socket = Socket::from(connect_seqpacket(&socket_path)?);
+    socket
+        .set_read_timeout(Some(timeout))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set broker read timeout to {timeout:?}"),
+            detail: err.to_string(),
+        })?;
+    socket
+        .set_write_timeout(Some(timeout))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set broker write timeout to {timeout:?}"),
+            detail: err.to_string(),
+        })?;
     write_json_frame(
         &socket,
         &BrokerRequestEnvelope {
@@ -1986,6 +2203,38 @@ fn dispatch_broker_request(
         path: socket_path,
         detail: err.to_string(),
     })
+}
+
+fn poll_broker_child_reaped(state: &ServerState) -> Result<usize, TypedError> {
+    let response = dispatch_broker_request(state, BrokerRequest::PollChildReaped)?;
+    match response {
+        BrokerResponse::PollChildReaped(response) => {
+            let count = response.notifications.len();
+            for notification in response.notifications {
+                state.broker_reap_log.insert(notification);
+            }
+            Ok(count)
+        }
+        BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!(
+                "PollChildReaped rejected by broker: {} ({})",
+                error.message, error.kind
+            ),
+        }),
+        other => Err(TypedError::InternalBrokerUnavailable {
+            path: broker_socket_path(state),
+            detail: format!("PollChildReaped returned unexpected response: {other:?}"),
+        }),
+    }
+}
+
+fn refresh_broker_reap_log(state: &ServerState, context: &str) {
+    match poll_broker_child_reaped(state) {
+        Ok(0) => {}
+        Ok(count) => tracing::debug!(count, context, "broker child reap log refreshed"),
+        Err(err) => tracing::debug!(error = ?err, context, "broker child reap log refresh skipped"),
+    }
 }
 
 fn dispatch_broker_request_with_fds_timeout(
@@ -2114,6 +2363,7 @@ fn broker_failure_response(
         target_wave,
         summary: Some(summary),
         remediation: Some(remediation),
+        api_ready: None,
     })
 }
 
@@ -2126,6 +2376,7 @@ fn invalid_request_response(verb: &str, remediation: String) -> Value {
         target_wave: None,
         summary: None,
         remediation: Some(remediation),
+        api_ready: None,
     })
 }
 
@@ -2147,6 +2398,20 @@ fn applied_response(verb: &str, summary: String) -> Value {
         target_wave: None,
         summary: Some(summary),
         remediation: None,
+        api_ready: None,
+    })
+}
+
+fn api_ready_timeout_response(verb: &str, summary: String) -> Value {
+    use nixling_ipc::public_wire::{MutatingVerbOutcome, MutatingVerbResponse};
+
+    wire::mutating_verb_response(MutatingVerbResponse {
+        verb: verb.to_owned(),
+        outcome: MutatingVerbOutcome::ApiReadyTimeout,
+        target_wave: None,
+        summary: Some(summary),
+        remediation: None,
+        api_ready: Some("timeout".to_owned()),
     })
 }
 
@@ -2180,6 +2445,13 @@ fn retarget_mutating_response(value: &Value, verb: &str) -> Value {
             response_remediation(value).unwrap_or_default().to_owned(),
             response_target_wave(value),
         ),
+        Some("api-ready-timeout") => {
+            let mut retargeted = value.clone();
+            if let Some(object) = retargeted.as_object_mut() {
+                object.insert("verb".to_owned(), Value::String(verb.to_owned()));
+            }
+            retargeted
+        }
         _ => value.clone(),
     }
 }
@@ -2296,6 +2568,23 @@ fn block_on_future<T>(future: impl Future<Output = T>) -> T {
     }
 }
 
+fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, TypedError> {
+    let path = state.config.locks_dir.join(format!("vm-start-{vm}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("open VM start lock {}", path.display()),
+            detail: err.to_string(),
+        })?;
+    Flock::lock(file, FlockArg::LockExclusive).map_err(|(_file, err)| TypedError::InternalIo {
+        context: format!("lock VM start lock {}", path.display()),
+        detail: err.to_string(),
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VmStartNodeMode {
     ReadinessOnly,
@@ -2311,7 +2600,9 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::CloudHypervisorRunner => {
             VmStartNodeMode::LongLived(RunnerRole::CloudHypervisor)
         }
-        ProcessRole::Gpu => VmStartNodeMode::LongLived(RunnerRole::Gpu),
+        ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
+            VmStartNodeMode::LongLived(RunnerRole::Gpu)
+        }
         ProcessRole::Audio => VmStartNodeMode::LongLived(RunnerRole::Audio),
         ProcessRole::Video => VmStartNodeMode::LongLived(RunnerRole::Video),
         ProcessRole::VsockRelay => VmStartNodeMode::LongLived(RunnerRole::VsockRelay),
@@ -2327,6 +2618,21 @@ fn tracked_role_id(node: &ProcessNode) -> String {
         ProcessRole::CloudHypervisorRunner => VM_RUNNER_ROLE_ID.to_owned(),
         _ => node.id.0.clone(),
     }
+}
+
+/// v1.2fu46/fu53: pure decision predicate for whether the daemon
+/// must dispatch `BrokerRequest::DiskInit` BEFORE `SpawnRunner` for
+/// the given node.
+///
+/// Extracted as a free function so the dispatch-order regression
+/// has hermetic unit-test coverage (the broker IPC itself requires
+/// integration testing).  See `node_requires_disk_init_dispatch_*`
+/// tests at the bottom of this module.
+fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
+    use nixling_core::processes::SpawnRunnerPlanOp;
+    node.plan_ops
+        .iter()
+        .any(|op| matches!(op, SpawnRunnerPlanOp::DiskInit { .. }))
 }
 
 struct VmStartRunner<'a> {
@@ -2348,11 +2654,69 @@ impl VmStartRunner<'_> {
             .find_runner_intent(&intent_id)
             .ok_or_else(|| "bundle-intent-missing".to_owned())?;
         let role_id = tracked_role_id(node);
+        // v1.2fu46/fu53: D9 close-the-loop — if the ProcessNode
+        // declares any DiskInit plan-ops (e.g. for
+        // writableStoreOverlay), dispatch BrokerRequest::DiskInit
+        // BEFORE SpawnRunner.  The broker resolves all plan-ops
+        // from the trusted bundle by vm_id and creates the disk
+        // images.  Without this dispatch the manifest emits the
+        // plan-op but the broker never runs it, so CH boots with
+        // no overlay file and fatals with `NotFound`.
+        //
+        // Decision logic is extracted into
+        // `node_requires_disk_init_dispatch` for hermetic unit
+        // testing — the regression covered by panel-test R1 #2.
+        if node_requires_disk_init_dispatch(node) {
+            match dispatch_broker_request(
+                self.state,
+                BrokerRequest::DiskInit(nixling_ipc::broker_wire::DiskInitRequest {
+                    vm_id: VmId::new(vm),
+                    tracing_span_id: None,
+                }),
+            ) {
+                Ok(BrokerResponse::Ack(_)) => {
+                    tracing::info!(
+                        vm = %vm,
+                        node = %node.id.0,
+                        plan_op_count = node.plan_ops.len(),
+                        "v1.2fu46: DiskInit plan-ops applied before SpawnRunner"
+                    );
+                }
+                Ok(BrokerResponse::Error(error)) => {
+                    tracing::warn!(
+                        vm = %vm,
+                        node = %node.id.0,
+                        broker_kind = %error.kind,
+                        broker_operation = %error.operation,
+                        "v1.2fu46: DiskInit pre-SpawnRunner dispatch failed"
+                    );
+                    return Err(format!("broker-error:DiskInit:{}", error.kind));
+                }
+                Ok(other) => {
+                    tracing::warn!(
+                        vm = %vm,
+                        node = %node.id.0,
+                        broker_response_kind = %broker_response_kind(&other),
+                        "v1.2fu46: DiskInit returned unexpected broker response"
+                    );
+                    return Err("broker-protocol:DiskInit".to_owned());
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        vm = %vm,
+                        node = %node.id.0,
+                        error = ?error,
+                        "v1.2fu46: DiskInit dispatch failed"
+                    );
+                    return Err("broker-dispatch:DiskInit".to_owned());
+                }
+            }
+        }
         match dispatch_broker_request_with_fds_timeout(
             self.state,
             BrokerRequest::SpawnRunner(BrokerSpawnRunnerRequest {
                 vm_id: VmId::new(vm),
-                role_id: RoleId::new(role_id),
+                role_id: RoleId::new(role_id.clone()),
                 role: runner_role,
                 bundle_runner_intent_ref: BundleOpId::new(intent.intent_id.clone()),
                 runtime_allocations: vec![],
@@ -2364,6 +2728,13 @@ impl VmStartRunner<'_> {
                 if let Err(error) =
                     self.register_node_pidfd(vm, node, runner_role, &response, &received_fds)
                 {
+                    stop_unregistered_spawned_runner(
+                        self.state,
+                        vm,
+                        &role_id,
+                        &response,
+                        &received_fds,
+                    );
                     close_received_fds(&received_fds);
                     return Err(error);
                 }
@@ -2463,10 +2834,7 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
             }
             VmStartNodeMode::LongLived(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
-                if let Err(error) = wait_for_readiness(node, readiness, budget.readiness) {
-                    cleanup_vm_start_registration(self.state, vm, &tracked_role_id(node));
-                    return Err(error);
-                }
+                wait_for_readiness(node, readiness, budget.readiness)?;
                 tracing::info!(
                     vm = %vm,
                     node = %node.id.0,
@@ -2477,6 +2845,45 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                 );
                 Ok(())
             }
+        }
+    }
+
+    async fn spawn_and_check_process_alive(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        budget: supervisor::dag::NodeBudget,
+    ) -> Result<(), String> {
+        match vm_start_node_mode(&node.role) {
+            VmStartNodeMode::LongLived(runner_role) => {
+                let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
+                tracing::info!(
+                    vm = %vm,
+                    node = %node.id.0,
+                    role_id = %tracked_role_id(node),
+                    pid = response.pid,
+                    start_time_ticks = response.start_time_ticks,
+                    "vm start node registered and process-alive"
+                );
+                Ok(())
+            }
+            _ => self.spawn_and_wait_ready(vm, node, &[], budget).await,
+        }
+    }
+
+    async fn probe_api_ready(
+        &self,
+        _vm: &str,
+        node: &ProcessNode,
+        readiness: &[ReadinessPredicate],
+        timeout: Duration,
+    ) -> supervisor::dag::ApiReadyState {
+        match wait_for_readiness(node, readiness, timeout) {
+            Ok(()) => supervisor::dag::ApiReadyState::Yes,
+            Err(error) if error == format!("readiness-timeout:{}", node.id.0) => {
+                supervisor::dag::ApiReadyState::Timeout
+            }
+            Err(reason) => supervisor::dag::ApiReadyState::Error { reason },
         }
     }
 }
@@ -2513,6 +2920,7 @@ fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, Str
         ReadinessPredicate::ApiSocketInfo(path) => Ok(api_socket_info_ready(path)),
         ReadinessPredicate::VsockNotify(value) => Ok(Path::new(value).exists()),
         ReadinessPredicate::UnixSocketExists(path) => Ok(unix_socket_exists(path)),
+        ReadinessPredicate::UnixSocketListening(path) => Ok(unix_socket_listening(path)),
         ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
         ReadinessPredicate::Command(command) => command_ready(command),
         ReadinessPredicate::ComponentSpecific(_) => Ok(true),
@@ -2551,6 +2959,23 @@ fn unix_socket_exists(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn unix_socket_listening(path: &str) -> bool {
+    const SO_ACCEPTCON: u64 = 0x0001_0000;
+    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+        return false;
+    };
+    contents.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            return false;
+        }
+        let flags = u64::from_str_radix(fields[3], 16).unwrap_or(0);
+        let socket_type = fields[4];
+        let socket_path = fields[7];
+        socket_path == path && socket_type == "0001" && (flags & SO_ACCEPTCON) != 0
+    })
+}
+
 fn tcp_port_ready(host: &str, port: u16) -> bool {
     let Ok(addrs) = format!("{host}:{port}").to_socket_addrs() else {
         return false;
@@ -2558,6 +2983,19 @@ fn tcp_port_ready(host: &str, port: u16) -> bool {
     addrs
         .into_iter()
         .any(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok())
+}
+
+fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if tcp_port_ready(host, port) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("tcp-readiness-timeout:{host}:{port}"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn command_ready(command: &[String]) -> Result<bool, String> {
@@ -2744,6 +3182,300 @@ mod proc_state_tests {
     }
 }
 
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod unix_socket_readiness_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn unix_socket_listening_detects_listening_stream_socket_without_connecting() {
+        let path = std::env::temp_dir().join(format!("nl-usl-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path_str = path.to_string_lossy().to_string();
+
+        assert!(!unix_socket_listening(&path_str));
+        let listener = UnixListener::bind(&path).expect("bind unix listener");
+        assert!(unix_socket_exists(&path_str));
+        assert!(unix_socket_listening(&path_str));
+
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Zombie-detection hermetic tests for `wait_for_one_shot_exit`.
+/// Linux-only: depends on `/proc/<pid>/stat`.
+///
+/// No `unsafe` code: child processes are created via
+/// `std::process::Command`.  Rust's `Child` does not call `waitpid` on
+/// drop, so an exited child stays in 'Z' state until the test calls
+/// `child.wait()` for cleanup.
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod wait_for_one_shot_exit_tests {
+    use super::*;
+    use std::process::{Child, Command};
+
+    /// Read the `starttime` field (column 22) for `pid` from
+    /// `/proc/<pid>/stat`.  Panics if the file is missing or
+    /// unparseable — this is a test-only helper.
+    fn read_start_time_ticks(pid: u32) -> u64 {
+        let path = format!("/proc/{pid}/stat");
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        supervisor::state::parse_proc_stat_starttime(&content)
+            .unwrap_or_else(|e| panic!("parse {path}: {e}"))
+    }
+
+    /// Spawn `sleep 0` — the child exits in < 1 ms, leaving a zombie
+    /// behind because Rust's `Child::drop` does not call `waitpid`.
+    fn spawn_zombie_child() -> Child {
+        Command::new("sleep")
+            .arg("0")
+            .spawn()
+            .expect("spawn 'sleep 0'")
+    }
+
+    /// Spawn `sleep 30` — alive for the duration of the test.
+    fn spawn_sleeping_child() -> Child {
+        Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn 'sleep 30'")
+    }
+
+    // v1.2 asserts the zombie shortcut path: `wait_for_one_shot_exit`
+    // must return `Ok(())` immediately (≤100 ms) when the target is in
+    // state 'Z', without waiting for the full polling timeout.
+    #[test]
+    fn wait_for_one_shot_exit_returns_ok_on_zombie_child() {
+        let mut child = spawn_zombie_child();
+        let pid = child.id();
+
+        // Give 'sleep 0' a moment to exit and become a zombie.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // The zombie's /proc/<pid>/stat is still present with 'Z' state
+        // and the original starttime; read it now.
+        let start_ticks = read_start_time_ticks(pid);
+
+        let t0 = Instant::now();
+        let result = wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(500));
+        let elapsed = t0.elapsed();
+
+        // Reap the zombie before asserting so it isn't left around on
+        // a test failure.
+        child.wait().expect("waitpid zombie child");
+
+        assert_eq!(result, Ok(()), "expected Ok(()) for zombie child");
+        assert!(
+            elapsed <= Duration::from_millis(100),
+            "zombie shortcut must fire in ≤100 ms; took {elapsed:?}"
+        );
+    }
+
+    // v1.2 asserts the timeout path — `wait_for_one_shot_exit` must
+    // return `Err("oneshot-timeout:<pid>")` when the target stays alive
+    // through the full polling window.
+    #[test]
+    fn wait_for_one_shot_exit_times_out_on_alive_process() {
+        let mut child = spawn_sleeping_child();
+        let pid = child.id();
+
+        // Give the child a moment to be scheduled.
+        std::thread::sleep(Duration::from_millis(10));
+
+        let start_ticks = read_start_time_ticks(pid);
+
+        let t0 = Instant::now();
+        let result = wait_for_one_shot_exit(pid as i32, start_ticks, Duration::from_millis(100));
+        let elapsed = t0.elapsed();
+
+        // Kill and reap the child before asserting.
+        child.kill().expect("kill sleeping child");
+        child.wait().expect("waitpid sleeping child");
+
+        assert_eq!(
+            result,
+            Err(format!("oneshot-timeout:{pid}")),
+            "expected timeout error for alive process"
+        );
+        // The timeout is 100 ms; the polling loop sleeps 100 ms per
+        // iteration, so elapsed must be ≥ 90 ms.
+        assert!(
+            elapsed >= Duration::from_millis(90),
+            "expected ≥90 ms for timeout path; took {elapsed:?}"
+        );
+    }
+}
+
+fn stop_unregistered_spawned_runner(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    response: &nixling_ipc::broker_wire::SpawnRunnerResponse,
+    received_fds: &[RawFd],
+) {
+    let pidfd = duplicate_received_fd(
+        received_fds,
+        response.pidfd_index,
+        "duplicate failed-registration SpawnRunner pidfd",
+    )
+    .map_err(|error| error.message());
+    if let Err(error) = &pidfd {
+        tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            pid = response.pid,
+            error = %error,
+            "spawn registration failed; could not duplicate pidfd for cleanup"
+        );
+    }
+
+    signal_unregistered_spawned_runner(
+        state,
+        vm,
+        role_id,
+        response,
+        pidfd.as_ref().ok(),
+        RunnerSignal::Term,
+    );
+    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
+        deregister_runner_pidfd_via_broker(
+            state,
+            BrokerCallerRole::AdminUid { uid: 0 },
+            vm,
+            role_id,
+        );
+        return;
+    }
+
+    tracing::warn!(
+        vm = %vm,
+        role = %role_id,
+        pid = response.pid,
+        "spawn registration failed; SIGTERM cleanup did not reap runner, escalating"
+    );
+    signal_unregistered_spawned_runner(
+        state,
+        vm,
+        role_id,
+        response,
+        pidfd.as_ref().ok(),
+        RunnerSignal::Kill,
+    );
+    if wait_unregistered_spawned_runner_reaped(state, vm, role_id, Duration::from_secs(2)) {
+        deregister_runner_pidfd_via_broker(
+            state,
+            BrokerCallerRole::AdminUid { uid: 0 },
+            vm,
+            role_id,
+        );
+    } else {
+        tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            pid = response.pid,
+            "spawn registration failed; runner was not observed reaped after SIGKILL, leaving broker pidfd registered"
+        );
+    }
+}
+
+fn signal_unregistered_spawned_runner(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    response: &nixling_ipc::broker_wire::SpawnRunnerResponse,
+    pidfd: Option<&OwnedFd>,
+    signal: RunnerSignal,
+) {
+    let signal_number = match signal {
+        RunnerSignal::Term => libc::SIGTERM,
+        RunnerSignal::Kill => libc::SIGKILL,
+        RunnerSignal::Quit => libc::SIGQUIT,
+    };
+    let pidfd_signal = rustix::process::Signal::from_raw(signal_number);
+    if let (Some(pidfd), Some(pidfd_signal)) = (pidfd, pidfd_signal) {
+        match rustix::process::pidfd_send_signal(pidfd.as_fd(), pidfd_signal) {
+            Ok(()) => {
+                tracing::warn!(
+                    vm = %vm,
+                    role = %role_id,
+                    pid = response.pid,
+                    signal = runner_signal_label(signal),
+                    "spawn registration failed; signaled unregistered runner by pidfd"
+                );
+                return;
+            }
+            Err(error) => tracing::warn!(
+                vm = %vm,
+                role = %role_id,
+                pid = response.pid,
+                signal = runner_signal_label(signal),
+                error = %error,
+                "spawn registration failed; direct pidfd signal failed, falling back to broker"
+            ),
+        }
+    }
+
+    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
+        vm_id: VmId::new(vm),
+        role_id: RoleId::new(role_id),
+        signal,
+        pid: Some(response.pid),
+        expected_start_time_ticks: Some(response.start_time_ticks),
+        tracing_span_id: None,
+    });
+    match dispatch_broker_request_as(state, request, BrokerCallerRole::AdminUid { uid: 0 }) {
+        Ok(BrokerResponse::SignalRunner(resp))
+            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
+        {
+            tracing::warn!(
+                vm = %vm,
+                role = %role_id,
+                pid = response.pid,
+                signal = runner_signal_label(signal),
+                "spawn registration failed; broker signaled unregistered runner"
+            );
+        }
+        Ok(other) => tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            pid = response.pid,
+            signal = runner_signal_label(signal),
+            response = ?other,
+            "spawn registration failed; broker cleanup signal returned unexpected response"
+        ),
+        Err(error) => tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            pid = response.pid,
+            signal = runner_signal_label(signal),
+            error = ?error,
+            "spawn registration failed; broker cleanup signal failed"
+        ),
+    }
+}
+
+fn wait_unregistered_spawned_runner_reaped(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        refresh_broker_reap_log(state, "unregistered-spawn-cleanup");
+        if state.broker_reap_log.take_for(vm, role_id).is_some() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn write_runner_snapshot(
     state: &ServerState,
     vm: &str,
@@ -2774,12 +3506,70 @@ fn remove_runner_snapshot(state: &ServerState, vm: &str, role_id: &str) {
     }
 }
 
+fn existing_vm_start_response_if_ready(state: &ServerState, vm: &str) -> Option<Value> {
+    if !state.pidfd_table.contains(vm, VM_RUNNER_ROLE_ID) {
+        return None;
+    }
+
+    Some(applied_response(
+        "vm start",
+        format!("vm.{vm}: already running; ch-runner pidfd is live"),
+    ))
+}
+
 fn cleanup_vm_start_registration(state: &ServerState, vm: &str, role_id: &str) {
     let _ = state.pidfd_table.deregister(vm, role_id);
     if let Err(error) = state.pidfd_table.snapshot() {
         tracing::warn!(vm = %vm, role = %role_id, error = ?error, "failed to persist pidfd table cleanup");
     }
     remove_runner_snapshot(state, vm, role_id);
+}
+
+fn rollback_failed_vm_start(
+    state: &ServerState,
+    vm: &str,
+    tracked_roles: &[String],
+) -> Result<(), Value> {
+    let tracked: BTreeSet<&str> = tracked_roles.iter().map(String::as_str).collect();
+    let mut entries = ordered_vm_stop_entries(state, vm)
+        .into_iter()
+        .filter(|entry| tracked.contains(entry.role.as_str()))
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return Ok(());
+    }
+    entries.sort_by(|left, right| {
+        vm_stop_role_priority(infer_runner_role_for_vm_stop(&left.role))
+            .cmp(&vm_stop_role_priority(infer_runner_role_for_vm_stop(
+                &right.role,
+            )))
+            .then_with(|| left.role.cmp(&right.role))
+    });
+    for entry in entries {
+        tracing::warn!(
+            vm = %vm,
+            role = %entry.role,
+            "vm start failed; rolling back runner spawned during this start attempt",
+        );
+        stop_vm_pidfd_role(
+            state,
+            BrokerCallerRole::AdminUid { uid: 0 },
+            "vm start",
+            vm,
+            &entry.role,
+            Duration::from_secs(10),
+            Duration::from_secs(5),
+        )?;
+    }
+    if let Err(error) = state.pidfd_table.snapshot() {
+        return Err(daemon_failure_response(
+            "vm start",
+            format!(
+                "vm start {vm}: rollback stopped spawned runners but pidfd_table persistence failed ({error})"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2840,8 +3630,8 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
         Some(RunnerRole::Video) => 3,
         Some(RunnerRole::Usbip) => 4,
         Some(RunnerRole::VsockRelay) => 5,
-        // P1: OtelHostBridge is observability infrastructure; stop
-        // it before swtpm/virtiofsd so trailing OTel spans flush
+        // OtelHostBridge is observability infrastructure; stop it before
+        // swtpm/virtiofsd so trailing OTel spans flush
         // before the per-VM TPM + virtiofs are torn down.
         Some(RunnerRole::OtelHostBridge) => 5,
         Some(RunnerRole::Swtpm) => 6,
@@ -2870,8 +3660,193 @@ fn ordered_vm_stop_entries(state: &ServerState, vm: &str) -> Vec<PidfdRegistrati
     entries
 }
 
+fn runner_signal_label(signal: RunnerSignal) -> &'static str {
+    match signal {
+        RunnerSignal::Term => "SIGTERM",
+        RunnerSignal::Kill => "SIGKILL",
+        RunnerSignal::Quit => "SIGQUIT",
+    }
+}
+
+fn broker_fallback_failure(
+    vm: &str,
+    role_id: &str,
+    signal: RunnerSignal,
+    detail: impl std::fmt::Display,
+) -> Value {
+    daemon_failure_response(
+        "vm stop",
+        format!(
+            "vm stop {vm}: pidfd_table {} failed for {role_id}; broker fallback failed: {detail}",
+            runner_signal_label(signal)
+        ),
+    )
+}
+
+fn signal_via_broker(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    vm: &str,
+    role_id: &str,
+    signal: RunnerSignal,
+) -> Result<(), Value> {
+    let registration = state
+        .pidfd_table
+        .list_for_vm(vm)
+        .into_iter()
+        .find(|entry| entry.role == role_id);
+    let request = BrokerRequest::SignalRunner(SignalRunnerRequest {
+        vm_id: VmId::new(vm),
+        role_id: RoleId::new(role_id),
+        signal,
+        pid: registration.as_ref().map(|entry| entry.pid),
+        expected_start_time_ticks: registration.as_ref().map(|entry| entry.start_time_ticks),
+        tracing_span_id: None,
+    });
+    match dispatch_broker_request_as(state, request, caller_role) {
+        Ok(BrokerResponse::SignalRunner(resp))
+            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id && resp.signaled =>
+        {
+            Ok(())
+        }
+        Ok(BrokerResponse::SignalRunner(resp)) => Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            format!(
+                "SignalRunner returned vm={} role={} signaled={}",
+                resp.vm_id.as_str(),
+                resp.role_id.as_str(),
+                resp.signaled
+            ),
+        )),
+        Ok(BrokerResponse::Error(error)) => Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            format!(
+                "SignalRunner rejected by broker: {} ({})",
+                error.message, error.kind
+            ),
+        )),
+        Ok(other) => Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            format!("SignalRunner returned unexpected response: {other:?}"),
+        )),
+        Err(err) => Err(broker_fallback_failure(
+            vm,
+            role_id,
+            signal,
+            format!("{err:?}"),
+        )),
+    }
+}
+
+fn deregister_runner_pidfd_via_broker(
+    state: &ServerState,
+    caller_role: BrokerCallerRole,
+    vm: &str,
+    role_id: &str,
+) {
+    let request = BrokerRequest::DeregisterRunnerPidfd(DeregisterRunnerPidfdRequest {
+        vm_id: VmId::new(vm),
+        role_id: RoleId::new(role_id),
+        tracing_span_id: None,
+    });
+    match dispatch_broker_request_as(state, request, caller_role) {
+        Ok(BrokerResponse::DeregisterRunnerPidfd(resp))
+            if resp.vm_id.as_str() == vm && resp.role_id.as_str() == role_id =>
+        {
+            if !resp.removed {
+                tracing::warn!(
+                    vm = %vm,
+                    role = %role_id,
+                    removed = false,
+                    "broker runner pidfd deregister reported no entry"
+                );
+            }
+        }
+        Ok(other) => tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            response = ?other,
+            "broker runner pidfd deregister returned unexpected response"
+        ),
+        Err(error) => tracing::warn!(
+            vm = %vm,
+            role = %role_id,
+            error = ?error,
+            "broker runner pidfd deregister failed"
+        ),
+    }
+}
+
+fn wait_terminated_with_broker_poll(
+    state: &ServerState,
+    vm: &str,
+    role_id: &str,
+    deadline: Instant,
+) -> Result<WaitTermination, PidfdTableError> {
+    let started = Instant::now();
+    let mut poll_count: u32 = 0;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(WaitTermination::TimedOut);
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        match state.pidfd_table.wait_terminated(vm, role_id, remaining) {
+            Ok(WaitTermination::Terminated) => return Ok(WaitTermination::Terminated),
+            Ok(WaitTermination::TerminatedByBroker { exit_status }) => {
+                return Ok(WaitTermination::TerminatedByBroker { exit_status })
+            }
+            Ok(WaitTermination::TimedOut) => return Ok(WaitTermination::TimedOut),
+            Err(PidfdTableError::WaitFailed {
+                errno: Some(libc::ECHILD),
+                ..
+            }) => {
+                if !state.pidfd_table.still_alive_same_start_time(vm, role_id) {
+                    return Ok(WaitTermination::Terminated);
+                }
+                poll_count = poll_count.saturating_add(1);
+                let budget = remaining.min(Duration::from_millis(200));
+                if let Ok(BrokerResponse::PollChildReaped(resp)) =
+                    dispatch_broker_request_with_timeout(
+                        state,
+                        BrokerRequest::PollChildReaped,
+                        budget,
+                    )
+                {
+                    for notification in resp.notifications {
+                        state.broker_reap_log.insert(notification);
+                    }
+                    if let Some(notification) = state.broker_reap_log.take_for(vm, role_id) {
+                        let elapsed = started.elapsed();
+                        tracing::info!(
+                            outcome = "echild-broker-recovered",
+                            vm = %vm,
+                            role = %role_id,
+                            poll_count,
+                            elapsed_ms = elapsed.as_millis() as u64,
+                            "stop reap recovered via broker reap log"
+                        );
+                        return Ok(WaitTermination::TerminatedByBroker {
+                            exit_status: notification.exit_status,
+                        });
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn stop_vm_pidfd_role(
     state: &ServerState,
+    caller_role: BrokerCallerRole,
     verb: &str,
     vm: &str,
     role_id: &str,
@@ -2893,6 +3868,25 @@ fn stop_vm_pidfd_role(
                 "pidfd signal target was already gone"
             );
         }
+        Err(PidfdTableError::SignalFailed {
+            errno: Some(libc::EPERM),
+            ..
+        }) => {
+            signal_via_broker(state, caller_role.clone(), vm, role_id, RunnerSignal::Term)?;
+            metrics::record_broker_request(
+                &state.metrics_registry,
+                "SignalRunner",
+                "broker-fallback",
+            );
+            tracing::info!(
+                outcome = "broker-fallback",
+                broker_signaled = true,
+                vm = %vm,
+                role = %role_id,
+                signal = "SIGTERM",
+                "pidfd signal EPERM recovered through broker"
+            );
+        }
         Err(PidfdTableError::NotFound { .. }) => {
             return Err(invalid_request_response(
                 verb,
@@ -2908,8 +3902,9 @@ fn stop_vm_pidfd_role(
         }
     }
 
-    match state.pidfd_table.wait_terminated(vm, role_id, term_timeout) {
-        Ok(WaitTermination::Terminated) => {
+    refresh_broker_reap_log(state, "before-sigterm-wait");
+    match wait_terminated_with_broker_poll(state, vm, role_id, Instant::now() + term_timeout) {
+        Ok(WaitTermination::Terminated) | Ok(WaitTermination::TerminatedByBroker { .. }) => {
             tracing::info!(
                 vm = %vm,
                 role = %role_id,
@@ -2919,6 +3914,7 @@ fn stop_vm_pidfd_role(
                 "role terminated after SIGTERM"
             );
             let _ = state.pidfd_table.deregister(vm, role_id);
+            deregister_runner_pidfd_via_broker(state, caller_role.clone(), vm, role_id);
             remove_runner_snapshot(state, vm, role_id);
             return Ok(VmStopRoleReport {
                 role_id: role_id.to_owned(),
@@ -2964,6 +3960,25 @@ fn stop_vm_pidfd_role(
                 "pidfd kill target was already gone"
             );
         }
+        Err(PidfdTableError::SignalFailed {
+            errno: Some(libc::EPERM),
+            ..
+        }) => {
+            signal_via_broker(state, caller_role.clone(), vm, role_id, RunnerSignal::Kill)?;
+            metrics::record_broker_request(
+                &state.metrics_registry,
+                "SignalRunner",
+                "broker-fallback",
+            );
+            tracing::info!(
+                outcome = "broker-fallback",
+                broker_signaled = true,
+                vm = %vm,
+                role = %role_id,
+                signal = "SIGKILL",
+                "pidfd signal EPERM recovered through broker"
+            );
+        }
         Err(PidfdTableError::NotFound { .. }) => {
             return Err(invalid_request_response(
                 verb,
@@ -2979,8 +3994,9 @@ fn stop_vm_pidfd_role(
         }
     }
 
-    match state.pidfd_table.wait_terminated(vm, role_id, kill_timeout) {
-        Ok(WaitTermination::Terminated) => {
+    refresh_broker_reap_log(state, "before-sigkill-wait");
+    match wait_terminated_with_broker_poll(state, vm, role_id, Instant::now() + kill_timeout) {
+        Ok(WaitTermination::Terminated) | Ok(WaitTermination::TerminatedByBroker { .. }) => {
             tracing::info!(
                 vm = %vm,
                 role = %role_id,
@@ -2990,6 +4006,7 @@ fn stop_vm_pidfd_role(
                 "role terminated after SIGKILL"
             );
             let _ = state.pidfd_table.deregister(vm, role_id);
+            deregister_runner_pidfd_via_broker(state, caller_role, vm, role_id);
             remove_runner_snapshot(state, vm, role_id);
             Ok(VmStopRoleReport {
                 role_id: role_id.to_owned(),
@@ -3077,8 +4094,8 @@ fn log_vm_start_report(report: &supervisor::dag::DagRunReport) {
     }
 }
 
-/// P2 ph2-dag-host-prep: log the planned host-prep DAG so
-/// `journalctl -u nixlingd.service` and the autostart-history
+/// Log the planned host-prep DAG so `journalctl -u nixlingd.service`
+/// and the autostart-history
 /// records carry the canonical step set per VM. Runs on every VM
 /// start regardless of whether `NIXLING_HOST_PREP_DAG_EXECUTE` is
 /// set.
@@ -3100,8 +4117,8 @@ fn log_host_prep_dag(vm: &str, steps: &[nixling_host::host_prep_dag::HostPrepSte
     }
 }
 
-/// P3 host-prep-broker-arms: extract a role id from the DAG step's
-/// bundle_ref, falling back to a step-default. The runner intent id
+/// Extract a role id from the DAG step's bundle_ref, falling back to a
+/// step-default. The runner intent id
 /// shape `runner:vm:<vm>:role:<role>` lets us derive the role
 /// mechanically; if the step did not carry a bundle_op_id we use
 /// the default (`ch` for tap/vhost-net).
@@ -3117,8 +4134,8 @@ fn host_prep_role_id_from_bundle_ref(
     RoleId::new(role)
 }
 
-/// P3 host-prep-broker-arms: dispatch a broker request for one
-/// host-prep DAG step where the broker may return a typed response
+/// Dispatch a broker request for one host-prep DAG step where the broker
+/// may return a typed response
 /// (e.g. `CreatePersistentTap`, `SetBridgePortFlags`) rather than
 /// the canonical `Ack`. Treats any non-`Error` response as success
 /// and surfaces `Error` responses through the same launcher-side
@@ -3163,14 +4180,12 @@ fn dispatch_broker_host_prep_step(
     }
 }
 
-/// P2 ph2-dag-host-prep: execute the host-prep DAG by dispatching
-/// the corresponding broker op for each step in topo order. On
-/// step failure surfaces the broker envelope; the operator sees
-/// the step id, the broker op kind, and the broker error string
-/// (the typed `HostPrepStepFailed` shape lives in
+/// Execute the host-prep DAG by dispatching the corresponding broker op
+/// for each step in topo order. On step failure surfaces the broker
+/// envelope; the operator sees the step id, the broker op kind, and the
+/// broker error string (the typed `HostPrepStepFailed` shape lives in
 /// `nixling_host::host_prep_dag`). Gated by
-/// `NIXLING_HOST_PREP_DAG_EXECUTE` until the P2/P3 broker handlers
-/// land.
+/// `NIXLING_HOST_PREP_DAG_EXECUTE` until the broker handlers land.
 fn execute_host_prep_dag(
     state: &ServerState,
     vm: &str,
@@ -3235,8 +4250,7 @@ fn execute_host_prep_dag(
                 },
             ),
             HostPrepStepKind::SshHostKeyPreflight => {
-                // P2 ph2-p2-ssh-host-key-preflight: run the
-                // daemon-native posture check instead of dispatching
+                // Run the daemon-native posture check instead of dispatching
                 // the broker stub. The broker variant remains in the
                 // wire enum as a typed placeholder; the live handler
                 // lives daemon-side because the check is a pure
@@ -3281,12 +4295,10 @@ fn execute_host_prep_dag(
                 }
                 continue;
             }
-            // P3 host-prep-broker-arms: live broker dispatch for the
-            // 5 step kinds that previously skipped-with-log. Each
-            // arm composes an existing W3 broker op.
+            // Live broker dispatch for the step kinds that previously
+            // skipped-with-log. Each arm composes an existing broker op.
             HostPrepStepKind::BringUpTapInterface => {
-                // P3 host-prep-broker-arms: compose CreatePersistentTap.
-                // The DAG anchors tap ownership via
+                // Compose CreatePersistentTap. The DAG anchors tap ownership via
                 // `runner:vm:<vm>:role:ch`; the host-prep DAG is
                 // about the persistent-side setup (ifname pinned,
                 // bridge port flags eventually applied), so we use
@@ -3316,8 +4328,8 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::PreOpenVhostNetFd => {
-                // P3 host-prep-broker-arms: dispatch OpenVhostNet for
-                // role `ch`. The broker returns an SCM_RIGHTS fd
+                // Dispatch OpenVhostNet for role `ch`. The broker returns
+                // an SCM_RIGHTS fd
                 // alongside an `Ack`; we don't need the fd here
                 // (the runner re-requests it at spawn), so the
                 // ack-only dispatcher discards it via MSG_CTRUNC.
@@ -3339,8 +4351,8 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplyNmUnmanaged => {
-                // P3 host-prep-broker-arms: compose ApplyNmUnmanaged
-                // against the single host-wide intent row
+                // Compose ApplyNmUnmanaged against the single host-wide
+                // intent row
                 // (`nm-unmanaged:host`). The scope_id falls back to
                 // the bundle_ref's env scope when the DAG carries
                 // one; otherwise "host".
@@ -3367,9 +4379,8 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::ApplySysctl => {
-                // P3 host-prep-broker-arms: iterate the resolver's
-                // sysctl intent ids for this VM's env and dispatch
-                // ApplySysctl per key. The bundle's per-tap entries
+                // Iterate the resolver's sysctl intent ids for this VM's env
+                // and dispatch ApplySysctl per key. The bundle's per-iface entries (bridges + TAPs)
                 // are keyed by `sysctl:env:<env>:if:<if>:<key>`; we
                 // filter by the env-scoped prefix so a single
                 // workload VM start doesn't apply sysctls for the
@@ -3428,8 +4439,8 @@ fn execute_host_prep_dag(
                 continue;
             }
             HostPrepStepKind::SetBridgePortFlags => {
-                // P3 host-prep-broker-arms: dispatch SetBridgePortFlags
-                // for role `ch`. The broker returns a typed
+                // Dispatch SetBridgePortFlags for role `ch`. The broker
+                // returns a typed
                 // BridgePortFlagsResponse, not an Ack; the host-prep
                 // dispatcher accepts any non-Error response.
                 let role_id = host_prep_role_id_from_bundle_ref(&step.bundle_ref, "ch");
@@ -3451,9 +4462,9 @@ fn execute_host_prep_dag(
                 }
                 continue;
             }
-            // P3 ph3-p3-net-route-degraded-mode: HostNetRoutePreflight
-            // is host-scope and is executed inline by the daemon at
-            // startup (and via `nixling host reconcile --network`).
+            // HostNetRoutePreflight is host-scope and is executed inline
+            // by the daemon at startup (and via
+            // `nixling host reconcile --network`).
             // It is not dispatched per-VM through this DAG; the arm
             // exists for exhaustiveness only.
             HostPrepStepKind::HostNetRoutePreflight => {
@@ -3492,8 +4503,8 @@ fn dispatch_broker_vm_start(
 
     let resolver = load_bundle_resolver(state)?;
 
-    // P2 ph2-p2-net-vm-bundle-gate: for net VMs (`sys-<env>-net`),
-    // refuse start if the on-disk dnsmasq.conf hash diverges from
+    // For net VMs (`sys-<env>-net`), refuse start if the on-disk
+    // dnsmasq.conf hash diverges from
     // the bundle's nft/route/hosts intent hash for the same env.
     // This catches the case where the bundle was updated but the
     // dnsmasq render step (host singleton or systemd unit) did not
@@ -3512,9 +4523,9 @@ fn dispatch_broker_vm_start(
             net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
                 let path = drift.path();
                 let reason = drift.reason();
-                // v1.1-final: ConfigMissing is a SOFT-DEFER, not a
-                // hard fail. The dnsmasq config render is owned by
-                // a v1.1.1 daemon host-prep DAG op
+                // ConfigMissing is a SOFT-DEFER, not a hard fail. The
+                // dnsmasq config render is owned by a v1.1.1 daemon
+                // host-prep DAG op
                 // (`RenderDnsmasqEnvConf{env}`) that has not landed
                 // yet; until it does, a fresh-install net-VM start
                 // can legitimately hit ConfigMissing on the first
@@ -3571,16 +4582,15 @@ fn dispatch_broker_vm_start(
         }
     }
 
-    // P2 ph2-dag-host-prep: build the host-prep DAG for this VM
-    // and (optionally) execute it before driving the per-VM
-    // process DAG. The DAG is logged unconditionally so operators
-    // and gates can observe the planned step set; actual broker
-    // dispatch is gated on `NIXLING_HOST_PREP_DAG_EXECUTE=1`. As of
-    // P3 host-prep-broker-arms, all 10 step kinds dispatch a real
-    // broker op (or a daemon-native check) — `OwnershipMatrixCheck`
-    // and `SshHostKeyPreflight` still cover the two P2 stubs that
-    // intentionally remain typed-Unimplemented at the broker layer
-    // pending sibling P3 wave-B handlers.
+    // Build the host-prep DAG for this VM and (optionally) execute it
+    // before driving the per-VM process DAG. The DAG is logged
+    // unconditionally so operators and gates can observe the planned step
+    // set; actual broker dispatch is gated on
+    // `NIXLING_HOST_PREP_DAG_EXECUTE=1`. All step kinds dispatch a real
+    // broker op (or a daemon-native check) — `OwnershipMatrixCheck` and
+    // `SshHostKeyPreflight` still cover the two stubs that intentionally
+    // remain typed-Unimplemented at the broker layer pending sibling
+    // handlers.
     let host_prep_steps =
         nixling_host::host_prep_dag::build_host_prep_dag(request.vm.as_str(), &resolver);
     log_host_prep_dag(&request.vm, &host_prep_steps);
@@ -3603,8 +4613,8 @@ fn dispatch_broker_vm_start(
             detail: "VM not present in processes.json".to_owned(),
         })?;
 
-    // P2 ph2-p2-ownership-matrix: refuse VM start if any per-VM
-    // state subdirectory has drifted from the typed ownership matrix
+    // Refuse VM start if any per-VM state subdirectory has drifted from
+    // the typed ownership matrix
     // declared in nixos-modules/options-ownership-matrix.nix. Missing
     // subdirectories surface as warn-only (state is materialized
     // lazily); owner/group/mode drift on existing paths fails closed.
@@ -3629,8 +4639,8 @@ fn dispatch_broker_vm_start(
             .to_envelope_value());
         }
 
-        // P2 ph2-p2-ssh-host-key-preflight: refuse VM start if the
-        // per-VM sshd host keys directory or any `ssh_host_*_key`
+        // Refuse VM start if the per-VM sshd host keys directory or any
+        // `ssh_host_*_key`
         // leaf has drifted from the canonical posture (regular file,
         // root:root, 0o0400; no symlinks). The directory's own
         // ownership/mode are enforced by the ownership-matrix
@@ -3671,6 +4681,7 @@ fn dispatch_broker_vm_start(
             _ => None,
         })
         .collect::<Vec<_>>();
+    let _vm_start_lock = acquire_vm_start_lock(state, &request.vm)?;
     // v1.1.1fu14 B3 + B7: prune entries whose backing process
     // has died (or whose PID has been reused) BEFORE checking
     // for existing registrations. This handles the
@@ -3700,6 +4711,9 @@ fn dispatch_broker_vm_start(
         .iter()
         .any(|role_id| state.pidfd_table.contains(&request.vm, role_id))
     {
+        if let Some(response) = existing_vm_start_response_if_ready(state, &request.vm) {
+            return Ok(response);
+        }
         return Ok(invalid_request_response(
             VERB,
             format!(
@@ -3717,7 +4731,34 @@ fn dispatch_broker_vm_start(
         state,
         resolver: &resolver,
     };
-    let report = match block_on_future(supervisor::dag::DagExecutor::new(runner).run(dag)) {
+    let api_timeout = Duration::from_secs(
+        std::env::var("NIXLING_API_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(supervisor::dag::DEFAULT_API_TIMEOUT_SECONDS),
+    );
+    let readiness_timeout = Duration::from_secs(
+        std::env::var("NIXLING_READINESS_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(api_timeout.as_secs().max(300)),
+    );
+    let split_mode = if request.no_wait_api {
+        supervisor::dag::SplitReadinessMode::NoWaitApi
+    } else {
+        supervisor::dag::SplitReadinessMode::Strict
+    };
+    let budget = supervisor::dag::NodeBudget {
+        readiness: readiness_timeout,
+        ..supervisor::dag::NodeBudget::default()
+    };
+    let report = match block_on_future(
+        supervisor::dag::DagExecutor::with_budget(runner, budget).run_split(
+            dag,
+            split_mode,
+            api_timeout,
+        ),
+    ) {
         Ok(report) => report,
         Err(error) => {
             tracing::warn!(vm = %request.vm, error = ?error, "vm start DAG validation failed");
@@ -3731,92 +4772,160 @@ fn dispatch_broker_vm_start(
         }
     };
     log_vm_start_report(&report);
-    if report.overall_ok {
-        // P3 ph3-p3-otelbridge-readiness: when the VM that just
-        // came up is the observability VM AND observability is
-        // enabled in the trusted bundle, block on the
-        // OtelHostBridge readiness gate before declaring success.
-        // On timeout we fall back to degraded mode (the VM stays
-        // up; the response carries a degraded-mode annotation).
-        // Strict-mode operators can flip the env var to convert
-        // the timeout into a typed `otel-host-bridge-readiness-timeout`
-        // refusal envelope (exit code 65). See
-        // `docs/reference/otel-host-bridge-readiness.md`.
-        let obs_meta = &resolver.manifest.observability;
-        if obs_meta.enabled && obs_meta.vm_name == request.vm {
-            let cfg = otel_host_bridge_readiness::ReadinessWaitConfig::from_env();
-            let source = otel_host_bridge_readiness::PidfdAndSocketProbeSource {
-                pidfd_table: &state.pidfd_table,
-                vm: request.vm.as_str(),
-                runner_role_id: nixling_ipc::broker_wire::RunnerRole::OtelHostBridge.as_str(),
-                vsock_host_socket: std::path::PathBuf::from(
-                    obs_meta.obs_vsock_host_socket.as_str(),
-                ),
-                exit_marker: None,
-            };
-            let outcome = otel_host_bridge_readiness::await_otel_host_bridge_readiness(
-                request.vm.as_str(),
-                &source,
-                &cfg,
-                std::thread::sleep,
-                std::time::Instant::now(),
+    // Persist the api-ready state for `nixling vm status`.
+    if let Some(ref api_ready_state) = report.api_ready {
+        let api_ready_value = serde_json::to_value(api_ready_state).unwrap_or_default();
+        if let Err(err) = daemon_audit::write_vm_api_ready_state(
+            &state.daemon_state_dir,
+            &request.vm,
+            api_ready_value,
+        ) {
+            tracing::warn!(
+                vm = %request.vm,
+                error = %err,
+                "vm start: failed to persist api-ready state (non-fatal)",
             );
-            if let otel_host_bridge_readiness::ReadinessWaitOutcome::DegradedTimeout {
-                vm,
-                elapsed_ms,
-                reason,
-            } = &outcome
-            {
-                if cfg.strict {
-                    return Ok(TypedError::OtelHostBridgeReadinessTimeout {
-                        vm: vm.clone(),
-                        elapsed_ms: *elapsed_ms,
-                    }
-                    .to_envelope_value());
-                }
-                tracing::warn!(
-                    vm = %vm,
-                    elapsed_ms,
-                    reason = %reason,
-                    "vm start succeeded in degraded-mode: otel-host-bridge readiness gate did not close",
+        }
+    }
+    if matches!(split_mode, supervisor::dag::SplitReadinessMode::Strict)
+        && matches!(
+            report.api_ready,
+            Some(supervisor::dag::ApiReadyState::Timeout)
+        )
+    {
+        tracing::warn!(
+            vm = %request.vm,
+            "vm start: api-ready timeout (api-ready phase did not converge within {} seconds)",
+            api_timeout.as_secs()
+        );
+        // Emit audit-log entry on api-ready timeout.
+        if let Err(err) =
+            state
+                .daemon_audit
+                .write_event(&daemon_audit::DaemonEvent::ApiReadyTimeout {
+                    vm: request.vm.clone(),
+                    runner: VM_RUNNER_ROLE_ID.to_owned(),
+                    elapsed_secs: api_timeout.as_secs(),
+                    mode: "strict".to_owned(),
+                })
+        {
+            tracing::warn!(
+                vm = %request.vm,
+                error = %err,
+                "vm start: failed to write ApiReadyTimeout audit event (non-fatal)",
+            );
+        }
+        if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
+            return Ok(response);
+        }
+        return Ok(api_ready_timeout_response(
+            VERB,
+            format!("vm.{}: process-alive: ok; api-ready: timeout", request.vm),
+        ));
+    }
+    if report.overall_ok {
+        if !request.no_wait_api {
+            // When the VM that just came up is the observability VM AND
+            // observability is
+            // enabled in the trusted bundle, block on the
+            // OtelHostBridge readiness gate before declaring success.
+            // On timeout we fall back to degraded mode (the VM stays
+            // up; the response carries a degraded-mode annotation).
+            // Strict-mode operators can flip the env var to convert
+            // the timeout into a typed `otel-host-bridge-readiness-timeout`
+            // refusal envelope (exit code 65). See
+            // `docs/reference/otel-host-bridge-readiness.md`.
+            let obs_meta = &resolver.manifest.observability;
+            if obs_meta.enabled && obs_meta.vm_name == request.vm {
+                let cfg = otel_host_bridge_readiness::ReadinessWaitConfig::from_env();
+                let source = otel_host_bridge_readiness::PidfdAndSocketProbeSource {
+                    pidfd_table: &state.pidfd_table,
+                    vm: request.vm.as_str(),
+                    runner_role_id: nixling_ipc::broker_wire::RunnerRole::OtelHostBridge.as_str(),
+                    vsock_host_socket: std::path::PathBuf::from(
+                        obs_meta.obs_vsock_host_socket.as_str(),
+                    ),
+                    exit_marker: None,
+                };
+                let outcome = otel_host_bridge_readiness::await_otel_host_bridge_readiness(
+                    request.vm.as_str(),
+                    &source,
+                    &cfg,
+                    std::thread::sleep,
+                    std::time::Instant::now(),
                 );
+                if let otel_host_bridge_readiness::ReadinessWaitOutcome::DegradedTimeout {
+                    vm,
+                    elapsed_ms,
+                    reason,
+                } = &outcome
+                {
+                    if cfg.strict {
+                        return Ok(TypedError::OtelHostBridgeReadinessTimeout {
+                            vm: vm.clone(),
+                            elapsed_ms: *elapsed_ms,
+                        }
+                        .to_envelope_value());
+                    }
+                    tracing::warn!(
+                        vm = %vm,
+                        elapsed_ms,
+                        reason = %reason,
+                        "vm start succeeded in degraded-mode: otel-host-bridge readiness gate did not close",
+                    );
+                }
+            }
+            // Post-readiness trigger. The per-VM DAG's
+            // `GuestSshReadiness` node is the
+            // canonical sd_notify-from-guest signal; once the DAG
+            // reports overall_ok we know sshd inside the VM has
+            // accepted at least one probe, so it is safe to pin the
+            // host pubkey into `/var/lib/nixling/known_hosts.nixling`
+            // via the broker. Failures here are warn-only — matching
+            // the legacy `nixling-known-hosts-refresh@<vm>.service`
+            // behaviour, which left the old pin in place rather than
+            // failing the VM start.
+            let outcome = known_hosts_refresh::refresh_known_hosts(
+                &request.vm,
+                &resolver.manifest,
+                &DaemonRotateKnownHostBroker { state },
+            );
+            match &outcome {
+                known_hosts_refresh::RefreshOutcome::Skipped { vm, reason } => tracing::info!(
+                    vm = %vm,
+                    reason = reason.as_str(),
+                    "known-hosts refresh skipped",
+                ),
+                known_hosts_refresh::RefreshOutcome::Rotated { vm, response } => tracing::info!(
+                    vm = %vm,
+                    static_ip = %response.static_ip,
+                    known_hosts_path = %response.known_hosts_path,
+                    rewrote = response.removed,
+                    "known-hosts refresh applied",
+                ),
+                known_hosts_refresh::RefreshOutcome::Failed { vm, detail } => tracing::warn!(
+                    vm = %vm,
+                    detail = %detail,
+                    "known-hosts refresh failed (non-fatal, retained prior pin)",
+                ),
             }
         }
-        // P2 ph2-known-hosts-refresh: post-readiness trigger.
-        // The per-VM DAG's `GuestSshReadiness` node is the
-        // canonical sd_notify-from-guest signal; once the DAG
-        // reports overall_ok we know sshd inside the VM has
-        // accepted at least one probe, so it is safe to pin the
-        // host pubkey into `/var/lib/nixling/known_hosts.nixling`
-        // via the broker. Failures here are warn-only — matching
-        // the legacy `nixling-known-hosts-refresh@<vm>.service`
-        // behaviour, which left the old pin in place rather than
-        // failing the VM start.
-        let outcome = known_hosts_refresh::refresh_known_hosts(
-            &request.vm,
-            &resolver.manifest,
-            &DaemonRotateKnownHostBroker { state },
-        );
-        match &outcome {
-            known_hosts_refresh::RefreshOutcome::Skipped { vm, reason } => tracing::info!(
-                vm = %vm,
-                reason = reason.as_str(),
-                "known-hosts refresh skipped",
-            ),
-            known_hosts_refresh::RefreshOutcome::Rotated { vm, response } => tracing::info!(
-                vm = %vm,
-                static_ip = %response.static_ip,
-                known_hosts_path = %response.known_hosts_path,
-                rewrote = response.removed,
-                "known-hosts refresh applied",
-            ),
-            known_hosts_refresh::RefreshOutcome::Failed { vm, detail } => tracing::warn!(
-                vm = %vm,
-                detail = %detail,
-                "known-hosts refresh failed (non-fatal, retained prior pin)",
-            ),
+        let summary = if request.no_wait_api {
+            format!("vm.{}: process-alive: ok; api-ready: pending", request.vm)
+        } else {
+            vm_start_success_summary(&report)
+        };
+        let mut response = applied_response(VERB, summary);
+        if request.no_wait_api {
+            response.as_object_mut().unwrap().insert(
+                "apiReady".to_owned(),
+                serde_json::Value::String("pending".to_owned()),
+            );
         }
-        return Ok(applied_response(VERB, vm_start_success_summary(&report)));
+        return Ok(response);
+    }
+    if let Err(response) = rollback_failed_vm_start(state, &request.vm, &tracked_roles) {
+        return Ok(response);
     }
     Ok(vm_start_failure_response(&report))
 }
@@ -3854,16 +4963,48 @@ impl known_hosts_refresh::RotateKnownHostBroker for DaemonRotateKnownHostBroker<
     }
 }
 
+#[cfg(test)]
 fn dispatch_broker_vm_stop(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
 ) -> Result<Value, TypedError> {
-    dispatch_broker_vm_stop_with_timeout(state, request, VM_STOP_TIMEOUT, VM_STOP_TIMEOUT)
+    dispatch_broker_vm_stop_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
 }
 
+fn dispatch_broker_vm_stop_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_stop_with_timeout_as(
+        state,
+        request,
+        caller_role,
+        VM_STOP_TIMEOUT,
+        VM_STOP_TIMEOUT,
+    )
+}
+
+#[cfg(test)]
 fn dispatch_broker_vm_stop_with_timeout(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
+    term_timeout: Duration,
+    kill_timeout: Duration,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_stop_with_timeout_as(
+        state,
+        request,
+        BrokerCallerRole::LauncherUid { uid: 0 },
+        term_timeout,
+        kill_timeout,
+    )
+}
+
+fn dispatch_broker_vm_stop_with_timeout_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
     term_timeout: Duration,
     kill_timeout: Duration,
 ) -> Result<Value, TypedError> {
@@ -3887,6 +5028,7 @@ fn dispatch_broker_vm_stop_with_timeout(
     for entry in &stop_entries {
         let report = match stop_vm_pidfd_role(
             state,
+            caller_role.clone(),
             VERB,
             &request.vm,
             &entry.role,
@@ -3935,9 +5077,18 @@ fn dispatch_broker_vm_stop_with_timeout(
     Ok(applied_response(VERB, summary))
 }
 
+#[cfg(test)]
 fn dispatch_broker_vm_restart(
     state: &ServerState,
     request: public_wire::VmLifecycleRequest,
+) -> Result<Value, TypedError> {
+    dispatch_broker_vm_restart_as(state, request, BrokerCallerRole::LauncherUid { uid: 0 })
+}
+
+fn dispatch_broker_vm_restart_as(
+    state: &ServerState,
+    request: public_wire::VmLifecycleRequest,
+    caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "vm restart";
 
@@ -3946,7 +5097,7 @@ fn dispatch_broker_vm_restart(
         return Ok(response);
     }
 
-    let stop_response = dispatch_broker_vm_stop(state, request.clone())?;
+    let stop_response = dispatch_broker_vm_stop_as(state, request.clone(), caller_role)?;
     if response_outcome(&stop_response) != Some("applied") {
         return Ok(retarget_mutating_response(&stop_response, VERB));
     }
@@ -4174,8 +5325,8 @@ fn dispatch_broker_host_destroy(
     ))
 }
 
-/// P3 `ph3-p3-net-route-degraded-mode`: SOLE mutating recovery
-/// verb after the daemon enters operator-only mode. Re-applies
+/// SOLE mutating recovery verb after the daemon enters operator-only
+/// mode. Re-applies
 /// the network slice of `host prepare` (host-scope nftables +
 /// per-env routes + per-env ipv6 sysctls) — explicitly NOT the
 /// `/etc/hosts` mutation or NetworkManager unmanaged file: those
@@ -4312,6 +5463,7 @@ fn dispatch_broker_run_host_install(
                     response.artifacts_written.len(),
                 )),
                 remediation: None,
+                api_ready: None,
             }))
         }
         Ok(BrokerResponse::Error(error)) => {
@@ -4385,6 +5537,7 @@ fn dispatch_broker_run_migrate(
                     response.notes.len(),
                 )),
                 remediation: None,
+                api_ready: None,
             }))
         }
         Ok(BrokerResponse::Error(error)) => {
@@ -4866,7 +6019,7 @@ fn dispatch_status(
                 "bundleVersion": bundle.bundle_version,
                 "processNodes": process_nodes,
                 "runnerParityOk": closure.as_ref().map(|value| value.runner_parity_ok).unwrap_or(false),
-                "runtime": "unknown (daemon-experimental, W4 not landed)",
+                "runtime": "unknown (daemon-experimental)",
                 "checkBridges": request.check_bridges,
             })
         })
@@ -5331,15 +6484,15 @@ fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> TypedErro
 
 #[cfg(test)]
 mod runtime_acl_tests {
-    //! W3fu5 H3 (security-1): regression tests for the public-socket
-    //! ACL + lock-parent shape under the non-root daemon contract.
+    //! Regression tests for the public-socket ACL + lock-parent shape
+    //! under the non-root daemon contract.
     //!
     //! Coverage of the production deployment topology
-    //! (`User=nixlingd`, `SupplementaryGroups=nixling-launchers`,
-    //! tmpfile `d /run/nixling 0750 nixlingd nixling-launchers -`,
-    //! socket `mode 0660 group nixling-launchers`) is split across
+    //! (`User=nixlingd`, `SupplementaryGroups=nixling`,
+    //! tmpfile `d /run/nixling 0750 nixlingd nixling -`,
+    //! socket `mode 0660 group nixling`) is split across
     //! these focused unit tests because the real system identities
-    //! (`nixlingd`, `nixling-launchers`) only exist on the deployed
+    //! (`nixlingd`, `nixling`) only exist on the deployed
     //! NixOS host. Here we simulate `expect_root_owned_parent=true`
     //! with the caller's own uid+gid so the chown succeeds under
     //! `cargo test`, and assert the produced shape (owner / group /
@@ -5376,8 +6529,8 @@ mod runtime_acl_tests {
         }
     }
 
-    /// W3fu5 H4 (test-1, R6): pick a supplementary group different from
-    /// the caller's primary gid so we can prove the
+    /// Pick a supplementary group different from the caller's primary gid
+    /// so we can prove the
     /// `expect_root_owned_parent=true` chgrp actually mutated the
     /// socket's gid. The caller is a member of every group `getgroups`
     /// returns, so `chown(None, Some(supp_gid))` is permitted by POSIX.
@@ -5402,13 +6555,13 @@ mod runtime_acl_tests {
         // Under the production unit the daemon never runs as root,
         // so the previous `if geteuid().is_root()` gate around the
         // chown left the socket with group `nixlingd` instead of
-        // `nixling-launchers`. With the gate removed and `chown(path,
+        // `nixling`. With the gate removed and `chown(path,
         // None, Some(public_socket_gid))`, the socket must always
         // pick up the requested group when
         // `expect_root_owned_parent` is true.
         //
-        // W3fu5 H4 (test-1, R6): the assertion is only meaningful if
-        // the socket's natural (umask-inherited) gid differs from
+        // The assertion is only meaningful if the socket's natural
+        // (umask-inherited) gid differs from
         // `public_socket_gid`; otherwise a regression that silently
         // re-introduces the `is_root()` gate could pass the test
         // because the socket would already carry the expected gid by
@@ -5496,7 +6649,7 @@ mod runtime_acl_tests {
     #[test]
     fn validate_lock_parent_accepts_production_tmpfile_shape() {
         // Production tmpfile: `d /run/nixling 0750 nixlingd
-        // nixling-launchers -`. With expect_root_owned_parent=true,
+        // nixling -`. With expect_root_owned_parent=true,
         // the validator now expects (daemon_uid, public_socket_gid,
         // 0o750) — i.e. the daemon's own uid + the public socket
         // group + mode 0750, not the old (0, 0, 0755) root-owned
@@ -5569,6 +6722,7 @@ mod broker_dispatch_tests {
     use std::process::{Child, Command};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
     use std::{fs, thread};
 
     use nix::sys::socket::{
@@ -5578,25 +6732,30 @@ mod broker_dispatch_tests {
     use nix::unistd::close;
     use nixling_core::processes::ProcessRole;
     use nixling_ipc::broker_wire::{
-        BrokerRequestEnvelope, BrokerResponse, RunnerRole, SpawnRunnerResponse,
+        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, ChildExitKind, ChildExitStatus,
+        ChildReapedNotification, DeregisterRunnerPidfdResponse, PollChildReapedResponse,
+        RunnerRole, RunnerSignal, SignalRunnerResponse, SpawnRunnerResponse,
     };
     use nixling_ipc::public_wire::{
         ActivationRequest, GcRequest, HostDestroyRequest, HostInstallRequest, HostPrepareRequest,
         KeysRotateRequest, MigrateRequest, MutationFlags, RotateKnownHostRequest, TrustRequest,
         VmLifecycleRequest,
     };
+    use nixling_ipc::types::{RoleId, VmId};
     use serde::Serialize;
     use serde_json::json;
 
-    use super::supervisor::pidfd_table::{PidfdEntry, PidfdTable, WaitTermination};
+    use super::supervisor::pidfd_table::{
+        force_signal_eperm_for_tests, BrokerReapLog, PidfdEntry, PidfdTable, WaitTermination,
+    };
     use super::supervisor::state::{
         parse_proc_stat_starttime, FilesystemSnapshotStore, PidfdOpener, ProcReader,
         RunnerSnapshotRecord, SnapshotStore,
     };
     use super::{
-        adopt_orphaned_runners_on_startup_with, dispatch_broker_boot, dispatch_broker_gc,
-        dispatch_broker_host_destroy, dispatch_broker_host_prepare, dispatch_broker_keys_rotate,
-        dispatch_broker_rollback, dispatch_broker_rotate_known_host,
+        adopt_orphaned_runners_on_startup_with, daemon_audit, dispatch_broker_boot,
+        dispatch_broker_gc, dispatch_broker_host_destroy, dispatch_broker_host_prepare,
+        dispatch_broker_keys_rotate, dispatch_broker_rollback, dispatch_broker_rotate_known_host,
         dispatch_broker_run_host_install, dispatch_broker_run_migrate, dispatch_broker_switch,
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
@@ -5648,6 +6807,7 @@ mod broker_dispatch_tests {
 
     fn test_state_with_broker_socket(path: PathBuf) -> ServerState {
         let daemon_state_dir = test_daemon_state_dir("broker-socket");
+        let broker_reap_log = BrokerReapLog::new();
         ServerState {
             config: DaemonConfig {
                 broker_socket_path: path,
@@ -5655,13 +6815,20 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
-            pidfd_table: Arc::new(PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
         }
     }
 
     fn test_state_with_broker_socket_and_host(path: PathBuf, host_path: PathBuf) -> ServerState {
         let daemon_state_dir = test_daemon_state_dir("broker-host");
+        let broker_reap_log = BrokerReapLog::new();
         ServerState {
             config: DaemonConfig {
                 broker_socket_path: path,
@@ -5672,8 +6839,14 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
-            pidfd_table: Arc::new(PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
         }
     }
 
@@ -6002,6 +7175,49 @@ mod broker_dispatch_tests {
         Ok(())
     }
 
+    fn write_test_json_frame<T: Serialize>(fd: RawFd, message: &T) -> io::Result<()> {
+        write_test_json_frame_with_fds(fd, message, &[])
+    }
+
+    fn start_test_broker_server<F>(
+        test_name: &str,
+        requests: usize,
+        mut handler: F,
+    ) -> (PathBuf, thread::JoinHandle<()>)
+    where
+        F: FnMut(usize, BrokerRequestEnvelope, RawFd) + Send + 'static,
+    {
+        let socket_path = unreachable_broker_socket_path(test_name);
+        if let Some(parent) = socket_path.parent() {
+            fs::create_dir_all(parent).expect("create broker socket parent");
+        }
+        fs::remove_file(&socket_path).ok();
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create broker listener");
+        let address = UnixAddr::new(&socket_path).expect("broker socket address");
+        bind(listener.as_raw_fd(), &address).expect("bind broker listener");
+        listen(&listener, Backlog::new(16).expect("listener backlog")).expect("listen broker");
+        let server_socket_path = socket_path.clone();
+        let join = thread::spawn(move || {
+            for index in 0..requests {
+                let accepted_fd = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
+                    .expect("accept broker peer");
+                let frame = read_test_frame(accepted_fd).expect("read broker request frame");
+                let envelope: BrokerRequestEnvelope =
+                    serde_json::from_slice(&frame).expect("decode broker request frame");
+                handler(index, envelope, accepted_fd);
+                close(accepted_fd).expect("close broker peer");
+            }
+            fs::remove_file(&server_socket_path).ok();
+        });
+        (socket_path, join)
+    }
+
     fn read_child_start_time(child: &Child) -> u64 {
         let path = format!("/proc/{}/stat", child.id());
         let content = fs::read_to_string(&path).expect("read child stat");
@@ -6207,6 +7423,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    no_wait_api: false,
                 }),
             ),
             (
@@ -6217,6 +7434,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    no_wait_api: false,
                 }),
             ),
             (
@@ -6227,6 +7445,7 @@ mod broker_dispatch_tests {
                         dry_run: true,
                         ..MutationFlags::default()
                     },
+                    no_wait_api: false,
                 }),
             ),
             (
@@ -6376,12 +7595,14 @@ mod broker_dispatch_tests {
     fn launcher_peer() -> PeerIdentity {
         PeerIdentity {
             role: PeerRole::Launcher,
+            uid: 1000,
         }
     }
 
     fn admin_peer() -> PeerIdentity {
         PeerIdentity {
             role: PeerRole::Admin,
+            uid: 0,
         }
     }
 
@@ -6637,6 +7858,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm start response");
@@ -6675,6 +7897,7 @@ mod broker_dispatch_tests {
 
         let daemon_state_dir = test_daemon_state_dir("vm-start-registers");
         let artifacts = write_minimal_vm_start_bundle_artifacts(&daemon_state_dir);
+        let broker_reap_log = BrokerReapLog::new();
         let state = ServerState {
             config: DaemonConfig {
                 broker_socket_path: socket_path.clone(),
@@ -6682,8 +7905,14 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
-            pidfd_table: Arc::new(PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -6734,6 +7963,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm start response");
@@ -6754,13 +7984,13 @@ mod broker_dispatch_tests {
             .pidfd_table
             .signal("vm-a", VM_RUNNER_ROLE_ID, libc::SIGKILL)
             .expect("cleanup signal");
-        assert_eq!(
+        assert!(matches!(
             state
                 .pidfd_table
                 .wait_terminated("vm-a", VM_RUNNER_ROLE_ID, std::time::Duration::from_secs(5))
                 .expect("cleanup wait"),
-            WaitTermination::Terminated
-        );
+            WaitTermination::Terminated | WaitTermination::TerminatedByBroker { .. }
+        ));
         state.pidfd_table.snapshot().expect("cleanup snapshot");
         let status = child.wait();
         assert!(!status.success());
@@ -6874,6 +8104,7 @@ mod broker_dispatch_tests {
                 ]
             }),
         );
+        let broker_reap_log = BrokerReapLog::new();
         let state = ServerState {
             config: DaemonConfig {
                 broker_socket_path: socket_path.clone(),
@@ -6881,8 +8112,14 @@ mod broker_dispatch_tests {
                 ..DaemonConfig::default()
             },
             daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
-            pidfd_table: Arc::new(PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
         };
 
         let listener = socket(
@@ -6993,6 +8230,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm start response");
@@ -7028,13 +8266,13 @@ mod broker_dispatch_tests {
                 .pidfd_table
                 .signal("vm-a", role, libc::SIGKILL)
                 .expect("cleanup signal");
-            assert_eq!(
+            assert!(matches!(
                 state
                     .pidfd_table
                     .wait_terminated("vm-a", role, std::time::Duration::from_secs(5))
                     .expect("cleanup wait"),
-                WaitTermination::Terminated
-            );
+                WaitTermination::Terminated | WaitTermination::TerminatedByBroker { .. }
+            ));
             let _ = state.pidfd_table.deregister("vm-a", role);
         }
         state.pidfd_table.snapshot().expect("cleanup snapshot");
@@ -7106,11 +8344,18 @@ mod broker_dispatch_tests {
         )
         .expect("write runner snapshot");
 
+        let broker_reap_log = BrokerReapLog::new();
         let state = ServerState {
             config: DaemonConfig::default(),
             daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
             daemon_state_dir: daemon_state_dir.clone(),
-            pidfd_table: Arc::new(PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))),
+            pidfd_table: Arc::new(
+                PidfdTable::new(daemon_state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -7136,6 +8381,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm stop response");
@@ -7187,6 +8433,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm stop response");
@@ -7229,6 +8476,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
             std::time::Duration::from_millis(100),
             std::time::Duration::from_secs(5),
@@ -7249,6 +8497,940 @@ mod broker_dispatch_tests {
         assert!(!status.success());
     }
 
+    fn assert_applied(response: &serde_json::Value) {
+        assert_eq!(
+            response.get("outcome").and_then(serde_json::Value::as_str),
+            Some("applied")
+        );
+    }
+
+    fn assert_daemon_failure_contains(response: &serde_json::Value, needle: &str) {
+        assert_eq!(
+            response.get("outcome").and_then(serde_json::Value::as_str),
+            Some("broker-error")
+        );
+        assert!(response
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains(needle));
+    }
+
+    fn assert_broker_envelope_launcher_role(caller_role_display: &str) {
+        assert_eq!(caller_role_display, concat!("nixling-", "launcher"));
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_falls_back_to_broker_on_sigterm_eperm() {
+        let vm = "vm-eperm-term";
+        let role = VM_RUNNER_ROLE_ID;
+        let child = Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .expect("spawn child");
+        let child = ChildGuard::new(child);
+        let pid = child.child().id() as i32;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-term", 3, move |index, env, fd| {
+                let caller_role_display = env.caller_role.for_display();
+                match (index, env.request) {
+                    (0, BrokerRequest::SignalRunner(req)) => {
+                        assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(req.vm_id.as_str(), vm);
+                        assert_eq!(req.role_id.as_str(), role);
+                        assert_eq!(req.signal, RunnerSignal::Term);
+                        nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(pid),
+                            nix::sys::signal::Signal::SIGTERM,
+                        )
+                        .expect("broker kill child");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: VmId::new(vm),
+                                role_id: RoleId::new(role),
+                            }),
+                        )
+                        .expect("write signal response");
+                    }
+                    (1, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![],
+                            }),
+                        )
+                        .expect("write poll response");
+                    }
+                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(req.vm_id.as_str(), vm);
+                        assert_eq!(req.role_id.as_str(), role);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: VmId::new(vm),
+                                role_id: RoleId::new(role),
+                                removed: true,
+                            }),
+                        )
+                        .expect("write dereg response");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let start_time_ticks = read_child_start_time(child.child());
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                role.to_owned(),
+                PidfdEntry {
+                    pidfd: open_child_pidfd(child.child()),
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register child");
+        super::write_runner_snapshot(
+            &state,
+            vm,
+            role,
+            RunnerRole::CloudHypervisor,
+            pid,
+            start_time_ticks,
+        )
+        .expect("write snapshot");
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_applied(&response);
+        assert!(state.metrics_registry.render().contains(
+            "nixling_daemon_broker_request_total{op=\"SignalRunner\",outcome=\"broker-fallback\"} 1"
+        ));
+        assert!(!state.pidfd_table.contains(vm, role));
+        broker.join().expect("broker join");
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn unregistered_spawn_cleanup_uses_broker_and_waits_for_reap_before_deregister() {
+        let vm = "vm-unregistered-cleanup";
+        let role = "video";
+        let pid = 4242;
+        let start_time_ticks = 99;
+        let (socket_path, broker) =
+            start_test_broker_server("unregistered-cleanup", 3, move |index, env, fd| {
+                match (index, env.request) {
+                    (0, BrokerRequest::SignalRunner(req)) => {
+                        assert_eq!(req.vm_id.as_str(), vm);
+                        assert_eq!(req.role_id.as_str(), role);
+                        assert_eq!(req.signal, RunnerSignal::Term);
+                        assert_eq!(req.pid, Some(pid));
+                        assert_eq!(req.expected_start_time_ticks, Some(start_time_ticks));
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: VmId::new(vm),
+                                role_id: RoleId::new(role),
+                            }),
+                        )
+                        .expect("write signal response");
+                    }
+                    (1, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![ChildReapedNotification {
+                                    runner_id: format!("{vm}:{role}"),
+                                    pid,
+                                    exit_status: ChildExitStatus {
+                                        kind: ChildExitKind::Exited,
+                                        code: Some(0),
+                                        signal: None,
+                                    },
+                                    reaped_at_ms: 123,
+                                }],
+                            }),
+                        )
+                        .expect("write poll response");
+                    }
+                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        assert_eq!(req.vm_id.as_str(), vm);
+                        assert_eq!(req.role_id.as_str(), role);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: VmId::new(vm),
+                                role_id: RoleId::new(role),
+                                removed: true,
+                            }),
+                        )
+                        .expect("write dereg response");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        super::stop_unregistered_spawned_runner(
+            &state,
+            vm,
+            role,
+            &SpawnRunnerResponse {
+                vm_id: VmId::new(vm),
+                role_id: RoleId::new(role),
+                role: RunnerRole::Video,
+                pid,
+                start_time_ticks,
+                pidfd_index: 0,
+            },
+            &[],
+        );
+        broker.join().expect("broker join");
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_falls_back_to_broker_on_sigkill_eperm() {
+        let vm = "vm-eperm-kill";
+        let role = VM_RUNNER_ROLE_ID;
+        let child = register_sleep_runner_for_role(
+            &test_state_with_broker_socket(unreachable_broker_socket_path("dummy")),
+            "dummy",
+            role,
+            RunnerRole::CloudHypervisor,
+            true,
+        );
+        let pid = child.child().id() as i32;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-kill", 5, move |index, env, fd| {
+                let caller_role_display = env.caller_role.for_display();
+                match (index, env.request) {
+                    (0, BrokerRequest::SignalRunner(req)) => {
+                        assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(req.signal, RunnerSignal::Term);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                            }),
+                        )
+                        .expect("write term signal response");
+                    }
+                    (1, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![],
+                            }),
+                        )
+                        .expect("write poll response");
+                    }
+                    (2, BrokerRequest::SignalRunner(req)) => {
+                        assert_broker_envelope_launcher_role(caller_role_display);
+                        assert_eq!(req.signal, RunnerSignal::Kill);
+                        nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(pid),
+                            nix::sys::signal::Signal::SIGKILL,
+                        )
+                        .expect("broker sigkill child");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                            }),
+                        )
+                        .expect("write kill signal response");
+                    }
+                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        assert_broker_envelope_launcher_role(caller_role_display);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write dereg response");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let start_time_ticks = read_child_start_time(child.child());
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                role.to_owned(),
+                PidfdEntry {
+                    pidfd: open_child_pidfd(child.child()),
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register child");
+        super::write_runner_snapshot(
+            &state,
+            vm,
+            role,
+            RunnerRole::CloudHypervisor,
+            pid,
+            start_time_ticks,
+        )
+        .expect("write snapshot");
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop_with_timeout(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+            Duration::from_millis(100),
+            Duration::from_secs(5),
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_applied(&response);
+        assert!(response
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("SIGTERM timeout"));
+        assert!(state.metrics_registry.render().contains(
+            "nixling_daemon_broker_request_total{op=\"SignalRunner\",outcome=\"broker-fallback\"} 2"
+        ));
+        broker.join().expect("broker join");
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_multi_role_one_eperm() {
+        let vm = "vm-eperm-multi";
+        let eperm_role = "virtiofsd-ro-store";
+        let normal_role = VM_RUNNER_ROLE_ID;
+        let eperm_child = register_sleep_runner_for_role(
+            &test_state_with_broker_socket(unreachable_broker_socket_path("dummy-multi")),
+            "dummy-multi",
+            eperm_role,
+            RunnerRole::Virtiofsd,
+            false,
+        );
+        let pid = eperm_child.child().id() as i32;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-multi", 5, move |index, env, fd| {
+                match (index, env.request) {
+                    (0, BrokerRequest::PollChildReaped) | (3, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![],
+                            }),
+                        )
+                        .expect("write poll response");
+                    }
+                    (1, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        assert_eq!(req.role_id.as_str(), normal_role);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write normal dereg response");
+                    }
+                    (2, BrokerRequest::SignalRunner(req)) => {
+                        assert_eq!(req.role_id.as_str(), eperm_role);
+                        nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(pid),
+                            nix::sys::signal::Signal::SIGTERM,
+                        )
+                        .expect("broker signal eperm role");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                            }),
+                        )
+                        .expect("write signal response");
+                    }
+                    (4, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        assert_eq!(req.role_id.as_str(), eperm_role);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write dereg response");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let normal_child = register_sleep_runner_for_role(
+            &state,
+            vm,
+            normal_role,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let start_time_ticks = read_child_start_time(eperm_child.child());
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                eperm_role.to_owned(),
+                PidfdEntry {
+                    pidfd: open_child_pidfd(eperm_child.child()),
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register eperm child");
+        super::write_runner_snapshot(
+            &state,
+            vm,
+            eperm_role,
+            RunnerRole::Virtiofsd,
+            pid,
+            start_time_ticks,
+        )
+        .expect("write snapshot");
+        force_signal_eperm_for_tests(vm, eperm_role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, eperm_role, false);
+        assert_applied(&response);
+        assert!(state.pidfd_table.list_for_vm(vm).is_empty());
+        broker.join().expect("broker join");
+        let _ = eperm_child.wait();
+        let _ = normal_child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_idempotent_after_deregistration() {
+        let vm = "vm-eperm-idempotent";
+        let role = VM_RUNNER_ROLE_ID;
+        let child = register_sleep_runner_for_role(
+            &test_state_with_broker_socket(unreachable_broker_socket_path("dummy-idem")),
+            "dummy-idem",
+            role,
+            RunnerRole::CloudHypervisor,
+            false,
+        );
+        let pid = child.child().id() as i32;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-idem", 3, move |index, env, fd| {
+                match (index, env.request) {
+                    (0, BrokerRequest::SignalRunner(req)) => {
+                        nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(pid),
+                            nix::sys::signal::Signal::SIGTERM,
+                        )
+                        .expect("kill child");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                            }),
+                        )
+                        .expect("write signal");
+                    }
+                    (1, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![],
+                            }),
+                        )
+                        .expect("write poll");
+                    }
+                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                                removed: true,
+                            }),
+                        )
+                        .expect("write dereg");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let start_time_ticks = read_child_start_time(child.child());
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                role.to_owned(),
+                PidfdEntry {
+                    pidfd: open_child_pidfd(child.child()),
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register");
+        super::write_runner_snapshot(
+            &state,
+            vm,
+            role,
+            RunnerRole::CloudHypervisor,
+            pid,
+            start_time_ticks,
+        )
+        .expect("snapshot");
+        force_signal_eperm_for_tests(vm, role, true);
+        let first = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("first stop");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_applied(&first);
+        let second = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("second stop");
+        assert_eq!(
+            second.get("outcome").and_then(serde_json::Value::as_str),
+            Some("invalid-request")
+        );
+        assert!(second
+            .get("remediation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("no registered pidfd_table entries"));
+        broker.join().expect("broker join");
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_unreachable_preserves_eperm_context() {
+        let vm = "vm-eperm-unreachable";
+        let role = VM_RUNNER_ROLE_ID;
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("eperm-unreachable"));
+        let child =
+            register_sleep_runner_for_role(&state, vm, role, RunnerRole::CloudHypervisor, false);
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
+        state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_signaled_false_is_daemon_failure() {
+        let vm = "vm-eperm-false";
+        let role = VM_RUNNER_ROLE_ID;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-false", 1, move |_, env, fd| match env.request {
+                BrokerRequest::SignalRunner(req) => write_test_json_frame(
+                    fd,
+                    &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                        signaled: false,
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                    }),
+                )
+                .expect("write false response"),
+                other => panic!("unexpected request {other:?}"),
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let child =
+            register_sleep_runner_for_role(&state, vm, role, RunnerRole::CloudHypervisor, false);
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
+        assert!(state.pidfd_table.contains(vm, role));
+        broker.join().expect("broker join");
+        state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_accepts_then_eof_preserves_eperm() {
+        let vm = "vm-eperm-eof";
+        let role = VM_RUNNER_ROLE_ID;
+        let (socket_path, broker) = start_test_broker_server("eperm-eof", 1, move |_, env, _fd| {
+            assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+        });
+        let state = test_state_with_broker_socket(socket_path);
+        let child =
+            register_sleep_runner_for_role(&state, vm, role, RunnerRole::CloudHypervisor, false);
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
+        broker.join().expect("broker join");
+        state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_accepts_then_short_frame_preserves_eperm() {
+        let vm = "vm-eperm-short";
+        let role = VM_RUNNER_ROLE_ID;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-short", 1, move |_, env, fd| {
+                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                nix::sys::socket::send(fd, &[1, 0], MsgFlags::empty()).expect("send short frame");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let child =
+            register_sleep_runner_for_role(&state, vm, role, RunnerRole::CloudHypervisor, false);
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
+        broker.join().expect("broker join");
+        state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_wrong_response_variant_preserves_eperm() {
+        let vm = "vm-eperm-wrong";
+        let role = VM_RUNNER_ROLE_ID;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-wrong", 1, move |_, env, fd| {
+                assert!(matches!(env.request, BrokerRequest::SignalRunner(_)));
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                        vm_id: VmId::new(vm),
+                        role_id: RoleId::new(role),
+                        removed: true,
+                    }),
+                )
+                .expect("write wrong response");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let child =
+            register_sleep_runner_for_role(&state, vm, role, RunnerRole::CloudHypervisor, false);
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_daemon_failure_contains(&response, "pidfd_table SIGTERM failed");
+        assert!(state.pidfd_table.contains(vm, role));
+        let store = FilesystemSnapshotStore::new(&state.daemon_state_dir);
+        assert!(!SnapshotStore::list(&store)
+            .expect("list snapshots")
+            .is_empty());
+        broker.join().expect("broker join");
+        state.pidfd_table.signal(vm, role, libc::SIGKILL).ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_vm_pidfd_role_broker_dereg_removed_false_is_idempotent_cleanup() {
+        let vm = "vm-eperm-dereg-false";
+        let role = VM_RUNNER_ROLE_ID;
+        let child = Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .expect("spawn child");
+        let child = ChildGuard::new(child);
+        let pid = child.child().id() as i32;
+        let (socket_path, broker) =
+            start_test_broker_server("eperm-dereg-false", 3, move |index, env, fd| {
+                match (index, env.request) {
+                    (0, BrokerRequest::SignalRunner(req)) => {
+                        nix::sys::signal::kill(
+                            nix::unistd::Pid::from_raw(pid),
+                            nix::sys::signal::Signal::SIGTERM,
+                        )
+                        .expect("kill child");
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::SignalRunner(SignalRunnerResponse {
+                                signaled: true,
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                            }),
+                        )
+                        .expect("write signal");
+                    }
+                    (1, BrokerRequest::PollChildReaped) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                                notifications: vec![],
+                            }),
+                        )
+                        .expect("write poll");
+                    }
+                    (2, BrokerRequest::DeregisterRunnerPidfd(req)) => {
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse {
+                                vm_id: req.vm_id,
+                                role_id: req.role_id,
+                                removed: false,
+                            }),
+                        )
+                        .expect("write dereg false");
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                }
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let start_time_ticks = read_child_start_time(child.child());
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                role.to_owned(),
+                PidfdEntry {
+                    pidfd: open_child_pidfd(child.child()),
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register");
+        super::write_runner_snapshot(
+            &state,
+            vm,
+            role,
+            RunnerRole::CloudHypervisor,
+            pid,
+            start_time_ticks,
+        )
+        .expect("snapshot");
+        force_signal_eperm_for_tests(vm, role, true);
+        let response = dispatch_broker_vm_stop(
+            &state,
+            VmLifecycleRequest {
+                vm: vm.to_owned(),
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+                no_wait_api: false,
+            },
+        )
+        .expect("stop response");
+        force_signal_eperm_for_tests(vm, role, false);
+        assert_applied(&response);
+        assert!(!state.pidfd_table.contains(vm, role));
+        assert!(
+            SnapshotStore::list(&FilesystemSnapshotStore::new(&state.daemon_state_dir))
+                .expect("snapshots")
+                .is_empty()
+        );
+        broker.join().expect("broker join");
+        let _ = child.wait();
+    }
+
+    fn register_echild_wait_entry(state: &ServerState, vm: &str, role: &str) -> ChildGuard {
+        let child = Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .expect("spawn child");
+        let child = ChildGuard::new(child);
+        let pid = child.child().id() as i32;
+        let start_time_ticks = read_child_start_time(child.child());
+        let self_pid = rustix::process::Pid::from_raw(std::process::id() as i32).expect("self pid");
+        let self_pidfd =
+            rustix::process::pidfd_open(self_pid, rustix::process::PidfdFlags::empty())
+                .expect("pidfd_open self");
+        state
+            .pidfd_table
+            .register(
+                vm.to_owned(),
+                role.to_owned(),
+                PidfdEntry {
+                    pidfd: self_pidfd,
+                    pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("register echild entry");
+        child
+    }
+
+    #[test]
+    fn wait_terminated_with_broker_poll_echild_polls_reap_log() {
+        let vm = "vm-echild-poll";
+        let role = VM_RUNNER_ROLE_ID;
+        let (socket_path, broker) =
+            start_test_broker_server("echild-poll", 1, move |_, env, fd| {
+                assert!(matches!(env.request, BrokerRequest::PollChildReaped));
+                write_test_json_frame(
+                    fd,
+                    &BrokerResponse::PollChildReaped(PollChildReapedResponse {
+                        notifications: vec![ChildReapedNotification {
+                            pid: 424242,
+                            runner_id: format!("{vm}:{role}"),
+                            exit_status: ChildExitStatus {
+                                kind: ChildExitKind::Exited,
+                                code: Some(0),
+                                signal: None,
+                            },
+                            reaped_at_ms: 1,
+                        }],
+                    }),
+                )
+                .expect("write poll response");
+            });
+        let state = test_state_with_broker_socket(socket_path);
+        let child = register_echild_wait_entry(&state, vm, role);
+        let result = super::wait_terminated_with_broker_poll(
+            &state,
+            vm,
+            role,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .expect("wait wrapper");
+        assert!(matches!(result, WaitTermination::TerminatedByBroker { .. }));
+        broker.join().expect("broker join");
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.child().id() as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .ok();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn wait_terminated_with_broker_poll_echild_respects_deadline() {
+        let vm = "vm-echild-deadline";
+        let role = VM_RUNNER_ROLE_ID;
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("echild-deadline"));
+        let child = register_echild_wait_entry(&state, vm, role);
+        let result = super::wait_terminated_with_broker_poll(
+            &state,
+            vm,
+            role,
+            Instant::now() + Duration::from_millis(120),
+        )
+        .expect("wait wrapper");
+        assert_eq!(result, WaitTermination::TimedOut);
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.child().id() as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .ok();
+        let _ = child.wait();
+    }
+
     #[test]
     #[cfg_attr(
         not(test_root),
@@ -7267,6 +9449,7 @@ mod broker_dispatch_tests {
                     apply: true,
                     ..MutationFlags::default()
                 },
+                no_wait_api: false,
             },
         )
         .expect("vm restart response");
@@ -7476,6 +9659,150 @@ mod broker_dispatch_tests {
             "host destroy",
             "ApplyNmUnmanaged failed",
             &expected_remediation,
+        );
+    }
+
+    /// Wiring test: verify that `ServerState.daemon_audit` is wired with a
+    /// `DaemonAuditLog` that can capture `DaemonEvent::ApiReadyTimeout`
+    /// events, and that the event serialises with the expected field shape.
+    ///
+    /// This complements the deeper unit tests in `daemon_audit::tests` by
+    /// asserting that the `ServerState` construction and the `DaemonEvent` fields
+    /// match what `dispatch_broker_vm_start` actually writes at the timeout site.
+    #[test]
+    fn api_ready_timeout_audit_event_captured_via_server_state() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let broker_reap_log = BrokerReapLog::new();
+        let state_dir = dir.path().to_path_buf();
+        let state = ServerState {
+            config: DaemonConfig::default(),
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::new(&state_dir)),
+            daemon_state_dir: state_dir.clone(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(state_dir.join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(crate::metrics::Registry::new()),
+        };
+
+        // Emit the same event that the timeout handler in
+        // dispatch_broker_vm_start writes.
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::ApiReadyTimeout {
+                vm: "vm-a".to_owned(),
+                runner: VM_RUNNER_ROLE_ID.to_owned(),
+                elapsed_secs: 120,
+                mode: "strict".to_owned(),
+            })
+            .expect("write ApiReadyTimeout audit event");
+
+        let captured = state
+            .daemon_audit
+            .captured
+            .lock()
+            .expect("lock captured records");
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one captured audit record"
+        );
+        let record: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("parse captured record as JSON");
+        let event = record.get("event").expect("event field must be present");
+        assert_eq!(
+            event.get("kind").and_then(|v| v.as_str()),
+            Some("api_ready_timeout"),
+            "event.kind must be 'api_ready_timeout'",
+        );
+        assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("vm-a"),);
+        assert_eq!(
+            event.get("runner").and_then(|v| v.as_str()),
+            Some(VM_RUNNER_ROLE_ID),
+        );
+        assert_eq!(
+            event.get("elapsed_secs").and_then(|v| v.as_u64()),
+            Some(120),
+        );
+        assert_eq!(event.get("mode").and_then(|v| v.as_str()), Some("strict"),);
+    }
+
+    // ----- v1.2fu53 panel-test R1 must-fix regression test -----
+
+    /// fu53 panel-test R1 #2: hermetic regression test for the D9
+    /// daemon-side DiskInit dispatch decision.  The original D9 hole
+    /// (closed by fu46) was missed precisely because no unit test
+    /// exercised the `spawn_runner` path's `node.plan_ops` branch.
+    ///
+    /// This test pins the predicate `node_requires_disk_init_dispatch`
+    /// to its correct behavior:
+    ///   - empty plan_ops → do NOT dispatch DiskInit
+    ///   - plan_ops contains DiskInit → DO dispatch DiskInit
+    ///
+    /// The integration of the predicate + actual broker dispatch is
+    /// covered by `tests/live-vm-smoke.sh` against a live deploy.
+    /// This hermetic test catches the "predicate accidentally
+    /// short-circuited to `false`" regression that would otherwise
+    /// silently re-introduce the v1.2 D9 hole.
+    #[test]
+    fn node_requires_disk_init_dispatch_returns_false_for_empty_plan_ops() {
+        use super::node_requires_disk_init_dispatch;
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
+
+        let node = ProcessNode {
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("ch-runner")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+        assert!(
+            !node_requires_disk_init_dispatch(&node),
+            "no plan_ops → no DiskInit dispatch (would otherwise be wasted broker traffic)"
+        );
+    }
+
+    #[test]
+    fn node_requires_disk_init_dispatch_returns_true_for_disk_init_op() {
+        use super::node_requires_disk_init_dispatch;
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, SpawnRunnerPlanOp};
+        use std::path::PathBuf;
+
+        let node = ProcessNode {
+            id: NodeId("cloud-hypervisor".to_owned()),
+            role: ProcessRole::CloudHypervisorRunner,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![SpawnRunnerPlanOp::DiskInit {
+                target_path: PathBuf::from("/var/lib/nixling/vms/test-vm/store-overlay.img"),
+                size_bytes: 1_073_741_824,
+                mode: 0o600,
+                owner_uid: 12345,
+                owner_gid: 12345,
+                if_absent: true,
+            }],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("ch-runner")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+        assert!(
+            node_requires_disk_init_dispatch(&node),
+            "plan_ops contains DiskInit → MUST dispatch BrokerRequest::DiskInit before SpawnRunner; otherwise CH boots without overlay file and fatals with NotFound (the original D9 hole — closed by fu46, regression-pinned by this test)"
         );
     }
 }

@@ -1,17 +1,21 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tracing;
 
 static SNAPSHOT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static SIGNAL_EPERM_TEST_ROLES: OnceLock<Mutex<std::collections::HashSet<(String, String)>>> =
+    OnceLock::new();
 
 use crate::supervisor::state::parse_proc_stat_starttime;
 
@@ -19,6 +23,7 @@ use crate::supervisor::state::parse_proc_stat_starttime;
 pub struct PidfdTable {
     pub(crate) entries: RwLock<BTreeMap<(String, String), PidfdEntry>>,
     pub(crate) state_path: PathBuf,
+    broker_reap_log: OnceLock<Arc<BrokerReapLog>>,
 }
 
 #[derive(Debug)]
@@ -36,10 +41,59 @@ pub struct PidfdRegistration {
     pub start_time_ticks: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WaitTermination {
+    /// Child exited and was reaped by nixlingd (normal path).
     Terminated,
+    /// Child was already reaped by the broker's SIGCHLD handler;
+    /// `wait_terminated` returned immediately on `ECHILD` using the
+    /// buffered exit status rather than re-entering `/proc` polling.
+    TerminatedByBroker {
+        exit_status: nixling_ipc::broker_wire::ChildExitStatus,
+    },
     TimedOut,
+}
+
+/// Shared log of broker-reaped child events.
+///
+/// Populated by nixlingd's broker-interaction layer when it calls
+/// `BrokerRequest::PollChildReaped`. Consulted by
+/// [`PidfdTable::wait_terminated`] on `ECHILD` so it can return
+/// [`WaitTermination::TerminatedByBroker`] immediately instead of
+/// spinning on `/proc` polling.
+#[derive(Debug, Default)]
+pub struct BrokerReapLog {
+    inner: Mutex<HashMap<i32, nixling_ipc::broker_wire::ChildReapedNotification>>,
+}
+
+impl BrokerReapLog {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Insert (or overwrite) a ChildReaped event keyed by PID.
+    pub fn insert(&self, notif: nixling_ipc::broker_wire::ChildReapedNotification) {
+        self.inner.lock().insert(notif.pid, notif);
+    }
+
+    /// Remove and return the event for `pid`, if any.
+    pub fn take(&self, pid: i32) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+        self.inner.lock().remove(&pid)
+    }
+
+    /// Remove and return the event for a `(vm, role)` runner id, if any.
+    pub fn take_for(
+        &self,
+        vm: &str,
+        role: &str,
+    ) -> Option<nixling_ipc::broker_wire::ChildReapedNotification> {
+        let runner_id = format!("{vm}:{role}");
+        let mut inner = self.inner.lock();
+        let pid = inner
+            .iter()
+            .find_map(|(pid, notif)| (notif.runner_id == runner_id).then_some(*pid))?;
+        inner.remove(&pid)
+    }
 }
 
 #[derive(Debug)]
@@ -67,6 +121,7 @@ pub enum PidfdTableError {
         vm: String,
         role: String,
         pid: i32,
+        errno: Option<i32>,
         detail: String,
     },
     SnapshotFailed {
@@ -103,6 +158,7 @@ impl std::fmt::Display for PidfdTableError {
                 role,
                 pid,
                 detail,
+                ..
             } => write!(
                 f,
                 "pidfd wait(vm={vm}, role={role}, pid={pid}) failed: {detail}"
@@ -139,7 +195,20 @@ impl PidfdTable {
         Self {
             entries: RwLock::new(BTreeMap::new()),
             state_path,
+            broker_reap_log: OnceLock::new(),
         }
+    }
+
+    /// Attach a `BrokerReapLog` for ECHILD fast-path handling.
+    pub fn with_broker_reap_log(self, log: Arc<BrokerReapLog>) -> Self {
+        let _ = self.broker_reap_log.set(log);
+        self
+    }
+
+    /// Set the `BrokerReapLog` on an already-constructed table (e.g.
+    /// after `restore_from_disk`).
+    pub fn set_broker_reap_log(&self, log: Arc<BrokerReapLog>) {
+        let _ = self.broker_reap_log.set(log);
     }
 
     pub fn register(
@@ -247,6 +316,21 @@ impl PidfdTable {
                 vm: vm.to_owned(),
                 role: role.to_owned(),
             })?;
+        #[cfg(test)]
+        if SIGNAL_EPERM_TEST_ROLES
+            .get_or_init(|| Mutex::new(Default::default()))
+            .lock()
+            .contains(&(vm.to_owned(), role.to_owned()))
+        {
+            return Err(PidfdTableError::SignalFailed {
+                vm: vm.to_owned(),
+                role: role.to_owned(),
+                pid: entry.pid,
+                signal: sig,
+                errno: Some(libc::EPERM),
+                detail: "forced EPERM for test".to_owned(),
+            });
+        }
         rustix::process::pidfd_send_signal(entry.pidfd.as_fd(), signal).map_err(|err| {
             PidfdTableError::SignalFailed {
                 vm: vm.to_owned(),
@@ -280,6 +364,7 @@ impl PidfdTable {
                     vm: vm.to_owned(),
                     role: role.to_owned(),
                     pid: entry.pid,
+                    errno: Some(err.raw_os_error()),
                     detail: format!("dup pidfd: {err}"),
                 }
             })?;
@@ -288,7 +373,7 @@ impl PidfdTable {
         let deadline = Instant::now() + timeout;
 
         loop {
-            let mut waitid_error = None;
+            let mut waitid_error: Option<(Option<i32>, String)> = None;
             match waitid(
                 Id::PIDFd(pidfd.as_fd()),
                 WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG | WaitPidFlag::WNOWAIT,
@@ -305,8 +390,26 @@ impl PidfdTable {
                     return Ok(WaitTermination::Terminated);
                 }
                 Ok(WaitStatus::StillAlive) | Ok(_) => {}
-                Err(Errno::ECHILD) => {}
-                Err(err) => waitid_error = Some(err.to_string()),
+                Err(Errno::ECHILD) => {
+                    if let Some(log) = self.broker_reap_log.get() {
+                        if let Some(notif) = log.take(pid) {
+                            let mut entries = self.entries.write();
+                            if matches!(
+                                entries.get(&key),
+                                Some(current)
+                                    if current.pid == pid
+                                        && current.start_time_ticks == start_time_ticks
+                            ) {
+                                entries.remove(&key);
+                            }
+                            return Ok(WaitTermination::TerminatedByBroker {
+                                exit_status: notif.exit_status,
+                            });
+                        }
+                    }
+                    waitid_error = Some((Some(libc::ECHILD), "waitid(P_PIDFD): ECHILD".to_owned()));
+                }
+                Err(err) => waitid_error = Some((Some(err as i32), err.to_string())),
             }
 
             let proc_state =
@@ -314,15 +417,17 @@ impl PidfdTable {
                     vm: vm.to_owned(),
                     role: role.to_owned(),
                     pid,
+                    errno: None,
                     detail,
                 })?;
             match proc_state {
                 Some(observed) if observed == start_time_ticks => {
-                    if let Some(detail) = waitid_error {
+                    if let Some((errno, detail)) = waitid_error {
                         return Err(PidfdTableError::WaitFailed {
                             vm: vm.to_owned(),
                             role: role.to_owned(),
                             pid,
+                            errno,
                             detail: format!("waitid(P_PIDFD): {detail}"),
                         });
                     }
@@ -344,6 +449,17 @@ impl PidfdTable {
                 }
             }
         }
+    }
+
+    pub fn still_alive_same_start_time(&self, vm: &str, role: &str) -> bool {
+        let (pid, start_time_ticks) = {
+            let entries = self.entries.read();
+            match entries.get(&(vm.to_owned(), role.to_owned())) {
+                Some(entry) => (entry.pid, entry.start_time_ticks),
+                None => return false,
+            }
+        };
+        matches!(read_proc_start_time(pid), Ok(Some(observed)) if observed == start_time_ticks)
     }
 
     pub fn snapshot(&self) -> Result<(), PidfdTableError> {
@@ -416,6 +532,19 @@ impl PidfdTable {
     }
 }
 
+#[cfg(test)]
+pub fn force_signal_eperm_for_tests(vm: &str, role: &str, enabled: bool) {
+    let mut roles = SIGNAL_EPERM_TEST_ROLES
+        .get_or_init(|| Mutex::new(Default::default()))
+        .lock();
+    let key = (vm.to_owned(), role.to_owned());
+    if enabled {
+        roles.insert(key);
+    } else {
+        roles.remove(&key);
+    }
+}
+
 fn write_snapshot(path: &Path, snapshot: &PersistedPidfdTable) -> Result<(), PidfdTableError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| PidfdTableError::SnapshotFailed {
@@ -480,7 +609,18 @@ fn reopen_persisted_entry(record: &PersistedPidfdEntry) -> Result<Option<PidfdEn
     };
     let pidfd = match rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()) {
         Ok(pidfd) => pidfd,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        // A non-root daemon cannot always reopen pidfds for runner
+        // principals directly. Treat that like a stale direct restore:
+        // startup's broker-backed orphan adoption can reacquire live
+        // runners through the privileged OpenPidfd op.
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+            ) || matches!(err.raw_os_error(), libc::ESRCH | libc::EPERM | libc::EACCES) =>
+        {
+            return Ok(None);
+        }
         Err(err) => return Err(format!("pidfd_open({}): {err}", record.pid)),
     };
     match read_proc_start_time(record.pid)? {
@@ -755,17 +895,43 @@ mod tests {
         restored
             .signal("alpha", "ch-runner", libc::SIGTERM)
             .expect("signal child by pidfd");
-        assert_eq!(
+        assert!(matches!(
             restored
                 .wait_terminated("alpha", "ch-runner", Duration::from_secs(5))
                 .expect("wait terminated"),
-            WaitTermination::Terminated
-        );
+            WaitTermination::Terminated | WaitTermination::TerminatedByBroker { .. }
+        ));
         restored.snapshot().expect("snapshot cleared table");
         assert!(!restored.contains("alpha", "ch-runner"));
 
         let status = child.wait();
         assert!(!status.success());
+    }
+
+    #[test]
+    fn restore_drops_stale_esrch_entries() {
+        let state_path = fresh_state_path("restore-drops-stale-esrch");
+        write_snapshot(
+            &state_path,
+            &PersistedPidfdTable {
+                entries: vec![PersistedPidfdEntry {
+                    vm: "alpha".to_owned(),
+                    role: "ch-runner".to_owned(),
+                    pid: i32::MAX,
+                    start_time_ticks: 1,
+                }],
+            },
+        )
+        .expect("write stale snapshot");
+
+        let restored = PidfdTable::restore_from_disk(&state_path).expect("restore pidfd table");
+        assert!(!restored.contains("alpha", "ch-runner"));
+        assert_eq!(restored.len(), 0);
+
+        let bytes = fs::read(&state_path).expect("read pruned snapshot");
+        let persisted: PersistedPidfdTable =
+            serde_json::from_slice(&bytes).expect("parse pruned snapshot");
+        assert!(persisted.entries.is_empty());
     }
 
     #[test]
@@ -800,14 +966,124 @@ mod tests {
         table
             .signal("alpha", "ch-runner", libc::SIGKILL)
             .expect("kill child");
-        assert_eq!(
+        assert!(matches!(
             table
                 .wait_terminated("alpha", "ch-runner", Duration::from_secs(5))
                 .expect("wait after kill"),
-            WaitTermination::Terminated
-        );
+            WaitTermination::Terminated | WaitTermination::TerminatedByBroker { .. }
+        ));
         let status = child.wait();
         assert!(!status.success());
+    }
+
+    /// Broker-reaped child fast-path.
+    ///
+    /// Simulates the broker having already consumed the child's exit
+    /// status via `waitid(P_PIDFD, WEXITED)` and the daemon having
+    /// recorded the corresponding `ChildReaped` notification.
+    #[test]
+    fn wait_terminated_echild_uses_broker_reap_log() {
+        use nix::sys::wait::{waitid, Id, WaitPidFlag, WaitStatus};
+        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+
+        let child = Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .expect("spawn sleep child");
+        let pid = child.id() as i32;
+        let pidfd = open_child_pidfd(&child);
+        let reaper_pidfd = rustix::io::dup(pidfd.as_fd()).expect("dup pidfd for reaper");
+        let start_time = read_child_start_time(&child);
+
+        let log = BrokerReapLog::new();
+        let table = PidfdTable::new(fresh_state_path("echild-broker-reap"))
+            .with_broker_reap_log(log.clone());
+        table
+            .register(
+                "test-vm".into(),
+                "ch-runner".into(),
+                PidfdEntry {
+                    pidfd,
+                    pid,
+                    start_time_ticks: start_time,
+                },
+            )
+            .expect("register child");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match waitid(
+                Id::PIDFd(reaper_pidfd.as_fd()),
+                WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG,
+            ) {
+                Ok(WaitStatus::StillAlive) => {
+                    assert!(Instant::now() < deadline, "child did not exit in time");
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Ok(WaitStatus::Exited(_, code)) => {
+                    assert_eq!(code, 0);
+                    break;
+                }
+                Ok(other) => panic!("unexpected wait status: {other:?}"),
+                Err(err) => panic!("waitid reaper pidfd failed: {err}"),
+            }
+        }
+
+        log.insert(ChildReapedNotification {
+            runner_id: "test-vm:ch-runner".to_owned(),
+            pid,
+            exit_status: ChildExitStatus {
+                kind: ChildExitKind::Exited,
+                code: Some(0),
+                signal: None,
+            },
+            reaped_at_ms: 0,
+        });
+        std::mem::forget(child);
+
+        let result = table
+            .wait_terminated("test-vm", "ch-runner", Duration::from_secs(5))
+            .expect("wait_terminated should succeed");
+        match result {
+            WaitTermination::TerminatedByBroker { exit_status } => {
+                assert_eq!(exit_status.kind, ChildExitKind::Exited);
+                assert_eq!(exit_status.code, Some(0));
+            }
+            other => panic!("expected TerminatedByBroker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn child_reap_buffer_survives_disconnect_reconnect() {
+        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+
+        let log = BrokerReapLog::new();
+        log.insert(ChildReapedNotification {
+            runner_id: "vm-a:ch".to_owned(),
+            pid: 1001,
+            exit_status: ChildExitStatus {
+                kind: ChildExitKind::Exited,
+                code: Some(0),
+                signal: None,
+            },
+            reaped_at_ms: 1000,
+        });
+        log.insert(ChildReapedNotification {
+            runner_id: "vm-b:ch".to_owned(),
+            pid: 1002,
+            exit_status: ChildExitStatus {
+                kind: ChildExitKind::Killed,
+                code: None,
+                signal: Some(9),
+            },
+            reaped_at_ms: 2000,
+        });
+
+        let retrieved1 = log.take(1001).expect("should have notif for pid 1001");
+        assert_eq!(retrieved1.runner_id, "vm-a:ch");
+        let retrieved2 = log.take(1002).expect("should have notif for pid 1002");
+        assert_eq!(retrieved2.exit_status.kind, ChildExitKind::Killed);
+        assert!(log.take(1001).is_none());
     }
 
     /// v1.1.2-final-R1 (panel-test CRITICAL): concurrent snapshot
@@ -833,10 +1109,7 @@ mod tests {
         // serialise (an empty entries map is also fine but real
         // workloads always have entries during contention).
         let pid_self = std::process::id() as i32;
-        let starttime = read_proc_start_time(pid_self)
-            .ok()
-            .flatten()
-            .unwrap_or(1);
+        let starttime = read_proc_start_time(pid_self).ok().flatten().unwrap_or(1);
         let pidfd_self = rustix::process::pidfd_open(
             rustix::process::Pid::from_raw(pid_self).unwrap(),
             rustix::process::PidfdFlags::empty(),
@@ -879,11 +1152,7 @@ mod tests {
             let entry = entry.expect("dir entry");
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            assert!(
-                !name_str.contains(".tmp."),
-                "leaked tmp file: {}",
-                name_str
-            );
+            assert!(!name_str.contains(".tmp."), "leaked tmp file: {}", name_str);
         }
     }
 
@@ -915,7 +1184,9 @@ mod tests {
     fn mktemp_dir() -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let path = std::env::temp_dir().join(format!("nixling-pidfd-test-{pid}-{id}"));
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/pidfd-table-tests");
+        std::fs::create_dir_all(&root).expect("mkdir test root");
+        let path = root.join(format!("nixling-pidfd-test-{pid}-{id}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("mkdir test tmpdir");
         path

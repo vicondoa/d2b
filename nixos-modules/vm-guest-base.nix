@@ -1,6 +1,6 @@
 # nixos-modules/vm-guest-base.nix
 #
-# v1.1.1: nixling-owned per-VM guest-side baseline. Replaces the
+# nixling-owned per-VM guest-side baseline. Replaces the
 # guest-side portion of `microvm.nix`'s
 # `microvm.nixosModules.microvm` (the per-VM eval module that
 # upstream `microvm.nixosModules.host` injected into every VM's
@@ -33,6 +33,7 @@
 
 let
   cfg = config.microvm;
+  nl = import ./lib.nix { inherit lib; };
 
   # Find the host-store share (source == "/nix/store") — required
   # to be present by `store.nix` / `host.nix`'s composeVm pass; it
@@ -46,6 +47,11 @@ let
   # host-store share mount point; the writable upper lives at
   # `${overlay}/store` and the workdir at `${overlay}/work`.
   hasOverlay = cfg.writableStoreOverlay != null;
+
+  volumeFileSystems = builtins.listToAttrs (map (volume: {
+    name = volume.mountPoint;
+    value = nl.volumeFileSystem volume;
+  }) cfg.volumes);
 in
 
 {
@@ -100,7 +106,7 @@ in
 
       # /nix/store: either bind-mount from the host-store share (no
       # overlay), or layered overlay (writable upper + read-only lower).
-      # v1.1.1fu13r: mount /nix/store DIRECTLY from the ro-store
+      # mount /nix/store DIRECTLY from the ro-store
       # virtiofs tag instead of bind-from-/nix/.ro-store. This
       # avoids a kernel quirk where bind-mounting a virtiofs onto
       # /nix/store loses exec permissions or sees an empty
@@ -116,6 +122,42 @@ in
         };
       })
 
+      # when overlay IS enabled, the ro-store virtiofs
+      # share MUST still be mounted as the overlayfs lowerdir
+      # source.  The foldl' below skips it (`s.source == "/nix/store"`
+      # is its skip predicate), so without this explicit mount the
+      # lowerdir is just an empty directory on the rootfs tmpfs and
+      # the overlayfs mount hangs in initramfs waiting for it.
+      # neededForBoot ensures the mount happens in initrd before
+      # the overlay block tries to assemble the layered /nix/store.
+      (lib.optionalAttrs (hostStore != null && hasOverlay) {
+        "${hostStore.mountPoint}" = {
+          device = hostStore.tag;
+          fsType = hostStore.proto;
+          options = [ "ro" "x-initrd.mount" "x-systemd.after=systemd-modules-load.service" ];
+          neededForBoot = true;
+        };
+      })
+
+      # writableStoreOverlay backing-disk mount.
+      # The broker attaches store-overlay.img to CH with serial=rootfs
+      # (see nixos-modules/processes-json.nix), so the guest sees
+      # /dev/disk/by-id/virtio-rootfs.  Mount it at the overlay path
+      # so the upperdir/workdir live on a real filesystem (ext4 — the
+      # broker's DiskInit op runs mkfs.ext4 when creating the image;
+      # see packages/nixling-priv-broker/src/ops/disk_init.rs).
+      # Without this mount the overlay upper/work live on the rootfs
+      # tmpfs and are wiped on every reboot, which defeats the
+      # writableStoreOverlay design.
+      (lib.optionalAttrs hasOverlay {
+        "${cfg.writableStoreOverlay}" = {
+          device = "/dev/disk/by-id/virtio-rootfs";
+          fsType = "ext4";
+          options = [ "x-initrd.mount" "x-systemd.after=systemd-modules-load.service" ];
+          neededForBoot = true;
+        };
+      })
+
       (lib.optionalAttrs hasOverlay {
         "/nix/store" = {
           neededForBoot = true;
@@ -127,6 +169,12 @@ in
         };
       })
 
+      # Per-VM block volumes declared through the preserved
+      # `microvm.volumes` option. processes-json.nix emits the same
+      # default virtio serial for each disk, so the guest can mount by
+      # stable /dev/disk/by-id path instead of ephemeral vda/vdb order.
+      volumeFileSystems
+
       # All other virtiofs/9p shares are mounted at their
       # `mountPoint`. Skip the host-store share (handled above) and
       # any share whose mountPoint is the overlay path (handled by
@@ -134,7 +182,7 @@ in
       (builtins.foldl'
         (acc: s:
           acc // (
-            # v1.1.1fu13r: skip ro-store entirely - mounted directly
+            # skip ro-store entirely - mounted directly
             # at /nix/store via the dedicated fileSystems entry above
             # (no-overlay case) or as overlay lowerdir (overlay case).
             if s.source == "/nix/store"

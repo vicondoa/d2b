@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# W6-H3 Layer-1 gate: vsock-relay + USBIP argv-generator parity.
-# Drives the W6-H1 / W6-H2 unit-test surface pinned by name.
+# Layer-1 gate: vsock-relay + USBIP argv-generator parity.
+# Drives the unit-test surface pinned by name.
 
 set -euo pipefail
 

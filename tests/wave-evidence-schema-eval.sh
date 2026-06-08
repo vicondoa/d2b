@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/wave-evidence-schema-eval.sh — P5 doc/schema drift gate.
+# tests/wave-evidence-schema-eval.sh— doc/schema drift gate.
 #
 # Asserts every readiness wave declared in
 # nixos-modules/options-daemon.nix:readinessWaveSpecs has a matching

@@ -8,7 +8,7 @@
 # sentinel empty-string entry required to drop all ambient caps.
 #
 # Canonical set (per host-broker.nix v1.1.1fu10+, expanded from the
-# original P0 8-cap set to the per-child-role union needed for
+# original 8-cap set to the per-child-role union needed for
 # capset(2) to succeed in the spawned child; ADR 0021's broker-pre-NS
 # model for virtiofsd reduces the per-spawn requirements but does NOT
 # shrink this bounding set because CH/swtpm/gpu still need the union):
@@ -28,15 +28,14 @@
 #   CAP_IPC_LOCK           swtpm needs mlock for TPM2 sealing material
 #   CAP_MKNOD              swtpm needs to create device nodes for TPM CRB
 #   CAP_SETFCAP            virtiofsd / swtpm cap_setfcap for child cap inheritance (legacy
-#                          — minimized in v1.1.1fu14 ADR 0021 broker-pre-NS but retained
-#                          for other roles that don't use user NS)
+#                          — minimized by ADR 0021 broker-pre-NS but retained for
+#                          other roles that don't use user NS)
 #
 # Notable absences that are a hard FAIL if present:
 #   CAP_SYS_PTRACE, CAP_NET_BIND_SERVICE, CAP_AUDIT_WRITE
 #
-# Wired into tests/static.sh (mid-tier eval pool).
-# Authority: plan.md P0 security-r2-1 + ph0-broker-caps-audit; updated
-# v1.1.1fu14 to match the v1.1.1fu10-expanded bounding set.
+# Wired into tests/static.sh (mid-tier eval pool). Keeps the expected
+# bounding set in sync with the broker service contract.
 
 set -uo pipefail
 

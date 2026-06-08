@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/ifname-nix-rust-parity.sh — W3fu2 H4 (nixos-2 / networking-2) gate.
+# tests/ifname-nix-rust-parity.sh— gate.
 #
 # Asserts that every `ifNameMappings[].derivedIfname` value emitted by
 # the Nix host-json emitter (`nixos-modules/host-json.nix`) is accepted
 # by the Rust `nixling_host::ifname::looks_nixling_owned` predicate.
 #
-# W3fu3 H8 (test-2) replaced the original shell-regex oracle
+# Replaced the original shell-regex oracle
 # (`^nl-[bt][0-9A-F]{8}$`) with a cargo-test invocation of the real
 # Rust function, fed the rendered host.json path via the
 # `NIXLING_IFNAME_PARITY_HOST_JSON` env var. The previous regex would
@@ -14,10 +14,10 @@
 # the cargo-test path exercises the production code so any drift fails
 # closed.
 #
-# Pre-W3fu2 the Nix emitter produced names like `nl-bridge-c4df354a`
+# Earlier, the Nix emitter produced names like `nl-bridge-c4df354a`
 # (18 bytes, > IFNAMSIZ-1 and rejected by `looks_nixling_owned` because
-# `bridge-...` is not a single Crockford-alphabet char). W3fu2 H4
-# fixed the emitter to use single-char role tags (`b` / `t`) plus
+# `bridge-...` is not a single Crockford-alphabet char). The emitter
+# now uses single-char role tags (`b` / `t`) plus
 # 8 upper-case hex chars (a strict subset of the Crockford base32
 # alphabet) so the format matches what the Rust predicate accepts.
 # The hash algorithms still differ (Nix: SHA-256; Rust: FNV-1a /
@@ -26,7 +26,7 @@
 # algorithms only need to agree on the format the predicate
 # recognises.
 #
-# Scratch state lives outside $ROOT (W2fu4 H8/H9/H14/H15).
+# Scratch state lives outside $ROOT.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -60,11 +60,11 @@ scratch=$(nl_mktemp .ifname-nix-rust-parity.XXXXXX)
 count=$(jq -r '(.ifNameMappings // []) | length' "$host_path")
 log "  smoke host.json: $count ifNameMappings entries"
 
-# W3fu4 H3 (test-1 from R4): the previous shape returned OK before
-# dispatching to the Rust oracle when `count` was zero, which would
+# The previous shape returned OK before dispatching to the Rust oracle
+# when `count` was zero, which would
 # let a regression that drops all Nix-emitted mappings pass invisibly.
 # An empty `ifNameMappings` array in the smoke bundle is itself a
-# real regression of the W3 emitter — fail closed.
+# real regression of the emitter— fail closed.
 if [ "$count" -eq 0 ]; then
   fail "ifname-nix-rust-parity: smoke host.json has empty/missing ifNameMappings; W3 emitter regression suspected. The gate cannot prove parity if the emitter produces zero names."
 fi
@@ -125,7 +125,7 @@ ok "ifname-nix-rust-parity: host-json emitter prefers host-runtime.json when ava
 
 WORKSPACE_DIR=$ROOT/packages
 
-# W3fu3 H8: invoke the real `looks_nixling_owned` predicate via
+# Invoke the real `looks_nixling_owned` predicate via
 # `cargo test -p nixling-host -- nix_emitted_ifnames_pass_looks_nixling_owned`.
 # The test reads the host.json path from NIXLING_IFNAME_PARITY_HOST_JSON,
 # parses `ifNameMappings[].derivedIfname`, and panics with a precise

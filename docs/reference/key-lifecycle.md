@@ -47,8 +47,8 @@ Framework-managed keys follow these permissions:
 
 | Path | Owner / mode |
 | --- | --- |
-| `${nixling.site.keysDir}` | `root:nixling-launcher` `0710` |
-| `${nixling.site.keysDir}/<vm>_ed25519` | `root:nixling-launcher` `0640` |
+| `${nixling.site.keysDir}` | `root:nixling` `0710` |
+| `${nixling.site.keysDir}/<vm>_ed25519` | `root:nixling` `0640` |
 | `${nixling.site.keysDir}/<vm>_ed25519.pub` | `root:root` `0644` |
 | `${nixling.site.keysDir}/.lock` | `root:root` `0600` |
 
@@ -138,7 +138,7 @@ not.
 ### Rollback
 
 - The `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in
-  P6 (per ADR 0015). Roll back a half-completed rotation by
+  v1.0 (per ADR 0015). Roll back a half-completed rotation by
   rebuilding to the prior host generation and restoring from your
   backup of `keysDir` / `known_hosts` before rerunning the verb
   through `nixlingd` → broker `RunKeysRotate`.

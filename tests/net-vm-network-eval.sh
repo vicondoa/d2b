@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/net-vm-network-eval.sh — regression test for W5 H1.
+# tests/net-vm-network-eval.sh— net VM network regression test.
 #
 # Verifies that auto-instantiated net VMs neutralize the catch-all
 # `10-eth-dhcp` network from `nixos-modules/base.nix` so it cannot
@@ -11,7 +11,7 @@
 #      match both NICs in lex-first order before `10-lan`/`10-uplink`).
 #   2. `10-eth-dhcp.matchConfig.MACAddress` MUST equal the sentinel
 #      `"00:00:00:00:00:00"` set by `mkForce` in net.nix:55-57. This
-#      pins the neutralization mechanism (W5fu2 M1): a future patch
+#      pins the neutralization mechanism: a future patch
 #      that drops the MAC sentinel — e.g. replacing it with a `Name`
 #      match — would silently re-enable the catch-all on any
 #      mac-less link and this test would catch it.
@@ -19,7 +19,7 @@
 #      `netUplinkIp/uplinkMask` (proves the per-MAC config applies
 #      and the manifest's IP derivation is intact).
 #   4. `10-lan.addresses[0].Address` MUST equal the env's
-#      `netLanIp/lanMask` (W5fu2 M1: the per-MAC LAN config is the
+#      `netLanIp/lanMask` (M1: the per-MAC LAN config is the
 #      other half of the static-config invariant; without it the
 #      auto-NATed env would not have a default gateway).
 #   5. `25-net-lan-<env>` MUST keep the net-VM tap non-isolated while
@@ -128,8 +128,8 @@ let
   up = netVm.config.systemd.network.networks."10-uplink";
   lan = netVm.config.systemd.network.networks."10-lan";
   workGuestDhcp = workGuest.systemd.network.networks."10-eth-dhcp";
-  # v0.1.6 Test-H2 (Spec correction #31): the HOST-side uplink-bridge
-  # networkd entry MUST carry ConfigureWithoutCarrier=true plus a
+  # The HOST-side uplink-bridge networkd entry MUST carry
+  # ConfigureWithoutCarrier=true plus a
   # static route to the LAN subnet via the net VM's uplink address.
   # Without ConfigureWithoutCarrier the bridge cannot apply Address +
   # Route before its first tap attaches — but
@@ -211,7 +211,7 @@ if [ "$MATCH_TYPE" = "ether" ]; then
 fi
 ok "net VM '10-eth-dhcp' is neutralized (matchConfig.Type = $MATCH_TYPE)"
 
-# W5fu2 M1: pin the neutralization mechanism explicitly. The
+# Pin the neutralization mechanism explicitly. The
 # `mkForce` in net.nix:55-57 replaces the entire 10-eth-dhcp
 # attrset with `matchConfig.MACAddress = "00:00:00:00:00:00"`. If a
 # future patch swaps the sentinel for a different match key (e.g.
@@ -227,7 +227,7 @@ if [ "$UPLINK_ADDR" != "192.0.2.2/30" ]; then
 fi
 ok "net VM '10-uplink' carries the env's static uplink address ($UPLINK_ADDR)"
 
-# W5fu2 M1: the LAN-side static address is the other half of the
+# The LAN-side static address is the other half of the
 # per-MAC config. The env's netLanIp is `<lanSubnet base>.1` so for
 # lanSubnet=10.20.0.0/24 this must be 10.20.0.1/24.
 if [ "$LAN_ADDR" != "10.20.0.1/24" ]; then
@@ -348,8 +348,7 @@ case "$SAFE_NFT_RULESET" in
 esac
 ok "default east-west path remains isolated when allowEastWest is unset"
 
-# v0.1.6 Test-H2 (Spec correction #31): host-side uplink-bridge
-# checks. ConfigureWithoutCarrier=true is the v0.1.2 fix that lets
+# Host-side uplink-bridge checks. ConfigureWithoutCarrier=true lets
 # networkd apply Address+Route before the bridge has carrier. The
 # route entry must point at the env's LAN subnet via the net VM's
 # uplink IP — that's what the route-preflight unit polls for at boot.
@@ -402,7 +401,7 @@ if [ "$WORKLOAD_LAN_ISOLATED" != "false" ]; then
 fi
 ok "workload LAN tap rule respects allowEastWest on br-work-lan"
 
-# ph2-p2-net-fixture-obs-env: observability env (auto-declared by
+# Observability env (auto-declared by
 # `nixling.observability.enable = true`) is just another env from the
 # net.nix perspective, but its lifecycle is framework-owned. Pin the
 # per-env net-VM contract here so a future change to the observability

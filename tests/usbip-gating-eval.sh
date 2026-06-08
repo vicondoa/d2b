@@ -277,7 +277,7 @@ EOF
 }
 
 multi_env_scoped=$(eval_multi_env_case)
-# P6 (ph6-remove-systemd-emission): per-env usbipd backend/proxy
+# Per-env usbipd backend/proxy
 # systemd units, sockets, and the per-env iptables carve-outs were
 # all deleted. The broker spawns `SpawnRunner{role: Usbip,
 # vm_id: sys-<env>-usbipd}` per the per-busid state machine in

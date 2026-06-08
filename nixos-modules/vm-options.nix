@@ -1,7 +1,7 @@
 # nixos-modules/vm-options.nix
 #
-# v1.1-final: nixling-owned per-VM runner options module. Replaces
-# the upstream microvm.nix `microvm.*` per-VM option set.
+# Nixling-owned per-VM runner options module. Replaces the upstream
+# microvm.nix `microvm.*` per-VM option set.
 #
 # This module is added to each per-VM NixOS evaluation by
 # `vm-evaluator.nix` so consumers' guest configs can set
@@ -245,8 +245,8 @@ in
         bundle `runner-intent.extra_args_script` field; the Nix-side
         value is a path/string referencing the script derivation.
 
-        v1.1-final note: at v1.1.1 the broker's Rust argv generators
-        do not yet honor this field (the generators emit static argv
+        Note: at v1.1.1 the broker's Rust argv generators do not yet
+        honor this field (the generators emit static argv
         from typed inputs). The audio module's existing per-VM
         script-based injection is preserved on the bundle side for
         backward compatibility with the daemon's pre-spawn argv
@@ -255,8 +255,8 @@ in
       '';
     };
 
-    # v1.1-final: declaredRunner is NOT emitted by the nixling-owned
-    # evaluator. The broker spawns the hypervisor directly via the
+    # declaredRunner is NOT emitted by the nixling-owned evaluator.
+    # The broker spawns the hypervisor directly via the
     # Rust argv generators in `packages/nixling-host/src/*_argv.rs`;
     # no Nix-side runner derivation is needed in v1.1+.
     declaredRunner = mkOption {

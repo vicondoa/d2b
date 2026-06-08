@@ -1,11 +1,10 @@
-//! P1: OTel host-bridge argv generator.
+//! OTel host-bridge argv generator.
 //!
 //! Replaces the singleton `nixling-otel-host-bridge.service`
 //! (`nixos-modules/components/observability/host.nix`) with a
 //! broker-spawned runner under `RunnerRole::OtelHostBridge`.
 //!
-//! Per-role contract (plan P1 + decision 5 + security-2 closed-set
-//! intent):
+//! Per-role closed-set intent contract:
 //!
 //! - Pre-opened vsock fds only (no AF_VSOCK socket creation
 //!   capability in the role profile).
@@ -24,8 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Inputs to the OTel host-bridge argv generator. The opaque references
-/// are bundle-resolved by the broker; only typed scalars cross the
-/// wire per W4-H5.
+/// are bundle-resolved by the broker; only typed scalars cross the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OtelHostBridgeArgvInputs {
@@ -57,10 +55,7 @@ pub enum OtelHostBridgeArgvError {
     /// A path-shaped input was empty.
     EmptyPath { field: &'static str },
     /// A path-shaped input was not absolute (did not start with `/`).
-    NonAbsolutePath {
-        field: &'static str,
-        value: String,
-    },
+    NonAbsolutePath { field: &'static str, value: String },
     /// `obs_otlp_port` was outside the valid TCP/vsock port range
     /// `1..=65535`.
     PortOutOfRange { value: u32 },
@@ -153,16 +148,15 @@ mod tests {
             host_egress_socket: "/run/alloy/host-egress.sock".to_owned(),
             obs_vsock_host_socket: "/var/lib/nixling/vms/sys-obs-stack/vsock.sock".to_owned(),
             obs_otlp_port: 14317,
-            ch_vsock_connect_path: "/run/current-system/sw/bin/nixling-ch-vsock-connect"
-                .to_owned(),
+            ch_vsock_connect_path: "/run/current-system/sw/bin/nixling-ch-vsock-connect".to_owned(),
         }
     }
 
     #[test]
     fn argv_shape_matches_singleton_service() {
         let argv = generate_otel_host_bridge_argv(&happy_inputs()).expect("happy path");
-        // Plan P1: the argv shape must match the singleton service's
-        // ExecStart line byte-for-byte after fd-passing differences
+        // The argv shape must match the singleton service's ExecStart
+        // line byte-for-byte after fd-passing differences
         // (i.e. fd inheritance handled by broker, not socat options).
         assert_eq!(
             argv,

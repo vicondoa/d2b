@@ -1,11 +1,11 @@
-//! W6-H2: USBIP bind/unbind argv generator.
+//! USBIP bind/unbind argv generator.
 //!
 //! Pure Rust functions emitting the host-side `usbip bind --busid X`
-//! and `usbip unbind --busid X` argv that the W6 daemon uses when
-//! moving a USB device into a VM's exclusive control. The W3 broker
-//! variant `UsbipBind` is wire-stable but returns
-//! `BrokerError::UnknownOperation` today (per W3fu1 H1 rust-1
-//! disposition); W6-fu wires it to invoke this generator's output.
+//! and `usbip unbind --busid X` argv that the daemon uses when moving a
+//! USB device into a VM's exclusive control. The broker variant
+//! `UsbipBind` is wire-stable but may return
+//! `BrokerError::UnknownOperation` until it is wired to invoke this
+//! generator's output.
 //!
 //! `usbip` CLI shapes (per linux-tools/usbip(8)):
 //!
@@ -15,10 +15,12 @@
 //! usbip list   --local
 //! ```
 //!
-//! Per-busid lock + env exclusivity + audit are W6 broker-side
-//! concerns; this module is only the pure argv shape.
+//! Per-busid lock + env exclusivity + audit are broker-side concerns;
+//! this module is only the pure argv shape.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
+
+use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +36,7 @@ pub struct UsbipArgvInput {
     pub bus_id: String,
 }
 
-/// Subset of the `usbip` subcommand surface the W6 daemon uses.
+/// Subset of the `usbip` subcommand surface the daemon uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipSubcommand {
@@ -81,8 +83,8 @@ pub enum UsbipArgvError {
     InvalidBusId {
         bus_id: String,
     },
-    /// W6 GPT-5.5 panel notable #2: usbip's `SYSFS_BUS_ID_SIZE` is
-    /// 32 bytes including NUL. Anything longer can't match a real
+    /// usbip's `SYSFS_BUS_ID_SIZE` is 32 bytes including NUL. Anything
+    /// longer can't match a real
     /// sysfs device name; reject at the generator layer for a
     /// typed error rather than a downstream `usbip exited 1`.
     BusIdTooLong {
@@ -103,14 +105,14 @@ const USBIP_SYSFS_BUS_ID_MAX: usize = 31;
 /// - `B-P` (port on root hub): digits-dash-digits.
 /// - `B-P.S[.S...]` (port on chained hub): digits-dash-digits.dots.
 ///
-/// Per W6 GPT-5.5 panel notable #2:
+/// Validation details:
 /// - Leading zeros in any segment are rejected (sysfs uses the
 ///   canonical decimal form; `01-02` would not match any real
 ///   device).
 /// - Total length is capped at `USBIP_SYSFS_BUS_ID_MAX` (31 chars).
 /// - ASCII digits only — Unicode digits like ٢ (Arabic-Indic 2)
 ///   refused.
-fn validate_bus_id(bus_id: &str) -> Result<(), UsbipArgvError> {
+pub fn validate_bus_id(bus_id: &str) -> Result<(), UsbipArgvError> {
     if bus_id.is_empty() {
         return Err(UsbipArgvError::EmptyBusId);
     }
@@ -188,9 +190,8 @@ pub fn generate_usbip_argv(
 /// Per ADR 0011 § "USBIP guest ssh attach/detach" + ADR 0018
 /// § "Per-attach SpawnRunner-leaf model": the daemon dispatches
 /// guest-side `usbip attach -r <host> -b <bus_id>` (or `detach -p
-/// <port>`) by SSHing into the guest. The ssh command is
-/// hardened against control-master leakage / job-control issues
-/// per the v1.1-P0 R10 panel commitments:
+/// <port>`) by SSHing into the guest. The ssh command is hardened
+/// against control-master leakage / job-control issues:
 /// - NO `-f` (don't background)
 /// - NO `-N` (DO run a command — we want `usbip attach/detach`)
 /// - NO `-M` (no control-master)
@@ -272,12 +273,13 @@ pub fn generate_guest_usbip_ssh_argv(
     ];
     match input.sub {
         UsbipSubcommand::Attach => {
-            let backend = input
-                .backend_ip
-                .as_ref()
-                .ok_or_else(|| UsbipArgvError::InvalidBusId {
-                    bus_id: "backend_ip required for Attach".to_owned(),
-                })?;
+            let backend =
+                input
+                    .backend_ip
+                    .as_ref()
+                    .ok_or_else(|| UsbipArgvError::InvalidBusId {
+                        bus_id: "backend_ip required for Attach".to_owned(),
+                    })?;
             let bus = input
                 .bus_id
                 .as_ref()
@@ -335,8 +337,8 @@ mod tests {
         assert_eq!(argv[1], "unbind");
     }
 
-    /// P1-usbip byte-parity snapshot. Emits two SNAPSHOT lines in a
-    /// stable order (bind first, then unbind) consumed by
+    /// USBIP byte-parity snapshot. Emits two SNAPSHOT lines in a stable
+    /// order (bind first, then unbind) consumed by
     /// `tests/usbip-argv-shape.sh` against
     /// `tests/golden/runner-shape/usbip-argv-minimal.txt`.
     #[test]
@@ -355,8 +357,8 @@ mod tests {
         assert!(generate_usbip_argv(&input, UsbipSubcommand::Bind).is_ok());
     }
 
-    /// W6-H5 panel finding #2: explicit test for multi-digit B
-    /// (>= 10 USB controllers is rare but legal).
+    /// Explicit test for multi-digit B (>= 10 USB controllers is rare
+    /// but legal).
     #[test]
     fn accepts_multi_digit_bus_number() {
         let mut input = audit_input();
@@ -448,8 +450,8 @@ mod tests {
         ));
     }
 
-    /// W6-H5 panel finding #3: explicit test for trailing-dot
-    /// rejection (covered by empty-segment logic but worth pinning).
+    /// Explicit test for trailing-dot rejection (covered by empty-segment
+    /// logic but worth pinning).
     #[test]
     fn rejects_bus_id_with_trailing_dot() {
         let mut input = audit_input();
@@ -460,8 +462,8 @@ mod tests {
         ));
     }
 
-    /// W6-H5 panel finding #4: explicit test for Unicode-digit
-    /// rejection. is_ascii_digit() correctly rejects ٢
+    /// Explicit test for Unicode-digit rejection. is_ascii_digit()
+    /// correctly rejects ٢
     /// (Arabic-Indic digit 2 / U+0662).
     #[test]
     fn rejects_unicode_digits() {
@@ -473,8 +475,8 @@ mod tests {
         ));
     }
 
-    /// W6 GPT-5.5 panel notable #2: leading zeros are rejected so
-    /// that the generator output matches the sysfs canonical form
+    /// Leading zeros are rejected so that the generator output matches
+    /// the sysfs canonical form
     /// usbip(8) expects.
     #[test]
     fn rejects_leading_zero_in_bus_segment() {
@@ -505,8 +507,8 @@ mod tests {
         assert!(generate_usbip_argv(&input, UsbipSubcommand::Bind).is_ok());
     }
 
-    /// W6 GPT-5.5 panel notable #2: SYSFS_BUS_ID_SIZE caps printable
-    /// busid at 31 chars. Longer is refused with a typed error.
+    /// SYSFS_BUS_ID_SIZE caps printable busid at 31 chars. Longer is
+    /// refused with a typed error.
     #[test]
     fn rejects_bus_id_over_sysfs_max_length() {
         let mut input = audit_input();
@@ -565,17 +567,14 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// P3 ph3-usbipd-perenv: per-env usbipd-backend + systemd-socket-proxyd
-// argv generators.
+// Per-env usbipd-backend + TCP proxy argv generators.
 //
-// The 9 per-env systemd units declared by `nixos-modules/network.nix`
-// (`nixling-sys-<env>-usbipd-{backend,proxy}.service`) are scheduled
-// for removal in P6 and replaced by the nixlingd daemon spawning the
-// backend + proxy through broker `SpawnRunner` with
-// `RunnerRole::Usbip`. These two pure argv generators emit the exact
-// argv the systemd `ExecStart=` lines emit today, so the daemon path
-// is byte-parity with the singleton path during the transitional P3 →
-// P5 window. See plan.md row `ph3-usbipd-perenv`.
+// The per-env systemd units declared by `nixos-modules/network.nix`
+// (`nixling-sys-<env>-usbipd-{backend,proxy}.service`) were retired in
+// v1.0 and replaced by the nixlingd daemon spawning the backend + proxy
+// through broker `SpawnRunner` with `RunnerRole::Usbip`. These two pure
+// argv generators emit the exact argv the daemon-side `processes.json`
+// rows emit.
 // ---------------------------------------------------------------------------
 
 /// Inputs for the per-env `usbipd` backend long-lived process. The
@@ -598,18 +597,18 @@ pub struct UsbipdBackendArgvInput {
     pub backend_port: u16,
 }
 
-/// Inputs for the per-env systemd-socket-proxyd that fronts the
-/// backend. The proxy is socket-activated by systemd in the
-/// transitional shape (P3 → P5); the daemon-spawned shape starts the
-/// proxy directly and binds the env's uplink IP:3240 via the wrapping
-/// per-env socket unit (also retiring in P6).
+/// Inputs for the per-env TCP proxy that fronts the backend. The
+/// daemon-spawned shape starts the proxy directly and binds the env's
+/// uplink IP:3240.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsbipdProxyArgvInput {
-    /// Absolute store path to `systemd-socket-proxyd`.
-    pub socket_proxyd_binary_path: String,
+    /// Absolute store path to `socat`.
+    pub socat_binary_path: String,
     /// Env name owning this proxy. Renders the argv[0] process title.
     pub env: String,
+    /// Env host-uplink IP the proxy listens on.
+    pub host_uplink_ip: String,
     /// Per-env loopback TCP port the proxy forwards to.
     pub backend_port: u16,
 }
@@ -628,6 +627,9 @@ pub enum UsbipdPerEnvArgvError {
     /// space into the argv[0] process title.
     InvalidEnv {
         env: String,
+    },
+    InvalidHostUplinkIp {
+        host_uplink_ip: String,
     },
     /// Port `0` is illegal; the manifest derivation starts at 3241.
     InvalidPort,
@@ -672,26 +674,31 @@ pub fn generate_usbipd_backend_argv(
     ])
 }
 
-/// Render the argv for the per-env `systemd-socket-proxyd`. Mirrors
-/// the `nixling-sys-<env>-usbipd-proxy.service` `ExecStart=` line
-/// byte-for-byte (`systemd-socket-proxyd 127.0.0.1:<port>`).
+/// Render the argv for the per-env self-binding TCP proxy.
 pub fn generate_usbipd_proxy_argv(
     input: &UsbipdProxyArgvInput,
 ) -> Result<Vec<String>, UsbipdPerEnvArgvError> {
-    if input.socket_proxyd_binary_path.is_empty()
-        || !input.socket_proxyd_binary_path.starts_with('/')
-    {
+    if input.socat_binary_path.is_empty() || !input.socat_binary_path.starts_with('/') {
         return Err(UsbipdPerEnvArgvError::InvalidBinaryPath {
-            path: input.socket_proxyd_binary_path.clone(),
+            path: input.socat_binary_path.clone(),
         });
     }
     validate_env(&input.env)?;
+    input.host_uplink_ip.parse::<IpAddr>().map_err(|_| {
+        UsbipdPerEnvArgvError::InvalidHostUplinkIp {
+            host_uplink_ip: input.host_uplink_ip.clone(),
+        }
+    })?;
     if input.backend_port == 0 {
         return Err(UsbipdPerEnvArgvError::InvalidPort);
     }
     Ok(vec![
         format!("nixling-sys-{}-usbipd-proxy", input.env),
-        format!("127.0.0.1:{}", input.backend_port),
+        format!(
+            "TCP-LISTEN:3240,bind={},fork,max-children=4,reuseaddr",
+            input.host_uplink_ip
+        ),
+        format!("TCP:127.0.0.1:{}", input.backend_port),
     ])
 }
 
@@ -709,9 +716,9 @@ mod per_env_tests {
 
     fn proxy_input() -> UsbipdProxyArgvInput {
         UsbipdProxyArgvInput {
-            socket_proxyd_binary_path:
-                "/nix/store/SYSTEMDSYSTEMDSYS-systemd/lib/systemd/systemd-socket-proxyd".to_owned(),
+            socat_binary_path: "/nix/store/SOCATSOCATSOCAT-socat/bin/socat".to_owned(),
             env: "work".to_owned(),
+            host_uplink_ip: "192.0.2.1".to_owned(),
             backend_port: 3242,
         }
     }
@@ -731,19 +738,20 @@ mod per_env_tests {
     }
 
     #[test]
-    fn proxy_argv_matches_systemd_exec_start() {
+    fn proxy_argv_binds_env_uplink_ip() {
         let argv = generate_usbipd_proxy_argv(&proxy_input()).unwrap();
         assert_eq!(
             argv,
             vec![
                 "nixling-sys-work-usbipd-proxy".to_owned(),
-                "127.0.0.1:3242".to_owned(),
+                "TCP-LISTEN:3240,bind=192.0.2.1,fork,max-children=4,reuseaddr".to_owned(),
+                "TCP:127.0.0.1:3242".to_owned(),
             ]
         );
     }
 
-    /// P3 ph3-usbipd-perenv byte-parity snapshot. Emits SNAPSHOT
-    /// lines (backend first, then proxy) consumed by the static
+    /// Per-env usbipd byte-parity snapshot. Emits SNAPSHOT lines
+    /// (backend first, then proxy) consumed by the static
     /// gate's runner-shape diff.
     #[test]
     fn per_env_argv_snapshot_lines() {
@@ -766,7 +774,7 @@ mod per_env_tests {
     #[test]
     fn proxy_rejects_relative_binary_path() {
         let mut input = proxy_input();
-        input.socket_proxyd_binary_path = "systemd-socket-proxyd".to_owned();
+        input.socat_binary_path = "socat".to_owned();
         assert!(matches!(
             generate_usbipd_proxy_argv(&input),
             Err(UsbipdPerEnvArgvError::InvalidBinaryPath { .. })
@@ -810,6 +818,16 @@ mod per_env_tests {
         assert!(matches!(
             generate_usbipd_backend_argv(&input),
             Err(UsbipdPerEnvArgvError::InvalidPort)
+        ));
+    }
+
+    #[test]
+    fn proxy_rejects_invalid_host_uplink_ip() {
+        let mut input = proxy_input();
+        input.host_uplink_ip = "not an ip".to_owned();
+        assert!(matches!(
+            generate_usbipd_proxy_argv(&input),
+            Err(UsbipdPerEnvArgvError::InvalidHostUplinkIp { .. })
         ));
     }
 

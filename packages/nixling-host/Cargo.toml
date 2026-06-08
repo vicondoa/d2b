@@ -50,5 +50,6 @@ sha2 = { workspace = true }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 
 [dev-dependencies]
+nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"

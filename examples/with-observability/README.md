@@ -24,7 +24,7 @@ surface directly.
 host: demo
 ├─ work env (declared)
 │  ├─ work-app (10.20.0.10, obs vsock CID 210)
-│  └─ host relay: broker-spawned VsockRelay runner (RunnerRole::VsockRelay, P1 ph1-vsock-relay)
+│  └─ host relay: broker-spawned VsockRelay runner (RunnerRole::VsockRelay)
 ├─ obs env (auto-declared by nixling.observability.enable)
 │  └─ sys-obs-stack (Grafana http://10.40.0.10:3000, obs vsock CID 1000)
 └─ host-local CH exporter: 127.0.0.1:9101
@@ -67,7 +67,7 @@ work-app guest Alloy/journald/node exporter
 * The auto-declared `obs` env's bridges (`br-obs-up`,
   `br-obs-lan`) and the `sys-obs-stack` microVM come up via the
   daemon-spawned broker runners (per ADR 0015).
-* The host-side OTLP relay (`broker-spawned VsockRelay runner (RunnerRole::VsockRelay, P1 ph1-vsock-relay)`)
+* The host-side OTLP relay (`broker-spawned VsockRelay runner`)
   starts when `work-app` boots and forwards guest telemetry to
   `sys-obs-stack` over AF_VSOCK port 14317.
 * Grafana becomes reachable from the host at

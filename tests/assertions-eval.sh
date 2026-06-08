@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # tests/assertions-eval.sh — eval-time-assertion regression tests
-# (W3a-1 consolidated harness).
+# (consolidated harness).
 #
-# Pre-W3a-1, this gate invoked `nix-instantiate --eval --strict`
+# Pre-, this gate invoked `nix-instantiate --eval --strict`
 # 31 times, once per case. Each invocation re-booted the NixOS
 # module-system evaluator from cold, totalling ~32 min wall + ~150 G
 # /nix/store growth per gate run.
 #
-# W3a-1 collapses the 25 simple `run_assertion_test` cases into a
+# Collapses the 25 simple `run_assertion_test` cases into a
 # single batched `nix-instantiate --eval --strict --json` against
 # `tests/eval-cases/assertions.nix`. Each case is read out of the
 # resulting JSON and per-case asserted in shell. The remaining 6
@@ -63,7 +63,7 @@ stderr_contains_all() {
 # Legacy `mk_expr` / `run_eval_json` helpers — used by the batched
 # harness's focused fallback path (for the 3 throw cases that still
 # need a per-case stderr capture) AND by the 6 non-batched cases at
-# the tail. W3a-2 switches the default forcing expression away from
+# the tail. switches the default forcing expression away from
 # `system.build.toplevel.drvPath` and onto `nixos.config.assertions`
 # so eval-only assertion probes stop materializing a toplevel closure.
 # ---------------------------------------------------------------------------
@@ -87,51 +87,19 @@ mk_expr() {
   local override="$1"
   local system="${2:-x86_64-linux}"
   local body="${3:-$ASSERTIONS_FORCE_EXPR}"
+  # Per-case eval shares the SAME minimal-evalModules evaluator as the
+  # batched harness (tests/eval-cases/shared.nix `mkEval`): nixling's
+  # own modules + misc/assertions.nix + namespace sinks, NOT a full
+  # `nixosSystem`. That keeps batch and per-case semantics identical and
+  # drops each per-case eval from ~28s (1,370 baseModules) to ~1s. The
+  # shared `baseModule` is byte-identical to the previously-inlined one.
   cat <<EOF
 let
-  pkgs = import <nixpkgs> { system = "$system"; };
-  inherit (pkgs) lib;
-  flake = builtins.getFlake (toString $ROOT);
-  nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
-  pkgsForSystem = import flake.inputs.nixpkgs {
+  shared = import $ROOT/tests/eval-cases/shared.nix { flakeRoot = $ROOT; };
+  inherit (shared) lib;
+  nixos = shared.mkEval {
     system = "$system";
-    config = { allowUnsupportedSystem = true; };
-  };
-  nixos = nixosSystem {
-    system = "$system";
-    pkgs = pkgsForSystem;
-    modules = [
-      flake.nixosModules.default
-      ({ lib, ... }: {
-        boot.loader.grub.enable = false;
-        boot.loader.systemd-boot.enable = false;
-        fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
-        environment.etc."machine-id".text =
-          "00000000000000000000000000000000";
-        system.stateVersion = "25.11";
-        users.users.alice = { isNormalUser = true; uid = 1000; };
-        nixling.site = {
-          waylandUser = "alice";
-          launcherUsers = [ "alice" ];
-          yubikey.enable = false;
-        };
-        nixling.envs.work = {
-          lanSubnet    = "10.20.0.0/24";
-          uplinkSubnet = "192.0.2.0/30";
-        };
-        nixling.vms.corp-vm = {
-          enable = true;
-          env = "work";
-          index = 10;
-          ssh.user = "alice";
-          config = {
-            networking.hostName = lib.mkDefault "corp-vm";
-            users.users.alice = { isNormalUser = true; uid = 1000; };
-          };
-        };
-      })
-      $override
-    ];
+    override = $override;
   };
 in
   $body
@@ -157,7 +125,7 @@ run_eval_json() {
 }
 
 # ---------------------------------------------------------------------------
-# W3a-1 batched harness
+# Batched harness
 # ---------------------------------------------------------------------------
 #
 # Run ONE nix-instantiate --eval --strict --json against the

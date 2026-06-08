@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 s3 Layer-1 gate: broker request dispositions stay closed and documented.
+# Broker request dispositions stay closed and documented.
 
 set -euo pipefail
 
@@ -116,10 +116,9 @@ for variant, disposition in sorted(rows.items()):
         if "BrokerError::Unimplemented" not in segment:
             fail(f"stubbed variant {variant} does not return BrokerError::Unimplemented")
     elif disposition == "stubbed-unknown-operation":
-        # W3fu1 H1 (rust-1): W6 USBIP live device routing ops
-        # (`UsbipBind`, `UsbipUnbind`, `UsbipProxyReconcile`) are
-        # out of W3 scope and the W3 broker refuses them with
-        # `BrokerError::UnknownOperation` so the audit shape
+        # USBIP live device routing ops (`UsbipBind`, `UsbipUnbind`,
+        # `UsbipProxyReconcile`) are outside this scope and the broker
+        # refuses them with `BrokerError::UnknownOperation` so the audit shape
         # records `unknown-operation` instead of the `Unimplemented`
         # `w3-pending-typed-wire` shape used for genuinely deferred
         # in-scope variants. Doc + gate parity for that intent.

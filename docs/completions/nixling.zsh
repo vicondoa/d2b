@@ -15,8 +15,8 @@ _nixling() {
 
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
 '--version[Print version]' \
 ":: :_nixling_commands" \
@@ -275,7 +275,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
-'--read-only[Mandatory\: the W3 doctor verb is read-only. Mutation forms are W4 deliverables]' \
+'--read-only[Mandatory\: doctor is read-only. Mutating forms are separate verbs]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -284,11 +284,11 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (install)
 _arguments "${_arguments_options[@]}" : \
-'(--apply --enable --start --no-start)--dry-run[W9\: \`--dry-run\` reports the planned install steps]' \
-'(--dry-run)--apply[W15\: \`--apply\` performs the install through the daemon → broker \`RunHostInstall\` path]' \
-'(--dry-run)--enable[W9\: After \`--apply\`, enable nixlingd.service via systemctl]' \
-'(--dry-run --no-start)--start[W9\: After \`--apply --enable\`, start nixlingd.service]' \
-'(--dry-run --start)--no-start[W9\: Explicitly do NOT start nixlingd.service post-install]' \
+'(--apply --enable --start --no-start)--dry-run[Report the planned install steps without mutating]' \
+'(--dry-run)--apply[Perform the install through the daemon → broker \`RunHostInstall\` path]' \
+'(--dry-run)--enable[After \`--apply\`, enable nixlingd.service via systemctl]' \
+'(--dry-run --no-start)--start[After \`--apply --enable\`, start nixlingd.service]' \
+'(--dry-run --start)--no-start[Explicitly do NOT start nixlingd.service post-install]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -297,7 +297,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (reconcile)
 _arguments "${_arguments_options[@]}" : \
-'--network[Required for P3\: re-run the network slice of \`host prepare\` and clear the daemon'\''s net-route preflight counter. Today this is the only available scope; future P-phases may add other scopes (e.g. \`--ownership\`)]' \
+'--network[Re-run the network slice of \`host prepare\` and clear the daemon'\''s net-route preflight counter. Currently the only available scope]' \
 '(--apply)--dry-run[Plan the reconcile without mutating host state]' \
 '(--dry-run)--apply[Apply the reconcile (mutates host state)]' \
 '(--human)--json[]' \
@@ -308,12 +308,12 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (validate)
 _arguments "${_arguments_options[@]}" : \
-'--wave=[Restrict to a single wave (e.g. \`--wave p1\`). Other waves are reported as \`skipped\`]:WAVE:_default' \
+'--wave=[Restrict to a single wave. Other waves are reported as \`skipped\`]:WAVE:_default' \
 '--operator-signature=[Override the per-wave operator signature. When unset, the verb derives a deterministic sha256 signature from \`hostname|wave|scripts_dir|timestamp\`]:SIGNATURE:_default' \
-'--evidence-dir=[Override the evidence directory. Default\: \`/var/lib/nixling/validated\` (the W18 gate path)]:PATH:_files' \
+'--evidence-dir=[Override the evidence directory. Default\: \`/var/lib/nixling/validated\`]:PATH:_files' \
 '--scripts-dir=[Override the scripts directory. Default\: best-effort discovery of the installed \`tests/\` share, then \`./tests\`]:PATH:_files' \
-'(--apply)--dry-run[Plan\: report which W18 readiness waves WOULD be attested. No evidence is written]' \
-'(--dry-run)--apply[Apply\: write the canonical \`/var/lib/nixling/validated/<wave>.json\` evidence record for every wave whose declared validators are present on disk]' \
+'(--apply)--dry-run[Plan\: report which readiness validators WOULD be attested. No evidence is written]' \
+'(--dry-run)--apply[Apply\: write \`/var/lib/nixling/validated/<wave>.json\` for every wave whose declared validators are present on disk]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -441,6 +441,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[Plan the DAG without spawning any role]' \
 '(--dry-run)--apply[Apply the DAG (drives the supervisor)]' \
+'--no-wait-api[Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -478,6 +479,29 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name:_default' \
+&& ret=0
+;;
+(konsole)
+_arguments "${_arguments_options[@]}" : \
+'--terminal=[Terminal emulator binary to spawn. Must accept \`-e\` to execute a command. Tested\: konsole, alacritty, foot, gnome-terminal, xterm. Default\: konsole]:TERMINAL:_default' \
+'--user=[SSH user inside the guest. Defaults to the per-VM \`ssh_user\` from the manifest; falls back to \`\$USER\` if the manifest entry is absent. Override for ad-hoc per-user sessions]:USER:_default' \
+'--host=[Override the SSH host (IP or hostname). Default\: manifest \`static_ip\` (bundle-resolved LAN address)]:HOST:_default' \
+'--key=[Override the SSH key path. Default\: the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides). Legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is only the fallback when no bundle is staged]:KEY:_files' \
+'--dry-run[Print the would-be command without executing]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_nixling__subcmd__vm__subcmd__help_commands" \
@@ -506,6 +530,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(konsole)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -522,6 +554,7 @@ esac
 _arguments "${_arguments_options[@]}" : \
 '(--apply)--dry-run[Plan the DAG without spawning any role]' \
 '(--dry-run)--apply[Apply the DAG (drives the supervisor)]' \
+'--no-wait-api[Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
@@ -913,6 +946,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(konsole)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -1013,29 +1054,29 @@ esac
 (( $+functions[_nixling_commands] )) ||
 _nixling_commands() {
     local commands; commands=(
-'list:' \
-'status:' \
-'usb:' \
-'console:Foreground serial console bridge for headless VMs. P7fu2\: the bash runtime that backed this verb pre-v1.0 was retired in P6; the daemon-native console surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit-78 envelope per ADR 0015' \
-'audio:Per-VM audio grant bridge. P7fu2\: the bash runtime that backed this verb pre-v1.0 was retired in P6; the daemon-native audio surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit-78 envelope per ADR 0015' \
-'audit:' \
-'host:' \
-'auth:' \
-'vm:W4-H7 / P4\: per-VM lifecycle verbs routed through \`nixlingd\`. \`--apply\` is daemon-only; failure modes surface as typed envelopes. \`--dry-run\` returns the DAG the supervisor would drive' \
-'up:P4 alias for \`vm start <vm>\`. Daemon-native; no bash fallback' \
-'down:P4 alias for \`vm stop <vm>\`. Daemon-native; no bash fallback' \
-'restart:P4 alias for \`vm restart <vm>\`. Daemon-native; no bash fallback' \
-'build:W7-H1\: \`nixling build <vm>\` — non-destructive eval+build of the per-VM toplevel' \
-'generations:W7-H2\: \`nixling generations <vm>\` — lists current/booted/N' \
-'switch:W7-H3\: \`nixling switch <vm> \[--apply|--dry-run\]\` — atomic activation. \`--apply\` dispatches through \`nixlingd\` → broker \`RunActivation\` (v1.0 daemon-only per ADR 0015); \`--dry-run\` returns the planned activation' \
-'boot:W7-H4\: \`nixling boot <vm>\` — stage for next boot only' \
-'test:W7-H5\: \`nixling test <vm>\` — activate-but-rollback-on-reboot' \
-'rollback:W7-H6\: \`nixling rollback <vm>\` — back to the previous generation' \
-'gc:W7-H7\: \`nixling gc \[--apply|--dry-run\]\` — store cleanup' \
-'keys:W8\: managed-key + trust lifecycle verbs (list / show / rotate). \`--apply\` dispatches through \`nixlingd\` → broker \`RunKeysRotate\` (v1.0 daemon-only per ADR 0015)' \
-'trust:W8\: \`nixling trust <vm>\` (top-level, NOT under \`keys\`). Trust a host key on first use (TOFU) through the daemon / broker \`RunHostKeyTrust\` op. Bash runtime retired in P6' \
-'rotate-known-host:W8\: \`nixling rotate-known-host <vm>\` (top-level, NOT under \`keys\`). Rotate the consumer'\''s recorded known-host entry via the daemon / broker \`RunRotateKnownHost\` op. Bash runtime retired in P6' \
-'migrate:W9\: \`nixling migrate\` — analyze the current host config and emit a migration plan to the daemon-experimental path. \`--apply\` dispatches the broker \`RunMigrate\` op (daemon-only since P6; the historical bash dispatch path was retired in the same wave)' \
+'list:List declared VMs from the static manifest' \
+'status:Show per-VM runtime status plus bridge health' \
+'usb:USBIP attach / detach / probe' \
+'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
+'audio:Per-VM audio grant bridge (not yet implemented)' \
+'audit:Tail the broker audit log' \
+'host:Host-side preflight, install, doctor, and reconcile verbs' \
+'auth:Authorisation introspection' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'up:Alias for \`vm start <vm>\`' \
+'down:Alias for \`vm stop <vm>\`' \
+'restart:Alias for \`vm restart <vm>\`' \
+'build:Non-destructive eval + build of the per-VM toplevel' \
+'generations:List current / booted / numbered generations for a VM' \
+'switch:Atomically activate a new per-VM closure' \
+'boot:Stage a per-VM closure for the next boot only' \
+'test:Activate a per-VM closure with rollback on reboot' \
+'rollback:Roll a VM back to its previous generation' \
+'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
+'keys:Managed-key lifecycle (list / show / rotate)' \
+'trust:Trust a VM'\''s host key on first use (TOFU)' \
+'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
+'migrate:Analyse the host config and emit a migration plan' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling commands' commands "$@"
@@ -1176,29 +1217,29 @@ _nixling__subcmd__generations_commands() {
 (( $+functions[_nixling__subcmd__help_commands] )) ||
 _nixling__subcmd__help_commands() {
     local commands; commands=(
-'list:' \
-'status:' \
-'usb:' \
-'console:Foreground serial console bridge for headless VMs. P7fu2\: the bash runtime that backed this verb pre-v1.0 was retired in P6; the daemon-native console surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit-78 envelope per ADR 0015' \
-'audio:Per-VM audio grant bridge. P7fu2\: the bash runtime that backed this verb pre-v1.0 was retired in P6; the daemon-native audio surface is queued for v1.1+. Calling this in v1.0 surfaces a typed exit-78 envelope per ADR 0015' \
-'audit:' \
-'host:' \
-'auth:' \
-'vm:W4-H7 / P4\: per-VM lifecycle verbs routed through \`nixlingd\`. \`--apply\` is daemon-only; failure modes surface as typed envelopes. \`--dry-run\` returns the DAG the supervisor would drive' \
-'up:P4 alias for \`vm start <vm>\`. Daemon-native; no bash fallback' \
-'down:P4 alias for \`vm stop <vm>\`. Daemon-native; no bash fallback' \
-'restart:P4 alias for \`vm restart <vm>\`. Daemon-native; no bash fallback' \
-'build:W7-H1\: \`nixling build <vm>\` — non-destructive eval+build of the per-VM toplevel' \
-'generations:W7-H2\: \`nixling generations <vm>\` — lists current/booted/N' \
-'switch:W7-H3\: \`nixling switch <vm> \[--apply|--dry-run\]\` — atomic activation. \`--apply\` dispatches through \`nixlingd\` → broker \`RunActivation\` (v1.0 daemon-only per ADR 0015); \`--dry-run\` returns the planned activation' \
-'boot:W7-H4\: \`nixling boot <vm>\` — stage for next boot only' \
-'test:W7-H5\: \`nixling test <vm>\` — activate-but-rollback-on-reboot' \
-'rollback:W7-H6\: \`nixling rollback <vm>\` — back to the previous generation' \
-'gc:W7-H7\: \`nixling gc \[--apply|--dry-run\]\` — store cleanup' \
-'keys:W8\: managed-key + trust lifecycle verbs (list / show / rotate). \`--apply\` dispatches through \`nixlingd\` → broker \`RunKeysRotate\` (v1.0 daemon-only per ADR 0015)' \
-'trust:W8\: \`nixling trust <vm>\` (top-level, NOT under \`keys\`). Trust a host key on first use (TOFU) through the daemon / broker \`RunHostKeyTrust\` op. Bash runtime retired in P6' \
-'rotate-known-host:W8\: \`nixling rotate-known-host <vm>\` (top-level, NOT under \`keys\`). Rotate the consumer'\''s recorded known-host entry via the daemon / broker \`RunRotateKnownHost\` op. Bash runtime retired in P6' \
-'migrate:W9\: \`nixling migrate\` — analyze the current host config and emit a migration plan to the daemon-experimental path. \`--apply\` dispatches the broker \`RunMigrate\` op (daemon-only since P6; the historical bash dispatch path was retired in the same wave)' \
+'list:List declared VMs from the static manifest' \
+'status:Show per-VM runtime status plus bridge health' \
+'usb:USBIP attach / detach / probe' \
+'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
+'audio:Per-VM audio grant bridge (not yet implemented)' \
+'audit:Tail the broker audit log' \
+'host:Host-side preflight, install, doctor, and reconcile verbs' \
+'auth:Authorisation introspection' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'up:Alias for \`vm start <vm>\`' \
+'down:Alias for \`vm stop <vm>\`' \
+'restart:Alias for \`vm restart <vm>\`' \
+'build:Non-destructive eval + build of the per-VM toplevel' \
+'generations:List current / booted / numbered generations for a VM' \
+'switch:Atomically activate a new per-VM closure' \
+'boot:Stage a per-VM closure for the next boot only' \
+'test:Activate a per-VM closure with rollback on reboot' \
+'rollback:Roll a VM back to its previous generation' \
+'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
+'keys:Managed-key lifecycle (list / show / rotate)' \
+'trust:Trust a VM'\''s host key on first use (TOFU)' \
+'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
+'migrate:Analyse the host config and emit a migration plan' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling help commands' commands "$@"
@@ -1288,13 +1329,13 @@ _nixling__subcmd__help__subcmd__help_commands() {
 (( $+functions[_nixling__subcmd__help__subcmd__host_commands] )) ||
 _nixling__subcmd__help__subcmd__host_commands() {
     local commands; commands=(
-'check:' \
-'prepare:W3fu1 H1 (product-1, software-1)\: native \`host prepare\` verb. \`--apply\` is mandatory for mutation; without it the command refuses with \`--apply-or-dry-run-required\` exit 78' \
-'destroy:W3fu1 H1\: native \`host destroy\` verb. Same mandatory-flag contract as \`prepare\`' \
-'doctor:W3fu1 H1\: native \`host doctor\` verb. \`--read-only\` is mandatory' \
-'install:W15 (software-1, product-1)\: native \`host install\` routes \`--apply\` through the daemon → broker \`RunHostInstall\` path' \
-'reconcile:P3 ph3-p3-net-route-degraded-mode\: SOLE mutating recovery verb after the daemon-side net-route preflight has engaged operator-only mode. Re-runs the broker-side net slice of \`host prepare\` (nftables host scope + per-env routes + per-env ipv6 sysctls) and clears the persistent consecutive-failure counter on success' \
-'validate:P5 ph5-p5-host-validate-verb\: composite preflight that inventories per-wave Layer-2 validators and (with \`--apply\`) writes the canonical W18 evidence records consumed by \`nixos-modules/options-daemon.nix\:validationEvidencePresent\`' \
+'check:Read-only preflight\: inventories host posture without mutation' \
+'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
+'destroy:Tear down host-side state owned by nixling. --apply mutates' \
+'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'install:Install nixlingd + broker units onto the host. --apply mutates' \
+'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'validate:Run the host-side validator suite and write evidence records' \
     )
     _describe -t commands 'nixling help host commands' commands "$@"
 }
@@ -1438,8 +1479,15 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'status:Daemon-side readiness state for a VM (api-ready phase)' \
+'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__konsole_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__konsole_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help vm konsole commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__list_commands] )) ||
 _nixling__subcmd__help__subcmd__vm__subcmd__list_commands() {
@@ -1456,6 +1504,11 @@ _nixling__subcmd__help__subcmd__vm__subcmd__start_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help vm start commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__status_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help vm status commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__stop_commands] )) ||
 _nixling__subcmd__help__subcmd__vm__subcmd__stop_commands() {
     local commands; commands=()
@@ -1464,13 +1517,13 @@ _nixling__subcmd__help__subcmd__vm__subcmd__stop_commands() {
 (( $+functions[_nixling__subcmd__host_commands] )) ||
 _nixling__subcmd__host_commands() {
     local commands; commands=(
-'check:' \
-'prepare:W3fu1 H1 (product-1, software-1)\: native \`host prepare\` verb. \`--apply\` is mandatory for mutation; without it the command refuses with \`--apply-or-dry-run-required\` exit 78' \
-'destroy:W3fu1 H1\: native \`host destroy\` verb. Same mandatory-flag contract as \`prepare\`' \
-'doctor:W3fu1 H1\: native \`host doctor\` verb. \`--read-only\` is mandatory' \
-'install:W15 (software-1, product-1)\: native \`host install\` routes \`--apply\` through the daemon → broker \`RunHostInstall\` path' \
-'reconcile:P3 ph3-p3-net-route-degraded-mode\: SOLE mutating recovery verb after the daemon-side net-route preflight has engaged operator-only mode. Re-runs the broker-side net slice of \`host prepare\` (nftables host scope + per-env routes + per-env ipv6 sysctls) and clears the persistent consecutive-failure counter on success' \
-'validate:P5 ph5-p5-host-validate-verb\: composite preflight that inventories per-wave Layer-2 validators and (with \`--apply\`) writes the canonical W18 evidence records consumed by \`nixos-modules/options-daemon.nix\:validationEvidencePresent\`' \
+'check:Read-only preflight\: inventories host posture without mutation' \
+'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
+'destroy:Tear down host-side state owned by nixling. --apply mutates' \
+'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'install:Install nixlingd + broker units onto the host. --apply mutates' \
+'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'validate:Run the host-side validator suite and write evidence records' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling host commands' commands "$@"
@@ -1493,13 +1546,13 @@ _nixling__subcmd__host__subcmd__doctor_commands() {
 (( $+functions[_nixling__subcmd__host__subcmd__help_commands] )) ||
 _nixling__subcmd__host__subcmd__help_commands() {
     local commands; commands=(
-'check:' \
-'prepare:W3fu1 H1 (product-1, software-1)\: native \`host prepare\` verb. \`--apply\` is mandatory for mutation; without it the command refuses with \`--apply-or-dry-run-required\` exit 78' \
-'destroy:W3fu1 H1\: native \`host destroy\` verb. Same mandatory-flag contract as \`prepare\`' \
-'doctor:W3fu1 H1\: native \`host doctor\` verb. \`--read-only\` is mandatory' \
-'install:W15 (software-1, product-1)\: native \`host install\` routes \`--apply\` through the daemon → broker \`RunHostInstall\` path' \
-'reconcile:P3 ph3-p3-net-route-degraded-mode\: SOLE mutating recovery verb after the daemon-side net-route preflight has engaged operator-only mode. Re-runs the broker-side net slice of \`host prepare\` (nftables host scope + per-env routes + per-env ipv6 sysctls) and clears the persistent consecutive-failure counter on success' \
-'validate:P5 ph5-p5-host-validate-verb\: composite preflight that inventories per-wave Layer-2 validators and (with \`--apply\`) writes the canonical W18 evidence records consumed by \`nixos-modules/options-daemon.nix\:validationEvidencePresent\`' \
+'check:Read-only preflight\: inventories host posture without mutation' \
+'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
+'destroy:Tear down host-side state owned by nixling. --apply mutates' \
+'doctor:Read-only deep diagnostics for the daemon + broker state' \
+'install:Install nixlingd + broker units onto the host. --apply mutates' \
+'reconcile:Recover host network state after the daemon engaged operator-only mode' \
+'validate:Run the host-side validator suite and write evidence records' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling host help commands' commands "$@"
@@ -1731,6 +1784,8 @@ _nixling__subcmd__vm_commands() {
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'status:Daemon-side readiness state for a VM (api-ready phase)' \
+'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm commands' commands "$@"
@@ -1742,6 +1797,8 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'status:Daemon-side readiness state for a VM (api-ready phase)' \
+'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm help commands' commands "$@"
@@ -1750,6 +1807,11 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 _nixling__subcmd__vm__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'nixling vm help help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__konsole_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__konsole_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm help konsole commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__list_commands] )) ||
 _nixling__subcmd__vm__subcmd__help__subcmd__list_commands() {
@@ -1766,10 +1828,20 @@ _nixling__subcmd__vm__subcmd__help__subcmd__start_commands() {
     local commands; commands=()
     _describe -t commands 'nixling vm help start commands' commands "$@"
 }
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__status_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm help status commands' commands "$@"
+}
 (( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__stop_commands] )) ||
 _nixling__subcmd__vm__subcmd__help__subcmd__stop_commands() {
     local commands; commands=()
     _describe -t commands 'nixling vm help stop commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__konsole_commands] )) ||
+_nixling__subcmd__vm__subcmd__konsole_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm konsole commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__list_commands] )) ||
 _nixling__subcmd__vm__subcmd__list_commands() {
@@ -1785,6 +1857,11 @@ _nixling__subcmd__vm__subcmd__restart_commands() {
 _nixling__subcmd__vm__subcmd__start_commands() {
     local commands; commands=()
     _describe -t commands 'nixling vm start commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__status_commands] )) ||
+_nixling__subcmd__vm__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm status commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__stop_commands] )) ||
 _nixling__subcmd__vm__subcmd__stop_commands() {

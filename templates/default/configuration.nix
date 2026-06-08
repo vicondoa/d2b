@@ -78,7 +78,7 @@ in
     # VMs).
     waylandUser = user;
 
-    # Users who get the `nixling-launcher` group + polkit grant
+    # Users who get the `nixling` group + polkit grant
     # to run `nixling up/down/...` without `sudo`.
     launcherUsers = [ user ];
 

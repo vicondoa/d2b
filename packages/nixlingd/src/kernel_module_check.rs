@@ -1,4 +1,4 @@
-//! P3 `ph3-p3-kernel-module-check`: daemon startup self-check that
+//! Daemon startup self-check that
 //! verifies the kernel-module matrix the running trusted bundle
 //! requires is loaded into the live kernel.
 //!
@@ -206,7 +206,7 @@ fn classify_vms(resolver: &BundleResolver) -> BundleFeatureSet {
                 ProcessRole::Virtiofsd => {
                     features.virtiofs_vms.insert(vm_id.clone());
                 }
-                ProcessRole::Gpu => {
+                ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
                     features.graphics_vms.insert(vm_id.clone());
                 }
                 ProcessRole::Usbip => {
@@ -320,7 +320,9 @@ pub fn check_kernel_modules(
                     // VMs (software-render fallback is the
                     // expected behaviour on non-nvidia hosts).
                     affected_vms: BTreeSet::new(),
-                    reason: "graphics VMs may fall back to software rendering on nvidia-equipped hosts".to_owned(),
+                    reason:
+                        "graphics VMs may fall back to software rendering on nvidia-equipped hosts"
+                            .to_owned(),
                 });
             }
         }
@@ -408,8 +410,7 @@ mod tests {
     use nixling_core::host::HostJson;
     use nixling_core::manifest_v04::ManifestV04;
     use nixling_core::processes::{
-        DagEdge, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag,
-        VmProcessInvariants,
+        DagEdge, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
     };
 
     const HOST_JSON_FIXTURE: &str =
@@ -417,8 +418,8 @@ mod tests {
     const MANIFEST_FIXTURE: &str =
         include_str!("../../../tests/golden/manifest_v04/baseline-vms.json");
 
-    /// A profile stub valid against the W1 schema. Built once via
-    /// JSON to keep the test fixture decoupled from the (large,
+    /// A profile stub valid against the schema. Built once via JSON to
+    /// keep the test fixture decoupled from the (large,
     /// occasionally-resnaped) [`nixling_core::processes::RoleProfile`]
     /// struct.
     fn role_profile_stub_json() -> serde_json::Value {
@@ -485,11 +486,12 @@ mod tests {
     /// then apply a closure that mutates the manifest VMs (toggle
     /// graphics / tpm / usbip) plus any process DAG additions.
     fn build_resolver(
-        mutate_vms: impl FnOnce(&mut std::collections::BTreeMap<String, nixling_core::manifest_v04::VmEntry>),
+        mutate_vms: impl FnOnce(
+            &mut std::collections::BTreeMap<String, nixling_core::manifest_v04::VmEntry>,
+        ),
         process_vms: Vec<VmProcessDag>,
     ) -> BundleResolver {
-        let host: HostJson =
-            serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        let host: HostJson = serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
         let mut manifest =
             ManifestV04::from_slice(MANIFEST_FIXTURE.as_bytes()).expect("manifest fixture parses");
         mutate_vms(&mut manifest.vms);
@@ -682,10 +684,7 @@ mod tests {
         ]);
         let report = check_kernel_modules(&resolver, &loaded, &empty_builtin());
         assert!(!report.is_fatal(), "{:?}", report);
-        assert!(report
-            .optional_missing
-            .iter()
-            .any(|r| r.module == "nvidia"));
+        assert!(report.optional_missing.iter().any(|r| r.module == "nvidia"));
         assert!(report.degraded_vms().is_empty());
     }
 

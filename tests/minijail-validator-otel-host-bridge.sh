@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# P1 OtelHostBridge minijail validator (decision 5 + observability-4 +
-# security-2 + kernel-r2-4 closed-set).
+# OtelHostBridge minijail validator (closed-set).
 #
 # This validator is the Layer-2 evidence script for the new
 # `RunnerRole::OtelHostBridge` role that replaces the singleton
@@ -34,8 +33,7 @@ log "==> tests/minijail-validator-otel-host-bridge.sh"
 
 # --------------------------------------------------------------------
 # Layer-1 (always-on): minijail-profiles.nix shape assertions for the
-# OtelHostBridge role (test-r1-1 closure). Caps must be empty
-# (pre-opened fds only, observability-4 + decision 5).
+# OtelHostBridge role. Caps must be empty (pre-opened fds only).
 # --------------------------------------------------------------------
 PROFILES_NIX="$ROOT/nixos-modules/minijail-profiles.nix"
 layer1_fail=0
@@ -84,7 +82,7 @@ if [ ! -r "$PROFILE_PATH" ]; then
   exit 1
 fi
 
-# Profile caps assertion — kernel-r2-4 matrix: empty.
+# Profile caps assertion — empty.
 caps=$(jq -r '.caps // [] | join(",")' "$PROFILE_PATH")
 if [ -n "$caps" ]; then
   fail "profile must declare empty caps per kernel-r2-4; got: $caps"

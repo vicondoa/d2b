@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 Layer-1 gate: nixling-ipc wire types -> daemon-api.md drift.
+# nixling-ipc wire types -> daemon-api.md drift.
 
 set -euo pipefail
 

@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["nixling-priv-broker"]
 members = [
+    "nixling-host-activation-helper",
     "nixling-core",
     "nixling-host",
     "nixling-ipc",
@@ -12,6 +13,9 @@ members = [
 
 [workspace.package]
 license = "Apache-2.0"
+
+[workspace.lints.clippy]
+all = "warn"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

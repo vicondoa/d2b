@@ -18,12 +18,17 @@ use nixling_core::{
         SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     },
     manifest_v04::ManifestV04,
-    minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet},
+    minijail_profile::CgroupPlacement,
     privileges::{PrivilegesJson, BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ},
     processes::{
-        DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate, RoleProfile,
-        VmProcessDag, VmProcessInvariants,
+        DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate, VmProcessDag,
+        VmProcessInvariants,
     },
+};
+#[cfg(not(feature = "test-support"))]
+use nixling_core::{
+    minijail_profile::{MountPolicy, NamespaceSet},
+    processes::RoleProfile,
 };
 
 fn main() {
@@ -213,10 +218,8 @@ fn w1_matrix_contains_public_and_broker_rows() {
 }
 
 fn manifest_baseline_round_trips_compact() {
-    // W3 prep (w2-rust-tests-golden-fragility-w3): embed via
-    // include_str! so the fuzz harness does not read outside the
-    // cargo sandbox. See plan.md §"W3 pre-existing follow-up
-    // assignments".
+    // Embed via include_str! so the fuzz harness does not read outside
+    // the cargo sandbox.
     const BASELINE: &str = include_str!("../../../../../tests/golden/vms.json-91d69b0");
     let manifest = ManifestV04::from_slice(BASELINE.as_bytes()).expect("baseline parses");
     let rendered = manifest.to_compact_json().expect("baseline serializes");
@@ -300,7 +303,7 @@ fn bundle_op_id_format_strings_are_wire_stable() {
 }
 
 // ---------------------------------------------------------------
-// W11 bundle resolver tests.
+// Bundle resolver tests.
 // ---------------------------------------------------------------
 
 fn build_synthetic_resolver() -> BundleResolver {
@@ -364,13 +367,22 @@ fn build_synthetic_resolver() -> BundleResolver {
         nftables: NftablesModel {
             family: "inet".to_owned(),
             table: "nixling".to_owned(),
-            chains: vec![NftChain {
-                name: "input".to_owned(),
-                hook: Some("input".to_owned()),
-                priority: Some(0),
-                policy: Some("drop".to_owned()),
-                purpose: "host ingress firewall".to_owned(),
-            }],
+            chains: vec![
+                NftChain {
+                    name: "input".to_owned(),
+                    hook: Some("input".to_owned()),
+                    priority: Some(0),
+                    policy: Some("drop".to_owned()),
+                    purpose: "host ingress firewall".to_owned(),
+                },
+                NftChain {
+                    name: "forward".to_owned(),
+                    hook: Some("forward".to_owned()),
+                    priority: Some(-5),
+                    policy: Some("drop".to_owned()),
+                    purpose: "host forward firewall (per-env workload egress)".to_owned(),
+                },
+            ],
             table_hash_after_apply: None,
             ownership_id: "nl-fixture-001".to_owned(),
         },
@@ -412,40 +424,67 @@ fn build_synthetic_resolver() -> BundleResolver {
                     "/var/lib/nixling/vms/work-vm/work-vm.sock".to_owned(),
                 ],
                 env: Vec::new(),
-                profile: RoleProfile {
-                    profile_id: "ch-runner-default".to_owned(),
-                    uid: 5001,
-                    gid: 5001,
-                    adr_carve_out: None,
-                    caps: Vec::new(),
-                    namespaces: NamespaceSet {
-                        mount: true,
-                        pid: true,
-                        net: false,
-                        ipc: true,
-                        uts: true,
-                        user: false,
-                    },
-                    seccomp_policy_ref: None,
-                    mount_policy: MountPolicy {
-                        read_only_paths: Vec::new(),
-                        writable_paths: Vec::new(),
-                        nix_store_read_only: true,
-                        hide_device_nodes_by_default: true,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
-                    },
-                    cgroup_placement: CgroupPlacement {
-                        subtree: "nixling/work-vm/ch-runner".to_owned(),
-                        controllers: Vec::new(),
-                        delegated: true,
-                    },
-                    user_namespace: None,
-                    umask: None,
+                profile: {
+                    #[cfg(feature = "test-support")]
+                    {
+                        nixling_core::test_support::RoleProfileBuilder::new()
+                            .with_profile_id("ch-runner-default")
+                            .with_uid(5001)
+                            .with_gid(5001)
+                            .with_namespaces(nixling_core::minijail_profile::NamespaceSet {
+                                mount: true,
+                                pid: true,
+                                net: false,
+                                ipc: true,
+                                uts: true,
+                                user: false,
+                            })
+                            .with_cgroup_placement(CgroupPlacement {
+                                subtree: "nixling/work-vm/ch-runner".to_owned(),
+                                controllers: Vec::new(),
+                                delegated: true,
+                            })
+                            .build()
+                    }
+                    #[cfg(not(feature = "test-support"))]
+                    {
+                        RoleProfile {
+                            profile_id: "ch-runner-default".to_owned(),
+                            uid: 5001,
+                            gid: 5001,
+                            adr_carve_out: None,
+                            caps: Vec::new(),
+                            namespaces: NamespaceSet {
+                                mount: true,
+                                pid: true,
+                                net: false,
+                                ipc: true,
+                                uts: true,
+                                user: false,
+                            },
+                            seccomp_policy_ref: None,
+                            mount_policy: MountPolicy {
+                                read_only_paths: Vec::new(),
+                                writable_paths: Vec::new(),
+                                nix_store_read_only: true,
+                                hide_device_nodes_by_default: true,
+                                device_binds: Vec::new(),
+                                bind_mounts: Vec::new(),
+                            },
+                            cgroup_placement: CgroupPlacement {
+                                subtree: "nixling/work-vm/ch-runner".to_owned(),
+                                controllers: Vec::new(),
+                                delegated: true,
+                            },
+                            user_namespace: None,
+                            umask: None,
+                        }
+                    }
                 },
                 readiness: vec![ReadinessPredicate::ApiSocketInfo(
                     "/run/nixling/vms/work-vm/api.sock".to_owned(),
                 )],
+                plan_ops: Vec::new(),
             }],
             edges: Vec::<DagEdge>::new(),
             invariants: VmProcessInvariants {
@@ -495,6 +534,19 @@ fn bundle_resolver_round_trips_nft_intents() {
     assert!(host_intent.desired_hash.starts_with("fnv1a64:"));
     assert_eq!(host_intent.ownership_id, "nl-fixture-001");
 
+    // Per-env workload egress: the forward chain default-drops at
+    // priority -5 (runs before nixos-filter-forward at 0), so without
+    // an explicit accept-new for each env's `br-<env>-up` interface,
+    // SYNs from workload VMs get dropped before they reach the nixos
+    // chain. Regression guard for that gap.
+    assert!(
+        host_intent
+            .script_body
+            .contains("iifname \"br-work-up\" ct state new accept"),
+        "missing per-env forward accept rule in host nft script:\n{}",
+        host_intent.script_body
+    );
+
     let env_intent = r
         .find_nft_intent(&intent_id_nft_env("work"))
         .expect("env nft");
@@ -508,7 +560,7 @@ fn bundle_resolver_round_trips_route_intents() {
         .find_route_intent(&intent_id_route_env("work", 0))
         .expect("env route 0");
     assert_eq!(route.destination, "192.168.1.0/24");
-    assert_eq!(route.device.as_deref(), Some("br-work-lan"));
+    assert_eq!(route.device.as_deref(), Some("br-work-up"));
     assert!(route.owned);
 }
 
@@ -697,7 +749,7 @@ fn bundle_resolver_intent_ids_are_sorted_and_deterministic() {
 }
 
 // ---------------------------------------------------------------
-// W17 minijail profile validator + W16 host-runtime tests.
+// Minijail profile validator + host-runtime tests.
 // ---------------------------------------------------------------
 
 fn bundle_resolver_minijail_profile_validator_passes_on_fixture() {

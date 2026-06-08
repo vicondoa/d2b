@@ -1,4 +1,4 @@
-//! W4-H1: Cloud Hypervisor argv generator.
+//! Cloud Hypervisor argv generator.
 //!
 //! Pure Rust function that takes a [`ChArgvInput`] (VM identity,
 //! closure paths, manifest network/share inputs, daemon-owned socket
@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 
 /// CH net-handoff mode the broker selected at host-check time, see
 /// `nixling_host::runner_shape::NetHandoffMode` (kept as a string here
-/// to avoid pulling in the W3 probe surface as a dependency of the
-/// argv generator; the daemon translates the runner-shape outcome
+/// to avoid pulling in the probe surface as a dependency of the argv
+/// generator; the daemon translates the runner-shape outcome
 /// before calling [`generate_ch_argv`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -136,8 +136,8 @@ pub struct ChArgvInput {
     /// fixture shows).
     #[serde(default)]
     pub fs_shares: Vec<ChFsShare>,
-    /// Daemon-owned CH API socket path. The W3 ADR 0014 contract
-    /// requires `mode=0660` and a non-empty owner; both are enforced
+    /// Daemon-owned CH API socket path. The ADR 0014 contract requires
+    /// `mode=0660` and a non-empty owner; both are enforced
     /// elsewhere (`runner_shape::runner_shape_preflight`) — this
     /// generator only emits the path.
     pub api_socket_path: String,
@@ -169,7 +169,7 @@ pub enum ChArgvError {
     /// `cpus` was zero. CH refuses `boot=0`.
     ZeroCpus,
     /// `kernel_path` was empty. Every supported VM must boot a
-    /// nixling-provided kernel; bootloaders are out of scope for W4.
+    /// nixling-provided kernel; bootloaders are out of scope.
     EmptyKernelPath,
     /// A [`ChNetIface`] in [`ChNetHandoff::TapFd`] mode was missing
     /// its `tap_fd`.
@@ -612,8 +612,8 @@ mod tests {
     #[test]
     fn argv_is_round_trip_serializable() {
         // The input is shipped from `nixlingd` to the broker over the
-        // W4-H5 `SpawnRunner` wire as part of the bundle-resolved
-        // intent. Round-trip the JSON shape so wire drift surfaces in
+        // `SpawnRunner` wire as part of the bundle-resolved intent.
+        // Round-trip the JSON shape so wire drift surfaces in
         // unit tests rather than via gate scripts.
         let input = audit_input();
         let json = serde_json::to_string(&input).unwrap();

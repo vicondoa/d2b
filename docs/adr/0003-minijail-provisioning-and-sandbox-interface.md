@@ -51,6 +51,21 @@ that introduces the actual crates.
    > only inside the namespace. virtiofsd is the only role currently
    > moved to this model; future roles (gpu/audio/swtpm) may follow
    > pending device-bind compatibility analysis.
+   >
+   > **Updated v1.2 (D5)**: closes the 'future roles (gpu/audio/swtpm)
+   > may follow' deferral — swtpm fully closed via ADR 0021
+   > broker-pre-NS pattern (zero host caps, single-entry user NS,
+   > swtpm principal mapping); gpu partially closed (render-node-only,
+   > v1.2fu25): broker pre-opens /dev/dri/renderD128 before
+   > clone3(CLONE_NEWUSER), dup2s to RENDER_NODE_INHERITED_FD=10 in
+   > the user-NS child, crosvm references /proc/self/fd/10 via
+   > --gpu-device-node. Render nodes bypass DRM master auth entirely
+   > (no DRM_IOCTL_SET_MASTER required). Legacy gpu profile unchanged;
+   > NVIDIA/non-render-node out of scope. audio fully closed (v1.2fu27,
+   > Tier 2): user-NS + owned-net-NS (namespaces.net=true); the child
+   > calls unshare(CLONE_NEWNET) inside the user NS so CAP_NET_RAW is
+   > effective in the user-NS-owned net NS — resolves the AF_NETLINK
+   > dependency without any host caps.
 5. The Cargo workspace keeps `unsafe_code = "forbid"` at workspace scope, and future `nixling-sandbox` or `libminijail-sys` exceptions require per-crate overrides approved by a follow-up ADR.
 6. Seccomp and ioctl policies are per-role and derived from typed device and resource requirements, and no profile may use an `ioctl: 1` catch-all.
 
@@ -68,6 +83,35 @@ that introduces the actual crates.
 - Depend on the host distribution's minijail package: rejected because version, patch, and CVE posture would vary across Tier-1 hosts.
 - Keep systemd hardening for daemon-owned VMs: rejected because daemon-owned orchestration must not require per-VM systemd units.
 - Allow broad ioctl passthrough during bring-up: rejected because the plan requires device-derived ioctl allowlists and negative tests for undeclared ioctls.
+
+## Updated v1.2
+
+**D4/P2.1 — seccomp BPF compilation wired** (closes the v1.1.2-final deferral):
+
+`load_runner_seccomp` in `packages/nixling-priv-broker/src/live_handlers.rs`
+previously returned `Ok(None)` for non-absolute policy refs (e.g.
+`w1-cloud-hypervisor-runner`), silently skipping seccomp installation.
+
+As of v1.2fu15, the function:
+
+1. Maps every internal `seccompPolicyRef` emitted by
+   `nixos-modules/minijail-profiles.nix` to a `&[DeviceClass]` slice via
+   `policy_ref_device_classes()`.
+2. Compiles that slice to a BPF program using
+   `nixling_host::seccomp::compile_ioctl_policy_to_bpf`, which derives
+   the ioctl allowlist from the `ioctl_policy.rs` matrix (Decision §6).
+3. Returns `Ok(Some(program))` for known refs; returns
+   `Err(SpawnFailed { detail: "InvalidSeccompPolicy: unknown …" })` for
+   unknown refs — the `Ok(None)` silent-skip path is retired.
+
+The broker child closure is reordered: capset → umask → seccomp → execve
+(previously capset → seccomp → umask), ensuring umask is not intercepted by
+a restrictive BPF before the final stage [panel-kernel R0 #1].
+
+Behavioral regression tests (fork + waitpid) in
+`packages/nixling-priv-broker/src/seccomp_compile_tests.rs` verify that
+a BPF compiled for `[DeviceClass::Kvm]` allows `KVM_GET_API_VERSION` and
+kills with `SIGSYS` on an undeclared ioctl [panel-security R0 #3, #4].
 
 ## References
 

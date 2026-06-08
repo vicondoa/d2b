@@ -23,8 +23,7 @@ HERE=$(dirname "$(readlink -f "$0")")
 STATE_ROOT=/var/lib/nixling/vms
 
 # Pick test VMs. Defaults derive from the live system manifest baked
-# into the nixling CLI generation (W2-followup H5 — reviewer's
-# recommended approach instead of a hand-maintained list). The list
+# into the nixling CLI generation instead of a hand-maintained list. The list
 # excludes net VMs (\`isNetVm == true\`) so per-VM store-sync tests
 # don't try to operate on the auto-declared sys-<env>-net entries
 # that may or may not carry workload payloads.

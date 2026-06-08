@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P1 usbip byte-parity gate: pins
+# Usbip byte-parity gate: pins
 # tests/golden/runner-shape/usbip-argv-minimal.txt against the
 # nixling_host::usbip_argv generator's bind + unbind shapes.
 

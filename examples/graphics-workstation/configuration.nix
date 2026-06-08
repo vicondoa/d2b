@@ -79,7 +79,7 @@
     # Required for any VM with graphics.enable or audio.enable.
     waylandUser = "alice";
 
-    # Members of `nixling-launcher` get a polkit grant on the
+    # Members of `nixling` get a polkit grant on the
     # framework's own systemd units; without this, `nixling vm start`
     # would prompt for sudo every time.
     launcherUsers = [ "alice" ];

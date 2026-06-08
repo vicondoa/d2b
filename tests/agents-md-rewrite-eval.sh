@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Asserts AGENTS.md reflects the P6 daemon-only end-state (ADR 0015):
+# Asserts AGENTS.md reflects the daemon-only end-state (ADR 0015):
 # no line may describe the bash CLI or a per-VM systemd template as a
-# live framework surface. Historical / retired / "deleted in P6"
+# live framework surface. Historical / retired / "deleted in "
 # context is allowed when the line is explicitly marked as such.
 #
 # Layer-1, eval-only (no flake build, no daemon, no host state).
@@ -35,7 +35,7 @@ grep -qE 'SpawnRunner' "$agents" \
 
 # Negative invariants: legacy patterns may not appear UNLESS the same
 # line carries an explicit historical / retired marker. This is the
-# core P6 docs invariant — agents must not regress AGENTS.md back to
+# core docs invariant— agents must not regress AGENTS.md back to
 # describing the bash CLI + per-VM systemd templates as canonical.
 #
 # Forbidden patterns (canonical legacy-as-live shapes):

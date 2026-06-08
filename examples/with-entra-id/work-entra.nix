@@ -21,6 +21,17 @@
 {
   networking.hostName = "work-entra";
 
+  # Persist Himmelblau / systemd identity state. The guest rootfs is tmpfs,
+  # so without this volume `/etc/machine-id`,
+  # `/var/lib/systemd/credential.secret`, and Himmelblau's cache/credential
+  # state are regenerated on every VM restart even when swtpm is intact.
+  microvm.volumes = [{
+    image = "var.img";
+    mountPoint = "/var";
+    size = 8192;
+    fsType = "ext4";
+  }];
+
   # Required so /dev/tpmrm0 is reachable + the `tss` group exists
   # for himmelblaud's DynamicUser. The nixling TPM component sets
   # this too (via `nixos-modules/components/tpm.nix`), so this is

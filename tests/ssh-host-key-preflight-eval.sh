@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/ssh-host-key-preflight-eval.sh — P2 ph2-p2-ssh-host-key-preflight
+# tests/ssh-host-key-preflight-eval.sh—
 # integration test for the daemon-side VM-start preflight that refuses
 # VM start when `/var/lib/nixling/vms/<vm>/sshd-host-keys` (or one of
 # its `ssh_host_*_key` leaves) drifts from the canonical posture.

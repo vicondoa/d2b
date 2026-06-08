@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P2 ph2-p2-stop-dag-owner: assert the stop-DAG owner module + docs
+# Assert the stop-DAG owner module + docs
 # carry the documented surface and that the planner only dispatches
 # through existing broker ops (no new wire variants).
 

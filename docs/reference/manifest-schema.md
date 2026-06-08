@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** stable from `manifestVersion = 3` onward (Wave 0 of the observability track).
+**Status:** stable from `manifestVersion = 3` onward.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this document and the JSON Schema
 disagree, the JSON Schema wins.
@@ -16,8 +16,8 @@ ships it as a single JSON file at:
 
 The current consumer of this contract in v1.0 is the Rust CLI in
 `packages/nixling/src/lib.rs`, dispatched through `nixlingd` →
-`nixling-priv-broker`. The pre-P6 bash CLI consumer in
-`nixos-modules/cli.nix` was retired in P6 per ADR 0015. The
+`nixling-priv-broker`. The legacy bash CLI consumer in
+`nixos-modules/cli.nix` was retired in v1.0 per ADR 0015. The
 schema exists as a documented contract so the Rust port generates
 types via `serde_json` / `schemars` and stays decoupled from the
 Nix module system.
@@ -28,11 +28,11 @@ Producer: `nixos-modules/manifest.nix` (declares
 
 Consumer (v1.0): the Rust CLI in `packages/nixling/src/lib.rs`
 (dispatched through `nixlingd` → broker per ADR 0015 daemon-only).
-The pre-P6 bash `nixling` script in `cli.nix` was retired in P6.
+The legacy bash `nixling` script in `cli.nix` was retired in v1.0.
 
-## Relationship to the W1 manifest bundle
+## Relationship to the manifest bundle
 
-W1 adds private manifest-bundle artifacts beside this public `vms.json`
+Private manifest-bundle artifacts live beside this public `vms.json`
 contract. The public file remains the compatibility manifest described
 in this document, including `_manifest.manifestVersion = 3` and the
 existing per-VM schema. The sibling bundle artifacts are private
@@ -41,8 +41,8 @@ daemon/broker inputs documented in
 
 The bundle does not change the v0.4.0 public manifest semantics.
 Consumers that only need VM inventory (in v1.0: the Rust CLI in
-`packages/nixling/src/lib.rs`; pre-P6 was the bash CLI in `cli.nix`,
-retired in P6 per ADR 0015) continue to read `vms.json`; `nixlingd`
+`packages/nixling/src/lib.rs`; the legacy bash CLI in `cli.nix` was
+retired in v1.0 per ADR 0015) continue to read `vms.json`; `nixlingd`
 and the privileged broker read the private bundle files after
 verifying owner, mode, version, and hash.
 
@@ -119,7 +119,7 @@ same schema version.
 |-------------------|------------------|----------|--------------------------------------------------------------------------------------------|
 | `manifestVersion` | unsigned integer | yes      | Schema version. Bumped on every breaking change. This document describes manifest v3.      |
 
-v0.2.0 bumped `manifestVersion` from 1 to 2 for observability. P2 (daemon-only end-state) then bumped 2 → 3 as a clean break, with no v2 compatibility window — the daemon refuses v2 bundles with `manifest-version-mismatch` (exit code 41).
+v0.2.0 bumped `manifestVersion` from 1 to 2 for observability. The daemon-only end-state then bumped 2 → 3 as a clean break, with no v2 compatibility window — the daemon refuses v2 bundles with `manifest-version-mismatch` (exit code 41).
 both a new reserved top-level sentinel (`_observability`) and a new
 per-VM `observability` block. Under the compatibility policy below,
 that was a breaking schema change; under nixling's pre-v1.0 semver
@@ -179,7 +179,7 @@ is the canonical type spec; the table below is for human readability.
 | `gpuSocket`      | string             | yes      | crosvm-gpu sidecar control socket (`<stateDir>/<name>-gpu.sock`). Only meaningful when `graphics = true`.                  |
 | `tpmSocket`      | string             | yes      | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Only meaningful when `tpm = true`.                                          |
 | `audioStateFile` | string             | yes      | Live audio-grant state file (`<stateDir>/state/audio-state.json`). `{ "mic": "on"\|"off", "speaker": "on"\|"off" }`.        |
-| `audioService`   | string             | yes      | Legacy/historical audio sidecar identifier (`nixling-<name>-snd.service`). In v1.0 (per ADR 0015) the pre-P6 systemd unit was retired and the audio runner is broker-spawned under `nixling.slice/<vm>/snd`; the field is retained for manifest-schema backward-compat with v0.x consumers. |
+| `audioService`   | string             | yes      | Legacy/historical audio sidecar identifier (`nixling-<name>-snd.service`). In v1.0 (per ADR 0015) the legacy systemd unit was retired and the audio runner is broker-spawned under `nixling.slice/<vm>/snd`; the field is retained for manifest-schema backward-compat with v0.x consumers. |
 | `observability`  | object             | yes      | Per-VM observability transport metadata. Always emitted; carries the enable bit, vsock CID/socket, and guest agent socket. |
 | `staticIp`       | string \| null     | yes      | The VM's static LAN IP. Derived for env-attached VMs; null for legacy VMs with no `staticIp` set.                          |
 | `sshUser`        | string \| null     | yes      | `nixling`-driven SSH username. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs the CLI never SSH-attaches.|
@@ -210,8 +210,8 @@ The schema carries them explicitly because:
    manifest is the place to look up the resolved path, not a string
    template inside the CLI.
 2. **The Rust CLI shouldn't have to know the template syntax.** The
-   pre-P6 bash CLI inlined `/var/lib/nixling/vms/$VM/$VM.sock` in
-   half a dozen places (retired in P6 per ADR 0015); that's the
+   legacy bash CLI inlined `/var/lib/nixling/vms/$VM/$VM.sock` in
+   half a dozen places (retired in v1.0 per ADR 0015); that's the
    kind of duplication the manifest is designed to centralise.
 
 #### `staticIp` vs the legacy hand-rolled path
@@ -225,8 +225,8 @@ through `env` + `index`.
 #### `sshUser` and the private-key path
 
 `sshUser` is the only SSH coordinate carried in the public manifest.
-The **private-key path is intentionally NOT in the manifest** (W4
-followup, security): the manifest at
+The **private-key path is intentionally NOT in the manifest** for
+security: the manifest at
 `/run/current-system/sw/share/nixling/vms.json` is world-readable, and
 exposing a per-VM private-key path leaks the location of secret
 material to every local user.
@@ -251,8 +251,7 @@ convention as the same path minus the `.pub` suffix.
 #### `observability` and `_observability`
 
 Schema v3 (the current daemon-only end-state version; bumped from
-v2 in P2) emits an always-present observability envelope in two
-places:
+v2) emits an always-present observability envelope in two places:
 
 1. `_observability` describes the host-wide stack wiring: whether the
    observability track is enabled, which VM name is reserved for the
@@ -265,7 +264,7 @@ places:
 
 The per-VM block is present even when
 `nixling.vms.<name>.observability.enable = false`. That is deliberate:
-Wave 0 reserves the shape so later PRs can land the transport and
+The schema reserves the shape so later PRs can land the transport and
 component modules without another manifest-structure change.
 
 `vsockCid` is deterministic. Env-backed VMs use
@@ -326,7 +325,7 @@ that needs them).
 ### Migration path
 
 When `manifestVersion` is bumped, the producer (`manifest.nix`) and
-the consumers (in v1.0: the Rust CLI in `packages/nixling/src/lib.rs`; the pre-P6 bash `nixling` script in `cli.nix` was retired in P6 per ADR 0015, and the
+the consumers (in v1.0: the Rust CLI in `packages/nixling/src/lib.rs`; the legacy bash `nixling` script in `cli.nix` was retired in v1.0 per ADR 0015, and the
 Rust CLI) are updated in the same PR. The Rust CLI versions itself
 independently and declares the highest manifest version it supports
 in a CLI-side constant; users running an older CLI against a newer
@@ -564,4 +563,4 @@ if m.meta.version > SUPPORTED_VERSION {
 - [`cli-contract.md`](./cli-contract.md) — the lifecycle / signal /
   exit-code contract the CLI must implement on top of this schema.
 - `nixos-modules/manifest.nix` — the producer.
-- (pre-P6 only) `nixos-modules/cli.nix` — the bash consumer was retired in P6 per ADR 0015; the v1.0 consumer is the Rust CLI in `packages/nixling/src/lib.rs`.
+- (legacy only) `nixos-modules/cli.nix` — the bash consumer was retired in v1.0 per ADR 0015; the v1.0 consumer is the Rust CLI in `packages/nixling/src/lib.rs`.

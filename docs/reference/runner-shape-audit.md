@@ -1,15 +1,15 @@
-# Runner-shape audit (W0b s1)
+# Runner-shape audit
 
 ## Scope and method
 
-This audit is the W0b Cloud Hypervisor/minijail spike artifact. It does
+This audit is the Cloud Hypervisor/minijail spike artifact. It does
 not boot a VM: this worktree has no KVM-capable host, root, or live
 network. Instead it evaluates the existing `examples/minimal` host and
 builds the microvm.nix runner derivation, then inspects the generated
 shell scripts.
 
 `examples/minimal` is otherwise unchanged, but today its headless VM
-still defaults to microvm.nix's non-Cloud-Hypervisor backend. The W0b
+still defaults to microvm.nix's non-Cloud-Hypervisor backend. The
 portability plan selects Cloud Hypervisor as the first daemon backend, so
 all snapshots add one test-only module:
 
@@ -106,7 +106,7 @@ The headless runner emits these flags today:
 | `--serial` | `tty` | headless serial console policy. |
 | `--vsock` | `cid=10914385,socket=notify.vsock` | `microvm.vsock.cid`; host.nix gives non-observability VMs a fallback CID for CH notify. Observability VMs append their own `microvm.cloud-hypervisor.extraArgs` `--vsock socket=...`. |
 | `--fs` | four sockets/tags: `ro-store`, `nl-meta`, `nl-hkeys`, `nl-ssh-host` | `microvm.shares`; nixling's store and host-key modules materialize these virtiofs shares. |
-| `--api-socket` | `corp-vm.sock` | CH runner default. W4 will keep API sockets always enabled but make them daemon-only. |
+| `--api-socket` | `corp-vm.sock` | CH runner default. The daemon keeps API sockets always enabled but daemon-only. |
 | `--net` | `mac=02:76:53:AE:57:0A,tap=work-l10` | `microvm.interfaces`, derived from `nixling.vms.corp-vm.env = "work"` and `index = 10`. |
 | `${runtime_args:-}` | empty for headless minimal | Extension point used by audio/graphics shapes; empty in this audit. |
 
@@ -148,7 +148,7 @@ forks `crosvm device gpu` before the CH `exec`:
 - `bin/microvm-run:24-26`: waits for the GPU socket.
 - `bin/microvm-run:34`: execs CH with `--gpu 'socket=corp-desktop-gpu.sock'`.
 
-That inline fork is the central W0b blocker for using declaredRunner as
+That inline fork is the central blocker for using declaredRunner as
 the daemon payload: the daemon cannot assign role-specific uid/gid,
 capability, cgroup, mount, and seccomp/minijail policy to CH and GPU
 separately when one shell script forks both.
@@ -160,7 +160,7 @@ separately when one shell script forks both.
 Rejected. A union profile would have to include the combined privileges
 of CH, virtiofsd readiness, crosvm GPU, audio/video helpers, swtpm paths,
 TAP handling, notify relay, and future observability roles. That violates
-W4-W6 requirements for per-role minijail profiles, per-role uid/capability
+the requirements for per-role minijail profiles, per-role uid/capability
 sets, cgroup leaves, readiness predicates, and runtime oracles.
 
 ### B. Generate nixling-owned CH argv from evaluated microvm/nixling config
@@ -176,19 +176,19 @@ Inputs are:
 - `nixling.vms.<vm>.*` options for env/index-derived names, graphics,
   audio, video, TPM, USBIP, audit, observability, state roots, and
   lifecycle policy;
-- the W1 manifest bundle (`bundle.json`, `host.json`, `processes.json`,
+- the manifest bundle (`bundle.json`, `host.json`, `processes.json`,
   `privileges.json`) as the stable daemon input.
 
-The parity oracle is: for headless VMs in W4, nixling-generated CH argv
-must match the declaredRunner argv snapshotted here except for explicitly
+The parity oracle is: for headless VMs, nixling-generated CH argv must
+match the declaredRunner argv snapshotted here except for explicitly
 documented divergences. Known expected divergences are daemon-owned API
 socket placement/permissions, daemon-owned vsock CID allocation, and any
 TAP fd-passing shape selected by the TAP ADR.
 
 ### C. Patch microvm.nix's CH runner to skip inline crosvm-gpu spawn
 
-Deferred. This remains a fallback if option B hits unforeseen complexity
-in W4. It would reduce the graphics blocker but still leaves nixling with
+Deferred. This remains a fallback if option B hits unforeseen complexity.
+It would reduce the graphics blocker but still leaves nixling with
 a shell-runner ABI and less direct control over role supervision.
 
 ## Decision
@@ -202,7 +202,7 @@ parity oracle during the transition.
 `tests/golden/runner-shape/` contains:
 
 - `examples-minimal-declaredRunner.txt`: the built declaredRunner store
-  path for `examples/minimal` plus the W0b CH-forcing module.
+  path for `examples/minimal` plus the CH-forcing module.
 - `cloud-hypervisor-argv-minimal.txt`: the exact `exec -a ...
   cloud-hypervisor ...` line extracted from that runner's
   `bin/microvm-run`.
@@ -215,7 +215,7 @@ current environment, and logs that as a TODO-style skip.
 
 A future microvm.nix, nixpkgs, component, or nixling option change that
 alters runner shape must update this audit, explain the intended drift,
-and refresh the fixtures in the same commit. W4 will lift the CH argv
-fixture into a hard build-time parity gate by comparing daemon-generated
+and refresh the fixtures in the same commit. The CH argv fixture will be
+lifted into a hard build-time parity gate by comparing daemon-generated
 argv against declaredRunner argv for headless VMs before allowing the
 new supervisor path to replace the shell runner.

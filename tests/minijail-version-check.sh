@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# W3 s4 L1c canary: minijail-too-old refusal.
+# Canary: minijail-too-old refusal.
 #
-# Plan.md §"W3 pre-merge canary matrix" lists `minijail-too-old`. The
+# Plan.md §" pre-merge canary matrix" lists `minijail-too-old`. The
 # real minijail provisioning lives outside s4's owned files; this
 # canary asserts the deterministic version-comparison logic the host
 # check uses when it refuses to start with an older minijail.
 #
-# Tier-0 pin (plan.md §"W3 L3 distro matrix pinning"): Nix-built
+# Tier-0 pin (plan.md §" L3 distro matrix pinning"): Nix-built
 # minijail v17. The canary refuses any version < 17.
 
 set -euo pipefail

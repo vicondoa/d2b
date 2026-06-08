@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P1 / ADR 0017: enforce "Rust CLI never executes bash".
+# v1.1 / ADR 0017: enforce "Rust CLI never executes bash".
 #
 # Three modes:
 #   - check            (Layer 1): ripgrep for Command::new("bash"|"sh"|...)

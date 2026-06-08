@@ -18,15 +18,14 @@ pub enum PublicRequest {
     Audit(AuditRequest),
     #[serde(rename = "host check")]
     HostCheck(HostCheckRequest),
-    // W14a (W4-fu-fu / W7-fu / W8-fu / W9-fu): mutating-verb wire
-    // surface. Each variant carries the dry-run / apply / json flag
-    // tuple + per-verb args. The daemon's `dispatch_request` routes
-    // each to a per-verb handler that drives nixlingd → broker. When
-    // the per-verb native backend has not yet landed, the daemon
-    // returns `MutatingVerb::NotYetImplemented { target_wave,
-    // remediation }`; the CLI surfaces the typed envelope and exits
-    // 78 (v1.0 daemon-only contract per ADR 0015; the historical
-    // W14 bash fallback was retired in P6).
+    // Mutating-verb wire surface. Each variant carries the dry-run /
+    // apply / json flag tuple + per-verb args. The daemon's
+    // `dispatch_request` routes each to a per-verb handler that drives
+    // nixlingd → broker. When the per-verb native backend has not yet
+    // landed, the daemon returns `MutatingVerb::NotYetImplemented {
+    // target_wave, remediation }`; the CLI surfaces the typed envelope
+    // and exits 78 (v1.0 daemon-only contract per ADR 0015; the
+    // historical bash fallback was retired in v1.0).
     #[serde(rename = "vm start")]
     VmStart(VmLifecycleRequest),
     #[serde(rename = "vm stop")]
@@ -67,9 +66,9 @@ pub enum PublicRequest {
     HostDestroy(HostDestroyRequest),
     #[serde(rename = "host install")]
     HostInstall(HostInstallRequest),
-    /// P3 `ph3-p3-net-route-degraded-mode`: dedicated reconcile
-    /// verb that re-runs the daemon-side net-route preflight + the
-    /// broker-side per-env nftables / route / sysctl reconcile
+    /// Dedicated reconcile verb that re-runs the daemon-side net-route
+    /// preflight + the broker-side per-env nftables / route / sysctl
+    /// reconcile
     /// without starting any VM. On success it resets the
     /// operator-only-mode counter so future daemon startups are
     /// no longer locked out of autostart. The CLI exposes this as
@@ -139,7 +138,7 @@ pub struct HostCheckRequest {
 }
 
 // ---------------------------------------------------------------
-// W14a mutating-verb request payloads.
+// Mutating-verb request payloads.
 // ---------------------------------------------------------------
 
 /// Common flags every mutating-verb request carries. The daemon
@@ -161,6 +160,10 @@ pub struct VmLifecycleRequest {
     pub vm: String,
     #[serde(default, flatten)]
     pub flags: MutationFlags,
+    /// When true, exit 0 on process-alive success without waiting for api-ready.
+    /// Default false (strict mode: wait for both process-alive and api-ready).
+    #[serde(default)]
+    pub no_wait_api: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -262,11 +265,11 @@ pub struct HostInstallRequest {
     pub no_start: bool,
 }
 
-/// P3 `ph3-p3-net-route-degraded-mode`: `host reconcile` request
-/// payload. Today the only scope is `--network`; future P-phases
-/// may add additional scopes (e.g. `--ownership`) carved out of
-/// `host prepare`. The daemon rejects requests with no scope
-/// selected with a typed `invalid-request` envelope.
+/// `host reconcile` request payload. Today the only scope is
+/// `--network`; future versions may add additional scopes (e.g.
+/// `--ownership`) carved out of `host prepare`. The daemon rejects
+/// requests with no scope selected with a typed `invalid-request`
+/// envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostReconcileRequest {
@@ -278,7 +281,7 @@ pub struct HostReconcileRequest {
     pub network: bool,
 }
 
-/// W14a mutating-verb daemon response shape.
+/// Mutating-verb daemon response shape.
 ///
 /// `outcome = "dry-run-planned"` returns a human-readable plan
 /// description in `summary` (the native CLI's dry-run planner output
@@ -293,7 +296,7 @@ pub struct HostReconcileRequest {
 /// dispatch row but the per-verb native backend has not yet landed.
 /// The CLI surfaces the typed envelope (exit 78) unconditionally;
 /// the historical `NIXLING_LEGACY_BASH_OPT_IN` escape hatch and the
-/// bash-fallback shim were both retired in P6.
+/// bash-fallback shim were both retired in v1.0.
 ///
 /// `outcome = "broker-error"` means the daemon reached the live
 /// broker executor, but the broker refused or failed the request. The
@@ -312,6 +315,8 @@ pub struct MutatingVerbResponse {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_ready: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -319,6 +324,7 @@ pub struct MutatingVerbResponse {
 pub enum MutatingVerbOutcome {
     DryRunPlanned,
     Applied,
+    ApiReadyTimeout,
     NotYetImplemented,
     BrokerError,
     InvalidRequest,

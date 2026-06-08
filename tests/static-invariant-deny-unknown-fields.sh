@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# W1 static invariant: sensitive schemas reject unknown fields.
+# Sensitive schemas reject unknown fields.
 
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(dirname "$HERE")}
-# W3fu1 H3 moved the live bundle baseline to schemas/v2; the deny-unknown
+# Moved the live bundle baseline to schemas/v2; the deny-unknown
 # fixtures track that current host.json shape.
 SCHEMA_DIR=${SCHEMA_DIR:-$ROOT/docs/reference/schemas/v2}
 FIXTURE_DIR=${FIXTURE_DIR:-$ROOT/tests/fixtures/deny-unknown}

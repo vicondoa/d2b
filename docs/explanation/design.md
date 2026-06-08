@@ -25,7 +25,7 @@ the code.
 - [4. Defenses in depth](#4-defenses-in-depth)
 - [5. Limitations and known gaps](#5-limitations-and-known-gaps)
 - [6. Why not X — design rationale FAQ](#6-why-not-x--design-rationale-faq)
-- [6.5 Portability roadmap (W0b threat-model delta)](#65-portability-roadmap-w0b-threat-model-delta)
+- [6.5 Portability roadmap](#65-portability-roadmap)
 - [Observability](#observability)
 - [7. References](#7-references)
 
@@ -81,7 +81,7 @@ flowchart TD
     subgraph host["HOST"]
         direction TD
         wayland["Wayland user (trusted UI principal)<br/>compositor + nixling CLI invocations"]
-        sidecars["nixling per-VM runners (semi-trusted)<br/>broker-spawned via nixling.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>gpu (per-VM uid)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (nixling.slice/sys-&lt;env&gt;/usbipd-*)<br/>pre-P6 systemd templates retired per ADR 0015"]
+        sidecars["nixling per-VM runners (semi-trusted)<br/>broker-spawned via nixling.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>gpu (per-VM uid)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (nixling.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
     end
     subgraph kvm["KVM boundary"]
         direction TD
@@ -92,7 +92,7 @@ flowchart TD
         guest_desc["workload userspace, in-VM kernel, browser…"]
     end
 
-    wayland -->|SO_PEERCRED at public.sock<br/>nixling-launchers group<br/>+ ssh via keysDir| sidecars
+    wayland -->|SO_PEERCRED at public.sock<br/>nixling group<br/>+ ssh via keysDir| sidecars
     sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wayland-0, pipewire-0)| boundary
     boundary --> guest_desc
 ```
@@ -108,7 +108,7 @@ flowchart TD
           │   │  compositor + nixling CLI invocations         │   │
           │   └──────────────────┬────────────────────────────┘   │
           │                      │ SO_PEERCRED at public.sock     │
-          │                      │ (nixling-launchers group)      │
+          │                      │ (nixling group)      │
           │                      │ + ssh via keysDir              │
           │                      ▼                                │
           │   ┌──── nixling per-VM runners (semi-trusted, ──┐    │
@@ -120,7 +120,7 @@ flowchart TD
           │   │   microvm-virtiofsd@<vm>    (per-VM uid)    │    │
           │   │   nixling.slice/sys-<env>/usbipd-{backend,proxy} │
           │   │   (per-env USBIP, v1.0 broker-spawned;      │    │
-          │   │    pre-P6 systemd templates retired)        │    │
+          │   │    legacy systemd templates retired)        │    │
           │   └──────────────────┬───────────────────────────┘   │
           │                      │ vsock / virtio-* / ACL'd       │
           │                      │ sockets (wayland-0, pipewire-0)│
@@ -243,7 +243,7 @@ into its `hostBlocklist`, so a workload cannot reach the host's
 neighbours (NAS, printer, other workstations) even if the env's
 default-deny chain were bypassed.
 
-**DHCP preemption on net VMs (W5 H1).** A net VM has two NICs
+**DHCP preemption on net VMs.** A net VM has two NICs
 matched by MAC. The guest baseline in
 [`nixos-modules/base.nix:47-54`](../../nixos-modules/base.nix)
 defines a catch-all `10-eth-dhcp` systemd-networkd network for
@@ -287,20 +287,20 @@ Pretending otherwise would be dishonest.
   TPM (if used at all) is not nixling's concern.
 - **Multi-user trust separation on the host.** Nixling assumes a
   single-human, single-Wayland-session host. The
-  `nixling-launchers` group exists to make `nixling vm start <vm>`
+  `nixling` group exists to make `nixling vm start <vm>`
   password-free for the human's account, not to model trust
   between two operators. SSH private keys at
   `/var/lib/nixling/keys/<vm>_ed25519` are readable by every
-  member of `nixling-launchers`. A second untrusted human on the
+  member of `nixling`. A second untrusted human on the
   same machine breaks the threat model.
 - **A malicious local launcher user.** A member of
-  `nixling-launchers` can start, stop, and restart every nixling
+  `nixling` can start, stop, and restart every nixling
   VM (within the daemon's per-VM scope), and read every per-VM SSH
   private key. The v1.0 authorisation surface ([§4](#4-defenses-in-depth))
   is SO_PEERCRED at `/run/nixling/public.sock` accept time +
-  `nixling-launchers` group membership; the pre-P6 polkit per-VM
+  `nixling` group membership; the legacy polkit per-VM
   allowlist that previously narrowed which unit names launchers
-  could start was retired in P6 (per ADR 0015), but the daemon-
+  could start was retired in v1.0 (per ADR 0015), but the daemon-
   side per-verb authorisation table still narrows the verb set
   to lifecycle + read-only operations. The daemon does not
   narrow *which* launcher user can drive *which* VM. By design.
@@ -348,21 +348,21 @@ through `nixos-modules/default.nix`. The consumer imports
 `nixling.site.*`, `nixling.envs.<env>.*`, and `nixling.vms.<vm>.*`.
 Everything else is derived.
 
-### `nixling@<vm>.service` — the pre-P6 per-VM wrapper (retired in v1.0)
+### `nixling@<vm>.service` — the legacy per-VM wrapper (retired in v1.0)
 
 > **v1.0 status (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)):**
 > The per-VM `nixling@<vm>.service` template and the wrapper module
-> `nixos-modules/host-wrapper.nix` were deleted in P6. The section
-> below documents the pre-P6 architecture for historical context;
+> `nixos-modules/host-wrapper.nix` were deleted in v1.0. The section
+> below documents the legacy architecture for historical context;
 > in v1.0 the per-VM lifecycle is fully owned by `nixlingd`'s
 > supervisor DAG dispatched through `nixling-priv-broker`'s
 > `SpawnRunner` / `SignalRunner` ops, and runner lifecycle-of-record
 > is the broker-registered pidfd table. See
-> [§ Launcher authorisation](#launcher-authorisation-v10-so_peercred--nixling-launchers-group)
+> [§ Launcher authorisation](#launcher-authorisation-v10-so_peercred--nixling-group)
 > for the v1.0 control surface.
 
-(historical, pre-P6) microvm.nix declares one template,
-`microvm@.service`. Pre-P6 nixling wrapped that with its own
+(historical, pre-v1.0) microvm.nix declares one template,
+`microvm@.service`. Before v1.0, nixling wrapped that with its own
 template, `nixling@.service`, declared in
 `nixos-modules/host-wrapper.nix`. The wrapper:
 
@@ -409,50 +409,38 @@ audit and backup scripts can reason about.
 > **v1.0 status (ADR 0015):** in v1.0 daemon-only, the per-VM sidecars
 > listed below are spawned by `nixling-priv-broker` via the supervisor
 > DAG (`SpawnRunner` requests) and registered in the pidfd table for
-> lifecycle ownership. Historically (pre-P6) they were emitted as
+> lifecycle ownership. Historically, they were emitted as
 > independent systemd units under `nixos-modules/host-sidecars.nix`; in
 > v1.0 only the per-VM long-lived roles that ADR 0015 retains as
 > systemd are still emitted (microvm-virtiofsd@<vm>, vfsd-watchdog,
 > store-sync, otel-relay@). All other "nixling-<vm>-{gpu,snd,video,
 > swtpm,usbip}" responsibilities now live in the broker-spawned
-> per-VM DAG; the systemd templates were removed in P6.
+> per-VM DAG; the systemd templates were removed in v1.0.
 
-For each declared VM, a subset of these sidecars exists, gated by
-the per-VM component toggles:
+For each declared VM, a subset of daemon-supervised DAG nodes exists,
+gated by the per-VM component toggles. `nixlingd` starts each long-lived
+runner through the broker's typed `SpawnRunner` operation and tracks it
+by pidfd:
 
-- `microvm-virtiofsd@<vm>.service` — supplied by microvm.nix, runs
-  as the microvm user, mediates the per-VM `/nix/store` share +
-  any `microvm.shares` the consumer adds.
-- `nixling-<vm>-store-sync.service` — populates the per-VM
-  `/var/lib/nixling/vms/<vm>/store/` hardlink farm. Materialised
-  for every enabled VM; see [`nixos-modules/store.nix`](../../nixos-modules/store.nix).
-- `nixling-<vm>-gpu.service` — present when
-  `nixling.vms.<vm>.graphics.enable = true`. Runs the
-  whole `microvm-run` (cloud-hypervisor + crosvm GPU sidecar) as
-  the dedicated `nixling-<vm>-gpu` user
-  ([`nixos-modules/host-sidecars.nix:100-182`](../../nixos-modules/host-sidecars.nix)).
-  Carries `DeviceAllow=/dev/net/tun rw` so cloud-hypervisor can
-  attach to the workload's tap (created upstream by
-  `microvm-tap-interfaces@<vm>.service`; cloud-hypervisor only
-  opens the cdev — it does not need `CAP_NET_ADMIN`).
-- `nixling-<vm>-video.service` — present when
-  `nixling.vms.<vm>.graphics.enable = true`. Runs the crosvm
-  vhost-user video decoder sidecar as the shared
-  `nixling-<vm>-gpu` user and exposes `/run/nixling-video/<vm>/video.sock`
-  to the GPU sidecar; sandboxing is simpler than `-gpu` but still pins
-  `DevicePolicy=closed`, an explicit NVIDIA/render-node allowlist,
-  `ProtectSystem=strict`, and `NoNewPrivileges`
-  ([`nixos-modules/components/video/host.nix`](../../nixos-modules/components/video/host.nix)).
-- `nixling-<vm>-snd.service` — present when
-  `nixling.vms.<vm>.audio.enable = true`. Runs
-  vhost-device-sound as `nixling-<vm>-snd`, exposes its
-  socket at `/run/nixling/vms/<vm>/snd.sock`
-  ([`nixos-modules/components/audio/host.nix`](../../nixos-modules/components/audio/host.nix)).
-- `nixling-<vm>-swtpm.service` — present when
-  `nixling.vms.<vm>.tpm.enable = true`. Per-VM software TPM
-  emulator, state under `/var/lib/nixling/vms/<vm>/swtpm/`
-  ([`nixos-modules/host-sidecars.nix:46-99`](../../nixos-modules/host-sidecars.nix)).
-  The `nixlingVmStatePerms` activation script
+- `virtiofsd` — mediates the per-VM `/nix/store` share and any
+  virtiofs shares the consumer adds.
+- `store-virtiofs-preflight` — verifies the per-VM hardlink-farm marker
+  before virtiofsd starts; the daemon owns the sync path.
+- `gpu` / `gpu-render-node` — present when
+  `nixling.vms.<vm>.graphics.enable = true`. Runs the patched crosvm
+  GPU sidecar and gates Cloud Hypervisor startup on the GPU socket.
+- `video` — present only when
+  `nixling.vms.<vm>.graphics.videoSidecar = true`. Runs the patched
+  crosvm `device video-decoder --backend vaapi` sidecar as
+  `RunnerRole::Video`, exposes `/run/nixling-video/<vm>/video.sock`,
+  and is consumed by the patched Cloud Hypervisor
+  `--vhost-user-media` device.
+- `audio` — present when `nixling.vms.<vm>.audio.enable = true`.
+  Runs vhost-device-sound and exposes `/run/nixling/vms/<vm>/snd.sock`.
+- `swtpm` — present when `nixling.vms.<vm>.tpm.enable = true`.
+  Per-VM software TPM emulator, state under
+  `/var/lib/nixling/vms/<vm>/swtpm/`. The `nixlingVmStatePerms`
+  activation script
   ([`nixos-modules/host-activation.nix`](../../nixos-modules/host-activation.nix))
   grants `nixling-<vm>-swtpm` a traversal-only ACL (`--x`) on
   the parent state dir so the swtpm process — which runs in its
@@ -512,10 +500,9 @@ nothing to apply.
 
 Per-env sidecars (one set per declared env, not per VM):
 
-- (pre-P6 only) `nixling-sys-<env>-usbipd-backend.service` and
+- (legacy only) `nixling-sys-<env>-usbipd-backend.service` and
   `nixling-sys-<env>-usbipd-proxy.{socket,service}` — per-env USBIP
-  sidecars. Retired as host singletons in P3
-  (`ph3-usbipd-perenv`); in v1.0 (per
+  sidecars. Retired as host singletons; in v1.0 (per
   [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the daemon
   spawns the same `usbipd` backend + socket-proxy via the broker's
   `SpawnRunner` path (cgroup leaf
@@ -524,8 +511,8 @@ Per-env sidecars (one set per declared env, not per VM):
   on the per-env DAG. See
   [`docs/reference/privileges.md`](../reference/privileges.md) for
   the broker enum + audit shape.
-- (pre-P6 only) `nixling-net-route-preflight.service` — the singleton
-  was retired in P6; in v1.0 (per
+- (legacy only) `nixling-net-route-preflight.service` — the singleton
+  was retired in v1.0 (per
   [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the equivalent
   fail-closed self-check lives inside `nixlingd`'s startup path and
   surfaces as the typed `net-route-preflight-degraded` envelope
@@ -614,7 +601,7 @@ owns the whole lifecycle:
   `<keysDir>/.lock`) walks every enabled VM, generates an
   Ed25519 keypair at `<keysDir>/<vm>_ed25519{,.pub}` if missing,
   repairs modes (0640 priv, 0644 pub) and ACL-grants the
-  `nixling-launchers` group `r` on the private key.
+  `nixling` group `r` on the private key.
 - The same activation script stages the per-VM pubkey + the
   resolved `userAuthorizedKeys` content into
   `/var/lib/nixling/vms/<vm>/host-keys/`, which `host.nix`
@@ -701,10 +688,10 @@ patterns, see [the naming conventions reference](../reference/naming-conventions
 | `nixlingd.service`                        | non-root daemon (v1.0; per ADR 0015 the only persistent user-facing nixling unit besides the broker) | host-daemon.nix |
 | `nixling-priv-broker.{socket,service}`    | socket-activated privileged broker (v1.0) | host-broker.nix              |
 | `microvm@<vm>.service`                    | upstream microvm.nix unit (still emitted for direct-debug bypass; not the lifecycle-of-record in v1.0) | microvm.nix |
-| `nixling.slice/<vm>/<role>`               | per-VM broker-spawned runner leaves (v1.0 replaces pre-P6 `nixling-<vm>-{gpu,video,snd,swtpm,store-sync,usbip}.service`) | broker SpawnRunner |
-| `nixling.slice/sys-<env>/usbipd-{backend,proxy}` | per-env USBIP runner leaves (v1.0 replaces pre-P6 `nixling-sys-<env>-usbipd-{backend,proxy}.service`) | broker SpawnRunner |
+| `nixling.slice/<vm>/<role>`               | per-VM broker-spawned runner leaves (v1.0 replaces legacy `nixling-<vm>-{gpu,video,snd,swtpm,store-sync,usbip}.service`) | broker SpawnRunner |
+| `nixling.slice/sys-<env>/usbipd-{backend,proxy}` | per-env USBIP runner leaves (v1.0 replaces legacy `nixling-sys-<env>-usbipd-{backend,proxy}.service`) | broker SpawnRunner |
 | `nixling-sys-<env>-net`                   | reserved auto-system VM name            | network.nix                 |
-| `nixling-launchers` group                 | SO_PEERCRED authorisation surface at `nixlingd`'s public.sock (mode 0660, group `nixling-launchers`) | host-users.nix |
+| `nixling` group                 | SO_PEERCRED authorisation surface at `nixlingd`'s public.sock (mode 0660, group `nixling`) | host-users.nix |
 | `nixling-<vm>-{gpu,snd,swtpm,usbip}` users | dedicated per-VM runner uids (broker-spawned in v1.0) | host-users.nix |
 
 ### Composition with framework-agnostic flakes (`nixos-entra-id`)
@@ -789,7 +776,7 @@ crosvm GPU forwarder; the surrounding `ProtectSystem=strict`,
 `DevicePolicy=closed + DeviceAllow=[…]`, narrow `ReadWritePaths`,
 and dedicated UID are the compensating controls.
 
-### Launcher authorisation (v1.0: SO_PEERCRED + nixling-launchers group)
+### Launcher authorisation (v1.0: SO_PEERCRED + nixling group)
 
 **Threat:** an over-broad permission grant lets a launcher user
 touch units or operations the framework doesn't own (the
@@ -800,10 +787,10 @@ init system itself).
 [ADR 0015](../adr/0015-daemon-only-clean-break.md)):** every
 lifecycle dispatch goes through `nixlingd`'s public socket at
 `/run/nixling/public.sock` (mode `0660`, owner `nixlingd`, group
-`nixling-launchers`). Authorisation is enforced via
+`nixling`). Authorisation is enforced via
 `SO_PEERCRED` at `accept(2)` time: the daemon reads the peer's
 uid/gid and refuses requests from peers outside the
-`nixling-launchers` group. Per-verb authorisation lives in the
+`nixling` group. Per-verb authorisation lives in the
 daemon's `dispatch_request` table — every mutating verb routes
 through `nixling-priv-broker` with an audited per-op entry, and
 unknown / out-of-scope verbs surface a typed
@@ -811,13 +798,13 @@ unknown / out-of-scope verbs surface a typed
 envelope. There is no per-VM allowlist at this layer; the
 daemon is the per-verb gate.
 
-**Retired pre-P6 surfaces (per ADR 0015 § "What gets removed"):**
-the W2-era polkit allowlist in `nixos-modules/host-polkit.nix`
+**Retired legacy surfaces (per ADR 0015 § "What gets removed"):**
+the polkit allowlist in `nixos-modules/host-polkit.nix`
 that gated `nixling@<vm>.service`, `nixling-<vm>-store-sync.service`,
 the `-gpu`/`-snd`/`-swtpm` triplets, and the per-env usbipd
-units was deleted in P6 along with the per-VM wrapper
+units was deleted in v1.0 along with the per-VM wrapper
 units it gated. The second per-VM "`nixling-<vm>-gpu` can
-start/stop the matching `-snd`" rule was also retired in P6; in
+start/stop the matching `-snd`" rule was also retired in v1.0; in
 v1.0 the broker `SpawnRunner` owns both runner lifecycles
 directly through the supervisor DAG.
 
@@ -851,8 +838,8 @@ as its built-in net-route preflight self-check. Failures surface as
 the typed `net-route-preflight-degraded` envelope (exit 66) and
 flip per-env autostart to a degraded outcome; recovery is via
 `nixling host reconcile --network --apply` after operator remediation. The
-pre-P6 `nixling-net-route-preflight.service` host singleton and the
-per-VM `nixling@<vm>.service Requires=` wiring were retired in P6
+legacy `nixling-net-route-preflight.service` host singleton and the
+per-VM `nixling@<vm>.service Requires=` wiring were retired in v1.0
 when the daemon took ownership of every host-mutation path — see
 the "Net-route preflight & operator-only mode" section of
 [`host-prepare.md`](../how-to/host-prepare.md) for the v1.0 operator
@@ -925,14 +912,14 @@ rotation to a rebuild.
 **Control:** keys are generated on the host at activation time by
 [`nixos-modules/host-keys.nix`](../../nixos-modules/host-keys.nix),
 written to `/var/lib/nixling/keys/<vm>_ed25519` (mode 0640, root-
-owned, ACL'd `r` for `nixling-launchers`), and never enter the
+owned, ACL'd `r` for `nixling`), and never enter the
 store. The CLI consumes them through `keysDir`; the guest gets
 only the corresponding pubkey via a virtio-fs share. Rotation is
 a single `nixling keys rotate <vm>` invocation; no rebuild
 required for that path.
 
 The trade is honest: the private key is readable by every member
-of `nixling-launchers`. That is intentional within the single-user
+of `nixling`. That is intentional within the single-user
 threat model — the launcher group is the human and the human's
 own service principals. It is not a defense against a second
 human on the same machine.
@@ -965,8 +952,8 @@ model is honest about its incomplete edges:
   … }; };` assignments, and comments / strings can still fool the
   heuristic; a Nix-eval-based check would be more precise if the
   pattern recurs. Note that `store.nix` legitimately carries
-- **(pre-P6 only) USBIP per-env systemd units materialised even when no VM in the env opted in.**
-  Pre-P6 each declared env emitted `nixling-sys-<env>-usbipd-{backend,proxy}.service`
+- **(legacy only) USBIP per-env systemd units materialised even when no VM in the env opted in.**
+  Before v1.0, each declared env emitted `nixling-sys-<env>-usbipd-{backend,proxy}.service`
   regardless of `usbip.yubikey` opt-in; the units sat idle until something bound.
   In v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the per-env
   USBIP runners are broker-spawned on demand via `nixling.slice/sys-<env>/usbipd-*`
@@ -981,12 +968,12 @@ model is honest about its incomplete edges:
   point-to-point endpoint of its env's gateway.
 - **No static lint for the `mkOption { default = …; readOnly =
   true; }` + matching `config.<…>` assignment trio.** A
-  reviewer-found bug in W5 (the `nixling.manifest` "set multiple
+  reviewer-found bug (the `nixling.manifest` "set multiple
   times" defect when graphics VMs were synthesised) was caught
-  by humans, not tooling. Phase 7a-followup will add a grep-level
-  lint. Note that `store.nix` legitimately carries
-- **(pre-P6 only) USBIP per-env systemd units materialised even when no VM in the env opted in.**
-  Pre-P6 each declared env emitted `nixling-sys-<env>-usbipd-{backend,proxy}.service`
+  by humans, not tooling. A future grep-level lint should cover
+  this. Note that `store.nix` legitimately carries
+- **(legacy only) USBIP per-env systemd units materialised even when no VM in the env opted in.**
+  Before v1.0, each declared env emitted `nixling-sys-<env>-usbipd-{backend,proxy}.service`
   regardless of `usbip.yubikey` opt-in; the units sat idle until something bound.
   In v1.0 (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)) the per-env
   USBIP runners are broker-spawned on demand via `nixling.slice/sys-<env>/usbipd-*`
@@ -1002,10 +989,10 @@ model is honest about its incomplete edges:
   same env.
 - **No static lint for the `mkOption { default = …; readOnly =
   true; }` + matching `config.<…>` assignment trio.** A
-  reviewer-found bug in W5 (the `nixling.manifest` "set multiple
+  reviewer-found bug (the `nixling.manifest` "set multiple
   times" defect when graphics VMs were synthesised) was caught
-  by humans, not tooling. Phase 7a-followup will add a grep-level
-  lint. Note that `store.nix` legitimately carries
+  by humans, not tooling. A future grep-level lint should cover
+  this. Note that `store.nix` legitimately carries
   `readOnly + default` on options that have NO matching
   `config.<…>` assignment, so a two-of-three match is fine —
   only the full three is a bug.
@@ -1060,7 +1047,7 @@ one of those is an opportunity for a config drift across VMs.
 
 ### Why not multi-user / multi-tenant?
 
-The trust-boundary work to make `nixling-launchers` a real
+The trust-boundary work to make `nixling` a real
 multi-principal grant — narrowing *which* user can drive
 *which* VM, splitting `keysDir` access per principal, modelling
 cross-user audit — multiplies the option surface and breaks
@@ -1398,23 +1385,20 @@ host and forward into an external aggregator with explicit instance
 labelling". That design space is real, but it is explicitly out of
 scope for this release.
 
-## 6.5 Portability roadmap (W0b threat-model delta)
+## 6.5 Portability roadmap
 
-This section is a forward-looking delta added during W0b of the
-portability plan (see `docs/adr/0001-0008`). It documents the
-trust-boundary changes the W2-W10 daemon work will introduce *before*
-the implementation lands, so that consumers and reviewers have a
-single anchor for the new model. W2 ships the full rewrite of this
-section.
+This section documents the daemon portability trust-boundary model
+(see `docs/adr/0001-0008`) so consumers and reviewers have a single
+anchor for the design.
 
 ### New trust boundaries
 
 The current model assumes the privilege boundary is the
-`nixling-launchers` group plus polkit. The portability work splits that
+`nixling` group plus polkit. The portability work splits that
 into three layers:
 
 1. **The public CLI socket** at `/run/nixling/nixlingd.sock` —
-   ACL'd to `nixling-launchers` (daily lifecycle) and `nixling-admin`
+   ACL'd to `nixling` (daily lifecycle) and `nixling-admin`
    (destructive / host-prepare / key rotation), authenticated by
    `SO_PEERCRED` + `getgrouplist()` (no `/proc/<pid>` races, no
    abstract sockets). See ADR 0002.
@@ -1432,8 +1416,9 @@ into three layers:
 
 ### Replaced surfaces
 
-- Per-VM `microvm@<vm>.service` and `nixling@<vm>.service` units (pre-P6 wrappers; retired in P6 per ADR 0015) went
-  away for daemon-owned VMs; `nixlingd` supervises children directly.
+- Per-VM `microvm@<vm>.service` and `nixling@<vm>.service` units
+  (legacy wrappers; retired in v1.0 per ADR 0015) went away for
+  daemon-owned VMs; `nixlingd` supervises children directly.
   Single-writer is enforced by `/run/nixling/locks/<vm>` (ADR 0001).
 - `polkit` runtime gating is replaced by `SO_PEERCRED` + groups on the
   daemon socket. NixOS may still use polkit to gate who can `systemctl
@@ -1453,8 +1438,8 @@ into three layers:
 - The `restartIfChanged = false` invariant is preserved in spirit:
   `nixlingd` never auto-restarts a running child on config change;
   drift surfaces as `[pending restart]` in `nixling list`/`status`.
-- v0.4.0 `vms.json` `manifestVersion = 2` is preserved unchanged; W1
-  layers new bundle artifacts beside it without mutating the
+- v0.4.0 `vms.json` `manifestVersion = 2` is preserved unchanged;
+  new bundle artifacts are layered beside it without mutating the
   existing schema (ADR 0006).
 - Telemetry posture stays "none". `nixlingd` makes no outbound
   network connections by default; any future opt-in lands behind an
@@ -1468,19 +1453,19 @@ autostart, rootless Nix, Firecracker feature parity, crosvm-as-full-VMM
 parity, and aarch64 runtime graphics/audio. Adding any of these
 requires a new ADR + panel sign-off.
 
-## 6.6 W4 main wave threat-model delta
+## 6.6 Headless daemon alpha threat-model delta
 
-W4 main ships the wire + pure layer of the headless daemon alpha:
-per-VM DAG executor, `(pid, start_time_ticks)` reconciliation,
-daemon-level `[pending restart]`, and the W4-H5 broker `SpawnRunner`
-opaque-ID variant. Broker-side execution of `SpawnRunner` lands in
-W4-fu. This section documents the trust-boundary additions and the
-specific authority-bearing primitives this wave introduces.
+The headless daemon alpha ships the wire + pure layer: per-VM DAG
+executor, `(pid, start_time_ticks)` reconciliation, daemon-level
+`[pending restart]`, and the broker `SpawnRunner` opaque-ID variant.
+Broker-side execution of `SpawnRunner` lands in a follow-up release.
+This section documents the trust-boundary additions and the specific
+authority-bearing primitives this work introduces.
 
 ### New surfaces
 
-1. **W4-H5 broker `SpawnRunner` request.** Per security-1 the daemon
-   never names argv, env, uid/gid, caps, seccomp profile,
+1. **Broker `SpawnRunner` request.** The daemon never names argv,
+   env, uid/gid, caps, seccomp profile,
    kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, vsock
    CIDs, or the CH/virtiofsd/swtpm binary path across the wire.
    `SpawnRunner` carries only `vm_id + role_id + role +
@@ -1497,11 +1482,11 @@ specific authority-bearing primitives this wave introduces.
    regression that re-introduces any of them fails-closed with
    `wire-unknown-field`.
 
-2. **W4-H5 broker `SpawnRunner` response: SCM_RIGHTS pidfd handoff.**
+2. **Broker `SpawnRunner` response: SCM_RIGHTS pidfd handoff.**
    The pidfd is delivered OOB on the same broker socket frame; the
    JSON body carries only `(pid, start_time_ticks, pidfd_index)`.
-   Per the W3 s1 pidfd contract, raw-pid kill/wait is forbidden
-   outside the reconciliation path; the daemon validates the pidfd
+   Per the pidfd contract, raw-pid kill/wait is forbidden outside
+   the reconciliation path; the daemon validates the pidfd
    against `(pid, start_time_ticks)` before it ever uses raw-pid
    semantics for the re-adoption window, and switches back to
    `pidfd_send_signal` for signal delivery the moment the pidfd is
@@ -1515,8 +1500,8 @@ specific authority-bearing primitives this wave introduces.
    children via its received pidfd; the broker reaps via
    `waitid(P_PIDFD)` on its own pidfd-table entry.)
 
-3. **W4-H6 daemon state on disk:** the supervisor persists a
-   per-(vm, role_id) snapshot under
+3. **Daemon state on disk:** the supervisor persists a per-(vm,
+   role_id) snapshot under
    `/var/lib/nixling/daemon-state/<vm>/runtime.<role_id>.json`
    (root-owned `0640 root:nixlingd`). The snapshot carries enough
    `(pid, start_time_ticks, role)` to validate live `/proc/<pid>/stat`
@@ -1526,8 +1511,8 @@ specific authority-bearing primitives this wave introduces.
    prevents a pid-reuse attacker from being mistaken for a re-adoption
    target.
 
-4. **W4-H8 daemon version file:** the daemon writes
-   `/run/nixling/version` at startup, recording its own
+4. **Daemon version file:** the daemon writes `/run/nixling/version`
+   at startup, recording its own
    canonicalized binary path + protocol version + start time. The
    CLI computes `[pending restart]` from the file vs. the on-disk
    install path. Surfaces a `daemon-down` envelope rather than a
@@ -1537,20 +1522,20 @@ specific authority-bearing primitives this wave introduces.
 
 ### Preserved invariants
 
-- The W3 broker opaque-ID contract — every mutating broker variant
+- The broker opaque-ID contract — every mutating broker variant
   carries only bundle-derived references; the daemon never names
-  raw authority. W4-H5 extends the contract to spawn requests.
-- The W3 s1 pidfd contract — raw-pid control forbidden outside
+  raw authority. The contract extends to spawn requests.
+- The pidfd contract — raw-pid control is forbidden outside
   reconciliation; reconciliation validates `(pid, start_time)`
   before re-adoption.
-- The W3 audit-pipeline contract — every broker variant including
+- The audit-pipeline contract — every broker variant including
   `SpawnRunner` writes an `OpAuditRecord` to the daily file with
-  its bundle-resolved subject/scope/decision. W4-fu broker-side
-  execution must preserve this when it lands.
+  its bundle-resolved subject/scope/decision. Broker-side execution
+  must preserve this.
 - The "no auto-restart" invariant — `nixlingd` never auto-restarts
   a running child on config change; drift surfaces as
-  `[pending restart]` in `nixling list` / `status` (W4 H8 extends
-  this to the daemon binary itself).
+  `[pending restart]` in `nixling list` / `status`; this extends to
+  the daemon binary itself.
 
 ## 7. References
 

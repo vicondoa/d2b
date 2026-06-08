@@ -2,32 +2,40 @@
 
 let
   cfg = config.nixling;
-  # v1.1.2-final-R1 (panel-software HIGH): use the shared helper
-  # from nixos-modules/lib.nix instead of duplicating the formula
-  # here. The duplicate was a drift-risk: if minijail-profiles.nix's
-  # copy changed, broker setuid target would diverge from system
-  # passwd uid and the fu35 ownership-matrix bug would silently
-  # return.
+  # Use the shared helper from nixos-modules/lib.nix instead of
+  # duplicating the formula here. The duplicate was a drift-risk: if
+  # minijail-profiles.nix's copy changed, broker setuid target would
+  # diverge from system passwd uid and the ownership-matrix bug would
+  # silently return.
   nixlingLib = import ./lib.nix { inherit lib; };
   inherit (nixlingLib) stablePrincipalId;
 in
 {
   # ---------------------------------------------------------------------------
-  # P4 C3/H5: Per-VM dedicated system users for GPU + audio sidecars.
+  # Per-VM dedicated system users for GPU + audio sidecars.
   # Each per-VM sidecar runs as its own dedicated user
   # (`nixling-<vm>-{gpu,snd,swtpm}`), NOT the host's Wayland user.
   # The `nixling.site.launcherUsers` list controls who gets the
-  # `nixling-launcher` group (and thus the polkit grant on the
-  # framework's units).
+  # canonical `nixling` lifecycle group.
   # ---------------------------------------------------------------------------
   users.groups = {
-    # nixling-launcher: members of this group get the polkit grant
-    # to start/stop/restart the framework's own systemd units. Add
-    # users to it via `nixling.site.launcherUsers`.
+    # nixling: members of this group can call the daemon public socket.
+    # Add users to it via `nixling.site.launcherUsers`.
+    nixling = { };
+    # DEPRECATED v1.2: kept as migration tombstone for the
+    # nixling-launcher{,s} → nixling rename. No module references the
+    # legacy groups; no user is a member. The empty declaration
+    # preserves the legacy gid in /etc/group so the
+    # nixlingGroupMigration helper can match by numeric gid on direct
+    # upgrades. Slated for removal in v1.3 after one release of
+    # confirmed clean migration.
     nixling-launcher = { };
   } // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-gpu" { gid = stablePrincipalId "nixling-${name}-gpu"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+  // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "nixling-${name}-video" { gid = stablePrincipalId "nixling-${name}-video"; })
+    (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
   // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-snd" { gid = stablePrincipalId "nixling-${name}-snd"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
@@ -39,12 +47,12 @@ in
     (lib.filterAttrs (_: vm: vm.enable) cfg.vms));
 
   users.users =
-    # nixling-launcher group membership for any user the site
+    # nixling lifecycle group membership for any user the site
     # declares. We ONLY add the supplementary group — the user
     # must already exist (declared elsewhere in the consumer's
     # NixOS config). The assertions module enforces that.
     (lib.genAttrs cfg.site.launcherUsers (_: {
-      extraGroups = [ "nixling-launcher" ];
+      extraGroups = [ "nixling" ];
     }))
     // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-gpu" {
@@ -54,6 +62,13 @@ in
       extraGroups = [ "kvm" "nixling-${name}-runner" ];
       description = "nixling GPU+hypervisor sidecar for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+  // (lib.mapAttrs' (name: _:
+    lib.nameValuePair "nixling-${name}-video" {
+      isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-video";
+      group = "nixling-${name}-video";
+      description = "nixling video decode sidecar for VM ${name}";
+    }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-snd" {
       isSystemUser = true;

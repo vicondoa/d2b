@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# W5-H4 Layer-1 gate: GPU / audio / video sidecar argv-generator
-# parity. Drives the W5-H1 / W5-H2 / W5-H3 unit-test surface to assert
+# GPU / audio / video sidecar argv-generator
+# parity. Drives the unit-test surface to assert
 # each sidecar argv generator emits the documented audit-parity shape
 # AND every input-validation rejection still fires.
 
@@ -77,7 +77,7 @@ video_argv_tests=(
   video_argv::tests::rejects_empty_vm_name
   video_argv::tests::rejects_empty_socket_path
   video_argv::tests::exec_arg0_rejects_empty_vm_name
-  video_argv::tests::extra_args_appended_in_order
+  video_argv::tests::rejects_unknown_extra_args_field
   video_argv::tests::backend_string_round_trip
   video_argv::tests::argv_is_round_trip_serializable
 )

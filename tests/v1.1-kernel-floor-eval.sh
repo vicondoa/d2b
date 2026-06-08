@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P10 invariant gate (paired with the daemon's runtime pidfs
+# v1.1 invariant gate (paired with the daemon's runtime pidfs
 # self-probe in `packages/nixlingd/src/startup.rs`): assert the
 # consumer's NixOS config declares a `boot.kernelPackages` whose
 # version meets the v1.1 floor of >= 6.9.
@@ -14,7 +14,7 @@
 # At v1.1-rc1, this gate is a passthrough — there is no consumer-
 # side configuration fixture available in CI to assert against,
 # and the v1.0 floor (>= 6.6) is already documented per ADR 0008.
-# The gate body lands as the v1.1-P10 invariant placeholder; the
+# The gate body lands as the v1.1 invariant placeholder; the
 # enforce path runs against an operator-provided fixture at
 # v1.1-final (per the v1.1 plan's release-readiness rerun).
 set -euo pipefail

@@ -6,6 +6,7 @@ use anyhow::Context;
 use argh::FromArgs;
 use base::RawDescriptor;
 use cros_async::Executor;
+use std::os::unix::fs::PermissionsExt;
 
 use crate::virtio::device_constants::video::VideoDeviceConfig;
 use crate::virtio::vhost_user_backend::video::VideoDecoderBackend;
@@ -49,6 +50,10 @@ pub fn run_video_device(opts: Options) -> anyhow::Result<()> {
         opts.socket_path.as_deref(),
         opts.fd,
     )?;
+    if let Some(path) = opts.socket_path.as_deref().or(opts.socket.as_deref()) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
+            .with_context(|| format!("Failed to chmod vhost-user video socket {path}"))?;
+    }
 
     conn.run_device(ex, video_device)
 }

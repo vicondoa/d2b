@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 s3 Layer-1 gate: the broker delegates bundle validation to nixling-core only.
+# The broker delegates bundle validation to nixling-core only.
 
 set -euo pipefail
 

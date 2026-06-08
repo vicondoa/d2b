@@ -22,7 +22,7 @@ the units you should see on a host with nixling installed are:
 | Host observability bridge      | `nixling-otel-host-bridge.service`       |
 | Host CH exporter               | `nixling-ch-exporter.service`            |
 | Auto-declared per-env net VM   | `nixling@sys-<env>-net.service` (workload-side `microvm@sys-<env>-net.service` backend) |
-| Polkit launcher group          | `nixling-launcher` (singleton)           |
+| Polkit launcher group          | `nixling` (singleton)           |
 
 State directories follow the matching pattern:
 
@@ -317,3 +317,63 @@ sudo -A nixos-rebuild switch --flake "$FLAKE#$HOST" && \
 
 If both `--quick` runs are green and any failed VM was running before,
 the change is safe to commit.
+
+## Layer-2 with-sudo CI hook (v1.2fu58)
+
+`tests/state-dir-acl-runtime.sh` is a Layer-2, root-only adversarial
+test that exercises the `/var/lib/nixling` traversal ACL added in
+v1.2fu58. It creates synthetic users + a throwaway state-dir, applies
+the activation script's setfacl pattern, and asserts:
+
+- A launcher-group member CAN traverse + read the per-VM SSH key.
+- A non-launcher user CANNOT stat the key (no traversal).
+- The traversal grant is `--x` only (launcher member cannot list the
+  state-dir contents).
+
+### Local run
+
+Skipped silently if not root. Opt in via:
+
+```bash
+NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh
+```
+
+### CI run
+
+`.github/workflows/layer2-runtime-with-sudo.yml` is **manual
+dispatch only** (`workflow_dispatch`) — it is NOT triggered on
+`pull_request` because it uses passwordless `sudo -n` on a
+self-hosted runner and running PR-controlled code under root would
+be a privilege-escalation footgun (panel R9 security-1 +
+networking-1). Maintainers manually dispatch the workflow against a
+reviewed ref:
+
+```bash
+gh workflow run layer2-runtime-with-sudo.yml --ref <ref>
+```
+
+The `paths` list inside the workflow YAML doubles as a reviewer
+checklist: PRs that touch `nixos-modules/host-activation.nix`,
+`nixos-modules/host-activation.d/state-dir-acl.sh`,
+`nixos-modules/host-keys.nix`, or `tests/state-dir-acl-*.sh`
+should be Layer-2-dispatched after review. See
+[`CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted
+runner"](../CONTRIBUTING.md) for runner setup.
+
+## Phase-6 nixosTest follow-ups
+
+Layer-3 nixosTest coverage should add these invariants:
+
+- Cross-uid runner stop via broker fallback.
+- Launcher key-path traversal without read escalation.
+- Post-rename lifecycle authorization through only the `nixling` group.
+- Broker `DeregisterRunnerPidfd` lifecycle with no leak after normal
+  stop and after daemon crash/restart.
+- Broker pidfd registry size gauge (Prometheus gauge, unlabeled,
+  exported by the broker) so operators can spot registry leaks.
+- Registry-size gauge converges to zero after a normal `vm stop` and
+  after a daemon-crash-then-restart cycle.
+- ECHILD recovery instrumentation: a distinct metric or structured-log
+  dimension distinguishing `wait_terminated_with_broker_poll` ECHILD
+  recovery from normal stops. The minimal structured log already ships
+  as `outcome="echild-broker-recovered"`; Phase 6 adds the metric arm.

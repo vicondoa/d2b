@@ -67,7 +67,7 @@ host onto daemon-owned lifecycle with
 
 Roll back by rebuilding to the prior host generation (the v1.0
 daemon-only contract per ADR 0015 has no env-var escape hatch;
-`NIXLING_LEGACY_BASH_OPT_IN=1` was retired in P6 along with the
+`NIXLING_LEGACY_BASH_OPT_IN=1` was retired in v1.0 along with the
 bash CLI).
 
 ## See also

@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# tests/legacy-unit-denylist-eval.sh — P6 drift gate.
+# tests/legacy-unit-denylist-eval.sh— drift gate.
 #
 # Canonical denylist enforcing that no systemd unit name retired in
-# Phase 6 (the daemon-only clean break — see docs/adr/0015) ever
+# (the daemon-only clean break— see docs/adr/0015) ever
 # reappears in nixos-modules/. Runs in seconds; Layer-1, eval-only;
 # no flake build, no daemon, no host state.
 #
-# What it asserts (per plan todos test-r2-4 + observability-r2-2 and
-# the ph6-p6-unit-denylist-gate deliverable in plan.md):
+# What it asserts:
 #
 #   The following unit-name patterns MUST NOT appear as live wiring
-#   inside any file under nixos-modules/ once P6 lands. They were
+#   inside any file under nixos-modules/. They were
 #   emitted by the pre-daemon supervisor and are obsolete:
 #
 #     - microvm-tap-interfaces@
@@ -32,18 +31,18 @@
 # (b) tagged with an `# obituary:` / `# retired:` marker on the same
 # line or on the immediately preceding line. Those two markers are
 # the in-source way to keep a transient mention (e.g. a docstring
-# pointing at the obsolete unit name from a SCHEDULED-FOR-REMOVAL-IN-P6
+# pointing at the obsolete unit name from a SCHEDULED-FOR-REMOVAL-IN-
 # block) while the sibling cleanup sweep is still in flight.
 #
 # Expected status:
 #
-#   EXPECTED-RED until sibling todo `ph6-remove-systemd-emission`
+#   EXPECTED-RED until sibling todo ``
 #   lands and removes every nixos-modules/* file that emits these
 #   units. This gate is intentionally introduced BEFORE that sweep
 #   so the deletion sweep has a machine-checkable target to drive
 #   to green, and so the gate cannot regress silently afterwards.
-#   See plan.md todo `ph6-p6-unit-denylist-gate` and its dependency
-#   on `ph6-remove-systemd-emission`.
+#   See plan.md todo `` and its dependency
+#   on ``.
 
 set -euo pipefail
 
@@ -84,7 +83,7 @@ PATTERNS=(
 # Files under nixos-modules/ to scan. We deliberately walk both .nix
 # sources and any .md docstrings shipped alongside modules (operators
 # read those alongside the option tree); both should be free of stale
-# unit names by end-of-P6.
+# unit names by end-of-.
 mapfile -t FILES < <(find "$MODULES_DIR" -type f \( -name '*.nix' -o -name '*.md' \) | sort)
 
 # Classify a single match line. Echoes "skip" or "live".
@@ -117,7 +116,7 @@ classify() {
       *'# obituary:'*|*'# retired:'*) printf 'skip\n'; return ;;
     esac
   fi
-  # P6fu2 test-r2/security-r2/observability-r2 closure: many post-P6
+  # Closure: many post-
   # references to the retired unit names are NOT live systemd-unit
   # declarations. Per-file allowlist for legitimate contexts.
   case "$file" in
@@ -140,17 +139,17 @@ classify() {
     # are bundle identifiers, not host systemd unit declarations.
     */processes-json.nix) printf 'skip\n'; return ;;
     # observability/host.nix Alloy journald source filters reference
-    # the historical unit names so post-P5 cutover Alloy can ingest
-    # both old (pre-P6) + new (broker-spawned) records. P6fu3 (R3
-    # closure): tightened to only allow JOURNALD FILTER STRINGS
-    # (lines containing `unit =`, `unit_pattern =`, journal source
+    # the historical unit names so post-cutover Alloy can ingest both
+    # old (pre-) + new (broker-spawned) records. Tightened to only allow
+    # JOURNALD FILTER STRINGS (lines containing `unit =`,
+    # `unit_pattern =`, journal source
     # name strings) — NOT `systemd.services.<x> = { ... }`
     # declarations. The latter is a fail-closed denylist match per
     # the inline content check below.
     */components/observability/host.nix)
       case "$line" in
-        *'systemd.services.'*' = {'*|\
         *'systemd.services."'*'" = {'*|\
+        *'systemd.services.'*' = {'*|\
         *'systemd.sockets.'*' = {'*)
           printf 'live\n'; return ;;
         *)
@@ -166,14 +165,14 @@ classify() {
     # host-activation.nix: transitional setfacl + systemctl is-active
     # checks that ensure backward-compat for hosts mid-cutover. The
     # checks no-op when the legacy unit doesn't exist. Surgical
-    # deletion deferred to P7 doc-blast-radius once cutover hosts
+    # deletion deferred to doc-blast-radius once cutover hosts
     # have all switched.
     */host-activation.nix) printf 'skip\n'; return ;;
     # assertions.nix: docstring references to the legacy unit names
     # in operator-facing assertion messages explaining the
     # remediation. These are prose, not declarations.
     */assertions.nix) printf 'skip\n'; return ;;
-    # components/audio/host.nix: post-P6 setfacl helpers + docstrings.
+    # components/audio/host.nix: post- setfacl helpers + docstrings.
     # The setfacl entries are transitional + no-op when the legacy
     # user is absent.
     */components/audio/host.nix) printf 'skip\n'; return ;;

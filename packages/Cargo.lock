@@ -621,6 +621,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-host-activation-helper"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "nixling-ipc"
 version = "0.0.0-bootstrap"
 dependencies = [

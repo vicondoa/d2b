@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tests/w18-default-flip-eval.sh — eval-time regression gate for the
-# P5 / W18 default flip of `nixling.daemonExperimental.enable`.
+# default flip of `nixling.daemonExperimental.enable`.
 #
 # Asserts:
-#   1. With every readiness wave in the W18 flip gate set marked
+#   1. With every readiness wave in the flip gate set marked
 #      implemented + validated AND with matching evidence files
 #      present under defaultFlipEvidenceDir, the option default
 #      flips to `true`.
@@ -31,7 +31,7 @@ fail() { log "  FAIL: $*"; exit 1; }
 
 log "==> tests/w18-default-flip-eval.sh"
 
-# The wave set the W18 flip gate iterates over. Keep this list in sync
+# The wave set the flip gate iterates over. Keep this list in sync
 # with `flipGateWaves` in nixos-modules/options-daemon.nix.
 FLIP_GATE_WAVES=(w4Fu w5Fu w6Fu w7Fu w8Fu w9Fu p0 p0Fu p1 p2 p3 p4)
 

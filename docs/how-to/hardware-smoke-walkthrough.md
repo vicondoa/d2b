@@ -3,10 +3,10 @@
 This guide covers the two operator-facing manual validations that sit above the
 usual static gate today:
 
-- **W20**: the local NixOS dev host with GPU + optional YubiKey
-- **W19**: the Ubuntu 24.04 Tier-1 manual scaffold
+- local NixOS dev host with GPU + optional YubiKey
+- Ubuntu 24.04 Tier-1 manual scaffold
 
-## W20: local NixOS GPU + YubiKey smoke
+## Local NixOS GPU + YubiKey smoke
 
 ### Preconditions
 
@@ -49,7 +49,7 @@ When the host is idle, follow the script's printed sequence:
 2. run `packages/target/debug/nixling host install --apply`;
 3. run `packages/target/debug/nixling vm start work-vm --apply`;
 4. attach the YubiKey via `packages/target/debug/nixling usb attach work-vm <busid> --apply` if you are
-   validating the USBIP leg (the pre-P6 `nixling usb work-vm` bash orchestrator was retired in P6 per ADR 0015);
+   validating the USBIP leg (the legacy `nixling usb work-vm` bash orchestrator was retired in v1.0 per ADR 0015);
 5. confirm `ExportBrokerAudit` contains the expected `ApplyNftables`,
    `SpawnRunner`, `OpenPidfd`, and `UsbipBind` rows.
 
@@ -79,7 +79,7 @@ nixling.defaultSwitchReadiness.w5Fu.validated = true;
 nixling.defaultSwitchReadiness.w6Fu.validated = true;
 ```
 
-## W19: Ubuntu 24.04 Tier-1 manual scaffold
+## Ubuntu 24.04 Tier-1 manual scaffold
 
 ### Preconditions
 

@@ -1,6 +1,6 @@
 //! Broker-side pidfd handoff contract.
 //!
-//! Owned by W3 scope **s1**. Per plan.md §"W3 pidfd handoff contract":
+//! Pidfd handoff contract:
 //!
 //! - the broker forks role payloads via `clone3(CLONE_PIDFD)`
 //!   (preferred), with a `fork + pidfd_open` fallback;
@@ -179,11 +179,11 @@ pub struct PidfdPayload {
 /// Race window note: the fork fallback opens a brief window between
 /// `fork(2)` returning the child pid in the parent and the parent
 /// calling `pidfd_open(2)`. If the child exited and its pid was
-/// reused before the parent ran `pidfd_open`, the parent would
-/// receive a pidfd for an unrelated process. The W3 reconciliation
-/// contract closes this by always validating
-/// `/proc/<pid>/stat` field 22 (start time in clock ticks since boot)
-/// against an expected value before trusting the fd.
+/// reused before the parent ran `pidfd_open`, the parent would receive
+/// a pidfd for an unrelated process. The reconciliation contract closes
+/// this by always validating `/proc/<pid>/stat` field 22 (start time in
+/// clock ticks since boot) against an expected value before trusting the
+/// fd.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealPidfdSpawner;
 
@@ -201,13 +201,12 @@ impl PidfdSpawner for RealPidfdSpawner {
         use crate::sys::pidfd_sys;
         use std::os::fd::AsRawFd;
 
-        // The child placeholder exits cleanly with code 0; the W3
+        // The child placeholder exits cleanly with code 0; the
         // production runtime owns the post-clone3 execve handoff (it
-        // wires up O_CLOEXEC fd cleanup + the per-role privilege
-        // drop before exec). Keeping that wiring out of the broker
-        // crate preserves the `#![deny(unsafe_code)]` posture on
-        // every code path the daemon will reach via the SCM_RIGHTS
-        // pidfd transport.
+        // wires up O_CLOEXEC fd cleanup + the per-role privilege drop
+        // before exec). Keeping that wiring out of the broker crate
+        // preserves the `#![deny(unsafe_code)]` posture on every code
+        // path the daemon will reach via the SCM_RIGHTS pidfd transport.
         let _argv = payload.argv.clone();
         let child_main = || -> i32 { 0 };
 

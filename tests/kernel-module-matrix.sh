@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# W3 s4 L1c canary: kernel-module 4-step probe + modules_disabled refusal +
+# Canary: kernel-module 4-step probe + modules_disabled refusal +
 # modprobe-denied-not-in-matrix + br_netfilter sysctl tightening.
 #
 # Drives the deterministic helpers in nixling-host::modules and
 # nixling-priv-broker::ops::modprobe (no /proc access needed). The shell
 # wrapper just exercises the cargo-test surface and asserts the canary
-# row names from plan.md §"W3 pre-merge canary matrix" pass.
+# row names from plan.md §" pre-merge canary matrix" pass.
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ log "==> tests/kernel-module-matrix.sh"
 
 cd "$ROOT/packages"
 
-# modules-disabled-sysctl-locked canary (plan.md §"W3 pre-merge canary matrix").
+# modules-disabled-sysctl-locked canary (plan.md §" pre-merge canary matrix").
 log "  canary: modules-disabled-sysctl-locked"
 cargo test -p nixling-host --all-features --lib modules::tests::modules_disabled_locks_required_absent_module 2>&1 | tail -5
 cargo test -p nixling-host --all-features --lib modules::tests::loaded_module_passes_even_with_modules_disabled 2>&1 | tail -5

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/loki-label-cardinality-eval.sh — static gate for the
-# Loki label contract (P3 ph3-p3-loki-label-contract).
+# Loki label contract.
 #
 # Asserts, against the Alloy configs emitted by
 # nixos-modules/components/observability/{host,stack,guest}.nix:
@@ -45,7 +45,9 @@ ALLOWED_VM_LITERALS=(host)
 # shellcheck disable=SC2034
 ALLOWED_ENV_LITERALS=(host obs)
 # Variables permitted under `${quote VAR}` for open-enum labels.
+# shellcheck disable=SC2034
 ALLOWED_VM_QUOTE_VARS=(name cfg.identity.vmName cfg.identity.envName hostName)
+# shellcheck disable=SC2034
 ALLOWED_ENV_QUOTE_VARS=(envLabel env cfg.env cfg.identity.envName)
 
 PASS=0
@@ -209,7 +211,6 @@ for file in "${FILES[@]}"; do
       # Classify value: literal "..." or ${quote VAR} or "${VAR}"
       literal=""
       qvar=""
-      ivar=""
       if [[ "$raw" =~ ^\"([^\"\$]*)\"$ ]]; then
         literal=${BASH_REMATCH[1]}
       elif [[ "$raw" =~ ^\"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}\"$ ]]; then
@@ -217,7 +218,7 @@ for file in "${FILES[@]}"; do
         # rendered Alloy output is a literal, but the value is set by
         # the call site. We allow this shape; the literal-budget pass
         # below tallies call-site values separately.
-        ivar=${BASH_REMATCH[1]}
+        : "${BASH_REMATCH[1]}"
       elif [[ "$raw" =~ ^\$\{quote[[:space:]]+([^}]+)\}$ ]]; then
         qvar=${BASH_REMATCH[1]}
         qvar=${qvar%"${qvar##*[![:space:]]}"}

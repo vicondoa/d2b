@@ -2,8 +2,8 @@
 
 **Diataxis category:** reference.
 
-The manifest bundle is the private, daemon-facing contract introduced by
-W1. It lives beside the existing public `vms.json` manifest and carries
+The manifest bundle is the private, daemon-facing contract. It lives
+beside the existing public `vms.json` manifest and carries
 host intent, process topology, privilege policy, closure metadata, and
 sandbox profile metadata that must not be exposed through the
 world-readable system profile.
@@ -30,13 +30,13 @@ inputs to `nixlingd` and the privileged broker described by
 | --- | --- | --- |
 | `bundleVersion` | Entire private bundle | Bump for any breaking change that affects daemon or broker compatibility across the artifact set. |
 | `schemaVersion` | One artifact schema | Bump for artifact-local schema evolution, including additive optional fields. |
-| `_manifest.manifestVersion` | Public `vms.json` only | Remains `2` in W1. A breaking public-manifest change requires an intentional manifest-version bump. |
+| `_manifest.manifestVersion` | Public `vms.json` only | Remains `2` for the private-bundle baseline. A breaking public-manifest change requires an intentional manifest-version bump. |
 
 The policy is defined by
 [ADR 0006](../adr/0006-manifest-bundle-versioning.md). The current
-schema directory is `docs/reference/schemas/v2/` (W3fu1 H3 bumped
-`bundleVersion` and the per-artifact `schemaVersion` from `v1` to
-`v2` to land the W3 host-prepare additions; the current emitted
+schema directory is `docs/reference/schemas/v2/`; the bundle and
+per-artifact schemas were bumped from `v1` to `v2` to land the
+host-prepare additions; the current emitted
 bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 4`
 for the additive USBIP `busIds` wiring). Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
@@ -48,7 +48,7 @@ changes.
 ## Drift policy
 
 The committed schema files are derived from Rust DTOs in `nixling-core`.
-The W1 drift gate is:
+The drift gate is:
 
 ```bash
 cargo xtask gen-schemas
@@ -71,7 +71,7 @@ The public boundary is intentionally narrow:
   paths, and authorization policy.
 - Secret material is never embedded in either boundary. Secret and key
   references use opaque key IDs only; path-bearing private-key fields are
-  rejected by W1 static gates.
+  rejected by static gates.
 
 Consumers that only need the compatibility manifest must read
 [`manifest-schema.md`](./manifest-schema.md). Daemon and broker

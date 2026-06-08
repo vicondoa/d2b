@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 Layer-1 gate: daemon version negotiation, deny_unknown_fields, and IfName validation.
+# Daemon version negotiation, deny_unknown_fields, and IfName validation.
 
 set -euo pipefail
 

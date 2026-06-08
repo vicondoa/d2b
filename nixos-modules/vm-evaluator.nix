@@ -1,7 +1,7 @@
 # nixos-modules/vm-evaluator.nix
 #
-# v1.1-final: nixling-owned per-VM NixOS evaluator. Replaces the
-# upstream `inputs.microvm.nixosModules.host` per-VM evaluation
+# Nixling-owned per-VM NixOS evaluator. Replaces the upstream
+# `inputs.microvm.nixosModules.host` per-VM evaluation
 # pipeline (which used `microvm.vms = lib.mapAttrs ...` + the
 # microvm.nix host module's `lib.evalModules` invocation).
 #
@@ -44,11 +44,11 @@ let
   # together describe the per-VM config. We layer vm-options.nix
   # and the per-VM `_module.args.name` on top.
   evalVm = name: composedModules:
-    import "${pkgs.path}/nixos/lib/eval-config.nix" {
+    import (pkgs.path + "/nixos/lib/eval-config.nix") {
       modules = [
         ./vm-options.nix
         ./vm-guest-base.nix
-        # v1.1.1: inherit the host's nixpkgs.config so per-VM evals
+        # inherit the host's nixpkgs.config so per-VM evals
         # honor the consumer's allowUnfree / allowUnfreePredicate /
         # permittedInsecurePackages settings without re-stating them
         # in each per-VM module.

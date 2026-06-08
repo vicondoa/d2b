@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 static invariant: manifests/bundle artifacts expose opaque key IDs, not host paths.
+# manifests/bundle artifacts expose opaque key IDs, not host paths.
 
 set -euo pipefail
 

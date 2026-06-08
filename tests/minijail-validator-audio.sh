@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # tests/minijail-validator-audio.sh
 #
-# P1 ph1-p1-byte-parity-goldens + ph1-p1-closed-set-profiles:
-# per-role minijail validator for the **audio** sidecar role
+# Per-role minijail validator for the **audio** sidecar role
 # (vhost-device-sound under the per-VM minijail profile declared in
 # nixos-modules/minijail-profiles.nix). Layer-2 — gated on NL_LIVE=1.
 #
 # Positive path: spawn vhost-device-sound under the audio profile
-#   (capabilities = [CAP_NET_RAW], bind PipeWire RO + per-VM runtime
+#   (zero host capabilities, broker-pre-user/net namespace,
+#    bind PipeWire RO + per-VM runtime
 #    dir RW), wait for the unix listener socket to appear under a
 #   tempdir, then SIGTERM cleanly. Exit 0.
 #
 # Negative path: probe SYS_ptrace inside the same profile and assert
 #   the kernel kills the child with SIGSYS (exit code 128 + 31).
 #
-# Cap matrix anchor (plan.md kernel-r2-4): Audio = CAP_NET_RAW only.
+# Cap matrix anchor: Audio has zero host capabilities. CAP_NET_RAW is
+# effective only inside the broker-pre-created user/net namespace.
 # Bind set: /run/user/<uid>/pipewire-0 (RO), /run/nixling/vms/<vm>/snd.sock
 # parent dir (RW listen target).
 #
@@ -32,11 +33,11 @@ log "==> tests/minijail-validator-audio.sh"
 # Layer-1 (always-on): minijail-profiles.nix shape assertions.
 #
 # The audio role must declare:
-#   - CAP_NET_RAW (and only that capability) per plan kernel-r2-4
+#   - zero host capabilities; userNamespace + namespaces.net = true
 #   - seccompPolicyRef = "w1-audio"
 #   - cgroupSubtree under nixling.slice/<vm>/audio
 # This block runs regardless of NL_LIVE so the profile shape never
-# drifts silently between deploys (per P1 work-review test-r1-1).
+# drifts silently between deploys.
 # --------------------------------------------------------------------
 PROFILES_NIX="$ROOT/nixos-modules/minijail-profiles.nix"
 layer1_fail=0
@@ -49,17 +50,30 @@ elif ! grep -q 'profileIdFor name "audio"' "$PROFILES_NIX"; then
   layer1_die "no audio profile block in minijail-profiles.nix"
 else
   layer1_pass "minijail-profiles.nix has audio profile block"
-  if grep -A 25 'profileIdFor name "audio"' "$PROFILES_NIX" \
-    | grep -q 'capabilities = \[ "CAP_NET_RAW" \]'; then
-    layer1_pass "audio profile declares CAP_NET_RAW exactly"
+  audio_block=$(awk '
+    /profileIdFor name "audio"/ { inblock=1 }
+    inblock { print }
+    inblock && /^[[:space:]]*};[[:space:]]*$/ { exit }
+  ' "$PROFILES_NIX")
+  if printf '%s\n' "$audio_block" | grep -q 'capabilities[[:space:]]*='; then
+    layer1_die "audio profile declares host capabilities; expected mkProfile default []"
   else
-    layer1_die "audio profile capabilities != [ CAP_NET_RAW ] (kernel-r2-4)"
+    layer1_pass "audio profile keeps host capabilities empty"
   fi
-  if grep -A 25 'profileIdFor name "audio"' "$PROFILES_NIX" \
-    | grep -q 'seccompPolicyRef = "w1-audio"'; then
+  if printf '%s\n' "$audio_block" | grep -q 'seccompPolicyRef = "w1-audio"'; then
     layer1_pass "audio profile seccompPolicyRef = \"w1-audio\""
   else
     layer1_die "audio profile seccompPolicyRef != \"w1-audio\""
+  fi
+  if printf '%s\n' "$audio_block" | grep -q 'namespaces = defaultNamespaces // { net = true; }'; then
+    layer1_pass "audio profile declares private net namespace"
+  else
+    layer1_die "audio profile missing namespaces.net = true"
+  fi
+  if printf '%s\n' "$audio_block" | grep -q 'userNamespace = {'; then
+    layer1_pass "audio profile declares broker-pre userNamespace"
+  else
+    layer1_die "audio profile missing userNamespace"
   fi
 fi
 
@@ -143,8 +157,8 @@ sock_path="$sock_dir/snd.sock"
 # --------------------------------------------------------------------
 # Positive path
 # --------------------------------------------------------------------
-# Cap matrix (kernel-r2-4): CAP_NET_RAW only. minijail0's -c flag
-# takes the cap bounding set as a hex bitmask; CAP_NET_RAW = bit 13.
+# Cap matrix: CAP_NET_RAW only. minijail0's -c flag takes the cap
+# bounding set as a hex bitmask; CAP_NET_RAW = bit 13.
 # (1 << 13) = 0x2000.
 cap_mask="0x2000"
 

@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 # tests/minijail-validator-cloud-hypervisor.sh
 #
-# P1 per-role validator for the CloudHypervisor runner profile
+# Per-role validator for the CloudHypervisor runner profile
 # (`nixos-modules/minijail-profiles.nix` -> profile id
 # `vm-corp-vm-cloud-hypervisor`).
 #
-# Phase 1 (always runs, eval-only):
+# (always runs, eval-only):
 #   * Evaluate the in-tree NixOS module with a single test VM and
 #     daemonExperimental.enable = true.
-#   * Assert the rendered profile declares EXACTLY the documented
-#     setup-time capability union {CAP_NET_ADMIN}. Per the plan's
-#     "Per-role capability matrix (kernel-r2-4 corrected)" the
-#     CloudHypervisor runner needs CAP_NET_ADMIN only during the
-#     tap-fd SCM_RIGHTS recv path and MUST drop it before entering
-#     its main loop. The static minijail allowlist cannot represent
-#     "transient" caps, so the profile declares the setup-time union
-#     and the role's startup code owns the post-setup drop.
+#   * (tap-fd / default): assert the rendered profile
+#     declares EMPTY capabilities — in tap-fd mode (the default,
+#     site.ch.netHandoffMode = "tap-fd") the broker's CreateTapFd op
+#     opens /dev/net/tun + calls TUNSETIFF pre-spawn and passes the
+#     TAP fd to CH via SCM_RIGHTS. CH uses fd=<N> in --net and
+#     requires NO CAP_NET_ADMIN. The bounding-set drop is enforced
+#     by the minijail profile granting zero capabilities to CH.
+#   * (persistent-tap fallback): assert the rendered profile
+#     declares EXACTLY {CAP_NET_ADMIN} — in persistent-tap mode CH
+#     opens /dev/net/tun itself and calls TUNSETIFF, which requires
+#     CAP_NET_ADMIN.
+#   * Both checks together assert the bounding-set drop fires in the
+#     default mode and the fallback retains the
+#     cap as documented.
 #
-# Phase 2 (opt-in, NL_LIVE=1):
+# (opt-in, NL_LIVE=1):
 #   * Positive path: invoke `cloud-hypervisor --version` under a
 #     `nix shell nixpkgs#minijail`-provided `minijail0` jail using a
 #     seccomp policy that allows the documented role syscalls;
@@ -36,7 +42,7 @@
 #
 # Shell-syntax + shellcheck clean (severity=warning).
 #
-# AGENTS.md commit convention: ( P1 cloud-hypervisor )
+# AGENTS.md commit convention: (cloud-hypervisor)
 
 set -euo pipefail
 
@@ -85,22 +91,32 @@ SCRATCH=$(mktemp -d -p "${TMPDIR:-/var/tmp}" nixling-p1-ch.XXXXXX)
 log "  scratch dir: $SCRATCH"
 
 # ===========================================================================
-# Phase 1 — eval-only
+# Eval-only
 # ===========================================================================
 log "==> Phase 1: eval-only"
 
-log "  evaluating profile caps for ${PROFILE_ID}"
+log "  Phase 1a: tap-fd mode (default) — expect empty caps"
 CAPS_JSON=""
 if ! CAPS_JSON=$(evaluate_minijail_profile_caps "$PROFILE_ID" 2>"$SCRATCH/eval.err"); then
-  fail_check "phase1: nix eval of minijail profile caps failed"
+  fail_check "phase1a: nix eval of minijail profile caps failed (tap-fd)"
   sed -n '1,40p' "$SCRATCH/eval.err" >&2 || true
 else
-  pass_check "phase1: rendered profile ${PROFILE_ID} caps = ${CAPS_JSON}"
-  assert_caps_exact '["CAP_NET_ADMIN"]' "$CAPS_JSON" "$ROLE"
+  pass_check "phase1a: rendered profile ${PROFILE_ID} caps (tap-fd) = ${CAPS_JSON}"
+  assert_caps_exact '[]' "$CAPS_JSON" "${ROLE}(tap-fd)"
+fi
+
+log "  Phase 1b: persistent-tap mode (fallback) — expect CAP_NET_ADMIN"
+CAPS_JSON=""
+if ! CAPS_JSON=$(evaluate_minijail_profile_caps "$PROFILE_ID" "persistent-tap" 2>"$SCRATCH/eval-ptap.err"); then
+  fail_check "phase1b: nix eval of minijail profile caps failed (persistent-tap)"
+  sed -n '1,40p' "$SCRATCH/eval-ptap.err" >&2 || true
+else
+  pass_check "phase1b: rendered profile ${PROFILE_ID} caps (persistent-tap) = ${CAPS_JSON}"
+  assert_caps_exact '["CAP_NET_ADMIN"]' "$CAPS_JSON" "${ROLE}(persistent-tap)"
 fi
 
 # ===========================================================================
-# Phase 2 — live (opt-in via NL_LIVE=1)
+# Live (opt-in via NL_LIVE=1)
 # ===========================================================================
 if [ "${NL_LIVE:-0}" != "1" ]; then
   log "==> Phase 2 skipped (set NL_LIVE=1 to run live checks)"
@@ -171,7 +187,7 @@ EOF
     fi
   fi
 
-  # --- Evidence record (only on full Phase 2 pass) ---
+  # --- Evidence record (only on full pass) ---
   if [ "$FAIL" -eq 0 ]; then
     log "  phase2: writing P1 ${ROLE} evidence record"
     if [ -f "$EVIDENCE_PATH" ]; then

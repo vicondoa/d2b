@@ -1,12 +1,12 @@
-# Store + virtiofs share reference (W4)
+# Store + virtiofs share reference
 
-This reference documents the per-VM virtiofs share set the W4
-headless alpha daemon supervises. The shape is anchored by the W0b
-[runner-shape audit](runner-shape-audit.md); the W4-H2
+This reference documents the per-VM virtiofs share set the headless
+alpha daemon supervises. The shape is anchored by the
+[runner-shape audit](runner-shape-audit.md); the
 [`virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
 generator emits matching argv.
 
-## The four W4 alpha shares
+## The four alpha shares
 
 For the audited headless `corp-vm`:
 
@@ -24,7 +24,7 @@ flag (see `ChArgvInput.fs_shares` in
 ## virtiofsd argv shape
 
 Each share renders to one virtiofsd process whose argv matches the
-W0b audit:
+audit:
 
 ```text
 virtiofsd \
@@ -42,10 +42,10 @@ virtiofsd \
 Flag semantics:
 
 - `--socket-path` — UDS the CH runner connects to. Daemon-owned;
-  the W4 broker places it under `/run/nixling/vms/<vm>/`. The
+  the broker places it under `/run/nixling/vms/<vm>/`. The
   audit uses runner-cwd-relative paths; either shape is honoured
   by the argv generator.
-- `--socket-group=kvm` — UDS group ownership. The W4 daemon-owned
+- `--socket-group=kvm` — UDS group ownership. The daemon-owned
   broker may move this to a dedicated `nixling-virtiofs` group as
   part of the ADR-0003 minijail split; the generator accepts any
   group string.
@@ -58,11 +58,11 @@ Flag semantics:
 - `--cache=auto` — auto-cache (kernel decides per inode). `always`
   is unsafe for the `ro-store` share because hardlink farm churn
   could expose stale store-paths; `never` makes virtiofs latency
-  visible. `auto` matches the W0b audit.
+  visible. `auto` matches the audit.
 - `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` — only the `ro-store` share has this in the W4 alpha
+- `--readonly` — only the `ro-store` share has this in the alpha
   shape. The other three shares are RW.
 
 ## Daemon-owned uid/gid
@@ -73,16 +73,16 @@ time. The CH runner's `--fs socket=<path>` line trusts the broker
 to have set the socket's group ownership to `kvm` (or the migrated
 `nixling-virtiofs` group post-ADR-0003).
 
-The daemon never names the uid/gid on the wire (per W3fu1 H1
-security-1); the broker resolves the per-role uid from the trusted
-bundle when it serves the W4-H5 `SpawnRunner` request.
+The daemon never names the uid/gid on the wire; the broker resolves
+the per-role uid from the trusted bundle when it serves the
+`SpawnRunner` request.
 
 ## Cross-references
 
 - [`nixling_host::virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
   — the pure argv generator + 19 unit tests.
-- [Runner-shape audit (W0b)](runner-shape-audit.md) — the parity
-  oracle for the share set + virtiofsd flags.
+- [Runner-shape audit](runner-shape-audit.md) — the parity oracle for
+  the share set + virtiofsd flags.
 - [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md)
   — per-role minijail uid/cap split.
 - [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) — CH

@@ -1,5 +1,5 @@
-//! W3 H2 real-host integration: drive [`RealPidfdSpawner`] against the
-//! kernel and assert the documented invariants:
+//! Real-host integration: drive [`RealPidfdSpawner`] against the kernel
+//! and assert the documented invariants:
 //!
 //! - CLOEXEC is set on the returned pidfd (post-spawn `fcntl(F_GETFD)`).
 //! - The reconciliation path agrees with the spawn-time start_time.

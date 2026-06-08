@@ -37,7 +37,7 @@
 
 use std::fs::File;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
@@ -99,19 +99,20 @@ fn parse_args() -> Result<Args, String> {
         setfacl_bin: None,
     };
     while let Some(flag) = argv.next() {
-        let value = argv.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        let value = argv
+            .next()
+            .ok_or_else(|| format!("missing value for {flag}"))?;
         match flag.as_str() {
             "--path" => args.path = Some(PathBuf::from(value)),
             "--uid" => args.uid = Some(value.parse().map_err(|e| format!("--uid: {e}"))?),
             "--gid" => args.gid = Some(value.parse().map_err(|e| format!("--gid: {e}"))?),
             "--mode" => {
-                let m = u32::from_str_radix(&value, 8)
-                    .map_err(|e| format!("--mode (octal): {e}"))?;
+                let m =
+                    u32::from_str_radix(&value, 8).map_err(|e| format!("--mode (octal): {e}"))?;
                 args.mode = Some(m);
             }
             "--size-mib" => {
-                args.size_mib =
-                    Some(value.parse().map_err(|e| format!("--size-mib: {e}"))?);
+                args.size_mib = Some(value.parse().map_err(|e| format!("--size-mib: {e}"))?);
             }
             "--acl-spec" => args.acl_spec = Some(value),
             "--also-spec" => args.also_spec = Some(value),
@@ -135,7 +136,7 @@ fn print_help() {
          USAGE:\n  \
            nixling-activation-helper ensure-regular-file --path P --uid U --gid G --mode M --size-mib N\n  \
            nixling-activation-helper enforce-dir-posture --path P --uid U --gid G --mode M\n  \
-           nixling-activation-helper setfacl-on-path --path P --acl-spec A [--also-spec A2] [--require-kind regular|directory|any] [--setfacl-bin PATH]\n  \
+           nixling-activation-helper setfacl-on-path --path P --acl-spec A [--also-spec A2] [--require-kind regular|directory|socket|any] [--setfacl-bin PATH]\n  \
            nixling-activation-helper chown-if-orphan --path P --uid U --gid G\n\
          \n\
          EXIT CODES:\n  \
@@ -148,23 +149,38 @@ fn print_help() {
 fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let uid = match require("uid", args.uid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let gid = match require("gid", args.gid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let mode = match require("mode", args.mode) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let size_mib = match require("size-mib", args.size_mib) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     // v1.1.2fu24 panel-security R5 critical must-fix: use
@@ -173,10 +189,7 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
     // ancestor-swap TOCTOU class. We still try O_EXCL+O_CREAT
     // first so the AlreadyExists fallback path can re-assert
     // mode on an existing regular file.
-    match open_no_symlinks(
-        path,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL,
-    ) {
+    match open_no_symlinks(path, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL) {
         Ok(fd) => {
             let file: File = File::from(fd);
             let target_size = size_mib.saturating_mul(1024 * 1024);
@@ -204,10 +217,7 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
             // RESOLVE_NO_SYMLINKS for full path-safety. O_NONBLOCK
             // keeps FIFO/socket targets from hanging open(2);
             // O_NOFOLLOW is implicit via the helper.
-            let existing_fd = match open_no_symlinks(
-                path,
-                OFlags::RDONLY | OFlags::NONBLOCK,
-            ) {
+            let existing_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::NONBLOCK) {
                 Ok(fd) => fd,
                 Err(e2) if e2.raw_os_error() == Some(libc::ELOOP) => {
                     eprintln!(
@@ -279,28 +289,37 @@ fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
 fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let uid = match require("uid", args.uid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let gid = match require("gid", args.gid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let mode = match require("mode", args.mode) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     // v1.1.2fu24 panel-security R5 critical must-fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
     // (intermediate or final) can be a symlink.
-    let dir_fd = match open_no_symlinks(
-        path,
-        OFlags::RDONLY | OFlags::DIRECTORY,
-    ) {
+    let dir_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::DIRECTORY) {
         Ok(fd) => fd,
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             eprintln!(
@@ -367,21 +386,28 @@ fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
 /// `setfacl` wrapper that cannot be redirected to attacker-
 /// controlled symlink targets. Opens `--path` with O_PATH +
 /// O_NOFOLLOW (refuses symlinks), fstats to validate the file
-/// type matches `--require-kind` (regular | directory | any),
+/// type matches `--require-kind` (regular | directory | socket | any),
 /// then invokes `setfacl -m <acl-spec> [-m <also-spec>]
-/// /proc/self/fd/<N>` — the kernel resolves the magic
-/// procfs symlink to the inode the fd already holds, so the
-/// setxattr cannot be redirected to a different path. The
+/// /proc/<helper-pid>/fd/<N>` while keeping FD_CLOEXEC set. The
+/// kernel resolves the magic procfs symlink to the inode the helper
+/// already holds, so the setxattr cannot be redirected to a
+/// different path and the target fd is not inherited by setfacl. The
 /// `--setfacl-bin` flag pins the setfacl binary (typically
 /// `${pkgs.acl}/bin/setfacl`) so $PATH is not consulted.
 fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let acl_spec = match require("acl-spec", args.acl_spec.as_ref()) {
         Ok(v) => v.clone(),
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let require_kind = args.require_kind.as_deref().unwrap_or("any");
     let setfacl_bin = args
@@ -391,15 +417,12 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
 
     // v1.1.2fu24 panel-security R5 critical must-fix: use
     // openat2 + RESOLVE_NO_SYMLINKS so NO path component
-    // (intermediate or final) can be a symlink. O_NONBLOCK
-    // prevents FIFO/socket hangs at the final segment.
-    // O_CLOEXEC is in our helper by default but we clear
-    // FD_CLOEXEC before spawning setfacl below so the child
-    // inherits the fd for /proc/self/fd/<N> resolution.
-    let raw_fd = match open_no_symlinks(
-        path,
-        OFlags::RDONLY | OFlags::NONBLOCK,
-    ) {
+    // (intermediate or final) can be a symlink. O_PATH lets this
+    // fd-safe path cover sockets as well as regular files/dirs.
+    // O_CLOEXEC remains set. setfacl addresses the held inode via
+    // /proc/<helper-pid>/fd/<N>, so no target fd is inherited across
+    // exec.
+    let raw_fd = match open_no_symlinks(path, OFlags::PATH) {
         Ok(fd) => fd,
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             eprintln!(
@@ -448,24 +471,21 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
             );
             return ExitCode::from(2);
         }
-        "any" | "regular" | "directory" => {}
+        "socket" if !meta.file_type().is_socket() => {
+            eprintln!(
+                "refusing: {} fstat says non-socket (mode 0o{:o}); --require-kind=socket",
+                path.display(),
+                meta.mode()
+            );
+            return ExitCode::from(2);
+        }
+        "any" | "regular" | "directory" | "socket" => {}
         other => {
             eprintln!("error: invalid --require-kind: {other}");
             return ExitCode::from(1);
         }
     }
-    let procfd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
-    // Rust's stdlib unconditionally sets FD_CLOEXEC on every File
-    // (even when we don't pass O_CLOEXEC). We need the setfacl
-    // child to inherit this fd so its `/proc/self/fd/<N>` argv
-    // resolves. Clear FD_CLOEXEC before spawn.
-    if let Err(e) = nix::fcntl::fcntl(
-        fd.as_raw_fd(),
-        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
-    ) {
-        eprintln!("fcntl(F_SETFD, 0) failed: {e}");
-        return ExitCode::from(1);
-    }
+    let procfd_path = format!("/proc/{}/fd/{}", std::process::id(), fd.as_raw_fd());
     let mut cmd = Command::new(&setfacl_bin);
     cmd.arg("-m").arg(&acl_spec);
     if let Some(also) = &args.also_spec {
@@ -500,15 +520,24 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
 fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
     let path = match require("path", args.path.as_ref()) {
         Ok(p) => p,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let uid = match require("uid", args.uid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     let gid = match require("gid", args.gid) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     // v1.1.2fu24 panel-security R5 critical must-fix: use
@@ -517,10 +546,7 @@ fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
     // does NOT work on O_PATH fds (kernel returns EBADF), so
     // use O_RDONLY + O_NONBLOCK (no FIFO hang) — the helper
     // adds O_NOFOLLOW + O_CLOEXEC implicitly.
-    let raw_fd = match open_no_symlinks(
-        path,
-        OFlags::RDONLY | OFlags::NONBLOCK,
-    ) {
+    let raw_fd = match open_no_symlinks(path, OFlags::RDONLY | OFlags::NONBLOCK) {
         Ok(fd) => fd,
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             eprintln!(

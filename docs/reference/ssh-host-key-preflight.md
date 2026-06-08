@@ -4,10 +4,7 @@ Reference for the daemon-side VM-start preflight that refuses to start
 a VM when its per-VM sshd host keys directory or any key leaf has
 drifted from the canonical posture.
 
-Tracked in plan task `ph2-p2-ssh-host-key-preflight` (see plan.md
-§"ph2-p2-ssh-host-key-preflight" and the privileges.md row
-`SshHostKeyPreflight`). Sibling preflight: per-VM state-directory
-ownership matrix — see
+Related preflight: per-VM state-directory ownership matrix — see
 [`per-vm-state-ownership.md`](./per-vm-state-ownership.md).
 
 ## What it checks
@@ -21,7 +18,7 @@ broker op:
    a symlink. Real directory ownership and mode are enforced
    separately by the
    [ownership matrix](./per-vm-state-ownership.md) preflight (which
-   declares `nixlingd:nixling-launcher 0750` for this directory).
+   declares `nixlingd:nixling 0750` for this directory).
 2. **Key file shape.** For each `ssh_host_*_key` private-key file
    directly under the directory (excluding `.pub` siblings and any
    unrelated files):
@@ -132,10 +129,9 @@ an existing path → fail-closed.
 
 ## Spec correction
 
-The original `ph2-p2-ssh-host-key-preflight` sub-agent prompt
-referenced `/var/lib/nixling/keys/<vm>/sshd-host-keys` and a
-`root:nixling-<vm>-runner 0750` directory posture with `0640` key
-files. The canonical paths and modes shipped by the ownership matrix
-(`/var/lib/nixling/vms/<vm>/sshd-host-keys`, `nixlingd:nixling-launcher 0750`
-directory, `root:root 0400` key files per the plan + privileges.md
-row) take precedence per AGENTS.md "Existing code is canon".
+Earlier drafts referenced `/var/lib/nixling/keys/<vm>/sshd-host-keys`
+and a `root:nixling-<vm>-runner 0750` directory posture with `0640`
+key files. The canonical paths and modes shipped by the ownership
+matrix (`/var/lib/nixling/vms/<vm>/sshd-host-keys`,
+`nixlingd:nixling 0750` directory, `root:root 0400` key
+files) take precedence per AGENTS.md "Existing code is canon".

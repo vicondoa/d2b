@@ -1,11 +1,10 @@
 //! `ModprobeIfAllowed` broker op.
 //!
-//! Per plan.md "W3 broker variant additions", `ModprobeIfAllowed`
-//! reads `/proc/sys/kernel/modules_disabled` **before** attempting any
-//! load and accepts only module names that appear in the trusted
-//! bundle's `kernelModules` matrix with `loadAllowed: true`. Every
-//! decision (allow + deny) is audited with `module_name`,
-//! `matrix_entry_id`, and `modules_disabled_sysctl` per plan §2295.
+//! `ModprobeIfAllowed` reads `/proc/sys/kernel/modules_disabled`
+//! **before** attempting any load and accepts only module names that
+//! appear in the trusted bundle's `kernelModules` matrix with
+//! `loadAllowed: true`. Every decision (allow + deny) is audited with
+//! `module_name`, `matrix_entry_id`, and `modules_disabled_sysctl`.
 //!
 //! The actual `modprobe(8)` invocation is intentionally factored out
 //! behind the [`ModprobeBackend`] trait so the L1c fake-backend canary

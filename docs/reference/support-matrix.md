@@ -1,8 +1,8 @@
 # Reference: nixling support matrix
 
-> Diataxis: reference. Per-platform-tier support matrix. Assembled by
-> the W3 integrator from fragments under
-> `docs/reference/support-matrix.d/*.md`; the scope-owned fragments
+> Diataxis: reference. Per-platform-tier support matrix. Assembled
+> from fragments under `docs/reference/support-matrix.d/*.md`; the
+> scope-owned fragments
 > are the source of truth for their respective tier columns.
 
 ## Tier model
@@ -22,7 +22,7 @@ Anything not in the Tier 0/1/1-later/2 set is **rejected**; see ADR
 0008 ("Supported platforms and rejected targets") for the explicit
 rejected list and the rationale.
 
-## Canonical platform support table (W3 v0.4.0 baseline)
+## Canonical platform support table (v0.4.0 baseline)
 
 Per-row kernel / cgroup / nftables / NetworkManager / Cloud Hypervisor
 / minijail / glibc minima. The "Status" column states the v1.0 SLA
@@ -43,18 +43,18 @@ trusted bundle; the host's distro-shipped minijail is never used.
 
 - [ADR 0008 — Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md)
 - [ADR 0011 — cgroup v2 delegation and pidfd handoff](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-- [ADR 0012 — W3 IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-- [ADR 0013 — W3 firewall coexistence policy matrix + `inet nixling` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
-- [ADR 0014 — W3 `kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
+- [ADR 0012 — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+- [ADR 0013 — firewall coexistence policy matrix + `inet nixling` chain layout](../adr/0013-w3-firewall-coexistence-policy.md)
+- [ADR 0014 — `kernel.modules_disabled=1` behavior, module probe order, CH net handoff selection, and runner-shape preflight](../adr/0014-w3-modules-devices-runner-shape.md)
 - [`docs/reference/compatibility.md`](compatibility.md) — full Tier
   0/1/1-later/2 status table including per-tier behavior of the new
-  W3 host verbs.
+  host verbs.
 
 ---
 
-## Section: kernel modules + devices (W3 s4)
+## Section: kernel modules + devices
 
-# Tier modules + devices (W3 s4 fragment)
+# Tier modules + devices
 
 Reference fragment listing kernel-module + device-node requirements
 per support tier. The integrator assembles this into

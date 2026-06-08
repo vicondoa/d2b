@@ -1,5 +1,5 @@
-//! ph2-p2-ownership-matrix: daemon-side enforcer for the per-VM state
-//! directory ownership matrix declared in
+//! Daemon-side enforcer for the per-VM state directory ownership matrix
+//! declared in
 //! `nixos-modules/options-ownership-matrix.nix`.
 //!
 //! # Invariant: hardlink-farm carve-out
@@ -67,10 +67,7 @@ pub enum OwnershipMismatch {
     /// `stat(2)` failed on the declared path (missing directory,
     /// broken symlink under a parent, permission denied for the
     /// daemon's uid).
-    StatFailed {
-        path: PathBuf,
-        detail: String,
-    },
+    StatFailed { path: PathBuf, detail: String },
     /// The path exists but owner/group/mode differ from the matrix.
     Drift {
         path: PathBuf,
@@ -243,9 +240,7 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
             gid: meta.gid(),
             mode: meta.mode() & 0o7777,
         };
-        if actual.uid != expected.uid
-            || actual.gid != expected.gid
-            || actual.mode != expected.mode
+        if actual.uid != expected.uid || actual.gid != expected.gid || actual.mode != expected.mode
         {
             out.push(OwnershipMismatch::ChildDrift {
                 path: path.clone(),
@@ -288,7 +283,11 @@ mod tests {
     }
 
     fn prepare(base: &Path, sub: &str, mode: u32) -> PathBuf {
-        let p = if sub == "." { base.to_path_buf() } else { base.join(sub) };
+        let p = if sub == "." {
+            base.to_path_buf()
+        } else {
+            base.join(sub)
+        };
         if sub != "." {
             stdfs::create_dir_all(&p).unwrap();
         }
@@ -303,10 +302,7 @@ mod tests {
         prepare(base, ".", 0o2770);
         prepare(base, "state", 0o0750);
 
-        let matrix = vec![
-            mk_entry(".", 0o2770),
-            mk_entry("state", 0o0750),
-        ];
+        let matrix = vec![mk_entry(".", 0o2770), mk_entry("state", 0o0750)];
         let drifts = check_ownership_matrix("vm1", base, &matrix);
         assert!(drifts.is_empty(), "unexpected drift: {drifts:?}");
     }
@@ -416,7 +412,10 @@ mod tests {
             recursive: true,
         };
 
-        assert!(!should_recurse(&entry), "carve-out must override `recursive = true`");
+        assert!(
+            !should_recurse(&entry),
+            "carve-out must override `recursive = true`"
+        );
 
         let drifts = check_ownership_matrix("vm1", base, &[entry]);
         // Top-level entry matches; no ChildDrift may appear under
@@ -450,7 +449,9 @@ mod tests {
         };
         let drifts = check_ownership_matrix("vm1", base, &[entry]);
         assert!(
-            drifts.iter().any(|d| matches!(d, OwnershipMismatch::ChildDrift { .. })),
+            drifts
+                .iter()
+                .any(|d| matches!(d, OwnershipMismatch::ChildDrift { .. })),
             "expected ChildDrift for non-carve-out recursive walk: {drifts:?}",
         );
     }
@@ -464,9 +465,21 @@ mod tests {
         assert_eq!(m.kind(), "ownership-matrix-stat-failed");
         let m = OwnershipMismatch::Drift {
             path: PathBuf::from("/x"),
-            expected: Ownership { uid: 0, gid: 0, mode: 0 },
-            actual: Ownership { uid: 1, gid: 0, mode: 0 },
-            drift_reason: DriftReason { owner: true, group: false, mode: false },
+            expected: Ownership {
+                uid: 0,
+                gid: 0,
+                mode: 0,
+            },
+            actual: Ownership {
+                uid: 1,
+                gid: 0,
+                mode: 0,
+            },
+            drift_reason: DriftReason {
+                owner: true,
+                group: false,
+                mode: false,
+            },
         };
         assert_eq!(m.kind(), "ownership-matrix-drift");
     }

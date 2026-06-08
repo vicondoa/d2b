@@ -1,16 +1,19 @@
 # shellcheck shell=bash
 # tests/lib/minijail-validator-common.sh
 #
-# Shared helpers for the P1 per-role minijail validator scripts
+# Shared helpers for the per-role minijail validator scripts
 # (tests/minijail-validator-<role>.sh). Sourced by each per-role
 # validator. Provides:
 #
-#   - evaluate_minijail_profile_caps <profile-id>
+#   - evaluate_minijail_profile_caps <profile-id> [ch-handoff-mode]
 #       Evaluate the in-tree NixOS module configuration with
 #       daemonExperimental.enable = true and a single test VM, then
 #       echo the JSON array of capabilities declared on the named
-#       profile. Caller is expected to compare against the role's
-#       documented cap union (per plan kernel-r2-4 corrected matrix).
+#       profile. The optional second argument overrides
+#       nixling.site.ch.netHandoffMode (e.g. "persistent-tap"); if
+#       omitted the options-site.nix default ("tap-fd") applies.
+#       Caller is expected to compare against the role's documented
+#       cap set for that mode.
 #
 #   - assert_caps_exact <expected-json-array> <actual-json-array> <role-name>
 #       Compare two jq-parseable JSON arrays as sorted sets; pass /
@@ -50,6 +53,11 @@ set -u
 # non-zero on eval failure.
 evaluate_minijail_profile_caps() {
   local profile_id=$1
+  local ch_handoff_override=${2:-}
+  local ch_handoff_nix=""
+  if [ -n "$ch_handoff_override" ]; then
+    ch_handoff_nix="ch.netHandoffMode = \"${ch_handoff_override}\";"
+  fi
   local expr
   expr=$(cat <<NIXEOF
 let
@@ -76,6 +84,7 @@ let
           waylandUser   = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
+          ${ch_handoff_nix}
         };
         nixling.envs.work = {
           lanSubnet    = "10.20.0.0/24";

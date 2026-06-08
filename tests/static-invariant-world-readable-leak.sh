@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 static invariant: public vms.json exposes only public-safe fields.
+# Public vms.json exposes only public-safe fields.
 
 set -euo pipefail
 

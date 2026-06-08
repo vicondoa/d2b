@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# tests/hardware-smoke-gpu-yubikey.sh — W20 (W*-fu-fu rollup):
+# tests/hardware-smoke-gpu-yubikey.sh— (rollup):
 # hardware validation smoke on this NixOS dev host.
 #
-# Validates the W5-fu GPU sidecar + W6-fu USBIP YubiKey live paths
+# Validates the GPU sidecar + USBIP YubiKey live paths
 # against this host's NVIDIA Quadro T1000 + USB / YubiKey hardware.
 #
 # Phases:
 #   1. preflight: confirm /dev/dri/renderD128 + /dev/bus/usb present
 #      + this is a NixOS host with the required nix shell tools.
-#   2. workspace build: cargo build the W*-fu-fu rollup workspace
+#   2. workspace build: cargo build the rollup workspace
 #      (nixling + nixlingd + nixling-priv-broker) so the validation
 #      tests can drive the released binaries.
-#   3. minijail profile validator: run the W17
+#   3. minijail profile validator: run the
 #      `BundleResolver::validate_minijail_profiles()` invariant gate
 #      against a synthesized resolver fixture so any regression in
 #      the per-role profile shape (uid=0 without carve-out,
@@ -23,8 +23,8 @@
 #      examples/with-entra-id to confirm GPU + YubiKey-enabled
 #      consumer flakes still build.
 #   6. (manual) live smoke: documents the operator-driven steps for
-#      driving the W12 broker live SpawnRunner against
-#      /dev/dri/renderD128 + the W13 USBIP live_bind against the
+#      driving the broker live SpawnRunner against
+#      /dev/dri/renderD128 + the USBIP live_bind against the
 #      plugged-in YubiKey. This phase is intentionally NOT
 #      automated — running it spawns real VMs that disrupt the
 #      operator's active Wayland session.

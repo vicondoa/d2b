@@ -1,6 +1,6 @@
 # Host-side observability component.
 #
-# Wave-1 todo: `component-host`.
+# TODO: `component-host`.
 # Owns the host Alloy forwarder and the host-local bridge into the
 # observability VM's vsock backend.
 { config, lib, pkgs, ... }:
@@ -288,15 +288,13 @@ lib.mkIf cfg.enable {
     RuntimeDirectoryPreserve = "yes";
   };
 
-  # P6 ph6-remove-systemd-emission + P1 ph1-p1-otelbridge-role:
   # `nixling-otel-host-bridge.service` host singleton was deleted.
   # The OTel host bridge is now broker-spawned via
-  # SpawnRunner{role: OtelHostBridge} (P1 ph1-p1-otelbridge-role,
-  # commit 566ef72) with readiness gated by P3
-  # ph3-p3-otelbridge-readiness (commit 02c0cc4). The argv generator
-  # lives at packages/nixling-host/src/otel_host_bridge_argv.rs;
+  # SpawnRunner{role: OtelHostBridge} with readiness gated by its
+  # readiness predicate. The argv generator lives at
+  # packages/nixling-host/src/otel_host_bridge_argv.rs;
   # the broker dispatcher at packages/nixling-priv-broker/src/runtime.rs
-  # refuses bundle intent for non-obs VMs (security-2 closed-set).
+  # refuses bundle intent for non-obs VMs.
   # The systemd.tmpfiles.rules block below stays — those are the
   # documented stable socket name aliases consumed by Alloy + Grafana.
 

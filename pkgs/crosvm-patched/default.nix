@@ -58,7 +58,7 @@ let
   # by stripping per-device `statx:` lines and re-adding a single
   # canonical allow in common_device.policy (see crosvmSeccomp).
   #
-  # nixos-1 (P5 round-1): symlinkJoin pkgs.crosvm with crosvmSeccomp
+  # symlinkJoin pkgs.crosvm with crosvmSeccomp
   # so the compiled .bpf files live alongside the crosvm binary
   # under the same store path. crosvm's jail loader looks for
   # ${out}/share/policy/crosvm/<device>.bpf relative to its own
@@ -67,7 +67,7 @@ let
   # is silently bypassed (so duplicate-syscall failures recur the
   # first time the C parser sees a policy with @includes).
   #
-  # rust-r2-1 (P5 round-2): KNOWN LIMITATION — seccomp policies not
+  # KNOWN LIMITATION — seccomp policies not
   # loaded at runtime by `crosvm device gpu`.
   #
   # The symlinkJoin above adds the compiled .bpf files to the package
@@ -92,7 +92,7 @@ let
   crosvmPatched = pkgs.symlinkJoin {
     name = "crosvm-with-seccomp";
     paths = [ crosvmNoGraphicalConsole crosvmSeccomp ];
-    # Phase 4 multi-arch: the join inherits its components' platform
+    # Multi-arch: the join inherits its components' platform
     # support. crosvmSeccomp is x86_64-only (see its meta block) and
     # crosvmNoGraphicalConsole patches `pkgs.crosvm` which nixpkgs
     # itself restricts to x86_64-linux. Make the constraint explicit

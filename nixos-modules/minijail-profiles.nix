@@ -2,9 +2,12 @@
 
 let
   cfg = config.nixling;
-  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
+    (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
+    (lib.attrValues cfg.vms)));
   obsOtlpPort = 14317;
   serviceControllers = [ "cpu" "memory" "pids" ];
 
@@ -15,12 +18,12 @@ let
     group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
   };
 
-  # v1.1.1fu11 (Option B from live-deploy 010 checkpoint):
+  # (Option B from live-deploy 010 checkpoint)
   # Hash-derived ephemeral UID per principal. The matching
   # named system users (`nixling-<vm>-{gpu,snd,swtpm,runner}`)
   # are declared in `nixos-modules/host-users.nix` with the
   # SAME hash via the shared helper, so when the broker
-  # `setuid()`s the spawned role to this UID, NSS resolves it
+  # `setuid`s the spawned role to this UID, NSS resolves it
   # back to the named user with its supplementary groups
   # (audio, kvm, nixling-<vm>-runner) and the per-VM ACL
   # grants the audio/graphics host modules install on
@@ -33,8 +36,8 @@ let
   # `host-activation.nix` that walks the bundle and grants
   # per-VM-dir traversal for every distinct role UID.
   #
-  # v1.1.2-final-R1 (panel-software HIGH): formula moved to
-  # nixos-modules/lib.nix as the canonical definition. This
+  # Formula moved to nixos-modules/lib.nix as the canonical
+  # definition. This
   # file imports it here to keep call-site readability;
   # changing the algorithm now happens in ONE place.
   inherit (nl) stablePrincipalId;
@@ -70,7 +73,7 @@ let
       requiresStartRoot ? false,
       exceptionRef ? null,
       adr_carve_out ? null,
-      # v1.1.2fu36: file-creation mask the broker installs in the
+      # file-creation mask the broker installs in the
       # spawned child before execve. None inherits the broker's
       # umask (current behavior). Roles binding shared Unix sockets
       # (vhost-user-sound, crosvm-gpu, swtpm) declare 0o007 so the
@@ -78,7 +81,7 @@ let
       # runtime default ACL, cloud-hypervisor's named-user entry
       # then becomes effective (mask:rw instead of mask:---).
       umask ? null,
-      # v1.1.1fu14 (ADR 0021): when non-null, broker pre-establishes
+      # (ADR 0021): when non-null, broker pre-establishes
       # a per-runner user NS and writes uid_map/gid_map. The
       # child runs fake-root inside; host-side capabilities should
       # be empty. Used by virtiofsd roles for least-privilege FS
@@ -87,6 +90,8 @@ let
       # Shape: { hostUidForZero, hostGidForZero }. Single-entry
       # mapping (in-NS UID 0 → host UID hostUidForZero).
       userNamespace ? null,
+      uid ? stablePrincipalId principal,
+      gid ? stablePrincipalId principal,
     }:
     let
       effectiveNamespaces =
@@ -106,8 +111,7 @@ let
         adr_carve_out
         ;
       namespaces = effectiveNamespaces;
-      uid = stablePrincipalId principal;
-      gid = stablePrincipalId principal;
+      inherit uid gid;
       mountPolicy = {
         inherit
           readOnlyPaths
@@ -138,11 +142,11 @@ let
       ;
     adr_carve_out = profile.adr_carve_out;
     caps = profile.capabilities;
-    # v1.1.1fu14 (ADR 0021): pass userNamespace through to the
+    # (ADR 0021): pass userNamespace through to the
     # processes.json RoleProfile so the broker can pre-create
     # the user NS when spawning the runner.
     userNamespace = profile.userNamespace or null;
-    # v1.1.2fu36: pass umask through to the RoleProfile so the
+    # pass umask through to the RoleProfile so the
     # broker can install it in the spawned child before execve.
     umask = profile.umask or null;
   };
@@ -153,20 +157,25 @@ let
   audioRuntimeDirOf = name: "/run/nixling/vms/${name}";
   videoRuntimeDirOf = name: "/run/nixling-video/${name}";
   gpuRuntimeDirOf = name: "/run/nixling-gpu/${name}";
-  # v1.1.2fu36: TPM socket consolidated under /run/nixling/vms/<vm>/
+  # TPM socket consolidated under /run/nixling/vms/<vm>/
   # (alongside snd.sock, gpu.sock). No separate /run/swtpm/ dir.
   # Reuses the per-VM default ACL machinery in host-activation.nix.
   swtpmRuntimeDirOf = name: "/run/nixling/vms/${name}";
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
 
-  # P1 ph1-p1-gpu-seccomp: the Gpu profile cross-domain Wayland
-  # BindMount needs the operator's wayland-user numeric uid. Lazy:
+  # The Gpu profile cross-domain Wayland
+  # BindMount needs the operator's wayland-user numeric uid. Lazy
   # only forced for VMs with graphics.enable = true; the assertions
   # module guarantees `waylandUser` is non-null in that case.
   waylandUid =
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
     else "0";
+  # Host primary compositor socket basename (e.g. wayland-0, or
+  # wayland-1 under niri). The bind-mount src below is the host path
+  # the broker grants the sidecar uid an ACL on; it MUST point at the
+  # operator's real socket. See nixling.site.waylandDisplay.
+  waylandHostSock = "/run/user/${waylandUid}/${cfg.site.waylandDisplay}";
 
   vmProfiles = name: vm:
     let
@@ -185,7 +194,7 @@ let
             profileId = profileIdFor name shareNodeId;
             role = "virtiofsd";
             principal = "nixling-${name}-runner";
-            # v1.1.1fu14 (ADR 0021): with broker-pre-NS, virtiofsd
+            # (ADR 0021): with broker-pre-NS, virtiofsd
             # runs fake-root INSIDE its own user namespace. All
             # caps within the NS scope are available implicitly;
             # the host-side capabilities set is EMPTY. This is the
@@ -200,7 +209,7 @@ let
             ];
             cgroupSubtree = "nixling.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
-            # v1.1.1fu14 (ADR 0021): broker pre-creates a user NS
+            # (ADR 0021): broker pre-creates a user NS
             # mapping in-NS UID 0 → the principal's stable
             # ephemeral UID on the host. virtiofsd then runs
             # fake-root inside the NS, so it can open/serve files
@@ -248,62 +257,72 @@ let
         profileId = profileIdFor name "cloud-hypervisor";
         role = "cloud-hypervisor-runner";
         principal = "nixling-${name}-runner";
-        # P1 per-role capability matrix (kernel-r2-4 corrected):
-        # CloudHypervisor declares CAP_NET_ADMIN as the **setup-time
-        # union** cap; the static minijail allowlist cannot express
-        # "transient", so the runner role's startup code MUST drop
-        # CAP_NET_ADMIN explicitly before entering its main loop.
-        # The setup-time use is the SCM_RIGHTS tap-fd recv path; once
-        # the fd is received, no further net-admin syscalls are made.
-        capabilities = [ "CAP_NET_ADMIN" ];
+        # D4a (bounding-set drop): CAP_NET_ADMIN is
+        # only required when CH opens /dev/net/tun itself and
+        # calls TUNSETIFF to attach to the persistent TAP
+        # (persistent-tap mode, fallback). In the default
+        # tap-fd mode (site.ch.netHandoffMode = "tap-fd"),
+        # the broker's CreateTapFd op opens /dev/net/tun +
+        # calls TUNSETIFF pre-spawn and passes the resulting
+        # TAP fd to CH via SCM_RIGHTS. CH uses fd=<N> in its
+        # --net argument and requires NO CAP_NET_ADMIN.
+        #
+        # Enforcement: by not granting CAP_NET_ADMIN in the
+        # minijail capabilities list, the kernel strips it from
+        # the bounding set before execve. CH can never acquire
+        # it post-spawn. The live-smoke probe asserts CapEff bit 12 == 0
+        # after 10 s uptime as a
+        # regression guard. In persistent-tap mode, CAP_NET_ADMIN
+        # is retained (CH must call TUNSETIFF itself).
+        capabilities = lib.optionals
+          (cfg.site.ch.netHandoffMode == "persistent-tap")
+          [ "CAP_NET_ADMIN" ];
         seccompPolicyRef = "w1-cloud-hypervisor-runner";
         readOnlyPaths = [ "/nix/store" ];
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Own the VM API socket, disks, and other runtime artifacts.")
         ];
-        # v1.1.1fu13e: bind-mount /dev/kvm (and graphics-VM device
+        # bind-mount /dev/kvm (and graphics-VM device
         # nodes) into the runner mount namespace. CH opens /dev/kvm
         # itself; without the bind it sees EROFS/ENOENT.
-        # v1.1.2fu33: /dev/net/tun must be bind-mounted so CH can
-        # open and configure its TAP interfaces inside the sandbox.
+        # /dev/net/tun bind required in persistent-tap
+        # mode so CH can open the device and call TUNSETIFF to
+        # attach to the pre-created persistent TAP. In tap-fd mode
+        # the broker pre-opens /dev/net/tun (broker runs as root,
+        # outside the minijail sandbox), so CH never needs the
+        # device node and the bind is omitted. /dev/vhost-net is
+        # always bound — CH opens it directly for accelerated
+        # virtio networking regardless of tap-handoff mode.
         #
-        # IMPORTANT (panel-networking + panel-security
-        # v1.1.2-final-R2): the runner's static minijail caps grant
-        # CAP_NET_ADMIN as the **setup-time union** (see
-        # `capabilities` above + kernel-r2-4 comment). At spawn
-        # time CH has CAP_NET_ADMIN in its effective set; this is
-        # what lets the SCM_RIGHTS tap-fd recv path work and what
-        # CH itself uses to call TUNSETIFF on the pre-existing
-        # persistent TAP. CH's published behaviour is to drop
-        # CAP_NET_ADMIN before entering its main loop (after
-        # device init), but the minijail static allowlist cannot
-        # express "transient" — operators MUST audit the
-        # cloud-hypervisor build to confirm this drop happens.
-        #
-        # The /dev/net/tun bind exposure surface is bounded by:
+        # The /dev/net/tun bind (persistent-tap only) exposure
+        # surface is bounded by
         # (a) the broker's `CreatePersistentTap` op runs FIRST in
-        #     the host-prep DAG (ApplyNftables → CreatePersistentTap
-        #     → SetBridgePortFlags → OpenVhostNet → SpawnRunner(CH))
-        #     so the named TAP always exists by the time CH attaches.
+        #     the host-prep DAG so the named TAP always exists by
+        #     the time CH attaches.
         # (b) the declarative `DeviceClass::NetTun` ioctl allowlist
         #     (packages/nixling-host/src/ioctl_policy.rs) is
         #     tightened to [TUNSETIFF, TUNSETGROUP] — the broker is
         #     the only legitimate caller of TUNSETPERSIST/TUNSETOWNER
         #     and bypasses the per-role policy via raw libc::ioctl.
-        # (c) ADR-tracked v1.2 follow-up: seccomp BPF compilation
-        #     from the declarative ioctl matrix is NOT yet wired
-        #     (load_runner_seccomp returns Ok(None) for non-absolute
-        #     seccomp_policy_ref values). Until that lands, the
-        #     declarative allowlist is contractual only — operators
-        #     of high-threat environments should treat a
-        #     post-init-compromise of CH as capable of creating
-        #     additional TAPs until the BPF enforcement closes the
-        #     gap. See CHANGELOG.md "Known limitations".
+        # (c) seccomp BPF compilation from the
+        #     declarative ioctl matrix is wired. load_runner_seccomp
+        #     compiles BPF from packages/nixling-host/src/seccomp.rs
+        #     for every internal seccomp_policy_ref (including
+        #     "w1-cloud-hypervisor-runner") at spawn time and the
+        #     broker child closure installs it via
+        #     SECCOMP_SET_MODE_FILTER BEFORE execve. The previous
+        #     "Ok(None) silent-skip" deferral is retired
+        #     (live_handlers.rs:1543-1563). The declarative
+        #     allowlist is now an enforced runtime constraint, not
+        #     documentation-only. Combined with (a) + (b) and the
+        #     D4a cap-drop in tap-fd mode, post-init compromise of
+        #     CH cannot escalate to additional TAP creation.
         deviceBinds = [
           "/dev/kvm"
           "/dev/vhost-net"
-          "/dev/net/tun"
-        ];
+        ] ++ lib.optional
+          (cfg.site.ch.netHandoffMode == "persistent-tap")
+          "/dev/net/tun";
         cgroupSubtree = "nixling.slice/${name}/cloud-hypervisor";
         controllers = serviceControllers;
       };
@@ -317,9 +336,9 @@ let
       };
     }
     // lib.optionalAttrs vm.tpm.enable {
-      # P1 Swtpm + SwtpmFlush minijail profiles.
+      # Swtpm + SwtpmFlush minijail profiles.
       #
-      # Per plan kernel-r2-4 the capability set is EMPTY — mkProfile
+      # The capability set is EMPTY — mkProfile
       # defaults `capabilities = [ ]`; do NOT add a `capabilities`
       # override below. CRITICAL SUBSYSTEM (AGENTS.md): the writable
       # paths declared here are a stable RW bind of
@@ -353,7 +372,7 @@ let
         ];
         cgroupSubtree = "nixling.slice/${name}/swtpm";
         controllers = serviceControllers;
-        # v1.1.2fu36: bind swtpm control socket with mode 0660 (via
+        # bind swtpm control socket with mode 0660 (via
         # explicit --ctrl mode= in argv) AND umask 0o007 here so any
         # ancillary files swtpm creates inside its state dir also
         # respect the group-rw default. Combined with the per-VM
@@ -361,6 +380,17 @@ let
         # rwx), this lets CH connect to /run/swtpm/<vm>/sock without
         # operator intervention.
         umask = 7;
+        # (ADR 0021) Broker pre-creates a user NS
+        # mapping in-NS UID 0 → the swtpm principal's stable
+        # ephemeral UID on the host. swtpm then runs fake-root
+        # inside the NS with zero host capabilities. Direct
+        # translation of the virtiofsd broker-pre-NS model (ADR 0021).
+        # swtpm has zero device binds + zero host caps + Unix socket
+        # only — the smallest surface of all sidecars.
+        userNamespace = {
+          hostUidForZero = stablePrincipalId "nixling-${name}-swtpm";
+          hostGidForZero = stablePrincipalId "nixling-${name}-swtpm";
+        };
       };
     }
     // lib.optionalAttrs vm.graphics.enable {
@@ -368,13 +398,13 @@ let
         profileId = profileIdFor name "gpu";
         role = "gpu";
         principal = "nixling-${name}-gpu";
-        # P1 kernel-r2-4 corrected: caps stay EMPTY (the original
+        # Caps stay EMPTY (the original
         # matrix carried CAP_SYS_NICE; the per-role smoke proves no
         # NICE is needed at runtime — virgl/venus/cross-domain run
         # under SCHED_OTHER on this host's NVIDIA Quadro T1000).
         capabilities = [ ];
         seccompPolicyRef = "w1-gpu";
-        # v1.1.2fu36: crosvm gpu sidecar binds the vhost-user socket
+        # crosvm gpu sidecar binds the vhost-user socket
         # at /run/nixling/vms/<vm>/gpu.sock. umask 0o007 makes the
         # socket mode 0660; the per-VM runtime dir default ACL then
         # grants cloud-hypervisor rw on it via the named-user entry.
@@ -383,7 +413,7 @@ let
           (mkWritablePath (stateDirOf name) "Own per-VM graphics runtime artifacts alongside the runner.")
           (mkWritablePath (gpuRuntimeDirOf name) "Expose the bound Wayland socket and GPU runtime state.")
         ];
-        # P1 ph1-p1-device-matrix: closed-set device bind set the
+        # Closed-set device bind set the
         # broker opens on behalf of the Gpu runner. Matches the
         # nixling_host::devices::DeviceClass taxonomy (Kvm, Dri,
         # NvidiaCtl, NvidiaRender → /dev/nvidia0 [corrected from the
@@ -396,12 +426,12 @@ let
           "/dev/nvidia-uvm"
           "/dev/udmabuf"
         ];
-        # P1 cross-domain Wayland: broker mounts the host's
-        # `/run/user/<waylandUser-uid>/wayland-0` socket into the
+        # Cross-domain Wayland: broker mounts the host's
+        # `/run/user/<waylandUser-uid>/<waylandDisplay>` socket into the
         # sidecar's mount namespace at the role-local in-sandbox
         # path so the sidecar can never traverse `/run/user/<uid>`.
         bindMounts = [
-          { src = "/run/user/${waylandUid}/wayland-0";
+          { src = waylandHostSock;
             dst = "${gpuRuntimeDirOf name}/wayland-0"; }
         ];
         cgroupSubtree = "nixling.slice/${name}/gpu";
@@ -411,24 +441,91 @@ let
       "${profileIdFor name "video"}" = mkProfile {
         profileId = profileIdFor name "video";
         role = "video";
-        principal = "nixling-${name}-gpu";
-        # P1 kernel-r2-4: video runs with an EMPTY capability bounding set
+        principal = "nixling-${name}-video";
+        # Video runs with an EMPTY capability bounding set
         # (mkProfile default; listed explicitly here so future readers don't
         # have to chase the helper).
         capabilities = [ ];
         seccompPolicyRef = "w1-video";
-        readOnlyPaths = [
-          # Render node for virtio-media decode (kernel-8 wire contract:
-          # virtio_id=48, 2x256 queues, 256 MiB SHM region). Bind RO; the
-          # vhost-user-media backend only opens this for DRM ioctls, never
-          # writes through it.
+        deviceBinds = [
+          # Render node for virtio-media decode (virtio_id=48, 2x256 queues, 256 MiB SHM region). This is the
+          # default video device allowlist.
           "/dev/dri/renderD128"
+        ] ++ lib.optionals (vm.graphics.videoNvidiaDecode or false) [
+          # Explicit NVIDIA VA-API/NVDEC opt-in. These are the only extra
+          # device nodes the proprietary nvidia-vaapi-driver opens on this
+          # path; /dev remains masked before exec.
+          "/dev/nvidiactl"
+          "/dev/nvidia0"
+          "/dev/nvidia-uvm"
         ];
+        namespaces = defaultNamespaces // { pid = true; };
         writablePaths = [
           (mkWritablePath (videoRuntimeDirOf name) "Create the vhost-user video decoder socket.")
         ];
+        umask = 7;
         cgroupSubtree = "nixling.slice/${name}/video";
         controllers = serviceControllers;
+      };
+    }
+    // lib.optionalAttrs (vm.graphics.enable && vm.graphics.renderNodeOnly) {
+      # (ADR 0021) Render-node-only broker-pre-NS GPU sidecar profile.
+      #
+      # RENDER-NODE ONLY constraint (architectural, not a v1.3 deferral)
+      # This profile intentionally omits /dev/nvidiactl, /dev/nvidia0,
+      # /dev/nvidia-uvm, and /dev/udmabuf. Those are root:video-owned
+      # character devices; inside a single-entry user NS the host devices
+      # appear with UID 65534 (overflow) and in-NS UID 0 lacks DAC access.
+      # Operators requiring NVIDIA or non-render-node device passthrough
+      # MUST use the legacy `gpu` profile (graphics.renderNodeOnly = false).
+      #
+      # SCM_RIGHTS / fd-passing justification
+      # Render nodes (/dev/dri/renderD128) bypass DRM master authentication
+      # entirely — DRM_IOCTL_SET_MASTER and DRM_IOCTL_AUTH_MAGIC are NOT
+      # required. The broker pre-opens the fd in the parent process (before
+      # clone3(CLONE_NEWUSER)), dup2's it to RENDER_NODE_INHERITED_FD (10)
+      # in the child, and passes /proc/self/fd/10 as --gpu-device-node.
+      # The fd survives the user-NS pivot without losing access semantics
+      # because the kernel checks permissions at open time only.
+      #
+      # No deviceBinds: the render node fd is pre-opened and passed via
+      # fd inheritance (SCM_RIGHTS into the user-NS child), not bind-mounted.
+      # Mount actions are skipped for user-NS spawns (ADR 0021).
+      "${profileIdFor name "gpu-render-node"}" = mkProfile {
+        profileId = profileIdFor name "gpu-render-node";
+        role = "gpu-render-node";
+        principal = "nixling-${name}-gpu";
+        # Zero host caps: the user-NS provides in-NS CAP_* without host exposure.
+        capabilities = [ ];
+        seccompPolicyRef = "w1-gpu-render-node";
+        # umask 0o007 so the vhost-user socket created by crosvm
+        # has mode 0660; the per-VM runtime dir default ACL then grants
+        # cloud-hypervisor rw via the named-user entry.
+        umask = 7;
+        writablePaths = [
+          (mkWritablePath (stateDirOf name) "Own per-VM graphics runtime artifacts alongside the runner.")
+          (mkWritablePath (gpuRuntimeDirOf name) "Expose the bound Wayland socket and GPU runtime state.")
+        ];
+        # deviceBinds is intentionally empty: /dev/dri/renderD128 is
+        # pre-opened by the broker parent and passed to the user-NS child
+        # via fd inheritance (RENDER_NODE_INHERITED_FD = 10 protocol
+        # constant in nixling-priv-broker/src/sys.rs). No bind-mount.
+        deviceBinds = [ ];
+        # Cross-domain Wayland: same socket bind as the legacy gpu profile.
+        bindMounts = [
+          { src = waylandHostSock;
+            dst = "${gpuRuntimeDirOf name}/wayland-0"; }
+        ];
+        cgroupSubtree = "nixling.slice/${name}/gpu";
+        controllers = serviceControllers;
+        # (ADR 0021) Broker pre-creates a user NS mapping
+        # in-NS UID/GID 0 → the gpu principal's stable ephemeral UID.
+        # crosvm device gpu then runs fake-root inside the NS with zero
+        # host capabilities and a pre-opened render node fd.
+        userNamespace = {
+          hostUidForZero = stablePrincipalId "nixling-${name}-gpu";
+          hostGidForZero = stablePrincipalId "nixling-${name}-gpu";
+        };
       };
     }
     // lib.optionalAttrs vm.audio.enable {
@@ -436,20 +533,37 @@ let
         profileId = profileIdFor name "audio";
         role = "audio";
         principal = "nixling-${name}-snd";
-        # P1 ph1-p1-cap-matrix (kernel-r2-4): Audio = CAP_NET_RAW only.
-        # vhost-user-sound's libpipewire client opens AF_NETLINK for the
-        # virtio-snd backend probe; CAP_NET_RAW gates that bind.
-        capabilities = [ "CAP_NET_RAW" ];
-        # P1 ph1-p1-closed-set-profiles: closed-set seccomp profile
+        # vhost-device-sound's libpipewire client opens
+        # AF_NETLINK(NETLINK_KOBJECT_UEVENT) during pw_context_new
+        # (spa-alsa-monitor) for backend probe. In a user-NS-only spawn,
+        # ns_capable(net->user_ns, CAP_NET_RAW) checks the initial user NS
+        # (the new net NS is owned by the initial user NS, not the process's
+        # new user NS) — bind would fail with EPERM.
+        #
+        # Tier 1 (PIPEWIRE config elimination: PIPEWIRE_LATENCY, PIPEWIRE_NODE
+        # and similar env vars) investigated and rejected: the AF_NETLINK open
+        # is structural in libpipewire's context-init path (spa-alsa-monitor)
+        # and precedes any user-facing configuration.
+        #
+        # Tier 2 resolution: combine CLONE_NEWUSER (clone3) with
+        # unshare(CLONE_NEWNET) executed inside the user NS. The resulting
+        # net NS is owned by the new user NS; ns_capable(net->user_ns,
+        # CAP_NET_RAW) then succeeds against the new user NS. No changes to
+        # RunnerIsolationSpec or sys.rs are required — NamespaceSet.net = true
+        # feeds the existing unshare_namespace_flags path (CLONE_NEWNET).
+        # vhost-device-sound's PipeWire + vhost-user sockets are AF_UNIX and
+        # are unaffected by net NS isolation.
+        namespaces = defaultNamespaces // { net = true; };
+        # Closed-set seccomp profile
         # declared by name; the policy body lives in the seccomp policy
         # store and is keyed by this ref. Renamed from the v0 placeholder
-        # "w1-audio-sidecar" to the canonical "w1-audio" P1 name.
+        # "w1-audio-sidecar" to the canonical "w1-audio" name.
         seccompPolicyRef = "w1-audio";
-        # v1.1.1fu11 (Option B): the Wayland user's runtime dir
-        # holds the PipeWire socket. libpipewire connect()s to
+        # The Wayland user's runtime dir
+        # holds the PipeWire socket. libpipewire connects to
         # it, which on a read-only bind-mount fails with EROFS
         # (the socket file is in a write-mediated dir). Make
-        # /run/user/<waylandUid> writable so connect() succeeds.
+        # /run/user/<waylandUid> writable so connect succeeds.
         # The PipeWire socket file is still ACL-grant'd
         # individually by host-activation.nix's
         # nixlingRoleUidAcls script — this writablePaths just
@@ -462,22 +576,32 @@ let
         ];
         cgroupSubtree = "nixling.slice/${name}/audio";
         controllers = serviceControllers;
-        # v1.1.2fu36: vhost-device-sound binds the socket at
+        # vhost-device-sound binds the socket at
         # /run/nixling/vms/<vm>/snd.sock. umask 0o007 makes it
         # mode 0660; the per-VM runtime dir default ACL then
         # makes cloud-hypervisor's named-user entry effective.
         umask = 7;
+        # (ADR 0021) Broker pre-creates a single-entry
+        # user NS mapping in-NS UID/GID 0 → the snd principal's stable
+        # ephemeral UID. Combined with namespaces.net = true (above),
+        # the sidecar runs fake-root inside the user-NS-owned net NS
+        # with zero host capabilities. Direct translation of the
+        # virtiofsd/swtpm/gpu-render-node ADR 0021 broker-pre-NS model.
+        userNamespace = {
+          hostUidForZero = stablePrincipalId "nixling-${name}-snd";
+          hostGidForZero = stablePrincipalId "nixling-${name}-snd";
+        };
       };
     }
     // lib.optionalAttrs vm.observability.enable {
-      # P1 VsockRelay role profile.
+      # VsockRelay role profile.
       #
-      # Caps: empty (kernel-r2-4 corrected matrix). The earlier
+      # Caps: empty. The earlier
       # matrix listed CAP_NET_RAW; corrected to empty because the
       # relay operates on pre-opened fds the broker passes in via
-      # SCM_RIGHTS, so no AF_VSOCK socket() call (and thus no caps)
+      # SCM_RIGHTS, so no AF_VSOCK socket call (and thus no caps)
       # are required in-role. See docs/reference/privileges.md
-      # §"P1 role profiles" for the "pre-opened fds only" contract.
+      # for the "pre-opened fds only" contract.
       #
       # seccompPolicyRef = "w1-vsock-relay" — must deny socket(AF_VSOCK)
       # and ptrace; tests/minijail-validator-vsock-relay.sh asserts
@@ -515,10 +639,41 @@ let
 
   profileTable = lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList vmProfiles enabledVms);
 
-  # P1 decision 5 + observability-4: host-scoped OTel host-bridge
+  usbipdProfilesForEnv = envName:
+    let
+      vmId = "sys-${envName}-usbipd";
+    in {
+      "${profileIdFor vmId "backend"}" = mkProfile {
+        profileId = profileIdFor vmId "backend";
+        role = "usbip";
+        principal = "root";
+        uid = 0;
+        gid = 0;
+        adr_carve_out = "USBIP backend usbipd requires host-root to write usbip_sockfd; broker masks host secret paths and /dev, then rebinds only the locked USB device node.";
+        capabilities = [ "CAP_NET_RAW" ];
+        namespaces = defaultNamespaces // { pid = true; };
+        seccompPolicyRef = "w1-usbip";
+        cgroupSubtree = "nixling.slice/${vmId}/backend";
+        controllers = serviceControllers;
+      };
+      "${profileIdFor vmId "proxy"}" = mkProfile {
+        profileId = profileIdFor vmId "proxy";
+        role = "usbip";
+        principal = "nixling-${vmId}-proxy";
+        capabilities = [ ];
+        seccompPolicyRef = "w1-usbip-proxy";
+        cgroupSubtree = "nixling.slice/${vmId}/proxy";
+        controllers = serviceControllers;
+      };
+    };
+
+  usbipdProfiles =
+    lib.foldl' lib.recursiveUpdate { } (map usbipdProfilesForEnv usbipEnvNames);
+
+  # Host-scoped OTel host-bridge
   # profile. Replaces the singleton
   # `nixling-otel-host-bridge.service` (singleton scheduled for
-  # P3 removal in `nixos-modules/components/observability/host.nix`).
+  # removal in `nixos-modules/components/observability/host.nix`).
   # The role runs under `RunnerRole::OtelHostBridge` and receives
   # pre-opened vsock fds from the broker via SCM_RIGHTS; the
   # in-jail profile MUST NOT permit AF_VSOCK / AF_UNIX socket
@@ -546,7 +701,7 @@ let
 
   hostProfiles = otelHostBridgeProfile;
 
-  fullProfileTable = profileTable // hostProfiles;
+  fullProfileTable = profileTable // usbipdProfiles // hostProfiles;
 
   renderedProfiles = lib.mapAttrs
     (profileId: data:
@@ -560,8 +715,8 @@ let
       })
     fullProfileTable;
 
-  # v1.1.2fu15 panel-security should-fix: detect stablePrincipalId
-  # collisions at eval time. stablePrincipalId = 50000 + first-24
+  # Detect stablePrincipalId collisions at eval time.
+  # stablePrincipalId = 50000 + first-24
   # bits of sha256(principal) — that's only 16.7M slots, so two
   # principals hashing to the same UID is improbable but possible
   # (birthday bound on ~5000 principals is ~99% safe; on ~12000
@@ -598,7 +753,7 @@ in
     type = lib.types.unspecified;
     readOnly = true;
     internal = true;
-    description = "Internal W1 typed minijail profile artifacts keyed by profileId.";
+    description = "Internal typed minijail profile artifacts keyed by profileId.";
   };
 
   config = {

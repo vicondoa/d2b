@@ -193,7 +193,7 @@ implicitly by the host activation script) produces:
 
 - **State directories:**
   - `/var/lib/nixling/keys/corp-desktop_ed25519{,.pub}` — the
-    framework-managed Ed25519 SSH key (mode 0600 root:nixling-launcher).
+    framework-managed Ed25519 SSH key (mode 0600 root:nixling).
   - `/var/lib/nixling/vms/corp-desktop/` — the per-VM workdir
     (microvm.nix-owned `var.img`, virtiofsd state, etc.).
   - `/var/lib/nixling/vms/corp-desktop/state/audio-state.json` —
@@ -225,7 +225,7 @@ implicitly by the host activation script) produces:
   - `nixling-net-route-preflight.service` — fail-closed env-route
     sanity check ordered after `network-online.target`.
 
-- **Polkit grants:** `alice` (member of `nixling-launcher`) can
+- **Polkit grants:** `alice` (member of `nixling`) can
   start / stop / restart any of the framework's own units without
   a password prompt.
 

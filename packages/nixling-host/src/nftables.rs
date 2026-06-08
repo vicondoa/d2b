@@ -1,27 +1,21 @@
-//! W3 host-prepare module: `nftables`.
-//!
-//! Owned by scope **s3** (nft + USBIP firewall skeleton) per the W3
-//! file-ownership map.
+//! Host-prepare nftables module.
 //!
 //! This module implements:
 //!
-//! - the deterministic `inet nixling` chain layout from plan.md
-//!   §"W3 `inet nixling` chain layout" (prerouting/forward/output/input
-//!   only, NO raw/mangle/nat);
+//! - the deterministic `inet nixling` chain layout
+//!   (prerouting/forward/output/input only, NO raw/mangle/nat);
 //! - host firewall manager detection (firewalld/ufw/Docker/libvirt/
 //!   iptables-nft);
-//! - the 7-row firewall coexistence policy matrix from plan.md
-//!   §"W3 firewall coexistence policy";
+//! - the 7-row firewall coexistence policy matrix;
 //! - drift detection via canonical hashing of the `inet nixling` table
 //!   JSON;
 //! - USBIP source-based firewall carve-out rule construction (skeleton,
 //!   ordering invariant: specific carve-outs BEFORE the generic
 //!   allow/drop rules in the `forward` chain).
 //!
-//! Rationale for not depending on `nftnl` / libnftnl: the panel ADR for
-//! W3 s3 ("W3 firewall coexistence policy matrix + `inet nixling`
-//! chain layout") rejected pulling libnftnl into this crate because
-//! the integrator-prep nix build environment ships nft(8) but does
+//! Rationale for not depending on `nftnl` / libnftnl: review rejected
+//! pulling libnftnl into this crate because the integrator-prep nix build
+//! environment ships nft(8) but does
 //! NOT ship libnftnl-dev. The fallback approach: this module produces
 //! a structured [`NftBatch`] (a typed in-memory description) and an
 //! `nft -f -` text rendering; the broker side feeds that text to the
@@ -83,8 +77,8 @@ pub enum NftError {
         detected: FirewallManager,
         declared: CoexistencePolicy,
     },
-    /// Attempted to flush a foreign nft table/chain. W3 NEVER flushes
-    /// foreign rules; this error is fail-closed.
+    /// Attempted to flush a foreign nft table/chain. Nixling NEVER
+    /// flushes foreign rules; this error is fail-closed.
     NftForeignRuleFlushAttempted { target: String },
     /// The post-apply hash of `inet nixling` does not match the
     /// pre-apply hash recorded in host.json.
@@ -145,7 +139,7 @@ impl fmt::Display for ParseNftScriptError {
 impl std::error::Error for ParseNftScriptError {}
 
 /// Hook priority constants (Linux nft conventions). Values chosen to
-/// match plan.md §"W3 `inet nixling` chain layout":
+/// match the `inet nixling` chain layout:
 ///
 /// | Chain        | Priority |
 /// | ------------ | -------- |
@@ -161,8 +155,7 @@ pub mod priority {
 }
 
 /// Chain hook kinds permitted under `inet nixling`. The variants
-/// intentionally do NOT include `raw`, `mangle`, or `nat` per plan.md
-/// §"W3 `inet nixling` chain layout".
+/// intentionally do NOT include `raw`, `mangle`, or `nat`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChainHook {
@@ -216,8 +209,7 @@ pub struct NftChain {
 
 /// A single nft rule. The `expr` field is the rendered nft expression
 /// (e.g. `"ip saddr 10.10.0.5 accept"`); `comment` carries the
-/// mandatory `nixling managed: <ownership-id>` marker per plan.md
-/// §"W3 `inet nixling` chain layout".
+/// mandatory `nixling managed: <ownership-id>` marker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NftRule {
     pub expr: String,
@@ -499,16 +491,37 @@ impl NftBatch {
     ///
     /// Returns an error if the batch is malformed (no `forward` chain).
     pub fn add_usbip_carveout(&mut self, bus_id: &BusId) -> Result<(), NftError> {
+        self.add_usbip_carveout_expr(
+            ChainHook::Forward,
+            bus_id,
+            &format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.0),
+        )
+    }
+
+    /// Append a USBIP carve-out expression to the selected chain,
+    /// preserving the specific-before-generic ordering invariant.
+    pub fn add_usbip_carveout_expr(
+        &mut self,
+        hook: ChainHook,
+        bus_id: &BusId,
+        expr: &str,
+    ) -> Result<(), NftError> {
+        let expr = expr.trim();
+        if expr.is_empty() || expr.contains('\n') || expr.contains(" comment ") {
+            return Err(NftError::ForeignNftRuleShadowsNixling {
+                details: format!("invalid USBIP carve-out expression for busid {bus_id}"),
+            });
+        }
         let chain = self
             .chains
             .iter_mut()
-            .find(|c| matches!(c.hook, ChainHook::Forward))
+            .find(|c| c.hook == hook)
             .ok_or_else(|| NftError::ForeignNftRuleShadowsNixling {
-                details: "forward chain missing from inet nixling batch".to_owned(),
+                details: format!("{} chain missing from inet nixling batch", hook.as_str()),
             })?;
 
         let rule = NftRule {
-            expr: format!("meta iifname \"usbip-{bus_id}\" accept", bus_id = bus_id.0),
+            expr: expr.to_owned(),
             comment: format!("{}usbip-carveout-{}", NftBatch::COMMENT_PREFIX, bus_id.0),
             specific_carveout: true,
         };
@@ -606,9 +619,8 @@ impl fmt::Display for BusId {
 // Public API per the s3 contract
 // ---------------------------------------------------------------------
 
-/// Build the canonical `inet nixling` chain layout from plan.md
-/// §"W3 `inet nixling` chain layout". Used by the broker as the
-/// declarative starting point for `ApplyNftables`.
+/// Build the canonical `inet nixling` chain layout. Used by the broker
+/// as the declarative starting point for `ApplyNftables`.
 ///
 /// The chains emitted are EXACTLY: `prerouting`, `forward`, `output`,
 /// `input`. NO `raw`/`mangle`/`nat` hooks are allocated under
@@ -714,15 +726,14 @@ pub fn detect_firewall_manager(probe: &DetectorProbe) -> FirewallManager {
             }
         }
         [only] => *only,
-        // Multiple incompatible managers collapse to Unknown per plan
-        // §"W3 firewall coexistence policy" (row "unknown manager").
+        // Multiple incompatible managers collapse to Unknown per the
+        // firewall coexistence policy (row "unknown manager").
         _ => FirewallManager::Unknown,
     }
 }
 
-/// Evaluate the 7-row firewall coexistence matrix from plan.md
-/// §"W3 firewall coexistence policy". Returns `Ok(())` when the
-/// declared bundle policy is admissible for the detected manager;
+/// Evaluate the 7-row firewall coexistence matrix. Returns `Ok(())`
+/// when the declared bundle policy is admissible for the detected manager;
 /// returns [`NftError::FirewallCoexistenceMismatch`] otherwise.
 ///
 /// Default policy per row (the bundle MUST declare exactly this default
@@ -964,8 +975,7 @@ mod tests {
 
     /// 7-row coexistence matrix — these are the L1c canaries
     /// `nft-coexistence-{firewalld,ufw,docker,libvirt,iptables-nft,
-    /// unknown-manager,no-manager}` from plan.md §"W3 pre-merge canary
-    /// matrix".
+    /// unknown-manager,no-manager}`.
     #[test]
     fn coexistence_matrix_all_7_rows() {
         use CoexistencePolicy::*;
@@ -1135,8 +1145,8 @@ mod tests {
         assert_eq!(err.as_kebab_case(), "foreign-nft-rule-shadows-nixling");
     }
 
-    /// W3fu2 H3 (test-1 / software-1): idempotency oracle for the
-    /// production [`hash_inet_nixling_table`] drift digest. Hashing
+    /// Idempotency oracle for the production [`hash_inet_nixling_table`]
+    /// drift digest. Hashing
     /// the same canonical `nft list table inet nixling -j` output
     /// twice MUST produce the same digest — this is the
     /// apply→dry-run-empty invariant the broker relies on for
@@ -1155,8 +1165,8 @@ mod tests {
         assert_eq!(h1, h2, "same input → same digest");
     }
 
-    /// W3fu2 H3 (test-1 / software-1): idempotency oracle for the
-    /// canonical-hash discipline. Kernel-assigned `handle` and `index`
+    /// Idempotency oracle for the canonical-hash discipline.
+    /// Kernel-assigned `handle` and `index`
     /// fields in the `nft list table inet nixling -j` output are
     /// runtime-volatile; canonicalization strips them so two textually
     /// different dumps describing the same logical table produce the

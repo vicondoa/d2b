@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# tests/nixlingd-startup-smoke.sh — P0 startup smoke gate.
+# tests/nixlingd-startup-smoke.sh— startup smoke gate.
 #
-# Phase 1 (eval-only, always runs):
+# (eval-only, always runs):
 #   Evaluates a minimal NixOS config with daemonExperimental.enable = true
 #   and asserts the documented systemd unit + tmpfiles surface for
 #   nixlingd + nixling-priv-broker.
 #
-# Phase 2 (opt-in, NL_LIVE=1):
+# (opt-in, NL_LIVE=1):
 #   Cycles the live daemon + broker, asserts /run/nixling/public.sock
 #   appears, exercises the Hello handshake and /run/nixling/version
 #   endpoint, and verifies that a tampered bundle.json causes the daemon
@@ -38,7 +38,7 @@ fail_check() { log "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 log "==> tests/nixlingd-startup-smoke.sh"
 
 # ---------------------------------------------------------------------------
-# Phase 1 — eval-only (always runs)
+# Eval-only (always runs)
 # ---------------------------------------------------------------------------
 
 log "==> Phase 1: eval-only checks"
@@ -85,7 +85,7 @@ let
             users.users.alice   = { isNormalUser = true; uid = 1000; };
           };
         };
-        # P0: enable the full daemon + broker systemd surface under test.
+        # Enable the full daemon + broker systemd surface under test.
         nixling.daemonExperimental.enable = true;
       })
     ];
@@ -157,7 +157,7 @@ check_eq() {
 
 # ---------------------------------------------------------------------------
 # 1. /run/nixling tmpfiles — exactly ONE rule, owner nixlingd,
-#    group nixling-launchers, mode 0750.
+#    group nixling, mode 0750.
 # ---------------------------------------------------------------------------
 RUN_NIXLING_COUNT=$(jq_get '.["tmpfiles-run-nixling"] | length')
 if [ "$RUN_NIXLING_COUNT" -eq 1 ]; then
@@ -169,7 +169,7 @@ fi
 RUN_NIXLING_RULE=$(jq_get '.["tmpfiles-run-nixling"][0] // ""')
 check_eq "tmpfiles /run/nixling rule content" \
   "$RUN_NIXLING_RULE" \
-  "d /run/nixling 0750 nixlingd nixling-launchers -"
+  "d /run/nixling 0750 nixlingd nixling -"
 
 # ---------------------------------------------------------------------------
 # 2. /var/lib/nixling/audit — 0750 root nixlingd
@@ -234,10 +234,11 @@ fi
 check_eq "nixlingd.serviceConfig.User" "$(jq_get '.["daemon-user"]')" "nixlingd"
 
 # ---------------------------------------------------------------------------
-# 12. nixlingd.serviceConfig.RestrictAddressFamilies = ["AF_UNIX"]
+# 12. nixlingd.serviceConfig.RestrictAddressFamilies allows daemon IPC
+#     plus TCP guest-readiness probes.
 # ---------------------------------------------------------------------------
 DAEMON_RAF=$(jq_getc '.["daemon-restrict-af"]')
-check_eq 'nixlingd.RestrictAddressFamilies = ["AF_UNIX"]' "$DAEMON_RAF" '["AF_UNIX"]'
+check_eq 'nixlingd.RestrictAddressFamilies = ["AF_UNIX","AF_INET","AF_INET6"]' "$DAEMON_RAF" '["AF_UNIX","AF_INET","AF_INET6"]'
 
 # ---------------------------------------------------------------------------
 # 13. nixlingd.wants includes nixling-priv-broker.socket
@@ -250,8 +251,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 14. P0 evidence record schema shape — Phase 1 consistency assertion.
-#     Verifies the shape that Phase 2 (NL_LIVE=1) would write is mutually
+# 14. evidence record schema shape— consistency assertion.
+#     Verifies the shape that (NL_LIVE=1) would write is mutually
 #     consistent with validationEvidencePresent in options-daemon.nix:
 #       - wave: non-empty string equal to "p0"
 #       - timestamp: non-empty string
@@ -271,7 +272,7 @@ fi
 log "==> Phase 1: ${PASS} passed, ${FAIL} failed"
 
 # ---------------------------------------------------------------------------
-# Phase 2 — live (opt-in via NL_LIVE=1)
+# Live (opt-in via NL_LIVE=1)
 # ---------------------------------------------------------------------------
 if [ "${NL_LIVE:-0}" != "1" ]; then
   log "==> Phase 2 skipped (set NL_LIVE=1 to run live checks)"
@@ -466,8 +467,8 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 2 — Step 8: write P0 evidence record if all checks passed so far.
-#   Written only when NL_LIVE=1 (Phase 2) and FAIL == 0 at this point.
+# Step 8: write evidence record if all checks passed so far.
+#   Written only when NL_LIVE=1 and FAIL == 0 at this point.
 #   Schema matches validationEvidencePresent in nixos-modules/options-daemon.nix:
 #     wave, timestamp (UTC RFC-3339), operatorSignature (sha256 of
 #     "plan.md|daemon.version|broker.version|bundle.hash").

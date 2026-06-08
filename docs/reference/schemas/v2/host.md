@@ -4,7 +4,7 @@ Schema: [`host.json`](./host.json)
 
 `host.json` is the private host-topology and host-policy artifact. The
 broker consumes it for read-only `host check`, host-prepare planning,
-and W4+ daemon/broker execution.
+and daemon/broker execution.
 
 ## Top-level fields
 
@@ -36,6 +36,6 @@ and W4+ daemon/broker execution.
 ## Contract notes
 
 - The schema is `additionalProperties: false` throughout the security-
-  sensitive W3/W4 host-prepare objects.
+  sensitive host-prepare objects.
 - `host check --read-only` and host-prepare drift gates are expected to stay
   in lock-step with this document.

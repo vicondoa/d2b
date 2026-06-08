@@ -3,7 +3,7 @@
 # p0..p7 daemon-only rollout waves are present in the
 # defaultSwitchReadiness option schema.
 #
-# Why: ph0-readiness-waves (P0) adds p0..p7 to readinessWaveSpecs so
+# Why: p0..p7 entries in readinessWaveSpecs ensure
 # that nixling.daemonExperimental.enable auto-flips to true only once
 # every phase is both implemented AND validated.  Regressions that
 # accidentally drop a wave (e.g. a merge conflict resolving the attrset

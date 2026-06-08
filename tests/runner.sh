@@ -194,8 +194,8 @@ validate_existing_run_root() {
 # `rm -rf -- "$d"` could nuke arbitrary user data (e.g.
 # NL_RUN_ROOT=/home/<user>).
 #
-# security-r4-1: RUN_ROOT is CANONICALIZED before any other validation
-# so the critical-path block-list cannot be bypassed via traversal
+# RUN_ROOT is CANONICALIZED before any other validation so the
+# critical-path block-list cannot be bypassed via traversal
 # segments (e.g. /tmp/foo/../etc/nixos) or via paths that traverse
 # through an attacker-created symlink above the leaf (e.g.
 # /tmp/symlinktest/parent/safe where parent -> /etc). The canonical
@@ -284,8 +284,8 @@ ensure_run_root() {
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 # Validate (and create-if-absent) RUN_ROOT in every mode -- including
 # --list -- so dangerous NL_RUN_ROOT overrides fail closed before any
-# I/O. ensure_run_root canonicalizes RUN_ROOT in place (security-r4-1),
-# so RUN_DIR is derived AFTER the call to ensure it uses the canonical
+# I/O. ensure_run_root canonicalizes RUN_ROOT in place, so RUN_DIR is
+# derived AFTER the call to ensure it uses the canonical
 # path. Only the RUN_DIR creation and aggregate log are gated on
 # non-list mode.
 ensure_run_root "$RUN_ROOT" "$NL_RUN_ROOT_IS_OVERRIDE"

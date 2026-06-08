@@ -54,7 +54,7 @@ TPM_VMS=( work-aad )
 
 # Net VMs: /var/lib/nixling/<env>-router/ -> /var/lib/nixling/vms/sys-<env>-net/.
 # Mirrors the per-VM convention because microvm.nix has a single
-# global stateDir (the "W2 anomaly"): system VMs land under vms/
+# global stateDir: system VMs land under vms/
 # alongside workloads, just prefixed with sys-.
 NET_VMS_OLD=( work-router personal-router )
 NET_VMS_NEW=( sys-work-net sys-personal-net )
@@ -975,10 +975,10 @@ stop_unit_or_fail() {
 }
 
 # F4: enumerate USBIP units under both the OLD naming (singleton +
-# usbipd-nixling-*) and the NEW naming introduced by W2
+# usbipd-nixling-*) and the NEW naming introduced by
 # (nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}). On a
 # partially-migrated host (e.g., one where the user already merged a
-# Phase 9 flake commit before running this script), the new units may
+# When a new flake commit has already been applied before running this script), the new units may
 # be present and active, holding the listener ports we need free.
 discover_new_usbipd_units() {
   # Skip privileged enumeration in dry-run as non-root — `systemctl
@@ -1020,7 +1020,7 @@ stop_old_sidecars() {
       stop_unit_or_fail "$svc"
     done
   done
-  # Old-naming USBIPD: the singleton + per-env proxies from the pre-W2
+  # Old-naming USBIPD: the singleton + per-env proxies from the pre-
   # design. Non-critical (no TPM state held), so warn-on-failure.
   for svc in "${OLD_USBIPD_UNITS[@]}"; do
     stop_unit_or_fail "$svc"
@@ -1224,13 +1224,13 @@ unit_disable_phase() {
     disable_unit_if_present "$unit"
   done
 
-  # USBIPD: old singleton + per-env proxies (pre-W2 naming).
+  # USBIPD: old singleton + per-env proxies (pre- naming).
   for unit in "${OLD_USBIPD_UNITS[@]}"; do
     disable_unit_if_present "$unit"
   done
 
-  # F4: new-naming USBIPD units (W2 onwards) that may have been left
-  # enabled by a partially-applied Phase 9 flake update.
+  # F4: new-naming USBIPD units (onwards) that may have been left
+  # enabled by a partially-applied flake update.
   if [[ "$DRY_RUN" -eq 1 ]]; then
     dry "enumerate nixling-sys-*-usbipd-* unit files and disable any present"
   else

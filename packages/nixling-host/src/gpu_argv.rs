@@ -1,11 +1,10 @@
-//! W5-H1: `crosvm device gpu` sidecar argv generator.
+//! `crosvm device gpu` sidecar argv generator.
 //!
 //! Pure Rust function that emits the argv microvm.nix's graphics
 //! runner forks inline before `exec`-ing Cloud Hypervisor (per the
-//! W0b runner-shape audit at `docs/reference/runner-shape-audit.md`).
-//! The W5 daemon spawns this sidecar through the W4-H5 broker
-//! `SpawnRunner` op with `RunnerRole::Gpu` (added by W5-fu when the
-//! broker-side spawn implementation ships).
+//! runner-shape audit at `docs/reference/runner-shape-audit.md`).
+//! The daemon spawns this sidecar through the broker `SpawnRunner` op
+//! with `RunnerRole::Gpu` when the broker-side spawn implementation ships.
 //!
 //! Audit shape for `corp-desktop`:
 //!
@@ -82,7 +81,7 @@ pub struct GpuArgvInput {
     /// embed the VM name (the socket path does).
     pub vm_name: String,
     /// `--socket` value. Audit uses runner-cwd-relative
-    /// `<vm>-gpu.sock`; the W5 daemon uses an absolute path under
+    /// `<vm>-gpu.sock`; the daemon uses an absolute path under
     /// `/run/nixling/vms/<vm>/`. Either shape is honoured.
     pub socket_path: String,
     /// `--wayland-sock` value. Resolved by the daemon caller to the
@@ -112,8 +111,8 @@ pub enum GpuArgvError {
 /// audit-shape diff stays byte-stable against
 /// `tests/golden/runner-shape/`.
 ///
-/// Implementation note (W5 GPT-5.5 panel notable #2): this uses
-/// manual `format!` rather than `serde_json::to_string` because:
+/// Implementation note: this uses manual `format!` rather than
+/// `serde_json::to_string` because:
 ///
 /// - the byte-stable parity diff vs the W0b audit fixture pins
 ///   the exact field order; serde_json::to_string does not
@@ -190,8 +189,7 @@ pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvErr
 }
 
 /// `arg0` the daemon passes to `execvp` so the process shows up in
-/// `ps` as `nixling-<vm>-gpu` (matching the existing W4-pre systemd
-/// unit name in `nixos-modules/components/graphics.nix`).
+/// `ps` as `nixling-<vm>-gpu`.
 pub fn exec_arg0(input: &GpuArgvInput) -> Result<String, GpuArgvError> {
     if input.vm_name.is_empty() {
         return Err(GpuArgvError::EmptyVmName);
@@ -224,8 +222,8 @@ mod tests {
         }
     }
 
-    /// P1 daemon-only end-state fixture: the argv the nixlingd Gpu
-    /// runner emits after P5 retirement of `nixling-<vm>-gpu.service`.
+    /// Daemon-only end-state fixture: the argv the nixlingd Gpu runner
+    /// emits after v1.0 retirement of `nixling-<vm>-gpu.service`.
     /// Socket path is the per-VM absolute socket under
     /// `/run/nixling/vms/<vm>/`, and `--wayland-sock` is the
     /// in-sandbox bind-mount target (broker prepares the BindPath
@@ -234,8 +232,8 @@ mod tests {
     /// crosvm sees only the bind target).
     fn daemon_input() -> GpuArgvInput {
         GpuArgvInput {
-            crosvm_binary_path: "/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-crosvm-127.0/bin/crosvm"
-                .to_owned(),
+            crosvm_binary_path:
+                "/nix/store/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-crosvm-127.0/bin/crosvm".to_owned(),
             vm_name: "corp-vm".to_owned(),
             socket_path: "/run/nixling/vms/corp-vm/gpu.sock".to_owned(),
             wayland_sock: "/run/nixling-gpu/corp-vm/wayland-0".to_owned(),
@@ -253,7 +251,7 @@ mod tests {
         }
     }
 
-    /// P1 daemon-only snapshot for the byte-parity gate
+    /// Daemon-only snapshot for the byte-parity gate
     /// (`tests/gpu-argv-shape.sh`). The single `SNAPSHOT:` line is
     /// extracted by the gate and diffed against
     /// `tests/golden/runner-shape/gpu-argv-minimal.txt`. Drift in
@@ -413,8 +411,8 @@ mod tests {
         }
     }
 
-    /// W5 GPT-5.5 panel notable #2: enforce at test time that every
-    /// `GpuContextType::as_str()` output is JSON-safe — only ASCII
+    /// Enforce at test time that every `GpuContextType::as_str()` output
+    /// is JSON-safe — only ASCII
     /// letters / digits / dash / underscore allowed. If a future
     /// variant ships with a quote, backslash, comma, or control
     /// character, this test fails closed rather than silently

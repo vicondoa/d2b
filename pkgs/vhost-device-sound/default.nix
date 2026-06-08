@@ -44,7 +44,7 @@ pkgs.vhost-device-sound.overrideAttrs (old: rec {
     "--features" "alsa-backend,pw-backend"
   ];
 
-  # Phase 4 multi-arch: the vhost-device-sound binary itself could in
+  # Multi-arch: the vhost-device-sound binary itself could in
   # principle build on aarch64-linux (it's pure Rust), but in nixling
   # it is only ever wired into a cloud-hypervisor VM via the
   # `--generic-vhost-user` flag added in CH v52. The spectrum-ch

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/per-vm-state-ownership-eval.sh — ph2-p2-ownership-matrix
+# tests/per-vm-state-ownership-eval.sh—
 # eval-time regression test.
 #
 # Asserts the canonical per-VM state ownership matrix declared in
@@ -13,6 +13,9 @@
 #     ACLs into /nix/store via the shared inodes)
 #   * the `swtpm` entry exists and has owner/group templated with
 #     `<vm>` (per-VM swtpm runner principal)
+#   * store.nix's sync helper enforces the same non-recursive
+#     `nixlingd:users 0755` shape for store/store-meta directories,
+#     never the pre-daemon `root:kvm 0755` shape.
 
 set -euo pipefail
 
@@ -69,6 +72,7 @@ in {
   swtpmOwnerTemplated = builtins.match ".*<vm>.*" swtpmEntry.owner != null;
   swtpmGroupTemplated = builtins.match ".*<vm>.*" swtpmEntry.group != null;
   storeMode = storeEntry.mode;
+  storeGroup = storeEntry.group;
   paths = map (e: e.path) matrix;
 }
 EOF
@@ -105,5 +109,26 @@ ok "swtpm entry owner/group are per-VM templated"
 
 paths=$(printf '%s' "$json" | jq -r '.paths | join(",")')
 log "  matrix paths: $paths"
+
+store_nix="$ROOT/nixos-modules/store.nix"
+grep -Fq 'find "$STORE_DIR" "$META_DIR" -type d -exec chown nixlingd:users {} +' "$store_nix" \
+  || fail "nixling-store-sync must chown only store/store-meta directory inodes to nixlingd:users"
+grep -Fq 'find "$STORE_DIR" "$META_DIR" -type d -exec chmod 0755 {} +' "$store_nix" \
+  || fail "nixling-store-sync must chmod only store/store-meta directory inodes to 0755"
+if grep -Fq 'chown root:kvm' "$store_nix"; then
+  fail "nixling-store-sync still contains legacy root:kvm store ownership fix-up"
+fi
+if grep -Fq 'chmod 2775' "$store_nix"; then
+  fail "nixling-store-sync must not grant group write on store/store-meta directories"
+fi
+if grep -R 'store store-meta' "$ROOT/nixos-modules" \
+    | grep -E -- '--mode 2775|chmod 2775' >/dev/null; then
+  fail "nixos-modules still contain store/store-meta 2775 enforcement"
+fi
+if grep -n 'path: "store' "$ROOT/packages/nixlingd/src/ownership_preflight.rs" -A5 \
+    | grep -Fq 'mode: 0o2775'; then
+  fail "daemon canonical ownership preflight still expects store/store-meta 2775"
+fi
+ok "store-sync directory ownership fix-up matches ownership matrix"
 
 log "==> tests/per-vm-state-ownership-eval.sh OK"

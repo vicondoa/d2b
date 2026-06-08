@@ -1,7 +1,7 @@
 # Stop-DAG reconcile owner
 
-> Status: **P2 (`ph2-p2-stop-dag-owner`)** — typed planner; live host
-> probes and broker dispatch wiring land alongside the broader P2
+> Status: typed planner; live host probes and broker dispatch wiring
+> land alongside the broader
 > daemon-only cut.
 
 ## Why

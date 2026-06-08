@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# v1.1-P8 invariant gate: assert `nixos-modules/processes-json.nix`,
+# v1.1 invariant gate: assert `nixos-modules/processes-json.nix`,
 # `closures-json.nix`, `minijail-profiles.nix`, and `store.nix` do
 # NOT directly read `config.microvm.vms.<name>.config.config.*` —
 # all per-VM runner config flows through the nixling-owned helpers
 # `nl.vmRunner` / `nl.vmToplevel` / `nl.vmDeclaredRunner` defined
 # in `nixos-modules/lib.nix`.
 #
-# This is the v1.1-P8 partial cut-over: the helper bodies still
+# This is the v1.1 partial cut-over: the helper bodies still
 # alias to `config.microvm.vms.<name>.config.config.microvm.*`
 # under the hood, but the access path is now nixling-owned so
 # v1.1-rc2 / v1.1-final can swap the helper bodies to read from

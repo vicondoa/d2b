@@ -117,14 +117,14 @@ pub struct HostJson {
     pub fd_ownership: Vec<FdOwnershipEntry>,
     /// VMM/device capability matrix anchored to Cloud Hypervisor.
     pub cloud_hypervisor_capabilities: Vec<CloudHypervisorCapability>,
-    /// W3 hash-derived IfName mapping exposure (networking-2). One row
-    /// per managed bridge/TAP gives the broker the user-visible →
+    /// Hash-derived IfName mapping exposure. One row per managed
+    /// bridge/TAP gives the broker the user-visible →
     /// derived `<=15`-byte name pair and a stable role tag for the
     /// per-role bridge-port-flags table. Empty for V1-shaped bundles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub if_name_mappings: Vec<IfNameMapping>,
-    /// W3 Cloud Hypervisor net handoff probe result (virt-1). Optional
-    /// for backward compatibility with V1 host.json fixtures.
+    /// Cloud Hypervisor net handoff probe result. Optional for backward
+    /// compatibility with V1 host.json fixtures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ch: Option<HostChConfig>,
     /// W4a-H3: per-host firewall coexistence policy emitted by the Nix
@@ -138,9 +138,9 @@ pub struct HostJson {
     pub firewall_coexistence_policy: Option<crate::host_w3::FirewallCoexistencePolicy>,
 }
 
-/// W3 hash-derived IfName mapping row exposed in `host.json`
-/// (networking-2). The broker's `nixling_host::ifname::detect_collisions`
-/// re-validates uniqueness over `derived_ifname` at runtime; the Nix
+/// Hash-derived IfName mapping row exposed in `host.json`. The broker's
+/// `nixling_host::ifname::detect_collisions` re-validates uniqueness over
+/// `derived_ifname` at runtime; the Nix
 /// emitter rejects duplicates at bundle build with a deterministic
 /// emitter error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -162,9 +162,9 @@ pub struct IfNameMapping {
     pub derived_ifname: IfName,
 }
 
-/// W3 Cloud Hypervisor host-side configuration probed at bundle build
-/// (virt-1). Selects the runner network-handoff mode based on the
-/// packaged CH binary's capabilities.
+/// Cloud Hypervisor host-side configuration probed at bundle build.
+/// Selects the runner network-handoff mode based on the packaged CH
+/// binary's capabilities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostChConfig {
@@ -172,7 +172,7 @@ pub struct HostChConfig {
     pub net_handoff_mode: ChNetHandoffMode,
 }
 
-/// W3 Cloud Hypervisor net handoff modes. `TapFd` keeps the long-lived
+/// Cloud Hypervisor net handoff modes. `TapFd` keeps the long-lived
 /// runner without `CAP_NET_ADMIN`; `PersistentTap` falls back to
 /// pre-created TAPs handed off via `TUNSETOWNER`/`TUNSETGROUP`. The
 /// emitter records the declared mode; the broker's host-check probe
@@ -329,14 +329,14 @@ pub struct NftablesModel {
     pub family: String,
     pub table: String,
     pub chains: Vec<NftChain>,
-    /// W3 (networking-4) drift-detection digest of the applied
-    /// `inet nixling` table. `None` in the emitted bundle; the broker
+    /// Drift-detection digest of the applied `inet nixling` table.
+    /// `None` in the emitted bundle; the broker
     /// fills it in after `ApplyNftables` so pre-VM-start drift checks
     /// can compare against the previously applied digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_hash_after_apply: Option<String>,
-    /// W3 (networking-4) stable per-table comment marker installed on
-    /// every rule (`comment "nixling managed: <ownership-id>"`). Empty
+    /// Stable per-table comment marker installed on every rule
+    /// (`comment "nixling managed: <ownership-id>"`). Empty
     /// for V1-shaped bundles.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ownership_id: String,

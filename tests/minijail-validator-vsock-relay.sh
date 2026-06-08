@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# tests/minijail-validator-vsock-relay.sh — P1 per-role validator for the
+# tests/minijail-validator-vsock-relay.sh— per-role validator for the
 # VsockRelay sidecar.
 #
-# Role contract under the daemon-only-cut end-state (plan.md §P1):
+# Role contract under the daemon-only end-state:
 #
 #   - The relay is the socat-based sidecar that replaces the per-VM
 #     nixling-otel-relay@<vm>.service. The argv generator lives in
 #     packages/nixling-host/src/vsock_relay_argv.rs; goldens are at
 #     tests/golden/runner-shape/vsock-relay-argv-minimal.txt.
 #
-#   - Capabilities in the minijail profile: empty
-#     (kernel-r2-4 corrected). The earlier matrix listed CAP_NET_RAW;
-#     the corrected matrix carries no caps because the relay operates
+#   - Capabilities in the minijail profile: empty. The earlier matrix
+#     listed CAP_NET_RAW; the corrected matrix carries no caps because
+#     the relay operates
 #     on pre-opened fds the broker passes in via SCM_RIGHTS, so no
 #     AF_VSOCK socket() call (and thus no caps) are required in-role.
 #
@@ -64,9 +64,8 @@ fail_step() { fail "$*"; exit 1; }
 
 # --------------------------------------------------------------------
 # Layer-1 (always-on): minijail-profiles.nix shape assertions for the
-# VsockRelay role (test-r1-1 closure). Caps must be empty per plan
-# kernel-r2-4 (pre-opened fds only — no AF_VSOCK socket creation).
-# seccompPolicyRef must be "w1-vsock-relay".
+# VsockRelay role. Caps must be empty (pre-opened fds only — no
+# AF_VSOCK socket creation). seccompPolicyRef must be "w1-vsock-relay".
 # --------------------------------------------------------------------
 PROFILES_NIX="$ROOT/nixos-modules/minijail-profiles.nix"
 layer1_fail=0
@@ -224,8 +223,7 @@ else
   fi
 
   # Bonus probe: ptrace must also be denied under any restrictive
-  # nixling role profile (plan.md kernel-r2-4 invariant). perl gives
-  # us a portable PTRACE_TRACEME probe.
+  # nixling role profile. perl gives us a portable PTRACE_TRACEME probe.
   PTRACE_OUT="$SCRATCH/ptrace.out"
   PTRACE_RC=0
   "$MINIJAIL_BIN" \

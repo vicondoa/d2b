@@ -1,14 +1,13 @@
 //! Bundle / manifest API for the broker's ValidateBundle dispatch.
 //!
-//! W4-fu clean-break: the broker reads the bundle manifest from
-//! its server-configured `bundle_path` and runs a strict
-//! [`ManifestV04`] parse against it. The bootstrap path keeps a
-//! looser "file exists" check in `crate::bootstrap::manifest`
-//! because the W2 probe-* test harnesses pre-date the v0.4
-//! manifest schema.
+//! The broker reads the bundle manifest from its server-configured
+//! `bundle_path` and runs a strict [`ManifestV04`] parse against it.
+//! The bootstrap path keeps a looser "file exists" check in
+//! `crate::bootstrap::manifest` because the probe-* test harnesses
+//! pre-date the v0.4 manifest schema.
 //!
-//! Future W4-fu-fu work: extend this surface with a
-//! `BundleResolver` that maps `BundleOpId` opaque IDs to concrete
+//! Future work: extend this surface with a `BundleResolver` that maps
+//! `BundleOpId` opaque IDs to concrete
 //! `NftIntent` / `RouteIntent` / `SysctlIntent` rows, so the
 //! broker's live_handlers can be invoked with resolved plans
 //! rather than just typed-Unimplemented envelopes.

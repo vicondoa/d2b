@@ -135,6 +135,33 @@ the standard tpm2 stack. The keys it generates persist on the host
 under `/var/lib/nixling/vms/<vm>/swtpm/` (for this example:
 `/var/lib/nixling/vms/work-entra/swtpm/`).
 
+TPM persistence is necessary but not sufficient for stable Entra device
+identity. Himmelblau also stores identity-bearing OS state under the
+guest's `/var` tree, including the systemd credential host key,
+Himmelblau's encrypted HSM PIN credential, and its cache DB. Declare a
+persistent `/var` volume for Entra-joined VMs, for example:
+
+```nix
+config.microvm.volumes = [{
+  image = "var.img";
+  mountPoint = "/var";
+  size = 8192;
+  fsType = "ext4";
+}];
+```
+
+Nixling mounts declared `microvm.volumes` by stable virtio serial inside
+the guest. Without this persistent `/var`, the root tmpfs regenerates
+`/etc/machine-id`, `/var/lib/systemd/credential.secret`, and Himmelblau
+state after each restart, which can look like a new device enrollment
+even when the swtpm directory is intact.
+
+Existing Entra-joined VMs that already booted without a persistent `/var`
+may need one final enrollment when you add the volume, because the prior
+identity state may only have existed on tmpfs. Once `/var` is mounted from
+the persistent volume and enrollment state is written there, subsequent VM
+restarts should keep the same device identity.
+
 > **DO NOT wipe this directory.** It holds the Intune device-bound
 > TPM credentials. Wiping it forces a fresh device-registration on
 > next boot — Entra/Intune may register that as a tamper signal in
@@ -297,6 +324,32 @@ aad-tool tpm                                     # 'Hardware TPM supported: true
 aad-tool status                                  # himmelblaud reachable
 getent passwd alice@contoso.com                  # NSS sees the Entra user
 systemctl status himmelblaud himmelblaud-tasks   # daemons healthy
+```
+
+Also verify the persistence layer before trusting a device enrollment:
+
+```bash
+# Still inside the VM:
+findmnt /var
+# expected: /var is ext4 from /dev/disk/by-id/virtio-var (or /dev/vda)
+
+cat /etc/machine-id
+sudo sha256sum \
+  /var/lib/systemd/credential.secret \
+  /var/lib/private/himmelblaud/hsm-pin.enc
+sudo tpm2_readpublic -c 0x81000001 | grep -E '^(name:|qualified name:)'
+```
+
+After `nixling vm stop work-entra --apply` followed by
+`nixling vm start work-entra --apply`, those values should remain stable
+except for normal Himmelblau cache DB churn. If the VM asks to re-enroll
+after every restart, check `findmnt /var` first: TPM loss and `/var`
+persistence loss look similar from Entra's point of view, but the fix is
+different. Mount failures surface as `var.mount` / `local-fs.target`
+errors in the guest journal:
+
+```bash
+journalctl -b -u var.mount -u local-fs.target --no-pager
 ```
 
 ## Customising

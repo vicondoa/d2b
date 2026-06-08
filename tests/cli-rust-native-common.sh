@@ -130,7 +130,22 @@ nl_cli_smoke_bundle_tree() {
   rm -rf -- "$tree"
   mkdir -p "$tree/closures"
   cp "$(nl_smoke_vms_json)" "$tree/vms.json"
-  _nl_cli_smoke_eval_raw 'nixos.config.nixling._bundle.bundle.jsonText' "$tree/bundle.json"
+  local modules flake_root bundle_path
+  modules=$(_nl_smoke_config_modules)
+  flake_root=$(nl_cli_flake_source_root)
+  bundle_path=$(nix build --impure --no-link --print-out-paths --expr "
+    let
+      flake = builtins.getFlake (toString $flake_root);
+      nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
+      nixos = nixosSystem {
+        system = builtins.currentSystem;
+        modules = [
+          $modules
+        ];
+      };
+    in nixos.config.nixling._bundle.bundle.path
+  ")
+  cp "$bundle_path" "$tree/bundle.json"
   _nl_cli_smoke_eval_raw 'nixos.config.nixling._bundle.hostJson.jsonText' "$tree/host.json"
   _nl_cli_smoke_eval_raw 'nixos.config.nixling._bundle.processesJson.jsonText' "$tree/processes.json"
 
@@ -141,9 +156,6 @@ nl_cli_smoke_bundle_tree() {
   # both instantiates and builds the derivation, returning the realised
   # output path. Bare `nix eval .path` + `cp` fails post-GC because the
   # output path is gone and there is no .drv left to rebuild from.
-  local modules flake_root
-  modules=$(_nl_smoke_config_modules)
-  flake_root=$(nl_cli_flake_source_root)
   while IFS= read -r vm; do
     [ -n "$vm" ] || continue
     local path
@@ -317,7 +329,7 @@ EOF2
 
 _nl_host_check_sysctls_json() {
   local bundle_root="$1"
-  # W3fu5 H4 (networking-1): host_check now enforces
+  # host_check now enforces
   # kernelModules[].sysctls when the module is loaded/built-in. The
   # passing fixtures must therefore include every declared
   # kernelModules[].sysctls (`key=value`) under the dotted key so the

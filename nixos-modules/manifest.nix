@@ -8,14 +8,14 @@
 # SSH credentials, …).
 #
 # Why an externally-typed module instead of an ad-hoc let-binding in
-# cli.nix:
+# cli.nix
 #
 #   1. The JSON file at `/run/current-system/sw/share/nixling/vms.json`
-#      is the integration surface for the Rust CLI port (Phase 8). It
+#      is the integration surface for the Rust CLI port. It
 #      must be documented and versioned. A typed `mkOption` gives us
 #      a schema we can hand-walk into `docs/reference/manifest-schema.{md,json}`
 #      and validate against in `tests/static.sh`.
-#   2. The Nix module system catches schema regressions at eval time:
+#   2. The Nix module system catches schema regressions at eval time
 #      if a future refactor accidentally produces a field of the wrong
 #      type, evaluation fails immediately rather than silently shipping
 #      a broken JSON file.
@@ -24,13 +24,13 @@
 #      type-checked attribute access, no second `lib.mapAttrs` of the
 #      same data.
 #
-# The JSON file's top-level layout is:
+# The JSON file's top-level layout is
 #
 #   {
 #     "_manifest": { "manifestVersion": <int> },
 #     "<vmName>":  { name: ..., env: ..., apiSocket: ..., ... },
-#     "<vmName>":  { ... },
-#     ...
+#     "<vmName>":  {... },
+# ...
 #   }
 #
 # `_manifest` is a reserved sentinel key — leading underscore disqualifies
@@ -123,7 +123,7 @@ let
       apiSocket = "${stateRoot}/${name}.sock";
       gpuSocket = "${stateRoot}/${name}-gpu.sock";
       tpmSocket = "/run/nixling/vms/${name}/tpm.sock";
-      # security-2: state file under root-owned non-group-writable subdir.
+      # State file under root-owned non-group-writable subdir.
       audioStateFile = "${stateRoot}/state/audio-state.json";
       audioService = "nixling-${name}-snd.service";
       observability = {
@@ -136,8 +136,8 @@ let
         if derivedIp != null then derivedIp
         else vm.staticIp;
       sshUser = vm.ssh.user;
-      # W4-followup H2 (security): `sshKeyPath` is intentionally NOT
-      # part of the public manifest. The manifest ships to
+      # `sshKeyPath` is intentionally NOT part of the public manifest.
+      # The manifest ships to
       # `/run/current-system/sw/share/nixling/vms.json` which is
       # world-readable; exposing a per-VM private-key path there
       # leaks the location of secret material to every local user.
@@ -313,7 +313,7 @@ let
         type = lib.types.nullOr lib.types.str;
         description = ''
           For workload VMs: IP of the per-env usbipd proxy
-          (`nixling-sys-<env>-usbipd-proxy.service`). The `nixling
+          (`sys-<env>-usbipd`/`proxy` broker runner). The `nixling
           usb` subcommand passes this as `-r <ip>` to `usbip attach`.
           Null for net VMs and legacy VMs.
         '';
@@ -447,8 +447,7 @@ in
       caller forced the option — which is exactly what cli.nix's
       `vmLaunchScript` does for every graphics-enabled VM. The
       smoke-eval test never declared a graphics VM and so never
-      exposed this; phase-6b's graphics-workstation example
-      surfaced it. See plan.md "Spec corrections" entry #29.
+      exposed this; the graphics-workstation example surfaced it.
     '';
   };
 
@@ -463,21 +462,19 @@ in
       renamed, retyped, or semantics changed). Additive changes
       (new optional fields) do not bump.
 
-      Set in `manifest.nix`. Phase 5 introduced this option;
-      consumers should not override.
+      Set in `manifest.nix`; consumers should not override.
 
       Version history:
-        * 0 — pre-Phase-5 schema (W2-followup stub). Schema was
+        * 0 — pre-documented schema. Schema was
           undocumented and changed without bumps (e.g. the
-          `isRouter`→`isNetVm` / `routerVm`→`netVm` rename in W2).
+          `isRouter`→`isNetVm` / `routerVm`→`netVm` rename).
         * 1 — first documented, externally-stable version. Locks in
           the baseline per-VM field set documented in
           `docs/reference/manifest-schema.{md,json}`.
         * 2 — observability schema expansion. Adds the always-emitted
           per-VM `observability` block and the top-level
           `_observability` sentinel.
-        * 3 — P2 daemon-only end-state break
-          (`ph2-p2-manifestversion-bump`). Drops per-VM systemd-unit
+        * 3 — daemon-only end-state break. Drops per-VM systemd-unit
           reference fields that become meaningless once supervisor
           mode is retired and the daemon owns every per-VM lifecycle
           transition. Pinned by `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`;

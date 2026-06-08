@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 static invariant: process writable paths must be documented by bundle schema.
+# Process writable paths must be documented by bundle schema.
 
 set -euo pipefail
 

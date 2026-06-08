@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# P6 Layer-1 gate (ph6-p6-privileges-doc-final): assert that every
+# Assert that every
 # legacy systemd template / singleton the framework historically
 # emitted has either a live doc row OR a documented retirement
-# (P6 obituary) in docs/reference/privileges.md — never both.
+# (obituary) in docs/reference/privileges.md— never both.
 #
 # Semantics
 # ---------
@@ -10,7 +10,7 @@
 # regions:
 #
 #   * the **obituary region** = lines between the
-#     `## P6 final-pass: comprehensive legacy systemd surface obituary`
+#     `## final-pass: comprehensive legacy systemd surface obituary`
 #     heading and the next top-level heading; this is the canonical
 #     index of units the framework has retired
 #   * the **live region**     = everything else in the doc; this is
@@ -25,7 +25,7 @@
 #       to its current/future replacement.
 #
 #   (2) "deleted but undocumented" — a legacy unit name absent from
-#       `nixos-modules/` AND absent from the P6 obituary index.
+#       `nixos-modules/` AND absent from the obituary index.
 #       Operators searching for the dead unit name find nothing.
 #
 #   (3) "self-contradictory: live row claims still-operational while
@@ -33,17 +33,17 @@
 #       live (non-obituary) row WITHOUT any retirement marker AND
 #       also appears in the obituary index. The doc tells operators
 #       two opposite things. A live row whose text itself carries
-#       the retirement marker (`Retired`, `deleted P6`, `Retired
-#       (deleted in P6)`, etc.) is fine — that is the obituary
+#       the retirement marker (`Retired`, `deleted `, `Retired
+#       (deleted in)`, etc.) is fine— that is the obituary
 #       marker, not a contradiction.
 #
 # Transitional in-flight state ("emitted by nixos-modules/ AND
-# documented in the obituary") is EXPECTED during the P6 panel
+# documented in the obituary") is EXPECTED during the panel
 # round: the doc lands first, the code-deletion sibling agent
-# (`ph6-remove-systemd-emission`) lands next. The gate prints a
+# (``) lands next. The gate prints a
 # WARNING for this state but does NOT fail; once
-# `ph6-remove-systemd-emission` ships, the warnings disappear and
-# the gate is fully green on a clean post-P6 tree.
+# `` ships, the warnings disappear and
+# the gate is fully green on a clean post- tree.
 
 set -euo pipefail
 
@@ -68,7 +68,7 @@ warn() { echo "WARN: $*" >&2; }
 # unit base name; the same pattern matches `systemd.services.<x>`
 # Nix attrs and `<x>.service`/`<x>@<vm>.service` doc citations.
 LEGACY_UNITS=(
-  # Per-VM templates (deleted by ph6-remove-systemd-emission).
+  # Per-VM templates (deleted by).
   'nixling@'
   'microvm@'
   'microvm-tap-interfaces@'
@@ -83,7 +83,7 @@ LEGACY_UNITS=(
   'nixling-known-hosts-refresh@'
   'nixling-vfsd-watchdog@'
   'nixling-otel-relay@'
-  # Host singletons (deleted by ph6-remove-systemd-emission).
+  # Host singletons (deleted by).
   'nixling-net-route-preflight'
   'nixling-audit-check'
   'nixling-ch-exporter'
@@ -92,8 +92,8 @@ LEGACY_UNITS=(
   'nixling-sys-[^"@ ]+-usbipd-backend'
 )
 
-OBIT_START=$(grep -n '^## P6 final-pass' "$DOC" | head -1 | cut -d: -f1 || true)
-[[ -n "$OBIT_START" ]] || fail "doc missing '## P6 final-pass' obituary section"
+OBIT_START=$(grep -n '^## Legacy systemd surface obituary' "$DOC" | head -1 | cut -d: -f1 || true)
+[[ -n "$OBIT_START" ]] || fail "doc missing '## Legacy systemd surface obituary' section"
 OBIT_END=$(awk -v s="$OBIT_START" 'NR>s && /^## / {print NR; exit}' "$DOC")
 [[ -n "$OBIT_END" ]] || OBIT_END=$(wc -l < "$DOC")
 
@@ -153,7 +153,7 @@ for pat in "${LEGACY_UNITS[@]}"; do
 
   # Failure (2): deleted but undocumented.
   if [[ "$emitted" -eq 0 && "$in_obit" -eq 0 ]]; then
-    echo "FAIL: '$pat' is no longer emitted but has no P6 obituary row" >&2
+    echo "FAIL: '$pat' is no longer emitted but has no obituary row" >&2
     errors=$((errors + 1))
     continue
   fi
@@ -167,7 +167,7 @@ for pat in "${LEGACY_UNITS[@]}"; do
 
   # Transitional warning: still emitted AND already in the obituary.
   if [[ "$emitted" -eq 1 && "$in_obit" -eq 1 ]]; then
-    warn "'$pat' still emitted by nixos-modules/ but already in P6 obituary (transitional; ph6-remove-systemd-emission pending)"
+    warn "'$pat' still emitted by nixos-modules/ but already in obituary (transitional; systemd emission removal pending)"
     warnings=$((warnings + 1))
   fi
 done

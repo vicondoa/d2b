@@ -81,7 +81,7 @@ let
       "${envName}-u2"
     ] ++ workloadTapNames envName);
 
-  # W16: live systems now have a broker-written canonical runtime
+  # live systems now have a broker-written canonical runtime
   # ifname map. Pure flake evals cannot see `/var/lib/...`, so they
   # fall back to the legacy hash algorithm; impure live evals prefer the
   # runtime artifact when it exists.
@@ -128,7 +128,7 @@ let
     in if runtimeRow != null then runtimeRow.derivedIfname else legacyDerivedIfName inputRole envName vmName;
 
   # One IfNameMapping row per managed bridge/TAP. Exposed under
-  # `host.json.ifNameMappings` so the H2 broker can re-validate
+  # `host.json.ifNameMappings` so the broker can re-validate
   # collision-freeness and so `nixling host check` / `status` can
   # surface the user-visible ↔ derived pair.
   envMappings = envName: m:
@@ -166,7 +166,7 @@ let
       (n: lib.length (lib.filter (m: m == n) derivedIfNameList) > 1)
       derivedIfNameList);
 
-  # Emitter-time collision detection (networking-2). The broker also
+  # Emitter-time collision detection. The broker also
   # re-runs `nixling_host::ifname::detect_collisions` against the
   # trusted bundle copy at runtime; this assert is the first gate.
   ifNameCollisionMessage =
@@ -217,7 +217,7 @@ let
     netVmForwardBlocklist = m.hostBlocklist;
   };
 
-  # W3 ownership marker (networking-4). Stable per-host id used in
+  # ownership marker. Stable per-host id used in
   # nft rule comment markers (`comment "nixling managed: <ownership-id>"`).
   ownershipId = "nixling-${
     builtins.substring 0 8 (builtins.hashString "sha256" (
@@ -233,8 +233,8 @@ let
       allowUnsafeEastWest = cfg.site.allowUnsafeEastWest;
     };
     environments = lib.mapAttrsToList envInfo envMeta;
-    # W3 (networking-4): 4-chain `inet nixling` layout. Plan
-    # §"W3 `inet nixling` chain layout". No raw/mangle/nat hooks.
+    # 4-chain `inet nixling` layout. Plan
+    # §" `inet nixling` chain layout". No raw/mangle/nat hooks.
     # All rules carry a `comment "nixling managed: <ownership-id>"`
     # marker; foreign tables/chains are never flushed.
     nftables = {
@@ -269,7 +269,7 @@ let
           hook = "input";
           priority = -5;
           policy = "accept";
-          purpose = "Host ingress chain at priority -5; default accept with marked carve-outs for nixling control-plane endpoints.";
+          purpose = "Host ingress chain at priority -5; default accept except broker-managed USBIP listener/backend drops, with runtime carve-outs inserted before those drops.";
         }
       ];
     };
@@ -326,8 +326,8 @@ let
       (moduleRow "usbip_host" "usbip" "optional"
         (if anyUsbip then "Required when host YubiKey support and at least one VM usbip.yubikey flag are both enabled." else "Used only when host YubiKey support and a VM usbip.yubikey flag are both enabled.")
         [ ] false)
-      (moduleRow "vfio" "future-passthrough" "deferred" "Reserved for a later passthrough role; not required in W1." [ ] false)
-      (moduleRow "vhost_vsock" "future-kernel-vsock" "deferred" "Reserved for a later kernel-backed vsock path; W1 uses Unix-socket-backed Cloud Hypervisor vsock only." [ ] false)
+      (moduleRow "vfio" "future-passthrough" "deferred" "Reserved for a later passthrough role; not required for the baseline target." [ ] false)
+      (moduleRow "vhost_vsock" "future-kernel-vsock" "deferred" "Reserved for a later kernel-backed vsock path; the baseline uses Unix-socket-backed Cloud Hypervisor vsock only." [ ] false)
     ];
     fdOwnership = [
       (fdRow "/dev/kvm" "OpenKvm" "cloud-hypervisor" "SCM_RIGHTS" false "The broker opens /dev/kvm and passes the fd to the Cloud Hypervisor runner.")
@@ -341,7 +341,7 @@ let
         [ "/dev/kvm" "tun" "vhost_net" "fuse" ]
         [ "virtiofsd" ]
         [ "api-socket-info" "store-virtiofs-preflight" ]
-        "Headless and net-VM Cloud Hypervisor runs are the baseline W1 target.")
+        "Headless and net-VM Cloud Hypervisor runs are the baseline target.")
       (capabilityRow "graphics" (if anyGraphics then "required" else "optional")
         [ "i915" "amdgpu" "nvidia" "nvidia_modeset" "nvidia_uvm" "nvidia_drm" ]
         [ "gpu" "video" ]
@@ -361,31 +361,29 @@ let
         [ "AF_VSOCK" "virtio-vsock" ]
         [ "vsock-relay" ]
         [ "unix-socket-exists:vsock-relay" ]
-        "W1 uses the Unix-socket-backed Cloud Hypervisor vsock path and a relay sidecar for observability flows.")
+        "The baseline uses the Unix-socket-backed Cloud Hypervisor vsock path and a relay sidecar for observability flows.")
       (capabilityRow "firecracker" "deferred" [ ] [ ] [ ] "Firecracker remains a deferred non-goal pending a later ADR and parity review.")
-      (capabilityRow "crosvmAsFullVmm" "deferred" [ ] [ ] [ ] "Crosvm may remain a helper, but it is not the primary W1 VMM.")
+      (capabilityRow "crosvmAsFullVmm" "deferred" [ ] [ ] [ ] "Crosvm may remain a helper, but it is not the primary VMM.")
     ];
-    # W3 (networking-2): hash-derived IfName mapping exposure.
+    # hash-derived IfName mapping exposure.
     ifNameMappings = allIfNameMappings;
-    # W3 (virt-1): Cloud Hypervisor net-handoff probe result. The
+    # Cloud Hypervisor net-handoff probe result. The
     # broker re-runs the host-check probe at runtime and fails closed
     # with `ch-net-handoff-not-supported` if neither mode satisfies
     # declared VM resources without `CAP_NET_ADMIN`.
     ch = {
       netHandoffMode = cfg.site.ch.netHandoffMode;
     };
-    # W4a-H3: per-host firewall coexistence policy. Closes the W3
-    # spec-corrections deferral that promised but did not wire this
-    # field into HostJson. The default is "no managed firewall
-    # detected -> coexist with whatever foreign rules exist"; the
-    # broker's runtime probe overrides at apply-time (W4 main wave).
-    # Until then, the static default makes the field present so
-    # downstream consumers (broker, drift gate, docs) can rely on
+    # Per-host firewall coexistence policy. The default is "no managed
+    # firewall detected -> coexist with whatever foreign rules exist";
+    # the broker's runtime probe overrides at apply-time. Until then,
+    # the static default makes the field present so downstream consumers
+    # (broker, drift gate, docs) can rely on
     # `host.json.firewallCoexistencePolicy` always existing.
     firewallCoexistencePolicy = {
       manager = "none";
       policy = "coexist";
-      rationale = "Default: no managed firewall manager declared on this host. W4 broker runtime probe overrides via ApplyNftables decisions; until then, nft rules install alongside foreign tables without flushing.";
+      rationale = "Default: no managed firewall manager declared on this host. The broker runtime probe overrides via ApplyNftables decisions; until then, nft rules install alongside foreign tables without flushing.";
     };
   };
 
@@ -397,7 +395,7 @@ in
     type = lib.types.unspecified;
     readOnly = true;
     internal = true;
-    description = "Internal W3 schema-v2 host.json artifact metadata.";
+    description = "Internal schema-v2 host.json artifact metadata.";
   };
 
   config = {

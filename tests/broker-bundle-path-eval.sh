@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/broker-bundle-path-eval.sh — P0 bundle-path alignment eval gate.
+# tests/broker-bundle-path-eval.sh— bundle-path alignment eval gate.
 #
 # Asserts that the three independent bundle-path declarations in the NixOS
 # module tree all agree on the same canonical path:
@@ -23,7 +23,9 @@
 #
 # (B) is verified via nix eval: we materialise a minimal NixOS config and
 # assert that environment.etc."nixling/bundle.json" is present, proving
-# bundle.nix does emit at that path.
+# bundle.nix does emit at that path.  The same eval verifies the read ACL
+# activation hook for lifecycle users while keeping the trusted artifact's
+# root:nixlingd 0640 verifier contract intact.
 #
 # Wired into tests/static.sh alongside the other broker-* eval gates.
 
@@ -112,8 +114,23 @@ let
     ];
   };
   etcAttrs = nixos.config.environment.etc;
+  activationScript = nixos.config.system.activationScripts.nixlingBundleAcl or {};
+  activationText = activationScript.text or "";
+  activationDeps = activationScript.deps or [];
 in {
   bundleJsonPresent = etcAttrs ? "nixling/bundle.json";
+  bundleJsonGroup = etcAttrs."nixling/bundle.json".group or null;
+  bundleJsonMode = etcAttrs."nixling/bundle.json".mode or null;
+  bundleAclScriptPresent = nixos.config.system.activationScripts ? nixlingBundleAcl;
+  bundleAclAfterEtc = builtins.elem "etc" activationDeps;
+  bundleAclAfterUsers = builtins.elem "users" activationDeps;
+  bundleAclGrantsDirectory = flake.inputs.nixpkgs.lib.hasInfix "g:nixling:rx,m::rx" activationText;
+  bundleAclGrantsFiles = flake.inputs.nixpkgs.lib.hasInfix "g:nixling:r,m::r" activationText;
+  bundleAclNoWriteGrant =
+    !(flake.inputs.nixpkgs.lib.hasInfix "g:nixling:rw" activationText)
+    && !(flake.inputs.nixpkgs.lib.hasInfix "g:nixling:rwx" activationText)
+    && !(flake.inputs.nixpkgs.lib.hasInfix "m::rw" activationText)
+    && !(flake.inputs.nixpkgs.lib.hasInfix "m::rwx" activationText);
 }
 EOF
 )
@@ -127,6 +144,31 @@ if [ "$BUNDLE_JSON_PRESENT" != "true" ]; then
 bundle.nix must emit the bundle at /etc/nixling/bundle.json to match the broker's --bundle-path."
 fi
 ok "environment.etc.\"nixling/bundle.json\" present (bundle lands at ${CANONICAL_PATH})"
+
+BUNDLE_JSON_GROUP=$(printf '%s' "$OUT" | jq -r '.bundleJsonGroup')
+BUNDLE_JSON_MODE=$(printf '%s' "$OUT" | jq -r '.bundleJsonMode')
+if [ "$BUNDLE_JSON_GROUP" != "nixlingd" ] || [ "$BUNDLE_JSON_MODE" != "0640" ]; then
+  fail "environment.etc.\"nixling/bundle.json\" must remain root:nixlingd 0640; \
+got group=${BUNDLE_JSON_GROUP} mode=${BUNDLE_JSON_MODE}."
+fi
+ok "environment.etc.\"nixling/bundle.json\" preserves group=nixlingd mode=0640"
+
+BUNDLE_ACL_SCRIPT_PRESENT=$(printf '%s' "$OUT" | jq -r '.bundleAclScriptPresent')
+BUNDLE_ACL_AFTER_ETC=$(printf '%s' "$OUT" | jq -r '.bundleAclAfterEtc')
+BUNDLE_ACL_AFTER_USERS=$(printf '%s' "$OUT" | jq -r '.bundleAclAfterUsers')
+BUNDLE_ACL_GRANTS_DIRECTORY=$(printf '%s' "$OUT" | jq -r '.bundleAclGrantsDirectory')
+BUNDLE_ACL_GRANTS_FILES=$(printf '%s' "$OUT" | jq -r '.bundleAclGrantsFiles')
+BUNDLE_ACL_NO_WRITE_GRANT=$(printf '%s' "$OUT" | jq -r '.bundleAclNoWriteGrant')
+if [ "$BUNDLE_ACL_SCRIPT_PRESENT" != "true" ] \
+  || [ "$BUNDLE_ACL_AFTER_ETC" != "true" ] \
+  || [ "$BUNDLE_ACL_AFTER_USERS" != "true" ] \
+  || [ "$BUNDLE_ACL_GRANTS_DIRECTORY" != "true" ] \
+  || [ "$BUNDLE_ACL_GRANTS_FILES" != "true" ] \
+  || [ "$BUNDLE_ACL_NO_WRITE_GRANT" != "true" ]; then
+  fail "system.activationScripts.nixlingBundleAcl must run after etc/users and grant g:nixling traverse/read ACLs \
+for /etc/nixling without granting write or changing bundle ownership."
+fi
+ok "system.activationScripts.nixlingBundleAcl grants read-only lifecycle group ACLs"
 
 # ---------------------------------------------------------------------------
 # (C) host-daemon.nix daemonConfigJson artifacts.bundlePath must be

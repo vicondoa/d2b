@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/daemon-metrics-eval.sh — P3 ph3-p3-prometheus-otlp-shape:
+# tests/daemon-metrics-eval.sh—
 # static parity gate between the daemon's Prometheus metric
 # inventory and its canonical reference doc.
 #

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# tests/ch-net-handoff-canary.sh — W3 executable canary for ch-net-handoff-not-supported (test-5).
+# tests/ch-net-handoff-canary.sh— executable canary for ch-net-handoff-not-supported.
 #
-# Closes W3 work-review R1 finding test-5 ("the test for
-# `ch-net-handoff-not-supported` is a doc-grep, not a runtime probe").
+# The `ch-net-handoff-not-supported` canary now exercises runtime behavior
+# instead of a doc grep.
 #
-# W3fu2 H3 (test-2): replaced the fake-shim + grep approach with a
+# Replaced the fake-shim + grep approach with a
 # direct cargo-test invocation that exercises the real
 # `nixling_host::runner_shape::probe_ch_net_handoff_mode` function.
 # The previous shape (fake CH shim + grep of the capability JSON +
@@ -12,7 +12,7 @@
 # `probe_ch_net_handoff_mode` were deleted from the crate, because
 # nothing on the canary's execution path actually called it.
 #
-# Scratch state lives outside $ROOT (W2fu4 H8/H9/H14/H15).
+# Scratch state lives outside $ROOT.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -52,8 +52,8 @@ log " - cargo test -p nixling-host -- ch_help_with_fd_selects_tap_fd ch_help_wit
        ch_help_with_fd_selects_tap_fd \
        ch_help_without_fd_or_tap_fails_closed )
 
-# Step 2: closed-table golden envelope check. The H4-shipped human +
-# JSON goldens for `host check --json` carry the `ch-net-handoff-not-supported`
+# Step 2: closed-table golden envelope check. The human + JSON goldens
+# for `host check --json` carry the `ch-net-handoff-not-supported`
 # error code; if the golden file disappears or its code field drifts,
 # the operator-facing contract has silently changed and we fail closed.
 GOLDEN=$ROOT/tests/golden/cli-output/host-check-ch-net-handoff-not-supported.json
@@ -65,7 +65,7 @@ if ! grep -q '"code": "ch-net-handoff-not-supported"' "$GOLDEN"; then
 fi
 ok "host-check golden envelope for ch-net-handoff-not-supported present and correctly coded"
 
-# Step 3: assert `CreateTapFd` is declared in the W3 broker wire
+# Step 3: assert `CreateTapFd` is declared in the broker wire
 # contract. This is a structural contract check (not an execution
 # one) and complements Step 1's real-probe execution: if the wire
 # variant disappears, the broker can no longer refuse it with the

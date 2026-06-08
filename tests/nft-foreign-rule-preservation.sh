@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/nft-foreign-rule-preservation.sh — W3 s3 L1c canary gate.
+# tests/nft-foreign-rule-preservation.sh— canary gate.
 #
 # Pre-seeds foreign iptables-style + nft-style rules into the fake
-# nft backend, runs the W3 reconcile against the `inet nixling` table,
+# nft backend, runs the reconcile against the `inet nixling` table,
 # and asserts that:
 #
 #   1. the rendered nft script NEVER contains the foreign rule body

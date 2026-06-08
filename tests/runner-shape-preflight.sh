@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# W3 s4 L1c canary: runner-shape preflight drift detection.
+# Canary: runner-shape preflight drift detection.
 #
 # Drives nixling-host::runner_shape against the parity-drift golden
-# fixture (plan.md §"W3 runner-shape preflight"). Asserts every
+# fixture (plan.md §" runner-shape preflight"). Asserts every
 # expected failure class fires.
 
 set -euo pipefail

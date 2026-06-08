@@ -1,4 +1,4 @@
-//! P2 ph2-p2-daemon-autostart: nixlingd autostart contract.
+//! nixlingd autostart contract.
 //!
 //! On daemon startup (after pidfd-table restoration + orphan
 //! adoption) the daemon enumerates the autostart-set from the
@@ -65,10 +65,10 @@ pub struct VmAutostartEntry {
     /// True for `sys-<env>-net` VMs (= `VmEntry::is_net_vm`).
     pub is_net_vm: bool,
     /// True if the VM is an autostart candidate. Today this is
-    /// derived heuristically from bundle shape (every non-graphics
-    /// VM is autostart-eligible — graphics VMs are excluded by
-    /// `assertions.nix`); post-P6 the `autostart` flag becomes a
-    /// first-class bundle field and this is read straight off it.
+    /// derived heuristically from bundle shape (every non-graphics VM is
+    /// autostart-eligible — graphics VMs are excluded by `assertions.nix`);
+    /// in the daemon-only bundle the `autostart` flag becomes a first-class
+    /// field and this is read straight off it.
     pub autostart: bool,
 }
 
@@ -256,11 +256,10 @@ pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
 
 /// Today's heuristic: every VM the manifest knows about is an
 /// autostart candidate unless it is a graphics VM. Graphics VMs are
-/// barred from autostart by `nixos-modules/assertions.nix`
-/// (SWArch-M9) — they have no Wayland session at boot so the
-/// runner would loop. Post-P6 the bundle gains a first-class
-/// `autostart: bool` field per VM and this heuristic becomes
-/// `vm.autostart`.
+/// barred from autostart by `nixos-modules/assertions.nix` — they have
+/// no Wayland session at boot so the runner would loop. In the daemon-only
+/// bundle, each VM gains a first-class `autostart: bool` field and this
+/// heuristic becomes `vm.autostart`.
 fn vm_is_autostart_eligible(vm: &nixling_core::manifest_v04::VmEntry) -> bool {
     !vm.graphics
 }
@@ -281,20 +280,14 @@ pub async fn execute_autostart<S: VmStarter>(
     starter: Arc<S>,
     config: AutostartConfig,
 ) -> AutostartReport {
-    execute_autostart_with_pre_degraded(
-        plan,
-        starter,
-        config,
-        &std::collections::BTreeSet::new(),
-    )
-    .await
+    execute_autostart_with_pre_degraded(plan, starter, config, &std::collections::BTreeSet::new())
+        .await
 }
 
-/// Variant of [`execute_autostart`] that accepts an additional set
-/// of VM names the caller has already classified as degraded (for
-/// reasons orthogonal to env-net-VM health — today: the P3
-/// kernel-module-check pass discovered an optional module the VM
-/// relies on is not loaded). Any VM whose name is in
+/// Variant of [`execute_autostart`] that accepts an additional set of VM
+/// names the caller has already classified as degraded (for reasons
+/// orthogonal to env-net-VM health — today: the kernel-module-check pass
+/// discovered an optional module the VM relies on is not loaded). Any VM whose name is in
 /// `pre_degraded` is reported as
 /// [`Outcome::Degraded`] with a stable
 /// `"pre-degraded: <vm>"` reason and is NOT dispatched to the
@@ -307,10 +300,9 @@ pub async fn execute_autostart_with_pre_degraded<S: VmStarter>(
 ) -> AutostartReport {
     let parallelism = config.parallelism.max(1);
     let semaphore = Arc::new(Semaphore::new(parallelism));
-    let pre_degraded_arc: Arc<std::collections::BTreeSet<String>> =
-        Arc::new(pre_degraded.clone());
+    let pre_degraded_arc: Arc<std::collections::BTreeSet<String>> = Arc::new(pre_degraded.clone());
 
-    // Phase 1: net VMs.
+    // Net VM pass.
     let net_outcomes = run_phase(
         plan.net_vms().cloned().collect::<Vec<_>>(),
         Arc::clone(&starter),
@@ -329,7 +321,7 @@ pub async fn execute_autostart_with_pre_degraded<S: VmStarter>(
         }
     }
 
-    // Phase 2: workloads.
+    // Workload pass.
     let workload_outcomes = run_phase(
         plan.workload_vms().cloned().collect::<Vec<_>>(),
         Arc::clone(&starter),
@@ -382,8 +374,8 @@ where
                 .await
                 .expect("autostart semaphore must not close before phase end");
 
-            // Pre-degraded VMs (e.g. flagged by the P3
-            // kernel-module-check pass) short-circuit before
+            // Pre-degraded VMs (e.g. flagged by the kernel-module-check
+            // pass) short-circuit before
             // anything else.
             if pre_degraded.contains(&entry.vm) {
                 return (
@@ -593,8 +585,7 @@ mod tests {
             entry("sys-f-net", Some("f"), true, true),
         ]);
         let config = AutostartConfig { parallelism: 3 };
-        let report =
-            execute_autostart(&plan, Arc::clone(&starter), config).await;
+        let report = execute_autostart(&plan, Arc::clone(&starter), config).await;
         assert_eq!(report.started(), 6, "all six net VMs must start");
         let observed = starter.max_in_flight.load(Ordering::SeqCst);
         assert!(
@@ -728,26 +719,14 @@ mod tests {
         assert!(Outcome::Started.is_up());
         assert!(Outcome::AlreadyRunning.is_up());
         assert!(!Outcome::NotAutostart.is_up());
-        assert!(!Outcome::Failed {
-            reason: "x".into()
-        }
-        .is_up());
-        assert!(!Outcome::Degraded {
-            reason: "x".into()
-        }
-        .is_up());
+        assert!(!Outcome::Failed { reason: "x".into() }.is_up());
+        assert!(!Outcome::Degraded { reason: "x".into() }.is_up());
 
         assert!(!Outcome::Started.is_degraded());
         assert!(!Outcome::AlreadyRunning.is_degraded());
         assert!(!Outcome::NotAutostart.is_degraded());
-        assert!(Outcome::Failed {
-            reason: "x".into()
-        }
-        .is_degraded());
-        assert!(Outcome::Degraded {
-            reason: "x".into()
-        }
-        .is_degraded());
+        assert!(Outcome::Failed { reason: "x".into() }.is_degraded());
+        assert!(Outcome::Degraded { reason: "x".into() }.is_degraded());
     }
 
     /// Parallelism clamp: configuring 0 must NOT deadlock.

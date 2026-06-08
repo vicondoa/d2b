@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tests/distro-matrix/ubuntu-2404-tier1.sh — W19 (W*-fu-fu rollup):
+# tests/distro-matrix/ubuntu-2404-tier1.sh— (rollup):
 # Ubuntu 24.04 LTS x86_64 Tier-1 smoke harness scaffold.
 #
-# This is the **scaffold** half of the W19 deliverable. The Tier-1
+# This is the **scaffold** half of the deliverable. The Tier-1
 # smoke gate runs end-to-end against an Ubuntu 24.04 host: install
 # nixling via `nixling host install --apply`, prepare the host,
 # create a minimal VM, bring it up, SSH into it, tear it down, and
@@ -26,10 +26,10 @@
 #   1. preflight: kernel KVM module, nix on PATH, root.
 #   2. install: cargo build the daemon + broker, RunHostInstall via
 #      the broker dispatch path.
-#   3. host prepare: nixling host prepare --apply (W4-fu-fu live
+#   3. host prepare: nixling host prepare --apply (live
 #      ApplyNftables / ApplyRoute / ApplySysctl / UpdateHostsFile
-#      via W11 BundleResolver, W12 broker live).
-#   4. vm start: nixling vm start minimal-vm --apply (W4-fu-fu
+#      via BundleResolver, broker live).
+#   4. vm start: nixling vm start minimal-vm --apply (
 #      SpawnRunner real wire, pidfd via SCM_RIGHTS).
 #   5. probe: SSH into the VM, confirm reachability.
 #   6. vm stop: nixling vm stop --apply, confirm pidfd table drain.

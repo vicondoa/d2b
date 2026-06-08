@@ -3,7 +3,7 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(dirname "$HERE")}
-# W2fu4 H15 — default timing log locations to outside $ROOT so the
+# Default timing log locations to outside $ROOT so the
 # append churn doesn't race builtins.getFlake source captures during
 # flake-eval gates. Operators who need them in-tree can still
 # override NL_STATIC_TIMING_REPORT / NL_STATIC_TIMING_RAW.

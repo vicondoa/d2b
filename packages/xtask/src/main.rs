@@ -485,10 +485,8 @@ fn split_top_level_entries(input: &str) -> Vec<String> {
             '[' => bracket += 1,
             ']' => bracket -= 1,
             '<' => angle += 1,
-            '>' => {
-                if angle > 0 {
-                    angle -= 1;
-                }
+            '>' if angle > 0 => {
+                angle -= 1;
             }
             ',' if paren == 0 && brace == 0 && bracket == 0 && angle == 0 => {
                 let trimmed = current.trim();
@@ -750,7 +748,7 @@ fn render_item_table(title: &str, items: &[&RustItem]) -> String {
     rendered
 }
 
-/// W18 (W10-fu): aggregate the `Unreleased` section of CHANGELOG.md
+/// Aggregate the `Unreleased` section of CHANGELOG.md
 /// into a versioned section. Re-runs are idempotent — if a section
 /// for `version` already exists, the function exits with a clear
 /// error rather than duplicating it.

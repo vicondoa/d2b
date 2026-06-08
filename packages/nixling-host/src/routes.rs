@@ -1,9 +1,7 @@
-//! W3 host-prepare module: `routes` — owned by scope s2.
+//! Host-prepare routes module.
 //!
-//! Implements the fail-closed route preflight predicate set (plan.md
-//! §"W3 route preflight (in host prepare *and* pre-VM-start)") and
-//! the host LAN CIDR derivation (plan.md §"W3 host LAN CIDR
-//! derivation"). Each predicate operates on a typed snapshot of the
+//! Implements the fail-closed route preflight predicate set and the host
+//! LAN CIDR derivation. Each predicate operates on a typed snapshot of the
 //! host's route + hosts-file + bound-socket state so the same code
 //! drives both the host-prepare path and the pre-VM-start hook.
 
@@ -21,7 +19,7 @@ use std::collections::BTreeMap;
 // -------------------------------------------------------------------
 
 /// Snapshot of `rtnetlink RTM_GETROUTE` table 254 / RT_TABLE_MAIN.
-/// Each entry encodes only the fields the W3 preflight inspects.
+/// Each entry encodes only the fields the preflight inspects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RouteTableSnapshot {
     pub routes: Vec<RouteRow>,
@@ -306,8 +304,8 @@ pub fn check_dnsmasq_bound(
 /// coexistence policy matches the live detector AND that the
 /// `inet nixling` table hash matches the bundle's recorded digest.
 ///
-/// Per plan.md §"W3 route preflight" predicate 5, both `host prepare`
-/// and the pre-VM-start hook re-run this check so a foreign actor
+/// Both `host prepare` and the pre-VM-start hook re-run this check so
+/// a foreign actor
 /// that mutates `inet nixling` between host prepare and VM start
 /// cannot ride the stale-trust window.
 pub fn check_firewall_coexistence(
@@ -408,7 +406,7 @@ pub fn run_route_preflight_for_vm(
 }
 
 // -------------------------------------------------------------------
-// Host LAN CIDR derivation (plan.md §"W3 host LAN CIDR derivation").
+// Host LAN CIDR derivation.
 // -------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

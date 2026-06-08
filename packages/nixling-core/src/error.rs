@@ -35,16 +35,16 @@ pub enum Kind {
     BrokerValidationFailed,
     #[serde(rename = "manifest-parse-error")]
     ManifestParseError,
-    /// P2 ph2-p2-manifestversion-bump: bundle's emitted manifestVersion
-    /// is not the version the running daemon supports (after the v2→v3
-    /// clean break, v2 bundles MUST be rejected with this distinct
+    /// Bundle's emitted manifestVersion is not the version the running
+    /// daemon supports (after the v2→v3 clean break, v2 bundles MUST
+    /// be rejected with this distinct
     /// kind so operators can correlate the failure to a re-render of
     /// the bundle, not to a parse-side regression).
     #[serde(rename = "manifest-version-mismatch")]
     ManifestVersionMismatch,
     #[serde(rename = "internal-io")]
     InternalIo,
-    /// P0: bundle artifact failed tamper-resistance check (symlink, owner,
+    /// Bundle artifact failed tamper-resistance check (symlink, owner,
     /// mode, or SHA-256 hash mismatch).
     #[serde(rename = "bundle-tampered")]
     BundleTampered,
@@ -128,8 +128,8 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         exit_code: 30,
         owning_command: "daemon-api/broker",
         message_template:
-            "broker operation {operation} is reserved for wave {target_wave} and is not callable in this build",
-        remediation: "Use the legacy-systemd path for this operation until the target wave lands.",
+            "broker operation {operation} is not implemented in this build",
+        remediation: "Upgrade to a build that implements this operation.",
         docs_anchor: "#broker-unimplemented",
     },
     ErrorKindRecord {
@@ -158,7 +158,7 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         message_template:
             "manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason})",
         remediation:
-            "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break in P2 does not ship a compatibility window.",
+            "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break does not ship a compatibility window.",
         docs_anchor: "#manifest-version-mismatch",
     },
     ErrorKindRecord {
@@ -317,7 +317,7 @@ impl Error {
         })
     }
 
-    /// P2 ph2-p2-manifestversion-bump: typed version-mismatch helper.
+    /// Typed version-mismatch helper.
     /// Distinct from `manifest_parse_error` so operators see kind
     /// `manifest-version-mismatch` instead of `manifest-parse-error`
     /// when a bundle render is stale.
@@ -573,9 +573,10 @@ impl BrokerError {
             Self::Unimplemented {
                 operation,
                 target_wave,
-            } => format!(
-                "broker operation {operation} is reserved for wave {target_wave} and is not callable in this build"
-            ),
+            } => {
+                let _ = target_wave;
+                format!("broker operation {operation} is not implemented in this build")
+            }
             Self::ValidationFailed { what } => {
                 format!("broker validation failed for opaque target {what}")
             }
@@ -597,8 +598,8 @@ pub enum ManifestError {
         artifact: &'static str,
         opaque_reason: String,
     },
-    /// P2 ph2-p2-manifestversion-bump: bundle's emitted manifestVersion
-    /// is not what the daemon supports. Distinct kind from ParseError so
+    /// Bundle's emitted manifestVersion is not what the daemon supports.
+    /// Distinct kind from ParseError so
     /// operators can correlate the failure to a stale bundle render
     /// rather than a parse-side regression.
     VersionMismatch {
@@ -889,7 +890,7 @@ impl JsonSchema for Error {
     }
 }
 
-/// P0: bundle artifact tamper-resistance check failed.
+/// Bundle artifact tamper-resistance check failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BundleError {
     /// `reason` is a short machine-readable slug:
@@ -970,7 +971,7 @@ mod tests {
     #[test]
     fn all_kinds_records_are_unique_and_operator_visible() {
         let records = Error::all_kinds();
-        // P2 ph2-p2-manifestversion-bump added Kind::ManifestVersionMismatch.
+        // Kind::ManifestVersionMismatch is part of the public table.
         assert_eq!(records.len(), 13);
 
         let mut codes = BTreeSet::new();
@@ -1068,17 +1069,15 @@ mod tests {
 
         // BundleTampered is exercised separately since its message intentionally
         // carries the artifact path for operator diagnostics.
-        let tamper = Error::bundle_tampered(
-            std::path::PathBuf::from("/etc/nixling/bundle.json"),
-            "hash",
-        );
+        let tamper =
+            Error::bundle_tampered(std::path::PathBuf::from("/etc/nixling/bundle.json"), "hash");
         assert_eq!(tamper.kind().discriminant(), "bundle-tampered");
         assert_eq!(tamper.code(), 60);
     }
 
     #[test]
     fn all_kinds_count_is_thirteen() {
-        // P2 ph2-p2-manifestversion-bump added Kind::ManifestVersionMismatch.
+        // Kind::ManifestVersionMismatch is part of the public table.
         assert_eq!(Error::all_kinds().len(), 13);
     }
 }

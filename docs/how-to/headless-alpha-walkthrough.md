@@ -3,17 +3,17 @@
 This how-to walks a clean Ubuntu 24.04 host from "no nixling
 installed" to "a running headless Cloud Hypervisor VM on the v1.0
 daemon/broker control-plane path (ADR 0015 daemon-only — the
-historical W14c three-mode bridge was retired in P6)".
+historical three-mode bridge was retired in v1.0)".
 
-**Status:** the W4 wire + pure layer is still the foundation, but
+**Status:** the wire + pure layer is still the foundation, but
 the broker/runtime story has moved on. The production
 (non-bootstrap) broker dispatcher now has live handlers for
 `ApplyNftables`, `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`,
-`OpenPidfd`, and `SpawnRunner` (W12 + the W4-fu-fu rollup).
+`OpenPidfd`, and `SpawnRunner`.
 Operator-facing mutating verbs in v1.0 dispatch through `nixlingd` →
-`nixling-priv-broker` only (ADR 0015 daemon-only). The W14c three-mode
+`nixling-priv-broker` only (ADR 0015 daemon-only). The three-mode
 bridge (default daemon-first / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`)
-was retired in P6 along with the bash CLI itself; both env vars are
+was retired in v1.0 along with the bash CLI itself; both env vars are
 now no-ops. See the
 [v1.0 daemon-only ADR](../adr/0015-daemon-only-clean-break.md) for
 the full removal list.
@@ -21,7 +21,7 @@ the full removal list.
 ## Prerequisites
 
 - Ubuntu 24.04 (24.10/25.04 should also work; older releases are
-  not supported per the W3 platform matrix).
+  not supported per the platform matrix).
 - A kernel ≥ 6.6 with KVM enabled (`/dev/kvm` present, your user in
   the `kvm` group).
 - `nix` installed via the upstream installer:
@@ -41,7 +41,7 @@ nix profile install github:vicondoa/nixling#nixling
 The profile install pulls in the `nixling` CLI binary, the
 `nixlingd` daemon, the privileged broker, and the systemd unit
 templates. `nixling host install --apply` now drives the live
-installer through the daemon → broker path; this W4 alpha walkthrough
+installer through the daemon → broker path; this alpha walkthrough
 keeps the manual steps so operators can see exactly what the
 installer materializes:
 
@@ -80,13 +80,13 @@ nixling host prepare --apply
 `host prepare` reconciles host-shared state (cgroup delegation, the
 named `inet nixling` nft table, NetworkManager unmanaged drop-in,
 `/etc/hosts` managed block, sysctl ordering, kernel module probe).
-The dry-run path is W3-complete today. In the production broker
+The dry-run path is complete today. In the production broker
 dispatcher, the host-reconcile ops behind `ApplyNftables` /
 `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` are now live; the
 remaining rollout work is the public daemon-backed `host prepare
 --apply` surface, not the broker executor itself.
 
-## Step 4 — Inspect the DAG (W4 main today)
+## Step 4 — Inspect the DAG
 
 ```bash
 nixling vm start corp-vm --dry-run --json
@@ -120,7 +120,7 @@ is stable; `--apply` routes through the daemon-native dispatch
 }
 ```
 
-## Step 5 — Start the VM (current W14c path)
+## Step 5 — Start the VM
 
 ```bash
 sudo systemctl start nixlingd.service
@@ -128,7 +128,7 @@ nixling vm start corp-vm --apply
 ```
 
 The native DAG is still the same 5-node sequence, but the behavior
-is different from the original W4-only draft:
+is different from the original draft:
 
 1. `host-reconcile` — the production broker dispatcher now resolves
    bundle intent refs and runs live `ApplyNftables` / `ApplyRoute` /
@@ -142,18 +142,18 @@ is different from the original W4-only draft:
 4. `ssh-ready` — the daemon (when kept on the native path) probes the
    guest SSH surface on the allocated static IP.
 
-What changed in W14c is the operator-facing routing: `nixling vm start
-corp-vm --apply` no longer stops at the old `daemon-down` placeholder
-by default. Instead:
+The operator-facing routing changed: `nixling vm start corp-vm --apply`
+no longer stops at the old `daemon-down` placeholder by default.
+Instead:
 
 In v1.0 daemon-only (ADR 0015) there is exactly one routing path:
 `--apply` dispatches through `nixlingd` → `nixling-priv-broker`.
 Daemon-unreachable surfaces the typed `daemon-down` envelope (exit-1);
 native-handler-deferred surfaces `not-yet-implemented` (exit-78).
 The historical `NIXLING_NATIVE_ONLY=1` and `NIXLING_LEGACY_BASH_OPT_IN=1`
-env vars are no-ops; the bash CLI itself was retired in P6.
+env vars are no-ops; the bash CLI itself was retired in v1.0.
 
-## Step 6 — Observe runtime state (W4 main today)
+## Step 6 — Observe runtime state
 
 ```bash
 nixling vm list --json
@@ -181,13 +181,13 @@ dispatches through `nixlingd` → broker `SignalRunner`. Native `stop`
 walks the DAG in reverse topo order, signalling each pidfd with
 `pidfd_send_signal(SIGTERM)` and waiting for `waitid(P_PIDFD)`.
 `restart` is `stop` then `start`. The `NIXLING_NATIVE_ONLY=1` and
-`NIXLING_LEGACY_BASH_OPT_IN=1` env vars from the W14c three-mode
-bridge are no-ops in v1.0; the bash CLI itself was retired in P6.
+`NIXLING_LEGACY_BASH_OPT_IN=1` env vars from the three-mode bridge
+are no-ops in v1.0; the bash CLI itself was retired in v1.0.
 
 ## Reference shape — what's live today
 
-| Component                 | Wire-stable W4 main | Live today | Remaining rollout |
-|---------------------------|:-------------------:|:----------:|:-----------------:|
+| Component                 | Wire-stable | Live today | Remaining rollout |
+|---------------------------|:-----------:|:----------:|:-----------------:|
 | `ch_argv` generator       | ✅                  | ✅         | — |
 | `virtiofsd_argv` generator| ✅                  | ✅         | — |
 | `swtpm_argv` generator    | ✅                  | ✅ (opt-in)| — |
@@ -197,19 +197,19 @@ bridge are no-ops in v1.0; the bash CLI itself was retired in P6.
 | Broker `SpawnRunner` op   | ✅                  | ✅ (non-bootstrap dispatch) | full native-only CLI rollout |
 | Daemon state persistence  | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
 | Daemon `[pending restart]`| ✅                  | ✅         | — |
-| `nixling vm` CLI verbs    | ✅                  | ✅ (`--dry-run`; default `--apply` uses the W14c bridge) | native-only lifecycle rollout |
+| `nixling vm` CLI verbs    | ✅                  | ✅ (`--dry-run`; `--apply` uses daemon-only routing) | native-only lifecycle rollout |
 | Ubuntu Tier-1 smoke       | ✅ (docs)           | —          | repeated live-host green runs |
 
 The wire-stable column means the JSON/argv shape and the typed
-envelope shape are pinned today; future changes follow the W3
+envelope shape are pinned today; future changes follow the
 wire-skew contract (`PROTOCOL_VERSION` bump + version-skew gate).
 
 ## References
 
 - [Daemon lifecycle explanation](../explanation/daemon-lifecycle.md)
-- [Runner-shape audit (W0b)](../reference/runner-shape-audit.md) —
-  the parity oracle the W4-H1 generator matches.
+- [Runner-shape audit](../reference/runner-shape-audit.md) —
+  the parity oracle the generator matches.
 - [Daemon API reference](../reference/daemon-api.md)
 - [Error codes](../reference/error-codes.md) — the typed envelope
   catalog including `daemon-down` / `not-yet-implemented` /
-  `--apply-or-dry-run-required` used by every W4 verb.
+  `--apply-or-dry-run-required` used by mutating verbs.

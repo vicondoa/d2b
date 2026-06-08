@@ -1,8 +1,8 @@
 # Per-environment network materialisation for nixling.
 #
-# For each `nixling.envs.<env>`, this module produces:
+# For each `nixling.envs.<env>`, this module produces
 #
-#   • Two host-side bridges:
+#   • Two host-side bridges
 #       - br-<env>-up   (/30, host has the .1, net VM the .2)
 #       - br-<env>-lan  (/24, host has NO interface, net VM is .1)
 #   • An auto-declared headless net VM named `sys-<env>-net`,
@@ -13,17 +13,15 @@
 #   • Host firewall: deny on the LAN bridge (host has no IP there
 #     anyway, defence-in-depth), allow only TCP/3240 on the uplink
 #     bridge (for USBIP).
-#   • Per-env `nixling-sys-<env>-usbipd-proxy.{service,socket}`
-#     pairs that bind the host's uplink IP and proxy to a per-env
-#     internal backend (`nixling-sys-<env>-usbipd-backend.service`,
-#     bound to 127.0.0.1:<port>). The proxy sockets are
-#     socket-activated and always bound.
+#   • Per-env broker-spawned USBIP backend/proxy runner intents.
+#     The backend runs `usbipd -4 --tcp-port <port>`; the proxy binds
+#     the host's uplink IP:3240 and forwards to 127.0.0.1:<port>.
 #   • `networking.nat.internalInterfaces` growth so the net VM's
 #     SNATted egress gets re-NATted to the upstream.
 #   • Static route on the host's uplink interface so the host can
 #     `ssh user@<lan>.<index>` and packets head out via the net VM.
 #
-# H1 (bridge port isolation): workload taps land on the LAN bridge
+# Bridge port isolation: workload taps land on the LAN bridge
 # with `Isolated = true` by default so they can only exchange
 # frames with the net VM's tap, not with each other. The env-level
 # `lan.allowEastWest` opt-in clears that flag. The net VM's LAN tap
@@ -52,7 +50,7 @@ let
   envs = lib.filterAttrs (_: n: n.enable) cfg.envs;
 
   # All enabled VMs (workload + net) — used by the route-preflight
-  # ordering/dependency wiring below (W3b H1).
+  # ordering/dependency wiring below.
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
   # Workload VMs in an env (excludes the net VM and any VM with env=null).
@@ -135,7 +133,7 @@ in
   # (the host doesn't use the net VMs as DNS), so we write the
   # mapping directly via networking.hosts. Covers every workload VM
   # (via its LAN IP) plus each env's net VM (uplink IP, since the
-  # host has no LAN-side route to .1).
+  # host has no LAN-side route to.1).
   # ---------------------------------------------------------------------------
   networking.hosts = lib.mkMerge (
     (lib.concatMap
@@ -202,10 +200,10 @@ in
         message = "nixling.envs.${envName}.lan.allowEastWest requires nixling.site.allowUnsafeEastWest = true because peer-guest traffic is outside nixling's default isolation threat model.";
       })
       envs)
-    # Phase 2b networking hardening: per-env CIDR validation.
+    # per-env CIDR validation.
     # - lanSubnet MUST be exactly /24 with the network address
     #   ending in `.0` (the framework's static-IP scheme assumes
-    #   .0-.254 host range).
+    # .0-.254 host range).
     # - uplinkSubnet MUST be exactly /30 (point-to-point host↔net-VM).
     # - No two envs may share a lanSubnet or uplinkSubnet, and none
     #   may overlap with `nixling.hostLanCidrs`.
@@ -239,9 +237,8 @@ in
           }
         ])
       envs))
-    # Inter-env CIDR overlap (W3b H3): exact-string equality was the
-    # phase-2b check; it missed real overlaps like
-    # `10.0.0.0/16` ⊃ `10.0.1.0/24`. cidrOverlaps does pure-Nix
+    # Inter-env CIDR overlap: exact-string equality missed real
+    # overlaps like `10.0.0.0/16` ⊃ `10.0.1.0/24`. cidrOverlaps does pure-Nix
     # IPv4 prefix arithmetic (see lib.nix). We reject any pair where
     # two distinct envs' subnets overlap, an env's lan/uplink subnets
     # overlap each other, or any env subnet overlaps with one of the
@@ -313,7 +310,7 @@ in
     # interface to reach >= "degraded". Our LAN bridges (br-<env>-lan)
     # sit at "Online state: unknown" forever (no host IP, no carrier
     # until a workload VM attaches), and `RequiredForOnline=no` on
-    # the per-link .network file is honoured for that interface but
+    # the per-link.network file is honoured for that interface but
     # `--any` mode empirically still times out (it only counts
     # interfaces with RequiredForOnline=yes toward "any is online").
     #
@@ -332,7 +329,7 @@ in
             Kind = "bridge";
             Name = m.lanBridge;
           };
-          # H1: disable STP and multicast snooping on the LAN bridge.
+          # Disable STP and multicast snooping on the LAN bridge.
           # This env has at most 1 net-VM tap + N workload taps; STP is
           # pure overhead (no loops possible) and IGMP snooping is a
           # timing side-channel with no benefit in an isolated /24.
@@ -346,7 +343,7 @@ in
             Kind = "bridge";
             Name = m.uplinkBridge;
           };
-          # H1: same rationale for the /30 uplink bridge (only ever has
+          # Same rationale for the /30 uplink bridge (only ever has
           # the net-VM tap, but keep settings consistent).
           bridgeConfig = {
             STP = false;
@@ -358,8 +355,8 @@ in
 
     networks = lib.mkMerge (lib.mapAttrsToList
       (envName: m: {
-        # Uplink bridge: host has the /30 .1 here, plus a static
-        # route to the LAN via the net VM's .2.
+        # Uplink bridge: host has the /30.1 here, plus a static
+        # route to the LAN via the net VM's.2.
         #
         # v0.1.2: ConfigureWithoutCarrier = true is REQUIRED here.
         # Without it, networkd refuses to apply Address + Route
@@ -416,7 +413,7 @@ in
           };
         };
 
-        # H1: Net-VM LAN tap (${envName}-l1) → LAN bridge, NOT isolated.
+        # Net-VM LAN tap (${envName}-l1) → LAN bridge, NOT isolated.
         # The net VM must be able to send to and receive from every
         # workload tap; the exact-name match (priority 25) wins over
         # the wildcard workload rule (priority 30) so this tap stays
@@ -431,7 +428,7 @@ in
           };
         };
 
-        # H1: Workload LAN taps (${envName}-l<index>, index >= 2) →
+        # Workload LAN taps (${envName}-l<index>, index >= 2) →
         # LAN bridge. Default: ISOLATED so each workload tap can only
         # exchange frames with the net VM's tap, not with peer
         # workload taps. `lan.allowEastWest = true` clears the bridge
@@ -470,16 +467,26 @@ in
   # ---------------------------------------------------------------------------
   networking.firewall.interfaces = lib.mkMerge (lib.mapAttrsToList
     (envName: m: {
-      # P2r3 nixos-1/networking-1: 3240 is now handled by explicit iptables
-      # rules in extraCommands (with -I nixos-fw 1) so NixOS-generated accept
-      # rules are not used for this port.  uplinkBridge entry intentionally absent.
       # No allows on the lan bridge — host has no IP there anyway.
       "${m.lanBridge}" = {
         allowedTCPPorts = [ ];
         allowedUDPPorts = [ ];
       };
     })
-    allMeta);
+    allMeta
+    ++ lib.mapAttrsToList
+      (_: m: {
+        # The broker-owned `inet nixling` table carries the per-busid
+        # USBIP carve-out/audit, but NixOS also installs a later
+        # `ip filter INPUT` chain. Accept TCP/3240 on opted-in uplink
+        # bridges here so that later chain does not drop traffic that
+        # the broker has already scoped to the env's proxy listener.
+        "${m.uplinkBridge}" = {
+          allowedTCPPorts = [ 3240 ];
+          allowedUDPPorts = [ ];
+        };
+      })
+      usbipMeta);
 
   # NAT: re-NAT the net-VM's SNATted egress to the host's upstream.
   networking.nat = {
@@ -488,17 +495,43 @@ in
   };
 
   # ---------------------------------------------------------------------------
-  # P6 (ph6-remove-systemd-emission): the per-env usbipd systemd units
+  # Bridge IPv6 boot-time sysctl application.
+  #
+  # Problem: bridges receive `disable_ipv6=1` only via the per-VM
+  # ApplySysctl broker path, which fires when the FIRST VM in the env
+  # starts.  Between boot and that first VM start the bridge has IPv6
+  # active.  Additionally, `systemctl restart systemd-networkd` silently
+  # undoes `disable_ipv6=1` by re-processing the netdev.
+  #
+  # Fix: emit declarative `boot.kernel.sysctl` entries for every declared
+  # bridge here, applied at NixOS activation BEFORE any nixlingd/broker
+  # invocation.  The per-VM ApplySysctl path is retained as defense-in-depth
+  # (no change to broker emission or host-json output).
+  #
+  # Covers the corrected problem statement and boot-time window.
+  # ---------------------------------------------------------------------------
+  boot.kernel.sysctl = lib.mkMerge (lib.concatLists (lib.mapAttrsToList
+    (_: m: [
+      { "net.ipv6.conf.${m.lanBridge}.disable_ipv6"  = 1; }
+      { "net.ipv6.conf.${m.lanBridge}.accept_ra"     = 0; }
+      { "net.ipv6.conf.${m.lanBridge}.autoconf"      = 0; }
+      { "net.ipv6.conf.${m.uplinkBridge}.disable_ipv6" = 1; }
+      { "net.ipv6.conf.${m.uplinkBridge}.accept_ra"    = 0; }
+      { "net.ipv6.conf.${m.uplinkBridge}.autoconf"     = 0; }
+    ])
+    allMeta));
+
+  # ---------------------------------------------------------------------------
+  # The per-env usbipd systemd units
   # (`nixling-sys-<env>-usbipd-{backend,proxy}.{service,socket}`) and the
   # `nixling-net-route-preflight.service` singleton were deleted here.
   #
   # Replacements:
   #   - usbipd-backend / usbipd-proxy: broker `SpawnRunner{role: Usbip,
   #     vm_id: sys-<env>-usbipd}` per the per-busid state machine in
-  #     `docs/reference/privileges.md` (`ph3-p3-usbip-state-machine`).
+  #     `docs/reference/privileges.md`.
   #   - net route preflight: `nixlingd` startup self-check +
   #     `nixling host reconcile --network --apply` via broker ops
-  #     (`ph3-p3-net-route-degraded-mode`).
   #   - Firewall carve-outs for per-env usbip ports: broker
   #     `UsbipBindFirewallRule` op.
   # ---------------------------------------------------------------------------

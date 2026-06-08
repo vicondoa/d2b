@@ -1,8 +1,9 @@
 # Host prepare: cgroup v2 delegation
 
-> Scope-owned fragment for the host-prepare how-to. The W3 integrator
-> assembles `docs/how-to/host-prepare.md` from the fragments under
-> `docs/how-to/host-prepare.d/*.md`; this file is the cgroup section.
+> Host-prepare fragment. The full
+> `docs/how-to/host-prepare.md` page is assembled from the fragments
+> under `docs/how-to/host-prepare.d/*.md`; this file is the cgroup
+> section.
 
 `nixling` runs every VM payload inside a per-VM/per-role cgroup leaf
 beneath `/sys/fs/cgroup/nixling.slice`. The slice is created by the
@@ -17,7 +18,7 @@ ownership model, and audit record shape are in
 ## How to verify cgroup delegation prerequisites
 
 Before running `nixling host prepare --apply`, confirm the host meets
-the W3 prerequisites:
+the prerequisites:
 
 ```bash
 # 1. Unified cgroup v2 hierarchy:
@@ -117,7 +118,7 @@ something is wrong with the broker bootstrap. Re-check
 
 ### `kernel.modules_disabled=1`
 
-W3 cgroup delegation does NOT load any kernel modules. This sysctl
+Cgroup delegation does NOT load any kernel modules. This sysctl
 does not block delegation. If you see `host-modules-locked` from
 `host check`, that is a separate device-related preflight (scope s4),
 not cgroup-related.

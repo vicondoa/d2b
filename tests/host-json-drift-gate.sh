@@ -1,41 +1,39 @@
 #!/usr/bin/env bash
-# tests/host-json-drift-gate.sh — W3 host.json per-field schema gold-file drift gate (test-4).
+# tests/host-json-drift-gate.sh— host.json per-field schema gold-file drift gate.
 #
-# Closes W3 work-review R1 finding test-4 ("plan §"W3 host.json
-# per-field schema gold-file drift gate" §2751-2762 is documented but
-# no gate enforces it").
+# Enforces the host.json per-field schema gold-file drift gate.
 #
 # Asserts:
 #
 #   1. tests/golden/host-json/baseline-host.json parses and matches
-#      the H3-shipped v2 schema (when present).
+#      the v2 schema (when present).
 #   2. tests/golden/host-json/ifname-collision.json declares
 #      `_expectedRejection.code == "ifname-collision"`.
 #   3. tests/golden/host-json/ifname-too-long.json declares
 #      `_expectedRejection.code == "ifname-too-long"`.
 #   4. Each tests/golden/host-json/unknown-field-*.json declares
 #      `_expectedRejection.code == "wire-unknown-field"`.
-#   5. When docs/reference/schemas/v2/host.json exists (H3-owned),
-#      assert it sets `additionalProperties: false` on the four
-#      W3+W4a security-sensitive sub-objects whose Rust DTOs ARE
+#   5. When docs/reference/schemas/v2/host.json exists, assert it sets
+#      `additionalProperties: false` on the four
+#      Security-sensitive sub-objects whose Rust DTOs ARE
 #      wired into HostJson today: KernelModulesEntry, BridgePortFlags,
-#      IfNameMapping, and (W4a-H3) FirewallCoexistencePolicy.
+#      IfNameMapping, and FirewallCoexistencePolicy.
 #      Definition names follow the actual Rust types'
 #      JsonSchema::schema_name() output; renaming a DTO requires
 #      updating both this gate and the schema regeneration.
 #   6. When docs/reference/schemas/v2/host.md exists, assert every
-#      W3-added field name appears in the prose.
+#      Added field name appears in the prose.
 #
-# H3 owns the v2 schema/prose; until H3 lands them, the schema- and
-# prose-cross-check assertions skip with a clear log line.
+# The v2 schema/prose may be absent while work is in flight; in that
+# case the schema- and prose-cross-check assertions skip with a clear
+# log line.
 #
 # Scratch state lives outside $ROOT per AGENTS.md disk-hygiene
-# contract (W2fu4 H8/H9/H14/H15).
+# contract.
 #
 # TODO(integrator): wire into tests/static.sh after the existing
-# bundle-drift.sh invocation. Per the W3fu1 H4 contract,
-# tests/static.sh is integrator-owned — H4 ships the script + the
-# wiring instruction only.
+# bundle-drift.sh invocation. tests/static.sh is integrator-owned; this
+# script carries the wiring instruction only.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -68,10 +66,10 @@ if [ ! -d "$FIXTURES_DIR" ]; then
   fail "host-json-drift-gate: fixtures directory missing: $FIXTURES_DIR"
 fi
 
-# W4afu1 test-1: render the live smoke host.json so the python
-# block can assert top-level field presence (specifically
-# firewallCoexistencePolicy after W4a-H3). Falls back to "" when
-# nl_smoke_bundle_host_json is unavailable; python handles that.
+# Render the live smoke host.json so the python block can assert
+# top-level field presence (specifically firewallCoexistencePolicy).
+# Falls back to "" when nl_smoke_bundle_host_json is unavailable;
+# python handles that.
 if SMOKE_HOST_JSON=$(nl_smoke_bundle_host_json 2>/dev/null); then
   :
 else
@@ -114,8 +112,8 @@ EXPECTED_REJECTIONS = {
 
 violations = []
 
-# W3fu5 H2 (nixos-1 MED): host-valid.json carries the live-emitted
-# host.json shape (filePath / startMarker / endMarker) and MUST agree
+# host-valid.json carries the live-emitted host.json shape
+# (filePath / startMarker / endMarker) and MUST agree
 # with the Rust broker constants in
 # packages/nixling-host/src/routes.rs (HOSTS_MANAGED_BEGIN/END) and
 # packages/nixling-priv-broker/src/ops/nm.rs (DEFAULT_NM_CONF_PATH).
@@ -147,9 +145,9 @@ else:
                 f"and packages/nixling-host/src/routes.rs::HOSTS_MANAGED_BEGIN/END)"
             )
 
-# W4afu1 test-1: assert the live smoke-rendered host.json carries
-# the W4a-H3 `firewallCoexistencePolicy` top-level field. The field
-# is `Option` in the Rust DTO (so pre-W4a fixtures don't have it),
+# Assert the live smoke-rendered host.json carries the
+# `firewallCoexistencePolicy` top-level field. The field is `Option`
+# in the Rust DTO (so older fixtures don't have it),
 # but the Nix emitter always emits it; a regression that drops the
 # emit would silently produce a host.json without firewall policy
 # info. Skip when the smoke render isn't available (e.g. standalone
@@ -219,16 +217,16 @@ for filename, expected_code in EXPECTED_REJECTIONS.items():
             f"expected {expected_code!r}"
         )
 
-# H3-coordinated schema/prose gates (skip when the v2 schema is not
-# yet on disk; H3 owns its lifecycle). Definition names come from
-# the Rust DTOs' `JsonSchema::schema_name()` output and MUST match
-# `packages/nixling-core/src/host.rs`. W4a-H3 wired
-# `FirewallCoexistencePolicy` (host_w3.rs DTO) into HostJson as an
-# optional field; it's now back in this check.
+# Coordinated schema/prose gates (skip when the v2 schema is not yet
+# on disk). Definition names come from the Rust DTOs'
+# `JsonSchema::schema_name()` output and MUST match
+# `packages/nixling-core/src/host.rs`. `FirewallCoexistencePolicy`
+# (host_w3.rs DTO) is wired into HostJson as an optional field; it's
+# now back in this check.
 if schema_path.exists():
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     defs = schema.get("definitions", schema.get("$defs", {}))
-    # Each W3-added security-sensitive sub-object MUST carry
+    # Each security-sensitive sub-object MUST carry
     # additionalProperties:false so the deny_unknown_fields contract
     # holds at JSON Schema level too.
     for sub in (

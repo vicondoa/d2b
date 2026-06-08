@@ -15,9 +15,9 @@
   # doesn't conflict if both are enabled.
   microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
-  # v1.1.2fu36: cloud-hypervisor's --tpm path moved from /run/swtpm/<vm>/sock
+  # cloud-hypervisor's --tpm path moved from /run/swtpm/<vm>/sock
   # to /run/nixling/vms/<vm>/tpm.sock. The per-VM runtime dir already exists,
-  # is owned nixlingd:nixling-launcher 0750 with default ACL granting every
+  # is owned nixlingd:nixling 0750 with default ACL granting every
   # per-VM ephemeral UID rwx (see host-activation.nix
   # nixlingRoleUidAcls). Putting the TPM socket there lets cloud-hypervisor
   # connect via the inherited named-user ACL — no separate /run/swtpm/ dir

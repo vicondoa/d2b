@@ -1,12 +1,12 @@
-//! P2 ph2-p2-ssh-host-key-preflight: VM-start preflight that
-//! refuses to start a VM when its per-VM sshd host keys have
+//! VM-start preflight that refuses to start a VM when its per-VM sshd
+//! host keys have
 //! drifted from the canonical mode/owner posture.
 //!
 //! # Canonical posture
 //!
 //! Directory `/var/lib/nixling/vms/<vm>/sshd-host-keys/`:
 //! - mode `0750`
-//! - owner `nixlingd`, group `nixling-launcher`
+//! - owner `nixlingd`, group `nixling`
 //!   (declared and enforced by the ownership matrix in
 //!   `nixos-modules/options-ownership-matrix.nix` + the daemon-side
 //!   `ownership_preflight` module; this preflight only verifies that
@@ -20,8 +20,8 @@
 //! - group gid `0` (root)
 //! - mode `0o0400`
 //!
-//! Source of truth: plan task `ph2-p2-ssh-host-key-preflight` and
-//! `docs/reference/privileges.md` row "SshHostKeyPreflight".
+//! Source of truth: `docs/reference/privileges.md` row
+//! "SshHostKeyPreflight".
 //!
 //! # Spec correction (recorded for plan.md "Spec corrections")
 //!
@@ -109,10 +109,7 @@ impl SshdHostKeyDrift {
                 format!("sshd-host-keys directory is a symlink: {}", path.display())
             }
             Self::DirNotADirectory { path } => {
-                format!(
-                    "sshd-host-keys path is not a directory: {}",
-                    path.display()
-                )
+                format!("sshd-host-keys path is not a directory: {}", path.display())
             }
             Self::DirStatFailed { path, detail } => {
                 format!(

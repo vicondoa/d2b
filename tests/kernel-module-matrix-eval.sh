@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/kernel-module-matrix-eval.sh — P3 ph3-p3-kernel-module-check
+# tests/kernel-module-matrix-eval.sh—
 # matrix-drift regression. Asserts that the REQUIRED / OPTIONAL
 # module constants in packages/nixlingd/src/kernel_module_check.rs
 # stay in sync with the operator-reference matrix in

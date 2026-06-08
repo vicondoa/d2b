@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 s3 Layer-1 gate: only nixlingd may talk to the private broker socket.
+# Only nixlingd may talk to the private broker socket.
 
 set -euo pipefail
 
@@ -44,7 +44,7 @@ if [ ! -x "$broker_bin" ]; then
 fi
 socket_path=$scratch/run/nixling/priv.sock
 audit_dir=$scratch/var/lib/nixling/audit
-# W4 retire-shim: the broker now writes a daily-rotated file under
+# Retire-shim: the broker now writes a daily-rotated file under
 # `$audit_dir/broker-<utc-date>.jsonl`. The legacy single-file
 # `/var/lib/nixling/broker-audit.log` is retired.
 audit_path=$audit_dir/broker-$(date -u +%F).jsonl

@@ -129,6 +129,7 @@ async fn main() {
     };
 
     if let Err(error) = result {
+        let _ = error.to_envelope();
         eprintln!("{}: {}", error.kind(), error.message());
         std::process::exit(i32::from(error.exit_code()));
     }

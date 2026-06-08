@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# W4-H10 Layer-1 gate: CH / virtiofsd / swtpm argv generator parity.
+# CH / virtiofsd / swtpm argv generator parity.
 #
-# Drives the W4-H1 / W4-H2 / W4-H3 unit-test surface to assert each
+# Drives the unit-test surface to assert each
 # argv generator emits the documented audit-parity shape AND every
 # input-validation rejection still fires. Wired into tests/static.sh
 # alongside the runner-shape preflight canary so daemon-side spawn
@@ -121,7 +121,7 @@ for t in "${swtpm_argv_tests[@]}"; do
   cargo test -p nixling-host --lib "$t" 2>&1 | tail -3
 done
 
-# W4-fu / W7-fu / W8-fu modules added post-W4-W10-main: hardlink
+# Modules added post---main: hardlink
 # farm primitive, ssh-keygen probe, daemon reconcile_and_adopt.
 log "  canary: hardlink_farm (W7-fu)"
 cargo test -p nixling-host --lib hardlink_farm 2>&1 | tail -3

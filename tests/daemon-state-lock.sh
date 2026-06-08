@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 Layer-1 gate: daemon OFD state-lock fail-closed behavior.
+# Daemon OFD state-lock fail-closed behavior.
 
 set -euo pipefail
 

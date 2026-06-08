@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2 Layer-1 gate: daemon public-socket ACL fail-closed matrix.
+# Daemon public-socket ACL fail-closed matrix.
 #
 # This test runs in a fake SO_PEERCRED mode because the Layer-1 environment
 # is intentionally unprivileged. The daemon honors

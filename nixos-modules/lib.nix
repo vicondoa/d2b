@@ -19,7 +19,7 @@ let
   # NEVER exits non-zero — callers (extraArgsScript, nixling CLI)
   # cannot handle a non-zero exit mid-flow.
   #
-  # Returns "mic=off speaker=off" for EVERY error case:
+  # Returns "mic=off speaker=off" for EVERY error case
   #   • file missing
   #   • file present but unreadable (permissions)
   #   • file present but not valid JSON
@@ -38,8 +38,8 @@ let
         nixling_read_audio_state() {
           local _nas_vm="$1" _nas_f _nas_mic=off _nas_spk=off _nas_raw
           local _nas_canonical _nas_expected _nas_stat
-          # security-2: state file lives under the root-owned state/ subdir.
-          # Phase 2a Pass 2: VM state dir moved under vms/<vm>/.
+          # State file lives under the root-owned state/ subdir.
+          # VM state dir moved under vms/<vm>/.
           _nas_f="/var/lib/nixling/vms/$_nas_vm/state/audio-state.json"
           _nas_expected="/var/lib/nixling/vms/$_nas_vm/state/audio-state.json"
           # Canonicalize: fail closed if path doesn't resolve or is a symlink
@@ -48,10 +48,10 @@ let
             || { printf 'mic=off speaker=off\n'; return 0; }
           [ "$_nas_canonical" = "$_nas_expected" ] \
             || { printf 'mic=off speaker=off\n'; return 0; }
-          # Verify ownership and mode: must be root:nixling-launcher 640.
+          # Verify ownership and mode: must be root:nixling 640.
           _nas_stat=$(stat -c '%U %G %a' "$_nas_canonical" 2>/dev/null) \
             || { printf 'mic=off speaker=off\n'; return 0; }
-          [ "$_nas_stat" = "root nixling-launcher 640" ] \
+          [ "$_nas_stat" = "root nixling 640" ] \
             || { printf 'mic=off speaker=off\n'; return 0; }
           if [ -r "$_nas_canonical" ]; then
             if _nas_raw=$(${pkgs.jq}/bin/jq -re '.mic' "$_nas_canonical" 2>/dev/null) \
@@ -73,16 +73,15 @@ let
         }
       '';
 in
-{
+rec {
   inherit hex2;
   inherit nixlingReadAudioState;
 
-  # v1.1.2-final-R1 (panel-software HIGH): SHARED helper extracted
-  # from minijail-profiles.nix and host-users.nix to eliminate the
-  # 4-line duplicate that was a drift-risk for broker/ownership-
-  # matrix UID agreement. If the hash algorithm or offset changes
-  # here, both consumers see the same UID, preventing the fu35-class
-  # bug from silently returning.
+  # Shared helper extracted from minijail-profiles.nix and
+  # host-users.nix to eliminate the 4-line duplicate that was a
+  # drift-risk for broker/ownership-matrix UID agreement. If the hash
+  # algorithm or offset changes here, both consumers see the same UID,
+  # preventing the ownership-matrix bug from silently returning.
   #
   # Maps a principal name (e.g. "nixling-work-aad-swtpm") to a
   # stable deterministic 24-bit UID in the range 50000..16827215.
@@ -97,6 +96,52 @@ in
   stablePrincipalId = principal:
     if principal == "root" then 0
     else 50000 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "sha256" principal));
+
+  # Stable virtio-blk serial for a microvm.volumes entry. Cloud Hypervisor
+  # emits this into the block device, while vm-guest-base.nix mounts by the
+  # corresponding /dev/disk/by-id/virtio-<serial> path.
+  volumeSerial = volume:
+    if (volume.serial or null) != null then volume.serial else (
+      let
+        base = baseNameOf (toString volume.image);
+        withoutImg = lib.removeSuffix ".img" base;
+        sanitized = lib.replaceStrings [ "." "_" "/" " " "," "=" ] [ "-" "-" "-" "-" "-" "-" ] withoutImg;
+      in
+      if sanitized == "" then "disk" else sanitized
+    );
+
+  volumeHostPath = stateDir: vmName: volume:
+    let image = toString volume.image; in
+    if lib.hasPrefix "/" image then image else "${toString stateDir}/${vmName}/${image}";
+
+  volumeDiskInitEligible = volume:
+    !(lib.hasPrefix "/" (toString volume.image))
+    && (toString (volume.imageType or "raw")) == "raw"
+    && (toString (volume.fsType or "ext4")) == "ext4";
+
+  volumeSizeBytes = volume: (volume.size or 1024) * 1024 * 1024;
+
+  volumeFileSystem = volume: {
+    device = "/dev/disk/by-id/virtio-${volumeSerial volume}";
+    fsType = volume.fsType or "ext4";
+    options = [ "x-systemd.after=systemd-modules-load.service" ]
+      ++ lib.optional (volume.readOnly or false) "ro";
+    neededForBoot = true;
+  };
+
+  volumeSerialIssues = volumes:
+    let
+      serials = map volumeSerial volumes;
+    in {
+      duplicates = lib.unique (lib.filter
+        (serial: lib.count (candidate: candidate == serial) serials > 1)
+        serials);
+      reserved = lib.filter (serial: serial == "rootfs") serials;
+      tooLong = lib.filter (serial: lib.stringLength serial > 20) serials;
+      unsafe = lib.filter
+        (serial: builtins.match "^[A-Za-z0-9][A-Za-z0-9-]{0,19}$" serial == null)
+        serials;
+    };
 
   # subnetIp "10.20.0.0/24" 5  =>  "10.20.0.5"
   # subnetIp "192.0.2.252/30" 1 => "192.0.2.1"  (host-octet only,
@@ -116,7 +161,7 @@ in
   # Used by cidrOverlaps below. Pure Nix — no shell, no `ip`
   # spawning at eval time. Assumes a well-formed IPv4 CIDR; the
   # callers in network.nix already gate per-env shape (/24 lan, /30
-  # uplink, .0 network address). cfg.hostLanCidrs is consumer-set;
+  # uplink,.0 network address). cfg.hostLanCidrs is consumer-set;
   # the helper still parses it correctly for any IPv4 CIDR.
   parseCidr = cidr:
     let
@@ -188,8 +233,8 @@ in
     in
     lib.toUpper "02:${pair 0}:${pair 2}:${pair 4}:${pair 6}:${hex2 index}";
 
-  # v1.1-final: vmRunner — single access point for per-VM runner
-  # config that processes-json.nix / closures-json.nix /
+  # vmRunner — single access point for per-VM runner config that
+  # processes-json.nix / closures-json.nix /
   # minijail-profiles.nix / store.nix consume. Reads from
   # `config.nixling._computed.vms.<name>.config.microvm.*` — the
   # nixling-owned per-VM evaluator output (see

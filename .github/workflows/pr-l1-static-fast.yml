@@ -14,6 +14,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Tier 0 first-pass gate
         run: bash tests/static-fast-tier0.sh
+      - name: ADR index coverage guard (P1.8)
+        run: bash tests/adr-index-coverage.sh
+      - name: CI coverage structural guard (D13/P1.7)
+        run: bash tests/ci-coverage.sh
 
   static-fast:
     needs: tier0

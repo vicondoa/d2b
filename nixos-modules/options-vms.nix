@@ -3,8 +3,7 @@
 # audio.* / audit.*) whose matching files under
 # `nixos-modules/components/`
 # are conditionally imported by host.nix on this submodule's
-# resolved values. Extracted from options.nix in Phase 2c
-# (split-options) for reviewability.
+# resolved values. Extracted from options.nix for reviewability.
 { lib, ... }:
 
 {
@@ -12,7 +11,7 @@
     description = "MicroVMs to declare via the nixling framework.";
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
-      # v1.1-P2: options-vms-removed.nix's mkRemovedOptionModule shim
+      # options-vms-removed.nix's mkRemovedOptionModule shim
       # was retired here. It cannot be imported into an `attrsOf
       # submodule` per-instance because the per-VM submodule layer
       # does not have an `assertions` option (NixOS assertions live
@@ -42,8 +41,7 @@
           # combines with consumer-side `{ users.users.x = ...; }`
           # via the module system's natural attribute merge,
           # instead of one definition stomping the other (which is
-          # what `types.unspecified` used to do — see Wave-6
-          # consumer-integration findings).
+          # what `types.unspecified` used to do).
           type = lib.types.deferredModule;
           default = { };
           example = lib.literalExpression "{ imports = [ ../../vms/foo.nix ]; }";
@@ -57,7 +55,7 @@
           '';
         };
 
-        # v1.1-final: nixling-owned per-VM evaluator output.
+        # Nixling-owned per-VM evaluator output.
         # Populated by host.nix's composeVm pass which runs the
         # consumer's `config` through the nixling-owned per-VM
         # NixOS evaluator (see vm-evaluator.nix). Stored at the
@@ -74,8 +72,8 @@
           default = { config = { }; options = { }; };
           internal = true;
           description = ''
-            DEPRECATED at v1.1-final: per-VM evaluation output moved
-            to `nixling._computed.vms.<name>` to avoid module-system
+            DEPRECATED in v1.1: per-VM evaluation output moved to
+            `nixling._computed.vms.<name>` to avoid module-system
             infinite recursion. Read via `nl.vmRunner config name`
             from `nixos-modules/lib.nix` (helpers route to the new
             location automatically).
@@ -100,7 +98,18 @@
           launchpad VM running FreeRDP or another remote-desktop client).
             Must be false for any VM running Docker (privileged-container escape
             inside the VM could attack the host compositor via cross-domain).
-            Spec: SECURITY-nixling.md C2#4.
+          '';
+        };
+
+        graphics.xwayland.enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Whether the guest Wayland proxy should expose an X11 socket
+            and spawn Xwayland for legacy clients. Disable for VMs whose
+            workload must be strictly Wayland-only. Default false because
+            Xwayland is a legacy compatibility surface and not every host
+            compositor supports it.
           '';
         };
 
@@ -108,11 +117,62 @@
           type = lib.types.bool;
           default = false;
           description = ''
-            v1.1.1fu13: spawn the per-VM video-decoder sidecar
-            (vaapi-backed virtio-video). Requires a crosvm build
-            with the video-decoder feature compiled in (the
-            crosvmVideo overlay is broken on nixpkgs 26.05).
-            Default false so graphics VMs can boot without hwaccel.
+            Spawn the per-VM crosvm video-decoder sidecar for the
+            H264 virtio-media decode path. Requires graphics.enable
+            and uses nixling's patched Cloud Hypervisor
+            --vhost-user-media support plus the patched crosvm
+            video-decoder build. Default false so graphics VMs boot
+            without the media backend unless explicitly opted in.
+          '';
+        };
+
+        graphics.videoNvidiaDecode = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Extend the video sidecar's closed device allowlist for the
+            NVIDIA VA-API/NVDEC backend. Requires
+            graphics.videoSidecar = true. When enabled, the broker masks
+            /dev and exposes only /dev/dri/renderD128 plus the NVIDIA
+            character devices required by nvidia-vaapi-driver.
+          '';
+        };
+
+        graphics.virglVideo = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Experimental: enable virglrenderer/rutabaga video forwarding
+            (`VIRGL_RENDERER_USE_VIDEO`) on the crosvm GPU sidecar. This is
+            the path Firefox's VA-API decoder would need, but it is
+            default-off because earlier testing deadlocked the GPU command
+            loop when the guest advertised video decode capabilities.
+          '';
+        };
+
+        graphics.renderNodeOnly = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            When
+            true, the gpu sidecar runs inside a single-entry user NS
+            with zero host caps; the broker pre-opens
+            /dev/dri/renderD128 and passes the fd via SCM_RIGHTS.
+
+            REQUIRES: render-node-only configuration (no NVIDIA,
+            no /dev/udmabuf). NVIDIA / non-render-node device
+            passthrough must use the default (false) value to keep
+            the legacy gpu profile.
+
+            Rationale: render nodes bypass DRM master authentication
+            (no DRM_IOCTL_SET_MASTER / DRM_IOCTL_AUTH_MAGIC required),
+            so the fd survives user-NS pivot without losing access
+            semantics. Other device classes (NVIDIA, udmabuf) need
+            direct DAC access to host device nodes which a
+            single-entry user-NS cannot grant (host UID 0 appears as
+            UID 65534 inside the NS).
+
+            Default false to preserve v1.1.x compat for NVIDIA users.
           '';
         };
 
@@ -124,12 +184,25 @@
           /var/lib/nixling/vms/<vm>/swtpm/ on the host.
         '';
 
+        writableStoreOverlaySize = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 1073741824;
+          description = ''
+            Size in bytes of the writable store overlay disk image at
+            <filename>/var/lib/nixling/vms/&lt;vm&gt;/store-overlay.img</filename>.
+            Default is 1 GiB (1073741824 bytes). Only used when the
+            guest VM sets <option>microvm.writableStoreOverlay</option>
+            to a non-null path; the broker provisions the disk image via
+            a <literal>DiskInit</literal> plan-op before SpawnRunner.
+          '';
+        };
+
         usbip.yubikey = lib.mkEnableOption ''
           YubiKey USBIP passthrough. Loads vhci_hcd in the guest and
           installs the usbip CLI so the `nixling usb <vm>` host-side
           wrapper can redirect a plugged-in Yubico device from the
           host's xhci to this VM via USBIP. Host-side daemon is
-          per-env (`nixling-sys-<env>-usbipd-proxy.service`); see
+          per-env (`sys-<env>-usbipd`/`proxy` broker runner); see
           `nixos-modules/network.nix`.
         '';
 
@@ -383,14 +456,14 @@
           };
         };
 
-        # REMOVED in Phase 2b. The submodule path is kept ONLY so that
+        # REMOVED. The submodule path is kept ONLY so that
         # legacy consumer assignments produce a readable assertion
         # error rather than the cryptic "option does not exist"
         # message the module system would emit if we simply dropped
         # the option. The stub is `internal = true` so it does not
         # appear in generated docs.
         #
-        # Migration: see CHANGELOG.md (Phase 2b: Removed) and the
+        # Migration: see CHANGELOG.md and the
         # `vicondoa/nixos-entra-id` flake README for the new
         # composition pattern (per-VM config.imports of the sibling
         # flake's nixosModules.default).
@@ -400,7 +473,7 @@
           internal = true;
           visible = false;
           description = ''
-            REMOVED in Phase 2b. Use `vicondoa/nixos-entra-id`'s
+            REMOVED. Use `vicondoa/nixos-entra-id`'s
             module per-VM via `nixling.vms.<vm>.config.imports`.
           '';
         };
@@ -408,8 +481,8 @@
     }));
   };
 
-  # v1.1-final: per-VM evaluation outputs stored OUTSIDE
-  # `nixling.vms.<name>` to avoid module-system infinite recursion.
+  # Per-VM evaluation outputs stored OUTSIDE `nixling.vms.<name>` to
+  # avoid module-system infinite recursion.
   # host.nix's composeVm pass populates `nixling._computed.vms.<name>`
   # with the evaluated NixOS attrset (config + options) for each
   # enabled VM. lib.nix helpers (vmRunner / vmToplevel /

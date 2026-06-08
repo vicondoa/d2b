@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# P1 OtelHostBridge argv byte-parity gate.
+# OtelHostBridge argv byte-parity gate.
 #
 # Diffs `cargo test -p nixling-host --lib otel_host_bridge_argv`'s
 # SNAPSHOT line against
 # tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt. Catches
 # drift between the broker-spawned runner argv and the singleton
-# nixling-otel-host-bridge.service ExecStart line being retired in P3.
+# nixling-otel-host-bridge.service ExecStart line being retired in v1.0.
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")

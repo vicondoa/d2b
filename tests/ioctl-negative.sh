@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# W3 s4 L1c canary: 5-class negative-allowlist matrix from plan.md
-# §"W3 seccomp/ioctl negative-allowlist matrix".
+# Canary: 5-class negative-allowlist matrix from plan.md
+# §" seccomp/ioctl negative-allowlist matrix".
 #
 # Asserts:
 #   - TAP/TUN: TUNSETIFF allowed, TUNATTACHFILTER refused

@@ -191,12 +191,11 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Path-safety helpers used by every W3 broker filesystem op
+/// Path-safety helpers used by every broker filesystem op
 /// (`UpdateHostsFile`, `ApplyNmUnmanaged`, `PrepareStateDir`,
-/// `PrepareRuntimeDir`). See plan.md §"W3 filesystem path-safety
-/// tests".
+/// `PrepareRuntimeDir`).
 ///
-/// The plan mandates `openat2` with `O_NOFOLLOW` + `RESOLVE_BENEATH`
+/// The contract mandates `openat2` with `O_NOFOLLOW` + `RESOLVE_BENEATH`
 /// for parent-relative resolution; this module implements equivalent
 /// fail-closed guards on stable Rust using `nix` + `std::fs`, including
 /// `RESOLVE_NO_XDEV` so mount-point crossings are rejected:
@@ -716,11 +715,7 @@ pub mod path_safe {
                     target_name,
                     libc::RENAME_EXCHANGE,
                 ) {
-                    Ok(()) => {
-                        if let Err(unlink_err) = unlinkat_raw(dir_fd.as_raw_fd(), stage_name) {
-                            return Err(unlink_err);
-                        }
-                    }
+                    Ok(()) => unlinkat_raw(dir_fd.as_raw_fd(), stage_name)?,
                     Err(exchange_err) if renameat2_flag_unsupported(&exchange_err) => {
                         let _ = unlinkat_raw(dir_fd.as_raw_fd(), stage_name);
                         return Err(atomic_replace_unsupported(
@@ -818,12 +813,10 @@ pub mod path_safe {
         ))
     }
 
-    /// W3fu1 H1 (security-3): `openat2(O_NOFOLLOW | RESOLVE_BENEATH)`
-    /// helper used by every W3 filesystem-mutating broker op per
-    /// plan.md §"W3 filesystem path-safety tests" ("must use
-    /// fd-relative openat2 with O_NOFOLLOW + RESOLVE_BENEATH").
-    /// `dirfd` anchors the resolution; `path` must be a relative
-    /// path that cannot escape the dirfd subtree.
+    /// `openat2(O_NOFOLLOW | RESOLVE_BENEATH)` helper used by every
+    /// filesystem-mutating broker op. `dirfd` anchors the resolution;
+    /// `path` must be a relative path that cannot escape the dirfd
+    /// subtree.
     pub fn open_at(
         dirfd: BorrowedFd<'_>,
         path: &Path,
@@ -857,26 +850,22 @@ pub mod path_safe {
             &name,
             flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             mode,
-            RESOLVE_BENEATH
-                | RESOLVE_NO_SYMLINKS
-                | RESOLVE_NO_MAGICLINKS
-                | RESOLVE_NO_XDEV,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
         )
     }
 
-    /// W3fu1 H1 (security-3): fd-based `fchmod` wrapper around
-    /// rustix; replaces every path-string `chmod` call site in
-    /// W3 broker fs ops.
+    /// fd-based `fchmod` wrapper around rustix; replaces every
+    /// path-string `chmod` call site in broker fs ops.
     pub fn fchmod(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
         use rustix::fs::{fchmod as rfchmod, Mode};
         rfchmod(fd, Mode::from_raw_mode(mode)).map_err(io_from_rustix)
     }
 
-    /// W3fu1 H1 (security-3): fd-based `fchown` via the safe `nix`
-    /// wrapper. The broker crate keeps `unsafe_code = "deny"`, so we
-    /// route through `nix::unistd::fchown` (which has a safe
-    /// signature) rather than `rustix::fs::fchown` (whose `Uid` /
-    /// `Gid` constructors are `unsafe fn`).
+    /// fd-based `fchown` via the safe `nix` wrapper. The broker crate
+    /// keeps `unsafe_code = "deny"`, so we route through
+    /// `nix::unistd::fchown` (which has a safe signature) rather than
+    /// `rustix::fs::fchown` (whose `Uid` / `Gid` constructors are
+    /// `unsafe fn`).
     pub fn fchown(fd: BorrowedFd<'_>, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
         let res = nix::unistd::fchown(
             fd.as_raw_fd(),
@@ -919,10 +908,7 @@ pub mod path_safe {
             &relative,
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             0,
-            RESOLVE_BENEATH
-                | RESOLVE_NO_SYMLINKS
-                | RESOLVE_NO_MAGICLINKS
-                | RESOLVE_NO_XDEV,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
         )
     }
 
@@ -1025,9 +1011,8 @@ pub mod path_safe {
         };
         unlinkat_raw_with_flags(parent_fd.as_raw_fd(), &c_name, flags)
     }
-    /// W3fu1 H1 (security-3): `mkdirat` on a parent dirfd.
-    /// `EEXIST` is folded into `Ok(())` so callers can use this as
-    /// a one-shot idempotent dir create.
+    /// `mkdirat` on a parent dirfd. `EEXIST` is folded into `Ok(())`
+    /// so callers can use this as a one-shot idempotent dir create.
     pub fn mkdir_at(parent_dirfd: BorrowedFd<'_>, name: &Path, mode: u32) -> io::Result<()> {
         use rustix::fs::{mkdirat, Mode};
         match mkdirat(parent_dirfd, name, Mode::from_raw_mode(mode)) {
@@ -1054,8 +1039,7 @@ pub mod path_safe {
     }
 }
 
-/// Quarantined syscall surface for the W3 pidfd handoff contract
-/// (plan.md §"W3 pidfd handoff contract").
+/// Quarantined syscall surface for the pidfd handoff contract.
 ///
 /// We use `clone3(CLONE_PIDFD)` as the preferred entry — `rustix
 /// 0.38` does NOT expose `clone3`, so the call goes via
@@ -1066,14 +1050,14 @@ pub mod path_safe {
 /// On `ENOSYS` (very old kernels) / `EINVAL` (newer kernels that
 /// have shifted the `clone_args` layout) / `E2BIG`, the spawner
 /// falls back to `fork(2)` + `pidfd_open(2)`. The race window
-/// between fork and pidfd_open is non-zero (the child could exit
-/// and its pid be reused before pidfd_open returns) but is
-/// vanishingly small in practice; W3 documents it in the
-/// `pidfd.rs` doc-comment.
+/// between fork and pidfd_open is non-zero (the child could exit and
+/// its pid be reused before pidfd_open returns) but is vanishingly small
+/// in practice; `pidfd.rs` documents it.
 pub mod pidfd_sys {
     use std::ffi::CString;
     use std::io;
     use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::Path;
 
     use nix::libc;
@@ -1137,7 +1121,7 @@ pub mod pidfd_sys {
     #[allow(unsafe_code)]
     pub fn clone3_pidfd_or_fork_fallback<F>(
         extra_clone_flags: u64,
-        mut child_main: F,
+        child_main: F,
     ) -> io::Result<SpawnOutcome>
     where
         F: FnMut() -> i32,
@@ -1296,6 +1280,78 @@ pub mod pidfd_sys {
         Ok(())
     }
 
+    /// Run `setfacl -m <acl_spec> /proc/self/fd/<fd>` in a forked
+    /// child while keeping the target fd CLOEXEC in the broker parent.
+    ///
+    /// This is intentionally in `sys.rs`: the child must clear
+    /// FD_CLOEXEC after `fork(2)` and before `execve(2)` so only the
+    /// setfacl child can resolve `/proc/self/fd/<fd>`. Clearing CLOEXEC
+    /// in the broker parent would let unrelated concurrent runner
+    /// spawns inherit the target fd.
+    #[allow(unsafe_code)]
+    pub fn run_setfacl_on_fd(fd: BorrowedFd<'_>, acl_spec: &str) -> io::Result<()> {
+        let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
+            .expect("static setfacl path has no NUL");
+        let dash_m = std::ffi::CString::new("-m").expect("static arg has no NUL");
+        let acl = std::ffi::CString::new(acl_spec).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "acl spec contains NUL byte")
+        })?;
+        let procfd = std::ffi::CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+            .expect("formatted fd path has no NUL");
+
+        // SAFETY: fork is used to immediately exec setfacl. The child
+        // performs only async-signal-safe libc calls before exec/_exit.
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if pid == 0 {
+            // Child: make the target fd visible to setfacl, but only in
+            // this child fd table.
+            let raw_fd = fd.as_raw_fd();
+            let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFD) };
+            if flags < 0 {
+                unsafe { libc::_exit(126) };
+            }
+            if unsafe { libc::fcntl(raw_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+                unsafe { libc::_exit(126) };
+            }
+            let argv = [
+                setfacl.as_ptr(),
+                dash_m.as_ptr(),
+                acl.as_ptr(),
+                procfd.as_ptr(),
+                std::ptr::null(),
+            ];
+            unsafe {
+                libc::execv(setfacl.as_ptr(), argv.as_ptr());
+                libc::_exit(127);
+            }
+        }
+
+        let mut status = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if rc == pid {
+                break;
+            }
+            if rc < 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+        if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "setfacl exited with wait status {status}"
+            )))
+        }
+    }
+
     /// Read `/proc/<pid>/stat` field 22 (start time in clock ticks).
     /// Pure I/O — no syscalls beyond `open`/`read`. Returns `None` if
     /// the file is missing or field 22 isn't parseable.
@@ -1348,6 +1404,37 @@ pub mod pidfd_sys {
                 filter: self.filters.as_ptr() as *mut libc::sock_filter,
             })
         }
+
+        /// Converts a [`nixling_host::seccomp::CompiledSeccompProgram`]
+        /// (assembled from the ioctl_policy matrix in the broker parent
+        /// before `clone3`) into an installable `SeccompProgram`.
+        ///
+        /// Each `BpfInstruction` has the same `(code, jt, jf, k)` field
+        /// layout as `libc::sock_filter`; the conversion is field-by-field
+        /// and requires no unsafe code.
+        pub fn from_compiled(program: nixling_host::seccomp::CompiledSeccompProgram) -> Self {
+            let filters = program
+                .instructions
+                .into_iter()
+                .map(|instr| libc::sock_filter {
+                    code: instr.code,
+                    jt: instr.jt,
+                    jf: instr.jf,
+                    k: instr.k,
+                })
+                .collect();
+            SeccompProgram { filters }
+        }
+
+        /// Installs this BPF program in the calling process via
+        /// `seccomp(SECCOMP_SET_MODE_FILTER)`.  Caller must have
+        /// already set `PR_SET_NO_NEW_PRIVS`.  Used by the broker
+        /// child closure and by the behavioral tests in
+        /// `seccomp_compile_tests`.
+        #[allow(unsafe_code)]
+        pub(crate) fn apply(&self) -> io::Result<()> {
+            apply_seccomp(self)
+        }
     }
 
     pub struct RunnerIsolationSpec {
@@ -1356,24 +1443,50 @@ pub mod pidfd_sys {
         pub seccomp_program: Option<SeccompProgram>,
         pub mount_policy: MountPolicy,
         pub cgroup_procs_fd: Option<OwnedFd>,
-        /// v1.1.1fu14 (security-first): when `Some`, the broker
-        /// pre-establishes a single-entry user namespace for the
-        /// runner before exec'ing the role binary. The child is
-        /// fake-root inside the namespace (all caps), and the
-        /// broker can DROP all host-side capabilities for the
-        /// role profile. Used by virtiofsd to serve files with
-        /// correct mode/UID semantics without needing CAP_DAC_*
-        /// effective on the host. See ADR 0021.
+        /// When `Some`, the broker pre-establishes a single-entry user
+        /// namespace for the runner before exec'ing the role binary. The
+        /// child is fake-root inside the namespace (all caps), and the
+        /// broker can DROP all host-side capabilities for the role
+        /// profile. Used by virtiofsd to serve files with correct
+        /// mode/UID semantics without needing CAP_DAC_* effective on the
+        /// host. See ADR 0021.
         pub user_namespace: Option<UserNamespaceSpec>,
-        /// v1.1.2fu36: when `Some`, the child calls `umask(2)` with
-        /// the given mask immediately before execve. Profiles that
-        /// bind shared Unix sockets (vhost-user-sound, crosvm-gpu,
-        /// swtpm) declare `0o007` so created sockets have mode 0660
-        /// — combined with the per-VM-runtime default ACL, this
-        /// lets cloud-hypervisor's named-user ACL entry become
-        /// effective (mask:rw instead of mask:---).
+        /// When `Some`, the child calls `umask(2)` with the given mask
+        /// immediately before execve. Profiles that bind shared Unix
+        /// sockets (vhost-user-sound, crosvm-gpu, swtpm) declare `0o007`
+        /// so created sockets have mode 0660 — combined with the
+        /// per-VM-runtime default ACL, this lets cloud-hypervisor's
+        /// named-user ACL entry become effective (mask:rw instead of
+        /// mask:---).
         pub umask: Option<u32>,
+        /// Pre-opened device fds to hand to the user-NS child via fd
+        /// inheritance (ADR 0021).
+        ///
+        /// The broker parent opens these before `clone3(CLONE_NEWUSER)`
+        /// (DAC checked at open time; survives the user-NS pivot).
+        /// In the child closure, each fd is `dup2`'d to its target fd
+        /// number (RENDER_NODE_INHERITED_FD + index), CLOEXEC cleared,
+        /// and the original fd closed so no stale fds survive execve.
+        ///
+        /// The parent retains ownership via `OwnedFd` inside the child
+        /// closure; the closure is dropped in the parent after fork,
+        /// closing the original fds there. No double-close: fork gives
+        /// parent and child independent fd tables.
+        ///
+        /// See `RENDER_NODE_INHERITED_FD` for the well-known protocol
+        /// constant used by the first (and currently only) entry.
+        pub pre_opened_device_fds: Vec<OwnedFd>,
     }
+
+    /// Well-known fd number for the pre-opened render node.
+    ///
+    /// The broker parent `dup2`s `/dev/dri/renderD128` to this fd in the
+    /// user-NS child before execve. The crosvm argv references it as
+    /// `--gpu-device-node /proc/self/fd/10`.
+    ///
+    /// Chosen to avoid fds 0–9 (stdin=0, stdout=1, stderr=2,
+    /// broker-socket=3, connection-fd=4, sync-pipe-read=5).
+    pub const RENDER_NODE_INHERITED_FD: libc::c_int = 10;
 
     /// Single-entry uid/gid mapping for a runner's user namespace.
     /// The child sees `0` mapped to `host_uid_for_zero` on the
@@ -1388,6 +1501,24 @@ pub mod pidfd_sys {
     struct PreparedMountAction {
         path: CString,
         readonly: bool,
+    }
+
+    struct PreparedDeviceBind {
+        source: CString,
+        destination: CString,
+        kind: PreparedDeviceBindKind,
+    }
+
+    enum PreparedDeviceBindKind {
+        Directory,
+        DeviceNode {
+            mode: libc::mode_t,
+            dev: libc::dev_t,
+        },
+    }
+
+    struct PreparedMaskAction {
+        path: CString,
     }
 
     #[repr(C)]
@@ -1515,12 +1646,11 @@ pub mod pidfd_sys {
         for path in &policy.writable_paths {
             by_path.entry(path.path.clone()).or_insert(false);
         }
-        // v1.1.1fu11 (Option B): device_binds (e.g. /dev/kvm,
-        // /dev/dri/renderD128, /dev/nvidia*) are bind-mounted
-        // writable into the runner mount namespace. The host
-        // already controls access via the dev-node mode bits +
-        // groups; the bind-mount just ensures the device node is
-        // visible inside the namespace.
+        // device_binds (e.g. /dev/kvm, /dev/dri/renderD128,
+        // /dev/nvidia*) are bind-mounted writable into the runner mount
+        // namespace. The host already controls access via the dev-node
+        // mode bits + groups; the bind-mount just ensures the device
+        // node is visible inside the namespace.
         for path in &policy.device_binds {
             by_path.entry(path.clone()).or_insert(false);
         }
@@ -1539,11 +1669,10 @@ pub mod pidfd_sys {
                 readonly,
             });
         }
-        // v1.1.1fu11 (Option B): bind_mounts entries are
-        // cross-domain bind mounts (e.g. /run/user/<uid>/wayland-0
-        // -> /run/nixling-gpu/<vm>/wayland-0). The dst is created
-        // if missing; the src is bind-mounted at the dst with
-        // MS_BIND|MS_REC. Both src and dst must be absolute. The
+        // bind_mounts entries are cross-domain bind mounts (e.g.
+        // /run/user/<uid>/wayland-0 -> /run/nixling-gpu/<vm>/wayland-0).
+        // The dst is created if missing; the src is bind-mounted at the
+        // dst with MS_BIND|MS_REC. Both src and dst must be absolute. The
         // dst is always writable for the runner; readonly is not
         // supported on bind_mounts (Wayland clients need to
         // bidirectionally talk to the socket).
@@ -1567,6 +1696,94 @@ pub mod pidfd_sys {
             });
         }
         Ok(out)
+    }
+
+    fn prepare_device_binds(
+        policy: &MountPolicy,
+    ) -> io::Result<(Vec<OwnedFd>, Vec<PreparedDeviceBind>)> {
+        let mut fds = Vec::with_capacity(policy.device_binds.len());
+        let mut binds = Vec::with_capacity(policy.device_binds.len());
+        for path in &policy.device_binds {
+            let path_ref = Path::new(path);
+            if !path_ref.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("device_binds path {path:?} is not absolute"),
+                ));
+            }
+            let metadata = std::fs::metadata(path_ref)?;
+            let file_type = metadata.file_type();
+            let kind = if file_type.is_dir() {
+                PreparedDeviceBindKind::Directory
+            } else if file_type.is_char_device() {
+                PreparedDeviceBindKind::DeviceNode {
+                    mode: (libc::S_IFCHR | 0o600) as libc::mode_t,
+                    dev: metadata.rdev() as libc::dev_t,
+                }
+            } else if file_type.is_block_device() {
+                PreparedDeviceBindKind::DeviceNode {
+                    mode: (libc::S_IFBLK | 0o600) as libc::mode_t,
+                    dev: metadata.rdev() as libc::dev_t,
+                }
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("device_binds path {path:?} is not a device node or directory"),
+                ));
+            };
+            let mut flags = rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC;
+            if matches!(kind, PreparedDeviceBindKind::Directory) {
+                flags |= rustix::fs::OFlags::DIRECTORY;
+            }
+            let fd = rustix::fs::openat2(
+                rustix::fs::CWD,
+                path_ref,
+                flags,
+                rustix::fs::Mode::empty(),
+                rustix::fs::ResolveFlags::NO_SYMLINKS,
+            )
+            .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+            let source = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "procfd contains NUL"))?;
+            let destination = CString::new(path.as_bytes()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "device_binds path contains NUL",
+                )
+            })?;
+            fds.push(fd);
+            binds.push(PreparedDeviceBind {
+                source,
+                destination,
+                kind,
+            });
+        }
+        Ok((fds, binds))
+    }
+
+    fn prepare_root_mask_actions(
+        uid: libc::uid_t,
+        policy: &MountPolicy,
+    ) -> io::Result<Vec<PreparedMaskAction>> {
+        if uid != 0 || !policy.hide_device_nodes_by_default {
+            return Ok(Vec::new());
+        }
+        const MASK_PATHS: &[&str] = &[
+            "/etc", "/var", "/home", "/root", "/run", "/tmp", "/boot", "/mnt", "/media", "/srv",
+            "/opt",
+        ];
+        MASK_PATHS
+            .iter()
+            .map(|path| {
+                Ok(PreparedMaskAction {
+                    path: CString::new(path.as_bytes()).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "mask path contains NUL")
+                    })?,
+                })
+            })
+            .collect()
     }
 
     fn clone3_namespace_flags(namespaces: &NamespaceSet) -> u64 {
@@ -1660,7 +1877,8 @@ pub mod pidfd_sys {
                         std::ptr::null(),
                         path,
                         std::ptr::null(),
-                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY) as libc::c_ulong,
+                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC)
+                            as libc::c_ulong,
                         std::ptr::null(),
                     )
                 };
@@ -1672,11 +1890,13 @@ pub mod pidfd_sys {
         Ok(())
     }
 
-    /// v1.1.2fu26d-debug: variant returning errno + the path that
-    /// failed so the broker-child stderr log can show which bind
-    /// mount kicked the failure (multiple paths in actions list).
+    /// Variant returning errno + the path that failed so the broker-child
+    /// stderr log can show which bind mount kicked the failure (multiple
+    /// paths in actions list).
     #[allow(unsafe_code)]
-    fn apply_mount_actions_debug(actions: &[PreparedMountAction]) -> Result<(), (libc::c_int, Vec<u8>)> {
+    fn apply_mount_actions_debug(
+        actions: &[PreparedMountAction],
+    ) -> Result<(), (libc::c_int, Vec<u8>)> {
         for action in actions {
             let path = action.path.as_ptr();
             let bind_ret = unsafe {
@@ -1698,7 +1918,8 @@ pub mod pidfd_sys {
                         std::ptr::null(),
                         path,
                         std::ptr::null(),
-                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY) as libc::c_ulong,
+                        (libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC)
+                            as libc::c_ulong,
                         std::ptr::null(),
                     )
                 };
@@ -1711,14 +1932,188 @@ pub mod pidfd_sys {
         Ok(())
     }
 
-    /// v1.1.2fu26d-debug: format errno as ASCII digits into buf,
-    /// return number of bytes written. Async-signal-safe.
+    #[allow(unsafe_code)]
+    fn mkdir_one(path: *const libc::c_char) -> Result<(), libc::c_int> {
+        if unsafe { libc::mkdir(path, 0o755) } < 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if errno != libc::EEXIST {
+                return Err(errno);
+            }
+        }
+        if unsafe { libc::chmod(path, 0o755) } < 0 {
+            Err(unsafe { *libc::__errno_location() })
+        } else {
+            Ok(())
+        }
+    }
+
+    #[allow(unsafe_code)]
+    fn prepare_device_bind_parent_dirs(destination: &CString) -> Result<(), libc::c_int> {
+        let bytes = destination.as_bytes_with_nul();
+        if bytes.len() > 4096 || !bytes.starts_with(b"/") {
+            return Err(libc::EINVAL);
+        }
+        let mut buf = [0u8; 4096];
+        buf[..bytes.len()].copy_from_slice(bytes);
+
+        for idx in 1..bytes.len() - 1 {
+            if buf[idx] == b'/' {
+                buf[idx] = 0;
+                mkdir_one(buf.as_ptr() as *const libc::c_char)?;
+                buf[idx] = b'/';
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn mknod_device_bind_target(
+        destination: &CString,
+        mode: libc::mode_t,
+        dev: libc::dev_t,
+        uid: libc::uid_t,
+        gid: libc::gid_t,
+    ) -> Result<(), libc::c_int> {
+        if unsafe { libc::unlink(destination.as_ptr()) } < 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if errno != libc::ENOENT {
+                return Err(errno);
+            }
+        }
+        if unsafe { libc::mknod(destination.as_ptr(), mode, dev) } < 0 {
+            return Err(unsafe { *libc::__errno_location() });
+        }
+        if unsafe { libc::chmod(destination.as_ptr(), mode & 0o777) } < 0 {
+            return Err(unsafe { *libc::__errno_location() });
+        }
+        if unsafe { libc::chown(destination.as_ptr(), uid, gid) } < 0 {
+            return Err(unsafe { *libc::__errno_location() });
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn apply_device_mask_and_binds(
+        binds: &[PreparedDeviceBind],
+        uid: libc::uid_t,
+        gid: libc::gid_t,
+    ) -> Result<(), (libc::c_int, Vec<u8>)> {
+        let dev = c"/dev".as_ptr();
+        let tmpfs = c"tmpfs".as_ptr();
+        let options = c"mode=0755".as_ptr() as *const libc::c_void;
+        if unsafe {
+            libc::mount(
+                tmpfs,
+                dev,
+                tmpfs,
+                (libc::MS_NOSUID | libc::MS_NOEXEC) as libc::c_ulong,
+                options,
+            )
+        } < 0
+        {
+            let errno = unsafe { *libc::__errno_location() };
+            return Err((errno, b"/dev".to_vec()));
+        }
+
+        for bind in binds {
+            if let Err(errno) = prepare_device_bind_parent_dirs(&bind.destination) {
+                return Err((errno, bind.destination.as_bytes().to_vec()));
+            }
+            match bind.kind {
+                PreparedDeviceBindKind::Directory => {
+                    if let Err(errno) = mkdir_one(bind.destination.as_ptr()) {
+                        return Err((errno, bind.destination.as_bytes().to_vec()));
+                    }
+                    if unsafe {
+                        libc::mount(
+                            bind.source.as_ptr(),
+                            bind.destination.as_ptr(),
+                            std::ptr::null(),
+                            (libc::MS_BIND | libc::MS_REC) as libc::c_ulong,
+                            std::ptr::null(),
+                        )
+                    } < 0
+                    {
+                        let errno = unsafe { *libc::__errno_location() };
+                        return Err((errno, bind.destination.as_bytes().to_vec()));
+                    }
+                }
+                PreparedDeviceBindKind::DeviceNode { mode, dev } => {
+                    if let Err(errno) =
+                        mknod_device_bind_target(&bind.destination, mode, dev, uid, gid)
+                    {
+                        return Err((errno, bind.destination.as_bytes().to_vec()));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn apply_root_secret_masks(
+        actions: &[PreparedMaskAction],
+    ) -> Result<(), (libc::c_int, Vec<u8>)> {
+        let tmpfs = c"tmpfs".as_ptr();
+        let options = c"mode=0555".as_ptr() as *const libc::c_void;
+        for action in actions {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::stat(action.path.as_ptr(), &mut st) } < 0 {
+                let errno = unsafe { *libc::__errno_location() };
+                if errno == libc::ENOENT {
+                    continue;
+                }
+                return Err((errno, action.path.as_bytes().to_vec()));
+            }
+            if st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+                continue;
+            }
+            if unsafe {
+                libc::mount(
+                    tmpfs,
+                    action.path.as_ptr(),
+                    tmpfs,
+                    (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC | libc::MS_RDONLY)
+                        as libc::c_ulong,
+                    options,
+                )
+            } < 0
+            {
+                let errno = unsafe { *libc::__errno_location() };
+                return Err((errno, action.path.as_bytes().to_vec()));
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    fn apply_private_procfs() -> Result<(), (libc::c_int, Vec<u8>)> {
+        let proc_path = c"/proc".as_ptr();
+        let proc_type = c"proc".as_ptr();
+        if unsafe {
+            libc::mount(
+                proc_type,
+                proc_path,
+                proc_type,
+                (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as libc::c_ulong,
+                std::ptr::null(),
+            )
+        } < 0
+        {
+            let errno = unsafe { *libc::__errno_location() };
+            return Err((errno, b"/proc".to_vec()));
+        }
+        Ok(())
+    }
+
+    /// Format errno as ASCII digits into buf, return number of bytes
+    /// written. Async-signal-safe.
     fn format_errno(errno: libc::c_int, buf: &mut [u8; 16]) -> usize {
         if errno == 0 {
             buf[0] = b'0';
             return 1;
         }
-        let mut n = errno.unsigned_abs() as u32;
+        let mut n = errno.unsigned_abs();
         let mut tmp = [0u8; 16];
         let mut len = 0;
         while n > 0 {
@@ -1818,19 +2213,23 @@ pub mod pidfd_sys {
     const CHILD_EXIT_SETGID: libc::c_int = 71;
     const CHILD_EXIT_SETUID: libc::c_int = 72;
     const CHILD_EXIT_EXECVE: libc::c_int = 73;
-    /// v1.1.1fu14: child failed to read 1 byte from the user-NS
-    /// sync pipe — typically EINTR or the parent died before
-    /// writing the maps. Distinct exit code so audit/triage can
-    /// distinguish from generic execve / capset failures.
+    /// Child failed to read 1 byte from the user-NS sync pipe —
+    /// typically EINTR or the parent died before writing the maps.
+    /// Distinct exit code so audit/triage can distinguish from generic
+    /// execve / capset failures.
     const CHILD_EXIT_USER_NS_SYNC: libc::c_int = 74;
-    // v1.1.2fu36 panel-rust-R1: surfaces a config-level mistake
-    // (umask field set to a value >0o777). Distinct from EXECVE
-    // failures so operators can grep audit logs for misconfig.
+    // Surfaces a config-level mistake (umask field set to a value
+    // >0o777). Distinct from EXECVE failures so operators can grep
+    // audit logs for misconfig.
     const CHILD_EXIT_INVALID_UMASK: libc::c_int = 75;
+    /// dup2 of a pre-opened device fd to its well-known number failed
+    /// in the child closure. Distinct from EXECVE so triage can
+    /// immediately identify the fd-passing step.
+    const CHILD_EXIT_PREOPEN_DUP2: libc::c_int = 76;
 
-    /// W4-fu: spawn a per-role runner with namespace / seccomp /
-    /// capability setup plus `setgroups` + `setgid` + `setuid` +
-    /// `execve` in a single `clone3_pidfd_or_fork_fallback` call.
+    /// Spawn a per-role runner with namespace / seccomp / capability
+    /// setup plus `setgroups` + `setgid` + `setuid` + `execve` in a
+    /// single `clone3_pidfd_or_fork_fallback` call.
     ///
     /// Async-signal-safety invariant (`signal-safety(7)`): every heap
     /// allocation, CString build, seccomp-program load, and cgroup fd
@@ -1846,13 +2245,12 @@ pub mod pidfd_sys {
         supplementary_groups: Vec<u32>,
         isolation: RunnerIsolationSpec,
     ) -> io::Result<SpawnOutcome> {
-        // v1.1.1fu14: NamespaceSet.user is now ALLOWED when
-        // RunnerIsolationSpec.user_namespace provides the
-        // uid_map/gid_map values. Caller must set both for the
-        // child to be fake-root inside the new user NS. Setting
-        // namespaces.user without user_namespace is rejected
-        // because the child would land in the namespace with
-        // overflowuid (65534) and no caps — never useful.
+        // NamespaceSet.user is ALLOWED when
+        // RunnerIsolationSpec.user_namespace provides the uid_map/gid_map
+        // values. Caller must set both for the child to be fake-root
+        // inside the new user NS. Setting namespaces.user without
+        // user_namespace is rejected because the child would land in the
+        // namespace with overflowuid (65534) and no caps — never useful.
         let user_ns_spec = isolation.user_namespace;
         if isolation.namespaces.user && user_ns_spec.is_none() {
             return Err(io::Error::new(
@@ -1881,11 +2279,20 @@ pub mod pidfd_sys {
         let capability_numbers = parse_capabilities(&isolation.capabilities)?;
         let mount_required =
             isolation.namespaces.mount || mount_policy_requires_namespace(&isolation.mount_policy);
+        let mask_dev = isolation.mount_policy.hide_device_nodes_by_default
+            && !isolation.mount_policy.device_binds.is_empty()
+            && isolation.namespaces.pid;
         let mount_actions = if mount_required {
             prepare_mount_actions(&isolation.mount_policy)?
         } else {
             Vec::new()
         };
+        let (device_bind_fds, prepared_device_binds) = if mask_dev {
+            prepare_device_binds(&isolation.mount_policy)?
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let root_mask_actions = prepare_root_mask_actions(uid, &isolation.mount_policy)?;
         let unshare_flags = unshare_namespace_flags(&isolation.namespaces, mount_required);
         let extra_clone_flags = clone3_namespace_flags(&isolation.namespaces);
         let argv_ptrs = &argv_ptrs_storage;
@@ -1893,28 +2300,44 @@ pub mod pidfd_sys {
         let supplementary_groups = &supplementary_groups_storage;
         let capabilities = &capability_numbers;
         let mount_actions = &mount_actions;
+        let prepared_device_binds = &prepared_device_binds;
+        let root_mask_actions = &root_mask_actions;
         let seccomp_program = isolation.seccomp_program;
         let cgroup_procs_fd = isolation.cgroup_procs_fd;
         let child_umask = isolation.umask;
         let gid = gid as libc::gid_t;
         let uid = uid as libc::uid_t;
 
-        // v1.1.1fu14: when a user NS is requested, create a
-        // sync pipe so the child can block until the parent
-        // has written uid_map/gid_map/setgroups. Pipe is FD_CLOEXEC
-        // so it auto-closes on execve regardless of child path.
+        // Extract raw fd numbers before the move closure so we can use
+        // them in the async-signal-safe child path (raw syscalls only)
+        // (ADR 0021). The OwnedFds themselves are moved into the closure
+        // so the PARENT drops them (closes the fds on the parent side)
+        // when the closure is dropped after clone/fork. Parent and child
+        // have independent fd tables after fork, so there is no
+        // double-close hazard.
+        let pre_opened_raw_fds: Vec<libc::c_int> = isolation
+            .pre_opened_device_fds
+            .iter()
+            .map(|fd| fd.as_raw_fd())
+            .collect();
+        let _pre_opened_device_fds_owner = isolation.pre_opened_device_fds;
+        let _device_bind_fds_owner = device_bind_fds;
+
+        // When a user NS is requested, create a sync pipe so the child
+        // can block until the parent has written uid_map/gid_map/setgroups.
+        // Pipe is FD_CLOEXEC so it auto-closes on execve regardless of
+        // child path.
         let user_ns_sync = if user_ns_spec.is_some() {
             Some(make_sync_pipe()?)
         } else {
             None
         };
-        // v1.1.1fu15 (panel-rust + panel-kernel must-fix): capture
-        // BOTH pipe fds in the child closure. Without this, the
-        // child inherits both ends of the pipe (CLOEXEC only fires
-        // on execve, not at clone), so the parent's death never
-        // delivers EOF to the child's read() — it can wedge
-        // forever. The child explicitly closes its inherited
-        // write_fd before blocking, so EOF is observable.
+        // Capture BOTH pipe fds in the child closure. Without this, the
+        // child inherits both ends of the pipe (CLOEXEC only fires on
+        // execve, not at clone), so the parent's death never delivers EOF
+        // to the child's read() — it can wedge forever. The child
+        // explicitly closes its inherited write_fd before blocking, so
+        // EOF is observable.
         let user_ns_sync_read_fd: libc::c_int = user_ns_sync
             .as_ref()
             .map(|p| p.read_fd.as_raw_fd())
@@ -1924,12 +2347,11 @@ pub mod pidfd_sys {
             .map(|p| p.write_fd.as_raw_fd())
             .unwrap_or(-1);
 
-        // v1.1.1fu15 (panel-kernel + panel-virt must-fix): when a
-        // user namespace is in play, the child must transition to
-        // in-NS UID 0 (the mapped root), NOT to the host stable
-        // principal UID. Calling setuid(<host_uid>) inside the new
-        // user NS fails with EINVAL because that UID is NOT mapped
-        // as an in-namespace ID — only NS-UID 0 is mapped.
+        // When a user namespace is in play, the child must transition
+        // to in-NS UID 0 (the mapped root), NOT to the host stable
+        // principal UID. Calling setuid(<host_uid>) inside the new user
+        // NS fails with EINVAL because that UID is NOT mapped as an
+        // in-namespace ID — only NS-UID 0 is mapped.
         //
         // The role profile's host UID/GID is still the EXEMPLAR
         // identity (used by ACLs and audit), but the in-NS
@@ -1939,10 +2361,9 @@ pub mod pidfd_sys {
         let target_uid: libc::uid_t = if in_ns_credentials { 0 } else { uid };
         let target_gid: libc::gid_t = if in_ns_credentials { 0 } else { gid };
 
-        // v1.1.1fu15 (panel-kernel must-fix): with setgroups=deny
-        // written by the parent's user-NS setup, the child CANNOT
-        // call setgroups(2) — even setgroups(0, ...) returns EPERM.
-        // Skip the call entirely when in a broker-pre-NS spawn.
+        // With setgroups=deny written by the parent's user-NS setup, the
+        // child CANNOT call setgroups(2) — even setgroups(0, ...) returns
+        // EPERM. Skip the call entirely when in a broker-pre-NS spawn.
         // Caller MUST ensure supplementary_groups is empty for
         // user_namespace spawns; we enforce this here defensively.
         if in_ns_credentials && !supplementary_groups_storage.is_empty() {
@@ -1953,36 +2374,16 @@ pub mod pidfd_sys {
         }
 
         let outcome = clone3_pidfd_or_fork_fallback(extra_clone_flags, move || unsafe {
-            // v1.1.2fu26 (live-deploy debug): open stderr log BEFORE
-            // any unshare/mount so /tmp is still in the original
-            // mount NS view. dup2 to fd 2 so subsequent errors
-            // (including virtiofsd's startup) are captured.
-            // v1.1.2fu29-debug: use /var/log instead of /tmp because
-            // PrivateTmp makes /tmp per-unit and harder to inspect.
-            let log_path = b"/var/log/nixling-broker-child.log\0";
-            let log_fd = libc::open(
-                log_path.as_ptr() as *const libc::c_char,
-                libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND | libc::O_CLOEXEC,
-                0o644,
-            );
-            if log_fd >= 0 {
-                libc::dup2(log_fd, 2);
-                libc::close(log_fd);
-                let m = b"=== broker-child stderr capture armed ===\n";
-                libc::write(2, m.as_ptr() as *const _, m.len());
-            }
-            // v1.1.1fu14 + fu15: if we're in a user NS, FIRST close
-            // the inherited write end of the sync pipe so the
-            // parent's death is observable as EOF. THEN block on
-            // the read end until the parent has written
+            // If we're in a user NS, FIRST close the inherited write end
+            // of the sync pipe so the parent's death is observable as EOF.
+            // THEN block on the read end until the parent has written
             // uid_map/setgroups=deny/gid_map and signaled.
             if user_ns_sync_read_fd >= 0 {
                 if user_ns_sync_write_fd >= 0 {
                     libc::close(user_ns_sync_write_fd);
                 }
                 let mut buf = [0u8; 1];
-                let n =
-                    libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
+                let n = libc::read(user_ns_sync_read_fd, buf.as_mut_ptr() as *mut _, 1);
                 if n != 1 {
                     let m = b"DEBUG: sync read returned non-1\n";
                     libc::write(2, m.as_ptr() as *const _, m.len());
@@ -2023,8 +2424,8 @@ pub mod pidfd_sys {
                     libc::write(2, b"\n".as_ptr() as *const _, 1);
                     libc::_exit(CHILD_EXIT_MOUNT);
                 }
-                // v1.1.2fu27 panel-kernel critical: when in_ns_credentials
-                // (broker-pre-NS spawn per ADR 0021), SKIP apply_mount_actions.
+                // When in_ns_credentials (broker-pre-NS spawn per ADR 0021),
+                // SKIP apply_mount_actions.
                 // The user-NS already provides isolation (each NS has its
                 // own mount tree clone from clone3). Bind-mounting paths
                 // onto themselves WOULD FAIL with EPERM for any path that
@@ -2051,6 +2452,57 @@ pub mod pidfd_sys {
                             libc::_exit(CHILD_EXIT_MOUNT);
                         }
                     }
+                    match apply_root_secret_masks(root_mask_actions) {
+                        Ok(()) => {}
+                        Err((errno, path_bytes)) => {
+                            let m = b"DEBUG: apply_root_secret_masks failed errno=";
+                            libc::write(2, m.as_ptr() as *const _, m.len());
+                            let mut buf = [0u8; 16];
+                            let len = format_errno(errno, &mut buf);
+                            libc::write(2, buf.as_ptr() as *const _, len);
+                            let m2 = b" path=";
+                            libc::write(2, m2.as_ptr() as *const _, m2.len());
+                            libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                            libc::write(2, b"\n".as_ptr() as *const _, 1);
+                            libc::_exit(CHILD_EXIT_MOUNT);
+                        }
+                    }
+                    if mask_dev {
+                        match apply_device_mask_and_binds(
+                            prepared_device_binds,
+                            target_uid,
+                            target_gid,
+                        ) {
+                            Ok(()) => {}
+                            Err((errno, path_bytes)) => {
+                                let m = b"DEBUG: apply_device_mask_and_binds failed errno=";
+                                libc::write(2, m.as_ptr() as *const _, m.len());
+                                let mut buf = [0u8; 16];
+                                let len = format_errno(errno, &mut buf);
+                                libc::write(2, buf.as_ptr() as *const _, len);
+                                let m2 = b" path=";
+                                libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                                libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                libc::_exit(CHILD_EXIT_MOUNT);
+                            }
+                        }
+                        match apply_private_procfs() {
+                            Ok(()) => {}
+                            Err((errno, path_bytes)) => {
+                                let m = b"DEBUG: apply_private_procfs failed errno=";
+                                libc::write(2, m.as_ptr() as *const _, m.len());
+                                let mut buf = [0u8; 16];
+                                let len = format_errno(errno, &mut buf);
+                                libc::write(2, buf.as_ptr() as *const _, len);
+                                let m2 = b" path=";
+                                libc::write(2, m2.as_ptr() as *const _, m2.len());
+                                libc::write(2, path_bytes.as_ptr() as *const _, path_bytes.len());
+                                libc::write(2, b"\n".as_ptr() as *const _, 1);
+                                libc::_exit(CHILD_EXIT_MOUNT);
+                            }
+                        }
+                    }
                 }
             }
             if let Some(fd) = cgroup_procs_fd.as_ref() {
@@ -2060,8 +2512,8 @@ pub mod pidfd_sys {
                     libc::_exit(CHILD_EXIT_CGROUP);
                 }
             }
-            // v1.1.1fu15: skip setgroups when in a broker-pre-NS
-            // (parent wrote setgroups=deny so any call would EPERM).
+            // Skip setgroups when in a broker-pre-NS spawn (parent wrote
+            // setgroups=deny so any call would EPERM).
             if !in_ns_credentials
                 && libc::setgroups(supplementary_groups.len(), supplementary_groups.as_ptr()) < 0
             {
@@ -2080,22 +2532,21 @@ pub mod pidfd_sys {
             if !capabilities.is_empty() && apply_capabilities(capabilities).is_err() {
                 libc::_exit(CHILD_EXIT_CAPSET);
             }
-            if let Some(program) = seccomp_program.as_ref() {
-                if apply_seccomp(program).is_err() {
-                    libc::_exit(CHILD_EXIT_SECCOMP);
-                }
-            }
-            // v1.1.2fu36: install umask from the role profile before
-            // execve. Sidecars that bind shared Unix sockets
-            // (vhost-user-sound, crosvm-gpu, swtpm) use 0o007 so the
-            // bind() returns a 0660-mode socket — the existing
-            // /run/nixling/vms/<vm>/ default ACL (user:<ch-uid>:rwx)
-            // then becomes effective for cloud-hypervisor because
-            // mode-group-bits derive ACL mask=rw, not mask=---.
+            // umask MUST precede seccomp. A restrictive BPF filter that
+            // kills unrecognised ioctls would SIGSYS the process if
+            // libc::umask() is implemented via ioctl on some kernels or
+            // if a future profile adds ioctl-free seccomp. Ordering:
+            //   capset → umask → seccomp → execve
+            // Install umask from the role profile before execve. Sidecars
+            // that bind shared Unix sockets (vhost-user-sound, crosvm-gpu,
+            // swtpm) use 0o007 so the bind() returns a 0660-mode socket —
+            // the existing /run/nixling/vms/<vm>/ default ACL
+            // (user:<ch-uid>:rwx) then becomes effective for
+            // cloud-hypervisor because mode-group-bits derive ACL mask=rw,
+            // not mask=---.
             //
-            // panel-rust v1.1.2-final-R1 should-fix: reject umasks
-            // that exceed the POSIX file-mode width (0o777) so a
-            // config typo (e.g. umask = 9999) is caught explicitly
+            // Reject umasks that exceed the POSIX file-mode width (0o777)
+            // so a config typo (e.g. umask = 9999) is caught explicitly
             // rather than silently truncated by libc::umask.
             if let Some(mask) = child_umask {
                 if mask > 0o777 {
@@ -2105,61 +2556,64 @@ pub mod pidfd_sys {
                 }
                 libc::umask(mask as libc::mode_t);
             }
+            // Install pre-opened device fds at their well-known numbers
+            // before seccomp is loaded (ADR 0021).
+            //
+            // Ordering (capset → umask → pre-open → seccomp → execve): the
+            // dup2/fcntl calls must precede seccomp installation so the
+            // filter does not need to permit them at runtime.
+            //
+            // Each fd is dup2'd to RENDER_NODE_INHERITED_FD + index:
+            //   - dup2 does NOT copy CLOEXEC; fcntl(F_SETFD,0) is defensive
+            //     no-op (CLOEXEC was already absent on the dup2 target) but
+            //     explicit for future-proofing.
+            //   - If src == dst (already at the target slot), skip dup2/close
+            //     but still clear CLOEXEC (dup2(a,a) is a POSIX no-op AND
+            //     does not clear CLOEXEC on the destination).
+            //   - OwnedFds holding the original fds are in the closure and
+            //     dropped by the PARENT after fork; in the child _exit(2) is
+            //     called (no Rust destructors) after execve. No double-close.
+            for (i, &src_fd) in pre_opened_raw_fds.iter().enumerate() {
+                let dst_fd = RENDER_NODE_INHERITED_FD + i as libc::c_int;
+                if src_fd != dst_fd {
+                    if libc::dup2(src_fd, dst_fd) < 0 {
+                        let m = b"DEBUG: dup2 pre-opened device fd failed\n";
+                        libc::write(2, m.as_ptr() as *const _, m.len());
+                        libc::_exit(CHILD_EXIT_PREOPEN_DUP2);
+                    }
+                    libc::close(src_fd);
+                }
+                // Clear CLOEXEC so the fd survives execve.
+                libc::fcntl(dst_fd, libc::F_SETFD, 0);
+            }
+            if let Some(program) = seccomp_program.as_ref() {
+                if apply_seccomp(program).is_err() {
+                    libc::_exit(CHILD_EXIT_SECCOMP);
+                }
+            }
             let m = b"DEBUG: about to execve\n";
             libc::write(2, m.as_ptr() as *const _, m.len());
-            // v1.1.2fu28-debug: log full argv for diagnostic
-            let argc_msg = b"DEBUG argc=";
-            libc::write(2, argc_msg.as_ptr() as *const _, argc_msg.len());
-            let mut buf = [0u8; 16];
-            let len = format_errno(argv_ptrs.len() as libc::c_int - 1, &mut buf);
-            libc::write(2, buf.as_ptr() as *const _, len);
-            libc::write(2, b"\n".as_ptr() as *const _, 1);
-            for (i, p) in argv_ptrs.iter().enumerate() {
-                if p.is_null() { break; }
-                let prefix = b"DEBUG argv[";
-                libc::write(2, prefix.as_ptr() as *const _, prefix.len());
-                let mut ibuf = [0u8; 16];
-                let ilen = format_errno(i as libc::c_int, &mut ibuf);
-                libc::write(2, ibuf.as_ptr() as *const _, ilen);
-                libc::write(2, b"]=".as_ptr() as *const _, 2);
-                let slen = libc::strlen(*p);
-                libc::write(2, *p as *const _, slen);
-                libc::write(2, b"\n".as_ptr() as *const _, 1);
-            }
-            for (i, p) in env_ptrs.iter().enumerate() {
-                if p.is_null() { break; }
-                let prefix = b"DEBUG env[";
-                libc::write(2, prefix.as_ptr() as *const _, prefix.len());
-                let mut ibuf = [0u8; 16];
-                let ilen = format_errno(i as libc::c_int, &mut ibuf);
-                libc::write(2, ibuf.as_ptr() as *const _, ilen);
-                libc::write(2, b"]=".as_ptr() as *const _, 2);
-                let slen = libc::strlen(*p);
-                libc::write(2, *p as *const _, slen);
-                libc::write(2, b"\n".as_ptr() as *const _, 1);
-            }
             libc::execve(binary_ptr, argv_ptrs.as_ptr(), env_ptrs.as_ptr());
             let m2 = b"DEBUG: execve returned (failed)\n";
             libc::write(2, m2.as_ptr() as *const _, m2.len());
             libc::_exit(CHILD_EXIT_EXECVE);
         })?;
 
-        // v1.1.1fu14 + fu15: parent-side user-NS map writes.
-        // Performed AFTER clone3 returns (we have the child's
-        // PID) and BEFORE the sync pipe write that unblocks the
-        // child. Sequencing per `man 7 user_namespaces`:
-        // uid_map → setgroups=deny → gid_map. Then write 1 byte
-        // to the sync pipe so the child unblocks. The child has
-        // already closed its inherited write_fd (fu15 fix), so
-        // if the parent dies BEFORE this point the child gets
-        // EOF on read and exits CHILD_EXIT_USER_NS_SYNC=74.
+        // Parent-side user-NS map writes. Performed AFTER clone3 returns
+        // (we have the child's PID) and BEFORE the sync pipe write that
+        // unblocks the child. Sequencing per `man 7 user_namespaces`:
+        // uid_map → setgroups=deny → gid_map. Then write 1 byte to the
+        // sync pipe so the child unblocks. The child has
+        // already closed its inherited write_fd, so if the parent dies
+        // BEFORE this point the child gets EOF on read and exits
+        // CHILD_EXIT_USER_NS_SYNC=74.
         if let (Some(sync), Some(spec)) = (user_ns_sync, user_ns_spec) {
             write_user_namespace_maps(outcome.pid, spec).map_err(|err| {
-                // fu17 panel-rust should-fix: preserve the underlying
-                // io::Error as the source so callers can chain `.source()`
-                // to recover the original errno/kind information. The
-                // outer wrapper adds operator-friendly context (which
-                // /proc path, which pid) without erasing the cause.
+                // Preserve the underlying io::Error as the source so
+                // callers can chain `.source()` to recover the original
+                // errno/kind information. The outer wrapper adds
+                // operator-friendly context (which /proc path, which pid)
+                // without erasing the cause.
                 io::Error::new(
                     err.kind(),
                     UserNsMapWriteError {
@@ -2177,9 +2631,7 @@ pub mod pidfd_sys {
             // read() returns. Pipe is still open (we kept write_fd
             // via the OwnedFd in `sync.write_fd`); the call below
             // returns 1 on success.
-            let n = unsafe {
-                libc::write(sync.write_fd.as_raw_fd(), buf.as_ptr() as *const _, 1)
-            };
+            let n = unsafe { libc::write(sync.write_fd.as_raw_fd(), buf.as_ptr() as *const _, 1) };
             if n != 1 {
                 return Err(io::Error::last_os_error());
             }
@@ -2188,13 +2640,12 @@ pub mod pidfd_sys {
         Ok(outcome)
     }
 
-    /// v1.1.2fu17 panel-rust should-fix: wrapping error type that
-    /// preserves the underlying io::Error as `Error::source()` while
-    /// adding pid + operation context to the Display impl. Used by
-    /// `write_user_namespace_maps` failures so operators see
-    /// "user_namespace map write failed for pid 12345: <orig>" AND
-    /// callers chasing `.source()` recover the original ENOSPC /
-    /// EPERM / EACCES etc.
+    /// Wrapping error type that preserves the underlying io::Error as
+    /// `Error::source()` while adding pid + operation context to the
+    /// Display impl. Used by `write_user_namespace_maps` failures so
+    /// operators see "user_namespace map write failed for pid 12345:
+    /// <orig>" AND callers chasing `.source()` recover the original
+    /// ENOSPC / EPERM / EACCES etc.
     #[derive(Debug)]
     struct UserNsMapWriteError {
         pid: i32,
@@ -2217,14 +2668,14 @@ pub mod pidfd_sys {
         }
     }
 
-    /// v1.1.1fu14: parent-side helper that writes the single-entry
-    /// uid_map / setgroups=deny / gid_map for the child user namespace.
-    /// Per `man 7 user_namespaces` the setgroups=deny write MUST
-    /// happen before gid_map when the writer is not privileged.
+    /// Parent-side helper that writes the single-entry uid_map /
+    /// setgroups=deny / gid_map for the child user namespace. Per
+    /// `man 7 user_namespaces` the setgroups=deny write MUST happen
+    /// before gid_map when the writer is not privileged.
     ///
-    /// fu17 panel-rust should-fix: each io::Error is annotated with
-    /// the specific /proc path that failed so operators don't have
-    /// to guess which of the three writes errored.
+    /// Each io::Error is annotated with the specific /proc path that
+    /// failed so operators don't have to guess which of the three writes
+    /// errored.
     fn write_user_namespace_maps(child_pid: i32, spec: UserNamespaceSpec) -> io::Result<()> {
         use std::fs;
         let uid_map_path = format!("/proc/{child_pid}/uid_map");
@@ -2232,16 +2683,17 @@ pub mod pidfd_sys {
         let gid_map_path = format!("/proc/{child_pid}/gid_map");
         fs::write(&uid_map_path, format!("0 {} 1\n", spec.host_uid_for_zero))
             .map_err(|err| io::Error::new(err.kind(), format!("writing {uid_map_path}: {err}")))?;
-        fs::write(&setgroups_path, "deny")
-            .map_err(|err| io::Error::new(err.kind(), format!("writing {setgroups_path}: {err}")))?;
+        fs::write(&setgroups_path, "deny").map_err(|err| {
+            io::Error::new(err.kind(), format!("writing {setgroups_path}: {err}"))
+        })?;
         fs::write(&gid_map_path, format!("0 {} 1\n", spec.host_gid_for_zero))
             .map_err(|err| io::Error::new(err.kind(), format!("writing {gid_map_path}: {err}")))?;
         Ok(())
     }
 
-    /// v1.1.1fu14: small helper that creates a CLOEXEC pipe and
-    /// returns the two ends as OwnedFds. Used to gate the child's
-    /// post-clone setup on the parent finishing the uid_map writes.
+    /// Small helper that creates a CLOEXEC pipe and returns the two ends
+    /// as OwnedFds. Used to gate the child's post-clone setup on the
+    /// parent finishing the uid_map writes.
     struct SyncPipe {
         read_fd: OwnedFd,
         write_fd: OwnedFd,
@@ -2366,16 +2818,13 @@ mod tests {
         assert!(!child.exists());
     }
 
-    // v1.1.1fu14 (ADR 0021) — UserNamespaceSpec validation.
-    // These tests exercise the SHAPE of the request, not the
-    // kernel-level fork+map dance (which requires root and is
-    // tested by integration tests in live_handlers.rs).
+    // UserNamespaceSpec validation (ADR 0021). These tests exercise the
+    // SHAPE of the request, not the kernel-level fork+map dance (which
+    // requires root and is tested by integration tests in live_handlers.rs).
 
-    use std::ffi::CString;
-    use super::pidfd_sys::{
-        clone3_spawn_runner, RunnerIsolationSpec, UserNamespaceSpec,
-    };
+    use super::pidfd_sys::{clone3_spawn_runner, RunnerIsolationSpec, UserNamespaceSpec};
     use nixling_core::minijail_profile::{MountPolicy, NamespaceSet};
+    use std::ffi::CString;
 
     fn empty_mount_policy() -> MountPolicy {
         MountPolicy {
@@ -2404,6 +2853,7 @@ mod tests {
             cgroup_procs_fd: None,
             user_namespace: spec,
             umask: None,
+            pre_opened_device_fds: Vec::new(),
         }
     }
 
@@ -2435,14 +2885,12 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
-    /// v1.1.2-final-R1 (panel-test HIGH): assert that the
-    /// `RunnerIsolationSpec.umask` field is present, defaults to
-    /// `None`, and accepts a valid octal value. This is the unit-
-    /// level verification that the umask plumbing reaches the
+    /// Assert that the `RunnerIsolationSpec.umask` field is present,
+    /// defaults to `None`, and accepts a valid octal value. This is the
+    /// unit-level verification that the umask plumbing reaches the
     /// child-closure layer; the actual `libc::umask()` syscall is
-    /// exercised by the live deploy + the integration-level VM
-    /// boot tests (sidecars binding mode-0660 sockets that CH
-    /// can connect to).
+    /// exercised by the live deploy + the integration-level VM boot
+    /// tests (sidecars binding mode-0660 sockets that CH can connect to).
     #[test]
     fn isolation_spec_umask_field_defaults_to_none() {
         let iso = isolation_with_user_namespace(None);
@@ -2456,13 +2904,75 @@ mod tests {
         assert_eq!(iso.umask, Some(7));
     }
 
-    /// v1.1.2-final-R1 (panel-test HIGH + panel-kernel
-    /// confirmed): verify that the broker rejects an umask >0o777
-    /// before exec rather than silently truncating via libc cast.
-    /// The child writes "DEBUG: invalid umask" to stderr and
-    /// exits CHILD_EXIT_INVALID_UMASK (75). Verified at child-
-    /// closure level: any value with bits above 0o777 set must
-    /// reach the `mask > 0o777` guard.
+    #[test]
+    fn child_spawn_path_does_not_log_full_argv_or_env_to_global_file() {
+        let source = include_str!("sys.rs");
+        let global_log = concat!("nixling-broker-child", ".log");
+        let argv_marker = concat!("DEBUG ", "argv[");
+        let env_marker = concat!("DEBUG ", "env[");
+        assert!(
+            !source.contains(global_log),
+            "broker child path must not create a global argv/env debug log"
+        );
+        assert!(
+            !source.contains(argv_marker) && !source.contains(env_marker),
+            "broker child path must not log full runner argv/env"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn mknod_device_bind_target_chowns_runner_device_node() {
+        if !nix::unistd::Uid::effective().is_root() {
+            return;
+        }
+        use std::os::unix::fs::MetadataExt as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "nixling-device-bind-target-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create tempdir");
+        let path = dir.join("null");
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+            .expect("temp path has no nul");
+        let uid = nix::unistd::Uid::current().as_raw();
+        let gid = nix::unistd::Gid::current().as_raw();
+
+        let null_metadata = std::fs::metadata("/dev/null").expect("stat /dev/null");
+        let rc = super::pidfd_sys::mknod_device_bind_target(
+            &c_path,
+            (nix::libc::S_IFCHR | 0o600) as nix::libc::mode_t,
+            null_metadata.rdev() as nix::libc::dev_t,
+            uid,
+            gid,
+        );
+
+        let metadata = std::fs::metadata(&path).expect("stat created device node");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        rc.expect("mknod device bind target");
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        assert_eq!(metadata.uid(), uid);
+        assert_eq!(metadata.gid(), gid);
+    }
+
+    #[test]
+    fn device_bind_target_chown_call_is_pinned() {
+        let source = include_str!("sys.rs");
+        let chown_call = concat!("libc::", "chown(destination.as_ptr(), uid, gid)");
+        assert!(
+            source.contains(chown_call),
+            "masked device bind targets must be chowned to the runner uid/gid"
+        );
+    }
+
+    /// Verify that the broker rejects an umask >0o777 before exec rather
+    /// than silently truncating via libc cast. The child writes "DEBUG:
+    /// invalid umask" to stderr and exits CHILD_EXIT_INVALID_UMASK (75).
+    /// Verified at child-closure level: any value with bits above 0o777
+    /// set must reach the `mask > 0o777` guard.
     #[test]
     fn umask_validation_bound_is_0o777() {
         // Sanity check: 0o007 is in range, 0o1000 is out.
@@ -2470,5 +2980,123 @@ mod tests {
         let invalid: u32 = 0o1000;
         assert!(valid <= 0o777);
         assert!(invalid > 0o777);
+    }
+
+    /// Hermetic unit test asserting that `apply_mount_actions` is NOT
+    /// called when `in_ns_credentials = true` (broker-pre-NS spawn per
+    /// ADR 0021).
+    ///
+    /// Strategy — exit-code oracle: spawn a no-op binary (`true`) with
+    /// `user_namespace = Some(...)` (which sets `in_ns_credentials =
+    /// true`) and a mount policy that produces a non-empty
+    /// `mount_actions` list (`nix_store_read_only = true` →
+    /// `["/nix/store"]`):
+    ///
+    /// - With the guard (`if !in_ns_credentials`) in place:
+    ///   `apply_mount_actions` is skipped; the child execs `true` and
+    ///   exits 0.
+    /// - Without the guard: `apply_mount_actions_debug` would attempt
+    ///   `mount("/nix/store", "/nix/store", NULL, MS_BIND|MS_REC)`
+    ///   inside the user-NS where inherited mounts are locked by the
+    ///   kernel (CAP_SYS_ADMIN in the child user-NS is not sufficient
+    ///   to mutate mounts owned by the parent user-NS); the call
+    ///   returns EPERM and the child exits `CHILD_EXIT_MOUNT` (64).
+    ///
+    /// Skips cleanly on hosts with `kernel.unprivileged_userns_clone=0`
+    /// (clone3 returns EPERM before any child runs).
+    #[test]
+    fn apply_mount_actions_skipped_in_user_ns() {
+        use nix::sys::wait::{waitpid, WaitStatus};
+        use nix::unistd::Pid;
+
+        // /bin/true is absent on NixOS; probe common locations.
+        let true_path = [
+            "/bin/true",
+            "/usr/bin/true",
+            "/run/current-system/sw/bin/true",
+        ]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .copied()
+        .expect("could not find `true` binary in any candidate location");
+
+        let current_uid = nix::unistd::Uid::current().as_raw();
+        let current_gid = nix::unistd::Gid::current().as_raw();
+
+        let iso = RunnerIsolationSpec {
+            capabilities: vec![],
+            namespaces: NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: true,
+            },
+            seccomp_program: None,
+            // nix_store_read_only = true triggers
+            // mount_policy_requires_namespace → mount_required = true
+            // → prepare_mount_actions → [PreparedMountAction { path:
+            // "/nix/store", readonly: true }].  This guarantees a
+            // non-empty mount_actions slice reaches the guard.
+            mount_policy: MountPolicy {
+                read_only_paths: vec![],
+                writable_paths: vec![],
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: false,
+                device_binds: vec![],
+                bind_mounts: vec![],
+            },
+            cgroup_procs_fd: None,
+            user_namespace: Some(UserNamespaceSpec {
+                host_uid_for_zero: current_uid,
+                host_gid_for_zero: current_gid,
+            }),
+            umask: None,
+            pre_opened_device_fds: Vec::new(),
+        };
+
+        let bin = CString::new(true_path).unwrap();
+        let argv0 = bin.clone();
+        // supplementary_groups MUST be empty: the parent writes
+        // setgroups=deny during uid_map setup, so any call to
+        // setgroups(2) in the child would return EPERM.
+        let outcome = match clone3_spawn_runner(
+            bin,
+            vec![argv0], // argv[0] = binary path; coreutils multi-call needs it
+            vec![],
+            current_uid,
+            current_gid,
+            vec![],
+            iso,
+        ) {
+            Ok(o) => o,
+            Err(e) if e.raw_os_error() == Some(nix::libc::EPERM) => {
+                // kernel.unprivileged_userns_clone=0: user namespaces
+                // not available on this host — skip rather than fail.
+                println!(
+                    "SKIP: unprivileged user NS not available \
+                     (kernel.unprivileged_userns_clone=0)"
+                );
+                return;
+            }
+            Err(e) => panic!("clone3_spawn_runner failed unexpectedly: {e}"),
+        };
+
+        // Reap the child and capture its wait status.
+        let wait_status = waitpid(Pid::from_raw(outcome.pid), None).expect("waitpid failed");
+
+        // CHILD_EXIT_MOUNT = 64 would mean apply_mount_actions ran and
+        // got EPERM on the locked /nix/store bind-mount — i.e., the
+        // `if !in_ns_credentials` guard is absent.
+        assert_eq!(
+            wait_status,
+            WaitStatus::Exited(Pid::from_raw(outcome.pid), 0),
+            "child did not exit 0 (expected /bin/true to succeed); \
+             WaitStatus::Exited(_, 64) (CHILD_EXIT_MOUNT) would indicate \
+             the fu27 guard `if !in_ns_credentials` is missing and \
+             apply_mount_actions was invoked inside the user-NS \
+             (EPERM on locked inherited mount)"
+        );
     }
 }

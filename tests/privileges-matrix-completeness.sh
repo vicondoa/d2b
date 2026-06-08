@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# W1 Layer-1 gate: every declared public/broker operation has a rendered privileges row.
+# Every declared public/broker operation has a rendered privileges row.
 #
-# W3fu2 H6 (docs-1): the SCHEMA path moved from v1 to v2 because W3fu1
-# H3 declared `v2` as the current bundle baseline (bundleVersion=2,
-# schemaVersion=v2). The privileges schema enum is regenerated from
+# The SCHEMA path moved from v1 to v2 because `v2` is the current
+# bundle baseline (bundleVersion=2, schemaVersion=v2). The privileges
+# schema enum is regenerated from
 # `packages/nixling-core/src/privileges.rs` by `cargo xtask gen-schemas`
 # into `docs/reference/schemas/v2/privileges.json`; validating
-# rendered W3 operations against v1's frozen enum was correct under
-# the W2 baseline but drifts on every W3+ operation addition.
+# rendered operations against v1's frozen enum was correct under
+# the baseline but drifts on every + operation addition.
 
 set -euo pipefail
 
@@ -60,9 +60,15 @@ found = set()
 def record_cli(parts):
     if not parts:
         return
+    if parts[0].startswith('NOTICE'):
+        return
     if parts[0] in {'--help', '-h'}:
         return
     if re.fullmatch(r'v\d+(?:\.\d+)*', parts[0]):
+        return
+    if '/' in parts[0]:
+        for item in parts[0].split('/'):
+            record_cli([item] + parts[1:])
         return
 
     op = [parts[0]]
@@ -72,7 +78,7 @@ def record_cli(parts):
             if len(parts) > 2 and parts[2] in {'--apply', '--dry-run', '--read-only'}:
                 op.append(parts[2])
         elif parts[0] == 'vm' and not parts[1].startswith('--'):
-            vm_alias = {'start': 'up', 'stop': 'down', 'restart': 'restart'}.get(parts[1])
+            vm_alias = {'start': 'up', 'stop': 'down', 'restart': 'restart', 'list': 'list'}.get(parts[1])
             if vm_alias is not None:
                 op = [vm_alias]
             else:
@@ -102,7 +108,7 @@ for raw_cmd in re.findall(r'`(nixling[^`]*)`', cli):
     tokens = []
     for raw in raw_cmd.split()[1:]:
         token = raw.strip().rstrip('.,;:')
-        if token.startswith('<') or token.startswith('['):
+        if token.startswith('<') or token.startswith('[') or token.startswith('>'):
             continue
         token = token.split('|', 1)[0].rstrip(']')
         if token in {'...', '…'}:
@@ -115,10 +121,10 @@ for broker_path in map(Path, sys.argv[2:]):
     text = broker_path.read_text(encoding='utf-8')
     saw_enum = False
     # Match operation-style enums by name suffix. Capture the enum's name
-    # so we can skip W3-introduced typed sub-error enums (CgroupOpError,
+    # so we can skip typed sub-error enums (CgroupOpError,
     # PidfdOpError, OpError, etc.) whose variants are kebab-case audit
-    # error codes, NOT broker enum operations. The W3 H2 integrator fix
-    # excludes enum-name suffixes Error/Err/Kind from the operation set.
+    # error codes, NOT broker enum operations. The integrator fix excludes
+    # enum-name suffixes Error/Err/Kind from the operation set.
     for enum_name, enum_body in re.findall(
         r'enum\s+(\w*(?:Operation|Request|Command|Op)\w*)\s*\{([^}]*)\}',
         text,

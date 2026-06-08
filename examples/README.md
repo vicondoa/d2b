@@ -9,7 +9,7 @@ directories. Read the per-directory README first.
 | [`personal-dev/`](./personal-dev/) | Rust-first README alias | README-only pointer to `minimal/`; VM name `personal-dev`. |
 | [`graphics-workstation/`](./graphics-workstation/) | Desktop VM with Wayland + audio + USBIP | Requires a Wayland compositor on the host. |
 | [`multi-env/`](./multi-env/) (`demo`) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight (legacy v0.4.0 Tier 0 path). |
-| [`multi-env/`](./multi-env/) (`multi-env-daemon-experimental`) | Two isolated envs + W3 daemon opt-in | Exercises per-env `mtu` / `mssClamp` / `lan.allowEastWest` plus `supervisor = "nixlingd"` on one VM. |
+| [`multi-env/`](./multi-env/) (`multi-env-daemon-experimental`) | Two isolated envs + daemon opt-in | Exercises per-env `mtu` / `mssClamp` / `lan.allowEastWest` plus `supervisor = "nixlingd"` on one VM. |
 | [`with-observability/`](./with-observability/) | Single workload VM + auto-declared observability stack | Grafana/Prometheus/Loki/Tempo on a dedicated `obs` env. |
 | [`with-entra-id/`](./with-entra-id/) | Checked Entra-ID composition | Canonical flake behind the doc-friendly [`work-entra/`](./work-entra/) alias. |
 | [`work-entra/`](./work-entra/) | Rust-first README alias | README-only pointer to `with-entra-id/`; VM name `work-entra`. |

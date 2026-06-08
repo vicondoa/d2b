@@ -1,4 +1,4 @@
-# tests/smoke-eval-aarch64.nix — Phase 4 multi-arch eval gate.
+# tests/smoke-eval-aarch64.nix — multi-arch eval gate.
 #
 # Sibling of tests/smoke-eval.nix that pins the eval-target system to
 # `aarch64-linux`. Exercises the case the published refactor plan
@@ -102,7 +102,7 @@ let
 
         # One headless workload VM — graphics + audio explicitly
         # LEFT OFF (their defaults are false, this is just a
-        # readability marker). The Phase 4 host.nix platform gate
+        # readability marker). The host.nix platform gate
         # lets this through; any future regression that adds an
         # unconditional graphics/audio import will surface here.
         nixling.vms.headless-vm = {

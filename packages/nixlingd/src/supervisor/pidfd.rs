@@ -1,22 +1,22 @@
-//! W3 s1 + P2 watchdog surface.
+//! Pidfd table re-exports plus virtiofsd watchdog surface.
 //!
-//! Re-exports the pidfd table (the W3 s1 deliverable that the rest of
-//! the daemon already depends on) and adds the **P2 virtiofsd
-//! watchdog** glue that the daemon's pidfd reaper consults when a
-//! registered runner exits.
+//! Re-exports the pidfd table that the rest of the daemon already depends
+//! on and adds the **virtiofsd watchdog** glue that the daemon's pidfd
+//! reaper consults when a registered runner exits.
 //!
-//! Before P2 the per-share `nixling-<vm>-virtiofsd@<share>.service`
-//! ExecStopPost-style bash health check + `nixling-vfsd-watchdog@<vm>`
-//! timer was the only thing that noticed virtiofsd dying mid-run.
-//! P2 moves that surface inside the daemon: every virtiofsd runner the
-//! daemon spawns lives in the pidfd table, and when its pidfd reports
+//! Before the daemon-owned watchdog, the per-share
+//! `nixling-<vm>-virtiofsd@<share>.service` ExecStopPost-style bash
+//! health check + `nixling-vfsd-watchdog@<vm>` timer was the only thing
+//! that noticed virtiofsd dying mid-run. The daemon now owns that surface:
+//! every virtiofsd runner the daemon spawns lives in the pidfd table, and
+//! when its pidfd reports
 //! exit the supervisor classifies the exit, marks the per-share mount
 //! as degraded, surfaces a typed `vfsd-died` event for the audit log,
 //! and (per policy) signals the dependent cloud-hypervisor runner so
 //! the VM does not keep running with a broken virtiofs root.
 //!
-//! The per-share systemd template stays on disk for the P6 deletion
-//! sweep; P2 only owns the in-daemon detection-and-degradation path.
+//! The per-share systemd template stayed on disk until the v1.0 deletion
+//! sweep; the daemon owns the in-daemon detection-and-degradation path.
 
 pub use super::pidfd_table::*;
 
@@ -115,9 +115,9 @@ pub enum SupervisorEvent {
 /// Audit record persisted to the broker audit log so post-mortems can
 /// reconstruct what the watchdog decided. The shape is deliberately
 /// minimal and self-describing — the integrator wraps it into the
-/// existing `OpAuditRecord` envelope when the audit-log writer
-/// surfaces this event (P2-fu integrator scope; the typed event is
-/// available immediately for in-process logging).
+/// existing `OpAuditRecord` envelope when the audit-log writer surfaces
+/// this event; the typed event is available immediately for in-process
+/// logging.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VfsdDiedAuditRecord {
@@ -316,7 +316,10 @@ mod tests {
             RunnerExitInfo::from_exit_code(0),
             VfsdWatchdogPolicy::default(),
         );
-        assert!(outcome.is_empty(), "clean exit must not degrade: {outcome:?}");
+        assert!(
+            outcome.is_empty(),
+            "clean exit must not degrade: {outcome:?}"
+        );
     }
 
     #[test]
@@ -378,8 +381,7 @@ mod tests {
         };
         let json = serde_json::to_string(&original).expect("serialize audit");
         assert!(json.contains("\"event\":\"vfsd-died\""));
-        let parsed: VfsdDiedAuditRecord =
-            serde_json::from_str(&json).expect("deserialize audit");
+        let parsed: VfsdDiedAuditRecord = serde_json::from_str(&json).expect("deserialize audit");
         assert_eq!(parsed, original);
     }
 

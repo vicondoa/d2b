@@ -13,7 +13,7 @@
 
 let
   # Patched virglrenderer: relax the "Mesa Gallium" vendor check in
-  # virgl_video_init() so nvidia-vaapi-driver (which returns "nvidia")
+  # virgl_video_init so nvidia-vaapi-driver (which returns "nvidia")
   # isn't rejected. The rest of virgl_video.c uses standard libva API
   # that nvidia-vaapi-driver implements. Without this patch, hardware
   # video decode is unavailable on NVIDIA hosts because virglrenderer
@@ -26,7 +26,7 @@ let
 
   # Our vendored, spectrum-os-patched cloud-hypervisor build (see
   # pkgs/spectrum-ch/MAINTAINING.md for the patch-bump workflow).
-  # Pulled into a let-binding so the W2 assertion below can read
+  # Pulled into a let-binding so the  assertion below can read
   # `passthru.testedWithCrosvmRev` and compare to `pkgs.crosvm.src.rev`.
   spectrumCH = import ../../pkgs/spectrum-ch { inherit pkgs; };
 
@@ -51,6 +51,10 @@ let
     ];
   });
 
+  waylandProxyXwaylandArgs =
+    lib.optionalString config.nixling.graphics.xwayland.enable
+      " --x-display=0 --xwayland-binary=${pkgs.xwayland}/bin/Xwayland";
+
   # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's
   # cloud-hypervisor runner over vhost-user-gpu. Use the crosvm
   # nixpkgs ships (Feb 2026, rev 4c80bf3) directly — that rev speaks
@@ -69,7 +73,7 @@ let
   # (any rev >= the Dec 2025 commit 729f98c "Update GET_SHMEM_CONFIG
   # messages"). Nixpkgs's pin sits comfortably after that.
   #
-  # We no longer override minijail with ALLOW_DUPLICATE_SYSCALLS=yes:
+  # We no longer override minijail with ALLOW_DUPLICATE_SYSCALLS=yes
   # all .policy files are pre-compiled to .bpf below using the
   # Python `compile_seccomp_policy` tool (which correctly merges
   # duplicate syscall definitions across @include chains). The C
@@ -80,7 +84,7 @@ let
   # by stripping per-device `statx:` lines and re-adding a single
   # canonical allow in common_device.policy (see crosvmSeccomp).
   #
-  # nixos-1 (P5 round-1): symlinkJoin pkgs.crosvm with crosvmSeccomp
+  # symlinkJoin pkgs.crosvm with crosvmSeccomp
   # so the compiled .bpf files live alongside the crosvm binary
   # under the same store path. crosvm's jail loader looks for
   # ${out}/share/policy/crosvm/<device>.bpf relative to its own
@@ -89,7 +93,7 @@ let
   # is silently bypassed (so duplicate-syscall failures recur the
   # first time the C parser sees a policy with @includes).
   #
-  # rust-r2-1 (P5 round-2): KNOWN LIMITATION — seccomp policies not
+  # KNOWN LIMITATION — seccomp policies not
   # loaded at runtime by `crosvm device gpu`.
   #
   # The symlinkJoin above adds the compiled .bpf files to the package
@@ -166,21 +170,19 @@ let
     # set_use_video() builder method, then enable it in crosvm's
     # build_rutabaga when a GPU render node path is present.
     #
-    # NOTE: use_video is DISABLED (set to false) because Mesa 26.1's
+    # NOTE: use_video defaults to DISABLED because Mesa 26.1's
     # virgl VA-API driver deadlocks when the host advertises video
     # caps: the guest sends VIRGL_CCMD_CREATE_VIDEO_CODEC which
     # blocks the GPU command loop while the host does synchronous
     # CUDA/NVDEC operations, causing a protocol-level hang.
-    # The plumbing is kept so we can re-enable once virglrenderer
-    # gains async video command processing.
+    # `nixling.graphics.virglVideo = true` re-enables the plumbing for
+    # an explicit experimental validation run.
     postPatch = (old.postPatch or "") + ''
       # 3. Enable video in build_rutabaga when GPU path is present
       substituteInPlace devices/src/virtio/gpu/mod.rs \
         --replace-fail \
           'let use_render_server =' \
-          'let _use_video = rutabaga_paths.iter().any(|p| p.path_type == RUTABAGA_PATH_TYPE_GPU);
-    let use_video = false; // disabled: virgl video forwarding deadlocks (see comment above)
-    let _ = _use_video;
+          'let use_video = ${if config.nixling.graphics.virglVideo then "true" else "false"};
     let use_render_server ='
 
       substituteInPlace devices/src/virtio/gpu/mod.rs \
@@ -316,8 +318,20 @@ in
     description = "Allow cross-domain Wayland forwarding via virtio-gpu for this VM. Default false; set true only for VMs where cross-domain is the primary use case (e.g. a Wayland-forwarding launchpad VM that runs FreeRDP or another remote-desktop client). Must be false for VMs running Docker.";
   };
 
+  options.nixling.graphics.virglVideo = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = "Experimental guest-side mirror of nixling.vms.<vm>.graphics.virglVideo. Enables rutabaga/virglrenderer video forwarding for the crosvm GPU sidecar.";
+  };
+
+  options.nixling.graphics.xwayland.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = false;
+    description = "Guest-side mirror of nixling.vms.<vm>.graphics.xwayland.enable. Default false: wayland-proxy-virtwl starts without Xwayland support and DISPLAY is not set unless explicitly enabled.";
+  };
+
   config = {
-    # W2: build-time guard that the CH↔crosvm rev pair this module was
+    # build-time guard that the CH↔crosvm rev pair this module was
     # QA'd against hasn't drifted underneath us. If nixpkgs bumps crosvm
     # independently of our vendored CH (which carries the matching
     # vhost-user-gpu wire protocol expectations), this assertion forces
@@ -353,7 +367,7 @@ in
       # the GPU sidecar over vhost-user-gpu. Feed nixpkgs's crosvm
       # directly (see crosvmPatched let-binding for why no overrides).
       #
-      # P5 W3: gate the cross-domain Wayland context type on
+      # gate the cross-domain Wayland context type on
       # `nixling.graphics.crossDomainTrusted`. When the option is false
       # (the default — set true only for VMs that legitimately need
       # cross-domain Wayland forwarding, e.g. a Wayland-forwarding
@@ -366,7 +380,7 @@ in
       # GPU capabilities (virgl2, etc.) so the VM still gets a
       # functioning virtio-gpu display.
       #
-      # NOTE on the chromeless "crosvm" window:
+      # NOTE on the chromeless "crosvm" window
       #
       # crosvm's gpu_display/src/display_wl.c unconditionally creates
       # an xdg_toplevel titled "crosvm" for every scanout surface;
@@ -440,7 +454,7 @@ in
     hardware.graphics.enable = true;
 
     # Without monospace fonts installed, fontconfig's "monospace" alias
-    # falls back to DejaVu Sans (proportional) and foot warns:
+    # falls back to DejaVu Sans (proportional) and foot warns
     #   "DejaVu Sans: font does not appear to be monospace"
     # dejavu_fonts ships DejaVu Sans Mono which fontconfig promotes to
     # the canonical monospace alias on resolution.
@@ -452,7 +466,6 @@ in
 
     environment.sessionVariables = {
       WAYLAND_DISPLAY = "wayland-1";
-      DISPLAY = ":0";
       QT_QPA_PLATFORM = "wayland";
       GDK_BACKEND = "wayland";
       XDG_SESSION_TYPE = "wayland";
@@ -499,6 +512,8 @@ in
       # severity=warning. The fallbacks always work, so silence the
       # probe noise.
       EGL_LOG_LEVEL = "fatal";
+    } // lib.optionalAttrs config.nixling.graphics.xwayland.enable {
+      DISPLAY = ":0";
     };
 
     systemd.user.services.wayland-proxy = {
@@ -518,7 +533,7 @@ in
         # --tag is prepended verbatim, so include the brackets and
         # trailing
         # space in the value.
-        ExecStart = "${waylandProxyVirtwlMultiMon}/bin/wayland-proxy-virtwl --virtio-gpu --tag=[${config.networking.hostName}]\\  --x-display=0 --xwayland-binary=${pkgs.xwayland}/bin/Xwayland";
+        ExecStart = "${waylandProxyVirtwlMultiMon}/bin/wayland-proxy-virtwl --virtio-gpu --tag=[${config.networking.hostName}]\\ ${waylandProxyXwaylandArgs}";
         Restart = "on-failure";
         RestartSec = 5;
       };
@@ -543,7 +558,7 @@ in
     # placeholder).
     #
     # Fix: don't auto-launch a guest terminal at all. The per-VM
-    # .desktop entry (cli.nix `desktopItems`) now launches a HOST-
+    #.desktop entry (cli.nix `desktopItems`) now launches a HOST-
     # side foot terminal that SSHes into the VM, which gets proper
     # chrome from the host KDE compositor via standard
     # xdg-decoration. Operators can still SSH from any other host

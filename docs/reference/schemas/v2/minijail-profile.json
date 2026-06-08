@@ -79,7 +79,7 @@
       "type": "string"
     },
     "seccompPolicyRef": {
-      "description": "Seccomp policy reference; kernel-version syscall allowlists are out of W1 scope.",
+      "description": "Seccomp policy reference; kernel-version syscall allowlists are out of scope.",
       "type": [
         "string",
         "null"
@@ -92,13 +92,24 @@
       "minimum": 0.0
     },
     "umask": {
-      "description": "v1.1.2-final: optional file-creation mask installed in the spawned child via umask(2) immediately before execve. null inherits the broker's umask. Sidecar roles that bind shared Unix sockets declare 0o007 so sockets are mode 0660 and per-VM-runtime named-user ACL entries become effective for cloud-hypervisor. Broker rejects values >0o777 with CHILD_EXIT_INVALID_UMASK=75.",
+      "description": "v1.1.2fu36: file-creation mask the broker installs in the spawned child before execve. Lets profiles that bind shared sockets (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare an umask of `0o007` so the resulting sockets have group r-w (mode 0660/0770) and the existing default ACL on the per-VM runtime dir yields effective r-w for named-user entries (cloud-hypervisor uid). Without this, the default 0o022 umask yields socket mode 0644 — but vhost-user/swtpm bind() typically restricts to 0600 — which derives ACL mask=0 and named-user entries become ineffective. None means \"inherit the broker's umask\" (current behaviour).",
       "type": [
         "integer",
         "null"
       ],
       "format": "uint32",
       "minimum": 0.0
+    },
+    "userNamespace": {
+      "description": "v1.1.1fu14 (ADR 0021): when `Some`, the broker pre-establishes a single-entry user namespace for runners using this profile. The child is fake-root inside the namespace (all caps within the user-NS scope) and the host-side `capabilities` set should typically be empty. Currently consumed by virtiofsd roles for least-privilege FS serving without CAP_DAC_*. Profiles that don't need a user NS omit this field.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UserNamespaceProfile"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -233,6 +244,27 @@
         "uts": {
           "description": "Whether the UTS namespace is isolated.",
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UserNamespaceProfile": {
+      "description": "v1.1.1fu14 — single-entry uid_map/gid_map declaration for the per-role user namespace. The values are the host UIDs/GIDs that in-NS UID 0 (and GID 0) map to. See ADR 0021.",
+      "type": "object",
+      "required": [
+        "hostGidForZero",
+        "hostUidForZero"
+      ],
+      "properties": {
+        "hostGidForZero": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hostUidForZero": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

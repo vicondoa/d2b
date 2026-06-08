@@ -16,7 +16,7 @@
   ],
   "properties": {
     "ch": {
-      "description": "W3 Cloud Hypervisor net handoff probe result (virt-1). Optional for backward compatibility with V1 host.json fixtures.",
+      "description": "Cloud Hypervisor net handoff probe result. Optional for backward compatibility with V1 host.json fixtures.",
       "anyOf": [
         {
           "$ref": "#/definitions/HostChConfig"
@@ -67,7 +67,7 @@
       ]
     },
     "ifNameMappings": {
-      "description": "W3 hash-derived IfName mapping exposure (networking-2). One row per managed bridge/TAP gives the broker the user-visible → derived `<=15`-byte name pair and a stable role tag for the per-role bridge-port-flags table. Empty for V1-shaped bundles.",
+      "description": "Hash-derived IfName mapping exposure. One row per managed bridge/TAP gives the broker the user-visible → derived `<=15`-byte name pair and a stable role tag for the per-role bridge-port-flags table. Empty for V1-shaped bundles.",
       "type": "array",
       "items": {
         "$ref": "#/definitions/IfNameMapping"
@@ -158,7 +158,7 @@
       ]
     },
     "ChNetHandoffMode": {
-      "description": "W3 Cloud Hypervisor net handoff modes. `TapFd` keeps the long-lived runner without `CAP_NET_ADMIN`; `PersistentTap` falls back to pre-created TAPs handed off via `TUNSETOWNER`/`TUNSETGROUP`. The emitter records the declared mode; the broker's host-check probe validates it against the packaged CH binary at runtime.",
+      "description": "Cloud Hypervisor net handoff modes. `TapFd` keeps the long-lived runner without `CAP_NET_ADMIN`; `PersistentTap` falls back to pre-created TAPs handed off via `TUNSETOWNER`/`TUNSETGROUP`. The emitter records the declared mode; the broker's host-check probe validates it against the packaged CH binary at runtime.",
       "oneOf": [
         {
           "description": "Preferred: broker opens TAP + `/dev/vhost-net` and passes fds.",
@@ -323,7 +323,7 @@
       ]
     },
     "HostChConfig": {
-      "description": "W3 Cloud Hypervisor host-side configuration probed at bundle build (virt-1). Selects the runner network-handoff mode based on the packaged CH binary's capabilities.",
+      "description": "Cloud Hypervisor host-side configuration probed at bundle build. Selects the runner network-handoff mode based on the packaged CH binary's capabilities.",
       "type": "object",
       "required": [
         "netHandoffMode"
@@ -369,7 +369,7 @@
       "pattern": "^[A-Za-z0-9_-]+$"
     },
     "IfNameMapping": {
-      "description": "W3 hash-derived IfName mapping row exposed in `host.json` (networking-2). The broker's `nixling_host::ifname::detect_collisions` re-validates uniqueness over `derived_ifname` at runtime; the Nix emitter rejects duplicates at bundle build with a deterministic emitter error.",
+      "description": "Hash-derived IfName mapping row exposed in `host.json`. The broker's `nixling_host::ifname::detect_collisions` re-validates uniqueness over `derived_ifname` at runtime; the Nix emitter rejects duplicates at bundle build with a deterministic emitter error.",
       "type": "object",
       "required": [
         "derivedIfname",
@@ -681,14 +681,14 @@
           "type": "string"
         },
         "ownershipId": {
-          "description": "W3 (networking-4) stable per-table comment marker installed on every rule (`comment \"nixling managed: <ownership-id>\"`). Empty for V1-shaped bundles.",
+          "description": "Stable per-table comment marker installed on every rule (`comment \"nixling managed: <ownership-id>\"`). Empty for V1-shaped bundles.",
           "type": "string"
         },
         "table": {
           "type": "string"
         },
         "tableHashAfterApply": {
-          "description": "W3 (networking-4) drift-detection digest of the applied `inet nixling` table. `None` in the emitted bundle; the broker fills it in after `ApplyNftables` so pre-VM-start drift checks can compare against the previously applied digest.",
+          "description": "Drift-detection digest of the applied `inet nixling` table. `None` in the emitted bundle; the broker fills it in after `ApplyNftables` so pre-VM-start drift checks can compare against the previously applied digest.",
           "type": [
             "string",
             "null"

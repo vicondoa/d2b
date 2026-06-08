@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# tests/l3-pin-consistency.sh — W3 L3 distro matrix pin parser/drift gate.
+# tests/l3-pin-consistency.sh— distro matrix pin parser/drift gate.
 #
-# Closes W3 work-review R1 finding test-3 ("L3 pin files exist but no
-# parse / drift gate enforces them").
+# Enforces that distro matrix pin files are parsed and drift-checked.
 #
 # Asserts every file in tests/golden/l3-matrix/:
 #   * exists,
@@ -15,12 +14,10 @@
 #     mojibake or partial digests),
 #   * `panel_approval_required_for_change = true` (drift requires ADR).
 #
-# Scratch state lives outside $ROOT per AGENTS.md disk-hygiene contract
-# (W2fu4 H8/H9/H14/H15).
+# Scratch state lives outside $ROOT per AGENTS.md disk-hygiene contract.
 #
 # TODO(integrator): wire into tests/static.sh next to the existing
-# `bash tests/path-safety-violation-fs.sh` invocation (W3fu1 H4 leaves
-# tests/static.sh untouched per the H4 contract — integrator-owned).
+# `bash tests/path-safety-violation-fs.sh` invocation.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -47,7 +44,7 @@ REQUIRED_KEYS=(
 
 log "W3 L3 pin parse + drift gate"
 
-# Scratch outside $ROOT per W2fu4 H8/H9/H14/H15.
+# Scratch outside $ROOT.
 SCRATCH=${TMPDIR:-/tmp}/nixling-l3-pin.$$
 mkdir -p "$SCRATCH"
 add_cleanup "rm -rf -- '$SCRATCH'"

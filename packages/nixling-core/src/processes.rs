@@ -1,6 +1,7 @@
 use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Per-VM process DAG and lifecycle invariants from ADR 0004.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -58,10 +59,56 @@ pub struct ProcessNode {
     /// UID.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<String>,
+    /// v1.2 broker-executed plan operations that run before the runner
+    /// spawns. The daemon sends only the opaque `vm_id`;
+    /// the broker resolves these ops from the trusted bundle.
+    ///
+    /// Backward-compatible: omitted from JSON when empty (serde default).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_ops: Vec<SpawnRunnerPlanOp>,
     /// Typed minijail metadata for this role.
     pub profile: RoleProfile,
     /// Readiness predicates that mark the role available.
     pub readiness: Vec<ReadinessPredicate>,
+}
+
+/// v1.2 additive plan operation emitted by `processes.json` for runner
+/// nodes that require broker-side pre-spawn work.
+///
+/// Tag-dispatched via `#[serde(tag = "kind")]` so the manifest JSON
+/// uses `{ "kind": "diskInit", ... }` shape (camelCase per bundle
+/// schema conventions).
+///
+/// Backward-compatible per invariant I4: the field is absent from JSON
+/// when empty (`skip_serializing_if = "Vec::is_empty"` on
+/// `ProcessNode::plan_ops`), so older bundles always deserialize
+/// cleanly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SpawnRunnerPlanOp {
+    /// Create and pre-allocate a disk image file if absent.
+    ///
+    /// Used for the per-VM writable store overlay disk
+    /// (`store-overlay.img`). The broker validates `target_path` is
+    /// under `/var/lib/nixling/vms/`, creates the file with
+    /// `O_CREAT|O_EXCL`, pre-allocates `size_bytes` via `fallocate`,
+    /// and sets mode + ownership.
+    #[serde(rename_all = "camelCase")]
+    DiskInit {
+        /// Absolute host path for the new disk image.
+        target_path: PathBuf,
+        /// Pre-allocated size in bytes (broker calls `fallocate`).
+        size_bytes: u64,
+        /// Unix permission bits in octal (e.g. `0o600` = 384 decimal).
+        mode: u32,
+        /// Owner UID — typically the per-VM runner UID.
+        owner_uid: u32,
+        /// Owner GID.
+        owner_gid: u32,
+        /// When `true`, skip creation if the file already exists
+        /// (idempotent re-run).
+        if_absent: bool,
+    },
 }
 
 /// Known role types in the ADR 0004 process graph.
@@ -82,6 +129,9 @@ pub enum ProcessRole {
     Video,
     /// Optional GPU/graphics sidecar.
     Gpu,
+    /// Optional GPU/graphics sidecar — render-node-only mode (fd-passing, no device bind-mounts).
+    /// Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).
+    GpuRenderNode,
     /// Optional audio sidecar.
     Audio,
     /// Cloud Hypervisor runner.
@@ -111,7 +161,7 @@ pub struct RoleProfile {
     pub caps: Vec<String>,
     /// Namespace isolation metadata.
     pub namespaces: NamespaceSet,
-    /// Seccomp policy reference only; syscall allowlists are W3-owned.
+    /// Seccomp policy reference only; syscall allowlists are owned elsewhere.
     pub seccomp_policy_ref: Option<String>,
     /// Mount policy metadata.
     pub mount_policy: MountPolicy,
@@ -120,17 +170,17 @@ pub struct RoleProfile {
     /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
     /// pre-establishes a per-runner user namespace and writes
     /// uid_map/gid_map. The child runs fake-root inside the NS;
-    /// host-side `caps` should be empty. Currently only set by
-    /// virtiofsd roles for least-privilege FS serving.
+    /// host-side `caps` should be empty. Set by virtiofsd
+    /// (v1.1.2 ADR 0021) and swtpm (v1.2) roles.
     /// Older bundles omit this field; deserialize defaults to None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_namespace: Option<RoleUserNamespace>,
     /// v1.1.2fu36: file-creation mask installed in the spawned
     /// child before execve. See `MinijailProfile::umask` for the
     /// rationale. Roles that bind shared Unix sockets
-    /// (vhost-user-sound, crosvm-gpu, swtpm) declare `0o007` so
-    /// downstream consumers (cloud-hypervisor) can connect via the
-    /// per-VM-runtime default ACL.
+    /// (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare
+    /// `0o007` so downstream consumers (cloud-hypervisor) can
+    /// connect via the per-VM-runtime default ACL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub umask: Option<u32>,
 }
@@ -166,6 +216,8 @@ pub enum ReadinessPredicate {
     VsockNotify(String),
     /// A Unix socket path exists.
     UnixSocketExists(String),
+    /// A Unix stream socket is present and listening, checked non-destructively.
+    UnixSocketListening(String),
     /// A TCP port accepts connections.
     TcpPort { host: String, port: u16 },
     /// A command exits successfully.
@@ -174,7 +226,7 @@ pub enum ReadinessPredicate {
     ComponentSpecific(String),
 }
 
-/// v0.4.0 invariants preserved in the W1 process contract.
+/// v0.4.0 invariants preserved in the process contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmProcessInvariants {

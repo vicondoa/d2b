@@ -5,6 +5,7 @@
 // Vhost-user backend for virtio-media decoder device.
 // Uses VirtioVideoAdapter + VideoDecoder with SHM HostMemoryMapper for MMAP buffers.
 pub mod sys;
+pub use sys::*;
 
 use std::rc::Rc;
 use std::thread;

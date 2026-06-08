@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P4 invariant gate: assert nixling-priv-broker.service +
+# v1.1 invariant gate: assert nixling-priv-broker.service +
 # nixling-priv-broker.socket are unconditionally configured in
 # `nixos-modules/host-broker.nix` (NOT gated behind
 # `cfg.daemonExperimental.enable`), and that the canonical

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/host-prepare-network.sh — W3 s2 L1c canary.
+# tests/host-prepare-network.sh— canary.
 #
-# Drives the fake-backend happy path + the W3 plan's network-reconcile
+# Drives the fake-backend happy path + the plan's network-reconcile
 # fail-closed canaries through cargo tests:
 #
 #   - nm-managed-foreign-conflict
@@ -12,10 +12,10 @@
 #   - dnsmasq-not-bound
 #   - host-lan-cidr-ambiguous
 #   - ch-net-handoff-not-supported (asserted via the docs anchor; the
-#     wire test lives in W3 s4's device probe scope).
+#     wire test lives in s4's device probe scope).
 #
 # All scratch state lands outside $ROOT per AGENTS.md disk-hygiene
-# contract (W2fu4 H8/H9/H14/H15).
+# contract.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

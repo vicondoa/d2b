@@ -4,7 +4,7 @@
 # The env's metadata + extraNetConfig come through specialArgs
 # as `envMeta` and `envExtraConfig`.
 #
-# What this file owns:
+# What this file owns
 #   - Hostname + minimal-system config.
 #   - Two systemd-networkd interfaces (eth0 = uplink, eth1 = lan).
 #   - sysctl ip_forward.
@@ -19,7 +19,7 @@
 
 let
   m = envMeta;
-  # The net VM has ./base.nix layered in by host.nix (see
+  # The net VM has./base.nix layered in by host.nix (see
   # nixos-modules/host.nix's `microvm.vms = lib.mapAttrs` block, which
   # unconditionally imports ./base.nix). Everything here builds on top
   # of that. One consequence: base.nix's catch-all DHCP fallback
@@ -44,7 +44,7 @@ in
   # runner exposes them as e.g. enp0sN). The MACs come from the same
   # mkMac derivation as the host-side bridge dispatch in network.nix.
   systemd.network.networks = {
-    # W5 H1: neutralize base.nix's `10-eth-dhcp` catch-all on net VMs.
+    # Neutralize base.nix's `10-eth-dhcp` catch-all on net VMs.
     # base.nix defines `10-eth-dhcp` with `matchConfig.Type = "ether"`
     # so workload VMs get DHCP on their single NIC. Net VMs have TWO
     # NICs explicitly bound by MAC below, and `10-eth-dhcp` would sort
@@ -83,7 +83,7 @@ in
 
   # The MACs that the host-side bridges expect on each NIC. The
   # nftables ruleset below also references "eth0"/"eth1" by name —
-  # since we can't rely on the kernel naming, use systemd .link
+  # since we can't rely on the kernel naming, use systemd.link
   # files to rename them deterministically.
   systemd.network.links = {
     "10-uplink" = {
@@ -153,7 +153,7 @@ in
           iifname "eth1" oifname "eth1" ct state new accept
           ''}
 
-          # networking-1: LAN-to-LAN (eth1→eth1) forwarding is intentionally absent
+          # LAN-to-LAN (eth1→eth1) forwarding is intentionally absent
           # by default. H1 bridge isolation prevents direct L2 between workloads,
           # and the net VM must also not relay same-LAN frames at L3 unless the
           # env explicitly opts in.
@@ -230,21 +230,21 @@ in
         (vmName: w: "${w.mac},${w.ip},${vmName},12h")
         m.workloads;
 
-      # L1.4: prevent workloads from spoofing another workload's hostname
-      # via DHCP option 12. dhcp-ignore-names makes dnsmasq ignore the
+      # Prevent workloads from spoofing another workload's hostname via
+      # DHCP option 12. dhcp-ignore-names makes dnsmasq ignore the
       # client-supplied hostname in DHCP requests and rely only on the
       # static dhcp-host reservations above.
       dhcp-ignore-names = true;
     };
   };
 
-  # H4.1 — dnsmasq systemd confinement.
+  # dnsmasq systemd confinement.
   #
   # The NixOS dnsmasq module starts the daemon as root then relies on dnsmasq's
-  # internal `--user=dnsmasq` flag to drop privileges.  We harden this by:
+  # internal `--user=dnsmasq` flag to drop privileges.  We harden this by
   #   1. Setting User=dnsmasq so the process never runs as root at all.
   #   2. Removing `--user=dnsmasq` from ExecStart (systemd's User= makes it
-  #      redundant and the internal setuid() would need SETUID/SETGID ambient
+  #      redundant and the internal setuid would need SETUID/SETGID ambient
   #      caps to succeed from a non-root starting point, which we avoid).
   #   3. Replacing the module's preStart (which ran chown/touch as the service
   #      user — broken with User=dnsmasq) with a single root-privileged (+)
@@ -252,7 +252,7 @@ in
   #   4. Adding comprehensive systemd sandboxing.
   #
   # Make sure dnsmasq starts after networkd has eth1 up. bind-interfaces
-  # (above) requires the kernel interface to exist at bind() time, so we
+  # (above) requires the kernel interface to exist at bind time, so we
   # additionally wait for systemd-networkd-wait-online@eth1 — that unit
   # blocks until eth1 reaches at least "degraded" (link up, address
   # assigned), which is exactly what bind-interfaces needs.
@@ -336,7 +336,7 @@ in
     };
   };
 
-  # H4.1: Declare the dnsmasq user/group explicitly so mutableUsers=false
+  # Declare the dnsmasq user/group explicitly so mutableUsers=false
   # (below) doesn't fight with the upstream module's implicit declaration.
   users.users.dnsmasq = {
     isSystemUser = true;
@@ -345,7 +345,7 @@ in
   };
   users.groups.dnsmasq = { };
 
-  # H4.1: Extend the dnsmasq DBus policy to allow the dnsmasq user (not just
+  # Extend the dnsmasq DBus policy to allow the dnsmasq user (not just
   # root) to own the uk.org.thekelleys.dnsmasq bus name.  The package shipped
   # policy only permits root; adding a supplemental policy file via
   # services.dbus.packages is the NixOS-idiomatic way to extend it.
@@ -368,7 +368,7 @@ in
     })
   ];
 
-  # H4.2: Prevent runtime user-database drift on net VMs.  With this set,
+  # Prevent runtime user-database drift on net VMs. With this set,
   # NixOS owns /etc/passwd and /etc/group entirely; useradd/userdel at runtime
   # cannot persist across rebuilds.
   users.mutableUsers = false;
@@ -408,8 +408,8 @@ in
   # host for the rare cases recovery needs it.
   services.openssh.settings.PermitRootLogin = lib.mkForce "prohibit-password";
   # Authorized keys for root in the net VM come from
-  # `nixling.site.userAuthorizedKeys` via the Phase-2b
-  # `nixling-load-host-keys` service (declared in base.nix); we keep
+  # `nixling.site.userAuthorizedKeys` via the `nixling-load-host-keys`
+  # service (declared in base.nix); we keep
   # the keyFiles list empty here so a stale public-flake key never
   # accidentally winds up trusted.
   users.users.root.openssh.authorizedKeys.keyFiles = [ ];

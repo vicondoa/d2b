@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 static invariant: uid 0 long-lived profiles require start-root + ADR carve-out.
+# Uid 0 long-lived profiles require start-root + ADR carve-out.
 
 set -euo pipefail
 

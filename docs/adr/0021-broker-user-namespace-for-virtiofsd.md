@@ -320,9 +320,58 @@ call would return `EINVAL`.
   need multi-range maps to preserve per-guest-user ownership.
 - `newuidmap`/`newgidmap` helper integration as an opt-in
   alternative for operators who want subuid-range mappings.
-- Apply the broker-pre-NS model to other roles (gpu, audio)
-  for uniform least-privilege; the chief blocker today is
-  that those roles need access to host devices
+- Apply the broker-pre-NS model to other roles (swtpm, gpu, audio)
+  for uniform least-privilege; the chief blocker today for gpu and
+  audio is that those roles need access to host devices
   (`/dev/dri/renderD128`, `/dev/snd/*`) which the user NS
   does not natively grant — would need bind-mount + setfacl
   coordination.
+
+  **v1.2 D5/P2.3 partial closure**: swtpm is **fully closed** in
+  v1.2. swtpm has zero device binds + zero host caps + Unix socket
+  only — a direct translation of the virtiofsd model. The long-lived
+  swtpm sidecar profile now declares `userNamespace = { hostUidForZero
+  = stablePrincipalId "nixling-<vm>-swtpm"; hostGidForZero = ... }`
+  and runs with zero host capabilities inside a single-entry user NS.
+
+  **v1.2 D5/P2.3 gpu render-node closure (v1.2fu25)**: gpu is
+  **partially closed** for the render-node-only case. The
+  `gpu-render-node` profile (selected when
+  `graphics.renderNodeOnly = true`) uses SCM_RIGHTS-style fd
+  inheritance: the broker parent pre-opens `/dev/dri/renderD128`
+  before `clone3(CLONE_NEWUSER)`, `dup2`s it to
+  `RENDER_NODE_INHERITED_FD = 10` in the user-NS child, and the
+  crosvm argv references `--gpu-device-node /proc/self/fd/10`.
+  Render nodes bypass DRM master authentication entirely
+  (`DRM_IOCTL_SET_MASTER` / `DRM_IOCTL_AUTH_MAGIC` not required),
+  so the pre-opened fd is fully usable inside the user NS.
+  NVIDIA / non-render-node device passthrough remains out of scope
+  (those devices have host-owned char-device permission checks that
+  a single-entry user NS cannot bridge without device-specific
+  kernel support). The legacy `gpu` profile is unchanged.
+
+  audio remains scope-restricted pending AF_NETLINK dependency
+  elimination. Deferred to a subsequent fuN per plan §P2.3.
+
+  **v1.2fu27 D5/P2.3 audio closure (Tier 2)**: audio is **fully
+  closed** via **user-NS + owned-net-NS**. Root cause: vhost-device-sound's
+  libpipewire client opens `AF_NETLINK(NETLINK_KOBJECT_UEVENT)` during
+  `pw_context_new()` (spa-alsa-monitor); in a user-NS-only spawn,
+  `ns_capable(net->user_ns, CAP_NET_RAW)` checks the initial user NS
+  (owner of the pre-existing host net NS) — bind fails with `EPERM`.
+  Tier 1 (PipeWire config elimination via `PIPEWIRE_LATENCY` /
+  `PIPEWIRE_NODE` / `PIPEWIRE_REMOTE`) was investigated and rejected:
+  the AF_NETLINK open is structural in libpipewire's context-init path
+  and precedes user-facing env-var consumption. Tier 2 resolution: add
+  `namespaces.net = true` to the audio minijail profile. The child calls
+  `unshare(CLONE_NEWNET)` inside the user NS (after uid_map is written);
+  the new net NS is owned by the new user NS; `CAP_NET_RAW` is effective
+  there. No changes to `RunnerIsolationSpec` or `sys.rs` were needed —
+  `NamespaceSet.net` + `unshare_namespace_flags` already handled
+  `CLONE_NEWNET`. Audio `capabilities` reduced from `["CAP_NET_RAW"]` to
+  `[]`. Bullet 3 is **fully closed** for v1.2.
+
+- Single-entry user-NS limitation for write-heavy shares (e.g.
+  `/home/<user>` mounts needing true UID-preserving semantics)
+  — remains out of v1.2 scope; tied to bullet 1's multi-principal
+  mapping work.

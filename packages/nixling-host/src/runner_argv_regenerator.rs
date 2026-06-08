@@ -151,7 +151,7 @@ pub fn regenerate_argv(
             replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        ProcessRole::Gpu => {
+        ProcessRole::Gpu | ProcessRole::GpuRenderNode => {
             let input = require(&extra.gpu_input, &intent.role, "gpu_input")?;
             let mut argv = generate_gpu_argv(input)
                 .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
@@ -230,45 +230,24 @@ mod tests {
     use super::*;
 
     fn fake_intent(role: ProcessRole) -> ResolvedRunnerIntent {
-        ResolvedRunnerIntent {
-            intent_id: "fake".to_owned(),
-            vm_name: "fake-vm".to_owned(),
-            role_id: "fake-role".to_owned(),
-            role,
-            binary_path: std::path::PathBuf::from("/bin/fake"),
-            argv: vec!["fake".to_owned()],
-            env: vec![],
-            uid: 0,
-            gid: 0,
-            supplementary_groups: vec![],
-            capabilities: vec![],
-            namespaces: nixling_core::minijail_profile::NamespaceSet {
-                mount: false,
-                pid: false,
-                net: false,
-                ipc: false,
-                uts: false,
-                user: false,
-            },
-            seccomp_policy_ref: None,
-            mount_policy: nixling_core::minijail_profile::MountPolicy {
+        nixling_core::test_support::ResolvedRunnerIntentBuilder::new()
+            .with_intent_id("fake")
+            .with_vm_name("fake-vm")
+            .with_role_id("fake-role")
+            .with_role(role)
+            .with_binary_path(std::path::PathBuf::from("/bin/fake"))
+            .with_argv(vec!["fake".to_owned()])
+            .with_uid(0)
+            .with_gid(0)
+            .with_mount_policy(nixling_core::minijail_profile::MountPolicy {
                 read_only_paths: vec![],
                 writable_paths: vec![],
                 nix_store_read_only: true,
                 hide_device_nodes_by_default: false,
                 device_binds: vec![],
                 bind_mounts: vec![],
-            },
-            cgroup_placement: nixling_core::minijail_profile::CgroupPlacement {
-                subtree: "nixling.slice/test".to_owned(),
-                controllers: vec![],
-                delegated: false,
-            },
-            root_carve_out: false,
-            profile_id: "test".to_owned(),
-            user_namespace: None,
-            umask: None,
-        }
+            })
+            .build()
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! P2 ph2-p2-stop-dag-owner: typed stop-DAG owner that reconciles
-//! per-VM nftables fragments and per-busid USBIP carrier state when
+//! Typed stop-DAG owner that reconciles per-VM nftables fragments and
+//! per-busid USBIP carrier state when
 //! `nixlingd` starts (or `vm_stop` runs).
 //!
 //! This module is a *planner*: it walks the declared intent surface
@@ -9,9 +9,9 @@
 //! enumerates the [existing] broker ops the supervisor must dispatch
 //! to converge.
 //!
-//! The planner deliberately does NOT add new broker wire variants
-//! (per ph2-p2-stop-dag-owner): every emitted action maps to the
-//! `ApplyNftables`, `UsbipBind`, or `UsbipUnbind` ops that already
+//! The planner deliberately does NOT add new broker wire variants: every
+//! emitted action maps to the `ApplyNftables`, `UsbipBind`, or
+//! `UsbipUnbind` ops that already
 //! ship in `packages/nixling-ipc/src/broker_wire.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,10 +55,7 @@ pub enum NftablesDriftReason {
     /// longer matches the bundle's desired hash (bundle was rebuilt
     /// while the daemon was offline, or someone hand-edited the
     /// table).
-    HashMismatch {
-        observed: String,
-        desired: String,
-    },
+    HashMismatch { observed: String, desired: String },
 }
 
 /// A single nftables reconcile action — maps 1:1 to
@@ -134,10 +131,7 @@ impl StopDagOwner {
     /// Test-visible reconcile entry point that accepts an explicit
     /// observed-state snapshot. The startup path delegates to this
     /// after probing the host.
-    pub fn reconcile(
-        resolver: &BundleResolver,
-        observed: &ObservedHostState,
-    ) -> ReconcileReport {
+    pub fn reconcile(resolver: &BundleResolver, observed: &ObservedHostState) -> ReconcileReport {
         let mut report = ReconcileReport::default();
         plan_nftables(resolver, observed, &mut report.nftables_actions);
         plan_usbip(resolver, observed, &mut report.usbip_actions);
@@ -150,10 +144,7 @@ fn plan_nftables(
     observed: &ObservedHostState,
     out: &mut Vec<NftablesReconcileAction>,
 ) {
-    let intent_ids: Vec<String> = resolver
-        .nft_intent_ids()
-        .map(|s| s.to_owned())
-        .collect();
+    let intent_ids: Vec<String> = resolver.nft_intent_ids().map(|s| s.to_owned()).collect();
     for intent_id in intent_ids {
         let Some(intent) = resolver.find_nft_intent(&intent_id) else {
             continue;
@@ -299,16 +290,16 @@ mod tests {
         // Simulate broker has applied every nft fragment with the
         // correct hash and no USBIP carriers exist.
         let mut observed = ObservedHostState::empty();
-        for id in resolver.nft_intent_ids().map(str::to_owned).collect::<Vec<_>>() {
+        for id in resolver
+            .nft_intent_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        {
             let h = resolver.find_nft_intent(&id).unwrap().desired_hash.clone();
             observed.nft_applied_hashes.insert(id, h);
         }
         let report = StopDagOwner::reconcile(&resolver, &observed);
-        assert!(
-            report.is_noop(),
-            "expected noop, got {:?}",
-            report
-        );
+        assert!(report.is_noop(), "expected noop, got {:?}", report);
     }
 
     #[test]
@@ -325,18 +316,22 @@ mod tests {
     #[test]
     fn hash_mismatch_classified_distinctly() {
         let resolver = fixture_resolver();
-        let intent_id = resolver
-            .nft_intent_ids()
-            .next()
+        let intent_id = resolver.nft_intent_ids().next().unwrap().to_owned();
+        let desired = resolver
+            .find_nft_intent(&intent_id)
             .unwrap()
-            .to_owned();
-        let desired = resolver.find_nft_intent(&intent_id).unwrap().desired_hash.clone();
+            .desired_hash
+            .clone();
 
         let mut observed = ObservedHostState::empty();
         // First intent has a stale hash; all others have the correct
         // hash so the per-intent classification can be asserted in
         // isolation.
-        for id in resolver.nft_intent_ids().map(str::to_owned).collect::<Vec<_>>() {
+        for id in resolver
+            .nft_intent_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        {
             let h = if id == intent_id {
                 "0000deadbeef".to_owned()
             } else {
@@ -349,7 +344,10 @@ mod tests {
         let action = &report.nftables_actions[0];
         assert_eq!(action.intent_id, intent_id);
         match &action.reason {
-            NftablesDriftReason::HashMismatch { observed, desired: d } => {
+            NftablesDriftReason::HashMismatch {
+                observed,
+                desired: d,
+            } => {
                 assert_eq!(observed, "0000deadbeef");
                 assert_eq!(d, &desired);
             }
@@ -363,7 +361,11 @@ mod tests {
         let mut observed = ObservedHostState::empty();
         // All nft fragments pre-applied so they don't pollute the
         // report.
-        for id in resolver.nft_intent_ids().map(str::to_owned).collect::<Vec<_>>() {
+        for id in resolver
+            .nft_intent_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        {
             let h = resolver.find_nft_intent(&id).unwrap().desired_hash.clone();
             observed.nft_applied_hashes.insert(id, h);
         }
@@ -388,7 +390,11 @@ mod tests {
     fn stale_carrier_owner_inactive_emits_unbind() {
         let resolver = fixture_resolver();
         let mut observed = ObservedHostState::empty();
-        for id in resolver.nft_intent_ids().map(str::to_owned).collect::<Vec<_>>() {
+        for id in resolver
+            .nft_intent_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        {
             let h = resolver.find_nft_intent(&id).unwrap().desired_hash.clone();
             observed.nft_applied_hashes.insert(id, h);
         }
@@ -411,7 +417,11 @@ mod tests {
     fn undeclared_carrier_emits_unbind() {
         let resolver = fixture_resolver();
         let mut observed = ObservedHostState::empty();
-        for id in resolver.nft_intent_ids().map(str::to_owned).collect::<Vec<_>>() {
+        for id in resolver
+            .nft_intent_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+        {
             let h = resolver.find_nft_intent(&id).unwrap().desired_hash.clone();
             observed.nft_applied_hashes.insert(id, h);
         }

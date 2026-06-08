@@ -67,9 +67,9 @@ the existing taps), stop here and shrink the scope first.
 | Graphics             | hand-rolled crosvm + virtio-gpu wiring             | `nixling.vms.<vm>.graphics.enable = true` (component toggle)         |
 | TPM                  | hand-rolled `swtpm`, manual socket plumbing        | `nixling.vms.<vm>.tpm.enable = true`                                 |
 | Audio                | hand-rolled vhost-user-sound                       | `nixling.vms.<vm>.audio.enable = true` + `nixling audio mic/speaker` |
-| USBIP                | manual `usbipd` + `usbip attach` on the host       | `nixling usb attach <vm> <busid> --apply` (dispatches through nixlingd → broker `SpawnRunner` per-env usbipd runner; pre-P6 systemd `nixling-sys-<env>-usbipd-proxy.{service,socket}` was retired in P6 per ADR 0015) |
-| Non-root start/stop  | sudo every time                                    | `nixling-launchers` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in P6) |
-| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `nixlingd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the W14 `nixling@<vm>.service` wrapper was retired in P6) |
+| USBIP                | manual `usbipd` + `usbip attach` on the host       | `nixling usb attach <vm> <busid> --apply` (dispatches through nixlingd → broker `SpawnRunner` per-env usbipd runner; legacy systemd `nixling-sys-<env>-usbipd-proxy.{service,socket}` was retired in v1.0 per ADR 0015) |
+| Non-root start/stop  | sudo every time                                    | `nixling` group + SO_PEERCRED at `public.sock` accept time (v1.0 daemon-only per ADR 0015; the polkit per-VM allowlist was retired in v1.0) |
+| Wrapping             | direct `microvm@<vm>.service`                      | wrapped by `nixlingd` supervisor DAG + broker `SpawnRunner` per-runner pidfd ownership (the legacy `nixling@<vm>.service` wrapper was retired in v1.0) |
 
 ## Option mapping
 
@@ -279,9 +279,9 @@ nixling.vms.work-app = {
 Then `nixling usb attach work-app <busid> --apply` from the host
 attaches a plugged-in YubiKey via the per-env usbipd broker-spawned
 runner under `nixling.slice/sys-work/usbipd-proxy` (v1.0 per ADR
-0015; the pre-P6 `nixling usb work-app` bash orchestrator + the
+0015; the legacy `nixling usb work-app` bash orchestrator + the
 per-env `nixling-sys-work-usbipd-proxy.service` systemd unit were
-retired in P6). Ctrl-C detaches.
+retired in v1.0). Ctrl-C detaches.
 
 ### Pattern: keeping legacy / hand-rolled networking
 
@@ -566,13 +566,13 @@ change. For the full predicate semantics see
   audio / usb` — no more remembering tap names, MAC byte counts, or
   which env's usbipd is bound to which `192.0.2.X`.
 - **SSH key management.** Per-VM Ed25519 keys generated at activation,
-  ACL'd to the `nixling-launchers` group, injected into the guest
+  ACL'd to the `nixling` group, injected into the guest
   at boot via `nixling-load-host-keys.service`. No flake-baked keys.
-- **Permission boundary.** Members of `nixling-launchers` can drive
+- **Permission boundary.** Members of `nixling` can drive
   `vm start` / `vm stop` / `vm restart` against `nixlingd`'s public
-  socket (mode 0660, group `nixling-launchers`); `SO_PEERCRED` at
-  accept time is the authorisation surface. The pre-P6 polkit per-VM
-  allowlist was retired in P6 (ADR 0015).
+  socket (mode 0660, group `nixling`); `SO_PEERCRED` at
+  accept time is the authorisation surface. The legacy polkit per-VM
+  allowlist was retired in v1.0 (ADR 0015).
 
 ## What microvm.nix users lose / what's nixling-only
 
@@ -600,7 +600,7 @@ change. For the full predicate semantics see
 - **`microvm@<vm>.service` is wrapped, not replaced — but only at
   evaluation time.** In v1.0 (per ADR 0015) the per-VM lifecycle is
   fully owned by `nixlingd` → `nixling-priv-broker` via the
-  supervisor DAG; the pre-P6 `nixling@<vm>.service` wrapper was
+  supervisor DAG; the legacy `nixling@<vm>.service` wrapper was
   retired. Use `nixling vm start / vm stop / vm restart` for
   day-to-day lifecycle. The upstream `microvm@<vm>.service` template
   is still emitted by `microvm.nix` and can be used directly if you
@@ -613,7 +613,7 @@ change. For the full predicate semantics see
 - `sys-<env>-net` — auto-declared net VM (NAT + dnsmasq + nftables).
 - `vm-<vm>-<env>` / `vm-<vm>-up` — taps on the bridges above.
 - `nixling-sys-<env>-usbipd-proxy.service` — host-side USBIP proxy
-  per env (retired as a host singleton in P3 → now a broker-spawned
+  per env (retired as a host singleton and now a broker-spawned
   runner per ADR 0015; the unit name above is preserved as the
   cgroup leaf identifier).
 - `nixlingd.service` — daemon control plane (read-only RPCs + dispatch
@@ -624,9 +624,9 @@ change. For the full predicate semantics see
 - `microvm@<vm>.service` — upstream unit (still emitted by
   `microvm.nix` for debugging; in v1.0 the broker `SpawnRunner` is
   the lifecycle of record).
-- `nixling-launchers` — host group whose members can drive `vm start
+- `nixling` — host group whose members can drive `vm start
   / vm stop / vm restart` against `nixlingd`'s public socket (mode
-  0660, group `nixling-launchers`).
+  0660, group `nixling`).
 
 ## Backup / state directories
 
@@ -637,7 +637,7 @@ change. For the full predicate semantics see
 - Per-VM `/nix/store` mirror: `/var/lib/nixling/vms/<vm>/store/`
   (hardlinks; same FS as `/nix/store` is required).
 - SSH keys: `/var/lib/nixling/keys/<vm>_ed25519` (private) +
-  `.pub`. Mode `0700`, ACL'd to `nixling-launcher`.
+  `.pub`. Mode `0700`, ACL'd to `nixling`.
 - TPM state (if `tpm.enable = true`):
   `/var/lib/nixling/vms/<vm>/swtpm/`. Treat as secret; back up only to
   encrypted, access-controlled media.
@@ -674,7 +674,7 @@ The per-VM store needs same-FS hardlinks; move
 remounting or relocating).
 
 **Polkit prompt still appears on `nixling vm start`.**
-The invoking user is not in `nixling-launcher`. Add them to
+The invoking user is not in `nixling`. Add them to
 `nixling.site.launcherUsers` (which only adjoins the group; you must
 still declare the user) and re-log-in so the group membership
 takes effect.

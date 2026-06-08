@@ -1,10 +1,9 @@
-//! `UpdateHostsFile` op (W3 s2).
+//! `UpdateHostsFile` op.
 //!
 //! Writes the nixling-managed block of `/etc/hosts` while preserving
 //! every foreign line byte-for-byte. Path safety: `openat2` with
 //! `O_NOFOLLOW` + `RESOLVE_BENEATH`; replace via `O_TMPFILE` +
-//! `linkat` (or `openat2` + `rename`). See plan.md §"W3 filesystem
-//! path-safety tests".
+//! `linkat` (or `openat2` + `rename`).
 //!
 //! The implementation here is layered:
 //!
@@ -135,7 +134,7 @@ impl std::fmt::Display for WriteMarkerBlockError {
 
 impl std::error::Error for WriteMarkerBlockError {}
 
-/// W12 runtime entry-point for `UpdateHostsFile`.
+/// Runtime entry-point for `UpdateHostsFile`.
 ///
 /// The resolver already renders the canonical marker-delimited block.
 /// The broker owns the merge: preserve foreign lines, replace the

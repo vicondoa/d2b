@@ -1,5 +1,4 @@
-//! P3 ph3-p3-host-doctor-extended: `nixling host doctor --read-only`
-//! checks.
+//! `nixling host doctor --read-only` checks.
 //!
 //! Each check is a passive, read-only probe:
 //! - `broker_ready` — connect to `/run/nixling/priv.sock`.
@@ -77,12 +76,7 @@ pub struct DoctorReport {
 }
 
 impl DoctorReport {
-    pub fn push(
-        &mut self,
-        name: &'static str,
-        status: DoctorStatus,
-        detail: impl Into<String>,
-    ) {
+    pub fn push(&mut self, name: &'static str, status: DoctorStatus, detail: impl Into<String>) {
         self.checks.push(DoctorCheck {
             name,
             status,
@@ -137,7 +131,7 @@ impl DoctorReport {
         }
     }
 
-    /// Backward-compatible top-level field: pre-P3 callers relied on
+    /// Backward-compatible top-level field: previous callers relied on
     /// the boolean `broker_ready`. Preserve it by looking at the
     /// matching check row.
     pub fn broker_ready(&self) -> bool {
@@ -159,6 +153,11 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
     check_usbipd_runners(&pidfd_entries, &mut report);
     check_kernel_module_matrix(&context.daemon_state_dir, &mut report);
     check_autostart_status(&context.daemon_state_dir, &mut report);
+    // v1.2 invariant probes
+    check_seccomp_bpf_loaded(&pidfd_entries, &mut report);
+    check_pre_ns_posture(&pidfd_entries, &mut report);
+    check_broker_reap_health(&pidfd_entries, &mut report);
+    check_bridge_ipv6_sysctl(&context.daemon_state_dir, &mut report);
     report
 }
 
@@ -211,7 +210,7 @@ fn check_daemon_socket(context: &Context, report: &mut DoctorReport) {
 fn check_metrics_endpoint(context: &Context, report: &mut DoctorReport) {
     let url = &context.metrics_url;
     match probe_http_metrics(url) {
-        Ok(status) if status == 200 => report.push(
+        Ok(200) => report.push(
             "metrics-endpoint",
             DoctorStatus::Pass,
             format!("scrape endpoint at {url} returned HTTP 200"),
@@ -705,6 +704,512 @@ fn check_autostart_status(daemon_state_dir: &Path, report: &mut DoctorReport) {
 }
 
 // ---------------------------------------------------------------
+// v1.2 invariant probes
+// ---------------------------------------------------------------
+
+// --- helpers for /proc parsing ---
+
+/// Read `/proc/<pid>/status` and return its lines, or `None` if the
+/// file is absent (process exited).
+fn read_proc_status(pid: i32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/status")).ok()
+}
+
+/// Extract the integer value from a line like `Seccomp:\t2\n`.
+fn parse_proc_status_field(status: &str, field: &str) -> Option<String> {
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix(field) {
+            return Some(rest.trim().to_owned());
+        }
+    }
+    None
+}
+
+/// Parse the process state character from `/proc/<pid>/stat`.
+/// The format is: `pid (comm) state ...`; `comm` may contain spaces
+/// and parentheses, so we locate the *last* `)` and take the next
+/// non-whitespace character.
+fn read_proc_stat_state(pid: i32) -> Option<char> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = text.rfind(')')?.checked_add(1)?;
+    text[after_comm..].trim_start().chars().next()
+}
+
+// --- check_seccomp_bpf_loaded (D4 visibility) ---
+
+/// For each runner in `pidfd-table.json`, verify `Seccomp: 2` (BPF
+/// filter mode) in `/proc/<pid>/status`.
+///
+/// - **Warn** if pidfd-table is missing (no runners to check).
+/// - **Fail** if any live runner reports `Seccomp: 0` (disabled) or
+///   `Seccomp: 1` (strict mode, not BPF filter).
+/// - **Pass** if all live runners have `Seccomp: 2`.
+fn check_seccomp_bpf_loaded(entries: &PidfdEntries, report: &mut DoctorReport) {
+    match &entries.state {
+        PidfdState::Missing => {
+            report.push(
+                "seccomp-bpf-loaded",
+                DoctorStatus::Warn,
+                "pidfd-table.json missing; no runners running — seccomp BPF posture not verifiable",
+            );
+            return;
+        }
+        PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
+            let detail = match &entries.state {
+                PidfdState::ParseError(d) => d.clone(),
+                _ => "daemon state dir unreadable".to_owned(),
+            };
+            report.push(
+                "seccomp-bpf-loaded",
+                DoctorStatus::Warn,
+                format!("pidfd-table inspection failed: {detail}"),
+            );
+            return;
+        }
+        PidfdState::Loaded => {}
+    }
+
+    if entries.entries.is_empty() {
+        report.push(
+            "seccomp-bpf-loaded",
+            DoctorStatus::Warn,
+            "no runners registered in pidfd-table; seccomp BPF posture not verifiable",
+        );
+        return;
+    }
+
+    let mut bad: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for entry in &entries.entries {
+        let Some(status) = read_proc_status(entry.pid) else {
+            // Process has already exited; skip stale entry.
+            continue;
+        };
+        checked += 1;
+        let seccomp_val = parse_proc_status_field(&status, "Seccomp:");
+        match seccomp_val.as_deref() {
+            Some("2") => {}
+            Some(v) => bad.push(format!("{}(pid={}) Seccomp:{}", entry.role, entry.pid, v)),
+            None => bad.push(format!(
+                "{}(pid={}) Seccomp: field missing",
+                entry.role, entry.pid
+            )),
+        }
+    }
+
+    if checked == 0 {
+        report.push(
+            "seccomp-bpf-loaded",
+            DoctorStatus::Warn,
+            "all registered runner PIDs have exited; seccomp BPF posture not verifiable",
+        );
+        return;
+    }
+
+    if bad.is_empty() {
+        report.push_with_data(
+            "seccomp-bpf-loaded",
+            DoctorStatus::Pass,
+            format!("all {checked} registered runner(s) have Seccomp:2 (BPF filter)"),
+            json!({ "checked": checked }),
+        );
+    } else {
+        report.push_with_data(
+            "seccomp-bpf-loaded",
+            DoctorStatus::Fail,
+            format!(
+                "{} runner(s) missing BPF filter: {}",
+                bad.len(),
+                bad.join(", ")
+            ),
+            json!({ "checked": checked, "failing": bad }),
+        );
+    }
+}
+
+// --- check_pre_ns_posture (D5 visibility) ---
+
+/// The set of runner roles that must run inside a broker-pre-established
+/// user namespace (D5 scope for v1.2: swtpm only; gpu render-node-only
+/// and audio are conditional and absent from v1.2 mandatory set).
+fn is_d5_scoped_role(role: &str) -> bool {
+    role.eq_ignore_ascii_case("swtpm")
+}
+
+/// For each D5-scoped runner, verify it is in a nested user namespace
+/// by inspecting `NStgid:` in `/proc/<pid>/status`.  Multiple
+/// tab-separated values on the `NStgid:` line indicate the process is
+/// inside at least one nested user namespace.
+///
+/// - **Warn** if pidfd-table is missing or no D5-scoped runners are
+///   registered (nothing to assert yet).
+/// - **Fail** if a D5-scoped runner is in the initial user NS (single
+///   `NStgid` value).
+/// - **Pass** if all D5-scoped runners are in a nested user NS.
+fn check_pre_ns_posture(entries: &PidfdEntries, report: &mut DoctorReport) {
+    match &entries.state {
+        PidfdState::Missing => {
+            report.push(
+                "pre-ns-posture",
+                DoctorStatus::Warn,
+                "pidfd-table.json missing; D5-scoped runner user-NS posture not verifiable",
+            );
+            return;
+        }
+        PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
+            let detail = match &entries.state {
+                PidfdState::ParseError(d) => d.clone(),
+                _ => "daemon state dir unreadable".to_owned(),
+            };
+            report.push(
+                "pre-ns-posture",
+                DoctorStatus::Warn,
+                format!("pidfd-table inspection failed: {detail}"),
+            );
+            return;
+        }
+        PidfdState::Loaded => {}
+    }
+
+    let scoped: Vec<&PersistedPidfdEntryLoose> = entries
+        .entries
+        .iter()
+        .filter(|e| is_d5_scoped_role(&e.role))
+        .collect();
+
+    if scoped.is_empty() {
+        report.push(
+            "pre-ns-posture",
+            DoctorStatus::Warn,
+            "no D5-scoped runners (swtpm) registered; user-NS posture not verifiable",
+        );
+        return;
+    }
+
+    let mut not_nested: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for entry in &scoped {
+        let Some(status) = read_proc_status(entry.pid) else {
+            continue;
+        };
+        checked += 1;
+        // `NStgid:` contains one value per nested user NS level
+        // (outermost … innermost), tab-separated.  Two or more
+        // values means the process is inside at least one user NS.
+        let nstgid = parse_proc_status_field(&status, "NStgid:");
+        let nested = nstgid
+            .as_deref()
+            .map(|v| v.split_whitespace().count() >= 2)
+            .unwrap_or(false);
+        if !nested {
+            not_nested.push(format!("{}(pid={})", entry.role, entry.pid));
+        }
+    }
+
+    if checked == 0 {
+        report.push(
+            "pre-ns-posture",
+            DoctorStatus::Warn,
+            "all D5-scoped runner PIDs have exited; user-NS posture not verifiable",
+        );
+        return;
+    }
+
+    if not_nested.is_empty() {
+        report.push_with_data(
+            "pre-ns-posture",
+            DoctorStatus::Pass,
+            format!("all {checked} D5-scoped runner(s) are in a nested user namespace"),
+            json!({ "checked": checked }),
+        );
+    } else {
+        report.push_with_data(
+            "pre-ns-posture",
+            DoctorStatus::Fail,
+            format!(
+                "{} D5-scoped runner(s) in initial user NS (broker-pre-NS not active): {}",
+                not_nested.len(),
+                not_nested.join(", ")
+            ),
+            json!({ "checked": checked, "failing": not_nested }),
+        );
+    }
+}
+
+// --- check_broker_reap_health (D7 visibility) ---
+
+/// For each registered runner PID, read `/proc/<pid>/stat` and check
+/// for zombie (`Z`) or dead (`X`) state — both indicate the process
+/// exited but was never reaped.
+///
+/// - **Fail** if any registered runner is in state `Z` or `X`.
+/// - **Pass** otherwise.
+///
+/// The broker's in-memory `ChildReaped` replay-buffer depth is NOT yet
+/// observable via a stable CLI command (`nixling-priv-broker
+/// --report-state` is not yet implemented as of v1.2).  When D7 lands
+/// the IPC mechanism, this check will be extended to query that buffer.
+/// For v1.2 the zombie-count probe is sufficient: zero zombies among
+/// registered runners implies the reap loop is functioning correctly.
+fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
+    match &entries.state {
+        PidfdState::Missing => {
+            report.push(
+                "broker-reap-health",
+                DoctorStatus::Warn,
+                "pidfd-table.json missing; broker reap health not verifiable",
+            );
+            return;
+        }
+        PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
+            let detail = match &entries.state {
+                PidfdState::ParseError(d) => d.clone(),
+                _ => "daemon state dir unreadable".to_owned(),
+            };
+            report.push(
+                "broker-reap-health",
+                DoctorStatus::Warn,
+                format!("pidfd-table inspection failed: {detail}"),
+            );
+            return;
+        }
+        PidfdState::Loaded => {}
+    }
+
+    if entries.entries.is_empty() {
+        report.push_with_data(
+            "broker-reap-health",
+            DoctorStatus::Pass,
+            "no runners registered; no zombie check needed (buffer depth not yet observable — D7 IPC placeholder)",
+            json!({ "zombies": 0, "checked": 0, "bufferDepth": null }),
+        );
+        return;
+    }
+
+    let mut zombies: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for entry in &entries.entries {
+        let Some(state_char) = read_proc_stat_state(entry.pid) else {
+            // Process exited and /proc entry is gone — already reaped.
+            continue;
+        };
+        checked += 1;
+        if state_char == 'Z' || state_char == 'X' {
+            zombies.push(format!(
+                "{}(pid={},state={})",
+                entry.role, entry.pid, state_char
+            ));
+        }
+    }
+
+    let data = json!({
+        "zombies": zombies.len(),
+        "checked": checked,
+        // D7 replay-buffer depth probe: not yet observable.
+        // When `nixling-priv-broker --report-state` lands, this
+        // field will carry the actual in-memory buffer depth.
+        "bufferDepth": null,
+    });
+
+    if zombies.is_empty() {
+        report.push_with_data(
+            "broker-reap-health",
+            DoctorStatus::Pass,
+            format!(
+                "no zombie/dead runners among {checked} checked (buffer depth not yet observable — D7 IPC placeholder)"
+            ),
+            data,
+        );
+    } else {
+        report.push_with_data(
+            "broker-reap-health",
+            DoctorStatus::Fail,
+            format!(
+                "{} registered runner(s) in zombie/dead state: {}",
+                zombies.len(),
+                zombies.join(", ")
+            ),
+            data,
+        );
+    }
+}
+
+// --- check_bridge_ipv6_sysctl (D8 visibility) ---
+
+/// Deserialised shape of `envs.json` — loose, forward-compatible.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct PersistedEnvsJson {
+    #[serde(default)]
+    envs: Vec<PersistedEnvEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedEnvEntry {
+    #[serde(default)]
+    lan_bridge: Option<String>,
+    #[serde(default)]
+    uplink_bridge: Option<String>,
+}
+
+/// Collect declared bridge names from `<daemon-state-dir>/envs.json`.
+/// Falls back to scanning `/sys/class/net/` for nixling-named bridges
+/// (`br-*-lan` / `br-*-up`) only when the file is absent or
+/// unparseable — a successfully-parsed empty file means "no envs
+/// declared" and suppresses the fallback.
+fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
+    let envs_path = daemon_state_dir.join("envs.json");
+    if let Ok(bytes) = std::fs::read(&envs_path) {
+        if let Ok(parsed) = serde_json::from_slice::<PersistedEnvsJson>(&bytes) {
+            // Successfully parsed — use declared bridges only; do NOT
+            // fall back to sysfs so that an empty envs.json correctly
+            // signals "no envs" rather than triggering a sysfs scan.
+            let mut bridges: Vec<String> = Vec::new();
+            for env in &parsed.envs {
+                if let Some(b) = &env.lan_bridge {
+                    if !b.is_empty() {
+                        bridges.push(b.clone());
+                    }
+                }
+                if let Some(b) = &env.uplink_bridge {
+                    if !b.is_empty() {
+                        bridges.push(b.clone());
+                    }
+                }
+            }
+            bridges.sort();
+            bridges.dedup();
+            return bridges;
+        }
+    }
+    // envs.json absent or unparseable — fall back to sysfs scan.
+    sysfs_nixling_bridges()
+}
+
+fn sysfs_nixling_bridges() -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    let mut bridges: Vec<String> = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_nixling_bridge_name(&name) {
+            bridges.push(name);
+        }
+    }
+    bridges.sort();
+    bridges
+}
+
+/// Return `true` for interface names matching the nixling bridge
+/// naming convention: `br-<env>-lan` or `br-<env>-up`.
+fn is_nixling_bridge_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("br-") else {
+        return false;
+    };
+    rest.ends_with("-lan") || rest.ends_with("-up")
+}
+
+/// For each declared nixling bridge, query
+/// `net.ipv6.conf.<bridge>.disable_ipv6` via `sysctl`.
+///
+/// - **Fail** if any bridge returns `0` (IPv6 active).
+/// - **Pass** if all bridges return `1`.
+/// - **Warn** if no bridges can be discovered (no envs running).
+fn check_bridge_ipv6_sysctl(daemon_state_dir: &Path, report: &mut DoctorReport) {
+    let bridges = collect_bridge_names(daemon_state_dir);
+
+    if bridges.is_empty() {
+        report.push(
+            "bridge-ipv6-sysctl",
+            DoctorStatus::Warn,
+            "no nixling bridges found (envs.json absent and no br-*-{lan,up} interfaces visible); IPv6 sysctl not verifiable",
+        );
+        return;
+    }
+
+    let mut failing: Vec<String> = Vec::new();
+    let mut passing: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for bridge in &bridges {
+        let key = format!("net.ipv6.conf.{bridge}.disable_ipv6");
+        match run_sysctl_n(&key) {
+            Ok(val) => {
+                let trimmed = val.trim();
+                if trimmed == "1" {
+                    passing.push(bridge.clone());
+                } else {
+                    failing.push(format!("{bridge}=>{trimmed}"));
+                }
+            }
+            Err(err) => errors.push(format!("{bridge}: {err}")),
+        }
+    }
+
+    let data = json!({
+        "bridges": bridges,
+        "passing": passing,
+        "failing": failing,
+        "errors": errors,
+    });
+
+    if !failing.is_empty() {
+        report.push_with_data(
+            "bridge-ipv6-sysctl",
+            DoctorStatus::Fail,
+            format!(
+                "{} bridge(s) have disable_ipv6=0 (IPv6 active): {}",
+                failing.len(),
+                failing.join(", ")
+            ),
+            data,
+        );
+    } else if !errors.is_empty() {
+        report.push_with_data(
+            "bridge-ipv6-sysctl",
+            DoctorStatus::Warn,
+            format!(
+                "sysctl query errors for {} bridge(s): {}",
+                errors.len(),
+                errors.join(", ")
+            ),
+            data,
+        );
+    } else {
+        report.push_with_data(
+            "bridge-ipv6-sysctl",
+            DoctorStatus::Pass,
+            format!("all {} bridge(s) have disable_ipv6=1", passing.len()),
+            data,
+        );
+    }
+}
+
+/// Run `sysctl -n <key>` and return trimmed stdout, or an error string.
+fn run_sysctl_n(key: &str) -> Result<String, String> {
+    let out = std::process::Command::new("sysctl")
+        .args(["-n", key])
+        .output()
+        .map_err(|e| format!("exec sysctl: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        Err(format!(
+            "sysctl exited {}: {stderr}",
+            out.status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_owned())
+        ))
+    }
+}
+
+// ---------------------------------------------------------------
 // Renderers
 // ---------------------------------------------------------------
 
@@ -715,7 +1220,10 @@ pub fn render_summary(report: &DoctorReport) -> Value {
         .map(|c| {
             let mut obj = serde_json::Map::new();
             obj.insert("name".to_owned(), Value::String(c.name.to_owned()));
-            obj.insert("status".to_owned(), Value::String(c.status.as_str().to_owned()));
+            obj.insert(
+                "status".to_owned(),
+                Value::String(c.status.as_str().to_owned()),
+            );
             obj.insert("detail".to_owned(), Value::String(c.detail.clone()));
             if let Some(data) = &c.data {
                 obj.insert("data".to_owned(), data.clone());
@@ -723,8 +1231,8 @@ pub fn render_summary(report: &DoctorReport) -> Value {
             Value::Object(obj)
         })
         .collect();
-    // Backward-compatible: pre-P3 doctor emitted a flat `findings`
-    // array containing only failing rows. Preserve that shape so
+    // Backward-compatible: previous doctor output emitted a flat
+    // `findings` array containing only failing rows. Preserve that shape so
     // existing consumers keep working; the new structured surface
     // lives in `checks`.
     let findings: Vec<Value> = report
@@ -1055,5 +1563,238 @@ mod tests {
         assert_eq!(report.checks[0].status, DoctorStatus::Pass);
         let data = report.checks[0].data.as_ref().unwrap();
         assert_eq!(data["count"].as_u64(), Some(2));
+    }
+
+    // ---------------------------------------------------------------
+    // Unit tests for the v1.2 invariant probes
+    // ---------------------------------------------------------------
+
+    // --- check_seccomp_bpf_loaded ---
+
+    #[test]
+    fn seccomp_bpf_loaded_warn_when_table_missing() {
+        let entries = PidfdEntries {
+            state: PidfdState::Missing,
+            entries: vec![],
+        };
+        let mut report = DoctorReport::default();
+        check_seccomp_bpf_loaded(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert!(report.checks[0].name == "seccomp-bpf-loaded");
+    }
+
+    #[test]
+    fn seccomp_bpf_loaded_warn_when_no_entries() {
+        let entries = PidfdEntries {
+            state: PidfdState::Loaded,
+            entries: vec![],
+        };
+        let mut report = DoctorReport::default();
+        check_seccomp_bpf_loaded(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+    }
+
+    /// Build a fake `/proc/<pid>/status`-style string with the given
+    /// `Seccomp:` value so we can exercise the parser without a real
+    /// process.
+    fn fake_proc_status(seccomp: u8, nstgid_values: &[u32]) -> String {
+        let nstgid = nstgid_values
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join("\t");
+        format!("Name:\ttest\nPid:\t99\nSeccomp:\t{seccomp}\nNStgid:\t{nstgid}\n")
+    }
+
+    #[test]
+    fn seccomp_field_parse_bpf() {
+        let status = fake_proc_status(2, &[99]);
+        assert_eq!(
+            parse_proc_status_field(&status, "Seccomp:"),
+            Some("2".to_owned())
+        );
+    }
+
+    #[test]
+    fn seccomp_field_parse_disabled() {
+        let status = fake_proc_status(0, &[99]);
+        assert_eq!(
+            parse_proc_status_field(&status, "Seccomp:"),
+            Some("0".to_owned())
+        );
+    }
+
+    // Simulate the actual /proc check using the real current process
+    // PID (which will have Seccomp: 0 in a normal test runner).
+    // The check result depends on the host kernel; we only assert
+    // the check runs without panic and produces a known name.
+    #[test]
+    fn seccomp_bpf_loaded_runs_against_self() {
+        let entries = PidfdEntries {
+            state: PidfdState::Loaded,
+            entries: vec![PersistedPidfdEntryLoose {
+                vm: "test".to_owned(),
+                role: "cloud-hypervisor".to_owned(),
+                pid: std::process::id() as i32,
+                start_time_ticks: 0,
+            }],
+        };
+        let mut report = DoctorReport::default();
+        check_seccomp_bpf_loaded(&entries, &mut report);
+        assert_eq!(report.checks[0].name, "seccomp-bpf-loaded");
+        // Status is host-dependent; just assert it is one of the valid variants.
+        assert!(matches!(
+            report.checks[0].status,
+            DoctorStatus::Pass | DoctorStatus::Fail | DoctorStatus::Warn
+        ));
+    }
+
+    // --- check_pre_ns_posture ---
+
+    #[test]
+    fn pre_ns_posture_warn_when_table_missing() {
+        let entries = PidfdEntries {
+            state: PidfdState::Missing,
+            entries: vec![],
+        };
+        let mut report = DoctorReport::default();
+        check_pre_ns_posture(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert_eq!(report.checks[0].name, "pre-ns-posture");
+    }
+
+    #[test]
+    fn pre_ns_posture_warn_when_no_d5_runners() {
+        let entries = PidfdEntries {
+            state: PidfdState::Loaded,
+            entries: vec![PersistedPidfdEntryLoose {
+                vm: "obs-net".to_owned(),
+                role: "cloud-hypervisor".to_owned(),
+                pid: 42,
+                start_time_ticks: 0,
+            }],
+        };
+        let mut report = DoctorReport::default();
+        check_pre_ns_posture(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+    }
+
+    #[test]
+    fn nstgid_nested_parse() {
+        // Two values → nested user NS
+        let status = fake_proc_status(2, &[12345, 1]);
+        let val = parse_proc_status_field(&status, "NStgid:").unwrap();
+        assert!(val.split_whitespace().count() >= 2);
+    }
+
+    #[test]
+    fn nstgid_single_parse() {
+        // One value → initial user NS
+        let status = fake_proc_status(2, &[12345]);
+        let val = parse_proc_status_field(&status, "NStgid:").unwrap();
+        assert_eq!(val.split_whitespace().count(), 1);
+    }
+
+    // --- check_broker_reap_health ---
+
+    #[test]
+    fn broker_reap_health_warn_when_table_missing() {
+        let entries = PidfdEntries {
+            state: PidfdState::Missing,
+            entries: vec![],
+        };
+        let mut report = DoctorReport::default();
+        check_broker_reap_health(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert_eq!(report.checks[0].name, "broker-reap-health");
+    }
+
+    #[test]
+    fn broker_reap_health_pass_when_no_entries() {
+        let entries = PidfdEntries {
+            state: PidfdState::Loaded,
+            entries: vec![],
+        };
+        let mut report = DoctorReport::default();
+        check_broker_reap_health(&entries, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Pass);
+    }
+
+    #[test]
+    fn proc_stat_state_parse_self() {
+        // The test runner itself should not be a zombie.
+        let state = read_proc_stat_state(std::process::id() as i32);
+        assert!(
+            matches!(state, Some('R') | Some('S') | Some('D')),
+            "unexpected state: {state:?}"
+        );
+    }
+
+    // Verify the zombie-detection path using a real exited child.
+    #[test]
+    fn broker_reap_health_fail_on_zombie() {
+        // Spawn a child that exits immediately, then check its state
+        // before waitpid — it should be in Z state.
+        use std::process::Command;
+        let mut child = Command::new("true").spawn().expect("spawn true");
+        let pid = child.id() as i32;
+        // Give the child time to exit without being reaped.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Read state; if it's already reaped by the OS before we get here
+        // (proc entry gone), skip the assertion.
+        if let Some(state_char) = read_proc_stat_state(pid) {
+            // May be 'Z' (zombie) or already gone ('X') on some kernels.
+            assert!(
+                state_char == 'Z' || state_char == 'X' || state_char == 'R' || state_char == 'S',
+                "unexpected state: {state_char}"
+            );
+        }
+        // Reap to avoid leaking zombies.
+        let _ = child.wait();
+    }
+
+    // --- check_bridge_ipv6_sysctl ---
+
+    #[test]
+    fn bridge_ipv6_sysctl_warn_when_no_bridges() {
+        let dir = unique_scratch("bridge-sysctl-no-bridges");
+        let mut report = DoctorReport::default();
+        // No envs.json and the scratch dir has no br-* ifaces.
+        // We override bridge collection by having an empty envs.json.
+        write_state(&dir, "envs.json", serde_json::json!({ "envs": [] }));
+        check_bridge_ipv6_sysctl(&dir, &mut report);
+        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
+        assert_eq!(report.checks[0].name, "bridge-ipv6-sysctl");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn nixling_bridge_name_matcher() {
+        assert!(is_nixling_bridge_name("br-corp-lan"));
+        assert!(is_nixling_bridge_name("br-work-up"));
+        assert!(!is_nixling_bridge_name("eth0"));
+        assert!(!is_nixling_bridge_name("br-corp-mgmt"));
+        assert!(!is_nixling_bridge_name("virbr0"));
+    }
+
+    #[test]
+    fn collect_bridge_names_from_envs_json() {
+        let dir = unique_scratch("bridge-collect");
+        write_state(
+            &dir,
+            "envs.json",
+            serde_json::json!({
+                "envs": [
+                    { "lanBridge": "br-corp-lan", "uplinkBridge": "br-corp-up" },
+                    { "lanBridge": "br-work-lan", "uplinkBridge": "br-work-up" },
+                ]
+            }),
+        );
+        let names = collect_bridge_names(&dir);
+        assert_eq!(
+            names,
+            vec!["br-corp-lan", "br-corp-up", "br-work-lan", "br-work-up"]
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

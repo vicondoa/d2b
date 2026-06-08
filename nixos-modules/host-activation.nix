@@ -1,28 +1,26 @@
 # Activation scripts for nixling.
 #
-# Phase 2b removed the three legacy activation scripts that used to
-# live here. If you're upgrading from a pre-public version of nixling
-# (pre-Phase-2b), see CHANGELOG.md for the manual migration steps:
+# Historical one-shot repairs were removed from this module. If you're
+# upgrading from a pre-public version of nixling, see CHANGELOG.md for
+# the manual migration steps.
 #
 #   * nixlingSbctlBackup    — host-specific (maintainer's sbctl pipeline);
 #                             no public framework concern. Move
 #                             *-backup.tar.gz files out of $HOME by hand
 #                             if you ever ran the maintainer setup.
-#   * nixlingStoreChownRepair — one-shot fix for a past chown bug (P5
-#                             round-1 leaked group=kvm into /nix/store
-#                             inodes via the per-VM hardlink farm).
-#                             If you ran a pre-Phase-2b nixling, run
-#                             the repair script from the historical
-#                             /etc/nixos commit once, then forget about
-#                             it. New installs are unaffected.
+#   * nixlingStoreChownRepair — one-shot fix for a past chown bug that
+#                             leaked group=kvm into /nix/store inodes via
+#                             the per-VM hardlink farm. Run the repair
+#                             script from the historical /etc/nixos commit
+#                             once, then forget about it. New installs are
+#                             unaffected.
 #   * nixlingMigrateState   — one-shot renamer (/var/lib/microvms →
 #                             /var/lib/nixling/vms, plus /var/lib/swtpm
 #                             → vms/<vm>/swtpm). New installs land on
-#                             the new layout from the start. Pre-W3
-#                             consumers should use the Phase 9
-#                             migration script.
+#                             the new layout from the start. Existing
+#                             consumers should use the migration script.
 #
-# What remains here:
+# What remains here
 #   - nixlingVmStatePerms       — per-graphics-VM ACLs on the state dir
 #                                 + var.img + every *.img disk so the
 #                                 nixling-<vm>-gpu sidecar user (not
@@ -35,9 +33,9 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib pkgs; };
 
-  # v1.1.2fu19 panel-security R2 critical must-fix: build the
-  # nixling-activation-helper binary (defined in
+  # Build the nixling-activation-helper binary (defined in
   # packages/nixling-host/src/bin/nixling-activation-helper.rs)
   # as a derivation here so activation scripts can call it via a
   # store path that's valid BEFORE
@@ -74,9 +72,64 @@ EOF
     '';
   };
   activationHelper = "${activationHelperPackage}/bin/nixling-activation-helper";
+  groupMigrationHelperPackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-host-activation-helper";
+    version = "0.0.0-bootstrap";
+    src = packagesSrc;
+    cargoBuildFlags = [ "--package" "nixling-host-activation-helper" ];
+    cargoLock.lockFile = ../packages/Cargo.lock;
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+  };
+  groupMigrationHelper = "${groupMigrationHelperPackage}/bin/nixling-host-activation-helper";
+  legacyLauncherGid = config.users.groups.nixling-launcher.gid or null;
+  legacyLaunchersGid = config.users.groups.nixling-launchers.gid or null;
+  legacyGidsArg = lib.concatStringsSep "," (
+    builtins.filter (g: g != null)
+      [ (if legacyLauncherGid == null then null else toString legacyLauncherGid)
+        (if legacyLaunchersGid == null then null else toString legacyLaunchersGid)
+      ]);
 in
 {
-  # v1.1-P5: per-sidecar-user traversal ACL on /var/lib/nixling.
+  system.activationScripts.nixlingGroupMigration =
+    lib.stringAfter [ "users" ] ''
+      target_gid="$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)"
+      [ -n "$target_gid" ] || exit 0
+
+      legacy_gids="${legacyGidsArg}"
+      # Fallback: also look up live legacy groups in case the gids
+      # weren't declared explicitly at eval time.
+      for legacy_name in nixling-launcher nixling-launchers; do
+        legacy_gid="$(${pkgs.getent}/bin/getent group "$legacy_name" | ${pkgs.coreutils}/bin/cut -d: -f3)"
+        if [ -n "$legacy_gid" ] && \
+           ! echo ",$legacy_gids," | ${pkgs.gnugrep}/bin/grep -q ",$legacy_gid,"; then
+          legacy_gids="''${legacy_gids:+$legacy_gids,}$legacy_gid"
+        fi
+      done
+      [ -n "$legacy_gids" ] || exit 0
+
+      for root in /var/lib/nixling /run/nixling; do
+        [ -e "$root" ] || continue
+        ${groupMigrationHelper} chgrp-by-numeric-gid \
+          --root "$root" \
+          --legacy-gids "$legacy_gids" \
+          --target-gid "$target_gid" \
+          --no-follow-symlinks \
+          --skip-while-lock-held /run/nixling/daemon.lock \
+          ${if cfg.site.activation.failClosedOnLegacyGid
+            then "--fail-closed"
+            else "|| true"}
+      done
+    '';
+
+  # per-sidecar-user traversal ACL on /var/lib/nixling.
   # /var/lib/nixling itself is `0750 root nixlingd` (set in
   # host-daemon.nix tmpfiles); this activation script grants the
   # documented sidecar users the `--x` traversal bit on the parent
@@ -87,7 +140,7 @@ in
   # nixlingd group).
   #
   # The enumeration mirrors the user list documented in
-  # `docs/reference/privileges.md` § "v1.1-P5 state-dir ACL
+  # `docs/reference/privileges.md` § "v1.1- state-dir ACL
   # contract". Each entry is a `--x` (execute-only / traversal)
   # grant — the sidecar user can `chdir` into the directory but
   # not read its contents; per-VM subdirectories under it have
@@ -96,7 +149,7 @@ in
   #
   # Idempotent: setfacl overwrites the named entries; running
   # multiple times produces the same final ACL set.
-  system.activationScripts.nixlingStateDirAcl = lib.stringAfter [ "users" ] (''
+  system.activationScripts.nixlingStateDirAcl = lib.stringAfter [ "users" "nixlingGroupMigration" ] (''
     set -u
     state_dir=/var/lib/nixling
     if [ ! -d "$state_dir" ]; then
@@ -120,6 +173,30 @@ in
     # `kvm` as a user (the v1.1-rc1 bug) silently grants nothing
     # because no `kvm` user exists.
     ${pkgs.acl}/bin/setfacl -m "g:kvm:--x" "$state_dir" 2>/dev/null || true
+    # `nixling` is the lifecycle group whose
+    # members can call the public daemon socket AND read per-VM
+    # SSH keys from `${cfg.site.keysDir}` (each key file is mode
+    # 0640 root:nixling with a named-group ACL granting
+    # read). Pre-v1.2fu58 the state-dir had no traversal grant
+    # for `nixling`, so `nixling vm konsole` failed
+    # `stat(2)` on the key path before reaching the file — even
+    # though the key existed and the operator was in the group.
+    #
+    # This is `--x` ONLY (chdir, no list / no read). Per-VM
+    # sub-directories own their own ACLs (e.g. swtpm state, TPM
+    # NVRAM, runner sockets). NO default ACL (`setfacl -d -m`)
+    # is applied at this level: per-VM sub-dirs MUST keep their
+    # scoped ACLs, NOT inherit a launcher-group traversal grant
+    # they didn't ask for. Review confirmed the
+    # default-ACL form would widen TPM-state / audit-log / runner-
+    # socket surface to every launcher-group member.
+    #
+    # B2 / v1.2fu61 flips this to `g:nixling:--x` after the
+    # group rename. See `docs/how-to/migrate-nixling-v1-1-to-v1-2.md`.
+    STATE_DIR="$state_dir" \
+      LAUNCHER_GROUP=nixling \
+      SETFACL_BIN=${pkgs.acl}/bin/setfacl \
+      . ${./host-activation.d/state-dir-acl.sh}
     # Per-VM sidecar users: enumerated by mapAttrs over cfg.vms
     # — each VM contributes gpu/swtpm/audio/video users that
     # may need traversal.
@@ -135,17 +212,17 @@ in
     cfg.vms));
 
   # Per-graphics-VM state dir + var.img + extra-disk ownership.
-  # v1.1.1 update: ownership matches the per-VM ownership matrix
+  # update: ownership matches the per-VM ownership matrix
   # (`nixos-modules/options-ownership-matrix.nix`): per-VM root is
   # `nixlingd:users 2770`. The pre-v1.1 `microvm:kvm` shape was
   # the upstream microvm.nix default; it's incompatible with the
-  # daemon-native ownership matrix that ph2-p2-ownership-matrix
-  # enforces. var.img stays `nixlingd:kvm 0600` so the cloud-
+  # daemon-native ownership matrix. var.img stays `nixlingd:kvm 0600`
+  # so the cloud-
   # hypervisor runner (member of the kvm group via supplementary
   # groups) can open it. ACLs grant `nixling-<vm>-gpu` rwx on the
   # parent dir and rw on each *.img leaf so the gpu sidecar can
   # access displays.
-  system.activationScripts.nixlingVmStatePerms = lib.stringAfter [ "users" ]
+  system.activationScripts.nixlingVmStatePerms = lib.stringAfter [ "users" "nixlingGroupMigration" ]
     (lib.concatStringsSep "\n" (lib.mapAttrsToList
       (name: _: ''
         if [ -d /var/lib/nixling/vms/${name} ]; then
@@ -159,12 +236,12 @@ in
           if systemctl is-active --quiet "nixling-${name}-gpu.service" 2>/dev/null; then
             echo "nixling: ${name} is running; skipping disk image ownership fix (apply on next nixling vm restart)"
           else
-            # v1.1.2fu19 panel-software R2 critical must-fix:
+            # panel-software R2 critical must-fix
             # the old `for img in /var/lib/nixling/vms/${name}/*.img`
             # shell glob followed symlinks. The VM dir grants
             # `nixling-${name}-gpu:rwx` (line 117), so a compromised
             # gpu runner could plant `evil.img -> /etc/shadow` and
-            # root would chown/chmod the target. Removed: the .img
+            # root would chown/chmod the target. Removed: the.img
             # ACL grants now flow exclusively through the
             # nixlingRoleUidAcls activation script below, which is
             # also being hardened. Existing files keep their
@@ -203,7 +280,7 @@ in
       (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms)));
 
   # Non-graphics VMs (net VMs) also need correct ownership on var.img.
-  # v1.1.1: same nixlingd:kvm 0660 as graphics VMs — the broker
+  # same nixlingd:kvm 0660 as graphics VMs — the broker
   # spawns CH as nixlingd (member of kvm via supplementary groups)
   # and opens var.img read/write.
   system.activationScripts.nixlingNetVmVarImgPerms = lib.stringAfter [ "users" ]
@@ -214,7 +291,7 @@ in
             chgrp users /var/lib/nixling/vms/${name} || true
             chmod 2770 /var/lib/nixling/vms/${name} || true
           fi
-          # v1.1.2fu20 panel-security R3 critical must-fix:
+          # panel-security R3 critical must-fix
           # var.img repair must NOT use `[ -f ]` + chown/chmod
           # because the runner-UID has rwx on the parent dir
           # (granted by nixlingRoleUidAcls below). An attacker
@@ -250,7 +327,7 @@ in
         # user/group as orphaned and repair it without disturbing
         # already-correct inodes.
         ${lib.optionalString vmCfg.tpm.enable ''
-          # v1.1.2fu23 panel-security R4 high must-fix: orphan
+          # panel-security R4 high must-fix: orphan
           # ownership repair under runner-writable swtpm dir.
           # Previous code used `find -type d -o -type f -exec
           # bash -c 'stat $f; chown $f'`, vulnerable to swap
@@ -288,12 +365,11 @@ in
       '')
       (lib.filterAttrs (_: vm: vm.enable) cfg.vms)));
 
-  # v1.1.1 live-deploy fu10: Grant the ephemeral per-role
-  # UIDs from processes.json access to the per-VM state
-  # directories. v1.1.1's `stablePrincipalId` mints a unique
+  # Grant the ephemeral per-role UIDs from processes.json access to
+  # the per-VM state directories. v1.1.1's `stablePrincipalId` mints a unique
   # numeric UID per role from a sha256 hash of the principal
   # name; these UIDs are NOT system users but the spawned
-  # runners setuid() to them and need filesystem access to the
+  # runners setuid to them and need filesystem access to the
   # shares they serve (virtiofsd) or sockets they create
   # (vsock-relay, audio). Idempotent: setfacl with the same
   # entries produces the same ACL state. Runs after every
@@ -306,7 +382,7 @@ in
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
           if [ -d /var/lib/nixling/vms/${name} ]; then
-            # v1.1.2fu20 panel-kernel + panel-virt R3 must-fix:
+            # panel-kernel + panel-virt R3 must-fix
             # narrow /dev/kvm ACL to only KVM-consuming role UIDs.
             # role string is top-level on the NODE (kebab-case serde
             # via #[serde(rename_all = "kebab-case")] on ProcessRole),
@@ -316,41 +392,43 @@ in
             # the eval gate tests/assertions-eval.sh has a future-
             # work item to enforce non-empty kvm_consuming_uids.
             kvm_consuming_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "gpu") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            video_media_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "video") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            session_socket_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node" or .role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
+            overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
+            overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
+            if [ -n "$overlay_uid" ] && [ "$overlay_uid" != "null" ] && \
+               [ -n "$overlay_gid" ] && [ "$overlay_gid" != "null" ] && \
+               [ -n "$overlay_size_mib" ] && [ "$overlay_size_mib" != "null" ]; then
+              # Re-assert the trusted DiskInit owner for an existing
+              # store overlay. This must run once per VM, not once
+              # per role UID; otherwise the last sorted role UID can
+              # steal the image away from cloud-hypervisor.
+              ${activationHelper} ensure-regular-file \
+                --path /var/lib/nixling/vms/${name}/store-overlay.img \
+                --uid "$overlay_uid" \
+                --gid "$overlay_gid" \
+                --mode 0600 \
+                --size-mib "$overlay_size_mib" \
+                2>/dev/null || true
+            fi
             for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
-              # v1.1.1fu11 Option B: also grant traversal on
-              # /run/nixling (mode 0750 nixlingd:nixling-launchers)
+              # Option B: also grant traversal on
+              # /run/nixling (mode 0750 nixlingd:nixling)
               # so ephemeral role UIDs (audio, video, etc.) can
               # reach the per-VM socket dir. virtiofsd skips this
               # via its own pivot_root + CAP_SYS_ADMIN; other
               # sidecars need explicit ACL.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
-              # v1.1.2fu19 panel-security R2 must-fix B: /dev/kvm
+              # panel-security R2 must-fix B: /dev/kvm
               # + /dev/vhost-net only for Hypervisor/Gpu UIDs.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 [ -e /dev/kvm ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rw" /dev/kvm 2>/dev/null || true
                 [ -e /dev/vhost-net ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rw" /dev/vhost-net 2>/dev/null || true
               fi
-              # v1.1.2fu19 panel-security R2 critical must-fix:
-              # delegate store-overlay.img creation to the
-              # nixling-activation-helper Rust binary which uses
-              # O_CREAT|O_EXCL|O_NOFOLLOW + ftruncate + fchown +
-              # fchmod against a held fd. No TOCTOU window: the
-              # action operates on the inode the helper opened,
-              # not on a path the attacker can swap. The helper
-              # exits 2 on safety refusal (symlink at target)
-              # which we tolerate with `|| true` — activation
-              # continues; operator sees the refusal in stderr.
-              overlay=/var/lib/nixling/vms/${name}/store-overlay.img
-              ${activationHelper} ensure-regular-file \
-                --path "$overlay" \
-                --uid "$uid" \
-                --gid "$uid" \
-                --mode 0600 \
-                --size-mib 2048 \
-                2>/dev/null || true
-              # v1.1.2fu19 panel-software R2 must-fix #1, #3:
+              # panel-software R2 must-fix #1, #3
               # the *.img ACL grant loop is REMOVED. New files
               # created in the VM dir inherit the per-UID rwx
               # default ACL set on lines 308-309 below
@@ -359,12 +437,12 @@ in
               # `nixling vm restart <vm>` after upgrade so the
               # broker-spawned CH re-creates disk-image-shaped
               # files with the inherited ACL. Documented in the
-              # v1.1.2 migration-guide section.
+              # migration-guide section.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
-              # v1.1.2fu23 panel-security R4 critical must-fix:
+              # panel-security R4 critical must-fix
               # the per-subdir setfacl loop used to do
-              # `[ -d "$vm_dir/$sub" ] && setfacl ...` on paths
+              # `[ -d "$vm_dir/$sub" ] && setfacl...` on paths
               # under the runner-writable VM root. An attacker
               # could replace `sshd-host-keys` with a symlink to
               # `/etc/ssh` between the `[ -d ]` check and the
@@ -384,7 +462,7 @@ in
                   2>/dev/null || true
               done
 
-              # v1.1.1fu15 (panel-virt must-fix #2) + v1.1.2fu23
+              # + v1.1.2fu23
               # panel-security R4 critical must-fix: per-keyfile
               # ACL grant for ssh_host_*_key. Previously used a
               # shell glob + `[ -f ]` + setfacl, vulnerable to
@@ -408,7 +486,7 @@ in
                     2>/dev/null || true
                 done
               fi
-              # v1.1.2fu24 panel-security R5 medium must-fix:
+              # panel-security R5 medium must-fix
               # default ACL also routes through setfacl-on-path
               # (which uses openat2+RESOLVE_NO_SYMLINKS for full
               # path-component safety). The "default:u:UID:rX"
@@ -424,49 +502,108 @@ in
                   2>/dev/null || true
               done
               ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chown nixlingd:nixling-launcher /run/nixling/vms/${name} 2>/dev/null || true
+              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
-              # v1.1.1fu13k: DEFAULT ACL so sockets created by any
+              # DEFAULT ACL so sockets created by any
               # per-VM ephemeral UID inherit cross-UID rw. CH
               # (cloud-hypervisor uid) needs to connect to snd.sock
               # (audio uid) + gpu.sock (gpu uid) + vsock-relay sock.
               # Without default ACL, mode 0700 sockets block CH.
               ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
-              # v1.1.1fu11 Option B: per-VM gpu/video runtime dirs.
+              # Option B: per-VM gpu/video runtime dirs.
               # Used as bind-mount destinations by the broker
               # (cross-domain bind for the Wayland socket, etc).
               # Mode 0750 with ACL grants for ephemeral UIDs.
               ${pkgs.coreutils}/bin/mkdir -p /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
-              ${pkgs.coreutils}/bin/chown nixlingd:nixling-launcher /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
+              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chmod 0750 /run/nixling-gpu/${name} /run/nixling-video/${name} 2>/dev/null || true
               ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-gpu/${name} 2>/dev/null || true
-              ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-video/${name} 2>/dev/null || true
+              if echo "$video_media_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-video/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling-video/${name} 2>/dev/null || true
+              else
+                ${pkgs.acl}/bin/setfacl -x "u:$uid" /run/nixling-video/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-video/${name} 2>/dev/null || true
+              fi
               # Pre-create the Wayland socket bind destination as
               # an empty regular file (mount --bind needs the dst
               # to exist with the same inode-type as src).
               [ ! -e /run/nixling-gpu/${name}/wayland-0 ] && ${pkgs.coreutils}/bin/touch /run/nixling-gpu/${name}/wayland-0 2>/dev/null || true
-              # v1.1.1fu11 Option B: grant ephemeral role UIDs
-              # access to the Wayland user's PipeWire + Wayland
-              # sockets. This is the "BindSessionSocket" mechanism
-              # done declaratively at activation time: the broker's
-              # SpawnRunner setuids the runner to the ephemeral
-              # UID; the role then connects to PipeWire/Wayland as
-              # that UID, which needs explicit setfacl since the
-              # ephemeral UID has no group membership.
+              # Option B: grant ONLY session-consuming role
+              # UIDs access to the Wayland user's PipeWire + Wayland
+              # sockets. The video runner is explicitly excluded: it
+              # uses a separate vhost-user media socket + device
+              # allowlist, and sharing/regranting host session sockets
+              # breaks the GPU/video principal split.
               ${lib.optionalString (cfg.site.waylandUser != null) ''
                 wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
                 if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
-                    ${pkgs.acl}/bin/setfacl -m "u:$uid:rx" "$rdir" 2>/dev/null || true
-                    for sock in pipewire-0 wayland-0 pulse/native; do
-                      [ -e "$rdir/$sock" ] && ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" "$rdir/$sock" 2>/dev/null || true
-                    done
+                    if echo "$session_socket_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir" \
+                        --acl-spec "u:$uid:rx" \
+                        --require-kind directory \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 ${cfg.site.waylandDisplay} pulse/native; do
+                        ${activationHelper} setfacl-on-path \
+                          --path "$rdir/$sock" \
+                          --acl-spec "u:$uid:rwx" \
+                          --require-kind socket \
+                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                          2>/dev/null || true
+                      done
+                    else
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir" \
+                        --acl-spec "u:$uid:---" \
+                        --require-kind directory \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 ${cfg.site.waylandDisplay} pulse/native; do
+                        ${activationHelper} setfacl-on-path \
+                          --path "$rdir/$sock" \
+                          --acl-spec "u:$uid:---" \
+                          --require-kind socket \
+                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                          2>/dev/null || true
+                      done
+                    fi
                   fi
                 fi
               ''}
             done
+            # Clean up stale video-principal session ACLs even when the
+            # current bundle no longer declares a video node. The UID is
+            # deterministic, so disabling graphics.videoSidecar must also
+            # revoke any prior Wayland/PipeWire/Pulse grants for that
+            # principal without adding it to the broader role ACL loop.
+            ${lib.optionalString (cfg.site.waylandUser != null) ''
+              stale_video_uid="${toString (nl.stablePrincipalId "nixling-${name}-video")}"
+              wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+              if [ -n "$wuid" ]; then
+                rdir="/run/user/$wuid"
+                if [ -d "$rdir" ]; then
+                  ${activationHelper} setfacl-on-path \
+                    --path "$rdir" \
+                    --acl-spec "u:$stale_video_uid:---" \
+                    --require-kind directory \
+                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                    2>/dev/null || true
+                  for sock in pipewire-0 ${cfg.site.waylandDisplay} pulse/native; do
+                    ${activationHelper} setfacl-on-path \
+                      --path "$rdir/$sock" \
+                      --acl-spec "u:$stale_video_uid:---" \
+                      --require-kind socket \
+                      --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                      2>/dev/null || true
+                  done
+                fi
+              fi
+            ''}
           fi
         '')
         (lib.filterAttrs (_: vm: vm.enable) cfg.vms))}
@@ -474,7 +611,7 @@ in
     true
   '';
 
-  # v1.1.1fu12d: W3 unified-naming compatibility. Add altnames to
+  #  unified-naming compatibility. Add altnames to
   # the user-visible NixOS-created bridges so the broker's
   # ApplyRoute / ApplyNftables ops (which reference derivedIfname
   # in the bundle) can find the live interface. Without altnames,
@@ -486,7 +623,7 @@ in
   # mappings (e.g. during the first activation before the bundle
   # is staged) and re-runs cleanly on every activation (altname
   # add is idempotent — exits 17 if the altname already exists).
-  # v1.1.1fu14d + fu15: W3 unified-naming compatibility. Add altnames to
+  #  unified-naming compatibility. Add altnames to
   # the user-visible NixOS-created bridges so the broker's
   # ApplyRoute / ApplyNftables ops (which reference derivedIfname
   # in the bundle) can find the live interface. Without altnames,
@@ -498,7 +635,7 @@ in
   # mappings (e.g. during the first activation before the bundle
   # is staged) and re-runs cleanly on every activation.
   #
-  # v1.1.1fu15 (panel-networking must-fix #1): NEVER mask all
+  # NEVER mask all
   # errors. Detect wrong-device collisions by comparing the
   # ifindex of `$user` (the user-visible bridge) and `$derived`
   # (the altname). If `$derived` already resolves to a DIFFERENT
@@ -526,7 +663,7 @@ in
             exit 1
           fi
         else
-          # v1.1.2fu19 panel-software R2 must-fix #2: capture
+          # panel-software R2 must-fix #2: capture
           # `ip` stderr via command substitution instead of a
           # predictable `/tmp/nixling-altname.err` file. The
           # old approach let any local attacker pre-create
@@ -542,24 +679,22 @@ in
     true
   '';
 
-  # v1.1.1fu14 B1 + B2: enforce /run/nixling/locks ownership on
-  # every activation. The tmpfiles.d rule (`d /run/nixling/locks
-  # 0700 nixlingd nixlingd -`, in host-daemon.nix) creates the dir
-  # at boot, but live-deploy iteration (broker spawn → daemon
-  # restart cycles) can leave it as root:nixlingd which then
-  # blocks the daemon's chmod(0700) idempotency call with EPERM.
-  # This snippet runs on every nixos-rebuild switch + every boot
-  # and idempotently re-asserts the canonical posture.
+  # Enforce /run/nixling/locks ownership on every activation. The
+  # tmpfiles.d rule (`d /run/nixling/locks 0700 nixlingd nixlingd -`,
+  # in host-daemon.nix) creates the dir at boot, but broker spawn →
+  # daemon restart cycles can leave it as root:nixlingd which then
+  # blocks the daemon's chmod(0700) idempotency call with EPERM. This
+  # snippet runs on every nixos-rebuild switch + every boot and
+  # idempotently re-asserts the canonical posture.
   #
-  # Companion B4: enforce per-VM store / store-meta ownership
-  # (`nixlingd:users 2775`); the BindMountFromHardlinkFarm broker
-  # op preserves the source's root:kvm 2755 which trips the
-  # ownership-matrix preflight. Re-enforce here.
+  # Also enforce per-VM store / store-meta ownership (`nixlingd:users
+  # 2775`); the BindMountFromHardlinkFarm broker op preserves the
+  # source's root:kvm 2755 which trips the ownership-matrix preflight.
+  # Re-enforce here.
   #
-  # v1.1.2fu19 panel-security R2 critical must-fix: replace the
-  # `[ ! -L ] && chown && chmod` shell pattern with calls to
+  # Replace the `[ ! -L ] && chown && chmod` shell pattern with calls to
   # nixling-activation-helper which use O_DIRECTORY|O_NOFOLLOW +
-  # fchown + fchmod against a held directory fd. No TOCTOU window:
+  # fchown + fchmod against a held directory fd. No TOCTOU window
   # the action operates on the inode the helper opened, not on a
   # path the attacker can swap. The helper exits 2 on safety
   # refusal (path is a symlink) which we tolerate with `|| true`.
@@ -572,6 +707,11 @@ in
     users_gid=$(${pkgs.getent}/bin/getent group users | ${pkgs.coreutils}/bin/cut -d: -f3)
     if [ -n "$nixlingd_uid" ] && [ -n "$nixlingd_gid" ]; then
       if [ -d /run/nixling ]; then
+        # /run/nixling must not carry default ACLs: public.sock is
+        # daemon-created, and inheriting default:g::r-x makes the
+        # owning nixling group read-only even after chmod 0660.
+        ${pkgs.acl}/bin/setfacl -k /run/nixling 2>/dev/null || true
+        ${pkgs.acl}/bin/setfacl -m "g::r-x,m::r-x" /run/nixling 2>/dev/null || true
         ${activationHelper} enforce-dir-posture \
           --path /run/nixling/locks \
           --uid "$nixlingd_uid" --gid "$nixlingd_gid" --mode 0700 2>/dev/null || true
@@ -585,7 +725,7 @@ in
           for sub in store store-meta; do
             ${activationHelper} enforce-dir-posture \
               --path "$vm_dir/$sub" \
-              --uid "$nixlingd_uid" --gid "$users_gid" --mode 2775 2>/dev/null || true
+              --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
           done
         done
       fi

@@ -1,4 +1,4 @@
-//! P2 ph2-store-sync: typed broker handler for the per-VM
+//! Typed broker handler for the per-VM
 //! `/var/lib/nixling/vms/<vm>/store/` hardlink farm.
 //!
 //! Replaces the `nixling-<vm>-store-sync.service` per-VM systemd
@@ -6,7 +6,7 @@
 //! closure entries into `/var/lib/nixling/vms/<vm>/store`) with a
 //! typed broker op.
 //!
-//! Implementation contract (plan.md §"ph2-store-sync"):
+//! Implementation contract:
 //!
 //! 1. The per-VM hardlink farm SHARES inodes with `/nix/store`.
 //!    The [`nixling_host::hardlink_farm`] primitive already
@@ -118,12 +118,11 @@ pub fn run_store_sync(
     }
 
     let resolved_generation = intent.generation;
-    let resolved_u32 = u32::try_from(resolved_generation).map_err(|_| {
-        StoreSyncError::GenerationOverflow {
+    let resolved_u32 =
+        u32::try_from(resolved_generation).map_err(|_| StoreSyncError::GenerationOverflow {
             wire: wire_generation,
             resolved: resolved_generation,
-        }
-    })?;
+        })?;
     if resolved_u32 != wire_generation {
         return Err(StoreSyncError::GenerationMismatch {
             wire: wire_generation,
@@ -190,7 +189,12 @@ mod tests {
         out
     }
 
-    fn intent_with(root: &std::path::Path, vm: &str, generation: u64, n: usize) -> ResolvedStoreViewIntent {
+    fn intent_with(
+        root: &std::path::Path,
+        vm: &str,
+        generation: u64,
+        n: usize,
+    ) -> ResolvedStoreViewIntent {
         let farm = root.join("vms").join(vm).join("store");
         std::fs::create_dir_all(&farm).unwrap();
         let target = farm.join("current");
@@ -264,7 +268,13 @@ mod tests {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "gamma", 5, 1);
         let err = run_store_sync(&intent, "gamma", 6).expect_err("generation mismatch refused");
-        assert!(matches!(err, StoreSyncError::GenerationMismatch { wire: 6, resolved: 5 }));
+        assert!(matches!(
+            err,
+            StoreSyncError::GenerationMismatch {
+                wire: 6,
+                resolved: 5
+            }
+        ));
     }
 
     #[test]

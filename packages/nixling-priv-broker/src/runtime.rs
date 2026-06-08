@@ -2,15 +2,15 @@ use std::env;
 use std::fs;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::time::Instant;
 
 use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -51,15 +51,15 @@ use nixling_core::bundle_resolver::BundleResolver;
 /// `NIXLING_BROKER_SOCKET_PATH`) to override the path used in non-activated
 /// (test / legacy) mode.
 const DEFAULT_SOCKET_PATH: &str = "/run/nixling/priv.sock";
-/// W4 retire-shim: audit records land under
+/// Audit records land under
 /// `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (no more legacy
 /// single `broker-audit.log` file). Override via `--audit-dir`.
 const DEFAULT_AUDIT_DIR: &str = "/var/lib/nixling/audit";
-/// W4a-H1: default audit retention. Matches the docs claim in
+/// Default audit retention. Matches the docs claim in
 /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md` "Control
-/// plane (W2+)". Override via `--audit-retention-days` (broker flag)
-/// or the NixOS module's `nixling.site.audit.retentionDays` option.
-/// Set to 0 to disable pruning.
+/// plane". Override via `--audit-retention-days` (broker flag) or the
+/// NixOS module's `nixling.site.audit.retentionDays` option. Set to 0
+/// to disable pruning.
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/nixling/current-bundle/manifest.json";
 const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
@@ -69,13 +69,11 @@ pub struct ServerConfig {
     pub socket_path: PathBuf,
     pub audit_dir: PathBuf,
     pub audit_retention_days: u32,
-    /// W4-fu clean-break: the broker reads the bundle manifest
-    /// from this server-configured path. The daemon never names
-    /// a bundle path on the wire (security: prevents path-
-    /// traversal + symlink-confusion). Defaults to
-    /// `/var/lib/nixling/current-bundle/manifest.json`; the
-    /// NixOS module's `nixling.site.bundle.currentManifest`
-    /// option overrides.
+    /// The broker reads the bundle manifest from this server-configured
+    /// path. The daemon never names a bundle path on the wire (security:
+    /// prevents path-traversal + symlink-confusion). Defaults to
+    /// `/var/lib/nixling/current-bundle/manifest.json`; the NixOS module's
+    /// `nixling.site.bundle.currentManifest` option overrides.
     pub bundle_path: PathBuf,
     pub nixlingd_uid: u32,
     pub nixlingd_gid: u32,
@@ -127,22 +125,18 @@ enum BrokerError {
     NoPidfd {
         runner_id: String,
     },
-    /// W3 op: the privileged implementation is staged but the
-    /// bootstrap wire path does not carry the typed intent data
-    /// required to call into `ops::*` yet. Emits a W3
-    /// [`OpAuditRecord`] with `decision = "errored"` +
-    /// `error_kind = "w3-pending-typed-wire"`.
+    /// The privileged implementation is staged but the bootstrap wire
+    /// path does not carry the typed intent data required to call into
+    /// `ops::*` yet. Emits a typed [`OpAuditRecord`] with
+    /// `decision = "errored"` + `error_kind = "w3-pending-typed-wire"`.
     Unimplemented {
         operation: &'static str,
         target_wave: &'static str,
     },
-    /// W3fu1 H1 (rust-1): W6 USBIP live device routing ops
-    /// (`UsbipBind`, `UsbipUnbind`, `UsbipProxyReconcile`) were
-    /// **out of W3 scope** per plan.md §"W3 broker variant
-    /// additions"; the W3 bootstrap broker refused them with
-    /// `unknown-operation` audit shape. W13 (W6-fu) wired them in
-    /// the non-bootstrap real-wire dispatch, so this variant is
-    /// only constructed by the bootstrap dispatch arm.
+    /// USBIP live device routing ops (`UsbipBind`, `UsbipUnbind`,
+    /// `UsbipProxyReconcile`) were out of scope for the initial broker
+    /// and were wired into the non-bootstrap real-wire dispatch later,
+    /// so this variant is only constructed by the bootstrap dispatch arm.
     #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
     UnknownOperation {
         operation: &'static str,
@@ -150,13 +144,13 @@ enum BrokerError {
     AuditRequiresAdmin,
     #[cfg_attr(not(feature = "layer1-bootstrap"), allow(dead_code))]
     ValidateBundle(String),
-    /// W12: broker started without a loadable bundle at
-    /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops
-    /// cannot resolve their `BundleOpId` refs and refuse fail-closed.
+    /// Broker started without a loadable bundle at
+    /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
+    /// resolve their `BundleOpId` refs and refuse fail-closed.
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleResolverUnavailable,
-    /// P0fu2: bundle artifact at `ServerConfig.bundle_path` failed the
-    /// tamper-resistance check (symlink / owner / mode / hash).  Every
+    /// Bundle artifact at `ServerConfig.bundle_path` failed the
+    /// tamper-resistance check (symlink / owner / mode / hash). Every
     /// incoming operation surfaces this error until the broker is
     /// restarted with a clean bundle.
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
@@ -164,8 +158,8 @@ enum BrokerError {
         path: String,
         reason: String,
     },
-    /// W12: the daemon-supplied `bundle_*_intent_ref` did not
-    /// resolve against the bundle's intent table.
+    /// The daemon-supplied `bundle_*_intent_ref` did not resolve
+    /// against the bundle's intent table.
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleIntentMissing {
         kind: &'static str,
@@ -188,9 +182,8 @@ enum BrokerError {
         vendor: u16,
         product: u16,
     },
-    /// W12: the live executor reported an error (nft/route/sysctl
-    /// shellout failed, pidfd open failed, spawn preflight failed,
-    /// etc).
+    /// The live executor reported an error (nft/route/sysctl shellout
+    /// failed, pidfd open failed, spawn preflight failed, etc).
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     LiveHandler(String),
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
@@ -207,17 +200,22 @@ enum BrokerError {
         expected: String,
         observed: String,
     },
-    /// P1 (decision 5 + security-2): `SpawnRunner` was called with
-    /// `RunnerRole::OtelHostBridge`, but the bundle-resolved intent
-    /// points at a VM whose name does not match
-    /// `manifest._observability.vmName`. The bridge MUST forward only
-    /// into the obs VM declared in the trusted bundle; any other
+    /// `SpawnRunner` was called with `RunnerRole::OtelHostBridge`, but
+    /// the bundle-resolved intent points at a VM whose name does not
+    /// match `manifest._observability.vmName`. The bridge MUST forward
+    /// only into the obs VM declared in the trusted bundle; any other
     /// target is a closed-set violation and the broker refuses
     /// fail-closed.
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     OtelHostBridgeIntentInvalid {
         intent_vm: String,
         expected_obs_vm: String,
+    },
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    SpawnRunnerIntentMismatch {
+        field: &'static str,
+        requested: String,
+        resolved: String,
     },
     Protocol(String),
 }
@@ -269,9 +267,8 @@ where
                             })?;
                     }
                     "--bundle-path" => {
-                        // W4-fu clean-break: broker reads the
-                        // bundle manifest from this server-
-                        // configured path so the daemon never
+                        // Broker reads the bundle manifest from this
+                        // server-configured path so the daemon never
                         // names a bundle path on the wire.
                         index += 1;
                         bundle_path = PathBuf::from(expect_arg(&rest, index, "--bundle-path")?);
@@ -306,7 +303,11 @@ where
 
             // Resolve socket path: flag > env var > built-in default.
             let socket_path = socket_path_override
-                .or_else(|| env::var("NIXLING_BROKER_SOCKET_PATH").ok().map(PathBuf::from))
+                .or_else(|| {
+                    env::var("NIXLING_BROKER_SOCKET_PATH")
+                        .ok()
+                        .map(PathBuf::from)
+                })
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_PATH));
 
             let fallback_uid = if test_mode {
@@ -566,26 +567,26 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         config.test_mode,
         config.audit_retention_days,
     )?;
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    let audit_log = Arc::new(audit_log);
 
     // Signal systemd that the broker is ready to accept connections.
     // Called after the listener is established and the audit log is open,
     // before entering the accept loop.  No-op when NOTIFY_SOCKET is absent.
     sd_notify_ready();
 
-    // W12: lazy-load the bundle resolver from the configured
-    // `bundle_path` on first use. In `test_mode`, or when the bundle
-    // artifacts are absent (for example the broker started before a
-    // manifest landed on disk), the resolver stays `None` and
-    // bundle-dependent dispatch arms return
-    // `BrokerError::BundleResolverUnavailable` with a clear
-    // remediation string. Once a bundle is present and loaded,
-    // subsequent dispatches reuse the same resolver (the bundle is
-    // treated as immutable for the lifetime of a broker serve process;
-    // a daemon-driven `nixling switch` triggers a broker restart to
-    // pick up the new bundle).
+    // Load the bundle resolver from the configured `bundle_path` for
+    // each accepted request. The broker is socket-activated but can
+    // remain alive across `nixos-rebuild switch`; treating the bundle
+    // as process-lifetime immutable made already-running brokers
+    // dispatch stale runner intents after a switch. Per-request reload
+    // keeps broker authority aligned with the current on-disk bundle
+    // while preserving fail-closed tamper handling.
+
+    // Start background SIGCHLD reap loop. The runtime handle must stay
+    // alive for the broker's lifetime.
     #[cfg(not(feature = "layer1-bootstrap"))]
-    let resolver_slot: std::sync::OnceLock<BundleSlot> =
-        std::sync::OnceLock::new();
+    let _sigchld_reaper_rt = start_sigchld_reaper(Arc::clone(&audit_log));
 
     loop {
         let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC)
@@ -599,9 +600,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         };
         #[cfg(not(feature = "layer1-bootstrap"))]
         let (resolver, bundle_tamper) = {
-            let slot = resolver_slot
-                .get_or_init(|| try_load_resolver(&config.bundle_path));
-            match slot {
+            match try_load_resolver(&config.bundle_path) {
                 BundleSlot::Loaded(r) => (Some(r.clone()), None),
                 BundleSlot::Unavailable => (None, None),
                 BundleSlot::Tampered { path, reason } => {
@@ -611,10 +610,14 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         };
         #[cfg(feature = "layer1-bootstrap")]
         let resolver: Option<()> = None;
+        #[cfg(not(feature = "layer1-bootstrap"))]
+        let audit_log_ref: &AuditLog = audit_log.as_ref();
+        #[cfg(feature = "layer1-bootstrap")]
+        let audit_log_ref: &AuditLog = &audit_log;
         if let Err(err) = handle_connection(
             connection,
             &config,
-            &audit_log,
+            audit_log_ref,
             resolver.as_ref(),
             #[cfg(not(feature = "layer1-bootstrap"))]
             bundle_tamper,
@@ -624,7 +627,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
     }
 }
 
-/// P0fu2: outcome of a bundle load attempt at broker startup.
+/// Outcome of a bundle load attempt at broker startup.
 #[cfg(not(feature = "layer1-bootstrap"))]
 #[derive(Debug)]
 enum BundleSlot {
@@ -640,17 +643,23 @@ enum BundleSlot {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn try_load_resolver(bundle_path: &Path) -> BundleSlot {
-    try_load_resolver_with_policy(bundle_path, &nixling_core::bundle_resolver::BundleVerifyPolicy::production())
+    try_load_resolver_with_policy(
+        bundle_path,
+        &nixling_core::bundle_resolver::BundleVerifyPolicy::production(),
+    )
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn try_load_resolver_with_policy(bundle_path: &Path, policy: &nixling_core::bundle_resolver::BundleVerifyPolicy) -> BundleSlot {
+fn try_load_resolver_with_policy(
+    bundle_path: &Path,
+    policy: &nixling_core::bundle_resolver::BundleVerifyPolicy,
+) -> BundleSlot {
     use nixling_core::error::{BundleError, Error as CoreError};
-    // P0fu3 H2 (observability): per the tracing contract, span attributes
-    // MUST NOT include filesystem paths (high cardinality + can leak host
-    // layout). The bundle path is bounded operational context handled by
-    // the typed error envelope + audit log, not the trace. Keep traces to
-    // bounded attrs: result/outcome/reason/intent-counts.
+    // Per the tracing contract, span attributes MUST NOT include
+    // filesystem paths (high cardinality + can leak host layout). The
+    // bundle path is bounded operational context handled by the typed
+    // error envelope + audit log, not the trace. Keep traces to bounded
+    // attrs: result/outcome/reason/intent-counts.
     match BundleResolver::load_with_policy(bundle_path, policy) {
         Ok(resolver) => {
             tracing::info!(
@@ -660,7 +669,7 @@ fn try_load_resolver_with_policy(bundle_path: &Path, policy: &nixling_core::bund
                 sysctl = resolver.sysctl_intent_ids().count(),
                 hosts = resolver.hosts_intent_ids().count(),
                 runners = resolver.runner_intent_ids().count(),
-                "W12 bundle resolver loaded"
+                "Bundle resolver loaded"
             );
             BundleSlot::Loaded(Arc::new(resolver))
         }
@@ -668,7 +677,7 @@ fn try_load_resolver_with_policy(bundle_path: &Path, policy: &nixling_core::bund
             tracing::error!(
                 load_outcome = "tampered",
                 reason = %reason,
-                "P0 bundle tamper-resistance check failed; all ops will be refused until broker restarts with a clean bundle"
+                "Bundle tamper-resistance check failed; all ops will be refused until broker restarts with a clean bundle"
             );
             BundleSlot::Tampered {
                 path: path.display().to_string(),
@@ -679,7 +688,7 @@ fn try_load_resolver_with_policy(bundle_path: &Path, policy: &nixling_core::bund
             warn!(
                 load_outcome = "unavailable",
                 error_kind = ?err.kind(),
-                "W12 bundle resolver could not load; bundle-dependent ops will fail closed"
+                "Bundle resolver could not load; bundle-dependent ops will fail closed"
             );
             BundleSlot::Unavailable
         }
@@ -718,8 +727,9 @@ fn handle_connection(
 
     let operation = request.op_name();
     let opaque_target_id = request.opaque_target_id();
-    let audit_context = DispatchAuditContext::from_request(&request, peer_pid, &envelope.caller_role)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
+    let audit_context =
+        DispatchAuditContext::from_request(&request, peer_pid, &envelope.caller_role)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{err:?}")))?;
     #[cfg(not(feature = "layer1-bootstrap"))]
     let dispatch_outcome = if let Some((path, reason)) = bundle_tamper {
         Err(BrokerError::BundleTampered { path, reason })
@@ -796,9 +806,9 @@ fn handle_connection(
     Ok(())
 }
 
-/// W12 fd-passing wiring: real-wire dispatch results can carry
-/// zero-or-more `OwnedFd`s alongside the JSON response (for
-/// `OpenPidfd` / `SpawnRunner`). Bootstrap dispatch never carries fds.
+/// Real-wire dispatch results can carry zero-or-more `OwnedFd`s
+/// alongside the JSON response (for `OpenPidfd` / `SpawnRunner`).
+/// Bootstrap dispatch never carries fds.
 #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
 #[derive(Debug)]
 struct DispatchResult {
@@ -1041,16 +1051,16 @@ fn dispatch_request(
     }
 }
 
-/// W4-fu clean-break: real-wire dispatch. Matches the opaque-ID
-/// `nixling_ipc::broker_wire::BrokerRequest` tuple-newtype shape
-/// and wires the W*-fu live executors into the dispatch arms that
-/// have a ready implementation today.
+/// Real-wire dispatch. Matches the opaque-ID
+/// `nixling_ipc::broker_wire::BrokerRequest` tuple-newtype shape and
+/// wires the live executors into the dispatch arms that have a ready
+/// implementation today.
 ///
-/// W12 extension: this signature now takes an `Option<&Arc<BundleResolver>>`
-/// and returns `DispatchResult` (response + optional fds) so the
-/// bundle-dependent arms can route through `BundleResolver::find_*_intent`
-/// and `live_handlers::*`, transporting fds via SCM_RIGHTS on the
-/// response frame.
+/// This signature takes an `Option<&Arc<BundleResolver>>` and returns
+/// `DispatchResult` (response + optional fds) so the bundle-dependent
+/// arms can route through `BundleResolver::find_*_intent` and
+/// `live_handlers::*`, transporting fds via SCM_RIGHTS on the response
+/// frame.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn dispatch_request(
     request: BrokerRequest,
@@ -1128,16 +1138,14 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(hello_ok_response()))
         }
         RealBrokerRequest::ValidateBundle => {
-            // W4-fu clean-break: the broker validates the
-            // server-configured bundle path. The daemon never
-            // names a bundle path on the wire (security:
+            // The broker validates the server-configured bundle path.
+            // The daemon never names a bundle path on the wire (security:
             // prevents path-traversal + symlink-confusion).
             // ServerConfig.bundle_path defaults to
-            // `/var/lib/nixling/current-bundle/manifest.json`
-            // and is operator-overridable via the `--bundle-path`
-            // flag (or the NixOS module's
-            // `nixling.site.bundle.currentManifest` option once
-            // that lands).
+            // `/var/lib/nixling/current-bundle/manifest.json` and is
+            // operator-overridable via the `--bundle-path` flag (or the
+            // NixOS module's `nixling.site.bundle.currentManifest`
+            // option once that lands).
             manifest_api::validate_bundle(&config.bundle_path)
                 .map_err(BrokerError::ValidateBundle)?;
             write_success_op_record!(
@@ -1156,10 +1164,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(validate_bundle_ok_response()))
         }
         RealBrokerRequest::ExportBrokerAudit(req) => {
-            // W4-fu clean-break: real wire filter is a typed
-            // BrokerAuditFilter struct; serialize to JSON so the
-            // daily-file export path keeps the existing substring
-            // match semantics.
+            // Real wire filter is a typed BrokerAuditFilter struct;
+            // serialize to JSON so the daily-file export path keeps the
+            // existing substring match semantics.
             let filter_json = req
                 .filter
                 .as_ref()
@@ -1206,12 +1213,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 lines,
             )))
         }
-        // W12: live bundle-dependent real-wire ops. Each one (1)
-        // resolves the daemon's opaque BundleOpId via the trusted-bundle
-        // resolver, (2) invokes the matching live_handlers::*
-        // executor against the system executor, (3) writes the
-        // audit row, (4) returns an Ack/OpenPidfd/SpawnRunner
-        // response.
+        // Live bundle-dependent real-wire ops. Each one (1) resolves the
+        // daemon's opaque BundleOpId via the trusted-bundle resolver,
+        // (2) invokes the matching live_handlers::* executor against the
+        // system executor, (3) writes the audit row, (4) returns an
+        // Ack/OpenPidfd/SpawnRunner response.
         RealBrokerRequest::ApplyNftables(req) => {
             let resolver = require_resolver(resolver)?;
             let intent = resolver
@@ -1369,14 +1375,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(ack_response("ApplyNmUnmanaged")))
         }
         RealBrokerRequest::OpenPidfd(req) => {
-            // OpenPidfd is the only W12 arm that needs an
-            // SCM_RIGHTS-bearing response.
+            // OpenPidfd is the only arm that needs an SCM_RIGHTS-bearing
+            // response.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            let outcome = backend.open_pidfd(
-                runner_id.as_str(),
-                req.pid,
-                req.expected_start_time_ticks,
-            )?;
+            let outcome =
+                backend.open_pidfd(runner_id.as_str(), req.pid, req.expected_start_time_ticks)?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -1403,8 +1406,33 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
         }
         RealBrokerRequest::SignalRunner(req) => {
+            // TODO(broker-authz): enforce the per-op privileges matrix at
+            // the broker boundary. For now, the handler keeps the
+            // pre-existing ADR 0015 trust model: nixlingd is part of the
+            // TCB in the daemon-only end-state, and SO_PEERCRED at accept
+            // time ensures only nixlingd reaches this handler.
+            // `envelope.caller_role` is forwarded from nixlingd from the
+            // operator's group membership for audit recording, not
+            // re-authorized here. Runtime safety for runner control is
+            // constrained by the broker-owned pidfd registry: only
+            // registered runner_ids can be signaled, with unknown ids
+            // rejected as NoPidfd by the backend.
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
-            backend.signal_runner(runner_id.as_str(), req.signal)?;
+            match backend.signal_runner(runner_id.as_str(), req.signal) {
+                Ok(()) => {}
+                Err(BrokerError::NoPidfd { .. }) => {
+                    let (Some(pid), Some(expected_start_time_ticks)) =
+                        (req.pid, req.expected_start_time_ticks)
+                    else {
+                        return Err(BrokerError::NoPidfd {
+                            runner_id: runner_id.clone(),
+                        });
+                    };
+                    backend.open_pidfd(runner_id.as_str(), pid, expected_start_time_ticks)?;
+                    backend.signal_runner(runner_id.as_str(), req.signal)?;
+                }
+                Err(err) => return Err(err),
+            }
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -1429,6 +1457,54 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     role_id: req.role_id,
                 },
             )))
+        }
+        RealBrokerRequest::DeregisterRunnerPidfd(req) => {
+            // TODO(broker-authz): enforce the per-op privileges matrix at
+            // the broker boundary. For now, the handler keeps the
+            // pre-existing ADR 0015 trust model: nixlingd is part of the
+            // TCB in the daemon-only end-state, and SO_PEERCRED at accept
+            // time ensures only nixlingd reaches this handler.
+            // `envelope.caller_role` is forwarded from nixlingd from the
+            // operator's group membership for audit recording, not
+            // re-authorized here. Runtime safety for runner control is
+            // constrained by the broker-owned pidfd registry: only
+            // registered runner_ids can be deregistered. The is_some()
+            // shape below intentionally returns `removed: false` for
+            // unknown ids, preserving idempotent cleanup without widening
+            // the registry surface.
+            let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
+            let removed = runner_pidfd_registry()
+                .lock()
+                .map_err(|_| {
+                    BrokerError::Protocol("runner pidfd registry mutex poisoned".to_owned())
+                })?
+                .remove(&runner_id)
+                .is_some();
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "DeregisterRunnerPidfd",
+                runner_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::DeregisterRunnerPidfd {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role_id: req.role_id.as_str().to_owned(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(
+                BrokerResponse::DeregisterRunnerPidfd(
+                    nixling_ipc::broker_wire::DeregisterRunnerPidfdResponse {
+                        vm_id: req.vm_id,
+                        role_id: req.role_id,
+                        removed,
+                    },
+                ),
+            ))
         }
         RealBrokerRequest::SpawnRunner(req) => {
             let resolver = require_resolver(resolver)?;
@@ -1464,17 +1540,19 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     reason: err.to_string(),
                 });
             }
-            // P1 (decision 5 + security-2 closed-set): when the
-            // daemon asks the broker to spawn the OtelHostBridge
+            validate_spawn_runner_request_matches_intent(&req, intent)?;
+            // When the daemon asks the broker to spawn the OtelHostBridge
             // runner (the replacement for the singleton
-            // `nixling-otel-host-bridge.service`), the bundle-
-            // resolved intent's vm_name MUST equal the obs VM
-            // declared in manifest._observability.vmName. Any other
-            // target would let a tampered or out-of-date bundle
-            // redirect host OTLP egress at an arbitrary VM; refuse
-            // fail-closed and surface a typed error envelope.
-            if matches!(req.role, nixling_ipc::broker_wire::RunnerRole::OtelHostBridge)
-                && intent.vm_name != resolver.manifest.observability.vm_name
+            // `nixling-otel-host-bridge.service`), the bundle-resolved
+            // intent's vm_name MUST equal the obs VM declared in
+            // manifest._observability.vmName. Any other target would let
+            // a tampered or out-of-date bundle redirect host OTLP egress
+            // at an arbitrary VM; refuse fail-closed and surface a typed
+            // error envelope.
+            if matches!(
+                req.role,
+                nixling_ipc::broker_wire::RunnerRole::OtelHostBridge
+            ) && intent.vm_name != resolver.manifest.observability.vm_name
             {
                 let expected_obs_vm = resolver.manifest.observability.vm_name.clone();
                 let intent_vm = intent.vm_name.clone();
@@ -1504,7 +1582,12 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     expected_obs_vm,
                 });
             }
-            apply_vm_start_prerequisites(backend, resolver, req.vm_id.as_str(), req.role_id.as_str())?;
+            apply_vm_start_prerequisites(
+                backend,
+                resolver,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+            )?;
             // v1.1.1 defense-in-depth: the canonical Rust argv
             // regenerator (`nixling_host::runner_argv_regenerator::regenerate_argv`)
             // is wired here as a no-op tamper check. The v1.1.1
@@ -1525,8 +1608,10 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // regenerator's MissingInput arm IS exercised in the
             // v1.1.1 broker integration tests) rather than living
             // as dead code on the v1.1.1 release branch.
-            let regenerator_extra = nixling_host::runner_argv_regenerator::RunnerArgvExtra::default();
-            match nixling_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
+            let regenerator_extra =
+                nixling_host::runner_argv_regenerator::RunnerArgvExtra::default();
+            match nixling_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra)
+            {
                 Ok(regenerated) => {
                     if regenerated != intent.argv {
                         tracing::warn!(
@@ -1538,8 +1623,11 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         );
                     }
                 }
-                Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::MissingInput { .. })
-                | Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_)) => {
+                Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::MissingInput {
+                    ..
+                })
+                | Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_)) =>
+                {
                     // Expected at v1.1.1: bundle does not yet
                     // carry typed argv inputs. Fall through to
                     // the bundle-argv path. v1.1.2 will populate
@@ -1555,22 +1643,39 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     );
                 }
             }
+            let mut mount_policy = intent.mount_policy.clone();
+            extend_usbip_backend_device_binds(
+                resolver,
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                &req.role,
+                &mut mount_policy,
+            )?;
+            let mut env = intent.env.clone();
+            extend_audio_runner_pipewire_props(
+                req.vm_id.as_str(),
+                req.role_id.as_str(),
+                &req.role,
+                &mut env,
+            )?;
+            cleanup_cloud_hypervisor_stale_sockets(&req.role, &intent.argv)?;
+            cleanup_video_stale_socket(&req.role, &intent.argv)?;
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
                 argv: intent.argv.clone(),
                 uid: intent.uid,
                 gid: intent.gid,
                 supplementary_groups: intent.supplementary_groups.clone(),
-                env: intent.env.clone(),
+                env,
                 capabilities: intent.capabilities.clone(),
                 namespaces: intent.namespaces.clone(),
                 seccomp_policy_ref: intent.seccomp_policy_ref.clone(),
-                mount_policy: intent.mount_policy.clone(),
+                mount_policy,
                 cgroup_placement: intent.cgroup_placement.clone(),
                 root_carve_out: intent.root_carve_out,
                 skip_binary_exists_check: false,
-                // v1.1.1fu14: thread through the user-namespace
-                // spec from the resolved intent. ADR 0021.
+                // Thread through the user-namespace spec from the
+                // resolved intent (ADR 0021).
                 user_namespace: intent.user_namespace.map(|spec| {
                     crate::ops::spawn_runner::UserNamespaceSpec {
                         host_uid_for_zero: spec.host_uid_for_zero,
@@ -1612,7 +1717,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let _ = intent_id_runner;
             Ok(DispatchResult::with_fd(response, outcome.pidfd))
         }
-        // W3-era ops: pre-existing typed-Unimplemented status.
+        // Pre-existing typed-Unimplemented status.
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
             operation: "BindUnixSocket",
             target_wave: "W5",
@@ -1902,6 +2007,21 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             operation: "PauseBroker",
             target_wave: "W4",
         }),
+        RealBrokerRequest::PollChildReaped => {
+            let notifications = drain_child_reap_buffer();
+            audit_log
+                .write_entry(
+                    "PollChildReaped",
+                    caller_uid,
+                    "allowed",
+                    "pidfd-reap-buffer",
+                    "success",
+                )
+                .map_err(|err| BrokerError::Protocol(err.to_string()))?;
+            Ok(DispatchResult::no_fds(BrokerResponse::PollChildReaped(
+                nixling_ipc::broker_wire::PollChildReapedResponse { notifications },
+            )))
+        }
         RealBrokerRequest::PrepareRuntimeDir(req) => {
             let resolver = require_resolver(resolver)?;
             let intent = resolver
@@ -2000,35 +2120,29 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(ack_response("PrepareStoreView")))
         }
-        // P2 ph2-store-sync: real-wire dispatch for the typed
-        // hardlink-farm op replacing the per-VM
-        // `nixling-<vm>-store-sync.service` bash oneshot. See
-        // plan.md §"ph2-store-sync" + the CRITICAL invariant in
-        // `ops/store_sync.rs`: NEVER recursively chown/chmod/setfacl
-        // the per-VM `store/` path — mutations propagate INTO
-        // `/nix/store` through the shared hardlink inodes.
+        // Real-wire dispatch for the typed hardlink-farm op replacing
+        // the retired per-VM `nixling-<vm>-store-sync.service` bash
+        // oneshot. See the CRITICAL invariant in `ops/store_sync.rs`:
+        // NEVER recursively chown/chmod/setfacl the per-VM `store/` path
+        // — mutations propagate INTO `/nix/store` through the shared
+        // hardlink inodes.
         RealBrokerRequest::StoreSync(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
-            let intent =
-                resolver
-                    .find_store_view_intent(&vm_name)
-                    .ok_or_else(|| BrokerError::BundleIntentMissing {
-                        kind: "store-sync-closure",
-                        intent_id: vm_name.clone(),
-                    })?;
+            let intent = resolver.find_store_view_intent(&vm_name).ok_or_else(|| {
+                BrokerError::BundleIntentMissing {
+                    kind: "store-sync-closure",
+                    intent_id: vm_name.clone(),
+                }
+            })?;
             if intent.intent_id != req.bundle_closure_ref.as_str() {
                 return Err(BrokerError::BundleIntentMissing {
                     kind: "store-sync-closure",
                     intent_id: req.bundle_closure_ref.as_str().to_owned(),
                 });
             }
-            let outcome = crate::ops::store_sync::run_store_sync(
-                intent,
-                &vm_name,
-                req.generation,
-            )
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let outcome = crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             let hardlink_farm_path_str = outcome.hardlink_farm_path.display().to_string();
             write_success_op_record!(
                 audit_log,
@@ -2383,7 +2497,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     kind: "runner",
                     intent_id: runner_intent_id.clone(),
                 })?;
-            let outcome = backend.setup_mount_namespace(&vm_name, req.role_id.as_str(), store_view_intent)?;
+            let outcome =
+                backend.setup_mount_namespace(&vm_name, req.role_id.as_str(), store_view_intent)?;
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             write_success_op_record!(
                 audit_log,
@@ -2421,8 +2536,27 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         intent_id: format!("vm={vm_name} bus={}", req.bus_id),
                     }
                 })?;
-            enforce_usbip_allowlist(intent, usb_device_sysfs_root())?;
-            backend.usbip_bind(intent)?;
+            let expected_identity = enforce_usbip_allowlist(&intent, usb_device_sysfs_root())?;
+            let expected_device_node =
+                usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+            backend.usbip_bind(&intent)?;
+            if let Err(grant_error) = grant_usbip_backend_device_acl(
+                resolver,
+                &intent,
+                expected_identity,
+                expected_device_node,
+            ) {
+                if let Err(rollback_error) = backend.usbip_unbind(&intent) {
+                    warn!(
+                        bus_id = %intent.bus_id,
+                        vm = %intent.vm_name,
+                        grant_error = ?grant_error,
+                        rollback_error = ?rollback_error,
+                        "UsbipBind ACL grant failed and rollback unbind also failed"
+                    );
+                }
+                return Err(grant_error);
+            }
             let scope_id = format!("env:{}", intent.env);
             write_success_op_record!(
                 audit_log,
@@ -2455,7 +2589,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                         intent_id: format!("bus={}", req.bus_id),
                     }
                 })?;
-            backend.usbip_unbind(intent)?;
+            revoke_usbip_backend_device_acl(resolver, &intent)?;
+            backend.usbip_unbind(&intent)?;
             let scope_id = format!("env:{}", intent.env);
             write_success_op_record!(
                 audit_log,
@@ -2475,17 +2610,18 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::no_fds(ack_response("UsbipUnbind")))
         }
         RealBrokerRequest::UsbipBindFirewallRule(req) => {
-            // W13: render the carve-out through the canonical USBIP
-            // nft batch helper so the existing table/chain ordering is
-            // preserved.
+            // Render the carve-out through the canonical USBIP nft batch
+            // helper so the existing table/chain ordering is preserved.
             let resolver = require_resolver(resolver)?;
-            let intent = resolver
-                .find_usbip_firewall_intent(req.bundle_usbip_firewall_intent_ref.as_str())
-                .ok_or_else(|| BrokerError::BundleIntentMissing {
-                    kind: "usbip-firewall",
-                    intent_id: req.bundle_usbip_firewall_intent_ref.as_str().to_owned(),
-                })?;
-            backend.usbip_bind_firewall_rule(resolver, intent)?;
+            let intent = find_usbip_firewall_intent_or_wildcard(
+                resolver,
+                req.bundle_usbip_firewall_intent_ref.as_str(),
+            )
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "usbip-firewall",
+                intent_id: req.bundle_usbip_firewall_intent_ref.as_str().to_owned(),
+            })?;
+            backend.usbip_bind_firewall_rule(resolver, &intent)?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -2538,18 +2674,16 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(ack_response("UsbipProxyReconcile")))
         }
-        // P3 host-prep-broker-arms: SeedDnsmasqLease + BindMount
-        // dispatch arms. The bundle resolver vouches for the per-VM
-        // intent rows; the broker validates the VM exists in the
-        // trusted manifest, records the typed audit row, and acks.
-        // The actual filesystem mutation (writing the leases file /
-        // performing the bind mount) stays out of scope for P3 —
-        // both targets live in subtrees the daemon already owns
-        // (`/var/lib/nixling/dnsmasq/`, per-VM store farm), and the
-        // P3 wave's goal is to remove the "Unimplemented P2" wall so
-        // the host-prep DAG executor exercises a real broker round
-        // trip in eval-only test environments. Live filesystem
-        // handlers land later.
+        // SeedDnsmasqLease + BindMount dispatch arms. The bundle
+        // resolver vouches for the per-VM intent rows; the broker
+        // validates the VM exists in the trusted manifest, records the
+        // typed audit row, and acks. The actual filesystem mutation
+        // (writing the leases file / performing the bind mount) stays
+        // out of scope here — both targets live in subtrees the daemon
+        // already owns (`/var/lib/nixling/dnsmasq/`, per-VM store farm),
+        // and this removes the typed-Unimplemented wall so the host-prep
+        // DAG executor exercises a real broker round trip in eval-only
+        // test environments. Live filesystem handlers land later.
         RealBrokerRequest::SeedDnsmasqLease(req) => {
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
@@ -2618,6 +2752,37 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             operation: "SshHostKeyPreflight",
             target_wave: "P2",
         }),
+        // Disk-init dispatch. The broker resolves every `DiskInit`
+        // plan-op from the trusted bundle for `vm_id` and creates the
+        // disk images before the caller issues SpawnRunner. No
+        // caller-supplied paths: the bundle is the only source of
+        // `target_path`, `size_bytes`, `mode`, `owner_uid`, `owner_gid`.
+        RealBrokerRequest::DiskInit(req) => {
+            let resolver = require_resolver(resolver)?;
+            let vm_name = lookup_vm_name(resolver, &req.vm_id);
+            let summary = crate::ops::disk_init::live_disk_init(resolver.as_ref(), &vm_name)
+                .map_err(|e| BrokerError::LiveHandler(e.to_string()))?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "DiskInit",
+                vm_name.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                vm_name.as_str(),
+                "host",
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::DiskInit {
+                    vm_id: vm_name.clone(),
+                    ops_total: summary.ops_total,
+                    ops_created: summary.ops_created,
+                    ops_skipped: summary.ops_skipped,
+                    target_paths_hash: summary.target_paths_hash,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("DiskInit")))
+        }
     }
 }
 
@@ -2776,6 +2941,59 @@ fn runner_signal_number(signal: nixling_ipc::broker_wire::RunnerSignal) -> i32 {
 fn runner_pidfd_registry() -> &'static Mutex<HashMap<String, OwnedFd>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, OwnedFd>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// In-memory ring buffer for `ChildReaped` notifications.
+/// Capped at 256 entries (oldest dropped on overflow). Protected by
+/// a `std::sync::Mutex` so both the tokio reap task and the synchronous
+/// accept loop can access it safely.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn child_reap_buffer(
+) -> &'static Mutex<std::collections::VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>> {
+    use std::collections::VecDeque;
+
+    static BUFFER: OnceLock<Mutex<VecDeque<nixling_ipc::broker_wire::ChildReapedNotification>>> =
+        OnceLock::new();
+    BUFFER.get_or_init(|| Mutex::new(VecDeque::with_capacity(256)))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+const CHILD_REAP_BUFFER_CAP: usize = 256;
+
+/// Push one notification to the ring buffer.
+/// If the buffer is full, drops the oldest entry and logs a warning.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn push_child_reap_notification(notif: nixling_ipc::broker_wire::ChildReapedNotification) {
+    let mut buf = match child_reap_buffer().lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::warn!("child_reap_buffer mutex poisoned; dropping ChildReaped notification");
+            return;
+        }
+    };
+    if buf.len() >= CHILD_REAP_BUFFER_CAP {
+        let dropped = buf.pop_front();
+        tracing::warn!(
+            dropped_runner_id = dropped
+                .as_ref()
+                .map(|d| d.runner_id.as_str())
+                .unwrap_or("?"),
+            "child_reap_buffer overflow: dropped oldest ChildReaped event"
+        );
+    }
+    buf.push_back(notif);
+}
+
+/// Drain the ring buffer (used by PollChildReaped handler).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn drain_child_reap_buffer() -> Vec<nixling_ipc::broker_wire::ChildReapedNotification> {
+    match child_reap_buffer().lock() {
+        Ok(mut buf) => buf.drain(..).collect(),
+        Err(_) => {
+            tracing::warn!("child_reap_buffer mutex poisoned; returning empty drain");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -3088,7 +3306,8 @@ impl DispatchBackend for LiveDispatchBackend {
         intent: &nixling_core::bundle_resolver::ResolvedStoreViewIntent,
     ) -> Result<crate::live_handlers::StoreViewOutcome, BrokerError> {
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
-        crate::live_handlers::live_prepare_store_view(&exec, intent).map_err(map_activation_live_error)
+        crate::live_handlers::live_prepare_store_view(&exec, intent)
+            .map_err(map_activation_live_error)
     }
 
     fn set_bridge_port_flags(
@@ -3142,20 +3361,17 @@ impl DispatchBackend for LiveDispatchBackend {
         runner_id: &str,
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
-        let outcome = crate::live_handlers::live_spawn_runner(plan_input)
-            .map_err(|err| {
-                // v1.1.1 live-deploy fu9: log the actual
-                // LiveHandlerError detail before wrapping it in
-                // the opaque BrokerError::LiveHandler envelope so
-                // operators can see WHY the spawn failed in
-                // journalctl.
-                tracing::error!(
-                    runner_id = %runner_id,
-                    error = %err,
-                    "live_spawn_runner failed"
-                );
-                BrokerError::LiveHandler(err.to_string())
-            })?;
+        let outcome = crate::live_handlers::live_spawn_runner(plan_input).map_err(|err| {
+            // Log the actual LiveHandlerError detail before wrapping it
+            // in the opaque BrokerError::LiveHandler envelope so
+            // operators can see WHY the spawn failed in journalctl.
+            tracing::error!(
+                runner_id = %runner_id,
+                error = %err,
+                "live_spawn_runner failed"
+            );
+            BrokerError::LiveHandler(err.to_string())
+        })?;
         register_runner_pidfd(runner_id, &outcome.pidfd)?;
         Ok(outcome)
     }
@@ -3265,10 +3481,13 @@ impl DispatchBackend for LiveDispatchBackend {
         resolver: &BundleResolver,
         intent: &nixling_core::bundle_resolver::ResolvedUsbipFirewallIntent,
     ) -> Result<(), BrokerError> {
-        let decision = crate::ops::usbip_firewall::bind_firewall_rule(
-            &nixling_host::nftables::BusId::new(intent.bus_id.as_str()),
-        )
-        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+        let host_nft_intent = resolver
+            .find_nft_intent(&nixling_core::bundle_resolver::intent_id_nft_host())
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "nft",
+                intent_id: nixling_core::bundle_resolver::intent_id_nft_host(),
+            })?;
+        let decision = build_usbip_firewall_decision(resolver, host_nft_intent, intent)?;
         let nft_binary = nft_binary_path();
         let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
         let nft_script = decision.batch.render_nft_script();
@@ -3414,8 +3633,8 @@ fn dispatch_run_host_install_response_inner(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-/// Shared W15 helper: resolve + execute `RunHostInstall` against an
-/// injected executor and map failures onto the broker wire envelope.
+/// Shared helper: resolve + execute `RunHostInstall` against an injected
+/// executor and map failures onto the broker wire envelope.
 /// The live server uses the inner form so it can write the audit row
 /// only after a successful install; integration tests use this wrapper
 /// to assert the typed negative-path responses directly.
@@ -3430,20 +3649,22 @@ pub fn dispatch_run_host_install_response(
     }
 }
 
-/// P0fu2 test helper: load the bundle at `bundle_path` through the same
+/// Test helper: load the bundle at `bundle_path` through the same
 /// `try_load_resolver` path as the broker's `serve` loop and convert the
-/// resulting `BundleSlot` into a `BrokerResponse`.  Returns
+/// resulting `BundleSlot` into a `BrokerResponse`. Returns
 /// `BrokerResponse::Error { kind: "bundle-tampered" }` when the bundle
 /// fails its tamper-resistance check, and
 /// `BrokerResponse::Error { kind: "Broker.BundleResolverUnavailable" }` when
-/// the bundle is absent or unreadable.  Exposed for the
+/// the bundle is absent or unreadable. Exposed for the
 /// `bundle_tampered_broker` integration test.
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerResponse {
     match try_load_resolver(bundle_path) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            nixling_ipc::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => {
+            BrokerResponse::ValidateBundle(nixling_ipc::broker_wire::ValidateBundleResponse {
+                valid: true,
+            })
+        }
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -3461,9 +3682,11 @@ pub fn probe_bundle_load_response_with_policy(
     policy: &nixling_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BrokerResponse {
     match try_load_resolver_with_policy(bundle_path, policy) {
-        BundleSlot::Loaded(_) => BrokerResponse::ValidateBundle(
-            nixling_ipc::broker_wire::ValidateBundleResponse { valid: true },
-        ),
+        BundleSlot::Loaded(_) => {
+            BrokerResponse::ValidateBundle(nixling_ipc::broker_wire::ValidateBundleResponse {
+                valid: true,
+            })
+        }
         BundleSlot::Unavailable => BrokerError::BundleResolverUnavailable.into_response(),
         BundleSlot::Tampered { path, reason } => {
             BrokerError::BundleTampered { path, reason }.into_response()
@@ -3561,12 +3784,11 @@ fn usbip_binary_path() -> PathBuf {
     )
 }
 
-/// W13: best-effort lookup of the human-readable VM name carried in
-/// the bundle's `processes.vms[*].vm` list. The wire `VmId` is a
-/// transparent opaque string; the bundle index is the
-/// `processes.vms[*].vm` field. We use the wire value as both the
-/// opaque key and the human-readable name today — the daemon emits
-/// them identically (this is the W4-fu wire shape).
+/// Best-effort lookup of the human-readable VM name carried in the
+/// bundle's `processes.vms[*].vm` list. The wire `VmId` is a transparent
+/// opaque string; the bundle index is the `processes.vms[*].vm` field.
+/// We use the wire value as both the opaque key and the human-readable
+/// name today — the daemon emits them identically.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &nixling_ipc::types::VmId) -> String {
     vm_id.as_str().to_owned()
@@ -3613,12 +3835,14 @@ fn execute_vm_start_action<B: DispatchBackend>(
                 created_paths: Vec::new(),
             })
             .map(|_| ())
-            .map_err(|err| BrokerError::LiveHandler(format!(
-                "prepare vm-start directory {} for {}:{} failed: {err}",
-                dir.base_dir.display(),
-                intent.vm_name,
-                intent.role_id
-            )))
+            .map_err(|err| {
+                BrokerError::LiveHandler(format!(
+                    "prepare vm-start directory {} for {}:{} failed: {err}",
+                    dir.base_dir.display(),
+                    intent.vm_name,
+                    intent.role_id
+                ))
+            })
         }
         nixling_core::bundle_resolver::ResolvedVmStartAction::PrepareStoreView(store_view) => {
             backend.prepare_store_view(store_view).map(|_| ())
@@ -3645,6 +3869,206 @@ fn read_usb_device_identity(sysfs_root: &Path, bus_id: &str) -> Result<(u16, u16
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+fn usb_device_node_for_busid(sysfs_root: &Path, bus_id: &str) -> Result<PathBuf, BrokerError> {
+    nixling_host::usbip_argv::validate_bus_id(bus_id)
+        .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
+    let device_dir = sysfs_root.join(bus_id);
+    let busnum = read_usb_decimal_attr(&device_dir, "busnum", bus_id)?;
+    let devnum = read_usb_decimal_attr(&device_dir, "devnum", bus_id)?;
+    Ok(PathBuf::from(format!(
+        "/dev/bus/usb/{busnum:03}/{devnum:03}"
+    )))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_usb_decimal_attr(device_dir: &Path, attr: &str, bus_id: &str) -> Result<u16, BrokerError> {
+    let path = device_dir.join(attr);
+    let raw = fs::read_to_string(&path).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "read USB {attr} for bus_id={bus_id} at {} failed: {err}",
+            path.display()
+        ))
+    })?;
+    raw.trim().parse::<u16>().map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "parse USB {attr} for bus_id={bus_id} at {} failed: {err}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn grant_usbip_backend_device_acl(
+    resolver: &Arc<BundleResolver>,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    expected_identity: (u16, u16),
+    expected_device_node: PathBuf,
+) -> Result<(), BrokerError> {
+    let runner = usbip_backend_runner_intent(resolver, intent)?;
+    let mut last_error = None;
+    let mut granted = false;
+    for _ in 0..20 {
+        if let Err(error) =
+            verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
+        {
+            if granted {
+                let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                    &expected_device_node,
+                    runner.uid,
+                );
+            }
+            return Err(error);
+        }
+        match crate::live_handlers::live_grant_verified_device_acl(
+            &expected_device_node,
+            runner.uid,
+        ) {
+            Ok(()) => granted = true,
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        if granted {
+            if let Err(error) =
+                verify_usbip_device_unchanged(intent, expected_identity, &expected_device_node)
+            {
+                let _ = crate::live_handlers::live_revoke_verified_device_acl(
+                    &expected_device_node,
+                    runner.uid,
+                );
+                return Err(error);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if granted {
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn verify_usbip_device_unchanged(
+        intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+        expected_identity: (u16, u16),
+        expected_device_node: &Path,
+    ) -> Result<(), BrokerError> {
+        let current_identity = read_usb_device_identity(usb_device_sysfs_root(), &intent.bus_id)?;
+        let current_device_node =
+            usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+        if current_identity != expected_identity || current_device_node != expected_device_node {
+            return Err(BrokerError::LiveHandler(format!(
+                "USBIP device identity changed while granting backend ACL for bus_id={}: expected {:?} at {}, observed {:?} at {}",
+                intent.bus_id,
+                expected_identity,
+                expected_device_node.display(),
+                current_identity,
+                current_device_node.display(),
+            )));
+        }
+        Ok(())
+    }
+    Err(BrokerError::LiveHandler(last_error.unwrap_or_else(|| {
+        "grant USBIP backend device ACL failed".to_owned()
+    })))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn revoke_usbip_backend_device_acl(
+    resolver: &Arc<BundleResolver>,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> Result<(), BrokerError> {
+    let runner = usbip_backend_runner_intent(resolver, intent)?;
+    let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+    crate::live_handlers::live_revoke_verified_device_acl(&device_node, runner.uid)
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usbip_backend_runner_intent<'a>(
+    resolver: &'a Arc<BundleResolver>,
+    intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+) -> Result<&'a nixling_core::bundle_resolver::ResolvedRunnerIntent, BrokerError> {
+    let runner_id = nixling_core::bundle_resolver::intent_id_runner(
+        &format!("sys-{}-usbipd", intent.env),
+        "backend",
+    );
+    resolver
+        .find_runner_intent(&runner_id)
+        .ok_or_else(|| BrokerError::BundleIntentMissing {
+            kind: "runner",
+            intent_id: runner_id,
+        })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn runner_role_for_process_role(
+    role: &nixling_core::processes::ProcessRole,
+) -> Option<nixling_ipc::broker_wire::RunnerRole> {
+    use nixling_core::processes::ProcessRole;
+    use nixling_ipc::broker_wire::RunnerRole;
+
+    match role {
+        ProcessRole::SwtpmPreStartFlush => Some(RunnerRole::SwtpmFlush),
+        ProcessRole::Swtpm => Some(RunnerRole::Swtpm),
+        ProcessRole::Virtiofsd => Some(RunnerRole::Virtiofsd),
+        ProcessRole::Video => Some(RunnerRole::Video),
+        ProcessRole::Gpu | ProcessRole::GpuRenderNode => Some(RunnerRole::Gpu),
+        ProcessRole::Audio => Some(RunnerRole::Audio),
+        ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
+        ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
+        ProcessRole::Usbip => Some(RunnerRole::Usbip),
+        ProcessRole::HostReconcile
+        | ProcessRole::StoreVirtiofsPreflight
+        | ProcessRole::GuestSshReadiness => None,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_spawn_runner_request_matches_intent(
+    req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
+    intent: &nixling_core::bundle_resolver::ResolvedRunnerIntent,
+) -> Result<(), BrokerError> {
+    if matches!(
+        req.role,
+        nixling_ipc::broker_wire::RunnerRole::OtelHostBridge
+    ) {
+        return Ok(());
+    }
+    if req.vm_id.as_str() != intent.vm_name {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "vm_id",
+            requested: req.vm_id.as_str().to_owned(),
+            resolved: intent.vm_name.clone(),
+        });
+    }
+    let expected_role_id = match intent.role {
+        nixling_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
+        _ => intent.role_id.as_str(),
+    };
+    if req.role_id.as_str() != expected_role_id {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "role_id",
+            requested: req.role_id.as_str().to_owned(),
+            resolved: expected_role_id.to_owned(),
+        });
+    }
+    let Some(expected_role) = runner_role_for_process_role(&intent.role) else {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "role",
+            requested: req.role.as_str().to_owned(),
+            resolved: format!("{:?}", intent.role),
+        });
+    };
+    if req.role != expected_role {
+        return Err(BrokerError::SpawnRunnerIntentMismatch {
+            field: "role",
+            requested: req.role.as_str().to_owned(),
+            resolved: expected_role.as_str().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
     let raw = fs::read_to_string(&path).map_err(|err| {
         BrokerError::LiveHandler(format!(
@@ -3664,17 +4088,23 @@ fn read_hex_u16(path: PathBuf, bus_id: &str) -> Result<u16, BrokerError> {
 fn enforce_usbip_allowlist(
     intent: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
     sysfs_root: &Path,
-) -> Result<(), BrokerError> {
-    if intent.vendor_product_allowlist.is_empty() {
-        return Ok(());
-    }
+) -> Result<(u16, u16), BrokerError> {
+    nixling_host::usbip_argv::validate_bus_id(&intent.bus_id)
+        .map_err(|err| BrokerError::LiveHandler(format!("invalid usbip bus_id: {err:?}")))?;
     let (vendor, product) = read_usb_device_identity(sysfs_root, &intent.bus_id)?;
-    if intent
-        .vendor_product_allowlist
-        .iter()
-        .any(|pair| pair.vendor == vendor && pair.product == product)
-    {
-        Ok(())
+    if intent.vendor_product_allowlist.is_empty() && !intent.dynamic_bus_id {
+        return Ok((vendor, product));
+    }
+    let allowed = if intent.vendor_product_allowlist.is_empty() {
+        vendor == 0x1050
+    } else {
+        intent
+            .vendor_product_allowlist
+            .iter()
+            .any(|pair| pair.vendor == vendor && pair.product == product)
+    };
+    if allowed {
+        Ok((vendor, product))
     } else {
         Err(BrokerError::UsbipDeviceNotAllowed {
             busid: intent.bus_id.clone(),
@@ -3685,15 +4115,494 @@ fn enforce_usbip_allowlist(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn find_usbip_bind_intent_for<'a>(
-    resolver: &'a Arc<BundleResolver>,
+fn extend_usbip_backend_device_binds(
+    resolver: &BundleResolver,
+    vm_id: &str,
+    role_id: &str,
+    role: &nixling_ipc::broker_wire::RunnerRole,
+    mount_policy: &mut nixling_core::minijail_profile::MountPolicy,
+) -> Result<(), BrokerError> {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Usbip)
+        || role_id != "backend"
+        || !vm_id.starts_with("sys-")
+        || !vm_id.ends_with("-usbipd")
+    {
+        return Ok(());
+    }
+    let env = vm_id
+        .strip_prefix("sys-")
+        .and_then(|value| value.strip_suffix("-usbipd"))
+        .ok_or_else(|| BrokerError::LiveHandler(format!("invalid USBIP backend vm_id {vm_id}")))?;
+    let mut binds = std::collections::BTreeSet::new();
+    for id in resolver.usbip_bind_intent_ids() {
+        let Some(intent) = resolver.find_usbip_bind_intent(id) else {
+            continue;
+        };
+        if intent.env != env {
+            continue;
+        }
+        let Some(owner) = crate::ops::usbip_lock::peek_owner(&intent.lock_path) else {
+            continue;
+        };
+        if owner != intent.vm_name {
+            continue;
+        }
+        let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+        binds.insert(device_node.display().to_string());
+    }
+    for intent in active_dynamic_usbip_bind_intents(resolver) {
+        if intent.env != env {
+            continue;
+        }
+        let device_node = usb_device_node_for_busid(usb_device_sysfs_root(), &intent.bus_id)?;
+        binds.insert(device_node.display().to_string());
+    }
+    if binds.is_empty() {
+        return Err(BrokerError::LiveHandler(format!(
+            "USBIP backend {vm_id}:{role_id} has no active locked busid device node to bind"
+        )));
+    }
+    mount_policy.device_binds = binds.into_iter().collect();
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn extend_audio_runner_pipewire_props(
+    vm_id: &str,
+    role_id: &str,
+    role: &nixling_ipc::broker_wire::RunnerRole,
+    env: &mut Vec<String>,
+) -> Result<(), BrokerError> {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Audio) || role_id != "audio" {
+        return Ok(());
+    }
+    let state_path = PathBuf::from(format!(
+        "/var/lib/nixling/vms/{vm_id}/state/audio-state.json"
+    ));
+    let bytes = fs::read(&state_path).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "audio runner {vm_id}:{role_id} could not read {}: {err}",
+            state_path.display()
+        ))
+    })?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "audio runner {vm_id}:{role_id} could not parse {}: {err}",
+            state_path.display()
+        ))
+    })?;
+    let mic = audio_state_value(&value, "mic", vm_id, role_id)?;
+    let speaker = audio_state_value(&value, "speaker", vm_id, role_id)?;
+    let input_target = audio_input_target_node(env, vm_id, role_id)?;
+    let target_prop = if mic == "on" {
+        input_target
+            .as_deref()
+            .map(|target| format!(" target.object = \"{target}\""))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    env.retain(|entry| !entry.starts_with("PIPEWIRE_PROPS="));
+    env.push(format!(
+        "PIPEWIRE_PROPS={{ application.name = \"nixling-{vm_id}\" node.name = \"nixling-{vm_id}\" node.description = \"nixling {vm_id}\" nixling.vm = \"{vm_id}\" nixling.mic = \"{mic}\" nixling.speaker = \"{speaker}\"{target_prop} }}"
+    ));
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn audio_input_target_node(
+    env: &[String],
+    vm_id: &str,
+    role_id: &str,
+) -> Result<Option<String>, BrokerError> {
+    let Some(raw) = env
+        .iter()
+        .find_map(|entry| entry.strip_prefix("NIXLING_AUDIO_INPUT_TARGET_NODE="))
+    else {
+        return Ok(None);
+    };
+    if raw.is_empty() || raw.contains('"') || raw.contains('\n') {
+        return Err(BrokerError::LiveHandler(format!(
+            "audio runner {vm_id}:{role_id} has invalid NIXLING_AUDIO_INPUT_TARGET_NODE"
+        )));
+    }
+    Ok(Some(raw.to_owned()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn audio_state_value<'a>(
+    value: &'a Value,
+    key: &str,
+    vm_id: &str,
+    role_id: &str,
+) -> Result<&'a str, BrokerError> {
+    let state = value.get(key).and_then(Value::as_str).ok_or_else(|| {
+        BrokerError::LiveHandler(format!(
+            "audio runner {vm_id}:{role_id} state missing string key {key:?}"
+        ))
+    })?;
+    match state {
+        "on" | "off" => Ok(state),
+        other => Err(BrokerError::LiveHandler(format!(
+            "audio runner {vm_id}:{role_id} state key {key:?} has invalid value {other:?}"
+        ))),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_cloud_hypervisor_stale_sockets(
+    role: &nixling_ipc::broker_wire::RunnerRole,
+    argv: &[String],
+) -> Result<(), BrokerError> {
+    if !matches!(
+        role,
+        nixling_ipc::broker_wire::RunnerRole::CloudHypervisor
+    ) {
+        return Ok(());
+    }
+    for path in cloud_hypervisor_socket_paths(argv) {
+        cleanup_stale_unix_socket(&path)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_video_stale_socket(
+    role: &nixling_ipc::broker_wire::RunnerRole,
+    argv: &[String],
+) -> Result<(), BrokerError> {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::Video) {
+        return Ok(());
+    }
+    let path = video_socket_path(argv)?;
+    if !path.starts_with("/run/nixling-video/") {
+        return Err(BrokerError::LiveHandler(format!(
+            "video socket preflight refusing non-nixling socket path {}",
+            path.display()
+        )));
+    }
+    cleanup_stale_unix_socket_without_probe(&path, "video socket preflight")
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
+    let mut iter = argv.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--socket-path" {
+            let Some(path) = iter.next() else {
+                break;
+            };
+            return Ok(PathBuf::from(path));
+        }
+        if let Some(path) = arg.strip_prefix("--socket-path=") {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err(BrokerError::LiveHandler(
+        "video socket preflight could not find --socket-path in runner argv".to_owned(),
+    ))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut iter = argv.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--api-socket" => {
+                if let Some(path) = iter.next() {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            "--vsock" => {
+                if let Some(spec) = iter.next() {
+                    for field in spec.split(',') {
+                        if let Some(path) = field.strip_prefix("socket=") {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    paths
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(BrokerError::LiveHandler(format!(
+                "cloud-hypervisor socket preflight could not stat {}: {err}",
+                path.display()
+            )))
+        }
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(BrokerError::LiveHandler(format!(
+            "cloud-hypervisor socket preflight refusing to remove non-socket path {}",
+            path.display()
+        )));
+    }
+    match std::os::unix::net::UnixStream::connect(path) {
+        Ok(_) => Err(BrokerError::LiveHandler(format!(
+            "cloud-hypervisor socket preflight found active listener at {}",
+            path.display()
+        ))),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            fs::remove_file(path).map_err(|remove_err| {
+                BrokerError::LiveHandler(format!(
+                    "cloud-hypervisor socket preflight could not remove stale {}: {remove_err}",
+                    path.display()
+                ))
+            })
+        }
+        Err(err) => Err(BrokerError::LiveHandler(format!(
+            "cloud-hypervisor socket preflight could not prove {} stale: {err}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn cleanup_stale_unix_socket_without_probe(path: &Path, context: &str) -> Result<(), BrokerError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(BrokerError::LiveHandler(format!(
+                "{context} could not stat {}: {err}",
+                path.display()
+            )))
+        }
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(BrokerError::LiveHandler(format!(
+            "{context} refusing to remove non-socket path {}",
+            path.display()
+        )));
+    }
+    if unix_socket_listening_path(path) {
+        return Err(BrokerError::LiveHandler(format!(
+            "{context} found active listener at {}",
+            path.display()
+        )));
+    }
+    fs::remove_file(path).map_err(|remove_err| {
+        BrokerError::LiveHandler(format!(
+            "{context} could not remove stale {}: {remove_err}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn unix_socket_listening_path(path: &Path) -> bool {
+    const SO_ACCEPTCON: u64 = 0x0001_0000;
+    let expected = path.to_string_lossy();
+    let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
+        return false;
+    };
+    contents.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            return false;
+        }
+        let flags = u64::from_str_radix(fields[3], 16).unwrap_or(0);
+        let socket_type = fields[4];
+        let socket_path = fields[7];
+        socket_path == expected && socket_type == "0001" && (flags & SO_ACCEPTCON) != 0
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn build_usbip_firewall_decision(
+    resolver: &BundleResolver,
+    host_nft_intent: &nixling_core::bundle_resolver::ResolvedNftIntent,
+    current: &nixling_core::bundle_resolver::ResolvedUsbipFirewallIntent,
+) -> Result<crate::ops::usbip_firewall::UsbipBindFirewallRuleDecision, BrokerError> {
+    let mut batch = nixling_host::nftables::NftBatch::parse(host_nft_intent.script_body.as_str())
+        .map_err(|err| BrokerError::NftScriptParseFailed(err.to_string()))?;
+    let mut inserted = std::collections::BTreeSet::<String>::new();
+
+    for id in resolver.usbip_bind_intent_ids() {
+        let Some(bind_intent) = resolver.find_usbip_bind_intent(id) else {
+            continue;
+        };
+        let Some(owner) = crate::ops::usbip_lock::peek_owner(&bind_intent.lock_path) else {
+            continue;
+        };
+        if owner != bind_intent.vm_name {
+            continue;
+        }
+        let firewall_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(
+            &bind_intent.env,
+            &bind_intent.bus_id,
+        );
+        if !inserted.insert(firewall_id.clone()) || firewall_id == current.intent_id {
+            continue;
+        }
+        let Some(active_firewall) = resolver.find_usbip_firewall_intent(&firewall_id) else {
+            return Err(BrokerError::BundleIntentMissing {
+                kind: "usbip-firewall",
+                intent_id: firewall_id,
+            });
+        };
+        batch
+            .add_usbip_carveout_expr(
+                nixling_host::nftables::ChainHook::Input,
+                &nixling_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                active_firewall.nft_rule_body.as_str(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    }
+    for bind_intent in active_dynamic_usbip_bind_intents(resolver) {
+        let firewall_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(
+            &bind_intent.env,
+            &bind_intent.bus_id,
+        );
+        if !inserted.insert(firewall_id.clone()) || firewall_id == current.intent_id {
+            continue;
+        }
+        let Some(active_firewall) = find_usbip_firewall_intent_or_wildcard(resolver, &firewall_id)
+        else {
+            return Err(BrokerError::BundleIntentMissing {
+                kind: "usbip-firewall",
+                intent_id: firewall_id,
+            });
+        };
+        batch
+            .add_usbip_carveout_expr(
+                nixling_host::nftables::ChainHook::Input,
+                &nixling_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                active_firewall.nft_rule_body.as_str(),
+            )
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    }
+
+    crate::ops::usbip_firewall::bind_firewall_rule(
+        batch,
+        &nixling_host::nftables::BusId::new(current.bus_id.as_str()),
+        current.nft_rule_body.as_str(),
+    )
+    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn find_usbip_firewall_intent_or_wildcard(
+    resolver: &BundleResolver,
+    intent_id: &str,
+) -> Option<nixling_core::bundle_resolver::ResolvedUsbipFirewallIntent> {
+    if let Some(intent) = resolver.find_usbip_firewall_intent(intent_id) {
+        return Some(intent.clone());
+    }
+    let (env, bus_id) = parse_usbip_firewall_intent_id(intent_id)?;
+    nixling_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+    let pending_id = nixling_core::bundle_resolver::intent_id_usbip_firewall(&env, "pending");
+    let source = resolver.find_usbip_firewall_intent(&pending_id)?;
+    Some(nixling_core::bundle_resolver::ResolvedUsbipFirewallIntent {
+        intent_id: intent_id.to_owned(),
+        bus_id,
+        env,
+        nft_rule_body: source.nft_rule_body.clone(),
+        desired_hash: source.desired_hash.clone(),
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn parse_usbip_firewall_intent_id(intent_id: &str) -> Option<(String, String)> {
+    let rest = intent_id.strip_prefix("usbip-fw:env:")?;
+    let (env, bus_id) = rest.split_once(":bus:")?;
+    if env.is_empty() || bus_id.is_empty() {
+        None
+    } else {
+        Some((env.to_owned(), bus_id.to_owned()))
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn active_dynamic_usbip_bind_intents(
+    resolver: &BundleResolver,
+) -> Vec<nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+    let Ok(entries) = std::fs::read_dir("/run/nixling/locks/usbip") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let bus_id = entry.file_name().into_string().ok()?;
+            nixling_host::usbip_argv::validate_bus_id(&bus_id).ok()?;
+            let owner = crate::ops::usbip_lock::peek_owner(&entry.path())?;
+            find_wildcard_usbip_bind_intent_for(resolver, &owner, &bus_id)
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn find_usbip_bind_intent_for(
+    resolver: &BundleResolver,
     vm_name: &str,
     bus_id: &str,
-) -> Option<&'a nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
-    resolver.usbip_bind_intent_ids().find_map(|id| {
+) -> Option<nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+    let exact = resolver.usbip_bind_intent_ids().find_map(|id| {
         let intent = resolver.find_usbip_bind_intent(id)?;
         if intent.vm_name == vm_name && intent.bus_id == bus_id {
-            Some(intent)
+            Some(intent.clone())
+        } else {
+            None
+        }
+    });
+    exact.or_else(|| {
+        if static_usbip_busid_owner(resolver, bus_id).is_some() {
+            None
+        } else {
+            find_wildcard_usbip_bind_intent_for(resolver, vm_name, bus_id)
+        }
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn find_usbip_bind_intent_by_busid(
+    resolver: &BundleResolver,
+    bus_id: &str,
+) -> Option<nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+    let exact = resolver.usbip_bind_intent_ids().find_map(|id| {
+        let intent = resolver.find_usbip_bind_intent(id)?;
+        if intent.bus_id == bus_id {
+            Some(intent.clone())
+        } else {
+            None
+        }
+    });
+    exact.or_else(|| {
+        let lock_path = usbip_lock_path_for_busid(bus_id);
+        let owner = crate::ops::usbip_lock::peek_owner(&lock_path)?;
+        find_wildcard_usbip_bind_intent_for(resolver, &owner, bus_id)
+    })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn find_wildcard_usbip_bind_intent_for(
+    resolver: &BundleResolver,
+    vm_name: &str,
+    bus_id: &str,
+) -> Option<nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+    nixling_host::usbip_argv::validate_bus_id(bus_id).ok()?;
+    if static_usbip_busid_owner(resolver, bus_id).is_some() {
+        return None;
+    }
+    resolver.usbip_bind_intent_ids().find_map(|id| {
+        let source = resolver.find_usbip_bind_intent(id)?;
+        if source.vm_name == vm_name && source.bus_id == "pending" {
+            Some(dynamic_usbip_bind_intent(source, bus_id))
         } else {
             None
         }
@@ -3701,26 +4610,47 @@ fn find_usbip_bind_intent_for<'a>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn find_usbip_bind_intent_by_busid<'a>(
-    resolver: &'a Arc<BundleResolver>,
-    bus_id: &str,
-) -> Option<&'a nixling_core::bundle_resolver::ResolvedUsbipBindIntent> {
+fn static_usbip_busid_owner(resolver: &BundleResolver, bus_id: &str) -> Option<String> {
     resolver.usbip_bind_intent_ids().find_map(|id| {
         let intent = resolver.find_usbip_bind_intent(id)?;
-        if intent.bus_id == bus_id {
-            Some(intent)
+        if intent.bus_id == bus_id && intent.bus_id != "pending" {
+            Some(intent.vm_name.clone())
         } else {
             None
         }
     })
 }
 
-// W4-fu clean-break: route ValidateBundle through
-// `nixling_core::manifest::validate_bundle` which parses the
-// configured bundle path as a v0.4 manifest. The bootstrap path
-// keeps its own loose "file exists" check in
-// `crate::bootstrap::manifest` because the W2 probe-* test
-// harnesses pre-date the v0.4 schema.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn dynamic_usbip_bind_intent(
+    source: &nixling_core::bundle_resolver::ResolvedUsbipBindIntent,
+    bus_id: &str,
+) -> nixling_core::bundle_resolver::ResolvedUsbipBindIntent {
+    nixling_core::bundle_resolver::ResolvedUsbipBindIntent {
+        intent_id: nixling_core::bundle_resolver::intent_id_usbip_bind(
+            &source.env,
+            &source.vm_name,
+            bus_id,
+        ),
+        bus_id: bus_id.to_owned(),
+        vm_name: source.vm_name.clone(),
+        env: source.env.clone(),
+        lock_path: usbip_lock_path_for_busid(bus_id),
+        vendor_product_allowlist: source.vendor_product_allowlist.clone(),
+        dynamic_bus_id: true,
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn usbip_lock_path_for_busid(bus_id: &str) -> PathBuf {
+    PathBuf::from(format!("/run/nixling/locks/usbip/{bus_id}"))
+}
+
+// Route ValidateBundle through `nixling_core::manifest::validate_bundle`,
+// which parses the configured bundle path as a v0.4 manifest. The
+// bootstrap path keeps its own loose "file exists" check in
+// `crate::bootstrap::manifest` because the legacy probe-* test harnesses
+// pre-date the v0.4 schema.
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nixling_core::manifest as manifest_api;
 
@@ -4000,8 +4930,8 @@ impl BrokerError {
                 operation: op,
                 target_wave,
             } => {
-                // W2-compat short-record (preserved for the
-                // export-audit / socket-acl gates).
+                // Legacy short-record (preserved for the export-audit /
+                // socket-acl gates).
                 audit_log.write_entry(
                     operation,
                     caller_uid,
@@ -4009,8 +4939,7 @@ impl BrokerError {
                     opaque_target_id,
                     "denied",
                 )?;
-                // W3fu1 H1 (security-2, software-6, rust-2): typed
-                // W3 [`OpAuditRecord`] record for every decision.
+                // Typed [`OpAuditRecord`] record for every decision.
                 audit_log.record(
                     op,
                     opaque_target_id,
@@ -4059,7 +4988,7 @@ impl BrokerError {
                     bundle_metadata.bundle_hash,
                     audit_context.duration_us(),
                     Some(serde_json::json!({
-                        "reason": "W3 broker refuses W6 USBIP live-device-routing ops",
+                        "reason": "broker does not yet implement USBIP live-device-routing ops",
                         "target_wave": "W6"
                     })),
                 )?;
@@ -4335,7 +5264,23 @@ impl BrokerError {
                     opaque_target_id,
                     "Broker.OtelHostBridgeIntentInvalid",
                     &format!(
-                        "OtelHostBridge runner intent points at VM `{intent_vm}` but the trusted bundle declares the obs VM as `{expected_obs_vm}` (security-2 closed-set)"
+                        "OtelHostBridge runner intent points at VM `{intent_vm}` but the trusted bundle declares the obs VM as `{expected_obs_vm}` (closed-set)"
+                    ),
+                )?;
+            }
+            Self::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
+            } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "spawn-runner-intent-mismatch",
+                    opaque_target_id,
+                    "Broker.SpawnRunnerIntentMismatch",
+                    &format!(
+                        "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
                     ),
                 )?;
             }
@@ -4355,9 +5300,9 @@ impl BrokerError {
                 operation,
                 Some("W6"),
                 &format!(
-                    "{operation} is W6 USBIP live-device-routing and is explicitly out of W3 scope (plan.md §\"W3 broker variant additions\")."
+                    "{operation} is USBIP live-device-routing and is not yet implemented."
                 ),
-                "Retry after the W6 USBIP wave lands; W3 ships only `UsbipBindFirewallRule` skeleton support.",
+                "USBIP live-device-routing is not yet implemented; only `UsbipBindFirewallRule` skeleton support ships today.",
             ),
             Self::AuditRequiresAdmin => authz_audit_requires_admin_response(),
             Self::MinijailValidation { reason } => error_response(
@@ -4386,7 +5331,7 @@ impl BrokerError {
                 "BundleResolver",
                 Some("W12"),
                 "Broker started without a loadable bundle at ServerConfig.bundle_path. Bundle-dependent real-wire ops cannot resolve their BundleOpId refs.",
-                "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and restart the broker.",
+                "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and retry; the broker reloads the bundle on the next request.",
             ),
             Self::BundleTampered { path, reason } => error_response(
                 "bundle-tampered",
@@ -4489,9 +5434,22 @@ impl BrokerError {
                 "SpawnRunner",
                 Some("P1"),
                 &format!(
-                    "OtelHostBridge runner intent points at VM `{intent_vm}` but the trusted bundle declares the obs VM as `{expected_obs_vm}` (decision 5 + security-2 closed-set)"
+                    "OtelHostBridge runner intent points at VM `{intent_vm}` but the trusted bundle declares the obs VM as `{expected_obs_vm}` (closed-set)"
                 ),
                 "Rebuild the bundle so the OtelHostBridge runner intent's vm_name matches manifest._observability.vmName, then retry SpawnRunner.",
+            ),
+            Self::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
+            } => error_response(
+                "Broker.SpawnRunnerIntentMismatch",
+                "SpawnRunner",
+                Some("P1"),
+                &format!(
+                    "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
+                ),
+                "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
             ),
         }
     }
@@ -4555,9 +5513,9 @@ fn unimplemented_response(operation: &str, target_wave: &str) -> BrokerResponse 
         "Broker.Unimplemented",
         operation,
         Some(target_wave),
-        &format!("{operation} is intentionally stubbed in W2 and performs no host mutation."),
+        &format!("{operation} is intentionally stubbed and performs no host mutation."),
         &format!(
-            "Retry after {target_wave} lands the privileged host implementation for {operation}."
+            "The privileged host implementation for {operation} is not yet available; retry once it lands."
         ),
     )
 }
@@ -4601,6 +5559,163 @@ fn error_response(
     }
 }
 
+/// Start a background tokio runtime that listens for SIGCHLD and reaps
+/// broker-spawned children via `waitid(P_PIDFD, WEXITED|WNOHANG)`.
+///
+/// The runtime runs in a dedicated OS thread so the main synchronous
+/// accept loop is not blocked. The pidfd registry Mutex is safe to lock
+/// from a tokio task (no signal-context access; no async Mutex needed).
+///
+/// Returns the `tokio::runtime::Runtime` handle — must stay alive for
+/// the duration of the broker process (bind it to a local in `run_server`).
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("nixling-broker-reaper")
+        .enable_all()
+        .build()
+        .expect("broker sigchld reaper tokio runtime");
+
+    rt.spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigchld = match signal(SignalKind::child()) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "broker: failed to install SIGCHLD handler; pidfd reap loop disabled"
+                );
+                return;
+            }
+        };
+
+        loop {
+            if sigchld.recv().await.is_none() {
+                break;
+            }
+            reap_all_pidfds(audit_log.as_ref());
+        }
+    });
+
+    rt
+}
+
+/// Iterate the pidfd registry and call
+/// `waitid(P_PIDFD, WEXITED|WNOHANG)` on each entry. Entries whose child
+/// has exited are removed from the registry, a `ChildReaped` notification
+/// is pushed to the ring buffer, and a forensics record is appended to the
+/// audit log.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reap_all_pidfds(audit_log: &AuditLog) {
+    use nix::errno::Errno;
+    use nix::sys::wait::{waitid, Id, WaitPidFlag, WaitStatus};
+    use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+
+    let runner_ids: Vec<String> = match runner_pidfd_registry().lock() {
+        Ok(reg) => reg.keys().cloned().collect(),
+        Err(_) => {
+            tracing::warn!("runner_pidfd_registry mutex poisoned in reap loop");
+            return;
+        }
+    };
+
+    for runner_id in runner_ids {
+        let pidfd_dup = {
+            let reg = match runner_pidfd_registry().lock() {
+                Ok(r) => r,
+                Err(_) => {
+                    tracing::warn!("runner_pidfd_registry mutex poisoned in reap loop");
+                    continue;
+                }
+            };
+            let Some(pidfd) = reg.get(&runner_id) else {
+                continue;
+            };
+            match dup(pidfd.as_raw_fd()).map(owned_fd_from_raw) {
+                Ok(d) => d,
+                Err(err) => {
+                    tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: dup pidfd failed");
+                    continue;
+                }
+            }
+        };
+
+        let wait_flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG;
+        match waitid(Id::PIDFd(pidfd_dup.as_fd()), wait_flags) {
+            Ok(WaitStatus::Exited(pid, code)) => {
+                let notif = ChildReapedNotification {
+                    runner_id: runner_id.clone(),
+                    pid: pid.as_raw(),
+                    exit_status: ChildExitStatus {
+                        kind: ChildExitKind::Exited,
+                        code: Some(code),
+                        signal: None,
+                    },
+                    reaped_at_ms: reaped_at_ms_now(),
+                };
+                remove_and_notify(&runner_id, notif, audit_log);
+            }
+            Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                let sig_num = sig as libc::c_int;
+                let notif = ChildReapedNotification {
+                    runner_id: runner_id.clone(),
+                    pid: pid.as_raw(),
+                    exit_status: ChildExitStatus {
+                        kind: if sig_num == libc::SIGKILL {
+                            ChildExitKind::Killed
+                        } else {
+                            ChildExitKind::Signaled
+                        },
+                        code: None,
+                        signal: Some(sig_num),
+                    },
+                    reaped_at_ms: reaped_at_ms_now(),
+                };
+                remove_and_notify(&runner_id, notif, audit_log);
+            }
+            Ok(WaitStatus::StillAlive) | Ok(_) => {}
+            Err(Errno::ECHILD) => {
+                tracing::debug!(
+                    runner_id = %runner_id,
+                    "reap_all_pidfds: ECHILD (already reaped); removing stale registry entry"
+                );
+                if let Ok(mut reg) = runner_pidfd_registry().lock() {
+                    reg.remove(&runner_id);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(runner_id = %runner_id, error = %err, "reap_all_pidfds: waitid failed");
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn reaped_at_ms_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn remove_and_notify(
+    runner_id: &str,
+    notif: nixling_ipc::broker_wire::ChildReapedNotification,
+    audit_log: &AuditLog,
+) {
+    if let Ok(mut reg) = runner_pidfd_registry().lock() {
+        reg.remove(runner_id);
+    }
+    if let Err(err) = audit_log.write_child_reaped(&notif) {
+        tracing::warn!(runner_id = %runner_id, error = %err, "reap: audit write_child_reaped failed");
+    }
+    push_child_reap_notification(notif);
+    tracing::info!(runner_id = %runner_id, "broker: child reaped via SIGCHLD handler");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4627,6 +5742,36 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn runner_role_mapping_covers_video_and_spawnable_roles() {
+        use nixling_core::processes::ProcessRole;
+        use nixling_ipc::broker_wire::RunnerRole;
+
+        let cases = [
+            (ProcessRole::SwtpmPreStartFlush, Some(RunnerRole::SwtpmFlush)),
+            (ProcessRole::Swtpm, Some(RunnerRole::Swtpm)),
+            (ProcessRole::Virtiofsd, Some(RunnerRole::Virtiofsd)),
+            (ProcessRole::Video, Some(RunnerRole::Video)),
+            (ProcessRole::Gpu, Some(RunnerRole::Gpu)),
+            (ProcessRole::GpuRenderNode, Some(RunnerRole::Gpu)),
+            (ProcessRole::Audio, Some(RunnerRole::Audio)),
+            (
+                ProcessRole::CloudHypervisorRunner,
+                Some(RunnerRole::CloudHypervisor),
+            ),
+            (ProcessRole::VsockRelay, Some(RunnerRole::VsockRelay)),
+            (ProcessRole::Usbip, Some(RunnerRole::Usbip)),
+            (ProcessRole::HostReconcile, None),
+            (ProcessRole::StoreVirtiofsPreflight, None),
+            (ProcessRole::GuestSshReadiness, None),
+        ];
+
+        for (role, expected) in cases {
+            assert_eq!(runner_role_for_process_role(&role), expected);
+        }
+    }
 
     struct AuditCase {
         error: BrokerError,
@@ -4691,11 +5836,11 @@ mod tests {
             ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
             VmObservability,
         };
-        use nixling_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use nixling_core::minijail_profile::CgroupPlacement;
         use nixling_core::processes::{
-            NodeId, ProcessNode, ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
-            VmProcessInvariants,
+            NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
         };
+        use nixling_core::test_support::RoleProfileBuilder;
 
         let bundle_dir = root.join("bundle");
         let bundle_path = bundle_dir.join("bundle.json");
@@ -4793,38 +5938,28 @@ mod tests {
                     binary_path: None,
                     argv: Vec::new(),
                     env: Vec::new(),
-                    profile: RoleProfile {
-                        profile_id: "profile-ch".to_owned(),
-                        uid: 1001,
-                        gid: 1001,
-                        adr_carve_out: None,
-                        caps: Vec::new(),
-                        namespaces: NamespaceSet {
+                    profile: RoleProfileBuilder::new()
+                        .with_profile_id("profile-ch")
+                        .with_uid(1001)
+                        .with_gid(1001)
+                        .with_namespaces(nixling_core::minijail_profile::NamespaceSet {
                             mount: true,
                             pid: false,
                             net: false,
                             ipc: false,
                             uts: false,
                             user: false,
-                        },
-                        seccomp_policy_ref: Some("profile-ch.seccomp".to_owned()),
-                        mount_policy: MountPolicy {
-                            read_only_paths: vec!["/nix/store".to_owned()],
-                            writable_paths: Vec::new(),
-                            nix_store_read_only: true,
-                            hide_device_nodes_by_default: true,
-                    device_binds: Vec::new(),
-                    bind_mounts: Vec::new(),
-                        },
-                        cgroup_placement: CgroupPlacement {
+                        })
+                        .with_seccomp_policy_ref(Some("profile-ch.seccomp"))
+                        .with_read_only_paths(vec!["/nix/store".to_owned()])
+                        .with_cgroup_placement(CgroupPlacement {
                             subtree: "nixling.slice/corp-vm/ch-runner".to_owned(),
                             controllers: vec!["cpu".to_owned(), "memory".to_owned()],
                             delegated: true,
-                        },
-                        user_namespace: None,
-                        umask: None,
-                    },
+                        })
+                        .build(),
                     readiness: Vec::new(),
+                    plan_ops: Vec::new(),
                 }],
                 edges: Vec::new(),
                 invariants: VmProcessInvariants {
@@ -4929,10 +6064,10 @@ mod tests {
         write_json_file(&processes_path, &processes);
         write_json_file(&closure_path, &closure);
 
-        // schemaVersion v2 bundles MUST carry a bundleHash field
-        // (P0fu3 H1). Inject it by replicating the bundle_resolver
-        // canonical-hash recipe: sha256( serde_json::to_vec( bundle
-        // as Value with artifactHashes=null and no bundleHash ) ).
+        // schemaVersion v2 bundles MUST carry a bundleHash field. Inject
+        // it by replicating the bundle_resolver canonical-hash recipe:
+        // sha256( serde_json::to_vec( bundle as Value with
+        // artifactHashes=null and no bundleHash ) ).
         {
             use std::os::unix::fs::PermissionsExt;
             let mut as_value: serde_json::Value =
@@ -4941,8 +6076,7 @@ mod tests {
                 map.remove("bundleHash");
                 map.insert("artifactHashes".to_owned(), serde_json::Value::Null);
             }
-            let canonical =
-                serde_json::to_vec(&as_value).expect("canonical-serialize test bundle");
+            let canonical = serde_json::to_vec(&as_value).expect("canonical-serialize test bundle");
             let digest = {
                 use sha2::Digest as _;
                 let raw: [u8; 32] = sha2::Sha256::digest(&canonical).into();
@@ -4950,16 +6084,11 @@ mod tests {
                 format!("sha256:{hex}")
             };
             if let serde_json::Value::Object(map) = &mut as_value {
-                map.insert(
-                    "bundleHash".to_owned(),
-                    serde_json::Value::String(digest),
-                );
+                map.insert("bundleHash".to_owned(), serde_json::Value::String(digest));
             }
-            let with_hash =
-                serde_json::to_vec(&as_value).expect("re-serialize test bundle");
+            let with_hash = serde_json::to_vec(&as_value).expect("re-serialize test bundle");
             if let Some(parent) = bundle_path.parent() {
-                fs::create_dir_all(parent)
-                    .expect("create parent directories for test bundle");
+                fs::create_dir_all(parent).expect("create parent directories for test bundle");
             }
             fs::write(&bundle_path, with_hash).expect("write test bundle.json");
             fs::set_permissions(&bundle_path, fs::Permissions::from_mode(0o640))
@@ -4983,14 +6112,86 @@ mod tests {
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn broker_bundle_load_sees_rewritten_processes_without_restart() {
+        use nixling_core::bundle_resolver::{intent_id_runner, BundleVerifyPolicy};
+        use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
+        use nixling_core::test_support::RoleProfileBuilder;
+
+        let root = test_audit_dir("bundle-freshness");
+        let bundle = build_test_bundle(&root);
+        let policy = BundleVerifyPolicy::for_tests();
+
+        let first = match try_load_resolver_with_policy(&bundle.bundle_path, &policy) {
+            BundleSlot::Loaded(resolver) => resolver,
+            other => panic!("initial bundle should load, got {other:?}"),
+        };
+        let video_intent = intent_id_runner("corp-vm", "video");
+        assert!(
+            first.find_runner_intent(&video_intent).is_none(),
+            "fixture starts without a video runner"
+        );
+
+        let mut processes: ProcessesJson =
+            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
+                .expect("parse processes.json");
+        processes.vms[0].nodes.push(ProcessNode {
+            id: NodeId("video".to_owned()),
+            role: ProcessRole::Video,
+            unit: None,
+            binary_path: Some("/nix/store/test-crosvm-video/bin/crosvm".to_owned()),
+            argv: vec![
+                "nixling-corp-vm-video".to_owned(),
+                "device".to_owned(),
+                "video-decoder".to_owned(),
+                "--socket-path".to_owned(),
+                "/run/nixling-video/corp-vm/video.sock".to_owned(),
+                "--backend".to_owned(),
+                "vaapi".to_owned(),
+            ],
+            env: Vec::new(),
+            profile: RoleProfileBuilder::new()
+                .with_profile_id("profile-video")
+                .with_uid(1002)
+                .with_gid(1002)
+                .with_seccomp_policy_ref(Some("w1-video"))
+                .with_writable_paths(vec![WritablePath {
+                    path: "/run/nixling-video/corp-vm".to_owned(),
+                    purpose: "test video socket".to_owned(),
+                }])
+                .with_device_binds(vec!["/dev/dri/renderD128".to_owned()])
+                .with_cgroup_placement(CgroupPlacement {
+                    subtree: "nixling.slice/corp-vm/video".to_owned(),
+                    controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                    delegated: false,
+                })
+                .with_umask(Some(7))
+                .build(),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+        });
+        write_json_file(&bundle.processes_path, &processes);
+
+        let second = match try_load_resolver_with_policy(&bundle.bundle_path, &policy) {
+            BundleSlot::Loaded(resolver) => resolver,
+            other => panic!("rewritten bundle should load, got {other:?}"),
+        };
+        let intent = second
+            .find_runner_intent(&video_intent)
+            .expect("per-request reload must see newly written video runner intent");
+        assert_eq!(intent.role, ProcessRole::Video);
+        assert_eq!(intent.umask, Some(7));
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
     fn build_invalid_minijail_test_bundle(root: &Path) -> TestBundle {
         use nixling_core::processes::ProcessesJson;
 
         let mut bundle = build_test_bundle(root);
-        let mut processes: ProcessesJson = serde_json::from_slice(
-            &fs::read(&bundle.processes_path).expect("read processes.json"),
-        )
-        .expect("parse processes.json");
+        let mut processes: ProcessesJson =
+            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
+                .expect("parse processes.json");
         let profile = &mut processes.vms[0].nodes[0].profile;
         profile.uid = 0;
         profile.gid = 0;
@@ -5010,10 +6211,9 @@ mod tests {
         bundle: &mut TestBundle,
         allowlist: Vec<nixling_core::host::VendorProductPair>,
     ) {
-        let mut host: nixling_core::host::HostJson = serde_json::from_slice(
-            &fs::read(&bundle.host_path).expect("read host.json"),
-        )
-        .expect("parse host.json");
+        let mut host: nixling_core::host::HostJson =
+            serde_json::from_slice(&fs::read(&bundle.host_path).expect("read host.json"))
+                .expect("parse host.json");
         host.environments[0].usbip_busid_locks[0].vendor_product_allowlist = allowlist;
         write_json_file(&bundle.host_path, &host);
         bundle.resolver = Arc::new(
@@ -5068,7 +6268,9 @@ mod tests {
         fn remember_runner(&self, runner_id: &str) -> Result<(), BrokerError> {
             self.registered_runners
                 .lock()
-                .map_err(|_| BrokerError::Protocol("fake runner registry mutex poisoned".to_owned()))?
+                .map_err(|_| {
+                    BrokerError::Protocol("fake runner registry mutex poisoned".to_owned())
+                })?
                 .insert(runner_id.to_owned());
             Ok(())
         }
@@ -5077,7 +6279,9 @@ mod tests {
             Ok(self
                 .registered_runners
                 .lock()
-                .map_err(|_| BrokerError::Protocol("fake runner registry mutex poisoned".to_owned()))?
+                .map_err(|_| {
+                    BrokerError::Protocol("fake runner registry mutex poisoned".to_owned())
+                })?
                 .contains(runner_id))
         }
     }
@@ -5451,8 +6655,9 @@ mod tests {
                                expected_fields: OperationFields,
                                expected_tracing: Option<&str>| {
             let expected_request_fields = request_fields_value(&request).expect("request fields");
-            let audit_context = DispatchAuditContext::from_request(&request, peer_pid, &caller_role)
-                .expect("audit context");
+            let audit_context =
+                DispatchAuditContext::from_request(&request, peer_pid, &caller_role)
+                    .expect("audit context");
             let before = capture.lock().expect("capture lock before dispatch").len();
             let result = dispatch_request_with_backend(
                 request,
@@ -5676,17 +6881,20 @@ mod tests {
 
         assert_ack(
             assert_dispatch(
-                BrokerRequest::PrepareStoreView(nixling_ipc::broker_wire::PrepareStoreViewRequest {
-                    vm_id: VmId::new("corp-vm"),
-                    tracing_span_id: Some(TracingSpanId::new("span-store-view")),
-                }),
+                BrokerRequest::PrepareStoreView(
+                    nixling_ipc::broker_wire::PrepareStoreViewRequest {
+                        vm_id: VmId::new("corp-vm"),
+                        tracing_span_id: Some(TracingSpanId::new("span-store-view")),
+                    },
+                ),
                 "PrepareStoreView",
                 OperationFields::PrepareStoreView {
                     vm: "corp-vm".to_owned(),
                     generation: 42,
                     hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store-view".to_owned(),
-                    view_root: "/var/lib/nixling/vms/corp-vm/store-view/generations/42/corp-vm-system"
-                        .to_owned(),
+                    view_root:
+                        "/var/lib/nixling/vms/corp-vm/store-view/generations/42/corp-vm-system"
+                            .to_owned(),
                 },
                 Some("span-store-view"),
             ),
@@ -5694,11 +6902,13 @@ mod tests {
         );
 
         let set_bridge_port_flags = assert_dispatch(
-            BrokerRequest::SetBridgePortFlags(nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
-                vm_id: VmId::new("corp-vm"),
-                role_id: RoleId::new("lan"),
-                tracing_span_id: Some(TracingSpanId::new("span-bridge-flags")),
-            }),
+            BrokerRequest::SetBridgePortFlags(
+                nixling_ipc::broker_wire::SetBridgePortFlagsRequest {
+                    vm_id: VmId::new("corp-vm"),
+                    role_id: RoleId::new("lan"),
+                    tracing_span_id: Some(TracingSpanId::new("span-bridge-flags")),
+                },
+            ),
             "SetBridgePortFlags",
             OperationFields::SetBridgePortFlags {
                 vm: "corp-vm".to_owned(),
@@ -5736,8 +6946,7 @@ mod tests {
                     role: "ch-runner".to_owned(),
                     mount_count: 1,
                     mount_root: "/run/nixling/mountns/corp-vm/ch-runner".to_owned(),
-                    mount_view_path: "/run/nixling/mountns/corp-vm/ch-runner/nix/store"
-                        .to_owned(),
+                    mount_view_path: "/run/nixling/mountns/corp-vm/ch-runner/nix/store".to_owned(),
                     source_view_path:
                         "/var/lib/nixling/vms/corp-vm/store-view/generations/42/corp-vm-system"
                             .to_owned(),
@@ -5778,6 +6987,8 @@ mod tests {
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 signal: RunnerSignal::Term,
+                pid: None,
+                expected_start_time_ticks: None,
                 tracing_span_id: Some(TracingSpanId::new("span-signal")),
             }),
             "SignalRunner",
@@ -6135,8 +7346,8 @@ mod tests {
             tracing_span_id: Some(TracingSpanId::new("span-invalid-spawn")),
         });
         let expected_request_fields = request_fields_value(&request).expect("request fields");
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 5150, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 5150, &caller_role)
+            .expect("audit context");
 
         let error = dispatch_request_with_backend(
             request,
@@ -6192,13 +7403,12 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
-        // P1 (decision 5 + security-2 closed-set): the broker MUST
-        // refuse a `SpawnRunner` request whose role is
-        // `RunnerRole::OtelHostBridge` when the bundle-resolved
-        // runner intent's `vm_name` does not match
-        // `manifest._observability.vmName`. The default test
-        // bundle uses obs vm "obs" and a runner intent for
-        // "corp-vm" — a perfect mismatch case.
+        // The broker MUST refuse a `SpawnRunner` request whose role is
+        // `RunnerRole::OtelHostBridge` when the bundle-resolved runner
+        // intent's `vm_name` does not match
+        // `manifest._observability.vmName`. The default test bundle uses
+        // obs vm "obs" and a runner intent for "corp-vm" — a perfect
+        // mismatch case.
         use nixling_core::bundle_resolver::intent_id_runner;
         use nixling_ipc::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
@@ -6233,8 +7443,8 @@ mod tests {
             tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
         });
         let expected_request_fields = request_fields_value(&request).expect("request fields");
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 5152, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
+            .expect("audit context");
 
         let error = dispatch_request_with_backend(
             request,
@@ -6316,10 +7526,12 @@ mod tests {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("missing"),
             signal: RunnerSignal::Term,
+            pid: None,
+            expected_start_time_ticks: None,
             tracing_span_id: None,
         });
-        let audit_context =
-            DispatchAuditContext::from_request(&request, 5151, &caller_role).expect("audit context");
+        let audit_context = DispatchAuditContext::from_request(&request, 5151, &caller_role)
+            .expect("audit context");
 
         let error = dispatch_request_with_backend(
             request,
@@ -6362,7 +7574,7 @@ mod tests {
 
         let intent = find_usbip_bind_intent_for(&bundle.resolver, "corp-vm", "1-2.3")
             .expect("bundle usbip bind intent");
-        let err = enforce_usbip_allowlist(intent, &sysfs_root)
+        let err = enforce_usbip_allowlist(&intent, &sysfs_root)
             .expect_err("device outside allowlist must be rejected");
         match err {
             BrokerError::UsbipDeviceNotAllowed {
@@ -6376,6 +7588,24 @@ mod tests {
             }
             other => panic!("expected UsbipDeviceNotAllowed, got {other:?}"),
         }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn usbip_static_busid_owner_is_global_authority() {
+        let root = test_audit_dir("usbip-static-owner");
+        let bundle = build_test_bundle(&root);
+
+        assert_eq!(
+            static_usbip_busid_owner(&bundle.resolver, "1-2.3").as_deref(),
+            Some("corp-vm")
+        );
+        assert!(
+            find_wildcard_usbip_bind_intent_for(&bundle.resolver, "other-vm", "1-2.3").is_none(),
+            "wildcard fallback must not claim a statically assigned busid"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6509,5 +7739,221 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&audit_dir);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    mod reap_tests {
+        use super::*;
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+        use nixling_ipc::broker_wire::{ChildExitKind, ChildExitStatus, ChildReapedNotification};
+        use std::process::Command;
+        use std::sync::{Mutex, MutexGuard, OnceLock};
+        use std::time::{Duration, Instant};
+
+        struct ReapTestGuard {
+            _lock: MutexGuard<'static, ()>,
+        }
+
+        impl ReapTestGuard {
+            fn new() -> Self {
+                static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+                let lock = LOCK
+                    .get_or_init(|| Mutex::new(()))
+                    .lock()
+                    .expect("reap test lock");
+                clear_reap_state();
+                Self { _lock: lock }
+            }
+        }
+
+        impl Drop for ReapTestGuard {
+            fn drop(&mut self) {
+                clear_reap_state();
+            }
+        }
+
+        fn clear_reap_state() {
+            let _ = drain_child_reap_buffer();
+            if let Ok(mut registry) = runner_pidfd_registry().lock() {
+                registry.clear();
+            }
+        }
+
+        fn start_test_reaper(test_name: &str) -> tokio::runtime::Runtime {
+            let audit_dir = test_audit_dir(test_name);
+            fs::create_dir_all(&audit_dir).expect("create reap audit dir");
+            let audit_log = AuditLog::open(&audit_dir, Gid::current().as_raw(), true, 0)
+                .expect("open reap audit log");
+            let rt = start_sigchld_reaper(Arc::new(audit_log));
+            std::thread::sleep(Duration::from_millis(50));
+            rt
+        }
+
+        fn wait_for_notification(
+            runner_id: &str,
+            timeout: Duration,
+        ) -> Option<ChildReapedNotification> {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                let found = child_reap_buffer()
+                    .lock()
+                    .expect("child_reap_buffer lock")
+                    .iter()
+                    .find(|n| n.runner_id == runner_id)
+                    .cloned();
+                if found.is_some() {
+                    return found;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            None
+        }
+
+        #[test]
+        fn reap_loop_processes_exited_child() {
+            let _guard = ReapTestGuard::new();
+            let _rt = start_test_reaper("reap-exited-child");
+
+            let child = Command::new("sleep")
+                .arg("1")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:test-role-{pid}");
+            {
+                let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .insert(runner_id.clone(), pidfd);
+            }
+            std::mem::forget(child);
+
+            let notif = wait_for_notification(&runner_id, Duration::from_secs(3))
+                .expect("ChildReaped notification should appear within 3 s");
+            assert_eq!(notif.exit_status.kind, ChildExitKind::Exited);
+            assert_eq!(notif.exit_status.code, Some(0));
+        }
+
+        #[test]
+        fn reap_loop_signaled_sigterm() {
+            let _guard = ReapTestGuard::new();
+            let _rt = start_test_reaper("reap-signaled-sigterm");
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:sigterm-{pid}");
+            {
+                let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .insert(runner_id.clone(), pidfd);
+            }
+            kill(Pid::from_raw(pid), Signal::SIGTERM).expect("kill SIGTERM");
+            std::mem::forget(child);
+
+            let notif = wait_for_notification(&runner_id, Duration::from_secs(2))
+                .expect("ChildReaped notification for SIGTERM");
+            assert_eq!(notif.exit_status.kind, ChildExitKind::Signaled);
+            assert_eq!(notif.exit_status.signal, Some(libc::SIGTERM));
+        }
+
+        #[test]
+        fn reap_loop_killed_sigkill() {
+            let _guard = ReapTestGuard::new();
+            let _rt = start_test_reaper("reap-killed-sigkill");
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:sigkill-{pid}");
+            {
+                let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .insert(runner_id.clone(), pidfd);
+            }
+            kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
+            std::mem::forget(child);
+
+            let notif = wait_for_notification(&runner_id, Duration::from_secs(2))
+                .expect("ChildReaped notification for SIGKILL");
+            assert_eq!(notif.exit_status.kind, ChildExitKind::Killed);
+            assert_eq!(notif.exit_status.signal, Some(libc::SIGKILL));
+        }
+
+        #[test]
+        fn reap_loop_concurrent_stress_8_children() {
+            let _guard = ReapTestGuard::new();
+            let _rt = start_test_reaper("reap-concurrent-stress");
+
+            let mut runner_ids = Vec::new();
+            for i in 0..8 {
+                let child = Command::new("sleep")
+                    .arg("1")
+                    .spawn()
+                    .expect("spawn stress child");
+                let pid = child.id() as i32;
+                let runner_id = format!("test-vm:stress-{i}-{pid}");
+                let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+                runner_pidfd_registry()
+                    .lock()
+                    .expect("registry lock")
+                    .insert(runner_id.clone(), pidfd);
+                runner_ids.push(runner_id);
+                std::mem::forget(child);
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let found = child_reap_buffer()
+                    .lock()
+                    .expect("child_reap_buffer lock")
+                    .iter()
+                    .filter(|n| runner_ids.iter().any(|id| id == &n.runner_id))
+                    .count();
+                if found == runner_ids.len() {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    panic!(
+                        "only {found}/{} children reaped within 3 s",
+                        runner_ids.len()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+
+        #[test]
+        fn reap_buffer_overflow_drops_oldest() {
+            let _guard = ReapTestGuard::new();
+
+            for i in 0..=CHILD_REAP_BUFFER_CAP {
+                push_child_reap_notification(ChildReapedNotification {
+                    runner_id: format!("overflow-{i}"),
+                    pid: i as i32,
+                    exit_status: ChildExitStatus {
+                        kind: ChildExitKind::Exited,
+                        code: Some(0),
+                        signal: None,
+                    },
+                    reaped_at_ms: 0,
+                });
+            }
+
+            let drained = drain_child_reap_buffer();
+            assert_eq!(drained.len(), CHILD_REAP_BUFFER_CAP);
+            assert!(!drained.iter().any(|n| n.runner_id == "overflow-0"));
+            assert!(drained.iter().any(|n| n.runner_id == "overflow-256"));
+        }
     }
 }

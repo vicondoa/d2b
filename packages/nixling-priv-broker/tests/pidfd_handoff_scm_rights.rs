@@ -1,4 +1,4 @@
-//! W3 s1 L1c integration: pidfd handoff over `SCM_RIGHTS`.
+//! Integration: pidfd handoff over `SCM_RIGHTS`.
 //!
 //! Drives the broker's existing [`nixling_priv_broker::fd_passing`]
 //! helpers end-to-end against a real `socketpair(SOCK_SEQPACKET)`,

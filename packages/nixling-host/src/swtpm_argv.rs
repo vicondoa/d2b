@@ -1,7 +1,7 @@
-//! W4-H3: swtpm argv generator (UNIX-socket TPM 2.0 backend).
+//! swtpm argv generator (UNIX-socket TPM 2.0 backend).
 //!
 //! `swtpm` is the per-VM software TPM sidecar nixling spawns for VMs
-//! that declare `nixling.vms.<vm>.tpm.enable = true`. The W0b
+//! that declare `nixling.vms.<vm>.tpm.enable = true`. The earlier
 //! runner-shape audit notes that microvm.nix's TPM component passes
 //! the CH TPM socket via `microvm.cloud-hypervisor.extraArgs`, but the
 //! sidecar process is shaped as a standalone systemd unit:
@@ -18,7 +18,7 @@
 //!   --daemon=false
 //! ```
 //!
-//! Plus a pre-start flush invocation per the W3 invariants
+//! Plus a pre-start flush invocation per the process invariants
 //! (`processes::VmProcessInvariants::swtpm_pre_start_flush = true`):
 //!
 //! ```text
@@ -62,9 +62,9 @@ pub struct SwtpmArgvInput {
     pub log_level: u8,
     /// `--pid file=<path>` value; usually `<state_dir>/swtpm.pid`.
     pub pid_path: String,
-    /// `--flags startup-clear` is emitted when this is `true`. Audit
-    /// + W3 invariant: on startup the supervisor runs `swtpm_ioctl -i`
-    ///   first, so the long-lived process boots clean.
+    /// `--flags startup-clear` is emitted when this is `true`. On
+    /// startup the supervisor runs `swtpm_ioctl -i` first, so the
+    /// long-lived process boots clean.
     pub startup_clear: bool,
     /// Free-form additional swtpm args. Caller is responsible for
     /// quoting; each entry is emitted as-is in order at the end.
@@ -74,7 +74,7 @@ pub struct SwtpmArgvInput {
 
 /// All inputs required to render the pre-start
 /// `swtpm_ioctl -i --unix <ctrl-socket>` flush argv. Pairs with the
-/// W3 `VmProcessInvariants::swtpm_pre_start_flush` invariant.
+/// `VmProcessInvariants::swtpm_pre_start_flush` invariant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwtpmIoctlFlushInput {
@@ -183,9 +183,8 @@ pub fn generate_swtpm_argv(input: &SwtpmArgvInput) -> Result<Vec<String>, SwtpmA
     argv.push("--pid".to_owned());
     argv.push(format!("file={}", input.pid_path));
 
-    // swtpm forks by default when it is `socket`-mode; the W4
-    // supervisor controls lifetime via pidfd, so it forces foreground
-    // operation.
+    // swtpm forks by default when it is `socket`-mode; the supervisor
+    // controls lifetime via pidfd, so it forces foreground operation.
     argv.push("--daemon=false".to_owned());
 
     for extra in &input.extra_args {
@@ -267,20 +266,17 @@ mod tests {
         }
     }
 
-    /// P1 byte-parity oracle for the long-lived swtpm argv.
+    /// Byte-parity oracle for the long-lived swtpm argv.
     ///
     /// The golden file `tests/golden/runner-shape/swtpm-argv-minimal.txt`
     /// contains a leading comment block (lines starting with `#`)
     /// followed by the argv vector joined by `'\n'`, one argument per
     /// line. This test strips the comment block and asserts byte-parity
-    /// with the live generator output, locking the shape the
-    /// `ph1-p1-swtpm-persistence` validator and the minijail profile
-    /// downstream reason about.
+    /// with the live generator output, locking the shape the persistence
+    /// validator and the minijail profile downstream reason about.
     #[test]
     fn audit_swtpm_input_parity_golden() {
-        let golden = include_str!(
-            "../../../tests/golden/runner-shape/swtpm-argv-minimal.txt"
-        );
+        let golden = include_str!("../../../tests/golden/runner-shape/swtpm-argv-minimal.txt");
         let expected: String = golden
             .lines()
             .filter(|l| !l.starts_with('#'))

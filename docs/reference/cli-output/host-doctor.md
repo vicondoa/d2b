@@ -2,8 +2,8 @@
 
 Schema: [`host-doctor.schema.json`](./host-doctor.schema.json)
 
-P3 `host doctor` is intentionally **read-only**. The JSON report layers a
-structured `checks[]` array on top of the legacy P2 fields
+`host doctor` is intentionally **read-only**. The JSON report layers a
+structured `checks[]` array on top of the legacy fields
 (`broker_ready`, `findings`, `summary`, `exitCode`) so existing parsers
 keep working while operators get richer postmortem signal.
 
@@ -13,11 +13,11 @@ keep working while operators get richer postmortem signal.
 | -------------- | ------------------ | ---------------------------------------------------------------------------------------------- | -------------------------- |
 | `command`      | string             | Always `"host doctor"`.                                                                        | Stable wire contract.      |
 | `mode`         | string             | Always `"read-only"`.                                                                          | Stable wire contract.      |
-| `broker_ready` | boolean            | Backward-compat alias: `true` iff the `broker-ready` check passed.                             | Stable (P2 carry-over).    |
-| `findings[]`   | array of strings   | Human-readable summary lines for every non-pass check; preserved for legacy log scrapers.      | Stable (P2 carry-over).    |
+| `broker_ready` | boolean            | Backward-compat alias: `true` iff the `broker-ready` check passed.                             | Stable legacy carryover.   |
+| `findings[]`   | array of strings   | Human-readable summary lines for every non-pass check; preserved for legacy log scrapers.      | Stable legacy carryover.   |
 | `summary`      | object             | `{pass, warn, fail}` counts across all `checks[]` rows.                                        | Stable wire contract.      |
 | `exitCode`     | integer            | `0` clean / `1` any warn / `2` any fail; usage errors still exit `78` with the typed envelope. | Stable wire contract.      |
-| `checks[]`     | array of check rows | Structured per-check payload (see below). New in P3.                                           | Stable wire contract (P3). |
+| `checks[]`     | array of check rows | Structured per-check payload (see below).                                                       | Stable wire contract.      |
 
 ## Check rows
 
@@ -28,7 +28,7 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 | ------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
 | `broker-ready`            | Connects to the broker `SOCK_SEQPACKET` socket (default `/run/nixling/broker.sock`).                       | `pass` on accept; `fail` on connect error (broker is the privileged dispatch path).         | `socket`                                                     |
 | `daemon-ready`            | Connects to the public daemon socket (default `/run/nixling/public.sock`).                                 | `pass` on accept; `warn` on connect error (degraded but doctor is best-effort).             | `socket`                                                     |
-| `metrics-endpoint`        | Loopback HTTP GET against the Prometheus scrape URL (default `http://127.0.0.1:9101/metrics`).             | `pass` on `200`; `warn` on non-200 / unreachable / non-loopback URL.                        | `url`, `status` (optional)                                   |
+| `metrics-endpoint`        | Loopback HTTP GET against the Prometheus scrape URL (default `http://127.0.0.1:9101/metrics`).             | `pass` on `200`; `warn` on non-200 / unreachable / non-loopback URL. **v1.2 status:** scrapable endpoint deferred to a later release (see [`daemon-metrics.md`](../daemon-metrics.md)); expected to report `warn` in v1.2. | `url`, `status` (optional)                                   |
 | `otel-host-bridge-runner` | Looks for a `role: "otel-host-bridge"` entry in `pidfd-table.json`.                                        | `pass` when ≥1 entry; `warn` when absent (observability is optional).                       | `count`, `entries[]`                                         |
 | `usbipd-runners`          | Counts `role: "usbip"` entries (one per env that owns USB).                                                | `pass` (zero or more); `data.count` + per-runner `vm`/`pid`/`startTimeTicks` snapshot.       | `count`, `entries[]`                                         |
 | `kernel-module-matrix`    | Reads `kernel-module-report.json` written by the daemon on startup.                                       | `pass` clean; `warn` if optional missing or the report file is absent; `fail` if required missing. | `requiredMissing[]`, `optionalMissing[]`                     |

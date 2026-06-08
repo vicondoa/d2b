@@ -37,8 +37,8 @@ for section in '^## Context$' '^## Decision$' '^## Consequences$'; do
     || fail "$adr missing required section matching $section"
 done
 
-# Cross-reference from AGENTS.md (docs-5: ADR must be discoverable
-# from the agent-operating manual).
+# Cross-reference from AGENTS.md (ADR must be discoverable from the
+# agent-operating manual).
 grep -qE '0015-daemon-only-clean-break\.md' "$agents" \
   || fail "AGENTS.md does not cross-reference 0015-daemon-only-clean-break.md"
 

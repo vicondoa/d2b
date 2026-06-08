@@ -1,4 +1,4 @@
-//! W4-H8: `[pending restart]` machinery for the daemon binary.
+//! `[pending restart]` machinery for the daemon binary.
 //!
 //! On startup the daemon writes a [`DaemonVersionFile`] to
 //! `/run/nixling/version` recording the running binary's version,

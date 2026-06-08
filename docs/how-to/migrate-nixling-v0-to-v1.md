@@ -33,10 +33,10 @@ architectural decision. The short version:
 - The bash CLI (`nixling-legacy` / `share/nixling/cli.sh` / the
   `cli.nix` builder) is deleted. The Rust `nixling` binary is the
   only CLI surface.
-- The W14c bash fallback bridge inside the Rust CLI is removed; so
-  is `NIXLING_LEGACY_BASH_OPT_IN` / `NIXLING_LEGACY_CLI`.
+- The bash fallback bridge inside the Rust CLI is removed; so is
+  `NIXLING_LEGACY_BASH_OPT_IN` / `NIXLING_LEGACY_CLI`.
   `NIXLING_NATIVE_ONLY` is preserved as a no-op for back-compat.
-- The polkit allowlist for per-VM units is retired; `nixling-launchers`
+- The polkit allowlist for per-VM units is retired; `nixling`
   group membership + `SO_PEERCRED` on `public.sock` is the only
   lifecycle authorisation surface.
 - The manifest contract bumps from `manifestVersion: 2` to
@@ -48,29 +48,29 @@ There is **no deprecation window**. v0.5 was skipped; the v0.4.x →
 v1.0.0 boundary deletes every legacy surface in one cut. Operators
 who skip this guide will see runtime `manifest-version-mismatch`
 errors. (The `supervisor` option's v1.0-intended eval-time
-assertion is **scheduled for v1.1-P2** per ADR 0015 § Decision and
-the v1.1 plan; v1.0 retains the option for backward-compat with
+assertion is **scheduled for v1.1** per ADR 0015 § Decision; v1.0
+retains the option for backward-compat with
 consumer flakes pinning pre-v1.0 manifests.)
 
-## Per-phase deliverable docs
+## Reference docs
 
 These reference docs cover the individual cut-overs in depth; this
 guide cross-links them and gives operators the migration recipe.
 
 - [ADR 0015 — Daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 - [`docs/reference/host-validate.md`](../reference/host-validate.md)
-  — the `nixling host validate` umbrella preflight (P5).
+  — the `nixling host validate` umbrella preflight.
 - [`docs/reference/cli-contract.md`](../reference/cli-contract.md)
   — the post-clean-break Rust CLI surface.
 - [`docs/reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md)
-  — the post-clean-break compatibility table + W18 auto-flip gate.
+  — the post-clean-break compatibility table + default-switch auto-flip gate.
 - [`docs/reference/privileges.md`](../reference/privileges.md) —
   daemon-only broker op catalogue + retired-unit obituary tables.
 - [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md)
   + [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json)
   — manifest v3 contract.
 - [`docs/reference/desktop-wrapper.md`](../reference/desktop-wrapper.md)
-  — daemon-native `.desktop` wrapper contract (P4).
+  — daemon-native `.desktop` wrapper contract.
 - [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
   — daemon DAG executor, pidfd handoff, supervisor reconciliation.
 
@@ -96,8 +96,8 @@ git -C /etc/nixos push --tags    # if your config is in a remote repo
 Bump the nixling input in your `flake.nix` to v1.0.0 **after** you
 have applied every change in §§1–7 below. The `supervisor` option's
 v1.0-intended hard removal + eval-time rejection assertion is
-**scheduled for v1.1-P2** (per ADR 0015 § Decision and the v1.1 plan);
-v1.0 retains the option for backward-compat with consumer flakes
+**scheduled for v1.1** (per ADR 0015 § Decision); v1.0 retains the
+option for backward-compat with consumer flakes
 pinning pre-v1.0 manifests.
 
 ## 1. Manifest v2 → v3
@@ -146,7 +146,7 @@ sudo nixling host validate --apply --wave p2
 ```
 
 The Layer-1 gate `tests/host-validate-verb-eval.sh` covers schema
-parity; the per-wave validator for P2 is
+parity; the per-wave validator for this migration stage is
 `tests/per-vm-state-ownership-eval.sh` +
 `tests/daemon-autostart-eval.sh` + `tests/host-prep-dag-eval.sh`
 (see the per-wave validator map in
@@ -211,8 +211,7 @@ Replace each call with the equivalent Rust verb:
 mutating verb (`--apply-or-dry-run-required`, exit 78). The bash
 verbs accepted neither.
 
-The daemon-native `.desktop` wrappers shipped in P4
-(`ph4-p4-desktop-wrapper`) replace the per-VM
+The daemon-native `.desktop` wrappers replace the per-VM
 `nixling-launch-<vm>.desktop` files `cli.nix` used to generate.
 Operators do not need to regenerate them by hand; the daemon-only
 wrappers ship from `nixos-modules/components/desktop-wrapper.nix`
@@ -249,7 +248,7 @@ If your consumer scripts call `nixling-legacy` you cannot run them
 on a v1.0 system; pin your flake input to v0.4.x until the script
 audit is complete.
 
-## 3. W14c bash fallback removed + `NIXLING_LEGACY_BASH_OPT_IN` no-op
+## 3. Bash fallback removed + `NIXLING_LEGACY_BASH_OPT_IN` no-op
 
 ### Before
 
@@ -287,8 +286,8 @@ sudo grep -rIn \
 
 Remove the env-var setting. If a verb was previously kept working
 only by `NIXLING_LEGACY_BASH_OPT_IN=1`, that verb is now either
-shipped daemon-native (the common case — every P3/P4 lifecycle
-verb landed natively) or it is a legitimate gap to file as an
+shipped daemon-native (the common case — lifecycle verbs landed
+natively) or it is a legitimate gap to file as an
 issue. `NIXLING_NATIVE_ONLY=1` can stay; it does nothing in v1.0
 but it is not an error.
 
@@ -351,22 +350,22 @@ pidfds. The per-VM lifecycle state lives in
 The `nixling.vms.<vm>.supervisor` option is **retained in v1.0
 source** (default `"systemd"`) for backward-compat with consumer
 flakes pinning pre-v1.0 manifests; the v1.0-intended hard
-removal + eval-time rejection assertion is **scheduled for v1.1-P2**
+removal + eval-time rejection assertion is **scheduled for v1.1**
 (see [ADR 0015](../adr/0015-daemon-only-clean-break.md)
-§ Decision and the v1.1 plan). v1.0 consumers should declare every
+§ Decision). v1.0 consumers should declare every
 workload VM as `supervisor = "nixlingd"` and enable
 `nixling.daemonExperimental.enable = true`.
 The polkit per-VM allowlist is retired (see §6 below);
-`nixling-launchers` group membership + `SO_PEERCRED` on
+`nixling` group membership + `SO_PEERCRED` on
 `public.sock` is the only lifecycle authorisation surface.
 
 ### Migration steps
 
 In your consumer `configuration.nix` (or whichever module declares
 your VMs), set every workload VM to `supervisor = "nixlingd"`
-(the v1.0 daemon-only convention per ADR 0015; the option's
-hard removal is scheduled for v1.1-P2 so the v1.0 default
-remains `"systemd"` for backward-compat):
+(the v1.0 daemon-only convention per ADR 0015; the option's hard
+removal is scheduled for v1.1 so the v1.0 default remains
+`"systemd"` for backward-compat):
 
 ```diff
  nixling.vms.work = {
@@ -437,8 +436,8 @@ on any retired unit name reappearing in a `dry-build` output),
 ### Rollback
 
 The `supervisor` option remains live in v1.0 (its hard removal
-is **scheduled for v1.1-P2** per ADR 0015 § Decision and the v1.1
-plan), so an operator can revert individual VMs from
+is **scheduled for v1.1** per ADR 0015 § Decision), so an operator
+can revert individual VMs from
 `supervisor = "nixlingd"` back to `supervisor = "systemd"` without
 a flake rev rollback. For a full rollback to v0.4.x, pin the
 nixling flake input back to v0.4.x and `nixos-rebuild switch
@@ -467,10 +466,10 @@ All five surfaces are gone. Their work moved as follows:
 
 | Retired unit | Replacement |
 | --- | --- |
-| `nixling-net-route-preflight.service` | `nixlingd` startup self-check + `nixling host reconcile --network --apply` (P3 `ph3-p3-net-route-degraded-mode`); typed envelope `net-route-preflight-degraded` (exit 66). |
-| `nixling-audit-check.{service,timer}` | broker `ExportBrokerAudit` op + `nixling host doctor` (P3 `ph3-p3-audit-check-retire`). Doctor's `checks[]` array reports the audit-rotation health. |
-| `nixling-ch-exporter.service` | `nixlingd`'s own Prometheus exposition at `127.0.0.1:9101/metrics` (P3 `ph3-p3-ch-exporter-retire`). |
-| `nixling-otel-host-bridge.service` | broker `SpawnRunner{role: OtelHostBridge}` (P3 `ph3-p3-otel-host-bridge-retire`) — runs as a daemon-supervised runner, not a persistent root service. |
+| `nixling-net-route-preflight.service` | `nixlingd` startup self-check + `nixling host reconcile --network --apply`; typed envelope `net-route-preflight-degraded` (exit 66). |
+| `nixling-audit-check.{service,timer}` | broker `ExportBrokerAudit` op + `nixling host doctor`. Doctor's `checks[]` array reports the audit-rotation health. |
+| `nixling-ch-exporter.service` | `nixlingd`'s own Prometheus exposition at `127.0.0.1:9101/metrics`. |
+| `nixling-otel-host-bridge.service` | broker `SpawnRunner{role: OtelHostBridge}` — runs as a daemon-supervised runner, not a persistent root service. |
 | `microvms.target` | retired with `microvm@<vm>`; the upstream `microvm.autostart` / `systemd.targets.microvms.wants` cascade is suppressed in `host.nix`. |
 
 ### Migration steps
@@ -541,7 +540,7 @@ posture back.
 for every per-VM systemd unit (`nixling@<vm>`,
 `nixling-<vm>-{gpu,snd,swtpm,store-sync}`) and every per-env
 usbipd triplet (`nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`).
-The `nixling-launcher` group plus `org.freedesktop.systemd1.manage-units`
+The `nixling` group plus `org.freedesktop.systemd1.manage-units`
 let operators run `systemctl start/stop/restart` on those units
 without a password.
 
@@ -557,8 +556,8 @@ its paired `nixling-<vm>-snd.service`.
 the JS rule are gone. Per-VM lifecycle flows through
 `public.sock` (`SO_PEERCRED` group check, no polkit in the path).
 
-The `nixling-launcher` group is preserved as the privilege
-boundary for daemon-singleton restarts; the **`nixling-launchers`
+The `nixling` group is preserved as the privilege
+boundary for daemon-singleton restarts; the **`nixling`
 group** (note the plural — declared in `nixos-modules/host-users.nix`)
 is the authorisation surface for the daemon socket.
 
@@ -567,13 +566,13 @@ is the authorisation surface for the daemon socket.
 Audit operator-facing tooling for `systemctl` invocations against
 the retired per-VM / per-env unit names (covered in §4). Make
 sure every operator who currently uses
-`systemctl start nixling@<vm>` is a member of `nixling-launchers`
-(daemon socket access), not just `nixling-launcher` (polkit
+`systemctl start nixling@<vm>` is a member of `nixling`
+(daemon socket access), not just `nixling` (polkit
 singleton restarts):
 
 ```bash
 # Audit launcher-group membership for every operator:
-getent group nixling-launchers
+getent group nixling
 ```
 
 Add operators to the group from your consumer config:
@@ -614,17 +613,17 @@ allowlist names exactly the three daemon-only singletons).
 Same as §4 — the polkit retirement ships in the same release as
 the per-VM template deletion. There is no in-place rollback.
 
-## 7. Final preflight + W18 default-flip
+## 7. Final preflight + default-switch auto-flip
 
 This section follows the canonical *Before / After / Migration steps /
-Validation / Rollback* layout for the W18 flip itself.
+Validation / Rollback* layout for the default-switch auto-flip itself.
 
 ### Before
 
 - `nixling.daemonExperimental.enable` defaults to `false` even though
   every individual breaking change in §§1–6 has landed in the running
   config.
-- The W18 readiness option set
+- The default-switch readiness option set
   (`nixling.defaultSwitchReadiness.<wave>.{implemented,validated}`)
   carries `implemented = true` for every wave that shipped its
   Rust/daemon path, but `validated = false` until an evidence file
@@ -693,7 +692,7 @@ by hand.
 
 ### Rollback
 
-The W18 flip is a default change driven by an evaluator predicate,
+The default-switch auto-flip is a default change driven by an evaluator predicate,
 not a destructive op. Rollback is therefore three orthogonal levers:
 
 ```bash
@@ -738,7 +737,7 @@ last broker audit log under `/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
 
 ## v1.1 deferred verbs and daemon-down rendering pointers
 
-> Operator pointer added in v1.1-P0 to back the typed-envelope
+> Operator pointer added in v1.1 to back the typed-envelope
 > remediation-rendering links from
 > [`docs/reference/error-codes.md`](../reference/error-codes.md)
 > "Remediation rendering conventions". The section covers two
@@ -780,8 +779,8 @@ table":
   unconditionally regardless of daemon state per ADR 0017
   § "Migration target table" line 91 (`lib.rs:1615` early-strict
   arm returns BEFORE socket probing). The strict-audit verb is
-  **NOT** in the v1.1 phase plan implementation set; it retains
-  the typed envelope in v1.1 with the new multi-line
+  **NOT** in the v1.1 implementation set; it retains the typed
+  envelope in v1.1 with the new multi-line
   `Remediation:` block format. Actual operator implementation
   is queued for a future release (v1.2+ or later); there is no
   v1.1 P<N> TDD row for the implementation work.
@@ -825,8 +824,8 @@ sudo cat /var/lib/nixling/audit/broker-$(date -u +%Y-%m-%d).jsonl | jq .
 in v1.0 AND v1.1 unconditionally (v1.1 only delivers the typed-
 envelope rendering + remediation per ADR 0017; the underlying
 per-VM serial-console attach operator implementation is queued
-for v1.2+ unscheduled — not in v1.1 phase plan). The cloud-
-hypervisor VM is running under the broker
+for v1.2+ unscheduled — not in the v1.1 implementation plan). The
+cloud-hypervisor VM is running under the broker
 `SpawnRunner{role: Hypervisor}` per
 [ADR 0018](../adr/0018-microvm-nix-removal.md) Hypervisor row;
 the console socket fd is created by the runner but the
@@ -838,22 +837,22 @@ detach handling) needs more design work.
 `/run/nixling/vms/<vm>/console.sock` (read-only operator
 diagnostic; `socat - UNIX-CONNECT:/run/nixling/vms/<vm>/console.sock`).
 
-**v1.1 plan**: see plan P1 deliverables for the
+**v1.1 plan**: see the v1.1 deliverables for the
 **migration-guide-rendering** lift (the Rust `Display` impl
 update in `packages/nixling-core/src/error/remediation_rendering.rs`
 + golden tests at `tests/golden/cli-output/audit-*-deferred.golden`,
 `console-deferred.golden`, `audio-deferred.golden`,
-`keys-deferred.golden` all land in v1.1-P1 per ADR 0017 +
+`keys-deferred.golden` all land in v1.1 per ADR 0017 +
 CHANGELOG); v1.1 retains the typed `#not-yet-implemented`
 envelope per ADR 0017 + cli-contract.md; the v1.1 change is
 the multi-line `Remediation:` block format pointing at this
 guide section, NOT the verb's actual implementation. The
 console verb's actual implementation (daemon-native serial-
 attach with terminal raw mode, escape sequences, detach
-handling) is **NOT** in the v1.1 phase plan (P1..P13); it is
+handling) is **NOT** in the v1.1 implementation plan; it is
 queued for a future release (v1.2+ or later). There is no
-v1.1 P<N> TDD row for the implementation work; the v1.1
-deliverable is the rendering + remediation contract only.
+v1.1 TDD row for the implementation work; the v1.1 deliverable is
+the rendering + remediation contract only.
 
 <a id="v11-deferred-verbs-audio"></a>
 ### `nixling audio` (truly deferred — operator CLI implementation queued for v1.2+ unscheduled)
@@ -862,8 +861,8 @@ deliverable is the rendering + remediation contract only.
 `#not-yet-implemented` (exit 78) in v1.0 AND v1.1 unconditionally
 (v1.1 only delivers the typed-envelope rendering + remediation
 per ADR 0017; the underlying per-VM audio device-state mutation
-CLI surface is queued for v1.2+ unscheduled — not in v1.1 phase
-plan). The `SpawnRunner{role: Audio}` (per
+CLI surface is queued for v1.2+ unscheduled — not in the v1.1
+implementation plan). The `SpawnRunner{role: Audio}` (per
 [ADR 0018](../adr/0018-microvm-nix-removal.md)) IS in the
 v1.1 role matrix (gated by `audio.enable = true` in the
 manifest, runs automatically when audio-enabled VMs start) but
@@ -876,12 +875,12 @@ per [`docs/reference/components-audio.md`](../reference/components-audio.md));
 runtime toggling via `nixling audio mic|speaker|off` is not
 exposed in v1.0.
 
-**v1.1 plan**: see plan P10 deliverables for the
+**v1.1 plan**: see the v1.1 deliverables for the
 **SpawnRunner Audio role** implementation that the mic/speaker/off
 subverbs depend on (per ADR 0018 § "Disposition matrix" Audio
 row). The role lands; the operator-facing CLI subverbs
 (`nixling audio mic|speaker|off`) themselves are **NOT** in the
-v1.1 phase plan implementation set — they retain the typed
+v1.1 implementation set — they retain the typed
 `#not-yet-implemented` envelope (exit 78) in v1.1 per ADR 0017
 + cli-contract.md, with the v1.1 multi-line `Remediation:` block
 pointing at this guide section. The audio CLI subverbs' actual

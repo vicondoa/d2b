@@ -156,9 +156,9 @@ Before you publish an addon release:
 - show the `nixling.vms.<vm>.config.imports` seam in the README;
 - keep at least one eval-only test in CI.
 
-## W3 host-prepare: addon hook contract
+## Host-prepare addon hook contract
 
-W3 introduces a privileged broker that the daemon uses to reconcile
+Host prepare uses a privileged broker that the daemon uses to reconcile
 host state (cgroup delegation, bridges/TAPs, NetworkManager
 unmanaged config, `/etc/hosts` managed block, `inet nixling`
 nftables table, per-link sysctls, `modprobe`, device-node opens).
@@ -167,7 +167,7 @@ ship a privileged systemd service that mutates any of those host
 surfaces directly. Instead:
 
 - If an addon needs a kernel module loaded, declare it in the
-  consumer-side `nixling.site.modules` allow-list so the W3 module
+  consumer-side `nixling.site.modules` allow-list so the module
   matrix can audit and probe it via the `ModprobeIfAllowed` broker
   variant (ADR 0014). Do not ship a `boot.kernelModules` entry that
   silently bypasses the matrix.
@@ -190,9 +190,9 @@ surfaces directly. Instead:
 If your addon legitimately cannot be expressed inside the closed
 broker enum, open an issue: extending the enum is an explicit
 panel-gated decision (ADR-required), and a privileged sidecar that
-bypasses the broker would silently weaken the W3 trust boundary
-described in [`SECURITY.md`](../../SECURITY.md) § W3 trust-boundary
-delta.
+bypasses the broker would silently weaken the host-prepare trust
+boundary described in [`SECURITY.md`](../../SECURITY.md) §
+host-prepare trust-boundary delta.
 
 See [`docs/reference/privileges.md`](../reference/privileges.md) for
 the full broker operation matrix and

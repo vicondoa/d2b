@@ -1,19 +1,17 @@
 # Default switch and deprecation — historical record
 
-> **Status: historical record.** Nixling shipped the
-> daemon-experimental rollout as a multi-stage "default switch +
-> bash deprecation cycle" through W10, W14c, and W18. That rollout
-> is closed. P5 [`ph5-w18-flip`] flipped the default and P6 deletes
-> the legacy bash CLI and per-VM systemd templates outright as a
-> clean break, not via a deprecation cycle. See
+> **Status: historical record.** The daemon-experimental rollout this
+> page describes is closed. `nixling.daemonExperimental.enable` now
+> flips through the evidence gate, the bash CLI is gone, and there
+> are no framework-declared per-VM lifecycle templates. See
 > [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 > for the rationale, alternatives considered, consequences, and
 > rollback limits.
 >
 > This page is preserved because (a) historical CHANGELOG entries
-> link to it, (b) the W18 auto-flip gate semantics it documents
-> still drive how `nixling.daemonExperimental.enable` resolves on
-> fresh consumer hosts, and (c) the "why we did NOT keep a bash
+> link to it, (b) the auto-flip gate semantics it documents still
+> drive how `nixling.daemonExperimental.enable` resolves on fresh
+> consumer hosts, and (c) the "why we did NOT keep a bash
 > coexistence path" framing is easier to read against the rollout
 > shape that came before it.
 >
@@ -23,11 +21,9 @@
 > [`../reference/cli-contract.md`](../reference/cli-contract.md)
 > (authoritative CLI contract).
 
-[`ph5-w18-flip`]: ../adr/0015-daemon-only-clean-break.md
-
 ## What was deprecated, and what replaced it
 
-| Concept (historical) | Replaced by (post P5 / P6) |
+| Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
 | `nixling.daemonExperimental.enable = false` as the shipped default | Auto-flip to `true` once the W18 flip-gate subset is green (see below). Explicit operator override in either direction still wins. |
 | W14c three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after P6. |

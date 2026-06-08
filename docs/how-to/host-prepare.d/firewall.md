@@ -1,7 +1,6 @@
-# Host firewall coexistence (W3 s3)
+# Host firewall coexistence
 
-Fragment owned by W3 scope s3. The integrator assembles this into
-`docs/how-to/host-prepare.md`.
+This fragment is included in `docs/how-to/host-prepare.md`.
 
 This document is the operator how-to for the `inet nixling` named
 table that the privileged broker reconciles during `nixling host
@@ -47,8 +46,8 @@ To use nixling on a firewalld host, either:
 
 1. Stop firewalld (`systemctl disable --now firewalld`) and re-run
    `nixling host prepare --apply`; or
-2. Wait for the W3fu ADR that defines an explicit firewalld zone
-   carve-out path. Until that lands, nixling fails closed.
+2. Replace firewalld with a firewall setup where nixling owns
+   `inet nixling`; otherwise nixling fails closed.
 
 ### Ubuntu (ufw)
 
@@ -59,17 +58,18 @@ shadows `inet nixling`'s `forward` chain.
 To use nixling on a ufw host:
 
 1. `ufw disable` and re-run `nixling host prepare --apply`; or
-2. (W3fu) opt into the carve-out override; until then the host check
-   refuses.
+2. Replace ufw with a firewall setup where nixling owns `inet
+   nixling`; otherwise the host check refuses.
 
 ### Mixed Docker / libvirt setups
 
 Default policy: **require-unmanaged**. Both Docker and libvirt write
 their own `filter`/`nat` chains. Nixling will install `inet nixling`
 alongside them but requires an explicit
-`/etc/nixling/firewall.coexist-with-{docker,libvirt}.toml` marker (W3
-host check enforces this) so the operator has acknowledged the
-forward-path arbitration that follows. The forward path is verified
+`/etc/nixling/firewall.coexist-with-{docker,libvirt}.toml` marker so
+the operator has acknowledged the forward-path arbitration that
+follows. The host check enforces that marker, and the forward path is
+verified
 on every VM start via the post-apply `nft list table inet nixling -j`
 re-hash; drift fails closed with `inet-nixling-drift`.
 
@@ -97,12 +97,11 @@ digest stored in the bundle's `host.json`. Mismatches fail closed with
 
 ## USBIP firewall carve-out
 
-When a VM is configured for USBIP passthrough, `UsbipBindFirewallRule`
-adds a per-busid source-based carve-out to `inet nixling`'s `forward`
-chain BEFORE the generic allow/drop. This is **firewall-only**; live
-USBIP device routing (`UsbipBind`, `UsbipUnbind`,
-`UsbipProxyReconcile`) is W6 scope and is refused at W3 with
-`unknown-operation`.
+When a VM is configured for USBIP passthrough,
+`UsbipBindFirewallRule` adds a per-busid source-based carve-out to
+`inet nixling`'s `forward` chain BEFORE the generic allow/drop.
+This is **firewall-only**; the USBIP attach/detach flow is handled
+separately from this firewall carve-out.
 
 ## Troubleshooting
 

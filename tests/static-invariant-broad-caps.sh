@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W1 static invariant: broad capabilities require explicit caps + ADR row.
+# Broad capabilities require explicit caps + ADR row.
 
 set -euo pipefail
 

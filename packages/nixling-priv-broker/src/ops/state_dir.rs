@@ -1,9 +1,9 @@
-//! `PrepareStateDir` + `PrepareRuntimeDir` (W3 s2).
+//! `PrepareStateDir` + `PrepareRuntimeDir`.
 //!
-//! Fd-based `fchown`/`fchmod` analogue. Path safety same as
-//! `hosts.rs`. Audit fields per plan.md §2287-2289:
-//! `base_dir_hash`, `vm_id_or_scope`, `created_paths_hash`, `mode`,
-//! `owner_uid`, `owner_gid`, `replace_or_create_result`.
+//! Fd-based `fchown`/`fchmod` analogue. Path safety same as `hosts.rs`.
+//! Audit fields: `base_dir_hash`, `vm_id_or_scope`,
+//! `created_paths_hash`, `mode`, `owner_uid`, `owner_gid`,
+//! `replace_or_create_result`.
 
 use crate::ops::exec_reconcile::SystemLiveExec;
 use crate::ops::hosts::stable_hash_str;
@@ -56,10 +56,9 @@ pub enum ReplaceOrCreateResult {
 }
 
 pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
-    // Refuse non-root parent for production paths (matches plan
-    // §"W3 /run/nixling atomic state invariants"). Tests pass a
-    // scratch base_dir so the refuse_non_root_parent guard is wired
-    // via the `enforce_root_parent` knob below.
+    // Refuse non-root parent for production paths. Tests pass a scratch
+    // base_dir so the refuse_non_root_parent guard is wired via the
+    // `enforce_root_parent` knob below.
     if production_path(&req.base_dir) {
         crate::sys::path_safe::refuse_non_root_parent(&req.base_dir)?;
     }

@@ -1,6 +1,5 @@
-//! P3 prometheus-otlp shape: daemon metrics registry + Prometheus
-//! text-format exposition for `GET /metrics` on the daemon's public
-//! socket.
+//! Daemon metrics registry + Prometheus text-format exposition for
+//! `GET /metrics` on the daemon's public socket.
 //!
 //! Why a hand-rolled registry rather than the `prometheus` crate:
 //! the daemon-only worktree has no other consumer of the crate, the
@@ -161,6 +160,7 @@ struct RegistryInner {
 /// metric volume is low (one increment per broker request, one
 /// observation per VM start) and the lock is never held across
 /// `await` points.
+#[derive(Debug)]
 pub struct Registry {
     inner: Mutex<RegistryInner>,
     started_at: Instant,
@@ -263,11 +263,7 @@ impl Registry {
                 }
                 MetricKind::Gauge => {
                     if d.name == "nixling_daemon_uptime_seconds" {
-                        out.push_str(&format!(
-                            "{} {}\n",
-                            d.name,
-                            render_float(uptime)
-                        ));
+                        out.push_str(&format!("{} {}\n", d.name, render_float(uptime)));
                         continue;
                     }
                     for ((_, labels), s) in g.gauges.iter().filter(|((n, _), _)| *n == d.name) {
@@ -325,6 +321,19 @@ impl Default for Registry {
     }
 }
 
+pub fn record_broker_request(registry: &Registry, op: &'static str, outcome: &'static str) {
+    match (op, outcome) {
+        ("SignalRunner", "broker-fallback") => registry.counter_inc(
+            "nixling_daemon_broker_request_total",
+            &[("op", "SignalRunner"), ("outcome", "broker-fallback")],
+        ),
+        _ => registry.counter_inc(
+            "nixling_daemon_broker_request_total",
+            &[("op", op), ("outcome", outcome)],
+        ),
+    }
+}
+
 fn help_text(name: &str) -> &'static str {
     match name {
         "nixling_daemon_vm_state" => "Per-VM lifecycle state (running/stopped/degraded).",
@@ -340,12 +349,8 @@ fn help_text(name: &str) -> &'static str {
         "nixling_daemon_broker_request_duration_seconds" => {
             "Round-trip latency of a single broker request."
         }
-        "nixling_daemon_ownership_drift_total" => {
-            "Per-VM ownership-preflight drift detections."
-        }
-        "nixling_daemon_ssh_host_key_drift_total" => {
-            "Per-VM SSH host-key drift detections."
-        }
+        "nixling_daemon_ownership_drift_total" => "Per-VM ownership-preflight drift detections.",
+        "nixling_daemon_ssh_host_key_drift_total" => "Per-VM SSH host-key drift detections.",
         "nixling_daemon_pidfd_table_size" => "Live pidfd entries held by the supervisor.",
         "nixling_daemon_uptime_seconds" => "Seconds since the daemon process started.",
         _ => "",
@@ -422,10 +427,9 @@ pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
 }
 
 /// Variant of [`metrics_handler`] that, after rendering the
-/// daemon-internal `nixling_daemon_*` registry, appends the
-/// per-VM Cloud Hypervisor stats produced by [`crate::ch_stats`].
-/// P3 ph3-p3-ch-exporter-retire: this is the seam that lets the
-/// daemon replace the legacy `nixling-ch-exporter.service`
+/// daemon-internal `nixling_daemon_*` registry, appends the per-VM
+/// Cloud Hypervisor stats produced by [`crate::ch_stats`]. This is the
+/// seam that lets the daemon replace the legacy `nixling-ch-exporter.service`
 /// singleton — same metric names (`nixling_vm_ch_api_up`,
 /// `nixling_vm_state`, `nixling_vm_running`), bounded
 /// `{vm, env, role}` cardinality, no separate listener.
@@ -534,6 +538,16 @@ mod tests {
     }
 
     #[test]
+    fn record_broker_request_accepts_signal_runner_broker_fallback() {
+        let r = Registry::new();
+        record_broker_request(&r, "SignalRunner", "broker-fallback");
+        let body = r.render();
+        assert!(body.contains(
+            "nixling_daemon_broker_request_total{op=\"SignalRunner\",outcome=\"broker-fallback\"} 1"
+        ));
+    }
+
+    #[test]
     fn histogram_emits_buckets_sum_and_count() {
         let r = Registry::new();
         r.histogram_observe(
@@ -548,7 +562,8 @@ mod tests {
         assert!(body.contains(
             "nixling_daemon_broker_request_duration_seconds_bucket{op=\"OpenPidfd\",le=\"+Inf\"} 1"
         ));
-        assert!(body.contains("nixling_daemon_broker_request_duration_seconds_count{op=\"OpenPidfd\"} 1"));
+        assert!(body
+            .contains("nixling_daemon_broker_request_duration_seconds_count{op=\"OpenPidfd\"} 1"));
     }
 
     #[test]
@@ -625,9 +640,7 @@ mod tests {
         assert!(s.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(s.contains("# TYPE nixling_daemon_uptime_seconds gauge"));
         assert!(s.contains("# TYPE nixling_vm_ch_api_up gauge"));
-        assert!(s.contains(
-            "nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"
-        ));
+        assert!(s.contains("nixling_vm_ch_api_up{vm=\"corp-vm\",env=\"work\",role=\"workload\"} 0"));
     }
 
     #[test]

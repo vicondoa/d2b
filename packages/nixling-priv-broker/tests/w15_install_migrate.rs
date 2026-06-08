@@ -306,7 +306,7 @@ fn bundle_resolver_unavailable_returns_typed_error() {
             operation: "BundleResolver".to_owned(),
             target_wave: Some("W12".to_owned()),
             message: "Broker started without a loadable bundle at ServerConfig.bundle_path. Bundle-dependent real-wire ops cannot resolve their BundleOpId refs.".to_owned(),
-            action: "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and restart the broker.".to_owned(),
+            action: "Land the bundle at /var/lib/nixling/current-bundle/manifest.json (or pass --bundle-path) and retry; the broker reloads the bundle on the next request.".to_owned(),
         })
     );
 }

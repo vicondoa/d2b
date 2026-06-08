@@ -2,7 +2,7 @@
 
 This is the current Fedora Tier-1-later / best-effort manual install path.
 Like the Ubuntu walkthrough, it is a scaffold-oriented guide for the current
-W15 host-install flow rather than a polished GA installer.
+host-install flow rather than a polished GA installer.
 
 ## 1. Install Fedora prerequisites
 

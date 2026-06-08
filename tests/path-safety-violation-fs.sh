@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/path-safety-violation-fs.sh — W3 s2 L1c canary matrix.
+# tests/path-safety-violation-fs.sh— canary matrix.
 #
-# Covers `path-safety-violation` on every W3 s2 filesystem-mutating op:
+# Covers `path-safety-violation` on every s2 filesystem-mutating op:
 #
 #   - UpdateHostsFile
 #   - ApplyNmUnmanaged
@@ -71,15 +71,14 @@ log "   (parent intentionally 0777; refuse_world_writable_parent must reject)"
 # `refuse_world_writable_parent`. The shell scaffolding stays so
 # operators can extend it locally with `sudo -E bash $0`.
 
-# W3fu1 H4 (test-5): symlink-swap canaries on the W3 broker
+# Symlink-swap canaries on the broker
 # filesystem-mutating ops the prior matrix only exercised indirectly.
 # Each canary creates a hostile symlink at the target / parent and
 # asserts the broker refuses with `path-safety-violation` AND emits an
 # `OpAuditRecord` entry. The Rust test layer in nixling-priv-broker
 # (`#[cfg(any(test, feature = "fake-backends"))]` test_harness mods)
 # owns the assertion bodies; this shell wrapper is best-effort because
-# H1 owns the broker runtime and the broker may not compile at every
-# W3 follow-up cut.
+# the broker runtime may not compile in every validation cut.
 log " - DelegateCgroupV2: symlink swap on chown target refused (Rust test_harness)"
 log " - ApplyNmUnmanaged: symlink swap on conf.d drop-in refused (Rust test_harness)"
 log " - PrepareStateDir: symlink swap on state-dir parent refused (Rust test_harness)"

@@ -1,7 +1,7 @@
 # Desktop wrapper contract
 
-**Status:** stable as of P4 (`ph4-p4-desktop-wrapper`).
-**Owner:** the pre-P6 `nixos-modules/cli.nix` (`vmLaunchScript` + `vmLaunchContract`) was retired in P6 per ADR 0015; the v1.0 launcher is the Rust CLI at `packages/nixling/src/lib.rs`, dispatched through `nixlingd` → broker.
+**Status:** stable.
+**Owner:** the legacy `nixos-modules/cli.nix` (`vmLaunchScript` + `vmLaunchContract`) was retired in v1.0 per ADR 0015; the v1.0 launcher is the Rust CLI at `packages/nixling/src/lib.rs`, dispatched through `nixlingd` → broker.
 **Test gate:** [`tests/desktop-wrapper-contract-eval.sh`](../../tests/desktop-wrapper-contract-eval.sh).
 **Schema version:** `1`.
 
@@ -32,9 +32,9 @@ of the store.
 | --- | --- | --- |
 | `schemaVersion` | `1` | Bumped only when this table changes. |
 | `vm` | `"<vm>"` | Identity. |
-| `execProgram` | `${nixling}/bin/nixling` (the Rust CLI) | The legacy bash CLI was retired in P6 per ADR 0015; the wrapper MUST point at the Rust binary. |
-| `execArgv` | `[ "vm" "start" "<vm>" "--apply" ]` | The daemon-native lifecycle verb introduced in P4 (`ph4-cli-up`). Replaces `nixling vm start <vm> -d`. |
-| `execEnv.NIXLING_NATIVE_ONLY` | `"1"` | (Pre-P6 framing.) In v1.0 (per ADR 0015) the daemon path is the default and the W14c bash fallback was retired in P6; the env var is a no-op. The wrapper still sets it for historical traceability with pre-v1.0 desktop entries. |
+| `execProgram` | `${nixling}/bin/nixling` (the Rust CLI) | The legacy bash CLI was retired in v1.0 per ADR 0015; the wrapper MUST point at the Rust binary. |
+| `execArgv` | `[ "vm" "start" "<vm>" "--apply" ]` | The daemon-native lifecycle verb. Replaces `nixling vm start <vm> -d`. |
+| `execEnv.NIXLING_NATIVE_ONLY` | `"1"` | In v1.0 (per ADR 0015) the daemon path is the default and the bash fallback was retired in v1.0; the env var is a no-op. The wrapper still sets it for historical traceability with pre-v1.0 desktop entries. |
 | `outputMode` | `"json"` | `nixling vm start --apply --json` emits the typed envelope so failures are parseable. |
 | `waitForHostCompositor` | `true` | Wrapper waits up to 30 s for the host `$WAYLAND_DISPLAY` socket before invoking the daemon. The GPU sidecar's cross-domain bind-mount target must exist when the runner starts. |
 | `hostCompositorSocketEnv` | `"WAYLAND_DISPLAY"` | The env var the wrapper resolves to find the host compositor's socket under `$XDG_RUNTIME_DIR`. |
@@ -65,7 +65,7 @@ of the store.
    slightly behind on cold starts.
 4. **Wait for SSH.** Probes `<sshUser>@<staticIp>` with the per-VM
    key (copied to a 0600 tempfile because the source is 0640
-   `root:nixling-launcher`). Classifies failure into "host key
+   `root:nixling`). Classifies failure into "host key
    mismatch" vs "not reachable" and surfaces the right remediation
    via `notify-send`.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole

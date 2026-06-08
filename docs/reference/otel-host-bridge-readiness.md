@@ -1,16 +1,16 @@
 # OtelHostBridge readiness gate
 
-Status: **P3 `ph3-p3-otelbridge-readiness`** — implemented.
+Status: canonical.
 
 ## What this gate is
 
-The P1 work folded the legacy `nixling-otel-host-bridge.service`
-host singleton into a broker-`SpawnRunner` lifecycle under
-`RunnerRole::OtelHostBridge`. The broker can now spawn the
-forwarder per the trusted bundle's intent, and `pidfd_table`
-tracks its liveness — but until this gate landed there was no
-*formal readiness* signal the daemon could block on before
-declaring an observability VM "ready".
+The legacy `nixling-otel-host-bridge.service` host singleton has
+been replaced by a broker-`SpawnRunner` lifecycle under
+`RunnerRole::OtelHostBridge`. The broker can spawn the forwarder
+per the trusted bundle's intent, and `pidfd_table` tracks its
+liveness — but without this gate there would be no *formal
+readiness* signal the daemon could block on before declaring an
+observability VM "ready".
 
 Without a readiness gate the daemon would report `overall_ok=true`
 for the obs VM the moment the per-VM process DAG settled, even if
@@ -104,8 +104,7 @@ start.
 
 ## Remediation
 
-- Inspect `nixling host doctor` (P3
-  `ph3-p3-host-doctor-extended`) for the OtelHostBridge runner's
+- Inspect `nixling host doctor` for the OtelHostBridge runner's
   pidfd liveness + last-relay-flush timestamp.
 - If the runner is missing entirely, the broker `SpawnRunner` for
   `RunnerRole::OtelHostBridge` failed — inspect the broker audit

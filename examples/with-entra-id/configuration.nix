@@ -36,7 +36,7 @@
     # too, in which case waylandUser is mandatory.
     waylandUser = "alice";
 
-    # Members of `nixling-launcher` can run `nixling vm start/stop/...`
+    # Members of `nixling` can run `nixling vm start/stop/...`
     # without password prompts via polkit. The framework adds the
     # group; you still declare the user above.
     launcherUsers = [ "alice" ];

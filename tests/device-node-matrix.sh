@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# W3 s4 L1c canary: device-node matrix mode/group/ACL validators + Open*
+# Canary: device-node matrix mode/group/ACL validators + Open*
 # pre-open decision + SCM_RIGHTS fd return.
 #
 # Drives nixling-host::devices and nixling-priv-broker::ops::device. The
 # fd-passing layer itself is already exercised by tests/broker-scm-rights-
-# fd-lifecycle.sh (W2 gate); this canary focuses on the typed device
+# fd-lifecycle.sh (gate); this canary focuses on the typed device
 # matrix decisions.
 
 set -euo pipefail
