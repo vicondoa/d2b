@@ -40,6 +40,12 @@ use std::path::{Path, PathBuf};
 /// for a single integer constant.
 const EXDEV: i32 = 18;
 
+/// `EMLINK` ("Too many links") errno. `link(2)` returns this when the
+/// source inode is already at the filesystem's maximum hardlink count
+/// (ext4 `EXT4_LINK_MAX` = 65000). Defined locally for the same reason
+/// as [`EXDEV`].
+const EMLINK: i32 = 31;
+
 /// Errors the hardlink-farm primitives can return.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
@@ -348,21 +354,17 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                 detail: "existing destination is not a file".to_owned(),
             });
         }
-        std::fs::hard_link(source, destination).map_err(|e| {
-            // EXDEV (cross-device link, errno 18) at the actual
-            // `link(2)` site means `source` and `destination` are on
-            // different mounts even though `assert_same_filesystem`
-            // (st_dev only) passed — the canonical case is NixOS
-            // bind-mounting `/nix/store` ro on top of itself, so a
-            // hardlink from `/nix/store/<x>` to `/var/lib/nixling/<y>`
-            // is rejected as cross-vfsmount. Surface the typed
-            // `DifferentFilesystem` error (with the mount-distinguishing
-            // detail) instead of a generic I/O error so the broker can
-            // map it to `StoreViewFilesystemMismatch`. The supported
-            // build path runs this inside a mount namespace where
-            // `/nix/store` is lazily detached, so this branch only
-            // fires when that namespace trick was bypassed or cannot
-            // apply.
+        if let Err(e) = std::fs::hard_link(source, destination) {
+            // EXDEV (errno 18) at the actual `link(2)` site means
+            // `source` and `destination` are on different mounts even
+            // though `assert_same_filesystem` (st_dev only) passed —
+            // the canonical case is NixOS bind-mounting `/nix/store` ro
+            // on top of itself, so a hardlink from `/nix/store/<x>` to
+            // `/var/lib/nixling/<y>` is rejected as cross-vfsmount.
+            // Surface the typed `DifferentFilesystem` error so the
+            // broker can retry the build inside a mount namespace where
+            // `/nix/store` is lazily detached (this branch only fires
+            // when that namespace trick was bypassed or cannot apply).
             if e.raw_os_error() == Some(EXDEV) {
                 let dst_dev = destination
                     .parent()
@@ -370,18 +372,39 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                     .map(|m| m.dev())
                     .unwrap_or(0);
                 let src_dev = std::fs::metadata(source).map(|m| m.dev()).unwrap_or(0);
-                return HardlinkFarmError::DifferentFilesystem {
+                return Err(HardlinkFarmError::DifferentFilesystem {
                     a: source.display().to_string(),
                     a_dev: src_dev,
                     b: destination.display().to_string(),
                     b_dev: dst_dev,
-                };
+                });
             }
-            HardlinkFarmError::Io {
+            // EMLINK (errno 31, "Too many links"): the SOURCE inode has
+            // reached the filesystem's hardlink ceiling (ext4
+            // `EXT4_LINK_MAX` = 65000). On a `nix-store --optimise`d
+            // store every empty/tiny file is deduplicated onto a single
+            // inode, so a long-lived host trivially saturates those
+            // inodes' link counts — after which no NEW hardlink to them
+            // can be created, in any mount namespace (the limit is
+            // per-inode, not per-mount). Fall back to a byte copy: the
+            // store file is read-only so the farm view is identical, and
+            // only these already-saturated (overwhelmingly empty) inodes
+            // pay the copy, so the farm stays a near-zero-cost hardlink
+            // farm. A copy does not share the source inode, which is
+            // strictly safer for the "never mutate shared inodes"
+            // invariant the per-VM store view relies on.
+            if e.raw_os_error() == Some(EMLINK) {
+                std::fs::copy(source, destination).map_err(|ce| HardlinkFarmError::Io {
+                    path: destination.display().to_string(),
+                    detail: format!("copy fallback after EMLINK: {ce}"),
+                })?;
+                return Ok(());
+            }
+            return Err(HardlinkFarmError::Io {
                 path: destination.display().to_string(),
                 detail: e.to_string(),
-            }
-        })?;
+            });
+        }
         return Ok(());
     }
     Err(HardlinkFarmError::Io {
