@@ -22,7 +22,7 @@ jobs:
             experimental-features = nix-command flakes
 
       # ---------------------------------------------------------------------------
-      # Phase 1: static text/grep eval tests.
+      # Static text/grep eval tests.
       # ---------------------------------------------------------------------------
       - name: Static eval tests
         run: |
@@ -70,12 +70,16 @@ jobs:
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"
-              bash "$t"
+              if [ "$t" = "tests/no-bash-exec-eval.sh" ]; then
+                bash "$t" all
+              else
+                bash "$t"
+              fi
             fi
           done
 
       # ---------------------------------------------------------------------------
-      # Phase 2: Nix eval tests — require `nix` on PATH.
+      # Nix eval tests — require `nix` on PATH.
       # ---------------------------------------------------------------------------
       - name: Nix eval tests
         run: |
@@ -106,7 +110,7 @@ jobs:
           done
 
       # ---------------------------------------------------------------------------
-      # Phase 3: Cargo/Rust unit tests — self-bootstrap via `nix shell` when
+      # Cargo/Rust unit tests — self-bootstrap via `nix shell` when
       # cargo is not on PATH.  No live daemon, no KVM, no privileged broker.
       # ---------------------------------------------------------------------------
       - name: Cargo/Rust eval tests

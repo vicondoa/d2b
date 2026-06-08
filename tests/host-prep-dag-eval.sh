@@ -43,7 +43,7 @@ done
 # of the bundle resolver shape; the test below pins the dep edges
 # inline by grepping the builder source for the canonical
 # depends_on declarations the integrator just landed.
-echo "==> P2fu1 host-prep DAG ordering edges"
+echo "==> host-prep DAG ordering edges"
 # NM unmanaged is a sibling of preflights (no upstream deps), runs
 # before nftables apply.
 grep -qE 'kind: HostPrepStepKind::ApplyNftablesRules' "$MOD" \
@@ -90,7 +90,7 @@ RUNTIME="packages/nixling-priv-broker/src/runtime.rs"
 # to live broker dispatch arms (they look up the per-VM bundle
 # intent, record a typed audit row, and ack). OwnershipMatrixCheck
 # and SshHostKeyPreflight still carry the typed Unimplemented
-# label pending the sibling wave-B handlers.
+# label pending the remaining live handlers.
 for variant in \
     SeedDnsmasqLease \
     BindMountFromHardlinkFarm \
@@ -108,15 +108,15 @@ for variant in \
 done
 for variant in OwnershipMatrixCheck SshHostKeyPreflight; do
     grep -q "operation: \"${variant}\"" "$RUNTIME" \
-        || fail "runtime.rs missing Unimplemented op label for ${variant} (expected to stay P2-stubbed)"
-    ok "BrokerRequest::${variant} still typed Unimplemented P2"
+        || fail "runtime.rs missing Unimplemented op label for ${variant} (expected to stay deferred)"
+    ok "BrokerRequest::${variant} still typed Unimplemented"
 done
 for variant in SeedDnsmasqLease BindMountFromHardlinkFarm; do
     grep -q "\"${variant}\"" "$RUNTIME" \
         || fail "runtime.rs missing op label for live ${variant} arm"
     grep -q "OperationFields::${variant}" "$RUNTIME" \
         || fail "runtime.rs missing OperationFields::${variant} audit row for live arm"
-    ok "BrokerRequest::${variant} live broker arm (P3 host-prep-broker-arms)"
+    ok "BrokerRequest::${variant} live broker arm"
 done
 
 echo "==> nixlingd vm_start wiring"
@@ -161,9 +161,8 @@ ok "host-prep DAG doc names the canonical ordering"
 # Cross-reference asserted in AGENTS.md row.
 grep -qF "host-prep-dag" "$DOC" || fail "doc does not self-reference its own slug"
 
-# P2fu2 test-r2 closure: strengthen the source-side ordering grep
-# to check the actual depends_on edges for the new step kinds, not
-# just their presence in the enum.
+# Strengthen the source-side ordering grep to check the actual depends_on
+# edges for the new step kinds, not just their presence in the enum.
 echo "==> source-side ordering edges (depends_on)"
 grep -B 3 'kind: HostPrepStepKind::ApplySysctl' "$MOD" \
     | grep -q 'id(HostPrepStepKind::BringUpTapInterface)' \
@@ -180,11 +179,9 @@ grep -B 3 'kind: HostPrepStepKind::PreOpenVhostNetFd' "$MOD" \
     && ok "PreOpenVhostNetFd depends on SetBridgePortFlags" \
     || fail "PreOpenVhostNetFd missing SetBridgePortFlags dep edge"
 
-# P2fu4 docs-r4 / product-r4 / test-r4 closure: the "Canonical
-# step set" section is the discoverable operator-facing index;
-# previously it listed only 7 steps (pre-P2fu1). Assert all 10
-# step slugs appear in that specific section (between
-# "## Canonical step set" and the next "##").
+# The "Canonical step set" section is the discoverable operator-facing
+# index. Assert all current step slugs appear in that specific section
+# (between "## Canonical step set" and the next "##").
 echo "==> documentation: Canonical step set completeness"
 canonical_section=$(awk '/^## Canonical step set/{f=1;next} /^## /{if(f){exit}} f{print}' "$DOC")
 for slug in \
