@@ -60,11 +60,13 @@ HOST_LOG="$LOG_DIR/host.log"
 BROKER_LOG="$LOG_DIR/broker.log"
 
 printf '\n[cgroup-delegation-oracle] host canaries (nixling-host fake backend)\n'
+set +e
 (
   cd "$ROOT/packages"
   run_cargo test -p nixling-host --all-features --lib cgroup::
 ) >"$HOST_LOG" 2>&1
 host_status=$?
+set -e
 if [ $host_status -ne 0 ]; then
   printf 'cgroup-delegation-oracle: host canary block failed (status %d)\n' "$host_status" >&2
   tail -80 "$HOST_LOG" >&2
@@ -81,11 +83,13 @@ done
 printf '  ok: %d host canaries passed\n' "${#HOST_CANARIES[@]}"
 
 printf '\n[cgroup-delegation-oracle] broker canaries (ops::cgroup + RecordingAuditSink)\n'
+set +e
 (
   cd "$ROOT/packages/nixling-priv-broker"
   run_cargo test --all-features --lib ops::cgroup
 ) >"$BROKER_LOG" 2>&1
 broker_status=$?
+set -e
 if [ $broker_status -ne 0 ]; then
   printf 'cgroup-delegation-oracle: broker canary block failed (status %d)\n' "$broker_status" >&2
   tail -80 "$BROKER_LOG" >&2

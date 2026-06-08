@@ -173,7 +173,7 @@ done
 # ---------------------------------------------------------------------------
 #  Host-prepare gates (mostly pure shell; some need cargo)
 # ---------------------------------------------------------------------------
-log "==> W3 host-prepare gates"
+log "==> Host-prepare gates"
 
 # Provision rustup + compiler support without injecting an unpinned
 # cargo/rustc ahead of packages/rust-toolchain.toml. Rust gates that need
