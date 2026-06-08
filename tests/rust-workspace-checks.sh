@@ -42,6 +42,30 @@ add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
 nl_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
+if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "rustup not on PATH and nix is unavailable; W0a rust gate cannot run pinned Rust $pinned_channel"
+    exit 1
+  fi
+  rust_gate_scratch=$(nl_mktemp .nixling-rust-gate.XXXXXX)
+  add_cleanup "rm -rf -- \"$rust_gate_scratch\""
+  log "  rustup not on PATH; re-entering via nix shell to acquire pinned Rust $pinned_channel toolchain"
+  export NIXLING_RUST_GATE_IN_NIX_SHELL=1
+  export NIXLING_RUST_GATE_BOOTSTRAP_RUSTUP=1
+  export RUSTUP_HOME="$rust_gate_scratch/rustup"
+  export CARGO_HOME="$rust_gate_scratch/cargo"
+  nix shell --quiet --inputs-from "$ROOT" \
+    nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
+    --command bash "$0" "$@"
+  exit $?
+fi
+
+if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
+  export NIXLING_RUST_GATE_IN_NIX_SHELL=1
+  export NIXLING_RUST_GATE_BOOTSTRAP_RUSTUP=1
+  rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
+fi
+
 if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
     fail "neither cargo nor nix is on PATH; W0a rust gate cannot run"

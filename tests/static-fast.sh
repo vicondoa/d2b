@@ -175,12 +175,11 @@ done
 # ---------------------------------------------------------------------------
 log "==> W3 host-prepare gates"
 
-# Provision cargo + rustc + clippy in the static-fast PATH so the
-# gates that exec `cargo test` (cgroup-delegation-oracle, etc.) can
-# find the rust toolchain. Same pattern as static.sh's
-# nl_cli_toolchain_shell.
+# Provision rustup + compiler support without injecting an unpinned
+# cargo/rustc ahead of packages/rust-toolchain.toml. Rust gates that need
+# cargo bootstrap the pinned channel through rustup.
 if ! command -v cargo >/dev/null 2>&1; then
-  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache --command bash -lc 'printf %s "$PATH"')
+  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache --command bash -lc 'printf %s "$PATH"')
   PATH="$rust_path:$PATH"
   export PATH
 fi

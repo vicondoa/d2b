@@ -21,18 +21,19 @@ jobs:
             experimental-features = nix-command flakes
       - name: Cargo workspace gate
         run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' packages/rust-toolchain.toml | head -1)
           nix shell \
-            nixpkgs#cargo \
-            nixpkgs#clippy \
-            nixpkgs#gcc \
-            nixpkgs#rustc \
-            nixpkgs#rustfmt \
+            nixpkgs#rustup \
+            nixpkgs#stdenv.cc \
             --command bash -lc '
+              set -euo pipefail
+              channel="$1"
+              rustup toolchain install "$channel" --profile minimal --component rustfmt --component clippy
               cd packages &&
-              CARGO_BUILD_RUSTC_WRAPPER="" cargo fmt --all -- --check &&
-              CARGO_BUILD_RUSTC_WRAPPER="" cargo clippy --workspace --all-targets -- -D warnings &&
-              CARGO_BUILD_RUSTC_WRAPPER="" cargo test --workspace &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo fmt --all -- --check &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --workspace --all-targets -- -D warnings &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --workspace &&
               (cd nixling-priv-broker &&
-                CARGO_BUILD_RUSTC_WRAPPER="" cargo test &&
-                CARGO_BUILD_RUSTC_WRAPPER="" cargo test --features layer1-bootstrap)
-            '
+                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test &&
+                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --features layer1-bootstrap)
+            ' -- "$channel"
