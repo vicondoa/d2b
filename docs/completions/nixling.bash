@@ -936,7 +936,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__config__subcmd__sync)
-            opts="-h --guest-path --host --user --key --dry-run --json --help <VM>"
+            opts="-h --guest-path --host --user --key --known-hosts --dry-run --json --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -955,6 +955,10 @@ _nixling() {
                     return 0
                     ;;
                 --key)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --known-hosts)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

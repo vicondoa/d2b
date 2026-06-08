@@ -786,6 +786,7 @@ _arguments "${_arguments_options[@]}" : \
 '--host=[Override the SSH host (defaults to the manifest \`static_ip\`)]:HOST:_default' \
 '--user=[Override the SSH user (defaults to the manifest \`ssh_user\`)]:USER:_default' \
 '--key=[Override the SSH private key path]:KEY:_files' \
+'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`)]:KNOWN_HOSTS:_files' \
 '--dry-run[Print the SSH command instead of running it]' \
 '--json[Emit a JSON envelope]' \
 '-h[Print help]' \

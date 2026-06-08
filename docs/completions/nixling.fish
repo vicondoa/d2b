@@ -307,6 +307,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l host -d 'Override the SSH host (defaults to the manifest `static_ip`)' -r
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l user -d 'Override the SSH user (defaults to the manifest `ssh_user`)' -r
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l key -d 'Override the SSH private key path' -r -F
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l known-hosts -d 'known_hosts file used to verify the VM\'s host key (defaults to the framework-managed `/var/lib/nixling/known_hosts.nixling`)' -r -F
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l dry-run -d 'Print the SSH command instead of running it'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l json -d 'Emit a JSON envelope'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help'

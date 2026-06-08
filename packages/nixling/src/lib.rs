@@ -1660,6 +1660,10 @@ struct ConfigSyncArgs {
     /// Override the SSH private key path.
     #[arg(long)]
     key: Option<PathBuf>,
+    /// known_hosts file used to verify the VM's host key (defaults to
+    /// the framework-managed `/var/lib/nixling/known_hosts.nixling`).
+    #[arg(long)]
+    known_hosts: Option<PathBuf>,
     /// Print the SSH command instead of running it.
     #[arg(long)]
     dry_run: bool,
@@ -1829,24 +1833,9 @@ fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailur
             ));
         }
     }
-    // Atomic publish: write a sibling temp then rename over target so a
-    // crash never leaves a half-written guest config.
-    let tmp = match parent {
-        Some(p) => p.join(format!(
-            ".{}.nixling-approve.tmp",
-            target
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("guest-config")
-        )),
-        None => PathBuf::from(format!("{}.nixling-approve.tmp", target.display())),
-    };
-    std::fs::write(&tmp, &bytes)
-        .map_err(|e| CliFailure::new(1, format!("config approve: write temp: {e}")))?;
-    std::fs::rename(&tmp, target).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        CliFailure::new(1, format!("config approve: publish to target: {e}"))
-    })?;
+    // Atomic, collision-safe publish (unique O_EXCL temp + fsync +
+    // rename); staging is only consumed after a successful publish.
+    config_atomic_write(target, &bytes)?;
     let _ = std::fs::remove_file(staging);
     Ok(bytes.len())
 }
@@ -1901,28 +1890,106 @@ fn warn_all_pending_staged_configs() {
     }
 }
 
-/// Build the host→guest SSH argv for `config sync`. The `--` separator
-/// pins `cat <guest_path>` as the remote command, and `guest_path` is
-/// validated by [`config_validate_remote_path`] before reaching here so
-/// it cannot inject shell metacharacters. StrictHostKeyChecking is
-/// disabled (the per-VM connection is host→its-own-guest over the env
-/// bridge, not the internet) consistent with `nixling console`.
-fn config_sync_ssh_argv(key_path: &Path, ssh_target: &str, guest_path: &str) -> Vec<String> {
+/// Build the host→guest SSH argv for `config sync`. The remote command
+/// is exactly `cat <guest_path>` placed AFTER the destination (where ssh
+/// expects the remote command); no `--` separator is used (it would be
+/// sent as part of the remote command). `guest_path` is validated by
+/// [`config_validate_remote_path`] (absolute, metacharacter-free) before
+/// reaching here, so it cannot inject into the remote shell. Host-key
+/// integrity is verified against the framework-managed known_hosts with
+/// `accept-new` (pins on first use; refuses a CHANGED key, so a same-env
+/// peer cannot silently MITM the pulled config).
+fn config_sync_ssh_argv(
+    key_path: &Path,
+    known_hosts: &Path,
+    ssh_target: &str,
+    guest_path: &str,
+) -> Vec<String> {
     vec![
         "ssh".to_owned(),
         "-i".to_owned(),
         key_path.display().to_string(),
         "-o".to_owned(),
-        "StrictHostKeyChecking=no".to_owned(),
+        format!("UserKnownHostsFile={}", known_hosts.display()),
         "-o".to_owned(),
-        "UserKnownHostsFile=/dev/null".to_owned(),
+        "StrictHostKeyChecking=accept-new".to_owned(),
         "-o".to_owned(),
         "BatchMode=yes".to_owned(),
         ssh_target.to_owned(),
-        "--".to_owned(),
         "cat".to_owned(),
         guest_path.to_owned(),
     ]
+}
+
+/// Atomically publish `bytes` to `target`: write a UNIQUE sibling temp
+/// (O_CREAT|O_EXCL so it never clobbers a concurrent writer's temp or a
+/// stale leftover), fsync it, then rename over `target`. The rename is
+/// atomic on the same filesystem, so a crash never leaves a partially
+/// written file (and never a non-empty truncated one that `approve`
+/// might later accept).
+fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
+    use std::io::Write as _;
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
+    let base = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("nixling-config");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_name = format!(".{base}.nixling-tmp.{}.{nanos}", std::process::id());
+    let tmp = match parent {
+        Some(p) => p.join(tmp_name),
+        None => PathBuf::from(tmp_name),
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| CliFailure::new(1, format!("config: create temp {}: {e}", tmp.display())))?;
+    let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(CliFailure::new(1, format!("config: write temp: {e}")));
+    }
+    std::fs::rename(&tmp, target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        CliFailure::new(1, format!("config: publish to {}: {e}", target.display()))
+    })
+}
+
+/// Run the `config sync` capture (testable, no `Context`): spawn
+/// `argv[0]` with `argv[1..]`, fail on non-zero exit, validate the
+/// captured stdout (non-empty/UTF-8), then atomically publish it to
+/// `staging`. Returns the byte count. Spawning `argv[0]` (an absolute
+/// path or PATH-resolved binary) makes this hermetically testable with
+/// a fake `ssh`.
+fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .map_err(|e| CliFailure::new(1, format!("config sync: spawn {}: {e}", argv[0])))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config sync: {} exited {}: {}",
+                argv[0],
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ),
+        ));
+    }
+    config_validate_staging_bytes(&output.stdout)?;
+    if let Some(parent) = staging.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliFailure::new(1, format!("config sync: create staging dir: {e}")))?;
+    }
+    config_atomic_write(staging, &output.stdout)?;
+    Ok(output.stdout.len())
 }
 
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
@@ -1970,7 +2037,12 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
             .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
     };
     let ssh_target = format!("{user}@{host}");
-    let argv: Vec<String> = config_sync_ssh_argv(&key_path, &ssh_target, &args.guest_path);
+    let known_hosts = args
+        .known_hosts
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("/var/lib/nixling/known_hosts.nixling"));
+    let argv: Vec<String> =
+        config_sync_ssh_argv(&key_path, &known_hosts, &ssh_target, &args.guest_path);
     let staging = config_staging_path(&args.vm);
 
     if args.dry_run {
@@ -1994,29 +2066,7 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
     }
 
     konsole_validate_key_exists(&key_path, args.json)?;
-    let output = Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()
-        .map_err(|e| CliFailure::new(1, format!("config sync: spawn ssh: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "config sync: ssh exited {}: {}",
-                output.status.code().unwrap_or(-1),
-                stderr.trim()
-            ),
-        ));
-    }
-    config_validate_staging_bytes(&output.stdout)?;
-    if let Some(parent) = staging.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| CliFailure::new(1, format!("config sync: create staging dir: {e}")))?;
-    }
-    std::fs::write(&staging, &output.stdout)
-        .map_err(|e| CliFailure::new(1, format!("config sync: write staging: {e}")))?;
-    let n = output.stdout.len();
+    let n = config_sync_capture_to_staging(&argv, &staging)?;
     if args.json {
         let body = serde_json::json!({
             "command": "config sync",
@@ -2028,10 +2078,12 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
     } else {
         print_stdout(&format!(
             "config sync: staged {n} bytes from {ssh_target}:{} to {}\n\
-             Review with `nixling config diff {} --against <live-file>` then \
-             `nixling config approve {} --to <live-file>`.\n",
+             Review with `nixling config diff {} --against <guestConfigFile>` then \
+             `nixling config approve {} --to <guestConfigFile>` \
+             (the host-side nixling.vms.{}.guestConfigFile path).\n",
             args.guest_path,
             staging.display(),
+            args.vm,
             args.vm,
             args.vm
         ));
@@ -3427,6 +3479,12 @@ fn w7_mutating_verb(
 ) -> Result<i32, CliFailure> {
     let flags = require_mutation_flag(verb, dry_run, apply, json)?;
     require_known_vm(context, vm, json)?;
+    // `switch`/`boot`/`test` build + activate from the host-side
+    // guestConfigFile; warn if a synced edit is staged-but-unapproved so
+    // the operator doesn't silently activate the old config.
+    if matches!(verb, "switch" | "boot" | "test") && !json {
+        warn_pending_staged_config(vm);
+    }
     if flags.apply {
         // Daemon-first dispatch is live for activation verbs.
         // The CLI only reaches the legacy bash surface when the daemon
@@ -7025,8 +7083,9 @@ mod config_cmd_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        config_approve_core, config_reject_core, config_staging_path_in, config_sync_ssh_argv,
-        config_validate_remote_path, config_validate_staging_bytes, config_validate_vm_name,
+        config_approve_core, config_reject_core, config_staging_path_in,
+        config_sync_capture_to_staging, config_sync_ssh_argv, config_validate_remote_path,
+        config_validate_staging_bytes, config_validate_vm_name,
     };
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -7165,6 +7224,53 @@ mod config_cmd_tests {
         assert!(!config_reject_core(&staging).expect("reject-again"));
     }
 
+    // Hermetic coverage of the real sync capture path via a fake `ssh`
+    // script invoked through `/bin/sh` (read, not exec'd — avoids any
+    // ETXTBSY race exec'ing a just-written binary under CI load).
+    fn fake_ssh(dir: &std::path::Path, name: &str, body: &str) -> Vec<String> {
+        let p = dir.join(name);
+        fs::write(&p, body).expect("write fake ssh");
+        vec!["/bin/sh".to_owned(), p.display().to_string()]
+    }
+
+    #[test]
+    fn sync_capture_success_stages_stdout() {
+        let dir = scratch("sync-ok");
+        let mut argv = fake_ssh(
+            &dir,
+            "ssh",
+            "printf '{ environment.systemPackages = []; }\\n'\n",
+        );
+        argv.push("ignored-arg".to_owned());
+        let staging = dir.join("work-aad.guest.nix");
+        let n = config_sync_capture_to_staging(&argv, &staging).expect("sync ok");
+        assert_eq!(
+            fs::read(&staging).unwrap(),
+            b"{ environment.systemPackages = []; }\n"
+        );
+        assert_eq!(n, fs::read(&staging).unwrap().len());
+    }
+
+    #[test]
+    fn sync_capture_nonzero_exit_errors_and_does_not_stage() {
+        let dir = scratch("sync-fail");
+        let argv = fake_ssh(&dir, "ssh", "echo 'permission denied' >&2\nexit 255\n");
+        let staging = dir.join("work-aad.guest.nix");
+        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("must error");
+        assert!(err.message.contains("exited 255"));
+        assert!(!staging.exists(), "must not stage on ssh failure");
+    }
+
+    #[test]
+    fn sync_capture_empty_stdout_is_rejected() {
+        let dir = scratch("sync-empty");
+        let argv = fake_ssh(&dir, "ssh", "exit 0\n");
+        let staging = dir.join("work-aad.guest.nix");
+        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("empty rejected");
+        assert!(err.message.contains("empty"));
+        assert!(!staging.exists());
+    }
+
     #[test]
     fn staging_path_in_is_per_vm() {
         let base = PathBuf::from("/x/state");
@@ -7175,9 +7281,10 @@ mod config_cmd_tests {
     }
 
     #[test]
-    fn sync_ssh_argv_pins_remote_cat_after_double_dash() {
+    fn sync_ssh_argv_remote_command_is_cat_after_destination() {
         let argv = config_sync_ssh_argv(
             &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
+            &PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
             "alice@10.20.0.10",
             "/var/lib/nixling-guest/guest-config.nix",
         );
@@ -7185,17 +7292,22 @@ mod config_cmd_tests {
         // key flag
         let i = argv.iter().position(|a| a == "-i").unwrap();
         assert_eq!(argv[i + 1], "/var/lib/nixling/keys/work-aad_ed25519");
-        // no host-key TOFU prompt, batch mode (never hangs on a prompt)
-        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
+        // host-key integrity: managed known_hosts + accept-new (NOT
+        // StrictHostKeyChecking=no / UserKnownHostsFile=/dev/null).
+        assert!(argv
+            .iter()
+            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
+        assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
+        assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
         assert!(argv.iter().any(|a| a == "BatchMode=yes"));
-        // the ssh target precedes the `--` separator
+        // No `--`: ssh would send it as part of the remote command.
+        assert!(!argv.iter().any(|a| a == "--"), "`--` must not be present");
+        // The remote command (everything after the destination) is
+        // exactly `cat <guest_path>`.
         let target = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
-        let dash = argv.iter().position(|a| a == "--").unwrap();
-        assert!(target < dash, "ssh target must precede `--`");
-        // the remote command is exactly `cat <guest_path>` AFTER `--`,
-        // so the guest path can never be parsed as an ssh option.
         assert_eq!(
-            &argv[dash + 1..],
+            &argv[target + 1..],
             &["cat", "/var/lib/nixling-guest/guest-config.nix"]
         );
     }
