@@ -218,7 +218,7 @@ WORK_LAN_ISOLATED=$(printf '%s' "$OUT" | jq -r '.workLanBridgeIsolated // "null"
 SAFE_LAN_ISOLATED=$(printf '%s' "$OUT" | jq -r '.safeLanBridgeIsolated // "null"')
 
 if [ "$MATCH_TYPE" = "ether" ]; then
-  fail "net VM '10-eth-dhcp' still has matchConfig.Type=ether (would DHCP both NICs lex-first vs 10-lan/10-uplink). See W5 H1."
+  fail "net VM '10-eth-dhcp' still has matchConfig.Type=ether (would DHCP both NICs lex-first vs 10-lan/10-uplink)."
 fi
 ok "net VM '10-eth-dhcp' is neutralized (matchConfig.Type = $MATCH_TYPE)"
 

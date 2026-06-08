@@ -151,7 +151,7 @@ run_gate "tests/rust-workspace-checks.sh" "bash '$ROOT/tests/rust-workspace-chec
 # ---------------------------------------------------------------------------
 #  bundle/schema static gates (pure shell + small Nix evals)
 # ---------------------------------------------------------------------------
-log "==> W1 bundle/schema static gates"
+log "==> Bundle/schema static gates"
 for gate in \
   bundle-drift \
   vms-json-parity \
@@ -235,5 +235,5 @@ done
 #     golden against live CLI output)
 
 log "Static-fast checks OK"
-log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, W2 broker daemons, per-example flake-check, audio.)"
+log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
 log "(run tests/static.sh before panel dispatch / wave-exit gates.)"

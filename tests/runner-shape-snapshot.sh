@@ -3,10 +3,9 @@
 #
 # Evals examples/minimal processesJson.data (with a test-only TPM overlay
 # so the swtpm role is present), extracts argv and deviceBinds for:
-#   cloud-hypervisor  — tests fu30 variadic --fs/--net/--disk/--device,
-#                       fu31 absolute vsock socket path, and
-#                       fu33 /dev/net/tun in mountPolicy.deviceBinds
-#   virtiofsd         — tests fu14 ADR-0021 argv shape (--sandbox=chroot
+#   cloud-hypervisor  — tests variadic --fs/--net/--disk/--device,
+#                       absolute vsock socket path, and device binds
+#   virtiofsd         — tests ADR-0021 argv shape (--sandbox=chroot
 #                       --inode-file-handles=never, absolute socket path)
 #   swtpm             — tests long-lived swtpm argv (tpm.sock mode=0660)
 #
@@ -97,7 +96,7 @@ extract_device_binds() {
 # ---------------------------------------------------------------------------
 # build_snap <json> <role> <jq-role>
 # Build the full snapshot text for a role.
-# cloud-hypervisor also includes the deviceBinds section (fu33 guard).
+# cloud-hypervisor also includes the deviceBinds section.
 # ---------------------------------------------------------------------------
 build_snap() {
   local json="$1" role="$2" jq_role="$3"
@@ -141,7 +140,7 @@ compare_or_update() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-log "==> D15/P1.10 runner-shape snapshot tests (fu30/31/33)"
+log "==> runner-shape snapshot tests"
 
 pjson_rc=0
 pjson=$(eval_processes_json 2>>"$NL_LOG") || pjson_rc=$?
@@ -167,4 +166,4 @@ do
   compare_or_update "$snap" "$content" "$role"
 done
 
-log "D15/P1.10 runner-shape snapshot tests OK"
+log "runner-shape snapshot tests OK"
