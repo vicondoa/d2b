@@ -504,6 +504,32 @@ ch-exporter,otel-host-bridge}` singleton, is gone.
   broker forbids it without an ADR.
 - Threaded cgroups. Same rule as partition roots.
 
+## Public `config` operation (daemon-handled, no broker dispatch)
+
+The `nixling config` verb group (`sync` / `diff` / `approve` /
+`reject` / `status`) is a **public** operation handled entirely by the
+unprivileged daemon and CLI. It dispatches **no** broker request
+(`brokerRequired: false`), so it is not in the broker catalog above; it
+is in the machine-readable public-operation matrix
+([`schemas/v2/privileges.json`](schemas/v2/privileges.json),
+`publicOperations[].operation = "config"`).
+
+| Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `config` | VM (guest-editable config layer) | per VM | none | no (staging/review only) | no | `nixling-launcher` + `nixling-admin` | yes | deny |
+
+Notes:
+
+- `sync` reaches into the guest over the **existing** per-VM SSH key
+  and writes only into the host-side staging copy; it never evaluates
+  or imports the guest bytes.
+- `approve` / `reject` are the trust transition and are
+  **host-operator-only** in the handler (the guest can never approve
+  its own config); they write only the operator-named `--to` path.
+- No new host mutation flows through the broker for any `config` verb,
+  so there is no `OpAuditRecord`; the daemon logs the public-operation
+  decision instead.
+
 ## Cross-references
 
 - ADR 0011 (cgroup + pidfd), ADR 0012 (IPv6/IfName/bridge-port),

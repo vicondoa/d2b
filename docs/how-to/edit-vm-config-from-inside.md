@@ -49,6 +49,22 @@ Rebuild the host once (`nixling switch work`). The guest now carries:
 - `/var/lib/nixling-guest/guest-config.nix` — a **writable** working
   copy, seeded once from the baseline, owned by the VM's SSH user.
 
+### Prerequisite: the per-VM SSH channel
+
+`config sync` pulls the edited file over the **existing**
+framework-managed per-VM SSH key — it does not open a new channel. That
+key is provisioned only when the VM declares an SSH user, so the VM
+**must** set:
+
+```nix
+nixling.vms.work.ssh.user = "alice";   # the in-VM account that owns the writable copy
+```
+
+Without `ssh.user`, there is no key to copy over and `nixling config
+sync` has nothing to connect to. The writable working copy
+(`/var/lib/nixling-guest/guest-config.nix`) is owned by this same user,
+so it is also the account you edit as inside the VM.
+
 ## The edit → sync → review → approve loop
 
 1. **Edit inside the VM.** SSH/console into the VM and edit the writable
