@@ -1034,20 +1034,31 @@ in-guest OS layer from inside the VM and sync it back to the host
 evaluation, so it is contained on three independent axes (see
 [ADR 0024](../adr/0024-in-vm-guest-config-sync.md)):
 
-- **Host-eval allowlist (fail-closed).** The guest file is rejected at
-  host-rebuild eval if it defines any host-owned `microvm.*` /
-  `nixling.*` option, attributed via the module system's
-  `definitionsWithLocations`. A guest can change its own OS, never the
-  host's control of it.
+- **Host-eval namespace policy lint (fail-closed).** The guest file is
+  rejected at host-rebuild eval if it defines any host-owned
+  `microvm.*` / `nixling.*` option. Detection evaluates the guest file
+  over the real nixpkgs NixOS module set with those namespaces
+  redeclared as detector options, and reports a violation by
+  *definition-existence* (`options.<ns>.isDefined`) rather than by
+  trusting the module system's reported source file — so `imports`,
+  `builtins.toFile`-generated modules, and `_file` spoofing are all
+  caught. A guest can change its own OS, never the host's
+  substrate/framework control of it. This is a namespace boundary, not
+  an eval-time sandbox: it does not constrain an *approved* guest
+  file's eval-time filesystem access (e.g. `builtins.readFile`), which
+  is governed by the operator-review-and-approve gate below (a sound
+  structural purity boundary is deferred future work in ADR 0024).
 - **Host-operator review before evaluation.** A synced file lands in a
   user-local staging copy and is never evaluated until an operator
   reviews (`config diff`) and approves it onto an operator-named
   target. The host never auto-locates or writes the operator's config
-  tree.
+  tree. An approved file is trusted, operator-reviewed host Nix — no
+  more privileged than config the operator writes by hand.
 - **No new attack surface.** The transport is a host-initiated SSH copy
   over the existing per-VM key — no virtiofs share, no new socket, no
   writable host-backed mount; the guest never initiates a connection
-  into the host control plane.
+  into the host control plane. The pull is bounded (1 MiB + 120 s) so a
+  hostile guest cannot OOM/hang the host.
 
 The residual sharp edge is the same one that governs all host-owned
 config: an operator who approves a config that errors at eval will see

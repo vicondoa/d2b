@@ -31,14 +31,40 @@ inversion.
    layer (packages, services, in-guest users, files). Both merge into
    the one per-VM closure the guest boots.
 
-2. **Containment is a host-eval allowlist, fail-closed.** The guest
-   file is evaluated through a hard assertion (`assertions.nix` +
-   `lib.nix`'s `guestConfigForbiddenDefs`) that attributes every option
-   definition back to its source file via the module system's
-   `definitionsWithLocations`. If the guest file defines ANY option
-   under `microvm.*` or `nixling.*`, the host rebuild fails, naming the
+2. **Containment is a host-eval namespace policy lint, fail-closed.**
+   The guest file is evaluated through a hard assertion
+   (`assertions.nix` + `lib.nix`'s `guestConfigForbiddenNamespaces`)
+   that evaluates the guest file (and its full import closure) with
+   `lib.evalModules` over the **real nixpkgs NixOS module set** — so a
+   guest module that READS a standard option (e.g.
+   `config.networking.hostName` in a `mkIf` guard) resolves instead of
+   crashing the host eval — with `microvm` and `nixling` redeclared as
+   detector options that nothing else defines. A namespace is reported
+   iff `options.<ns>.isDefined`, i.e. by **definition-existence**, not
+   by trusting the module system's reported source file. So a guest's
+   `imports`, a `builtins.toFile`-generated module, and `_file`
+   spoofing are all caught. If the guest file defines ANY option under
+   `microvm.*` or `nixling.*`, the host rebuild fails, naming the
    offending option(s). A guest can change its own OS, never the host's
-   control of it. Only VMs that set a `guestConfigFile` pay this cost.
+   substrate/framework control of it. Only VMs that set a
+   `guestConfigFile` pay this cost.
+
+   **Scope / non-goal (eval-time purity).** This check is a *namespace*
+   policy boundary, not an eval-time security sandbox. `lib.evalModules`
+   cannot prevent an approved guest file from reading host paths at eval
+   time (e.g. `builtins.readFile "/etc/…"`) — and a sound structural
+   purity boundary is not achievable for a single module merged into the
+   otherwise-impure per-VM `nixosSystem` eval without a larger redesign
+   (a restricted/pure evaluator whose normalized output is the only
+   thing the host consumes — see Future work). The eval-time exposure is
+   therefore bounded by the **operator-review-and-approve trust gate**:
+   the host only ever evaluates a guest file the operator has reviewed
+   (`config diff`) and explicitly approved, at which point it is trusted,
+   operator-reviewed host Nix — no more privileged than config the
+   operator writes by hand. The namespace lint guarantees the operator
+   cannot *accidentally* let a guest escape into `microvm.*`/`nixling.*`;
+   it does not claim to sandbox a malicious approved file's eval-time
+   filesystem access.
 
 3. **Canonical config stays in its current host-side location.** No new
    source-of-truth repo. History/rollback come from the operator's
@@ -74,8 +100,9 @@ inversion.
 ## Consequences
 
 - The trust direction is preserved: untrusted guest input is contained
-  by (a) the host-eval allowlist, (b) operator review before the host
-  ever evaluates it, and (c) the host-operator-only approve step.
+  by (a) the host-eval namespace policy lint (no `microvm.*`/`nixling.*`
+  escape), (b) operator review before the host ever evaluates it, and
+  (c) the host-operator-only approve step.
 - No net-new privileged surface is added for the workflow; it reuses
   the per-VM SSH key and the static manifest.
 - The fast `assertions-eval` gate is unaffected for VMs without a
@@ -100,3 +127,19 @@ inversion.
 - **Auto-landing approve into the operator's config tree** — rejected
   as a default: the CLI only writes the operator-named `--to` target,
   keeping the tool from silently editing host config.
+
+## Future work
+
+- **Structurally sound eval-time purity.** The namespace lint does not
+  constrain a guest file's eval-time filesystem access (see Decision 2,
+  scope note). A fully-sound boundary would evaluate the per-VM system
+  for `guestConfigFile` VMs under a restricted/pure evaluator and have
+  the host consume only that evaluator's normalized output (toplevel
+  drv + runner attrs + namespace result), never re-importing the guest
+  file impurely. This is a larger change than the namespace lint and is
+  deferred; until then, operator review/approve is the eval-purity
+  trust boundary.
+- **Guest-build mode.** In-guest `nixos-rebuild` for fast local
+  iteration (store DB, build users, inputs, closure reconciliation) is a
+  separate spike. Durable persistence always flows config → sync →
+  approve → host build; the host never ingests guest-built store paths.

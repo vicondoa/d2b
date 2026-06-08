@@ -1859,15 +1859,21 @@ denied commands:
 
 ### `config sync`
 
-**Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--dry-run] [--json]`
+**Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
 
 Pulls the VM's in-guest edited `guestConfigFile` (default
 `/var/lib/nixling-guest/guest-config.nix`) over the framework-managed
 per-VM SSH key into a host-side **staging** file
 (`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
-The host treats the pulled bytes as untrusted data; the staging copy is
-never evaluated until approved. `--dry-run` prints the SSH command
-without running it.
+The host treats the pulled bytes as untrusted data: the pull is bounded
+(1 MiB hard cap + 120 s timeout, so a hostile guest cannot OOM/hang the
+host), validated (non-empty, valid UTF-8), and the staging copy is never
+evaluated until approved. The VM's host key is verified against
+`--known-hosts` (default `/var/lib/nixling/known_hosts.nixling`) with
+`StrictHostKeyChecking=accept-new` (pins on first use; refuses a changed
+key). The SSH user comes from `--user` or the manifest `ssh_user`
+(set `nixling.vms.<vm>.ssh.user`); there is no `$USER` fallback.
+`--dry-run` prints the SSH command without running it.
 
 **Disposition:** `rust-native` — host-initiated SSH copy; reuses the
 existing per-VM key + manifest `static_ip` / `ssh_user`. No new
@@ -1875,7 +1881,7 @@ privileged surface, no virtiofs.
 
 ### `config diff`
 
-**Synopsis:** `nixling config diff <vm> --against <live-file> [--json]`
+**Synopsis:** `nixling config diff <vm> --against <guestConfigFile> [--json]`
 
 Shows a unified diff between the staged guest config and the live
 host-side file the operator names with `--against` (typically their
@@ -1889,11 +1895,12 @@ reports `differs` + the diff text.
 **Synopsis:** `nixling config approve <vm> --to <target-file> [--json]`
 
 Validates the staged guest config (non-empty, valid UTF-8) and
-atomically writes it onto the operator-chosen `--to` target, then
-clears the staging file. The CLI never auto-locates the operator's
-config tree — the operator names the target explicitly. The
-authoritative containment + eval gate is the per-VM `guestConfigFile`
-assertion that runs on the subsequent `nixling switch`.
+atomically writes it onto the operator-chosen `--to` target (unique
+`O_EXCL` temp + fsync + rename + parent-dir fsync), then clears the
+staging file. The CLI never auto-locates the operator's config tree —
+the operator names the target explicitly. The authoritative containment
++ eval gate is the per-VM `guestConfigFile` assertion that runs on the
+subsequent `nixling switch`.
 
 **Disposition:** `rust-native` — host-operator-only; atomic publish.
 
@@ -1913,6 +1920,30 @@ Reports whether a VM (or, with `--all`, every VM) has a pending
 (un-approved) staged guest config.
 
 **Disposition:** `rust-native` — read-only.
+
+### `config` exit codes + JSON envelopes
+
+All `config` verbs share these exit codes:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Success (including `diff` whether or not files differ). |
+| `1` | Runtime error: nothing staged, SSH failure, size-cap/timeout, missing `ssh.user`, missing `--to`/`--against` target dir, I/O error, unknown VM in the manifest. |
+| `2` | Usage error (bad/missing arguments; surfaced by `clap`). |
+
+With `--json` each verb emits a single stdout object:
+
+- `config sync` → `{ "command": "config sync", "vm", "staging", "bytes" }`
+  (or `{ …, "mode": "dry-run", "argv", "staging" }` under `--dry-run`).
+- `config diff` → `{ "command": "config diff", "vm", "against", "staging", "differs": <bool>, "diff": <string> }`.
+- `config approve` → `{ "command": "config approve", "vm", "target", "bytes" }`.
+- `config reject` → `{ "command": "config reject", "vm", "removed": <bool> }`.
+- `config status` → `{ "command": "config status", "pending": [ <vm>… ] }`
+  (the single-VM form reports a list with 0 or 1 entry).
+
+Pending-staging notes (`nixling status`, `nixling up`/`start`, and the
+mutating verbs) are emitted on **stderr** for human output only, so they
+never perturb a `--json` stdout envelope.
 
 ## Dispatch capability table
 
