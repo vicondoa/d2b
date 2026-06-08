@@ -87,3 +87,8 @@ result-*
 packages/*/t/
 .copilot-*
 .*-eval.log
+
+# Panel-review output must never be committed — it belongs in the
+# session workspace, not the repo. (Removed a stray panel-w-fu-fu-rollup/
+# that a prior run wrote into the repo when /tmp was unavailable.)
+panel-*/
