@@ -135,8 +135,8 @@ ${ALL_TRUE_READINESS}
     };
   });
 
-  # Scenario 2: same as #1 but w9Fu.validated = false. Default stays
-  # false because the readiness boolean half of the gate is red.
+  # Scenario 2: same as #1 but one readiness entry is not validated.
+  # The obsolete compatibility option still defaults true.
   gateRedReadiness = mk ({ lib, ... }: {
     nixling.daemonExperimental.defaultFlipEvidenceDir =
       "$WORKDIR/evidence-full";
@@ -145,9 +145,9 @@ ${ALL_TRUE_BUT_ONE_VALIDATED}
     };
   });
 
-  # Scenario 3: every wave implemented + validated, but the evidence
-  # file for w9Fu is absent from evidence-missing-one. Default stays
-  # false because the file-presence half of the gate is red.
+  # Scenario 3: every readiness entry implemented + validated, but
+  # one evidence file is absent. The obsolete compatibility option
+  # still defaults true.
   gateRedEvidence = mk ({ lib, ... }: {
     nixling.daemonExperimental.defaultFlipEvidenceDir =
       "$WORKDIR/evidence-missing-one";
@@ -202,8 +202,8 @@ check_bool() {
 }
 
 check_bool "gateGreenAll"           "true"
-check_bool "gateRedReadiness"       "false"
-check_bool "gateRedEvidence"        "false"
+check_bool "gateRedReadiness"       "true"
+check_bool "gateRedEvidence"        "true"
 check_bool "overrideFalseWinsGreen" "false"
 check_bool "overrideTrueWinsRed"    "true"
 
