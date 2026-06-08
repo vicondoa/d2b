@@ -93,7 +93,7 @@ log "==> sets-microvm.nix (host-owned microvm.*)"
 mv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/sets-microvm.nix")
 if printf '%s' "$mv" | grep -q "may only set" \
    && printf '%s' "$mv" | grep -q "microvm.mem" \
-   && printf '%s' "$mv" | grep -q "microvm.cloud-hypervisor.extraArgs"; then
+   && printf '%s' "$mv" | grep -q "microvm.cloud-hypervisor"; then
   ok "guest setting microvm.* is rejected and the options are named"
 else
   fail "guest microvm.* containment did not fire as expected: $mv"
@@ -107,6 +107,29 @@ if printf '%s' "$nv" | grep -q "may only set" \
   ok "guest setting nixling.* is rejected and the option is named"
 else
   fail "guest nixling.* containment did not fire as expected: $nv"
+fi
+
+# --- BYPASS #1: forbidden option set via an imported module ---------
+# A `definitionsWithLocations == guestConfigFile` check would miss this
+# (the def is attributed to the imported file); the sound sandbox check
+# must still reject it.
+log "==> imports-microvm.nix (bypass via imports)"
+iv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/imports-microvm.nix")
+if printf '%s' "$iv" | grep -q "may only set" \
+   && printf '%s' "$iv" | grep -q "microvm.mem"; then
+  ok "guest setting microvm.* via an IMPORTED module is still rejected"
+else
+  fail "containment BYPASS via imports not caught: $iv"
+fi
+
+# --- BYPASS #2: forbidden option with a spoofed module `_file` -------
+log "==> spoof-file.nix (bypass via _file spoofing)"
+sv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/spoof-file.nix")
+if printf '%s' "$sv" | grep -q "may only set" \
+   && printf '%s' "$sv" | grep -q "microvm.mem"; then
+  ok "guest setting microvm.* with a SPOOFED _file is still rejected"
+else
+  fail "containment BYPASS via _file spoofing not caught: $sv"
 fi
 
 log "guest-config-containment-eval: ${PASS} passed, ${FAIL} failed"

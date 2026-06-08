@@ -348,7 +348,22 @@ in
               ] ++ obsSecretsShare);
             }
           ];
-      in composeVm name composedModules)
+      in (composeVm name composedModules) // {
+        # SOUND containment for the guest-editable `guestConfigFile`:
+        # evaluated in an isolated sandbox (see lib.nix) with the same
+        # pkgs/specialArgs the real per-VM evaluator uses, so a guest
+        # config valid in the real eval doesn't spuriously fail here.
+        # Forbidden namespaces are detected by definition-existence
+        # (imports / generated modules / `_file` spoofing all caught).
+        guestForbidden =
+          if vm'.guestConfigFile == null then [ ]
+          else nl.guestConfigForbiddenNamespaces
+            {
+              inherit pkgs;
+              specialArgs = { inherit inputs; name = name; } // cfg.site.extraSpecialArgs;
+            }
+            vm'.guestConfigFile;
+      })
     enabledVms;
 
   # Fail-fast stub `microvm@<vm>.service` units are no longer needed —

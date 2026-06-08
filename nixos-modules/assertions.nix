@@ -532,21 +532,23 @@ let
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
   # only set guest OS options, never host-owned microvm.* / nixling.*.
-  # Only VMs that actually set a guestConfigFile force their per-VM
-  # evaluator output (`cfg._computed.<name>.options`), so VMs without
-  # one — i.e. every existing consumer — pay nothing here.
+  # The SOUND check (sandbox eval, definition-existence; catches
+  # imports / generated modules / `_file` spoofing) runs in host.nix's
+  # composeVm pass and is read here as `_computed.<name>.guestForbidden`.
+  # Only VMs that set a guestConfigFile force that per-VM evaluation, so
+  # VMs without one — i.e. every existing consumer — pay nothing here.
   guestConfigContainmentAssertions = lib.mapAttrsToList
     (name: vm:
       let
         guestFile = toString vm.guestConfigFile;
-        vmOptions = cfg._computed.${name}.options or { };
-        forbidden = nl.guestConfigForbiddenDefs vmOptions guestFile;
+        forbidden = cfg._computed.${name}.guestForbidden or [ ];
       in
       {
         assertion = forbidden == [ ];
         message = ''
           nixling.vms.${name}.guestConfigFile (${guestFile}) may only set
-          guest OS options, but it sets host-owned option(s): ${
+          guest OS options, but it (or a module it imports) sets host-owned
+          option(s): ${
             lib.concatStringsSep ", " forbidden
           }. Host-owned microvm.* / nixling.* settings must live in the
           host-owned nixling.vms.${name}.config, which the guest cannot

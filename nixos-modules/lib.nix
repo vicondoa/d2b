@@ -258,39 +258,54 @@ rec {
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
 
-  # guestConfigForbiddenDefs — containment check for the per-VM
-  # `guestConfigFile` (the guest-editable OS layer).
+  # guestConfigForbiddenNamespaces — SOUND containment check for the
+  # per-VM guest-editable `guestConfigFile` (the guest-editable OS
+  # layer).
   #
-  # Given a per-VM evaluator `options` attrset and the guest config
-  # file path (as a string), return the dotted paths of host-owned
-  # options (anything under `microvm.*` or `nixling.*`) that the guest
-  # file illegitimately defined. An empty list means the guest file is
-  # contained (only touched guest OS options).
+  # Returns the host-owned option path(s) (under `microvm.*` /
+  # `nixling.*`) that the guest file — OR ANY MODULE IT IMPORTS /
+  # GENERATES — defined. An empty list means the guest file is contained
+  # (it touched only guest OS options).
   #
-  # Implementation: recurse the `microvm` and `nixling` option
-  # subtrees; for each leaf option, ask the module system (via
-  # `definitionsWithLocations`) whether ANY of its definitions was
-  # sourced from the guest file. This attributes a forbidden write to
-  # the exact file that made it, so a guest can never silently set
-  # host-owned runner/framework options even after an operator
-  # approves its synced config. See assertions.nix for the assertion
-  # that consumes this.
-  guestConfigForbiddenDefs = vmOptions: guestFile:
+  # Implementation: evaluate the guest file (and its full import
+  # closure) in an ISOLATED `lib.evalModules` sandbox whose ONLY
+  # declared options are the host-owned `microvm` / `nixling`
+  # namespaces; every other (guest-OS) option is accepted via a freeform
+  # type so a normal guest config evaluates. We then report a namespace
+  # iff `options.<ns>.isDefined` — i.e. a REAL definition exists for it.
+  #
+  # Soundness: detection is by definition-EXISTENCE, not by matching the
+  # module-system-reported source file. This closes the bypasses a
+  # `definitionsWithLocations`-by-`_file` check missed — a guest's
+  # `imports`, a `builtins.toFile`-generated module, and `_file`
+  # spoofing all still register a definition and are caught.
+  #
+  # `pkgs` + `specialArgs` MUST mirror what the real per-VM evaluator
+  # passes (pkgs, inputs, name, site.extraSpecialArgs) so a guest config
+  # valid in the real eval does not spuriously fail to apply here. Any
+  # eval failure inside the sandbox is treated fail-closed (reported as
+  # a violation). See assertions.nix for the consuming assertion.
+  guestConfigForbiddenNamespaces = { pkgs, specialArgs ? { } }: guestFile:
     let
-      isOpt = a: builtins.isAttrs a && (a._type or null) == "option";
-      walk = prefix: attrs:
-        lib.concatLists (lib.mapAttrsToList
-          (name: val:
-            let path = if prefix == "" then name else "${prefix}.${name}"; in
-            if lib.hasPrefix "_" name then [ ]
-            else if isOpt val then
-              (if builtins.any (d: d.file == guestFile)
-                 (val.definitionsWithLocations or [ ])
-               then [ path ] else [ ])
-            else if builtins.isAttrs val then walk path val
-            else [ ])
-          attrs);
+      ev = lib.evalModules {
+        specialArgs = { inherit lib pkgs; } // specialArgs;
+        modules = [
+          {
+            freeformType = lib.types.attrsOf lib.types.anything;
+            options.microvm = lib.mkOption { type = lib.types.anything; };
+            options.nixling = lib.mkOption { type = lib.types.anything; };
+          }
+          guestFile
+        ];
+      };
+      namesIn = ns:
+        lib.optionals ev.options.${ns}.isDefined
+          (lib.concatMap
+            (def: map (k: "${ns}.${k}") (lib.attrNames def))
+            ev.options.${ns}.definitions);
+      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "nixling");
     in
-    (walk "microvm" (vmOptions.microvm or { }))
-    ++ (walk "nixling" (vmOptions.nixling or { }));
+    if probe.success then probe.value
+    else [ "<guestConfigFile failed to evaluate in the containment sandbox>" ];
 }
+
