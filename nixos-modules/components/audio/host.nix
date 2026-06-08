@@ -119,6 +119,12 @@ in
       systemd.services = lib.mapAttrs' (name: _: lib.nameValuePair "nixling-${name}-snd" {
         description = "vhost-user-sound sidecar for nixling VM ${name} (P4 C3 system user)";
         wantedBy = [ ];
+        # v0.1.5: never restart on rebuild. vhost-user-sound's socket
+        # connection to CH cannot survive a restart; killing this
+        # sidecar mid-VM kills audio for the running VM (silent
+        # speakers, mic stuck on/off whatever it was). Consumer
+        # applies changes via `nixling switch <vm>`.
+        unitConfig.X-RestartIfChanged = false;
         serviceConfig = {
           # C3: dedicated system user per VM.
           User = "nixling-${name}-snd";

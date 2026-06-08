@@ -10,6 +10,105 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.5] - 2026-05-19
+
+Patch release. Three consumer-impacting items from the first
+`/etc/nixos`-side migration: the framework's nixos-rebuild
+hot-restart of per-VM sidecars was killing running VMs; the
+load-host-keys group assumption broke for the standard NixOS user
+shape; and once we stopped restarting, consumers had no signal that
+config drift had built up.
+
+### Added
+
+- **`nixling restart <vm> [--force]`** — convenience wrapper around
+  `down <vm>` + `up <vm>`. Idempotent (a stopped VM is just brought
+  up). Graphics VMs still require a Wayland session for the up
+  step. The `--force` flag is forwarded to the down step (lets you
+  cycle a net VM without first stopping the env's workloads). Used
+  in tandem with the new `pending-restart` indicator below: when
+  `nixling list` flags a VM, `nixling restart <vm>` applies the
+  pending config.
+
+- **`pending-restart` signal in `nixling list` / `nixling status`.**
+  Compares each VM's `current` symlink (latest declared closure)
+  against `booted` (the closure the running VM actually exec'd).
+  If they differ AND the VM is up, both UIs flag the VM:
+
+  ```
+  NAME             ENV    GRAPHICS TPM   USBIP   STATIC_IP       STATUS
+  work-aad         work   true     true  true    10.20.0.10      systemd [pending switch]
+  ```
+
+  And `nixling status work-aad` adds:
+
+  ```
+  pending-restart: YES — config changed; run `nixling switch work-aad` to apply
+    booted : /nix/store/...-microvm-cloud-hypervisor-work-aad
+    current: /nix/store/...-microvm-cloud-hypervisor-work-aad
+  ```
+
+  Required because of the `restartIfChanged = false` changes below
+  — without that signal, consumers had no way to know their
+  `nixos-rebuild switch` only landed unit-file changes and not VM
+  behaviour.
+
+### Fixed
+
+- **`restartIfChanged = false` on every per-VM lifecycle service.**
+  Pre-v0.1.5, every `nixos-rebuild switch` that touched any of the
+  per-VM units killed the running VM mid-flight — for graphics
+  VMs the GPU sidecar IS the cloud-hypervisor process, so its
+  restart terminated CH, the guest's in-RAM Entra device-bound
+  tokens evaporated, and the user lost their login session. Even
+  for headless VMs, every framework-touched config (host-keys
+  refresh wiring, virtiofsd hardening stanza) caused NixOS to
+  override upstream microvm.nix's `X-RestartIfChanged=false` back
+  to `true`. The new flag updates the unit files at rebuild time
+  but does NOT cycle the running VM; consumers apply per-VM
+  changes via `nixling restart <vm>` (or `nixling switch <vm>`
+  for a per-VM closure rebuild + live activation).
+
+  Services covered:
+  - `nixling@<vm>.service` (user-facing wrapper)
+  - `microvm@<vm>.service` (upstream runner; framework was
+    overriding upstream's existing flag back to true via the
+    host-known-hosts.nix drop-in)
+  - `microvm-virtiofsd@<vm>.service` (per-VM virtiofs daemon;
+    framework adds hardening stanza)
+  - `nixling-<vm>-swtpm.service`
+  - `nixling-<vm>-snd.service`
+  - `nixling-<vm>-gpu.service`
+
+- **`nixling-<vm>-gpu.service` updates the per-VM `booted`
+  symlink.** Upstream microvm.nix's
+  `microvm-set-booted@<vm>.service` only runs as part of
+  `microvm@<vm>.service`'s lifecycle — but graphics VMs bypass
+  that template (the GPU sidecar runs microvm-run directly).
+  Pre-v0.1.5, `/var/lib/nixling/vms/<vm>/booted` simply didn't
+  exist for graphics VMs, so the new pending-restart check
+  couldn't compute anything. Added `ExecStartPre`
+  (`+`-prefixed → root) that mirrors
+  `microvm-set-booted_-start`:
+  `rm -f booted && ln -s $(readlink current) booted`. Cleared
+  by `ExecStopPost`.
+
+- **`nixling-load-host-keys.service` primary-group resolution.**
+  Pre-v0.1.5 the script assumed the guest user's primary group
+  matched the username (`install -d ... -g "$SSH_USER"`). This
+  only holds when the consumer's VM config sets
+  `users.users.<u>.group = "<u>"` or uses DynamicUser. NixOS's
+  `isNormalUser = true` default puts the user in the `users`
+  group, breaking the install with
+  `install: invalid group '<u>'`. Result: no nixling-managed
+  pubkey ever reached the guest's `authorized_keys`, and SSH
+  only worked for keys baked statically into
+  `users.users.<u>.openssh.authorizedKeys.keys`.
+
+  Now: resolve GID via `getent passwd | cut -d: -f4`, then GID →
+  name via `getent group`. Works for both
+  `users.users.<u>.group = "<u>"` and the NixOS default.
+
 ## [0.1.4] - 2026-05-19
 
 Patch release. Four framework bugs surfaced during the first real

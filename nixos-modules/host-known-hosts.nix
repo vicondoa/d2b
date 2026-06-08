@@ -158,5 +158,15 @@ in
   # Net VMs are detected and skipped early in the refresh script itself.
   systemd.services."microvm@" = {
     wants = [ "nixling-known-hosts-refresh@%i.service" ];
+    # v0.1.5: don't let NixOS override upstream microvm.nix's own
+    # X-RestartIfChanged=false. Without this, any framework
+    # config change cycles every running headless/net VM at
+    # rebuild time (the framework adds the `wants` above, so
+    # NixOS treats the unit as framework-owned and emits
+    # X-RestartIfChanged=true in the drop-in). Same rationale as
+    # the per-VM sidecars (host-sidecars.nix / audio host) —
+    # consumer applies VM-closure changes via `nixling switch
+    # <vm>`.
+    restartIfChanged = false;
   };
 }

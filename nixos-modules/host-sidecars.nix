@@ -50,6 +50,13 @@ in
       # nixling CLI's graphics-up flow. PartOf microvms.target so a
       # system-wide microvm restart cycles us too.
       partOf = [ "microvms.target" ];
+      # v0.1.5: never restart on rebuild. swtpm changing under a
+      # running VM means CH loses the TPM socket → guest TPM is wedged
+      # → Entra/Intune device-bound creds become unreachable. The
+      # consumer applies sidecar changes via `nixling switch <vm>`
+      # (which stops + starts the VM cleanly). Mirrors upstream
+      # microvm.nix's X-RestartIfChanged=false on microvm@.
+      unitConfig.X-RestartIfChanged = false;
       serviceConfig = {
         Type = "exec";
         # H6: dedicated per-VM static user; DynamicUser removed so state is
@@ -102,6 +109,14 @@ in
       wants  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" ];
       after  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" ];
       wantedBy = [ ];
+      # v0.1.5: never restart on rebuild. This sidecar IS the VM
+      # runner (microvm-run / cloud-hypervisor); restarting it kills
+      # the running VM, destroying any in-flight session state (login
+      # session, Entra device-bound tokens in RAM, virtiofsd
+      # connections, etc.). Consumer applies sidecar config changes
+      # via `nixling switch <vm>` (graceful stop + start). Mirrors
+      # upstream microvm.nix's X-RestartIfChanged=false on microvm@.
+      unitConfig.X-RestartIfChanged = false;
       serviceConfig = {
         Type = "exec";
         # C3: run as nixling-${name}-gpu — a dedicated system user,
@@ -116,8 +131,22 @@ in
         RuntimeDirectory = "nixling-gpu/${name}";
         # C: rw ACL on the wayland socket only — NOT the parent /run/user/uid dir.
         # The socket is bind-mounted via BindPaths; sidecar never traverses /run/user/uid.
-        ExecStartPre =
-          ("+${pkgs.acl}/bin/setfacl -m u:nixling-${name}-gpu:rw /run/user/${waylandUid}/wayland-0");
+        ExecStartPre = [
+          # v0.1.5: replicate microvm-set-booted_-start for graphics VMs.
+          # Upstream microvm.nix's microvm-set-booted@<vm>.service only
+          # runs when microvm@<vm>.service starts — which is bypassed for
+          # graphics VMs (the GPU sidecar runs microvm-run directly).
+          # Without `booted`, `nixling status`/`list` can't compute the
+          # `current` vs `booted` mismatch that signals "config changed
+          # while VM kept running; nixling switch <vm> needed". The `+`
+          # prefix runs as root (the sidecar drops to nixling-<vm>-gpu
+          # for the main ExecStart).
+          ("+${pkgs.bash}/bin/bash -c '"
+            + "rm -f /var/lib/nixling/vms/${name}/booted && "
+            + "ln -s \"$(${pkgs.coreutils}/bin/readlink /var/lib/nixling/vms/${name}/current)\" "
+            + "/var/lib/nixling/vms/${name}/booted'")
+          ("+${pkgs.acl}/bin/setfacl -m u:nixling-${name}-gpu:rw /run/user/${waylandUid}/wayland-0")
+        ];
         # Only wayland-0 is visible in the sidecar's mount namespace.
         BindPaths = [ "/run/user/${waylandUid}/wayland-0:/run/nixling-gpu/${name}/wayland-0" ];
         ExecStart = "/var/lib/nixling/vms/${name}/current/bin/microvm-run";
@@ -125,9 +154,11 @@ in
           "WAYLAND_DISPLAY=wayland-0"
           "XDG_RUNTIME_DIR=/run/nixling-gpu/${name}"
         ];
-        # Revoke wayland ACL on stop; ignore failures.
-        ExecStopPost =
-          ("-+${pkgs.acl}/bin/setfacl -x u:nixling-${name}-gpu /run/user/${waylandUid}/wayland-0");
+        # Revoke wayland ACL on stop; remove booted symlink. Ignore failures.
+        ExecStopPost = [
+          ("-+${pkgs.acl}/bin/setfacl -x u:nixling-${name}-gpu /run/user/${waylandUid}/wayland-0")
+          ("-+${pkgs.coreutils}/bin/rm -f /var/lib/nixling/vms/${name}/booted")
+        ];
         Restart = "no";
         TimeoutStartSec = 120;
         TimeoutStopSec = 30;

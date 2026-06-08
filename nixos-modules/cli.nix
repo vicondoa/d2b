@@ -108,6 +108,12 @@ Subcommands:
                         later with 'nixling down <vm>'.
   down    <vm> [--force]  Stop cleanly. Use --force to stop a net VM
                           while its env's workload VMs are still up.
+  restart <vm> [--force]  Stop cleanly, then start. Convenience wrapper
+                          around \`down <vm>\` + \`up <vm>\`. For graphics
+                          VMs you must invoke from a Wayland session
+                          (same as plain \`up\`). \`--force\` is passed
+                          through to the down step. Idempotent: a
+                          stopped VM is just brought up.
   status  [<vm>]        Service / process / SSH health. Always
                         appends a per-bridge health section.
   status  --check-bridges
@@ -307,6 +313,7 @@ ${vmSshKeyCaseBody}
       do_list() {
         printf '%-18s %-9s %-9s %-5s %-7s %-15s %s\n' \
           NAME ENV GRAPHICS TPM USBIP STATIC_IP STATUS
+        local _any_pending=0
         for vm in $(manifest_vms); do
           env=$(vm_get "$vm" env)
           [ "$env" = "null" ] && env="-"
@@ -332,10 +339,50 @@ ${vmSshKeyCaseBody}
           else
             st=stopped
           fi
+          # v0.1.5: surface pending config changes. With
+          # X-RestartIfChanged=false on per-VM sidecars, a
+          # nixos-rebuild updates the unit files but does NOT
+          # cycle the running VM. Compare the per-VM `current`
+          # symlink (latest declared closure) against `booted`
+          # (the closure the running VM actually executed). If
+          # they differ AND the VM is running, the consumer
+          # needs `nixling switch <vm>` to apply changes.
+          if vm_pending_restart "$vm"; then
+            st="$st [pending switch]"
+            _any_pending=1
+          fi
           [ -n "$tag" ] && st="$st ($tag)"
           printf '%-18s %-9s %-9s %-5s %-7s %-15s %s\n' \
             "$vm" "$env" "$g" "$t" "$u" "$ip" "$st"
         done
+        if [ "$_any_pending" -eq 1 ]; then
+          echo
+          echo "(one or more VMs have unapplied config changes; run \`nixling switch <vm>\` to roll over)"
+        fi
+      }
+
+      # v0.1.5: detect whether <vm> is running an out-of-date closure.
+      # Returns 0 (true) when the per-VM `current` symlink points at a
+      # different store path than `booted` AND the VM is up.
+      # Returns 1 (false) otherwise:
+      #  - VM stopped (nothing booted; not "pending").
+      #  - `booted` missing (graphics VMs pre-v0.1.5; first-run case).
+      #  - `current` == `booted` (no change needed).
+      vm_pending_restart() {
+        local _vm="$1"
+        local _statedir="/var/lib/nixling/vms/$_vm"
+        local _booted_target _current_target
+        _booted_target=$(readlink "$_statedir/booted" 2>/dev/null) || return 1
+        _current_target=$(readlink "$_statedir/current" 2>/dev/null) || return 1
+        [ -z "$_booted_target" ] || [ -z "$_current_target" ] && return 1
+        [ "$_booted_target" = "$_current_target" ] && return 1
+        # Different. Is the VM actually running?
+        if systemctl is-active --quiet "nixling@$_vm.service" 2>/dev/null \
+           || systemctl is-active --quiet "microvm@$_vm.service" 2>/dev/null \
+           || vm_running "$_vm"; then
+          return 0
+        fi
+        return 1
       }
 
 
@@ -803,6 +850,34 @@ EOF
         fi
       }
 
+      # v0.1.5: convenience wrapper. With X-RestartIfChanged=false on
+      # the per-VM sidecars, a nixos-rebuild leaves running VMs on
+      # the OLD closure; the user has to manually cycle one. The
+      # nixling status / list `pending-restart` indicator tells the
+      # user WHICH VMs need this; `nixling restart <vm>` performs
+      # the cycle in one step. Graphics VMs still require a Wayland
+      # session (the up step would error otherwise).
+      #
+      # Optional second arg `--force` is forwarded to `down` so net
+      # VMs can be restarted without first stopping the env's
+      # workloads.
+      do_restart() {
+        require_vm "''${1:-}"
+        VM="$1"
+        local FORCE="''${2:-}"
+        echo "nixling: restarting '$VM' (down then up)..."
+        # Down is a no-op if already stopped, so no need to test
+        # state first. The function logs its own progress.
+        do_down "$VM" "$FORCE"
+        # Brief settle so any teardown side effects (tap removal,
+        # virtiofsd socket cleanup) finish before we re-up.
+        ${pkgs.coreutils}/bin/sleep 1
+        # Detach mode is not propagated — restart is interactive by
+        # default for graphics VMs (same as a fresh `up`). Headless
+        # VMs are systemd-managed regardless.
+        do_up "$VM" false
+      }
+
       do_down() {
         require_vm "''${1:-}"
         VM="$1"
@@ -1121,6 +1196,21 @@ BASH
           else
             echo "sshd@$STATIC_IP:22: unreachable"
           fi
+        fi
+        # v0.1.5: pending-restart hint. Per-VM sidecars carry
+        # X-RestartIfChanged=false, so a nixos-rebuild updates unit
+        # files but does NOT bounce the running VM. Surface that
+        # mismatch here so the user knows when `nixling switch <vm>`
+        # is required.
+        if vm_pending_restart "$VM"; then
+          local _booted _current
+          _booted=$(readlink "/var/lib/nixling/vms/$VM/booted" 2>/dev/null || echo "(none)")
+          _current=$(readlink "/var/lib/nixling/vms/$VM/current" 2>/dev/null || echo "(none)")
+          echo "pending-restart: YES — config changed; run \`nixling switch $VM\` to apply"
+          echo "  booted : $_booted"
+          echo "  current: $_current"
+        else
+          echo "pending-restart: no"
         fi
         echo
         do_check_bridges || true
@@ -2794,6 +2884,7 @@ EOF
           do_up "$_VM" "$_DETACH"
           ;;
         down)    shift; do_down "$@" ;;
+        restart) shift; do_restart "$@" ;;
         status)  shift; do_status "$@" ;;
         usb)     shift; do_usb "$@" ;;
         console) shift; do_console "$@" ;;

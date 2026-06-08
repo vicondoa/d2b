@@ -833,6 +833,15 @@ in
     systemd.services = (lib.mapAttrs'
       (name: _:
         lib.nameValuePair "microvm-virtiofsd@${name}" {
+          # v0.1.5: don't let NixOS override upstream microvm.nix's
+          # X-RestartIfChanged=false. Framework adds per-VM
+          # serviceConfig (ExecStartPre marker check, hardened
+          # ExecStart wrapper, sandbox stanza); without this, every
+          # rebuild restarts virtiofsd → CH loses the virtiofs
+          # socket → guest /nix/.ro-store wedges → VM unusable.
+          # Mirrors per-VM sidecars (host-sidecars.nix / audio host).
+          # Consumer applies changes via `nixling switch <vm>`.
+          restartIfChanged = false;
           serviceConfig = {
             # Layer 1 of the belt-and-suspenders marker gate
             # (security findings nixos-1 / software-1 / security-1).

@@ -67,6 +67,12 @@ in
       # file means the template's ExecStart/ExecStop are NOT
       # inherited, breaking systemd unit validation).
       wantedBy = [ ];
+      # v0.1.5: the user-facing wrapper inherits the same "don't
+      # cycle on rebuild" policy as the backend microvm@ and the
+      # per-VM sidecars. Restarting nixling@<vm> propagates to
+      # microvm@<vm> via BindsTo, which would defeat the purpose
+      # of the underlying X-RestartIfChanged=false guards.
+      restartIfChanged = false;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;

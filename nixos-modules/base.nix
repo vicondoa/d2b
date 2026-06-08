@@ -163,8 +163,22 @@ in
           exit 0
         fi
 
+        # Resolve primary group via the same getent (passwd field 4 is
+        # the GID; convert GID → group name with getent group). v0.1.5
+        # fix: pre-v0.1.5 the script assumed group = $SSH_USER which
+        # only holds when the user was created with `users.users.<u>.group
+        # = "<u>"` or via DynamicUser. NixOS's `isNormalUser = true`
+        # default puts the user in the `users` group, so the old
+        # assumption EACCESed `install: invalid group '<u>'`.
+        SSH_GID=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f4)
+        SSH_GROUP=$(${pkgs.glibc.getent}/bin/getent group "$SSH_GID" | ${pkgs.coreutils}/bin/cut -d: -f1)
+        if [ -z "$SSH_GROUP" ]; then
+          echo "nixling-load-host-keys: could not resolve primary group for '$SSH_USER' (gid=$SSH_GID) — skipping" >&2
+          exit 0
+        fi
+
         ${pkgs.coreutils}/bin/install -d -m 0700 -o "$SSH_USER" \
-          -g "$SSH_USER" "$USER_HOME/.ssh"
+          -g "$SSH_GROUP" "$USER_HOME/.ssh"
 
         AUTH_KEYS="$USER_HOME/.ssh/authorized_keys"
         TMP=$(${pkgs.coreutils}/bin/mktemp "$USER_HOME/.ssh/.authorized_keys.XXXXXX")
@@ -180,7 +194,7 @@ in
           > "$TMP" || true
 
         ${pkgs.coreutils}/bin/install -m 0600 -o "$SSH_USER" \
-          -g "$SSH_USER" "$TMP" "$AUTH_KEYS"
+          -g "$SSH_GROUP" "$TMP" "$AUTH_KEYS"
 
         echo "nixling-load-host-keys: $(${pkgs.coreutils}/bin/wc -l < "$AUTH_KEYS") key(s) installed in $AUTH_KEYS for $SSH_USER"
       ''}";
