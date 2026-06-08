@@ -2656,11 +2656,23 @@ EOF
 
           # ── Strict: bridge_isolated_workload ──────────────────────────────
           # P6r2 security-r2-1: keyed by VM; assert every workload has isolated==true.
+          # v0.1.4 fix: skip when the VM isn't running. The bridge-isolation
+          # property is a runtime attribute of the workload's tap; a stopped
+          # VM has no tap, so jq returns null. Mirrors the
+          # `AUDIT SKIP [virtiofsd.<vm>]: daemon not running` semantic
+          # already applied to the virtiofsd check above.
           for _vm in $(manifest_vms); do
             [ "$(vm_get "$_vm" isNetVm)" = "true" ] && continue
             local _bridge
             _bridge=$(vm_get "$_vm" bridge)
             [ "$_bridge" = "null" ] || [ -z "$_bridge" ] && continue
+            # Skip stopped VMs: the tap doesn't exist on the bridge.
+            local _vm_active
+            _vm_active=$(systemctl is-active "microvm@''${_vm}.service" 2>/dev/null || echo inactive)
+            if [ "$_vm_active" != "active" ]; then
+              echo "AUDIT SKIP [bridge_isolated_workload.$_vm]: VM not running" >&2
+              continue
+            fi
             local _biso
             _biso=$(echo "$_bridge_json" | jq -r --arg v "$_vm" '.[$v].isolated')
             [ "$_biso" = "true" ] \

@@ -50,7 +50,17 @@ in
           ${pkgs.acl}/bin/setfacl -m "g::r-x" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-gpu:rwx" /var/lib/nixling/vms/${name} || true
           ${pkgs.acl}/bin/setfacl -d -m "g::r-x" /var/lib/nixling/vms/${name} || true
-          ${pkgs.acl}/bin/setfacl -d -m "u:nixling-${name}-gpu:rw" /var/lib/nixling/vms/${name} || true
+          ${pkgs.acl}/bin/setfacl -d -m "u:nixling-${name}-gpu:rw" /var/lib/nixling/vms/${name} || true${lib.optionalString cfg.vms.${name}.tpm.enable ''
+          # v0.1.4 fix: nixling-${name}-swtpm needs +x on the parent
+          # state dir to traverse into its `swtpm/` subdir (where
+          # systemd's StateDirectory= places it). Without this grant
+          # the swtpm service starts but fails to open
+          # tpm2-00.permall with EACCES, libtpms enters failure mode,
+          # and the VM boots with a freshly-initialised TPM —
+          # triggering Entra/Intune device-tampering alerts for
+          # tenant-enrolled VMs.
+          ${pkgs.acl}/bin/setfacl -m "u:nixling-${name}-swtpm:--x" /var/lib/nixling/vms/${name} || true
+        ''}
           # security-r8-audio-13: iterate over EVERY *.img disk in the
           # state dir, not just var.img. microvm.nix VMs can declare
           # arbitrary additional volumes — all of them are owned by

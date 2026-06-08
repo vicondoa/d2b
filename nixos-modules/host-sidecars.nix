@@ -176,6 +176,16 @@ in
           # Default render node on the host. Override per-VM via the
           # microvm.nix runner if the host has multiple GPUs.
           "/dev/dri/renderD128 rw"
+          # v0.1.4 fix: cloud-hypervisor calls open("/dev/net/tun") +
+          # ioctl(TUNSETIFF, …) to attach to its VM's tap. Pre-v0.1.4
+          # this device wasn't in DeviceAllow, so DevicePolicy=closed
+          # blocked the open() with EPERM and the VM crashed in early
+          # boot with "Cannot create virtio-net device / Couldn't open
+          # /dev/net/tun". The tap itself is created by upstream
+          # microvm.nix's microvm-tap-interfaces@<vm>.service helper
+          # (which runs as root, with CAP_NET_ADMIN); we only need
+          # access to the cdev to attach.
+          "/dev/net/tun rw"
         ];
         UMask = "0077";
       };

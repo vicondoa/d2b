@@ -10,6 +10,60 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.4] - 2026-05-19
+
+Patch release. Four framework bugs surfaced during the first real
+consumer migration's VM bring-up (paydro's /etc/nixos, after v0.1.3
+got `nixling@<vm>` units working but the actual graphics+TPM VM
+refused to boot).
+
+### Fixed
+
+- **`nixos-modules/host-sidecars.nix`**: per-VM GPU sidecar
+  (`nixling-<vm>-gpu.service`) had `DevicePolicy = "closed"` without
+  `/dev/net/tun` in `DeviceAllow`. Cloud-hypervisor needs to
+  `open("/dev/net/tun")` + `ioctl(TUNSETIFF, …)` to attach to the
+  VM's tap (created earlier by upstream microvm.nix's
+  `microvm-tap-interfaces@<vm>.service` helper); without it
+  graphics VMs crash in early boot with "Cannot create virtio-net
+  device / Couldn't open /dev/net/tun / Operation not permitted".
+  Added `/dev/net/tun rw` to DeviceAllow.
+
+- **`nixos-modules/host-activation.nix`**: `nixlingVmStatePerms`
+  granted ACL rwx on `/var/lib/nixling/vms/<vm>/` to
+  `nixling-<vm>-gpu` but not to `nixling-<vm>-swtpm`. The swtpm
+  service starts as the swtpm user, opens its `StateDirectory=`
+  (which systemd creates at the correct path), then tries to read
+  `tpm2-00.permall` — and EACCESes because traversing the parent
+  dir requires +x for the swtpm user. libtpms enters failure mode
+  and the VM boots with a freshly-initialised TPM, triggering
+  Entra/Intune device-tampering alerts for tenant-enrolled VMs.
+  Added `setfacl -m "u:nixling-<vm>-swtpm:--x" <stateDir>` (gated
+  on `vm.tpm.enable`).
+
+- **`nixos-modules/base.nix`**: `nixling-load-host-keys.service`
+  inside the guest referenced `${"$"}{pkgs.coreutils}/bin/getent` —
+  but `getent` is in glibc, not coreutils. The lookup silently
+  failed with "No such file or directory" and the script printed
+  `user '<u>' not found in /etc/passwd — skipping` even though the
+  user existed. Result: nixling-managed pubkeys + the consumer's
+  `userAuthorizedKeys` never reached the guest's
+  `authorized_keys` — SSH worked only via any pubkey statically
+  baked into the VM's `users.users.<u>.openssh.authorizedKeys.keys`.
+  Fixed path to `${"$"}{pkgs.glibc.getent}/bin/getent`.
+
+- **`nixos-modules/cli.nix`** (audit `--strict`): the
+  `bridge_isolated_workload.<vm>` check ran unconditionally and
+  STRICT-FAILed when the VM wasn't running (the workload tap
+  doesn't exist on the bridge, so jq returned null). With the
+  framework's default `nixling.vms.<vm>.autostart = false`, this
+  blocked every post-activation `nixling-audit-check.service`
+  hook → `nixos-rebuild switch` returned non-zero exit code 4.
+  Added a `systemctl is-active microvm@<vm>` precondition that
+  emits `AUDIT SKIP [bridge_isolated_workload.<vm>]: VM not
+  running` (mirrors the existing virtiofsd skip-when-down
+  semantic).
+
 ## [0.1.3] - 2026-05-19
 
 Patch release. Two more framework bugs surfaced during the first

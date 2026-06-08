@@ -154,7 +154,7 @@ in
         # Look up the user's home from /etc/passwd at boot — declarative
         # users.users.<u>.home would also work but requires propagating
         # the value through extra options.
-        if ! USER_HOME=$(${pkgs.coreutils}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f6); then
+        if ! USER_HOME=$(${pkgs.glibc.getent}/bin/getent passwd "$SSH_USER" | ${pkgs.coreutils}/bin/cut -d: -f6); then
           echo "nixling-load-host-keys: user '$SSH_USER' not found in /etc/passwd — skipping" >&2
           exit 0
         fi
