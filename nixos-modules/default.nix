@@ -45,6 +45,7 @@
     ./cli.nix
     ./host-ch-exporter.nix
     ./components/audio/host.nix
+    ./components/video/host.nix
     ./components/observability/default.nix
   ];
 

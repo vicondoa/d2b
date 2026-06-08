@@ -27,9 +27,9 @@
 # user's ~/.ssh/authorized_keys.
 #
 # Operator-visible side effects (none under normal operation):
-#   - `<keysDir>/<vm>_ed25519`        owner root:root mode 0640
-#                                     with group=nixling-launcher ACL
-#                                     so CLI subcommands can ssh.
+#   - `<keysDir>/<vm>_ed25519`        owner root:nixling-launcher mode 0640.
+#                                     The CLI copies to a tempfile (mode 0600,
+#                                     caller-owned) before passing to ssh.
 #   - `<keysDir>/<vm>_ed25519.pub`    owner root:root mode 0644.
 #   - `<stateDir>/vms/<vm>/host-keys/host.pub`
 #   - `<stateDir>/vms/<vm>/host-keys/user-authorized-keys`
@@ -66,7 +66,7 @@ let
     priv="$vm_keys_dir/${name}_ed25519"
     pub="$priv.pub"
 
-    install -d -m 0700 -o root -g root "$vm_keys_dir"
+    install -d -m 0710 -o root -g nixling-launcher "$vm_keys_dir"
     install -d -m 0755 -o root -g root "$vm_state_dir" 2>/dev/null || true
     install -d -m 0755 -o root -g root "$vm_host_keys_dir"
 
@@ -89,12 +89,18 @@ let
     fi
 
     # Repair modes on every activation. Idempotent.
-    chown root:root "$priv" "$pub"
+    # Owner = root, group = nixling-launcher, mode = 0640.
+    # ssh's identity-file permission check requires the caller to
+    # OWN the file or the file to be 0600 with no group/other. We
+    # can't satisfy either here (root owns, launcher-group reads).
+    # The CLI's vmLaunchScript copies the key to a per-launch
+    # tempfile in $XDG_RUNTIME_DIR with the caller's UID + 0600
+    # before passing it to ssh. The 0640 mode lets the copy work
+    # without sudo.
+    chown root:nixling-launcher "$priv"
     chmod 0640 "$priv"
+    chown root:root "$pub"
     chmod 0644 "$pub"
-    # ACL: nixling-launcher group can read the private key (so the
-    # CLI / launcher .desktop entries can ssh without sudo).
-    ${pkgs.acl}/bin/setfacl -m "g:nixling-launcher:r" "$priv" || true
 
     # Stage the per-VM host-keys share for the guest to mount.
     install -m 0644 -o root -g root "$pub" "$vm_host_keys_dir/host.pub"
@@ -117,7 +123,17 @@ in
   # without racing with the first-ever activation's directory
   # creation.
   systemd.tmpfiles.rules = [
-    "d ${cfg.site.keysDir}             0700 root root -"
+    # Mode 0710 + group nixling-launcher: the owning group's --x bit
+    # grants directory traversal so launcher-group members can stat +
+    # read private keys inside (each key carries its own
+    # group:nixling-launcher:r-- ACL). Prior to this fix the mode was
+    # 0700 root:root and a named-group ACL (group:nixling-launcher:--x)
+    # provided traverse. That broke because: (a) `d 0700` forces the
+    # POSIX ACL mask to --- which neutralizes named-group entries, and
+    # (b) systemd-tmpfiles skips the `a+` fix-up rule due to the
+    # microvm→root ownership transition on /var/lib/nixling. Using
+    # traditional group bits avoids ACLs entirely.
+    "d ${cfg.site.keysDir}             0710 root nixling-launcher -"
     "f ${cfg.site.keysDir}/.lock       0600 root root -"
   ];
 
@@ -140,14 +156,12 @@ in
     ${generateKeysBody}
 
     # Grant the nixling-launcher group traverse-only on the keys
-    # directory itself so members can read the individual key files
-    # (which have their own per-file ACL granting :r). This MUST run
-    # AFTER generateKeysBody because each VM's per-script call does
-    # `install -d -m 0700 -o root -g root "$vm_keys_dir"` which resets
-    # the dir mode and thereby strips named ACLs from the effective
-    # permission mask. Re-apply :--x AND bump the mask to :--x so the
-    # per-file :r grants stay effective.
+    # directory itself so members can stat + read the individual key
+    # files (which are chown'd root:nixling-launcher 0640). This MUST
+    # run AFTER generateKeysBody because each VM's per-script call
+    # does `install -d -m 0700` which resets the dir mode and strips
+    # ACLs from the effective permission mask.
     ${pkgs.acl}/bin/setfacl -m "g:nixling-launcher:--x" "${cfg.site.keysDir}" || true
-    ${pkgs.acl}/bin/setfacl -m "m::--x" "${cfg.site.keysDir}" || true
+    ${pkgs.acl}/bin/setfacl -m "m::r-x" "${cfg.site.keysDir}" || true
   '';
 }

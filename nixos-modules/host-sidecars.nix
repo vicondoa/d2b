@@ -118,8 +118,8 @@ in
     }) (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms))
     // (lib.mapAttrs' (name: _: lib.nameValuePair "nixling-${name}-gpu" {
       description = "nixling GPU+hypervisor sidecar for microVM ${name}";
-      wants  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" ];
-      after  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" ];
+      wants  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" "nixling-${name}-video.service" ];
+      after  = [ "network.target" "nixling-${name}-swtpm.service" "nixling-${name}-snd.service" "nixling-${name}-video.service" ];
       wantedBy = [ ];
       # v0.1.5: never restart on rebuild. This sidecar IS the VM
       # runner (microvm-run / cloud-hypervisor); restarting it kills
@@ -168,6 +168,18 @@ in
             + "ln -s \"$(${pkgs.coreutils}/bin/readlink /var/lib/nixling/vms/${name}/current)\" "
             + "/var/lib/nixling/vms/${name}/booted'")
           ("+${pkgs.acl}/bin/setfacl -m u:nixling-${name}-gpu:rw /run/user/${waylandUid}/wayland-0")
+          # Wait for the video decoder sidecar socket (if video service exists).
+          # Exit non-zero if the socket doesn't appear within 10 seconds, so
+          # CH doesn't start with a missing --vhost-user-media socket.
+          ("${pkgs.bash}/bin/bash -c '"
+            + "sock=/run/nixling-video/${name}/video.sock; "
+            + "if ${pkgs.systemd}/bin/systemctl is-enabled nixling-${name}-video.service >/dev/null 2>&1; then "
+            + "  for i in $(${pkgs.coreutils}/bin/seq 1 20); do "
+            + "    [ -S \"$sock\" ] && break; "
+            + "    ${pkgs.coreutils}/bin/sleep 0.5; "
+            + "  done; "
+            + "  [ -S \"$sock\" ] || { echo \"video socket $sock not ready after 10s\"; exit 1; }; "
+            + "fi'")
         ];
         # Only wayland-0 is visible in the sidecar's mount namespace.
         BindPaths = [ "/run/user/${waylandUid}/wayland-0:/run/nixling-gpu/${name}/wayland-0" ];
@@ -187,6 +199,32 @@ in
         Environment = [
           "WAYLAND_DISPLAY=wayland-0"
           "XDG_RUNTIME_DIR=/run/nixling-gpu/${name}"
+          # virglrenderer's video subsystem calls vaGetDisplayDRM() →
+          # vaInitialize() which needs to find a VA-API driver. On
+          # NVIDIA hosts with the proprietary driver, libva auto-
+          # detection may fall back to Mesa/LLVMPIPE instead of
+          # nvidia-vaapi-driver because the EGL context is Mesa.
+          # Force the correct driver explicitly.
+          "LIBVA_DRIVERS_PATH=/run/opengl-driver/lib/dri"
+          "LIBVA_DRIVER_NAME=nvidia"
+          "NV_VAAPI_BACKEND=direct"
+          # Enable VA-API debug logging so virglrenderer's video init
+          # and decode operations are visible in the service journal.
+          "LIBVA_MESSAGING_LEVEL=2"
+          # Venus render server needs the Vulkan loader in its path
+          # plus /run/opengl-driver/lib for NVIDIA's libGLX_nvidia.so
+          "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib:/run/opengl-driver/lib"
+          # Force NVIDIA Vulkan ICD so Venus proxies to NVDEC, not llvmpipe
+          "VK_DRIVER_FILES=/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json"
+          # CRITICAL: exclude NVIDIA's EGL vendor from loading.
+          # NVIDIA's libEGL_nvidia.so probes /dev/dri/renderD128 during
+          # EGL init and taints the per-process NVIDIA kernel driver
+          # state. After that, nvidia-vaapi-driver's NVDEC decode path
+          # silently falls back to software. By loading only Mesa's EGL
+          # (which virglrenderer needs for GL — it falls back to
+          # llvmpipe anyway since NVIDIA EGL lacks EGL_MESA_drm_image),
+          # the NVIDIA kernel state stays clean and VA-API NVDEC works.
+          "__EGL_VENDOR_LIBRARY_FILENAMES=/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json"
         ];
         # Revoke wayland ACL on stop; remove booted symlink. Ignore failures.
         ExecStopPost = [
@@ -251,6 +289,17 @@ in
           # (which runs as root, with CAP_NET_ADMIN); we only need
           # access to the cdev to attach.
           "/dev/net/tun rw"
+          # NVIDIA device access for Venus Vulkan + VA-API NVDEC.
+          # char-195:* covers nvidiactl (195:255) and nvidia0 (195:0).
+          # char-510:* covers nvidia-uvm (510:0).
+          # Explicit paths as fallback for systemd BPF filter compatibility.
+          "char-195:* rw"
+          "char-510:* rw"
+          "/dev/nvidiactl rw"
+          "/dev/nvidia0 rw"
+          "/dev/nvidia-uvm rw"
+          # Venus blob memory needs /dev/udmabuf
+          "/dev/udmabuf rw"
         ];
         UMask = "0077";
       };

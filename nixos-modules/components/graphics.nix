@@ -12,6 +12,18 @@
 { lib, pkgs, config, ... }:
 
 let
+  # Patched virglrenderer: relax the "Mesa Gallium" vendor check in
+  # virgl_video_init() so nvidia-vaapi-driver (which returns "nvidia")
+  # isn't rejected. The rest of virgl_video.c uses standard libva API
+  # that nvidia-vaapi-driver implements. Without this patch, hardware
+  # video decode is unavailable on NVIDIA hosts because virglrenderer
+  # refuses to init the video subsystem.
+  virglrendererPatched = pkgs.virglrenderer.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [
+      ../../pkgs/patches/virglrenderer-allow-nvidia-vaapi.patch
+    ];
+  });
+
   # Our vendored, spectrum-os-patched cloud-hypervisor build (see
   # modules/nixling/ext/spectrum-ch/). Pulled into a let-binding so
   # the W2 assertion below can read `passthru.testedWithCrosvmRev`
@@ -104,15 +116,124 @@ let
     paths = [ crosvmNoGraphicalConsole crosvmSeccomp ];
   };
 
+  # Wrap crosvmPatched so `crosvm device gpu` gets both
+  # `"implicit-render-server":true` in the --params JSON AND
+  # `--gpu-device-node /dev/dri/renderD128` so virglrenderer's
+  # get_drm_fd callback can open the host GPU for VA-API video
+  # decode. The --gpu-device-node flag is our crosvm patch
+  # (crosvm-gpu-device-node.patch); without it, rutabaga_gfx logs
+  # "no valid GPU path provided" and video decode falls back to
+  # software.
+  crosvmWithRenderServer = pkgs.writeShellScriptBin "crosvm" ''
+    newargs=()
+    inject_gpu_node=false
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--params" ] && [ $# -ge 2 ]; then
+        patched=$(printf '%s' "$2" \
+          | ${pkgs.jq}/bin/jq -c '
+              . + {"implicit-render-server": true, "external-blob": true}
+              | .["context-types"] = (.["context-types"] // "" | split(":") + ["venus"] | unique | join(":"))
+            ')
+        newargs+=( "--params" "$patched" )
+        inject_gpu_node=true
+        shift 2
+      else
+        newargs+=( "$1" )
+        shift
+      fi
+    done
+    if [ "$inject_gpu_node" = "true" ] && [ -e /dev/dri/renderD128 ]; then
+      newargs+=( "--gpu-device-node" "/dev/dri/renderD128" )
+    fi
+    exec ${crosvmPatched}/bin/crosvm "''${newargs[@]}"
+  '';
+
   # security-r8-audio-11: port of talex5/crosvm@993b8e756 "Don't open
   # a graphical console window" to the vhost-user-gpu backend. See
   # the patch file for the full rationale. Without this, every
   # graphics VM start creates a chromeless, transparent, undecorated
   # window titled "crosvm" on the host compositor.
-  crosvmNoGraphicalConsole = pkgs.crosvm.overrideAttrs (old: {
+  crosvmNoGraphicalConsole = (pkgs.crosvm.override {
+    virglrenderer = virglrendererPatched;
+  }).overrideAttrs (old: {
+    # Add libva for virglrenderer's VA-API video init path.
+    buildInputs = (old.buildInputs or []) ++ [ pkgs.libva ];
     patches = (old.patches or [ ]) ++ [
       ../../pkgs/patches/crosvm-no-graphical-console.patch
+      ../../pkgs/patches/crosvm-gpu-device-node.patch
     ];
+    # Patch vendored rutabaga_gfx to add use_video() flag and
+    # set_use_video() builder method, then enable it in crosvm's
+    # build_rutabaga when a GPU render node path is present.
+    #
+    # NOTE: use_video is DISABLED (set to false) because Mesa 26.1's
+    # virgl VA-API driver deadlocks when the host advertises video
+    # caps: the guest sends VIRGL_CCMD_CREATE_VIDEO_CODEC which
+    # blocks the GPU command loop while the host does synchronous
+    # CUDA/NVDEC operations, causing a protocol-level hang.
+    # The plumbing is kept so we can re-enable once virglrenderer
+    # gains async video command processing.
+    postPatch = (old.postPatch or "") + ''
+      # 3. Enable video in build_rutabaga when GPU path is present
+      substituteInPlace devices/src/virtio/gpu/mod.rs \
+        --replace-fail \
+          'let use_render_server =' \
+          'let _use_video = rutabaga_paths.iter().any(|p| p.path_type == RUTABAGA_PATH_TYPE_GPU);
+    let use_video = false; // disabled: virgl video forwarding deadlocks (see comment above)
+    let _ = _use_video;
+    let use_render_server ='
+
+      substituteInPlace devices/src/virtio/gpu/mod.rs \
+        --replace-fail \
+          '.set_use_render_server(use_render_server)' \
+          '.set_use_render_server(use_render_server)
+        .set_use_video(use_video)'
+    '';
+    # Vendored rutabaga_gfx patches. Must use preBuild, not postPatch,
+    # because cargo-setup-hook unsets $cargoDepsCopy after patchPhase.
+    # The vendored source lives at /build/<pkg>-vendor/.
+    preBuild = (old.preBuild or "") + ''
+      VENDOR_DIR=$(echo /build/*-vendor)
+
+      # 1. Add use_video to VirglRendererFlags
+      substituteInPlace $(find $VENDOR_DIR -path '*/rutabaga_gfx-*/src/rutabaga_utils.rs') \
+        --replace-fail \
+          'pub fn use_render_server(self, v: bool) -> VirglRendererFlags {
+        self.set_flag(VIRGLRENDERER_RENDER_SERVER, v)
+    }
+}' \
+          'pub fn use_render_server(self, v: bool) -> VirglRendererFlags {
+        self.set_flag(VIRGLRENDERER_RENDER_SERVER, v)
+    }
+
+    /// Enable video decode acceleration through virglrenderer.
+    pub fn use_video(self, v: bool) -> VirglRendererFlags {
+        // VIRGL_RENDERER_USE_VIDEO = 1 << 11 = 2048
+        self.set_flag(1 << 11, v)
+    }
+}'
+
+      # 2. Add set_use_video to RutabagaBuilder
+      substituteInPlace $(find $VENDOR_DIR -path '*/rutabaga_gfx-*/src/rutabaga_core.rs') \
+        --replace-fail \
+          'pub fn set_use_render_server(mut self, v: bool) -> RutabagaBuilder {
+        self.virglrenderer_flags = self.virglrenderer_flags.use_render_server(v);' \
+          'pub fn set_use_render_server(mut self, v: bool) -> RutabagaBuilder {
+        self.virglrenderer_flags = self.virglrenderer_flags.use_render_server(v);
+        self
+    }
+
+    pub fn set_use_video(mut self, v: bool) -> RutabagaBuilder {
+        self.virglrenderer_flags = self.virglrenderer_flags.use_video(v);'
+
+      # 4. Remove O_NONBLOCK from get_drm_fd open flags.
+      # nvidia-vaapi-driver segfaults when vaInitialize receives a
+      # DRM fd opened with O_NONBLOCK.
+      substituteInPlace $(find $VENDOR_DIR -path '*/rutabaga_gfx-*/src/virgl_renderer.rs') \
+        --replace-fail \
+          '.custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOCTTY)' \
+          '.custom_flags(libc::O_CLOEXEC | libc::O_NOCTTY)'
+    '';
   });
 
   # The seccomp .policy files that ship with the crosvm rev pinned
@@ -270,12 +391,13 @@ in
       # visible artifact is suppressed.
       graphics.crosvmPackage =
         if config.nixling.graphics.crossDomainTrusted
-        then crosvmPatched
+        then crosvmWithRenderServer
         else
           let
             realCrosvm = crosvmPatched;
           in pkgs.writeShellScriptBin "crosvm" ''
             newargs=()
+            inject_gpu_node=false
             while [ $# -gt 0 ]; do
               if [ "$1" = "--params" ] && [ $# -ge 2 ]; then
                 stripped=$(printf '%s' "$2" \
@@ -283,13 +405,22 @@ in
                       -e 's/cross-domain://g' \
                       -e 's/:cross-domain//g' \
                       -e 's/cross-domain//g')
-                newargs+=( "--params" "$stripped" )
+                patched=$(printf '%s' "$stripped" \
+                  | ${pkgs.jq}/bin/jq -c '
+                      . + {"implicit-render-server": true, "external-blob": true}
+                      | .["context-types"] = (.["context-types"] // "" | split(":") + ["venus"] | unique | join(":"))
+                    ')
+                newargs+=( "--params" "$patched" )
+                inject_gpu_node=true
                 shift 2
               else
                 newargs+=( "$1" )
                 shift
               fi
             done
+            if [ "$inject_gpu_node" = "true" ] && [ -e /dev/dri/renderD128 ]; then
+              newargs+=( "--gpu-device-node" "/dev/dri/renderD128" )
+            fi
             exec ${realCrosvm}/bin/crosvm "''${newargs[@]}"
           '';
 
@@ -346,6 +477,13 @@ in
       # Same idea for GL: skip the "find a real card" probing phase and
       # tell Mesa's DRI loader directly that virtio_gpu is what to use.
       MESA_LOADER_DRIVER_OVERRIDE = "virtio_gpu";
+
+      # Tell libva to use Mesa's virtio-gpu VA-API driver, which proxies
+      # video decode commands through the virtio-gpu channel to the host.
+      # Requires `implicit-render-server:true` on the crosvm GPU sidecar
+      # (set in the crosvmWithRenderServer wrapper above) so
+      # virglrenderer gets a DRM fd for the host GPU.
+      LIBVA_DRIVER_NAME = "virtio_gpu";
 
       # Mesa 24+ ships zink (the Vulkan-on-GL layer) as a GL fallback
       # via the kopper loader. With virtio-gpu but no exposed Vulkan

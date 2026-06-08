@@ -1,0 +1,116 @@
+diff -ruN a/src/virglrenderer.c b/src/virglrenderer.c
+--- a/src/virglrenderer.c	2026-05-20 17:15:04.126789412 -0700
++++ b/src/virglrenderer.c	2026-05-20 17:15:45.415452631 -0700
+@@ -54,6 +54,7 @@
+ #include "virtgpu_drm.h"
+ 
+ #include "virgl_context.h"
++#include "vrend/virgl_video.h"
+ #include "virgl_fence.h"
+ #include "virgl_resource.h"
+ #include "virgl_util.h"
+@@ -855,6 +856,15 @@
+             drm_fd = cbs->get_drm_fd(cookie);
+       }
+ 
++#ifdef ENABLE_VIDEO
++      if (flags & VIRGL_RENDERER_USE_VIDEO) {
++         if (virgl_video_early_init(drm_fd) == 0)
++            virgl_info("early video init succeeded\n");
++         else
++            virgl_warn("early video init failed\n");
++      }
++#endif
++
+       ret = vrend_winsys_init(flags, drm_fd);
+       if (ret) {
+          if (drm_fd >= 0)
+diff -ruN a/src/vrend/virgl_video.c b/src/vrend/virgl_video.c
+--- a/src/vrend/virgl_video.c	2026-05-20 17:15:04.121859526 -0700
++++ b/src/vrend/virgl_video.c	2026-05-20 17:15:31.137124981 -0700
+@@ -63,6 +63,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <fcntl.h>
+ #include <epoxy/gl.h>
+ #include <epoxy/egl.h>
+ #include <va/va.h>
+@@ -541,6 +542,23 @@
+     return codec->ref_pic_list[idx]->va_sfc;
+ }
+ 
++
++int virgl_video_early_init(int drm_fd)
++{
++    int video_fd, major_ver, minor_ver;
++    if (va_dpy) return 0;
++    video_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
++    if (video_fd < 0 && drm_fd >= 0) video_fd = dup(drm_fd);
++    if (video_fd < 0) return -1;
++    va_dpy = vaGetDisplayDRM(video_fd);
++    if (!va_dpy) { close(video_fd); return -1; }
++    if (vaInitialize(va_dpy, &major_ver, &minor_ver) != VA_STATUS_SUCCESS) {
++        va_dpy = NULL; close(video_fd); return -1;
++    }
++    virgl_info("early VA-API init: version %d.%d\n", major_ver, minor_ver);
++    return 0;
++}
++
+ int virgl_video_init(int drm_fd,
+                      struct virgl_video_callbacks *cbs, unsigned int flags)
+ {
+@@ -550,22 +568,12 @@
+ 
+     (void)flags;
+ 
+-    if (drm_fd < 0) {
+-        virgl_error("invalid drm fd: %d\n", drm_fd);
+-        return -1;
+-    }
+-
+-    va_dpy = vaGetDisplayDRM(drm_fd);
+     if (!va_dpy) {
+-        virgl_error("get va display failed\n");
+-        return -1;
+-    }
+-
+-    va_stat = vaInitialize(va_dpy, &major_ver, &minor_ver);
+-    if (VA_STATUS_SUCCESS != va_stat) {
+-        virgl_error("init va library failed\n");
+-        virgl_video_destroy();
+-        return -1;
++        if (drm_fd < 0) { virgl_error("invalid drm fd: %d\n", drm_fd); return -1; }
++        va_dpy = vaGetDisplayDRM(drm_fd);
++        if (!va_dpy) { virgl_error("get va display failed\n"); return -1; }
++        va_stat = vaInitialize(va_dpy, &major_ver, &minor_ver);
++        if (VA_STATUS_SUCCESS != va_stat) { virgl_error("init va library failed\n"); virgl_video_destroy(); return -1; }
+     }
+ 
+     virgl_info("VA-API version: %d.%d\n", major_ver, minor_ver);
+@@ -573,11 +581,8 @@
+     driver = vaQueryVendorString(va_dpy);
+     virgl_info("Driver version: %s\n", driver ? driver : "<unknown>");
+ 
+-    if (!driver || !strstr(driver, "Mesa Gallium")) {
+-        virgl_error("only supports mesa va drivers now\n");
+-        virgl_video_destroy();
+-        return -1;
+-    }
++    if (!driver) { virgl_error("no VA-API vendor string\n"); virgl_video_destroy(); return -1; }
++    if (!strstr(driver, "Mesa Gallium")) { virgl_info("non-Mesa VA-API driver (%s)\n", driver); }
+ 
+     callbacks = cbs;
+ 
+diff -ruN a/src/vrend/virgl_video.h b/src/vrend/virgl_video.h
+--- a/src/vrend/virgl_video.h	2026-05-20 17:15:04.122060402 -0700
++++ b/src/vrend/virgl_video.h	2026-05-20 17:15:45.401378166 -0700
+@@ -125,6 +125,8 @@
+                              const unsigned *coded_sizes);
+ };
+ 
++int virgl_video_early_init(int drm_fd);
++
+ int virgl_video_init(int drm_fd,
+                      struct virgl_video_callbacks *cbs,
+                      unsigned int flags);

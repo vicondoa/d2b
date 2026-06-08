@@ -251,6 +251,16 @@
           };
         };
 
+        sudo = lib.mkEnableOption ''
+          passwordless sudo for the VM's SSH user (`ssh.user`). When
+          enabled, the framework adds a NOPASSWD sudoers rule for
+          the user inside the guest, allowing `sudo` from the
+          nixling SSH session without an interactive password prompt.
+          Useful for development/debugging VMs where the SSH user
+          needs root for `tpm2_flushcontext`, `systemctl restart`,
+          etc.
+        '';
+
         userAuthorizedKeys = lib.mkOption {
           type = lib.types.listOf
             (lib.types.oneOf [ lib.types.path lib.types.str ]);

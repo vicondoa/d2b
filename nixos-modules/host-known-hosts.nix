@@ -1,6 +1,7 @@
-{ pkgs, lib, ... }:
+{ config, pkgs, lib, ... }:
 
 let
+  cfg = config.nixling;
   refreshScript = pkgs.writeShellScript "nixling-known-hosts-refresh" ''
     set -euo pipefail
     vm="''${1:?usage: nixling-known-hosts-refresh <vm>}"
@@ -79,33 +80,56 @@ in
   # Trigger: microvm@.service wants this template; specifier %i is the VM name.
   # Net VMs are detected from the manifest and skipped (no exposed sshd).
   # ---------------------------------------------------------------------------
-  systemd.services."nixling-known-hosts-refresh@" = {
-    description = "Refresh known_hosts.nixling for microVM %i (M2 TOFU-on-boot)";
-    wantedBy = [ ];
-    after = [ "microvm@%i.service" ];
-    serviceConfig = {
-      Type          = "oneshot";
-      RemainAfterExit = false;
-      User          = "root";
-      ExecStart     = "${refreshScript} %i";
-      StandardOutput = "journal";
-      StandardError  = "journal";
+  systemd.services = {
+    "nixling-known-hosts-refresh@" = {
+      description = "Refresh known_hosts.nixling for microVM %i (M2 TOFU-on-boot)";
+      wantedBy = [ ];
+      after = [ "microvm@%i.service" "nixling-%i-gpu.service" ];
+      serviceConfig = {
+        Type          = "oneshot";
+        RemainAfterExit = false;
+        User          = "root";
+        ExecStart     = "${refreshScript} %i";
+        StandardOutput = "journal";
+        StandardError  = "journal";
+      };
     };
-  };
 
-  # Trigger the refresh whenever any VM (including net VMs) starts.
-  # Net VMs are detected and skipped early in the refresh script itself.
-  systemd.services."microvm@" = {
-    wants = [ "nixling-known-hosts-refresh@%i.service" ];
-    # v0.1.5: don't let NixOS override upstream microvm.nix's own
-    # X-RestartIfChanged=false. Without this, any framework
-    # config change cycles every running headless/net VM at
-    # rebuild time (the framework adds the `wants` above, so
-    # NixOS treats the unit as framework-owned and emits
-    # X-RestartIfChanged=true in the drop-in). Same rationale as
-    # the per-VM sidecars (host-sidecars.nix / audio host) —
-    # consumer applies VM-closure changes via `nixling switch
-    # <vm>`.
-    restartIfChanged = false;
-  };
+    # Trigger the refresh whenever any VM (including net VMs) starts.
+    # Net VMs are detected and skipped early in the refresh script itself.
+    "microvm@" = {
+      wants = [ "nixling-known-hosts-refresh@%i.service" ];
+      # v0.1.5: don't let NixOS override upstream microvm.nix's own
+      # X-RestartIfChanged=false. Without this, any framework
+      # config change cycles every running headless/net VM at
+      # rebuild time (the framework adds the `wants` above, so
+      # NixOS treats the unit as framework-owned and emits
+      # X-RestartIfChanged=true in the drop-in). Same rationale as
+      # the per-VM sidecars (host-sidecars.nix / audio host) —
+      # consumer applies VM-closure changes via `nixling switch
+      # <vm>`.
+      restartIfChanged = false;
+    };
+  }
+  # Graphics VMs bypass `microvm@<vm>.service` — the GPU sidecar
+  # (`nixling-<vm>-gpu.service`) starts cloud-hypervisor directly.
+  # Without this Wants= the known-hosts refresh only ever fires
+  # during nixos-rebuild activation, which can be tens of minutes
+  # before the user actually launches the graphics VM — every one
+  # of those activation-time refreshes times out (the VM isn't
+  # running yet) and the pinned key in known_hosts.nixling stays
+  # stale across rebuilds. Symptom: clicking the per-VM .desktop
+  # launcher silently fails (ssh -o StrictHostKeyChecking=yes
+  # rejects the live key, konsole exec's into an immediately-failing
+  # ssh and closes). Wiring the refresh into the GPU sidecar's
+  # Wants= makes it fire on actual VM start; the refresh script
+  # already retries up to 90s for sshd to come up. The companion
+  # `after = [ ... "nixling-%i-gpu.service" ]` on the refresh
+  # template (above) means refresh waits for the sidecar's
+  # ExecStart to begin before probing.
+  // lib.mapAttrs'
+       (name: _: lib.nameValuePair "nixling-${name}-gpu" {
+         wants = [ "nixling-known-hosts-refresh@${name}.service" ];
+       })
+       (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms);
 }

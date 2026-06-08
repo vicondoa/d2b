@@ -241,6 +241,7 @@ in
               ++ lib.optional vm'.tpm.enable ./components/tpm.nix
               ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
               ++ lib.optional vm'.audio.enable ./components/audio/guest.nix
+              ++ lib.optional vm'.graphics.enable ./components/video/guest.nix
               ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
               # Note: Entra ID / Himmelblau is NOT a nixling component.
               # Consumers who need it import it per-VM via:
@@ -301,7 +302,9 @@ in
           # Propagate the SSH user to the guest so
           # nixling-load-host-keys.service knows whose
           # authorized_keys to populate (Phase 2b nixling-managed keys).
-          { nixling.sshUser = vm'.ssh.user; }
+          { nixling.sshUser = vm'.ssh.user;
+            nixling.sudo = vm'.sudo;
+          }
         ];
       })
     (lib.filterAttrs (_: vm: vm.enable) cfg.vms);
@@ -453,7 +456,7 @@ in
   # Alloy no longer needs write access to the shared launcher/audio lock root.
   # P4 C3: also pre-create the GPU sidecar's runtime root.
   systemd.tmpfiles.rules = [
-    "d /run/nixling             0755 root root -"
+    "d /run/nixling             0775 root nixling-launcher -"
     "d /run/nixling/vms         0755 root root -"
     "f /run/nixling/usbipd.lock 0660 root nixling-launcher -"
     "d /run/nixling-gpu         0755 root root -"
@@ -465,7 +468,7 @@ in
     # Phase 2b reserve: keys directory for nixling-managed SSH keys.
     # Created root:root 0700 — Phase 2b's generator activation script
     # (deferred) will populate it.
-    "d /var/lib/nixling/keys    0700 root root -"
+    "d /var/lib/nixling/keys    0710 root nixling-launcher -"
   ]
   # /run/nixling/alloy is created at service-start time by
   # alloy.service's `RuntimeDirectory=nixling/alloy` directive, not

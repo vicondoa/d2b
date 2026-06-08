@@ -58,7 +58,7 @@ index 88dbcaf..d7f3f19 100644
 +    /// The shared memory region id.
 +    pub id: u8,
 +    /// Padding for alignment / wire-format compat.
-+    padding: [u8; 7],
++    pub padding: [u8; 7],
 +    /// The length of the shared memory region.
 +    pub length: u64,
 +}

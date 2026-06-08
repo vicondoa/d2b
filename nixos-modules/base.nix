@@ -24,7 +24,18 @@ in
     '';
   };
 
+  options.nixling.sudo = lib.mkEnableOption ''
+    passwordless sudo for the VM's SSH user. When enabled, a
+    NOPASSWD sudoers rule is added for the SSH user.
+  '';
+
   config = {
+  # Passwordless sudo for the SSH user when nixling.sudo is enabled.
+  security.sudo.extraRules = lib.mkIf (cfg.sudo && cfg.sshUser != null) [{
+    users = [ cfg.sshUser ];
+    commands = [{ command = "ALL"; options = [ "NOPASSWD" ]; }];
+  }];
+
   # Every nixling VM uses systemd-networkd. The host runs a DHCP
   # server on each env's LAN bridge; per-VM static-IP overrides come
   # from the dnsmasq host-reservation set up by network.nix.

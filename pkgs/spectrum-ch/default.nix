@@ -55,6 +55,7 @@ pkgs.cloud-hypervisor.overrideAttrs (oldAttrs: rec {
   patches = (oldAttrs.patches or [ ]) ++ [
     ./cloud-hypervisor/0001-build-use-local-vhost.patch
     ./cloud-hypervisor/0002-virtio-devices-add-a-GPU-device.patch
+    ./cloud-hypervisor/0003-vhost-user-media-device.patch
   ];
 
   cargoDeps = pkgs.rustPlatform.fetchCargoVendor {

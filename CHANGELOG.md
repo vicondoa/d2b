@@ -8,6 +8,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 minor releases may break public APIs. When practical,
 deprecations ship one minor release before removal.
 
+## [0.3.0] - 2026-05-24
+
+Minor release adding **hardware-accelerated H264 video decode** for
+RDP sessions inside graphics VMs. A new virtio-media pipeline
+offloads H264 decode from guest CPU to host NVDEC hardware via a
+multi-component stack: guest ffmpeg h264_v4l2m2m → /dev/video0 →
+chromeos/virtio-media kernel driver (device ID 48) → Cloud
+Hypervisor `--vhost-user-media` → crosvm vhost-user video-decoder →
+VA-API → nvidia-vaapi-driver → NVDEC. The pipeline activates
+automatically when the RDP server negotiates AVC420/AVC444 codec;
+ClearCodec sessions fall back to software decode transparently.
+
+### Added
+
+- **Dedicated CH `--vhost-user-media` device type**
+  (`0003-vhost-user-media-device.patch`, 1104 lines across 10 CH
+  source files). Modeled on the GPU device's VirtioDevice
+  implementation with BackendReqHandler for shmem_map/shmem_unmap,
+  memfd-backed 256 MB SHM PCI BAR, read_config proxying, and a
+  vring_bases fix that forces `SET_VRING_BASE(0)` on initial
+  activation — working around a CH bug where it reads `avail_idx`
+  from guest memory, skipping buffers the driver pre-queued before
+  `DRIVER_OK`.
+- **Crosvm vhost-user video-decoder backend**
+  (`pkgs/vhost-user-video/`). Implements `VhostUserDevice` for
+  virtio-media, wrapping `VirtioVideoAdapter` + `VideoDecoder` with
+  `VirtioMediaDeviceRunner`. Worker loop matches crosvm's built-in
+  media.rs reference. Supports VA-API and FFmpeg decoder backends.
+- **virtio-media guest kernel module**
+  (`pkgs/virtio-media-driver/`). Builds chromeos/virtio-media
+  out-of-tree for kernel 6.18, pinned to commit `ebcef1a`.
+- **Video sidecar systemd service** (`video/host.nix`). Per-VM
+  `nixling-<vm>-video.service` running as the GPU sidecar user with
+  VA-API environment (LIBVA_DRIVER_NAME=nvidia,
+  NV_VAAPI_BACKEND=direct). Lifecycle bound to GPU service via
+  `partOf`.
+- **FreeRDP h264_v4l2m2m integration** (work-aad.nix). Patches
+  FreeRDP to prefer `h264_v4l2m2m` decoder with fallback to software,
+  removes YUV420P format override, adds thread-local NV12→YUV420P
+  deinterleave for v4l2m2m's NV12 output.
+- **devbox-connect AVC enablement**. Injects `use video codec:i:2`
+  into .rdp files, adds `/gfx:AVC420:on` to FreeRDP command line,
+  and auto-sets Windows registry keys for AVC444 software encoding
+  via `/shell` on connect.
+
+### Fixed
+
+- **EventQueue deadlock** in vhost-user mode. Upstream
+  `EventQueue::send_event()` blocks with `event().wait()` on the
+  event queue kick eventfd. Fixed by adding a non-blocking
+  `reset()` + `pop()` before the blocking wait.
+- **SET_VRING_BASE race**. CH reads `avail_idx` from guest memory
+  at activate time, but the virtio-media driver pre-queues 16 event
+  buffers before `DRIVER_OK`, making them invisible. Fixed by
+  forcing `vring_bases = vec![0; N]` in the media device's
+  `activate()`.
+- **Video socket startup race**. The GPU service's socket wait loop
+  now exits non-zero if the video socket doesn't appear within 10
+  seconds, preventing CH from starting with a missing socket.
+- **crosvm decoder_adapter panics**. `ResetCompleted` and
+  `NotifyError` events now log and continue instead of `todo!()`
+  crashing the sidecar.
+
+### Removed
+
+- Dead files from abandoned approaches: virtio-video driver
+  (device ID 31), 4 kernel compat patches, USERPTR patches for
+  ffmpeg and virtio-media, old crosvm/FreeRDP patch files,
+  kernel-v4l2-m2m-prompt.patch (10 files, 977 lines).
+
+### Security
+
+- NV12 scratch buffers in FreeRDP decompress changed from `static`
+  globals to `_Thread_local` to prevent data races between
+  concurrent decoder contexts.
+- Video sidecar socket wait hardened with non-zero exit on timeout.
+- Video sidecar lifecycle bound to GPU service via `partOf`.
+
 ## [0.2.0] - 2026-05-20
 
 Minor release introducing the **observability subsystem**: a new
@@ -342,6 +420,49 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   may need a one-time `ssh-keygen -R <ip>` against their personal
   `~/.ssh/known_hosts` if they manually trusted the old key.
 
+
+### Fixed
+
+- **`nixos-modules/host-keys.nix`**: per-VM `.desktop` launchers
+  failed with "Permission denied" on the SSH private key because
+  the keys directory (`/var/lib/nixling/keys/`) lacked a traverse
+  ACL for `nixling-launcher`. The directory had a
+  `group:nixling-launcher:--x` ACL entry, but both the tmpfiles
+  rule and the activation script's `install -d -m 0700` set the
+  directory mode to `0700`, which forces the POSIX ACL mask to
+  `---` and neutralizes the named-group entry. Fix: add
+  `setfacl -m "g:nixling-launcher:--x"` on the keys directory
+  in the activation script, after the `install -d`, so the mask
+  is recalculated to include `--x`.
+
+- **`nixos-modules/host-known-hosts.nix`** + **`nixos-modules/cli.nix`**
+  (`vmLaunchScript`): graphics-VM per-VM `.desktop` launchers
+  silently did nothing when the pinned host key in
+  `known_hosts.nixling` was stale. Two coupled bugs:
+  1. `nixling-known-hosts-refresh@%i.service` was wanted only by
+     `microvm@%i.service`, but graphics VMs bypass that template
+     (the GPU sidecar runs cloud-hypervisor directly). The
+     refresh therefore only fired during `nixos-rebuild`
+     activation — often tens of minutes before the user actually
+     launched the graphics VM — and every one of those
+     activation-time refreshes timed out because the VM wasn't
+     running yet. The pinned key stayed stale across rebuilds.
+     Fix: also `Wants=nixling-known-hosts-refresh@<vm>.service`
+     from `nixling-<vm>-gpu.service` for graphics-enabled VMs,
+     with a matching `After=nixling-%i-gpu.service` on the
+     refresh template.
+  2. `vmLaunchScript` (`cli.nix`) ran a 30 s ssh-readiness probe,
+     discarded its stderr, did not track success/failure, and
+     unconditionally `exec`'d `konsole -e ssh …`. With a stale
+     pin every probe failed silently with
+     `Host key verification failed!`; konsole then exec'd into an
+     immediately-failing ssh and closed — observed by the user as
+     the launcher "doing nothing" whether the VM was up or down.
+     Fix: track probe success, classify the failure on timeout
+     (host-key mismatch vs. unreachable), and surface
+     `notify-send` with the exact remediation command (host-key
+     case points at
+     `sudo systemctl start nixling-known-hosts-refresh@<vm>.service`).
 
 ## [0.1.7] - 2026-05-19
 

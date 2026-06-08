@@ -96,6 +96,7 @@ let
       MANIFEST=${config.nixling._manifestJsonPath}
       FLAKE_DEFAULT=${if config.nixling.site.flakePath == null then "" else config.nixling.site.flakePath}
       STATE_ROOT=${config.nixling.store.stateDir}
+      SITE_ROOT=${config.nixling.site.stateDir}
       VM=""
       ENV=""
       VM_ROLE=""
@@ -330,7 +331,7 @@ Lifecycle subcommands (per-VM closures + live activation):
 
 Host-key pinning (M2):
   trust            <vm>     Scan and pin the VM's SSH host key into
-                            \$STATE_ROOT/known_hosts.nixling (TOFU on
+                            \$SITE_ROOT/known_hosts.nixling (TOFU on
                             first contact).  Run once per VM after
                             first boot; re-run after an intentional
                             rebuild that rotates host keys.
@@ -383,6 +384,29 @@ EOF
 ${vmSshKeyCaseBody}
           *) printf '%s\n' "null" ;;
         esac
+      }
+
+      # Copy the per-VM SSH private key to a caller-owned tempfile
+      # (mode 0600) so ssh's identity-file permission check passes.
+      # The original key is root:nixling-launcher 0640; ssh rejects
+      # it because the caller isn't root (its stat check precedes
+      # any read). The temp copy is cleaned up automatically by
+      # $XDG_RUNTIME_DIR's tmpfs lifecycle or an explicit rm.
+      vm_ssh_key_safe() {
+        local VM="$1"
+        local SRC
+        SRC=$(vm_ssh_key "$VM")
+        if [ "$SRC" = "null" ]; then
+          printf '%s\n' "null"
+          return
+        fi
+        local DST
+        DST="''${XDG_RUNTIME_DIR:-/tmp}/.nixling-key-$VM-$$.tmp"
+        install -m 0600 "$SRC" "$DST" 2>/dev/null || {
+          printf '%s\n' "$SRC"
+          return
+        }
+        printf '%s\n' "$DST"
       }
 
       # Enumerate user-declared VM names from the manifest, skipping
@@ -680,7 +704,7 @@ BASH
         USBIPYK=$(vm_get "$VM" usbipYubikey)
         STATIC_IP=$(vm_get "$VM" staticIp)
         SSH_USER=$(vm_get "$VM" sshUser)
-        SSH_KEY=$(vm_ssh_key "$VM")
+        SSH_KEY=$(vm_ssh_key_safe "$VM")
         USBIP_BUSID=""
         VM_PID=""
         # C4: validate identifier values before privileged use.
@@ -895,6 +919,7 @@ BASH
           # Re-enable :- defaults so an EXIT trap firing before vars are
           # set doesn't trip `set -u`.
           local VM="''${VM:-}"
+          local DETACH="''${DETACH:-false}"
           local USBIP_BUSID="''${USBIP_BUSID:-}"
           local VM_PID="''${VM_PID:-}"
           local STATIC_IP="''${STATIC_IP:-null}"
@@ -909,7 +934,7 @@ BASH
           if [ -n "$USBIP_BUSID" ] && [ "$STATIC_IP" != "null" ] && \
              [ "$SSH_USER" != "null" ] && [ "$SSH_KEY" != "null" ]; then
             ssh -i "$SSH_KEY" \
-                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
                 -o ConnectTimeout=3 \
                 "$SSH_USER@$STATIC_IP" "
                   port=\$(sudo /run/current-system/sw/bin/usbip port 2>/dev/null \
@@ -1094,7 +1119,7 @@ BASH
             if {
               usbip_exclusive_attach "$ENV" "$USBIP_BUSID" "$UP_ALL_ENVS"
               ssh -i "$SSH_KEY" \
-                  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+                  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
                   -o ConnectTimeout=10 \
                   "$SSH_USER@$STATIC_IP" "
                     sudo /run/current-system/sw/bin/modprobe vhci_hcd
@@ -1625,7 +1650,7 @@ BASH
         local STATIC_IP SSH_USER SSH_KEY HOST_IP ENV
         STATIC_IP=$(vm_get "$VM" staticIp)
         SSH_USER=$(vm_get "$VM" sshUser)
-        SSH_KEY=$(vm_ssh_key "$VM")
+        SSH_KEY=$(vm_ssh_key_safe "$VM")
         HOST_IP=$(vm_get "$VM" usbipdHostIp)
         ENV=$(vm_get "$VM" env)
         # C4: validate identifier values before privileged use (usbip helper passes ENV in unit names).
@@ -1666,7 +1691,7 @@ BASH
         nl_span_start "wait_guest_ssh" "static_ip=$STATIC_IP"
         nl_event "wait_guest_ssh" "started"
         if ssh -i "$SSH_KEY" \
-                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
                 -o ConnectTimeout=5 \
                 "$SSH_USER@$STATIC_IP" true 2>/dev/null; then
           nl_event "wait_guest_ssh" "ok"
@@ -1688,7 +1713,7 @@ BASH
           echo
           echo "nixling: releasing YubiKey..."
           ssh -i "$SSH_KEY" \
-              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
               -o ConnectTimeout=3 \
               "$SSH_USER@$STATIC_IP" "
                 set +e
@@ -1717,7 +1742,7 @@ BASH
           usbip_exclusive_attach "$ENV" "$BUSID" "$ALL_ENVS"
           echo "nixling: hot-plugging $BUSID into VM..."
           ssh -i "$SSH_KEY" \
-              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
               "$SSH_USER@$STATIC_IP" "sudo /run/current-system/sw/bin/modprobe vhci_hcd && \
                                       sudo /run/current-system/sw/bin/usbip attach -r $HOST_IP -b $BUSID"
         } || rc=$?
@@ -2313,7 +2338,7 @@ BASH
         local VM="$1"
         local USER KEY IP
         USER=$(vm_get "$VM" sshUser)
-        KEY=$(vm_ssh_key "$VM")
+        KEY=$(vm_ssh_key_safe "$VM")
         IP=$(vm_get "$VM" staticIp)
         if [ "$USER" = "null" ] || [ "$KEY" = "null" ] || [ "$IP" = "null" ]; then
           echo "nixling: '$VM' has no ssh.user / ssh.keyPath / staticIp — cannot SSH for in-VM activation." >&2
@@ -2330,7 +2355,7 @@ BASH
         USER_AT_IP=$(echo "$CRED" | awk '{print $1}')
         KEY=$(echo "$CRED" | awk '{print $2}')
         ssh -i "$KEY" \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
             -o ConnectTimeout=5 \
             "$USER_AT_IP" "$@"
       }
@@ -2621,7 +2646,7 @@ BASH
           USER_AT_IP=$(echo "$CRED" | awk '{print $1}')
           KEY=$(echo "$CRED" | awk '{print $2}')
           ssh -i "$KEY" \
-              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SITE_ROOT/known_hosts.nixling" \
               -o ConnectTimeout=5 \
               "$USER_AT_IP" \
               "sudo /run/current-system/sw/bin/nix-env --profile /nix/var/nix/profiles/system --list-generations 2>/dev/null
@@ -2710,7 +2735,7 @@ BASH
           echo "nixling: '$VM' has no staticIp - cannot trust." >&2
           exit 2
         fi
-        local KNOWN_HOSTS="$STATE_ROOT/known_hosts.nixling"
+        local KNOWN_HOSTS="$SITE_ROOT/known_hosts.nixling"
         echo "nixling: scanning host key for $VM at $STATIC_IP ..."
         local KEYSCAN
         KEYSCAN=$(ssh-keyscan -t ed25519 "$STATIC_IP" 2>/dev/null)
@@ -2721,12 +2746,12 @@ BASH
         # Serialise all known_hosts.nixling mutations with flock, build the
         # new file in a temp path, then atomically replace. KEYSCAN is passed
         # as a positional arg to avoid shell injection in the heredoc.
-        sudo -A bash -s -- "$STATE_ROOT" "$KNOWN_HOSTS" "$STATIC_IP" "$KEYSCAN" <<${"'"}BASH${"'"}
+        sudo -A bash -s -- "$SITE_ROOT" "$KNOWN_HOSTS" "$STATIC_IP" "$KEYSCAN" <<${"'"}BASH${"'"}
           set -euo pipefail
-          STATE_ROOT=$1; KNOWN_HOSTS=$2; STATIC_IP=$3; KEYSCAN=$4
-          exec 9>"$STATE_ROOT/known_hosts.nixling.lock"
+          SITE_ROOT=$1; KNOWN_HOSTS=$2; STATIC_IP=$3; KEYSCAN=$4
+          exec 9>"$SITE_ROOT/known_hosts.nixling.lock"
           flock -w 30 9 || { echo "nixling: could not acquire known_hosts lock" >&2; exit 5; }
-          tmp=$(mktemp "$STATE_ROOT/known_hosts.nixling.XXXXXX")
+          tmp=$(mktemp "$SITE_ROOT/known_hosts.nixling.XXXXXX")
           if [ -f "$KNOWN_HOSTS" ]; then
             cp "$KNOWN_HOSTS" "$tmp"
           fi
@@ -2750,19 +2775,19 @@ BASH
           echo "nixling: '$VM' has no staticIp." >&2
           exit 2
         fi
-        local KNOWN_HOSTS="$STATE_ROOT/known_hosts.nixling"
+        local KNOWN_HOSTS="$SITE_ROOT/known_hosts.nixling"
         if [ ! -f "$KNOWN_HOSTS" ]; then
           echo "nixling: $KNOWN_HOSTS does not exist - nothing to rotate." >&2
           exit 2
         fi
         # Serialise with flock; rebuild temp file excluding the VM's entry, then
         # atomically replace.
-        sudo -A bash -s -- "$STATE_ROOT" "$KNOWN_HOSTS" "$STATIC_IP" <<${"'"}BASH${"'"}
+        sudo -A bash -s -- "$SITE_ROOT" "$KNOWN_HOSTS" "$STATIC_IP" <<${"'"}BASH${"'"}
           set -euo pipefail
-          STATE_ROOT=$1; KNOWN_HOSTS=$2; STATIC_IP=$3
-          exec 9>"$STATE_ROOT/known_hosts.nixling.lock"
+          SITE_ROOT=$1; KNOWN_HOSTS=$2; STATIC_IP=$3
+          exec 9>"$SITE_ROOT/known_hosts.nixling.lock"
           flock -w 30 9 || { echo "nixling: could not acquire known_hosts lock" >&2; exit 5; }
-          tmp=$(mktemp "$STATE_ROOT/known_hosts.nixling.XXXXXX")
+          tmp=$(mktemp "$SITE_ROOT/known_hosts.nixling.XXXXXX")
           cp "$KNOWN_HOSTS" "$tmp"
           ssh-keygen -R "$STATIC_IP" -f "$tmp" 2>/dev/null || true
           rm -f "$tmp.old"
@@ -3635,7 +3660,41 @@ EOF
         VM=${lib.escapeShellArg name}
         IP=${lib.escapeShellArg ip}
         SSH_USER=${lib.escapeShellArg sshUser}
-        SSH_KEY=${lib.escapeShellArg sshKey}
+        SSH_KEY_SRC=${lib.escapeShellArg sshKey}
+
+        # Copy per-VM key to a caller-owned tempfile (mode 0600) so
+        # ssh's identity-file permission check passes. The original
+        # is root:nixling-launcher 0640; ssh rejects it because the
+        # caller isn't root. Cleaned up via trap on exit.
+        SSH_KEY="''${XDG_RUNTIME_DIR:-/tmp}/.nixling-key-$VM-$$.tmp"
+        ${pkgs.coreutils}/bin/install -m 0600 "$SSH_KEY_SRC" "$SSH_KEY"
+        trap '${pkgs.coreutils}/bin/rm -f "$SSH_KEY"' EXIT
+
+        # 0. Wait for the host Wayland compositor to be ready. Graphics
+        #    VMs need the compositor's socket for the GPU sidecar's
+        #    cross-domain channel (crosvm's BindPaths bind-mounts
+        #    wayland-0 into its mount namespace at ExecStart). If the
+        #    launcher runs before KWin has created the socket (e.g. KDE
+        #    session restore re-launches this .desktop entry at login
+        #    before the compositor is up), the bind-mount targets a dead
+        #    placeholder and the cross-domain channel is permanently
+        #    broken until the VM is restarted.
+        WAYLAND_SOCK="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wayland-0"
+        WAYLAND_READY=false
+        for _ in $(${pkgs.coreutils}/bin/seq 1 60); do
+          if [ -S "$WAYLAND_SOCK" ]; then
+            WAYLAND_READY=true
+            break
+          fi
+          ${pkgs.coreutils}/bin/sleep 0.5
+        done
+        if [ "$WAYLAND_READY" != "true" ]; then
+          ${pkgs.libnotify}/bin/notify-send -i computer-fail \
+            "nixling: $VM — no Wayland compositor" \
+            "Waited 30 s for $WAYLAND_SOCK; compositor not running." \
+            2>/dev/null || true
+          exit 1
+        fi
 
         # 1. Bring the VM up (no-op if already running; sec-r8-9).
         ${nixling}/bin/nixling up "$VM" -d || {
@@ -3648,11 +3707,17 @@ EOF
 
         # 2. Wait for SSH to come up. The pinned host key in
         #    /var/lib/nixling/known_hosts.nixling is refreshed by
-        #    nixling-known-hosts-refresh@<vm>.service, which runs
-        #    automatically after the VM boots. As of
+        #    nixling-known-hosts-refresh@<vm>.service, which fires
+        #    from nixling-<vm>-gpu.service's Wants= for graphics VMs
+        #    (and from microvm@<vm>.service for headless VMs). As of
         #    security-r8-audio-12 that service auto-rotates the pin
-        #    when the VM generation has changed, so we don't need
-        #    any in-launcher key handling here.
+        #    when the VM generation has changed, so under normal
+        #    operation we don't need any in-launcher key handling
+        #    here. The classification step below (after the wait
+        #    loop) is the fallback for when the refresh hasn't yet
+        #    succeeded — e.g. the refresh racing with this loop on a
+        #    cold start, or an operator wiping known_hosts.nixling.
+        SSH_OK=false
         for _ in $(${pkgs.coreutils}/bin/seq 1 60); do
           if ${pkgs.openssh}/bin/ssh \
                -o BatchMode=yes \
@@ -3660,10 +3725,44 @@ EOF
                -o StrictHostKeyChecking=yes \
                -o UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling \
                -i "$SSH_KEY" "$SSH_USER@$IP" : 2>/dev/null; then
+            SSH_OK=true
             break
           fi
           ${pkgs.coreutils}/bin/sleep 0.5
         done
+
+        # 2a. If 30 s of probing never succeeded, classify the failure
+        #     and surface a `notify-send` with actionable remediation.
+        #     Without this, konsole below execs into a doomed ssh and
+        #     closes instantly, leaving the user with no signal at all
+        #     about *why* the launcher "did nothing".
+        if [ "$SSH_OK" != "true" ]; then
+          ssh_err=$(${pkgs.openssh}/bin/ssh \
+                      -o BatchMode=yes \
+                      -o ConnectTimeout=2 \
+                      -o StrictHostKeyChecking=yes \
+                      -o UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling \
+                      -i "$SSH_KEY" "$SSH_USER@$IP" : 2>&1) || true
+          case "$ssh_err" in
+            *"Host key verification failed"* \
+            | *"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+              ${pkgs.libnotify}/bin/notify-send -i security-low \
+                "nixling: $VM host key mismatch" \
+                "Pinned key in known_hosts.nixling is stale. Run:
+sudo systemctl start nixling-known-hosts-refresh@$VM.service" \
+                2>/dev/null || true
+              ;;
+            *)
+              ${pkgs.libnotify}/bin/notify-send -i computer-fail \
+                "nixling: $VM not reachable on SSH" \
+                "Probed $IP:22 for 30 s with no response. Check:
+  nixling status $VM
+  journalctl -u nixling-$VM-gpu.service" \
+                2>/dev/null || true
+              ;;
+          esac
+          exit 1
+        fi
 
         # 3. exec into a chrome'd host Konsole that SSHes in.
         #    --hide-menubar / --hide-tabbar: keep the window clean;

@@ -1,0 +1,42 @@
+--- a/devices/src/virtio/video/decoder/mod.rs	1969-12-31 16:00:01.000000000 -0800
++++ b/devices/src/virtio/video/decoder/mod.rs	2026-05-21 01:39:03.970392475 -0700
+@@ -442,7 +442,7 @@
+     decoder: D,
+     capability: Capability,
+     contexts: ContextMap<D::Session>,
+-    resource_bridge: Tube,
++    resource_bridge: Option<Tube>,
+     mem: GuestMemory,
+ }
+ 
+@@ -455,7 +455,20 @@
+             decoder: backend,
+             capability,
+             contexts: Default::default(),
+-            resource_bridge,
++            resource_bridge: Some(resource_bridge),
++            mem,
++        }
++    }
++
++    /// Build a decoder without resource bridge (guest-pages only).
++    pub fn new_no_bridge(backend: D, mem: GuestMemory) -> Self {
++        let capability = backend.get_capabilities();
++
++        Self {
++            decoder: backend,
++            capability,
++            contexts: Default::default(),
++            resource_bridge: None,
+             mem,
+         }
+     }
+@@ -576,7 +589,7 @@
+                     // unwrap() is also safe here because we just tested above that `entries` had
+                     // exactly one element.
+                     entries.first().unwrap().object(),
+-                    &self.resource_bridge,
++                    self.resource_bridge.as_ref().ok_or(VideoError::InvalidArgument)?,
+                     params,
+                 )
+                 .map_err(|_| VideoError::InvalidArgument)?
