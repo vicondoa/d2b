@@ -2299,7 +2299,7 @@ fn redact_broker_error_for_launcher(
             "broker is starting up / bundle not yet loaded; retry shortly. Admin: confirm the bundle path is populated.".to_owned()
         }
         "Broker.BundleIntentMissing" => format!(
-            "{op_name} references a bundle intent that the broker did not find. Admin: ask `nixling audit --strict` for the intent id."
+            "{op_name} references a bundle intent that the broker did not find. Admin: ask `journalctl -u nixling-priv-broker` for the intent id."
         ),
         "Broker.StoreViewFilesystemMismatch" => format!(
             "{op_name} refused: the per-VM store view is not on the same filesystem as /nix/store. Admin: check the VM state dir layout and retry."
@@ -2308,11 +2308,11 @@ fn redact_broker_error_for_launcher(
             "{op_name} refused: the prepared store-view generation is missing its marker. Admin: rebuild the store view and retry."
         ),
         "Broker.LiveHandlerFailed" => format!(
-            "{op_name} failed at the broker live handler. Admin: inspect `nixling audit --strict` for the underlying syscall/exit code."
+            "{op_name} failed at the broker live handler. Admin: inspect `journalctl -u nixling-priv-broker` for the underlying syscall/exit code."
         ),
         "Broker.CoexistenceRefused" => "{op_name} refused: another firewall manager owns the table per FirewallCoexistencePolicy. Admin: check nixling.site.firewallCoexistencePolicy."
             .replace("{op_name}", op_name),
-        "Broker.NftScriptParseFailed" => "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `nixling audit --strict` for the parse error."
+        "Broker.NftScriptParseFailed" => "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `journalctl -u nixling-priv-broker` for the parse error."
             .replace("{op_name}", op_name),
         "Broker.CarveoutOrderingViolation" => "{op_name} refused: USBIP firewall carve-out rules are out of order relative to broad allow/drop. Admin: inspect the bundle's nft batch ordering."
             .replace("{op_name}", op_name),
@@ -2334,7 +2334,7 @@ fn redact_broker_error_for_launcher(
             "broker audit export requires an authorized admin user.".to_owned()
         }
         _ => format!(
-            "{op_name} failed; admin should inspect `nixling audit --strict` for details"
+            "{op_name} failed; admin should inspect `journalctl -u nixling-priv-broker` for details"
         ),
     };
     (summary, remediation)
@@ -2688,6 +2688,9 @@ impl VmStartRunner<'_> {
                         node = %node.id.0,
                         broker_kind = %error.kind,
                         broker_operation = %error.operation,
+                        broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
+                        broker_message = %error.message,
+                        broker_action = %error.action,
                         "v1.2fu46: DiskInit pre-SpawnRunner dispatch failed"
                     );
                     return Err(format!("broker-error:DiskInit:{}", error.kind));
@@ -2748,6 +2751,8 @@ impl VmStartRunner<'_> {
                     broker_kind = %error.kind,
                     broker_operation = %error.operation,
                     broker_target_wave = error.target_wave.as_deref().unwrap_or("none"),
+                    broker_message = %error.message,
+                    broker_action = %error.action,
                     "vm start node spawn failed"
                 );
                 Err(format!("broker-error:{}", error.kind))

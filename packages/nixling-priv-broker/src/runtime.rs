@@ -3993,7 +3993,7 @@ fn usbip_backend_runner_intent<'a>(
     );
     resolver
         .find_runner_intent(&runner_id)
-        .ok_or_else(|| BrokerError::BundleIntentMissing {
+        .ok_or(BrokerError::BundleIntentMissing {
             kind: "runner",
             intent_id: runner_id,
         })
@@ -5112,6 +5112,19 @@ impl BrokerError {
                 )?;
             }
             Self::LiveHandler(message) => {
+                // Surface the operator-facing root cause (errno / path /
+                // stderr) in the broker journal, not just the
+                // `Broker.LiveHandlerFailed` wrapper kind. The same
+                // detail is recorded in the audit log; an operator
+                // reading `journalctl -u nixling-priv-broker` should not
+                // have to cross-reference the audit jsonl to learn why a
+                // runner spawn failed.
+                tracing::warn!(
+                    operation = operation,
+                    error_kind = "Broker.LiveHandlerFailed",
+                    detail = %message,
+                    "broker live-handler op failed"
+                );
                 audit_log.write_error_entry(
                     operation,
                     caller_uid,

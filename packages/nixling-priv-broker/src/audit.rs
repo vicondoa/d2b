@@ -219,7 +219,9 @@ impl AuditLog {
     }
 
     /// Legacy short-record writer for errored outcomes that need
-    /// admin-visible diagnostics in `nixling audit --strict`.
+    /// admin-visible diagnostics. The full detail is also surfaced in
+    /// the broker journal (`journalctl -u nixling-priv-broker`) for
+    /// live-handler failures.
     pub fn write_error_entry(
         &self,
         operation: &str,

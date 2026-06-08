@@ -63,6 +63,23 @@ deprecations ship one minor release before removal.
   closures of one VM mapping to the same generation number) instead of
   unioning them, by pinning the closure identity in the generation
   marker.
+- VM start no longer aborts with `SpawnRunner failed ... broker-error`
+  on the first runtime-directory step. The broker's path-safe directory
+  opener resolved every path from `/` with `RESOLVE_NO_XDEV`, which
+  fails with `EXDEV` ("Invalid cross-device link") the moment it must
+  cross a mount boundary — and the per-VM runtime dir lives under the
+  `/run` tmpfs, the tap device under `/dev`, cgroups under `/sys`, etc.
+  Resolution now walks component by component and follows a *real*,
+  pre-existing mount crossing (still refusing symlink / magic-link
+  components and `..` escapes at every step), so legitimate
+  cross-filesystem paths resolve while the load-bearing symlink
+  protection is preserved.
+- Broker spawn/host-prep failures are no longer opaque. The broker now
+  logs the live-handler root cause (errno / path / stderr) to its
+  journal, the daemon includes the broker's `message` in its
+  `vm start node spawn failed` log, and failure remediations point at
+  the working `journalctl -u nixling-priv-broker` instead of the
+  `nixling audit --strict` command (which returns `not-yet-implemented`).
 - GitHub Actions PR hardening keeps fork PR code off self-hosted
   runners, makes the privileged oracle workflow manual-dispatch only,
   and repairs the affected CI validation gates so the hardening can

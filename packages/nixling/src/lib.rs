@@ -5384,7 +5384,7 @@ fn redact_broker_error_for_cli(
             format!("{op_name} failed: trusted bundle intent missing"),
             "The daemon reached the broker, but the trusted bundle did not contain the requested intent row.".to_owned(),
             format!(
-                "{op_name} references a bundle intent that the broker did not find. Admin: ask `nixling audit --strict` for the intent id."
+                "{op_name} references a bundle intent that the broker did not find. Admin: ask `journalctl -u nixling-priv-broker` for the intent id."
             ),
         ),
         "Broker.StoreViewFilesystemMismatch" => (
@@ -5405,7 +5405,7 @@ fn redact_broker_error_for_cli(
             format!("{op_name} failed at the broker live handler"),
             "The daemon reached the broker and the privileged live handler started, but the underlying host mutation failed.".to_owned(),
             format!(
-                "{op_name} failed at the broker live handler. Admin: inspect `nixling audit --strict` for the underlying syscall/exit code."
+                "{op_name} failed at the broker live handler. Admin: inspect `journalctl -u nixling-priv-broker` for the underlying syscall/exit code."
             ),
         ),
         "Broker.CoexistenceRefused" => (
@@ -5419,7 +5419,7 @@ fn redact_broker_error_for_cli(
             format!("{op_name} failed: bundle nft script parse error"),
             "The daemon reached the broker, but the nftables batch embedded in the trusted bundle could not be parsed.".to_owned(),
             format!(
-                "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `nixling audit --strict` for the parse error."
+                "{op_name} failed: bundle nft script could not be parsed. Admin: inspect `journalctl -u nixling-priv-broker` for the parse error."
             ),
         ),
         "Broker.CarveoutOrderingViolation" => (
@@ -6408,7 +6408,7 @@ mod host_install_dispatch_tests {
                 "outcome": "broker-error",
                 "targetWave": "W15",
                 "summary": "RunHostInstall failed",
-                "remediation": "RunHostInstall failed at the broker live handler. Admin: inspect `nixling audit --strict` for the underlying syscall/exit code.",
+                "remediation": "RunHostInstall failed at the broker live handler. Admin: inspect `journalctl -u nixling-priv-broker` for the underlying syscall/exit code.",
             }),
         );
 
