@@ -102,7 +102,7 @@ run_gate "tests/preflight-disk-space.sh" "bash '$ROOT/tests/preflight-disk-space
 # ---------------------------------------------------------------------------
 # Parse + lint
 # ---------------------------------------------------------------------------
-log "==> Layer 1 fast: parse + lint"
+log "==> Static fast: parse + lint"
 
 run_gate "nix-instantiate --parse on all .nix files" "
   set -e
@@ -166,7 +166,18 @@ for gate in \
   ifname-nix-rust-parity \
   static-invariant-deny-unknown-fields; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
-    run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
+    case "$gate" in
+      static-invariant-deny-unknown-fields-w3)
+        label="tests/host-schema-deny-unknown-fields.sh"
+        ;;
+      w6-argv-shape)
+        label="tests/vsock-usbip-argv-shape.sh"
+        ;;
+      *)
+        label="tests/$gate.sh"
+        ;;
+    esac
+    run_gate "$label" "bash '$ROOT/tests/$gate.sh'"
   fi
 done
 
@@ -236,4 +247,4 @@ done
 
 log "Static-fast checks OK"
 log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
-log "(run tests/static.sh before panel dispatch / wave-exit gates.)"
+log "(run tests/static.sh before panel dispatch / release-exit gates.)"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/deliverable-gate-inventory.sh
 #
-# Assert every planned deliverable has at least one Layer-1 gate
+# Assert every planned deliverable has at least one regression gate
 # (cargo test, eval script, or doc-drift gate) the integrator can run
 # on every change.
 #
@@ -70,9 +70,9 @@ for mapping in "${MAPPINGS[@]}"; do
     esac
   done
   if [ "$found" -eq 1 ]; then
-    ok "$todo has a Layer-1 gate: $gates"
+    ok "$todo has a regression gate: $gates"
   else
-    die "$todo has NO discoverable Layer-1 gate (checked: $gates)"
+    die "$todo has NO discoverable regression gate (checked: $gates)"
   fi
 done
 

@@ -22,12 +22,12 @@ if [ ! -f packages/nixling-core/src/bundle.rs ] \
   || [ ! -f packages/nixling-core/src/lib.rs ] \
   || ! grep -q 'pub mod bundle' packages/nixling-core/src/lib.rs \
   || [ ! -f packages/xtask/Cargo.toml ]; then
-  log "no packages/nixling-core/src/bundle.rs — skipping bundle-drift (W1 unstaged)"
+  log "no packages/nixling-core/src/bundle.rs — skipping bundle-drift"
   exit 0
 fi
 
 if [ ! -d docs/reference/schemas ]; then
-  fail "bundle-drift: docs/reference/schemas/ missing after W1 bundle DTOs landed"
+  fail "bundle-drift: docs/reference/schemas/ missing after bundle DTOs landed"
 fi
 
 # Self-bootstrap toolchain through nix shell when cargo isn't on PATH.
@@ -47,14 +47,16 @@ xtask_bin=$(nl_cargo_bin_path workspace xtask)
 if [ ! -x "$xtask_bin" ]; then
   (
     cd packages
-    CARGO_TARGET_DIR="$(nl_cargo_target_dir workspace)" cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+      CARGO_TARGET_DIR="$(nl_cargo_target_dir workspace)" \
+      cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
   )
 fi
 
 log "--> bundle-drift: cargo xtask gen-schemas"
 (
   cd packages
-  "$xtask_bin" gen-schemas
+  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" "$xtask_bin" gen-schemas
 )
 
 if git diff --exit-code -- docs/reference/schemas/ >/dev/null; then

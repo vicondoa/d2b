@@ -101,7 +101,7 @@ jobs:
             tests/usbip-gating-eval.sh \
             tests/bridge-ipv6-boot-sysctl-eval.sh \
             tests/v1.1-kernel-floor-eval.sh \
-            tests/w18-default-flip-eval.sh \
+            tests/daemon-default-compat-eval.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"

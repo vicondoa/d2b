@@ -58,7 +58,7 @@ CARGO_TARGET_DIR="$workspace_target_dir" cargo test \
   --nocapture
 ok "host: specific carve-out before generic; nixling-managed marker on every rule"
 
-log "--> broker: UsbipBindFirewallRule audit payload + W6 refusal"
+log "--> broker: UsbipBindFirewallRule audit payload + explicit refusal"
 CARGO_TARGET_DIR="$broker_target_dir" cargo test \
   --manifest-path "$broker_manifest" \
   --all-features \
@@ -70,13 +70,13 @@ CARGO_TARGET_DIR="$broker_target_dir" cargo test \
 ok "broker: UsbipBind/Unbind/ProxyReconcile refused with unknown-operation"
 
 # Static grep so the boundary cannot be silently elided.
-log "--> static grep: W6 USBIP UX variants explicitly refused"
+log "--> static grep: USBIP UX variants explicitly refused"
 for op in UsbipBind UsbipUnbind UsbipProxyReconcile; do
   if ! grep -q "$op" "$ROOT/packages/nixling-priv-broker/src/ops/usbip_firewall.rs"; then
-    fail "missing W6 refusal variant $op in usbip_firewall.rs"
+    fail "missing USBIP refusal variant $op in usbip_firewall.rs"
     exit 1
   fi
 done
-ok "static grep: every W6 USBIP variant has an explicit refusal handler"
+ok "static grep: every USBIP variant has an explicit refusal handler"
 
-ok "tests/usbip-firewall-skeleton.sh: ordering + audit + W6 boundary all enforced"
+ok "tests/usbip-firewall-skeleton.sh: ordering + audit + USBIP boundary all enforced"

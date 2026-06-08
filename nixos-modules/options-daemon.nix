@@ -194,7 +194,7 @@ in
         and by the per-wave `validated = true` eval assertion. The
         default `/var/lib/nixling/validated` is the canonical
         operator-host location; the option is overridable mainly for
-        regression tests (see `tests/w18-default-flip-eval.sh`).
+        regression tests (see `tests/daemon-default-compat-eval.sh`).
       '';
     };
   };

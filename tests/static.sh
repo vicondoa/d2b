@@ -719,10 +719,10 @@ if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
   # docs/reference/tempo-retention-sampling.md.
   nl_static_parallel_script_gate "tests/tempo-budget-eval.sh" "$ROOT/tests/tempo-budget-eval.sh"
 fi
-if [ -x "$ROOT/tests/w18-default-flip-eval.sh" ]; then
+if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
-  nl_static_parallel_script_gate "tests/w18-default-flip-eval.sh" "$ROOT/tests/w18-default-flip-eval.sh"
+  nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
 if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
   # Layer-1 gate for the
