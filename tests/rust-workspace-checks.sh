@@ -63,6 +63,7 @@ fi
 if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
   export NIXLING_RUST_GATE_IN_NIX_SHELL=1
   export NIXLING_RUST_GATE_BOOTSTRAP_RUSTUP=1
+  export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
   export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
   rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
 fi
