@@ -11,7 +11,7 @@ SCHEMA_DIR=${SCHEMA_DIR:-$ROOT/docs/reference/schemas/v1}
 . "$HERE/lib.sh"
 
 if [ ! -f packages/nixling-core/src/bundle.rs ] || [ ! -d "$SCHEMA_DIR" ]; then
-  log "schemas absent — skipping static-invariant-world-readable-leak (W1 unstaged)"
+  log "schemas absent — skipping static-invariant-world-readable-leak"
   exit 0
 fi
 

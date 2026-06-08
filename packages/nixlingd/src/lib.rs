@@ -398,7 +398,7 @@ fn persist_autostart_report(daemon_state_dir: &Path, report: &autostart::Autosta
 }
 
 pub fn banner() -> String {
-    "nixlingd 0.0.0-bootstrap (W0a stub)".to_owned()
+    "nixlingd 0.0.0-bootstrap (bootstrap stub)".to_owned()
 }
 
 pub fn banner_note() -> String {

@@ -42,9 +42,35 @@ add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
 nl_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
+if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "rustup not on PATH and nix is unavailable; rust gate cannot run pinned Rust $pinned_channel"
+    exit 1
+  fi
+  rust_gate_scratch=$(nl_mktemp .nixling-rust-gate.XXXXXX)
+  add_cleanup "rm -rf -- \"$rust_gate_scratch\""
+  log "  rustup not on PATH; re-entering via nix shell to acquire pinned Rust $pinned_channel toolchain"
+  export NIXLING_RUST_GATE_IN_NIX_SHELL=1
+  export NIXLING_RUST_GATE_BOOTSTRAP_RUSTUP=1
+  export RUSTUP_HOME="$rust_gate_scratch/rustup"
+  export CARGO_HOME="$rust_gate_scratch/cargo"
+  nix shell --quiet --inputs-from "$ROOT" \
+    nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
+    --command bash "$0" "$@"
+  exit $?
+fi
+
+if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
+  export NIXLING_RUST_GATE_IN_NIX_SHELL=1
+  export NIXLING_RUST_GATE_BOOTSTRAP_RUSTUP=1
+  export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+  export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+  rustup toolchain install "$pinned_channel" --profile minimal --component rustfmt --component clippy
+fi
+
 if [ -z "${NIXLING_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
-    fail "neither cargo nor nix is on PATH; W0a rust gate cannot run"
+    fail "neither cargo nor nix is on PATH; rust gate cannot run"
     exit 1
   fi
   rust_gate_scratch=$(nl_mktemp .nixling-rust-gate.XXXXXX)
@@ -198,13 +224,13 @@ snapshot_schema_out() {
   )
 }
 
-log "--> schema-drift placeholder (W1 will replace with real schemas)"
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+log "--> schema generation reproducibility"
+(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
-  fail "schema-drift placeholder: cargo xtask gen-schemas output is not reproducible"
+  fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
   diff -u \
     <(printf '%s\n' "$schema_snapshot_1") \
     <(printf '%s\n' "$schema_snapshot_2") >&2 || true
@@ -213,21 +239,23 @@ fi
 if [ "$schema_out_preexisting" = "0" ]; then
   rm -rf -- "$schema_out"
 fi
-ok "schema-drift placeholder (W1 will replace with real schemas)"
+ok "schema generation reproducibility"
 
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+        cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   else
-    fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
+    fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
 }
@@ -236,15 +264,15 @@ cargo_audit_check() {
   local label="$1" lock_path="$2"
   if command -v cargo-audit >/dev/null 2>&1; then
     log "--> cargo audit ($label)"
-    cargo audit --file "$lock_path"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
     ok "cargo audit ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo audit ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      cargo audit --file "$lock_path"
+      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
     ok "cargo audit ($label)"
   else
-    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
+    fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a waiver"
     exit 1
   fi
 }

@@ -48,11 +48,20 @@ fn open_dir_path_safe_rejects_mount_crossing() {
         Err(err) => panic!("failed to execute unshare: {err}"),
     };
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success()
+        && stderr.contains("Operation not permitted")
+        && stderr.contains("uid_map")
+    {
+        eprintln!("skipping mount-crossing test: user namespace uid_map denied");
+        return;
+    }
+
     assert!(
         output.status.success(),
         "helper failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        stderr,
     );
 }
 

@@ -3032,7 +3032,8 @@ mod tests {
     }
 
     #[test]
-    fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {        let root = test_root("vm-start-intents");
+    fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {
+        let root = test_root("vm-start-intents");
         let resolver = build_personal_dev_bundle(&root);
 
         let host = resolver

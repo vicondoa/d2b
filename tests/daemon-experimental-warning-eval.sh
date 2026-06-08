@@ -1,32 +1,37 @@
 #!/usr/bin/env bash
-# v1.1 invariant gate: assert the deprecation warning text for
-# `nixling.daemonExperimental.enable` is locked into
-# `nixos-modules/assertions.nix` so operators see the same string
-# in nixos-rebuild output AND the migration guide.
+# v1.1 invariant gate: assert the obsolete
+# `nixling.daemonExperimental.enable` option remains documented as
+# compatibility-only, with operator migration guidance.
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(dirname "$HERE")}
 
-assertions_module="$ROOT/nixos-modules/assertions.nix"
+options_module="$ROOT/nixos-modules/options-daemon.nix"
+migration_guide="$ROOT/docs/how-to/migrate-nixling-v1-0-to-v1-1.md"
 
-expected='nixling.daemonExperimental.enable is obsolete in v1.1; remove this option from your consumer flake because the broker socket/service are enabled by default. Leaving it set has no effect.'
+expected_option='Obsolete compatibility gate for the daemon-backed control plane.'
+expected_guide='Remove `nixling.daemonExperimental.enable`'
 
-if [ ! -f "$assertions_module" ]; then
-  printf 'daemon-experimental-warning-eval: FAIL — %s missing\n' "$assertions_module" >&2
+if [ ! -f "$options_module" ]; then
+  printf 'daemon-experimental-warning-eval: FAIL — %s missing\n' "$options_module" >&2
   exit 1
 fi
 
-if ! grep -F -- "$expected" "$assertions_module" >/dev/null 2>&1; then
-  printf 'daemon-experimental-warning-eval: FAIL — warning text not found in %s\n' "$assertions_module" >&2
-  printf '  expected literal string: %s\n' "$expected" >&2
+if [ ! -f "$migration_guide" ]; then
+  printf 'daemon-experimental-warning-eval: FAIL — %s missing\n' "$migration_guide" >&2
   exit 1
 fi
 
-# Also verify it is a `warnings` entry (NOT an assertion) so
-# leaving the option set does not block eval.
-if ! grep -E '^\s*warnings\s*=' "$assertions_module" >/dev/null 2>&1; then
-  printf 'daemon-experimental-warning-eval: FAIL — `warnings =` definition not found in %s\n' "$assertions_module" >&2
+if ! grep -F -- "$expected_option" "$options_module" >/dev/null 2>&1; then
+  printf 'daemon-experimental-warning-eval: FAIL — obsolete option text not found in %s\n' "$options_module" >&2
+  printf '  expected literal string: %s\n' "$expected_option" >&2
+  exit 1
+fi
+
+if ! grep -F -- "$expected_guide" "$migration_guide" >/dev/null 2>&1; then
+  printf 'daemon-experimental-warning-eval: FAIL — migration instruction not found in %s\n' "$migration_guide" >&2
+  printf '  expected literal string: %s\n' "$expected_guide" >&2
   exit 1
 fi
 

@@ -103,8 +103,8 @@ check_bool "hasP7"  "true"
 check_bool "p0ImplDef"  "false"
 check_bool "p0ValidDef" "false"
 
-# With all p0..p7 unimplemented, daemonExperimental.enable must default
-# to false (allReady gate is false).
-check_bool "daemonAutoDefault" "false"
+# daemonExperimental.enable is now an obsolete compatibility option whose
+# default is true; the daemon-only control plane is always enabled.
+check_bool "daemonAutoDefault" "true"
 
 log "==> readiness-waves-eval OK"

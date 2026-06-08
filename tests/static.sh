@@ -724,10 +724,10 @@ if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
   # docs/reference/tempo-retention-sampling.md.
   nl_static_parallel_script_gate "tests/tempo-budget-eval.sh" "$ROOT/tests/tempo-budget-eval.sh"
 fi
-if [ -x "$ROOT/tests/w18-default-flip-eval.sh" ]; then
+if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
-  nl_static_parallel_script_gate "tests/w18-default-flip-eval.sh" "$ROOT/tests/w18-default-flip-eval.sh"
+  nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
 if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
   # Layer-1 gate for the
@@ -777,6 +777,9 @@ fi
 if [ -x "$ROOT/tests/privileges-doc-completeness-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-doc-completeness-eval.sh" "$ROOT/tests/privileges-doc-completeness-eval.sh"
 fi
+if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
+  nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
+fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
@@ -815,7 +818,7 @@ for _d13_gate in \
   no-bash-exec-eval \
   otel-acl-migration-eval \
   otel-host-bridge-argv-shape \
-  p2-deliverable-gate-inventory \
+  deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   processes-json-eval \
   readiness-waves-eval \

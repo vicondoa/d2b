@@ -105,4 +105,4 @@ for t in "${daemon_version_tests[@]}"; do
   cargo test -p nixlingd --lib "$t" 2>&1 | tail -3
 done
 
-ok "tests/dag-topo.sh: every W4-H4/H6/H8 canary passed"
+ok "tests/dag-topo.sh: every supervisor DAG canary passed"

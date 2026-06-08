@@ -20,5 +20,5 @@
 # invoking without failing.
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
-log "==> tests/video-sidecar-hardening-eval.sh (stub; surface moved to broker SpawnRunner{Video} in ph6-remove-systemd-emission)"
+log "==> tests/video-sidecar-hardening-eval.sh (stub; video runner hardening moved to broker SpawnRunner{Video})"
 exit 0

@@ -42,7 +42,7 @@ REQUIRED_KEYS=(
   panel_approval_required_for_change
 )
 
-log "W3 L3 pin parse + drift gate"
+log "distro matrix pin parse + drift gate"
 
 # Scratch outside $ROOT.
 SCRATCH=${TMPDIR:-/tmp}/nixling-l3-pin.$$

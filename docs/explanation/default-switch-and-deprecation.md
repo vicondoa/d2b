@@ -111,7 +111,7 @@ them would deadlock the auto-flip.
 `nixling.daemonExperimental.defaultFlipEvidenceDir` option; its
 default is `/var/lib/nixling/validated`. The option is overridable
 mainly for the regression test
-(`tests/w18-default-flip-eval.sh`); operator hosts should leave it
+(`tests/daemon-default-compat-eval.sh`); operator hosts should leave it
 at the default.
 
 ### Per-wave gate semantics

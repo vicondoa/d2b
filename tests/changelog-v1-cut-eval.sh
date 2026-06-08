@@ -36,18 +36,22 @@ if ! grep -qE '^## \[[0-9]+\.[0-9]+(\.[0-9]+)?\][[:space:]]+[—-][[:space:]]+[0
   fail "latest release header missing 'YYYY-MM-DD' cut date: $latest_header"
 fi
 
-# "## [Unreleased]" must be empty of release content: between it and
-# the latest release header, only blank lines / HTML comments are
-# permitted (no "### " entries, no bullet lines).
-between_start=$((unreleased_line + 1))
-between_end=$((latest_line - 1))
-if [ "$between_end" -ge "$between_start" ]; then
-  body=$(sed -n "${between_start},${between_end}p" "$changelog")
-  if grep -qE '^### ' <<< "$body"; then
-    fail "'## [Unreleased]' section is not empty: contains '### ' entry"
-  fi
-  if grep -qE '^[*-] ' <<< "$body"; then
-    fail "'## [Unreleased]' section is not empty: contains bullet entry"
+# Release-cut jobs can opt in to requiring an empty "## [Unreleased]"
+# block. PR CI allows active-development entries from concurrent work.
+if [ "${NIXLING_REQUIRE_EMPTY_UNRELEASED:-0}" = 1 ]; then
+  # "## [Unreleased]" must be empty of release content: between it and
+  # the latest release header, only blank lines / HTML comments are
+  # permitted (no "### " entries, no bullet lines).
+  between_start=$((unreleased_line + 1))
+  between_end=$((latest_line - 1))
+  if [ "$between_end" -ge "$between_start" ]; then
+    body=$(sed -n "${between_start},${between_end}p" "$changelog")
+    if grep -qE '^### ' <<< "$body"; then
+      fail "'## [Unreleased]' section is not empty: contains '### ' entry"
+    fi
+    if grep -qE '^[*-] ' <<< "$body"; then
+      fail "'## [Unreleased]' section is not empty: contains bullet entry"
+    fi
   fi
 fi
 

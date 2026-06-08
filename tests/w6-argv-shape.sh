@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Layer-1 gate: vsock-relay + USBIP argv-generator parity.
+# Static gate: vsock-relay + USBIP argv-generator parity.
 # Drives the unit-test surface pinned by name.
 
 set -euo pipefail
@@ -14,7 +14,7 @@ fi
 
 if [ -z "${NIXLING_W6_H3_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
-    echo "w6-argv-shape: neither cargo nor nix is on PATH" >&2
+    echo "vsock-usbip-argv-shape: neither cargo nor nix is on PATH" >&2
     exit 1
   fi
   export NIXLING_W6_H3_IN_NIX_SHELL=1
@@ -29,7 +29,7 @@ fi
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$(nl_cargo_target_dir workspace)}
 export RUSTC_WRAPPER=${RUSTC_WRAPPER:-}
 
-log "==> tests/w6-argv-shape.sh"
+log "==> tests/vsock-usbip-argv-shape.sh"
 
 cd "$ROOT/packages"
 
@@ -95,4 +95,4 @@ for t in "${usbip_tests[@]}"; do
   cargo test -p nixling-host --lib "$t" 2>&1 | tail -3
 done
 
-ok "tests/w6-argv-shape.sh: every W6-H1/H2 argv-generator canary passed"
+ok "tests/vsock-usbip-argv-shape.sh: every vsock/USBIP argv-generator canary passed"

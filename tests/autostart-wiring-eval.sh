@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/autostart-wiring-eval.sh — positive-eval regression test for
-# autostart wiring after.
+# daemon-driven autostart wiring.
 #
 # Before the daemon-only cutover, this gate locked in Spec
 # correction #32 + SWArch-M10: the `nixling@<vm>.service` template
@@ -88,7 +88,10 @@ let
   };
   svcs = nixos.config.systemd.services;
   mu = nixos.config.systemd.targets.multi-user.wants;
-  mvms = nixos.config.systemd.targets.microvms.wants;
+  mvms =
+    if builtins.hasAttr "microvms" nixos.config.systemd.targets
+    then nixos.config.systemd.targets.microvms.wants or [ ]
+    else [ ];
   nlAttrs = builtins.filter (n: builtins.match "^nixling@.*\\\\.service$" n != null) mu;
 in {
   hasNixlingTemplate = builtins.hasAttr "nixling@" svcs;
@@ -113,20 +116,19 @@ HAS_NLD=$(printf '%s' "$OUT"     | jq -r '.hasNixlingd')
 NLD_WB=$(printf '%s' "$OUT"      | jq -c '.nixlingdWantedBy')
 MVMS=$(printf '%s' "$OUT"        | jq -c '.microvmsWants')
 
-# nixling@ template MUST NOT exist (host-wrapper.nix
-# removed by).
+# nixling@ template MUST NOT exist; nixlingd owns autostart.
 if [ "$HAS_TPL" != "false" ]; then
-  fail "systemd.services.\"nixling@\" template still present; should be deleted by ph6-remove-systemd-emission (host-wrapper.nix removed). Replacement: nixlingd.service drives per-VM SpawnRunner{role: CloudHypervisor} via broker."
+  fail "systemd.services.\"nixling@\" template still present. Replacement: nixlingd.service drives per-VM SpawnRunner{role: CloudHypervisor} via broker."
 fi
-ok "systemd.services.\"nixling@\" template correctly ABSENT (P6 deletion)"
+ok "systemd.services.\"nixling@\" template correctly ABSENT"
 
 # Per-instance attrs MUST NOT exist either.
 if [ "$HAS_AUTO" != "false" ]; then
-  fail "systemd.services.\"nixling@auto-vm\" attr exists; should be absent post-P6 (no nixling@<vm> path)."
+  fail "systemd.services.\"nixling@auto-vm\" attr exists; no nixling@<vm> path should be emitted."
 fi
 ok "systemd.services.\"nixling@auto-vm\" correctly ABSENT"
 if [ "$HAS_MANUAL" != "false" ]; then
-  fail "systemd.services.\"nixling@manual-vm\" attr exists; should be absent post-P6."
+  fail "systemd.services.\"nixling@manual-vm\" attr exists; no nixling@<vm> path should be emitted."
 fi
 ok "systemd.services.\"nixling@manual-vm\" correctly ABSENT"
 
@@ -138,13 +140,13 @@ ok "multi-user.target.wants has no dangling nixling@*.service entries"
 
 # nixlingd.service is the new autostart driver.
 if [ "$HAS_NLD" != "true" ]; then
-  fail "systemd.services.\"nixlingd\" missing; nixlingd is the post-P6 autostart driver."
+  fail "systemd.services.\"nixlingd\" missing; nixlingd is the autostart driver."
 fi
 ok "systemd.services.\"nixlingd\" present"
 if ! printf '%s' "$NLD_WB" | jq -e 'index("multi-user.target")' >/dev/null; then
   fail "nixlingd.service is not wired to multi-user.target (wantedBy missing); daemon won't autostart on boot. Got wantedBy=$NLD_WB"
 fi
-ok "nixlingd.service wired to multi-user.target (P6 autostart driver)"
+ok "nixlingd.service wired to multi-user.target as the autostart driver"
 
 # microvms.target.wants must be [].
 if [ "$MVMS" != "[]" ]; then

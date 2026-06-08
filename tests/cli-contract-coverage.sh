@@ -497,4 +497,4 @@ if violations:
     sys.exit(1)
 PY
 
-ok "cli-contract-coverage: W3 closed golden table (48 rows × {.txt, .json}) is complete and orphan-free"
+ok "cli-contract-coverage: closed golden table (48 rows × {.txt, .json}) is complete and orphan-free"
