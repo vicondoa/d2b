@@ -360,10 +360,19 @@ pub fn live_run_activation(
                 })?;
             let generation_dir =
                 generation_dir(&store_view_intent.hardlink_farm_path, rollback_generation);
-            hardlink_farm::read_generation_marker(&generation_dir)
+            let rollback_marker = hardlink_farm::read_generation_marker(&generation_dir)
                 .map_err(|err| LiveHandlerError::Activation(err.to_string()))?;
-            let target_view_path =
-                target_view_for_generation(store_view_intent, rollback_generation)?;
+            // The rolled-back generation may hold a DIFFERENT closure
+            // than the current bundle intent, so the toplevel basename
+            // for the target view must come from the rollback
+            // generation's own marker — NOT the current intent's
+            // basename (which would point at a non-existent
+            // `generations/<old-gen>/<current-basename>`).
+            let target_view_path = rollback_target_view_path(
+                store_view_intent,
+                rollback_generation,
+                &rollback_marker,
+            )?;
             if !target_view_path.exists() {
                 return Err(LiveHandlerError::Activation(format!(
                     "rollback target store view missing at {}",
@@ -476,6 +485,37 @@ fn target_view_for_generation(
         ))
     })?;
     Ok(generation_dir(&intent.hardlink_farm_path, generation).join(target_name))
+}
+
+/// Resolve the target store-view path for a ROLLBACK to `generation`.
+///
+/// Unlike a forward activation, the rolled-back generation may hold a
+/// different closure than the current bundle intent, so the toplevel
+/// basename is recovered from that generation's own marker
+/// (`closure_hash == "toplevel:<basename>"`, written by
+/// [`ResolvedStoreViewIntent::closure_identity`]). Falls back to the
+/// current intent's basename only for a marker written before the
+/// `toplevel:` identity format (defensive; such markers never reached
+/// activation in practice because store-view intents were absent).
+fn rollback_target_view_path(
+    intent: &ResolvedStoreViewIntent,
+    generation: u64,
+    marker: &hardlink_farm::GenerationMarker,
+) -> Result<PathBuf, LiveHandlerError> {
+    let dir = generation_dir(&intent.hardlink_farm_path, generation);
+    if let Some(basename) = marker.closure_hash.strip_prefix("toplevel:") {
+        // Must be a single, non-traversing path component (a Nix store
+        // basename). Reject anything with separators / `.` / `..` so a
+        // malformed marker can never escape the generation dir.
+        if !basename.is_empty()
+            && !basename.contains('/')
+            && basename != "."
+            && basename != ".."
+        {
+            return Ok(dir.join(basename));
+        }
+    }
+    target_view_for_generation(intent, generation)
 }
 
 fn read_current_generation(hardlink_farm_path: &Path) -> Result<Option<u64>, LiveHandlerError> {
@@ -2135,8 +2175,55 @@ mod tests {
         }
     }
 
-    fn sample_gc_intent() -> ResolvedGcIntent {
-        ResolvedGcIntent {
+    #[test]
+    fn rollback_target_view_path_uses_rolled_back_marker_basename() {
+        let intent = ResolvedStoreViewIntent {
+            intent_id: "store-view:vm:alpha".to_owned(),
+            vm: "alpha".to_owned(),
+            generation: 99,
+            hardlink_farm_path: PathBuf::from("/var/lib/nixling/vms/alpha/store-view"),
+            target_view_path: PathBuf::from(
+                "/var/lib/nixling/vms/alpha/store-view/generations/99/current-system",
+            ),
+            closure_paths: Vec::new(),
+        };
+        let marker = hardlink_farm::GenerationMarker {
+            closure_hash: "toplevel:old-system".to_owned(),
+            nixling_version: "test".to_owned(),
+            activated_at: "test".to_owned(),
+            vm: "alpha".to_owned(),
+            generation_number: 7,
+        };
+        // Rollback to gen 7 (closure `old-system`) must target the OLD
+        // basename, not the current intent's `current-system`.
+        assert_eq!(
+            rollback_target_view_path(&intent, 7, &marker).unwrap(),
+            PathBuf::from("/var/lib/nixling/vms/alpha/store-view/generations/7/old-system"),
+        );
+
+        // Defensive fallback: a pre-`toplevel:` marker format resolves
+        // to the current intent's basename (old behavior).
+        let legacy = hardlink_farm::GenerationMarker {
+            closure_hash: "store-view:alpha:7".to_owned(),
+            ..marker.clone()
+        };
+        assert_eq!(
+            rollback_target_view_path(&intent, 7, &legacy).unwrap(),
+            PathBuf::from("/var/lib/nixling/vms/alpha/store-view/generations/7/current-system"),
+        );
+
+        // A malformed marker with path traversal is rejected → fallback.
+        let evil = hardlink_farm::GenerationMarker {
+            closure_hash: "toplevel:../escape".to_owned(),
+            ..marker.clone()
+        };
+        assert_eq!(
+            rollback_target_view_path(&intent, 7, &evil).unwrap(),
+            PathBuf::from("/var/lib/nixling/vms/alpha/store-view/generations/7/current-system"),
+        );
+    }
+
+    fn sample_gc_intent() -> ResolvedGcIntent {        ResolvedGcIntent {
             intent_id: "gc:host".to_owned(),
             retained_store_paths: vec![
                 PathBuf::from("/nix/store/aaaaaaaaaaaaaaaa-alpha"),

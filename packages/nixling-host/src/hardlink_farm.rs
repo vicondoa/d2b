@@ -52,6 +52,17 @@ pub enum HardlinkFarmError {
     MarkerMissing { generation_dir: String },
     /// Marker file present but unparseable as JSON.
     MarkerUnparseable { path: String, detail: String },
+    /// The target generation dir already holds a *different* closure
+    /// than the one being built. This is the fail-closed guard for an
+    /// (astronomically rare) u32 store-view generation-number collision
+    /// between two distinct closures of the same VM: rather than union
+    /// both closures into one generation dir (which would corrupt
+    /// rollback + the activated store view), refuse the build.
+    GenerationCollision {
+        generation_dir: String,
+        existing: String,
+        incoming: String,
+    },
     /// I/O error during a primitive operation.
     Io { path: String, detail: String },
 }
@@ -70,6 +81,15 @@ impl std::fmt::Display for HardlinkFarmError {
             Self::MarkerUnparseable { path, detail } => {
                 write!(f, "marker {path}: {detail}")
             }
+            Self::GenerationCollision {
+                generation_dir,
+                existing,
+                incoming,
+            } => write!(
+                f,
+                "store-view generation collision at {generation_dir}: already holds closure \
+                 `{existing}`, refusing to build `{incoming}` over it"
+            ),
             Self::Io { path, detail } => write!(f, "I/O error on {path}: {detail}"),
         }
     }
@@ -192,6 +212,38 @@ pub fn build_farm(
     let generation_dir = store_root
         .join("generations")
         .join(generation_number.to_string());
+    // Fail-closed collision guard: the store-view generation number is
+    // a content-derived u32 (see closures-json.nix). If this generation
+    // dir already exists with a marker for a DIFFERENT closure, two
+    // distinct closures of this VM collided onto the same u32. Refuse
+    // rather than hardlink the new closure on top of the old one (which
+    // would produce a mixed store view and corrupt rollback). Reusing a
+    // dir for the SAME closure stays idempotent.
+    let existing_marker_path = generation_dir.join("marker.json");
+    if generation_dir.exists() {
+        if existing_marker_path.exists() {
+            let existing = read_generation_marker(&generation_dir)?;
+            if existing.closure_hash != marker.closure_hash {
+                return Err(HardlinkFarmError::GenerationCollision {
+                    generation_dir: generation_dir.display().to_string(),
+                    existing: existing.closure_hash,
+                    incoming: marker.closure_hash.clone(),
+                });
+            }
+        } else {
+            // Populated generation dir with no trusted marker: a build
+            // that crashed before write_generation_marker. It is never
+            // activatable (swap_current_symlink + read_generation_marker
+            // both require the marker) and its contents can't be trusted
+            // to belong to this closure — so a colliding closure must not
+            // be hardlinked on top of it. Rebuild the generation from
+            // scratch instead of unioning the partial leftovers.
+            std::fs::remove_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
+                path: generation_dir.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        }
+    }
     std::fs::create_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
         path: generation_dir.display().to_string(),
         detail: e.to_string(),
@@ -467,6 +519,115 @@ mod tests {
         let marker = read_generation_marker(&generation_dir).unwrap();
         assert_eq!(marker.generation_number, 7);
         assert_eq!(marker.vm, "corp-vm");
+    }
+
+    #[test]
+    fn build_farm_idempotent_for_same_closure() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        let system_path = source_root.join("abc-system");
+        std::fs::create_dir_all(&system_path).unwrap();
+        std::fs::write(system_path.join("payload"), b"data").unwrap();
+        let marker = GenerationMarker {
+            closure_hash: "toplevel:abc-system".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-05-29T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 7,
+        };
+        // Building the same closure into the same generation twice is a
+        // no-op-equivalent: the second call reuses the dir + marker.
+        build_farm(&farm_root, 7, std::slice::from_ref(&system_path), &marker).unwrap();
+        build_farm(&farm_root, 7, std::slice::from_ref(&system_path), &marker).unwrap();
+    }
+
+    #[test]
+    fn build_farm_refuses_generation_collision() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        // Two DISTINCT closures (different toplevel identity) that
+        // collided onto the same u32 generation number.
+        let closure_a = source_root.join("aaa-system");
+        let closure_b = source_root.join("bbb-system");
+        std::fs::create_dir_all(&closure_a).unwrap();
+        std::fs::create_dir_all(&closure_b).unwrap();
+        std::fs::write(closure_a.join("payload"), b"a").unwrap();
+        std::fs::write(closure_b.join("payload"), b"b").unwrap();
+
+        build_farm(
+            &farm_root,
+            42,
+            std::slice::from_ref(&closure_a),
+            &GenerationMarker {
+                closure_hash: "toplevel:aaa-system".to_owned(),
+                nixling_version: "0.4.0".to_owned(),
+                activated_at: "2026-05-29T09:00:00Z".to_owned(),
+                vm: "corp-vm".to_owned(),
+                generation_number: 42,
+            },
+        )
+        .unwrap();
+
+        // Same generation number, different closure identity → refuse
+        // fail-closed rather than union the two closures.
+        let result = build_farm(
+            &farm_root,
+            42,
+            std::slice::from_ref(&closure_b),
+            &GenerationMarker {
+                closure_hash: "toplevel:bbb-system".to_owned(),
+                nixling_version: "0.4.0".to_owned(),
+                activated_at: "2026-05-29T09:00:00Z".to_owned(),
+                vm: "corp-vm".to_owned(),
+                generation_number: 42,
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(HardlinkFarmError::GenerationCollision { .. })
+        ));
+        // The original closure's store view is untouched.
+        assert!(farm_root.join("generations/42/aaa-system/payload").exists());
+        assert!(!farm_root.join("generations/42/bbb-system/payload").exists());
+    }
+
+    #[test]
+    fn build_farm_rebuilds_markerless_partial_generation() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        let closure = source_root.join("ccc-system");
+        std::fs::create_dir_all(&closure).unwrap();
+        std::fs::write(closure.join("payload"), b"c").unwrap();
+
+        // Simulate a crashed earlier build: a populated generation dir
+        // with leftover files but NO marker.json.
+        let stale_dir = farm_root.join("generations").join("9");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        std::fs::write(stale_dir.join("leftover-from-crash"), b"stale").unwrap();
+
+        // Building a (different) closure into the same generation must
+        // NOT union the stale leftovers: it rebuilds from scratch.
+        build_farm(
+            &farm_root,
+            9,
+            std::slice::from_ref(&closure),
+            &GenerationMarker {
+                closure_hash: "toplevel:ccc-system".to_owned(),
+                nixling_version: "0.4.0".to_owned(),
+                activated_at: "2026-05-29T09:00:00Z".to_owned(),
+                vm: "corp-vm".to_owned(),
+                generation_number: 9,
+            },
+        )
+        .unwrap();
+
+        assert!(stale_dir.join("ccc-system/payload").exists());
+        assert!(!stale_dir.join("leftover-from-crash").exists());
+        let marker = read_generation_marker(&stale_dir).unwrap();
+        assert_eq!(marker.closure_hash, "toplevel:ccc-system");
     }
 
     #[test]

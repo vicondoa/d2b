@@ -137,7 +137,7 @@ pub fn run_store_sync(
     hardlink_farm::reconcile_stale_swap_tmp(&intent.hardlink_farm_path)?;
 
     let marker = GenerationMarker {
-        closure_hash: format!("store-sync:{}:{}", intent.vm, resolved_generation),
+        closure_hash: intent.closure_identity(),
         nixling_version: env!("CARGO_PKG_VERSION").to_owned(),
         activated_at: format!("unix-{}", current_unix_ms()),
         vm: intent.vm.clone(),
