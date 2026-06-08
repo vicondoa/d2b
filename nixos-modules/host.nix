@@ -253,6 +253,23 @@ in
           ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
           ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
           ++ [ vm'.config ]
+          ++ lib.optional (vm'.guestConfigFile != null) vm'.guestConfigFile
+          # Seed the guest-editable config INTO the VM so an operator can
+          # see + edit it from inside the guest, then `nixling config
+          # sync` it back. The read-only baseline always reflects the
+          # currently-approved guestConfigFile; a writable working copy
+          # is seeded once (tmpfiles `C` = copy-if-absent) for the SSH
+          # user to edit. No new host surface — it rides the normal
+          # read-only closure (no virtiofs share).
+          ++ lib.optional (vm'.guestConfigFile != null) (
+            { lib, ... }: {
+              environment.etc."nixling/guest-config.nix".source = vm'.guestConfigFile;
+              systemd.tmpfiles.rules = lib.optionals (vm'.ssh.user != null) [
+                "d /var/lib/nixling-guest 0750 ${vm'.ssh.user} users -"
+                "C /var/lib/nixling-guest/guest-config.nix 0640 ${vm'.ssh.user} users - /etc/nixling/guest-config.nix"
+              ];
+            }
+          )
           ++ lib.optional (chVsock == null) {
             microvm.vsock.cid = lib.mkDefault (fallbackVsockCid name);
           }
@@ -331,7 +348,24 @@ in
               ] ++ obsSecretsShare);
             }
           ];
-      in composeVm name composedModules)
+      in (composeVm name composedModules) // {
+        # Namespace-containment policy lint for the guest-editable
+        # `guestConfigFile`: evaluated over the real nixpkgs NixOS module
+        # set (see lib.nix) with the same pkgs/specialArgs the per-VM
+        # evaluator uses, so a guest config that reads standard options
+        # resolves instead of false-positiving. Forbidden namespaces are
+        # detected by definition-existence (imports / generated modules /
+        # `_file` spoofing all caught). This is NOT an eval-time security
+        # sandbox — see lib.nix + docs/adr/0024 for the trust model.
+        guestForbidden =
+          if vm'.guestConfigFile == null then [ ]
+          else nl.guestConfigForbiddenNamespaces
+            {
+              inherit pkgs;
+              specialArgs = { inherit inputs; name = name; } // cfg.site.extraSpecialArgs;
+            }
+            vm'.guestConfigFile;
+      })
     enabledVms;
 
   # Fail-fast stub `microvm@<vm>.service` units are no longer needed —

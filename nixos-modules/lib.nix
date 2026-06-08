@@ -257,4 +257,97 @@ rec {
   # helper returns null for backward compat with consumers that
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
+
+  # guestConfigForbiddenNamespaces — namespace-containment policy check
+  # for the per-VM guest-editable `guestConfigFile`.
+  #
+  # Returns the host-owned option path(s) (under `microvm.*` /
+  # `nixling.*`) that the guest file — OR ANY MODULE IT IMPORTS /
+  # GENERATES — defined. An empty list means the guest file touched only
+  # guest-OS options.
+  #
+  # Mechanism: evaluate the guest file (and its full import closure) with
+  # `lib.evalModules` over the REAL nixpkgs NixOS module set, so a guest
+  # module that READS a standard option (e.g.
+  # `config.networking.hostName` in a `mkIf` guard) resolves instead of
+  # crashing the host eval. `microvm` and `nixling` are redeclared as
+  # detector options that nothing else defines, and a namespace is
+  # reported iff `options.<ns>.isDefined` — i.e. the guest contributed a
+  # real definition. Detection is by definition-EXISTENCE, so a guest's
+  # `imports`, a `builtins.toFile`-generated module, and `_file`
+  # spoofing are all caught (none can hide a definition from the option
+  # system).
+  #
+  # SCOPE / NON-GOAL: this is a best-effort namespace-containment policy
+  # lint, NOT a sound eval-time security sandbox. Two known limits, both
+  # inherent to evaluating guest-authored Nix as a module and both with
+  # the SAME backstop (the operator-review-and-approve trust gate — the
+  # host only ever evaluates a guest file the operator reviewed via
+  # `config diff` and approved) and the SAME deferred sound fix (a
+  # restricted/pure evaluator whose normalized output is the only thing
+  # the host consumes — see docs/adr/0024 "Future work"):
+  #   1. `lib.evalModules` cannot stop an approved guest file from
+  #      reading host paths at eval time (e.g. `builtins.readFile`).
+  #   2. This lint evaluates the guest file over the base NixOS module
+  #      set, NOT the full per-VM module stack (`vm.config`, components,
+  #      framework). So the `config.*` context can differ from the real
+  #      eval, which has two consequences:
+  #      (a) a forbidden `microvm.*`/`nixling.*` definition gated on
+  #          `lib.mkIf <cond>` where `<cond>` depends on a value the real
+  #          eval sets but this context does not can evaluate false here
+  #          and true in the real eval, escaping the lint (false NEGATIVE);
+  #      (b) a contained guest file that READS a framework-declared option
+  #          (e.g. `config.nixling.sshUser`, declared by the framework but
+  #          here only an undefined `anything` detector root) fails the
+  #          sandbox eval and is reported fail-closed (false POSITIVE).
+  #      Sound attribution of a guest's contribution in the FULL context
+  #      is not reliably expressible — definition counts conflate
+  #      defaults, value comparison forces (and is perturbed by) the whole
+  #      runner closure, and source-file attribution is `_file`-spoofable
+  #      — hence the deferred restricted-evaluator.
+  # The lint reliably catches the common case: UNCONDITIONAL host-owned
+  # sets, and conditional ones whose guard resolves the same here as in
+  # the real eval — from any source (`imports`, `builtins.toFile`,
+  # `_file` spoofing), since detection is by definition-existence. Guest
+  # files that read framework-declared `nixling.*`/`microvm.*` options
+  # are not supported (they read host-owned state the guest layer should
+  # not depend on).
+  #
+  # `pkgs` + `specialArgs` mirror what the real per-VM evaluator passes
+  # so a guest config valid in the real eval applies here too. Any eval
+  # failure is treated fail-closed (reported as a violation).
+  guestConfigForbiddenNamespaces = { pkgs, specialArgs ? { } }: guestFile:
+    let
+      modulesPath = toString (pkgs.path + "/nixos/modules");
+      baseModules = import (modulesPath + "/module-list.nix");
+      ev = lib.evalModules {
+        specialArgs = {
+          inherit lib pkgs modulesPath baseModules;
+          utils = import (pkgs.path + "/nixos/lib/utils.nix") {
+            inherit lib pkgs;
+            config = ev.config;
+          };
+        } // specialArgs;
+        modules = baseModules ++ [
+          {
+            nixpkgs.pkgs = pkgs;
+            nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
+          }
+          {
+            options.microvm = lib.mkOption { type = lib.types.anything; };
+            options.nixling = lib.mkOption { type = lib.types.anything; };
+          }
+          guestFile
+        ];
+      };
+      namesIn = ns:
+        lib.optionals ev.options.${ns}.isDefined
+          (lib.concatMap
+            (def: map (k: "${ns}.${k}") (lib.attrNames def))
+            ev.options.${ns}.definitions);
+      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "nixling");
+    in
+    if probe.success then probe.value
+    else [ "<guestConfigFile failed to evaluate in the containment check>" ];
 }
+

@@ -207,6 +207,7 @@
             "boot",
             "build",
             "capabilities",
+            "config",
             "console",
             "debug bundle",
             "down",

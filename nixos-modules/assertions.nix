@@ -529,6 +529,35 @@ let
         }
       ])
     cfg.vms);
+
+  # Containment for the per-VM guest-editable `guestConfigFile`: it may
+  # only set guest OS options, never host-owned microvm.* / nixling.*.
+  # The namespace-containment check (evalModules over the real nixpkgs
+  # NixOS module set, definition-existence; catches imports / generated
+  # modules / `_file` spoofing) runs in host.nix's composeVm pass and is
+  # read here as `_computed.<name>.guestForbidden`. It is a policy lint,
+  # not an eval-time security sandbox (see lib.nix + docs/adr/0024).
+  # Only VMs that set a guestConfigFile force that per-VM evaluation, so
+  # VMs without one — i.e. every existing consumer — pay nothing here.
+  guestConfigContainmentAssertions = lib.mapAttrsToList
+    (name: vm:
+      let
+        guestFile = toString vm.guestConfigFile;
+        forbidden = cfg._computed.${name}.guestForbidden or [ ];
+      in
+      {
+        assertion = forbidden == [ ];
+        message = ''
+          nixling.vms.${name}.guestConfigFile (${guestFile}) may only set
+          guest OS options, but it (or a module it imports) sets host-owned
+          option(s): ${
+            lib.concatStringsSep ", " forbidden
+          }. Host-owned microvm.* / nixling.* settings must live in the
+          host-owned nixling.vms.${name}.config, which the guest cannot
+          edit.
+        '';
+      })
+    (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) cfg.vms);
 in
 {
   assertions = lib.flatten (
@@ -539,6 +568,7 @@ in
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions
     ++ volumeSerialAssertions
+    ++ guestConfigContainmentAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

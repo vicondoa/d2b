@@ -10,6 +10,45 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- `nixling config` verb group — the host-side review/approve workflow
+  for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
+  in-guest edited file over the existing per-VM SSH key into a
+  user-local staging copy; `config diff` shows a unified diff against a
+  live file; `config approve` atomically writes the staged copy onto an
+  operator-chosen target; `config reject` discards it; `config status`
+  reports pending stagings. The CLI only writes its own staging area and
+  the operator-named `--to` target — it never auto-touches the config
+  tree. `approve`/`reject` are host-operator-only and are the
+  authoritative containment boundary (the host only ever evaluates an
+  operator-approved guest file); an eval-time namespace lint on
+  `nixling switch` additionally rejects guest-set host-owned options as
+  defense-in-depth. No new privileged surface (no virtiofs, no new
+  socket); the untrusted pull is bounded (size cap + timeout). `nixling
+  up` / `start` and `nixling status` also print a human-output note when
+  a VM has a pending un-approved staged config.
+- `nixling.vms.<vm>.guestConfigFile` — a dedicated, **guest-editable**
+  per-VM NixOS module for the in-guest OS layer (packages, services,
+  in-guest users, files). It is merged into the guest like `config`,
+  but is **contained**: a best-effort eval-time namespace lint rejects
+  it if it sets any host-owned `microvm.*` (runner substrate) or
+  `nixling.*` (framework) option, naming the offending option(s)
+  (detected by definition-existence over the real NixOS module set, so
+  `imports`/`builtins.toFile`/`_file`-spoofing are caught). The lint is
+  defense-in-depth, not a sound sandbox — operator review/approve is the
+  authoritative boundary; see
+  [ADR 0024](docs/adr/0024-in-vm-guest-config-sync.md) for the trust
+  model and the deferred sound-evaluator work. This is the foundation
+  for the in-VM config-sync workflow — an operator can edit this file
+  from inside the VM and sync it back for review. Host-owned settings
+  stay in `config`, which the guest cannot edit. When set, the current
+  approved guest config is also seeded into the VM (read-only at
+  `/etc/nixling/guest-config.nix`, plus a writable working copy at
+  `/var/lib/nixling-guest/guest-config.nix`) so it can be edited from
+  inside the VM. See
+  [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
+
 ### Fixed
 
 - `nixling switch` / `boot` / `test` no longer fail with `broker-error`

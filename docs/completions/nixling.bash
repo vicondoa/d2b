@@ -31,6 +31,9 @@ _nixling() {
             nixling,build)
                 cmd="nixling__subcmd__build"
                 ;;
+            nixling,config)
+                cmd="nixling__subcmd__config"
+                ;;
             nixling,console)
                 cmd="nixling__subcmd__console"
                 ;;
@@ -130,6 +133,42 @@ _nixling() {
             nixling__subcmd__auth__subcmd__help,status)
                 cmd="nixling__subcmd__auth__subcmd__help__subcmd__status"
                 ;;
+            nixling__subcmd__config,approve)
+                cmd="nixling__subcmd__config__subcmd__approve"
+                ;;
+            nixling__subcmd__config,diff)
+                cmd="nixling__subcmd__config__subcmd__diff"
+                ;;
+            nixling__subcmd__config,help)
+                cmd="nixling__subcmd__config__subcmd__help"
+                ;;
+            nixling__subcmd__config,reject)
+                cmd="nixling__subcmd__config__subcmd__reject"
+                ;;
+            nixling__subcmd__config,status)
+                cmd="nixling__subcmd__config__subcmd__status"
+                ;;
+            nixling__subcmd__config,sync)
+                cmd="nixling__subcmd__config__subcmd__sync"
+                ;;
+            nixling__subcmd__config__subcmd__help,approve)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__approve"
+                ;;
+            nixling__subcmd__config__subcmd__help,diff)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__diff"
+                ;;
+            nixling__subcmd__config__subcmd__help,help)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__help"
+                ;;
+            nixling__subcmd__config__subcmd__help,reject)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__reject"
+                ;;
+            nixling__subcmd__config__subcmd__help,status)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__status"
+                ;;
+            nixling__subcmd__config__subcmd__help,sync)
+                cmd="nixling__subcmd__config__subcmd__help__subcmd__sync"
+                ;;
             nixling__subcmd__help,audio)
                 cmd="nixling__subcmd__help__subcmd__audio"
                 ;;
@@ -144,6 +183,9 @@ _nixling() {
                 ;;
             nixling__subcmd__help,build)
                 cmd="nixling__subcmd__help__subcmd__build"
+                ;;
+            nixling__subcmd__help,config)
+                cmd="nixling__subcmd__help__subcmd__config"
                 ;;
             nixling__subcmd__help,console)
                 cmd="nixling__subcmd__help__subcmd__console"
@@ -216,6 +258,21 @@ _nixling() {
                 ;;
             nixling__subcmd__help__subcmd__auth,status)
                 cmd="nixling__subcmd__help__subcmd__auth__subcmd__status"
+                ;;
+            nixling__subcmd__help__subcmd__config,approve)
+                cmd="nixling__subcmd__help__subcmd__config__subcmd__approve"
+                ;;
+            nixling__subcmd__help__subcmd__config,diff)
+                cmd="nixling__subcmd__help__subcmd__config__subcmd__diff"
+                ;;
+            nixling__subcmd__help__subcmd__config,reject)
+                cmd="nixling__subcmd__help__subcmd__config__subcmd__reject"
+                ;;
+            nixling__subcmd__help__subcmd__config,status)
+                cmd="nixling__subcmd__help__subcmd__config__subcmd__status"
+                ;;
+            nixling__subcmd__help__subcmd__config,sync)
+                cmd="nixling__subcmd__help__subcmd__config__subcmd__sync"
                 ;;
             nixling__subcmd__help__subcmd__host,check)
                 cmd="nixling__subcmd__help__subcmd__host__subcmd__check"
@@ -419,7 +476,7 @@ _nixling() {
 
     case "${cmd}" in
         nixling)
-            opts="-h -V --help --version list status usb console audio audit host auth vm up down restart build generations switch boot test rollback gc keys trust rotate-known-host migrate help"
+            opts="-h -V --help --version list status usb console audio audit host auth vm up down restart build generations switch boot test rollback gc keys trust rotate-known-host migrate config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -702,6 +759,216 @@ _nixling() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        nixling__subcmd__config)
+            opts="-h --help sync diff approve reject status help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__approve)
+            opts="-h --to --json --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__diff)
+            opts="-h --against --json --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --against)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help)
+            opts="sync diff approve reject status help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__approve)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__diff)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__reject)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__status)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__help__subcmd__sync)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__reject)
+            opts="-h --json --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__status)
+            opts="-h --all --json --help [VM]"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__config__subcmd__sync)
+            opts="-h --guest-path --host --user --key --known-hosts --dry-run --json --help <VM>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --guest-path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --host)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --user)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --key)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --known-hosts)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         nixling__subcmd__console)
             opts="-h --help <VM>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -759,7 +1026,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help)
-            opts="list status usb console audio audit host auth vm up down restart build generations switch boot test rollback gc keys trust rotate-known-host migrate help"
+            opts="list status usb console audio audit host auth vm up down restart build generations switch boot test rollback gc keys trust rotate-known-host migrate config help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -901,6 +1168,90 @@ _nixling() {
         nixling__subcmd__help__subcmd__build)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config)
+            opts="sync diff approve reject status"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config__subcmd__approve)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config__subcmd__diff)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config__subcmd__reject)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config__subcmd__status)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__config__subcmd__sync)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

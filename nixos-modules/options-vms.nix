@@ -55,6 +55,32 @@
           '';
         };
 
+        guestConfigFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.path;
+          default = null;
+          example = lib.literalExpression "./vms/work.guest.nix";
+          description = ''
+            Path to a dedicated **guest-editable** NixOS module holding
+            this VM's in-guest OS layer — the software installed and run
+            inside the VM (`environment.systemPackages`, `services.*`,
+            in-guest `users.users.*`, `programs.*`, files, desktop).
+
+            It is merged into the guest's configuration like `config`,
+            but is **contained**: it may set only guest OS options, and
+            is rejected at eval time (a hard assertion) if it sets any
+            host-owned `microvm.*` (runner substrate: mounts, devices,
+            volumes, hypervisor args, kernel, vsock, …) or `nixling.*`
+            (framework) option. Those host-owned concerns stay in the
+            host-owned `config` above, which the guest cannot edit.
+
+            This is the surface that the in-VM config-sync workflow
+            (`nixling config sync` / `diff` / `approve`) edits: an
+            operator can change it from inside the VM, sync the change
+            back to the host, review it, and approve it — without ever
+            being able to escape the VM's own OS boundary.
+          '';
+        };
+
         # Nixling-owned per-VM evaluator output.
         # Populated by host.nix's composeVm pass which runs the
         # consumer's `config` through the nixling-owned per-VM
