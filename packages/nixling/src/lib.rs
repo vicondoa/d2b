@@ -3757,7 +3757,7 @@ fn vm_counts_as_running(vm: &ManifestVm, services: &StatusServicesOutputV2) -> b
 }
 
 fn service_state_counts_as_running(state: &str) -> bool {
-    matches!(state, "active" | "activating" | "reloading")
+    matches!(state, "active" | "activating" | "reloading" | "running")
 }
 
 fn list_status_label(
