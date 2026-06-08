@@ -1,0 +1,98 @@
+# nixling.envs.<env>.* — isolated per-env networks. Each env is
+# materialised by network.nix into two host bridges (`br-<env>-up`
+# point-to-point host↔net-VM, `br-<env>-lan` net-VM↔workload-VMs),
+# an auto-generated headless net VM (`sys-<env>-net`), NAT/firewall,
+# and a per-env `nixling-sys-<env>-usbipd-proxy` instance. Workload
+# VMs join an env by setting `nixling.vms.<name>.env = "<env>"` and
+# `index = <N>`. Extracted from options.nix in Phase 2c
+# (split-options) for reviewability.
+{ lib, ... }:
+
+{
+  options.nixling.envs = lib.mkOption {
+    description = ''
+      Isolated per-env networks. Each env owns two bridges
+      (`br-<name>-up` and `br-<name>-lan`), an auto-declared headless
+      net VM (`sys-<name>-net`) that NATs and firewalls the LAN, a
+      dnsmasq DHCP/DNS server on the LAN, and a
+      `nixling-sys-<name>-usbipd-proxy` service on the host bound to
+      the uplink IP.
+
+      Workload VMs reference an env via `nixling.vms.<vm>.env`.
+    '';
+    default = { };
+    type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+      options = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether to materialise this env's bridges + net VM.";
+        };
+
+        lanSubnet = lib.mkOption {
+          type = lib.types.str;
+          example = "10.20.0.0/24";
+          description = ''
+            CIDR for the env's workload LAN bridge. The net VM
+            takes `.1`; workload VMs get `.<index>` via dnsmasq
+            host-reservations. Host has NO interface on this bridge.
+            Must be a /24 with the network address ending in `.0`.
+          '';
+        };
+
+        uplinkSubnet = lib.mkOption {
+          type = lib.types.str;
+          example = "192.0.2.252/30";
+          description = ''
+            Point-to-point CIDR between the host and the net VM.
+            Host takes `.1`, net VM takes `.2`. The per-env usbipd
+            proxy (`nixling-sys-<env>-usbipd-proxy`) binds to the
+            host's `.1` here. Must be a /30. RFC 5737 reserves
+            192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 as
+            documentation ranges; pick a /30 inside one of those if
+            you want addresses that visibly belong to nixling.
+          '';
+        };
+
+        netName = lib.mkOption {
+          type = lib.types.str;
+          default = "sys-${name}-net";
+          description = ''
+            VM name under `nixling.vms.<netName>` for the
+            auto-declared net VM. Defaults to `sys-<env>-net`.
+          '';
+        };
+
+        hostBlocklist = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [
+            "10.0.0.0/8"
+            "172.16.0.0/12"
+            "192.168.0.0/16"
+            "169.254.0.0/16"
+          ];
+          description = ''
+            Destination CIDRs the net VM DROPs on forward from
+            the LAN. Intent: workload VMs must not reach the host's
+            primary-LAN IP or other RFC1918 services. Carve-outs
+            (intra-env LAN, USBIP-to-host-uplink-IP) are evaluated
+            before this list.
+          '';
+        };
+
+        extraNetConfig = lib.mkOption {
+          type = lib.types.unspecified;
+          default = { };
+          example = lib.literalExpression ''
+            { networking.hostName = "example-gw"; }
+          '';
+          description = ''
+            Extra NixOS module merged into the auto-declared net
+            VM's configuration. Use for per-env overrides
+            (hostname, ssh keys, extra dnsmasq options, etc).
+          '';
+        };
+      };
+    }));
+  };
+}

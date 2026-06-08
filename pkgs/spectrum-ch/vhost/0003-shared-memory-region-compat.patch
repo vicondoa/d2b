@@ -1,0 +1,82 @@
+diff --git a/vhost/src/vhost_user/frontend.rs b/vhost/src/vhost_user/frontend.rs
+index 851beff..959dfff 100644
+--- a/vhost/src/vhost_user/frontend.rs
++++ b/vhost/src/vhost_user/frontend.rs
+@@ -83,6 +83,11 @@ pub trait VhostUserFrontend: VhostBackend {
+     /// Get the shared memory region configuration from the backend.
+     fn get_shmem_config(&mut self) -> Result<VhostUserShMemConfig>;
+ 
++    /// Get shared memory regions, skipping the SHMEM protocol-feature
++    /// gate. Use this when talking to crosvm-style backends that
++    /// advertise SHMEM_MAP_CROSVM rather than SHMEM.
++    fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>>;
++
+     /// Begin transfer of internal state from/to the back-end
+     /// for the purpose of migration.
+     fn set_device_state_fd(
+@@ -596,6 +601,13 @@ impl VhostUserFrontend for Frontend {
+         Ok(config)
+     }
+ 
++    fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>> {
++        let mut node = self.node();
++        let hdr = node.send_request_header(FrontendReq::GET_SHMEM_CONFIG, None)?;
++        let config = node.recv_reply::<VhostUserShMemConfig>(&hdr)?;
++        Ok(config.regions())
++    }
++
+     fn set_device_state_fd(
+         &self,
+         direction: VhostTransferStateDirection,
+diff --git a/vhost/src/vhost_user/message.rs b/vhost/src/vhost_user/message.rs
+index 88dbcaf..d7f3f19 100644
+--- a/vhost/src/vhost_user/message.rs
++++ b/vhost/src/vhost_user/message.rs
+@@ -445,6 +445,14 @@ bitflags! {
+         /// Allow the backend to request file descriptors be mapped into virtio shared memory
+         /// regions.
+         const SHMEM = 0x0020_0000;
++        /// crosvm-compatible SHMEM feature bit. crosvm advertises
++        /// shared-memory-region support at 0x0010_0000 (called
++        /// SHMEM_MAP in crosvm); rust-vmm/vhost uses 0x0020_0000
++        /// (called SHMEM, above). The two bits are non-overlapping
++        /// and chosen independently; code talking to crosvm-style
++        /// backends MUST advertise this bit. The wire op
++        /// (GET_SHMEM_CONFIG = 44) is the same in both.
++        const SHMEM_MAP_CROSVM = 0x0010_0000;
+     }
+ }
+ 
+@@ -704,6 +712,32 @@ pub struct VhostUserShMemConfig {
+     pub memory_sizes: [u64; 256],
+ }
+ 
++/// Single shared memory region descriptor.
++#[repr(C, packed)]
++#[derive(Default, Copy, Clone, Debug)]
++pub struct VhostSharedMemoryRegion {
++    /// The shared memory region id.
++    pub id: u8,
++    /// Padding for alignment / wire-format compat.
++    padding: [u8; 7],
++    /// The length of the shared memory region.
++    pub length: u64,
++}
++
++// SAFETY: VhostSharedMemoryRegion is POD; all fields are scalars.
++unsafe impl ByteValued for VhostSharedMemoryRegion {}
++
++impl VhostUserShMemConfig {
++    /// Convert to (id, length) regions. Scans full 0..256 because
++    /// backends populate memory_sizes by id, not by position.
++    pub fn regions(&self) -> Vec<VhostSharedMemoryRegion> {
++        (0..256usize)
++            .filter(|&i| self.memory_sizes[i] != 0)
++            .map(|i| VhostSharedMemoryRegion { id: i as u8, padding: [0; 7], length: self.memory_sizes[i] })
++            .collect()
++    }
++}
++
+ impl Default for VhostUserShMemConfig {
+     fn default() -> Self {
+         Self {

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vicondoa/nixling/blob/main/docs/reference/manifest-schema.json",
+  "title": "nixling JSON manifest",
+  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract a future Rust CLI port consumes. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
+  "type": "object",
+  "required": ["_manifest"],
+  "properties": {
+    "_manifest": {
+      "type": "object",
+      "description": "Reserved schema-metadata key. The leading underscore disqualifies it as a VM name (vmNameOk regex requires a leading lowercase letter), so it cannot collide with any valid consumer config.",
+      "required": ["manifestVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "manifestVersion": {
+          "type": "integer",
+          "const": 1,
+          "description": "Schema version. This document IS the v1 schema; the field is locked to `const: 1`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v2.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v1 manifests (version 0) were the W2-followup stub and are no longer valid under this schema."
+        }
+      }
+    }
+  },
+  "patternProperties": {
+    "^[a-z][a-z0-9-]*$": {
+      "$ref": "#/$defs/vmEntry"
+    },
+    "^_": {
+      "description": "Reserved namespace for future schema-metadata keys. CLI consumers MUST tolerate unknown _-prefixed keys without bumping manifestVersion.",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vmEntry": {
+      "type": "object",
+      "description": "Per-VM metadata, indexed under the VM's name in the top-level object.",
+      "required": [
+        "name",
+        "graphics",
+        "tpm",
+        "usbipYubikey",
+        "audio",
+        "tap",
+        "bridge",
+        "env",
+        "isNetVm",
+        "netVm",
+        "usbipdHostIp",
+        "stateDir",
+        "apiSocket",
+        "gpuSocket",
+        "tpmSocket",
+        "audioStateFile",
+        "audioService",
+        "staticIp",
+        "sshUser"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "VM name. Matches the enclosing top-level key. Pattern enforced by nixos-modules/assertions.nix's vmNameOk."
+        },
+        "graphics": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.graphics.enable is set. The CLI uses this to pick the launch path."
+        },
+        "tpm": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.tpm.enable is set."
+        },
+        "usbipYubikey": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb <vm>` refuses to run when false."
+        },
+        "audio": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.audio.enable is set. Capability bit; live grant state lives in audioStateFile."
+        },
+        "tap": {
+          "type": "string",
+          "description": "Host-side tap-device name. Derived: <env>-l<index> (workload), <env>-u2 (net VM), or vm-<name> (legacy)."
+        },
+        "bridge": {
+          "type": ["string", "null"],
+          "description": "Linux bridge the tap attaches to. Workload: br-<env>-lan. Net VM: br-<env>-up. Legacy hand-rolled VM: null."
+        },
+        "env": {
+          "type": ["string", "null"],
+          "description": "Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs."
+        },
+        "isNetVm": {
+          "type": "boolean",
+          "description": "True iff this VM is the auto-generated sys-<env>-net for some env."
+        },
+        "netVm": {
+          "type": ["string", "null"],
+          "description": "For workload VMs: name of the net VM serving this VM's env. Null for net VMs themselves and legacy VMs."
+        },
+        "usbipdHostIp": {
+          "type": ["string", "null"],
+          "description": "Host IP of the per-env usbipd proxy. `nixling usb <vm>` passes this to `usbip attach -r`. Null for net VMs and legacy."
+        },
+        "stateDir": {
+          "type": "string",
+          "description": "Per-VM state dir. Currently /var/lib/nixling/vms/<name>."
+        },
+        "apiSocket": {
+          "type": "string",
+          "description": "microvm.nix runner API socket path (<stateDir>/<name>.sock)."
+        },
+        "gpuSocket": {
+          "type": "string",
+          "description": "crosvm-gpu sidecar control socket (<stateDir>/<name>-gpu.sock). Only meaningful when graphics=true."
+        },
+        "tpmSocket": {
+          "type": "string",
+          "description": "swtpm vTPM socket path (/run/swtpm/<name>/sock). Only meaningful when tpm=true."
+        },
+        "audioStateFile": {
+          "type": "string",
+          "description": "Live audio-grant state file (<stateDir>/state/audio-state.json). { mic: on|off, speaker: on|off }."
+        },
+        "audioService": {
+          "type": "string",
+          "description": "Host-side audio sidecar systemd unit name (nixling-<name>-snd.service)."
+        },
+        "staticIp": {
+          "type": ["string", "null"],
+          "description": "VM's static LAN IP. Derived for env-attached VMs. Null when no IP source applies."
+        },
+        "sshUser": {
+          "type": ["string", "null"],
+          "description": "Username for nixling-driven SSH. Mirrors nixling.vms.<name>.ssh.user. Null for headless net VMs."
+        }
+      }
+    }
+  }
+}

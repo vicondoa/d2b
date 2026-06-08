@@ -1,0 +1,53 @@
+security-r8-audio-11: don't open a graphical console window in
+`crosvm device gpu`.
+
+Port of talex5/crosvm@993b8e756 ("Don't open a graphical console
+window") to the vhost-user-gpu backend path. Upstream's patch
+landed against the in-tree GPU device at
+src/crosvm/sys/linux/gpu.rs (used by `crosvm run`); the equivalent
+code in devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs is
+what `crosvm device gpu` exercises.
+
+Symptom: a transparent, chromeless window titled "crosvm" with no
+WM_CLASS appears on the host compositor every time a graphics-enabled
+VM starts. KDE Plasma renders it without decoration (crosvm never
+requests xdg-decoration SSD) and labels it with the default "W"
+placeholder icon. The window stays visible for the lifetime of the
+VM. The DisplayParameters.hidden field that microvm.nix passes is
+silently ignored on Linux/Wayland.
+
+talex5 (the wayland-proxy-virtwl author who designed nixling's
+cross-domain forwarding model) hit the same artifact and dropped
+the Wayland + X DisplayBackends entirely, leaving Stub as the only
+backend. The scanout protocol still works against Stub (it
+discards SetScanout silently); the guest's virtio_gpu driver gets
+RESP_OK and proceeds. Cross-domain wayland forwarding (the path
+nixling actually uses for guest GUI apps via wayland-proxy-virtwl)
+is independent of the scanout backend and unaffected.
+
+--- a/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
++++ b/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
+@@ -222,13 +222,18 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
+ 
+     let (gpu_control_tube, _) = Tube::pair().context("failed to create gpu control tube")?;
+ 
+-    let mut display_backends = vec![
+-        virtio::DisplayBackend::X(x_display),
++    // security-r8-audio-11: port of talex5/crosvm@993b8e756.
++    // Use ONLY the Stub backend so crosvm never opens a wl_compositor
++    // client connection for the scanout display — no wl_surface, no
++    // xdg_toplevel, no chromeless "crosvm" window on the host
++    // compositor. The scanout protocol still validates against Stub;
++    // SetScanout calls discard silently. Cross-domain wayland
++    // forwarding (via wayland-proxy-virtwl) is independent of the
++    // scanout backend and unaffected.
++    let _ = x_display;
++    let display_backends = vec![
+         virtio::DisplayBackend::Stub,
+     ];
+-    if let Some(p) = channels.get("") {
+-        display_backends.insert(0, virtio::DisplayBackend::Wayland(Some(p.to_owned())));
+-    }
+ 
+     // These are only used when there is an input device.
+     let event_devices = Vec::new();

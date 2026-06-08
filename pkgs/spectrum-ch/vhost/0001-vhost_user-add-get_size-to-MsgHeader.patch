@@ -1,0 +1,82 @@
+From 667b6aa7d3fd81a832d57b54e24bdef1614ebdd5 Mon Sep 17 00:00:00 2001
+From: Alyssa Ross <hi@alyssa.is>
+Date: Thu, 24 Oct 2024 17:11:17 +0200
+Subject: [PATCH 1/4] vhost_user: add get_size() to MsgHeader
+SPDX-FileCopyrightText: 2019 Alibaba Cloud Computing. All rights reserved.
+SPDX-FileCopyrightText: 2024 Red Hat, Inc.
+SPDX-FileCopyrightText: 2024 Alyssa Ross <hi@alyssa.is>
+SPDX-License-Identifier: Apache-2.0
+
+Signed-off-by: Alyssa Ross <hi@alyssa.is>
+---
+ vhost/src/vhost_user/gpu_message.rs |  9 ++++-----
+ vhost/src/vhost_user/message.rs     | 12 +++++++-----
+ 2 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/vhost/src/vhost_user/gpu_message.rs b/vhost/src/vhost_user/gpu_message.rs
+index 6be26f20d..75073dc4c 100644
+--- a/vhost/src/vhost_user/gpu_message.rs
++++ b/vhost/src/vhost_user/gpu_message.rs
+@@ -135,11 +135,6 @@ impl<R: Req> VhostUserGpuMsgHeader<R> {
+         }
+     }
+ 
+-    /// Get message size.
+-    pub fn get_size(&self) -> u32 {
+-        self.size
+-    }
+-
+     /// Set message size.
+     pub fn set_size(&mut self, size: u32) {
+         self.size = size;
+@@ -169,6 +164,10 @@ impl<T: Req> VhostUserMsgValidator for VhostUserGpuMsgHeader<T> {
+ impl<R: Req> MsgHeader for VhostUserGpuMsgHeader<R> {
+     type Request = R;
+     const MAX_MSG_SIZE: usize = u32::MAX as usize;
++
++    fn get_size(&self) -> u32 {
++        self.size
++    }
+ }
+ 
+ // Bit mask for vhost-user-gpu protocol feature flags.
+diff --git a/vhost/src/vhost_user/message.rs b/vhost/src/vhost_user/message.rs
+index c66bd4468..8359eb1fd 100644
+--- a/vhost/src/vhost_user/message.rs
++++ b/vhost/src/vhost_user/message.rs
+@@ -70,6 +70,9 @@ pub(super) trait MsgHeader: ByteValued + Copy + Default + VhostUserMsgValidator
+ 
+     /// The maximum size of a msg that can be encapsulated by this MsgHeader
+     const MAX_MSG_SIZE: usize;
++
++    /// Get message size.
++    fn get_size(&self) -> u32;
+ }
+ 
+ enum_value! {
+@@ -241,6 +244,10 @@ pub(super) struct VhostUserMsgHeader<R: Req> {
+ impl<R: Req> MsgHeader for VhostUserMsgHeader<R> {
+     type Request = R;
+     const MAX_MSG_SIZE: usize = MAX_MSG_SIZE;
++
++    fn get_size(&self) -> u32 {
++        self.size
++    }
+ }
+ 
+ impl<R: Req> Debug for VhostUserMsgHeader<R> {
+@@ -336,11 +343,6 @@ impl<R: Req> VhostUserMsgHeader<R> {
+         }
+     }
+ 
+-    /// Get message size.
+-    pub fn get_size(&self) -> u32 {
+-        self.size
+-    }
+-
+     /// Set message size.
+     pub fn set_size(&mut self, size: u32) {
+         self.size = size;
+-- 
+2.50.0
+

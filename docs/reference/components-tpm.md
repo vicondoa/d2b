@@ -1,0 +1,145 @@
+# `nixling.vms.<vm>.tpm.*`
+
+> Reference for the `tpm` component module.
+> Source: [`nixos-modules/components/tpm.nix`](../../nixos-modules/components/tpm.nix)
+> Host-side wiring: [`nixos-modules/host-sidecars.nix`](../../nixos-modules/host-sidecars.nix), [`nixos-modules/host-users.nix`](../../nixos-modules/host-users.nix)
+
+## What this component does
+
+Attaches a software-emulated TPM 2.0 device to the guest. Per-VM
+`swtpm socket` runs on the host as a dedicated `nixling-<vm>-swtpm`
+system user; cloud-hypervisor connects to it via
+`--tpm socket=/run/swtpm/<vm>/sock`. The guest kernel sees a normal
+TPM CRB device, exposes `/dev/tpm0` + `/dev/tpmrm0`, and an in-guest
+oneshot provisions the TPM2 Storage Root Key at the standard
+persistent handle `0x81000001` (ECC P-256 preferred, RSA-2048
+fallback) so downstream services (Himmelblau, sbctl, systemd-tpm2-setup
+consumers) can bind keys without bootstrapping themselves.
+
+TPM state — including the SRK and any keys bound to it by services
+running inside the VM — is **persisted on the host** at
+`/var/lib/nixling/vms/<vm>/swtpm/`.
+
+## Options (host-side)
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `nixling.vms.<vm>.tpm.enable` | bool | `false` | Attach an swtpm 2.0 device to this VM as TPM CRB. Implies `hypervisor = cloud-hypervisor` (the only one microvm.nix can wire swtpm to). |
+
+## Options (guest-side propagation)
+
+None. The component module is layered directly into the guest config
+by `host.nix` (`++ lib.optional vm'.tpm.enable ./components/tpm.nix`);
+all guest-side wiring is unconditional within the module.
+
+## Host-side resources created
+
+- **`nixling-<vm>-swtpm` system user + group**
+  ([`host-users.nix`](../../nixos-modules/host-users.nix)). Static
+  per-VM user — `DynamicUser = false` so state under
+  `/var/lib/nixling/vms/<vm>/swtpm/` has a stable owner.
+- **`nixling-<vm>-swtpm.service`**
+  ([`host-sidecars.nix`](../../nixos-modules/host-sidecars.nix)).
+  - Runs as `nixling-<vm>-swtpm:nixling-<vm>-swtpm`.
+  - `StateDirectory = "nixling/vms/<vm>/swtpm"`, `StateDirectoryMode = 0700`.
+  - `RuntimeDirectory = "swtpm/<vm>"`, `RuntimeDirectoryMode = 0711`.
+  - `ExecStart`:
+    `swtpm socket --tpmstate dir=/var/lib/nixling/vms/<vm>/swtpm
+    --ctrl type=unixio,path=/run/swtpm/<vm>/sock,mode=0600 --tpm2
+    --flags startup-clear`.
+  - `ExecStartPost`: `setfacl -m u:nixling-<vm>-gpu:rw /run/swtpm/<vm>/sock`
+    so cloud-hypervisor (running as `nixling-<vm>-gpu` when graphics
+    is also enabled) can connect. Failures are tolerated for non-
+    graphics VMs.
+  - `partOf = [ "microvms.target" ]` so a system-wide microvm
+    restart cycles it; `Restart = "on-failure"`, `RestartSec = 2`.
+- **State directory** `/var/lib/nixling/vms/<vm>/swtpm/`, mode 0700
+  owned by `nixling-<vm>-swtpm`. Contents are swtpm NVRAM + state
+  blobs — not human-readable, not portable across VMs.
+
+## Guest-side resources created
+
+- `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
+- `microvm.cloud-hypervisor.extraArgs =
+  [ "--tpm" "socket=/run/swtpm/<hostname>/sock" ]`.
+- `security.tpm2.enable = true`.
+- `boot.kernelModules = [ "tpm" "tpm_crb" ]` — belt-and-suspenders;
+  the kernel normally auto-probes when it sees the CH TPM CRB at
+  `fed40000-fed40fff`.
+- `environment.systemPackages = [ pkgs.tpm2-tools ]` for in-guest
+  diagnostics (`tpm2_getcap properties-fixed`, `tpm2_getrandom 16`).
+- `systemd.services.tpm2-srk-provision` — oneshot, `RemainAfterExit`,
+  `wantedBy = [ "multi-user.target" ]`. Idempotently provisions the
+  SRK at `0x81000001`. Pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`
+  to skip the tabrmd D-Bus probe. Services that need the SRK in
+  place should add `after = [ "tpm2-srk-provision.service" ]`.
+
+## Runtime invariants
+
+- Each TPM-enabled VM has exactly one `nixling-<vm>-swtpm.service`
+  on the host. The socket at `/run/swtpm/<vm>/sock` is mode 0600,
+  owned by `nixling-<vm>-swtpm`. ACLs grant `nixling-<vm>-gpu` rw;
+  no other user (including the kvm group) can reach the control
+  protocol out-of-band.
+- swtpm NVRAM persists across `nixling up`/`nixling down` cycles
+  and across host reboots — by design. Anything the guest binds to
+  the TPM (LUKS keys, Himmelblau device key, sbctl PCR policies)
+  survives a VM restart.
+- The SRK at `0x81000001` exists exactly once. The provisioning
+  oneshot short-circuits via
+  `tpm2_getcap handles-persistent | grep -q $SRK_HANDLE`.
+
+## Hardening notes
+
+`nixling-<vm>-swtpm.service`:
+
+- Dedicated static system user per VM. Earlier revisions ran swtpm
+  under `DynamicUser` in the `kvm` group; this was tightened so a
+  kvm-group process on the host cannot speak the swtpm control
+  protocol.
+- `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateDevices`, `PrivateTmp`, `ProtectKernelModules`,
+  `ProtectKernelTunables`, `ProtectKernelLogs`,
+  `ProtectControlGroups`, `LockPersonality`,
+  `MemoryDenyWriteExecute = true`.
+- `RestrictAddressFamilies = [ "AF_UNIX" ]` — swtpm needs no network.
+- `UMask = "0177"`.
+- The control socket is mode `0600`; only the swtpm user can open it.
+  Access for cloud-hypervisor is granted post-start via a single
+  named-user ACL entry, not via group membership.
+
+## Common gotchas / failure modes
+
+- **DO NOT WIPE `/var/lib/nixling/vms/<vm>/swtpm/`.** Removing or
+  replacing this directory regenerates a fresh, empty TPM with a
+  new endorsement key. To remote IdPs (Entra ID via Himmelblau,
+  any TPM-bound enrolment) this looks like device tampering and
+  forces re-enrolment — and, depending on the IdP, may require
+  out-of-band admin action to unblock. Treat the directory as part
+  of the VM's stable identity.
+- **Backups: encrypted, access-controlled media only.** swtpm state
+  contains key material; a backup that leaks the state files leaks
+  every key the VM bound to its TPM. If you back up
+  `/var/lib/nixling/vms/<vm>/swtpm/`, do it to a LUKS volume (or
+  equivalent) and limit who can mount it.
+- **No swtpm without cloud-hypervisor.** `tpm.enable = true` pins
+  `microvm.hypervisor` to `cloud-hypervisor` via `mkDefault`. The
+  graphics and audio components also pin CH via `mkDefault`, so the
+  three compose cleanly. A VM that hand-rolls `microvm.hypervisor =
+  "qemu"` and sets `tpm.enable = true` will end up with an unwired
+  TPM (CH `extraArgs` are emitted, but ignored by qemu).
+- **`tpm2_*` complaining about TCTI.** The provisioning oneshot
+  pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`. Ad-hoc invocations
+  from a guest shell may default to dialing tabrmd over D-Bus and
+  emit harmless warnings; pass `-T device:/dev/tpmrm0` or set
+  the env var.
+
+## See also
+
+- [Design / threat model](../explanation/design.md) — TPM-bound
+  credentials at rest is one of the in-scope threats.
+- [Manifest schema](./manifest-schema.md) — `units.swtpm` field.
+- [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
+  enables `tpm.enable` alongside graphics + audio.
+- [`examples/with-entra-id`](../../examples/with-entra-id/) — uses
+  the swtpm to bind the Entra device key.
