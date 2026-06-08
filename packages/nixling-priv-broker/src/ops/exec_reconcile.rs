@@ -848,6 +848,22 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
         HardlinkFarmError::DifferentFilesystem { a, a_dev, b, b_dev } => {
             ReconcileExecError::DifferentFilesystem { a, a_dev, b, b_dev }
         }
+        // CrossMountLink is normally consumed by
+        // `store_view_farm::build_farm_cross_mount_safe` (which retries
+        // in a mount namespace). If it reaches here it means even the
+        // namespaced build still hit a same-fs cross-mount EXDEV — map
+        // it to DifferentFilesystem so the broker surfaces the typed
+        // store-view filesystem error rather than a generic I/O error.
+        HardlinkFarmError::CrossMountLink {
+            source,
+            destination,
+            dev,
+        } => ReconcileExecError::DifferentFilesystem {
+            a: source,
+            a_dev: dev,
+            b: destination,
+            b_dev: dev,
+        },
         HardlinkFarmError::MarkerMissing { generation_dir } => {
             ReconcileExecError::MarkerMissing { generation_dir }
         }

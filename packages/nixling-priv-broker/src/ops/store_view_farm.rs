@@ -67,14 +67,17 @@ const NS_SHELL_SCRIPT: &str =
 ///    `/var/lib/nixling` are the same mount (and in unit tests against
 ///    a `tempdir`) this succeeds directly with no subprocess.
 /// 2. If — and only if — the in-process attempt fails with
-///    [`HardlinkFarmError::DifferentFilesystem`] (the `link(2)` EXDEV
-///    that a `/nix/store` self-bind-mount produces, surfaced by
-///    `hardlink_farm`'s EXDEV mapping), retry the build in a private
-///    mount namespace where `/nix/store` is lazily detached. The retry
-///    rebuilds the markerless partial directory the failed attempt left
-///    behind.
+///    [`HardlinkFarmError::CrossMountLink`] (the `link(2)` EXDEV on the
+///    *same* `st_dev` that a `/nix/store` self-bind-mount produces),
+///    retry the build in a private mount namespace where `/nix/store`
+///    is lazily detached. The retry rebuilds the markerless partial
+///    directory the failed attempt left behind.
 ///
-/// All other errors (collision / marker / genuine I/O) propagate
+/// A genuine distinct-`st_dev` [`HardlinkFarmError::DifferentFilesystem`]
+/// is FATAL (the farm root and `/nix/store` are truly different
+/// filesystems) and is NOT retried — unmounting `/nix/store` there would
+/// expose the covered mount directory and could hardlink the wrong
+/// inodes. All other errors (collision / marker / genuine I/O) propagate
 /// unchanged. Returns the generation directory on success.
 pub fn build_farm_cross_mount_safe(
     farm_root: &Path,
@@ -84,9 +87,17 @@ pub fn build_farm_cross_mount_safe(
 ) -> Result<PathBuf, HardlinkFarmError> {
     match hardlink_farm::build_farm(farm_root, generation, closure_paths, marker) {
         Ok(dir) => Ok(dir),
-        Err(HardlinkFarmError::DifferentFilesystem { .. }) => {
+        // Same-filesystem, different-vfsmount EXDEV (the NixOS
+        // `/nix/store` self-bind-mount): recoverable by rebuilding inside
+        // a private mount namespace where `/nix/store` is detached.
+        Err(HardlinkFarmError::CrossMountLink { .. }) => {
             build_farm_via_namespace(farm_root, generation, closure_paths, marker)
         }
+        // Genuine distinct-`st_dev` mismatch is FATAL — the farm root and
+        // `/nix/store` are different filesystems, so no namespace/unmount
+        // can make `link(2)` succeed. Propagate instead of masking it by
+        // unmounting `/nix/store` (which would expose the covered mount
+        // directory and could hardlink the wrong inodes).
         Err(other) => Err(other),
     }
 }
