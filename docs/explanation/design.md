@@ -1025,6 +1025,37 @@ None of these gaps undermine the load-bearing isolation
 boundaries; they are sharp edges around configurability and
 audit ergonomics.
 
+### In-VM guest config editing (guest → host config flow)
+
+`nixling.vms.<vm>.guestConfigFile` lets an operator edit a VM's
+in-guest OS layer from inside the VM and sync it back to the host
+(`nixling config sync` / `diff` / `approve`). This deliberately moves
+*untrusted, guest-authored bytes* toward the host's trusted
+evaluation, so it is contained on three independent axes (see
+[ADR 0024](../adr/0024-in-vm-guest-config-sync.md)):
+
+- **Host-eval allowlist (fail-closed).** The guest file is rejected at
+  host-rebuild eval if it defines any host-owned `microvm.*` /
+  `nixling.*` option, attributed via the module system's
+  `definitionsWithLocations`. A guest can change its own OS, never the
+  host's control of it.
+- **Host-operator review before evaluation.** A synced file lands in a
+  user-local staging copy and is never evaluated until an operator
+  reviews (`config diff`) and approves it onto an operator-named
+  target. The host never auto-locates or writes the operator's config
+  tree.
+- **No new attack surface.** The transport is a host-initiated SSH copy
+  over the existing per-VM key — no virtiofs share, no new socket, no
+  writable host-backed mount; the guest never initiates a connection
+  into the host control plane.
+
+The residual sharp edge is the same one that governs all host-owned
+config: an operator who approves a config that errors at eval will see
+their `nixling switch` fail (not their host rebuild — the per-VM eval
+is the failure boundary). Guest-built `/nix/store` paths are never
+trusted into the host; an in-guest `nixos-rebuild` (guest-build mode)
+remains a separate future spike.
+
 ## 6. Why not X — design rationale FAQ
 
 These are the questions that came up most often during the
