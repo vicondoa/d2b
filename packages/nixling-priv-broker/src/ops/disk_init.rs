@@ -491,11 +491,11 @@ mod tests {
     }
 
     /// Post-mkfs reopen with O_NOFOLLOW refuses symlink swap. Proxy
-    /// test for the TOCTOU race that the previous std::fs::set_permissions
-    /// + std::os::unix::fs::chown variant allowed between mkfs returning
-    /// and the chmod/chown reaching the inode. By re-opening with
-    /// O_NOFOLLOW we ensure a concurrent attacker cannot redirect us to a
-    /// sensitive target.
+    /// test for the TOCTOU race that the previous
+    /// `std::fs::set_permissions` / `std::os::unix::fs::chown` variant
+    /// allowed between mkfs returning and the chmod/chown reaching the
+    /// inode. By re-opening with O_NOFOLLOW we ensure a concurrent
+    /// attacker cannot redirect us to a sensitive target.
     #[test]
     fn post_mkfs_reopen_refuses_symlink() {
         use std::os::unix::fs::OpenOptionsExt;

@@ -197,8 +197,14 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
 ///
 /// The contract mandates `openat2` with `O_NOFOLLOW` + `RESOLVE_BENEATH`
 /// for parent-relative resolution; this module implements equivalent
-/// fail-closed guards on stable Rust using `nix` + `std::fs`, including
-/// `RESOLVE_NO_XDEV` so mount-point crossings are rejected:
+/// fail-closed guards on stable Rust using `nix` + `std::fs`. Resolution
+/// always refuses symlink and magic-link components and `..` escapes
+/// (`RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH`).
+/// `RESOLVE_NO_XDEV` is additionally enforced at every component as
+/// defense-in-depth and is relaxed *only* exactly where a real,
+/// pre-existing kernel/framework mount sits (e.g. `/run` tmpfs, `/dev`
+/// devtmpfs), since broker paths legitimately span those mounts — see
+/// [`open_dir_path_safe`] for the per-component mount-tolerant walk:
 ///
 /// - [`refuse_symlink`] — rejects symlinks at `path` via `lstat`;
 /// - [`refuse_world_writable_parent`] — rejects world-writable parent
@@ -875,16 +881,36 @@ pub mod path_safe {
         res.map_err(|err| io::Error::from_raw_os_error(err as i32))
     }
 
-    /// Open a directory with `openat2` anchored at `/` and the full
-    /// hardening mask:
+    /// Open a directory with `openat2`, hardened with
+    /// `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_MAGICLINKS`, `RESOLVE_BENEATH`,
+    /// and `RESOLVE_NO_XDEV`.
     ///
-    /// - `RESOLVE_BENEATH` keeps resolution anchored below `/` and
-    ///   rejects `..` escapes;
-    /// - `RESOLVE_NO_SYMLINKS` rejects symlink path components;
-    /// - `RESOLVE_NO_MAGICLINKS` rejects procfs-style magic links; and
-    /// - `RESOLVE_NO_XDEV` rejects mount-point crossings so a bind-mount
-    ///   swap cannot redirect the walk into a different filesystem.
+    /// Legitimate broker paths span multiple filesystems: `/run` is a
+    /// tmpfs, `/dev` a devtmpfs, `/sys` sysfs, `/proc` procfs, and
+    /// `/var/lib` may be its own mount. A single `/`-anchored `NO_XDEV`
+    /// walk therefore fails with `EXDEV` at the first mount crossing
+    /// (e.g. `/`→`/run` when preparing `/run/nixling/vms/<vm>`, or
+    /// `/`→`/dev` when opening `/dev/net/tun`).
+    ///
+    /// We resolve **component by component**. Each component is opened
+    /// with the full hardened mask; if a component is a genuine mount
+    /// crossing (`openat2` returns `EXDEV` under `NO_XDEV`), it is
+    /// re-opened **without** `NO_XDEV` — but still with `NO_SYMLINKS`,
+    /// `NO_MAGICLINKS`, and `BENEATH` — and the walk continues with the
+    /// full mask beneath. Net effect:
+    ///
+    /// - symlink / magic-link components are **always** refused (this is
+    ///   the load-bearing protection against unprivileged redirection);
+    /// - `..` escapes are **always** refused (`BENEATH`);
+    /// - only **real, pre-existing** mounts are followed. Planting a new
+    ///   mount over a path component requires `CAP_SYS_ADMIN`, which in
+    ///   the broker's root-only threat model means the attacker already
+    ///   owns the host. `NO_XDEV` therefore remains enforced at every
+    ///   non-mount component as defense-in-depth, and is relaxed only
+    ///   exactly where a legitimate kernel/framework mount sits.
     pub fn open_dir_path_safe(dir: &Path) -> io::Result<OwnedFd> {
+        use std::path::Component;
+
         if !dir.is_absolute() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -892,24 +918,48 @@ pub mod path_safe {
             ));
         }
 
-        let root_fd: OwnedFd = File::open("/")?.into();
-        let relative = dir.strip_prefix("/").map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("directory must be absolute: {}", dir.display()),
-            )
-        })?;
-        if relative.as_os_str().is_empty() {
-            return Ok(root_fd);
+        const FULL: u64 =
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
+        const MOUNT_TOLERANT: u64 =
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+
+        let mut cur: OwnedFd = File::open("/")?.into();
+        for component in dir.components() {
+            let name = match component {
+                Component::RootDir | Component::CurDir => continue,
+                Component::Normal(name) => name,
+                // `BENEATH` would reject these too, but refuse explicitly
+                // so the failure is an unambiguous path-safety violation.
+                Component::ParentDir | Component::Prefix(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "path-safety-violation: unexpected path component in {}",
+                            dir.display()
+                        ),
+                    ));
+                }
+            };
+            let name = name.to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("path component is not valid UTF-8 in {}", dir.display()),
+                )
+            })?;
+            let c_name = cstring_from_name(name)?;
+            cur = match openat2_raw(cur.as_raw_fd(), &c_name, flags, 0, FULL) {
+                Ok(fd) => fd,
+                // A genuine mount crossing: follow it (still refusing
+                // symlinks / magic-links / `..`), then keep enforcing the
+                // full mask beneath.
+                Err(err) if err.raw_os_error() == Some(libc::EXDEV) => {
+                    openat2_raw(cur.as_raw_fd(), &c_name, flags, 0, MOUNT_TOLERANT)?
+                }
+                Err(err) => return Err(err),
+            };
         }
-        let relative = cstring_from_path(relative)?;
-        openat2_raw(
-            root_fd.as_raw_fd(),
-            &relative,
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            0,
-            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
-        )
+        Ok(cur)
     }
 
     /// Atomic-replace a file under `dir_fd` using an anonymous temp
@@ -1035,6 +1085,124 @@ pub mod path_safe {
     impl AsFd for DirFd {
         fn as_fd(&self) -> BorrowedFd<'_> {
             self.0.as_fd()
+        }
+    }
+
+    #[cfg(test)]
+    mod cross_mount_tests {
+        use super::*;
+        use std::os::unix::fs::MetadataExt;
+
+        /// A path on a *separate* mount from `/` must be reachable. This
+        /// is the regression for the cross-mount `EXDEV` bug: the broker
+        /// prepares `/run/nixling/vms/<vm>` and opens `/dev/net/tun`,
+        /// `/sys/fs/cgroup/...`, etc., all on mounts other than the
+        /// rootfs; a naive `/`-anchored `NO_XDEV` walk fails at the first
+        /// crossing.
+        ///
+        /// CI-stable: `/run` is a tmpfs on every Linux host, so this does
+        /// not skip on CI. Verifies BOTH the bug (a single `/`-anchored
+        /// `NO_XDEV` `openat2` returns `EXDEV`) AND the fix
+        /// (`open_dir_path_safe` reaches the path).
+        #[test]
+        fn open_dir_path_safe_walks_across_a_mount_boundary() {
+            let target = Path::new("/run");
+            let (Ok(target_md), Ok(root_md)) =
+                (std::fs::metadata(target), std::fs::metadata("/"))
+            else {
+                eprintln!("cross-mount test: SKIP (cannot stat /run or /)");
+                return;
+            };
+            if target_md.dev() == root_md.dev() {
+                eprintln!("cross-mount test: SKIP (/run is not a separate mount from /)");
+                return;
+            }
+
+            // Demonstrate the bug: a single `/`-anchored walk with the
+            // full mask (incl. NO_XDEV) cannot cross into `/run`.
+            let slash: OwnedFd = std::fs::File::open("/").unwrap().into();
+            let run_c = cstring_from_name("run").unwrap();
+            match openat2_raw(
+                slash.as_raw_fd(),
+                &run_c,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+                0,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
+            ) {
+                Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {}
+                other => panic!(
+                    "expected EXDEV from the `/`-anchored NO_XDEV walk into /run, got {other:?}"
+                ),
+            }
+
+            // The fix: the component walk follows the mount and reaches it.
+            open_dir_path_safe(target)
+                .expect("open_dir_path_safe must reach /run across the mount boundary");
+
+            // A nested path on the same separate mount is also reachable
+            // (the per-component NO_XDEV does not false-EXDEV below the
+            // crossing). `/run` always exists; assert reachability without
+            // assuming a specific subdir.
+            for nested in ["/run/lock", "/dev/net"] {
+                let p = Path::new(nested);
+                if std::fs::metadata(p).is_ok() {
+                    open_dir_path_safe(p)
+                        .unwrap_or_else(|e| panic!("open_dir_path_safe({nested}) failed: {e}"));
+                }
+            }
+        }
+
+        /// A path on the same filesystem as `/` still resolves (the fast
+        /// path: every component succeeds under the full mask, no
+        /// crossing).
+        #[test]
+        fn open_dir_path_safe_resolves_same_fs_path() {
+            open_dir_path_safe(Path::new("/etc")).expect("/etc must resolve");
+        }
+
+        /// The load-bearing security invariant: a symlink path component
+        /// is refused even though the mount-tolerant fallback drops
+        /// `NO_XDEV`. `NO_SYMLINKS` is retained on every component,
+        /// including a crossed one, so an attacker cannot redirect the
+        /// walk via a symlink.
+        #[test]
+        fn open_dir_path_safe_refuses_symlink_component() {
+            let dir = std::env::temp_dir().join(format!(
+                "nixling-pathsafe-symlink-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(dir.join("real")).unwrap();
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(dir.join("real"), &link).unwrap();
+            let err = open_dir_path_safe(&link).expect_err("symlink component must be refused");
+            // openat2 reports ELOOP for a refused symlink under NO_SYMLINKS.
+            assert_eq!(
+                err.raw_os_error(),
+                Some(libc::ELOOP),
+                "expected ELOOP for the refused symlink, got {err:?}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A non-existent leaf yields `NotFound`, not a spurious `EXDEV`
+        /// (the mount-tolerant fallback only triggers on a real crossing).
+        #[test]
+        fn open_dir_path_safe_missing_leaf_is_not_found() {
+            let missing = Path::new("/run/nixling-definitely-absent-xmount-test");
+            let err = open_dir_path_safe(missing).expect_err("missing leaf must error");
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        }
+
+        /// `..` and other non-normal components are refused.
+        #[test]
+        fn open_dir_path_safe_refuses_parent_dir_component() {
+            let err = open_dir_path_safe(Path::new("/etc/../etc"))
+                .expect_err("`..` component must be refused");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         }
     }
 }
