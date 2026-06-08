@@ -1857,6 +1857,63 @@ denied commands:
 
 **Disposition:** `rust-native` — Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
 
+### `config sync`
+
+**Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--dry-run] [--json]`
+
+Pulls the VM's in-guest edited `guestConfigFile` (default
+`/var/lib/nixling-guest/guest-config.nix`) over the framework-managed
+per-VM SSH key into a host-side **staging** file
+(`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
+The host treats the pulled bytes as untrusted data; the staging copy is
+never evaluated until approved. `--dry-run` prints the SSH command
+without running it.
+
+**Disposition:** `rust-native` — host-initiated SSH copy; reuses the
+existing per-VM key + manifest `static_ip` / `ssh_user`. No new
+privileged surface, no virtiofs.
+
+### `config diff`
+
+**Synopsis:** `nixling config diff <vm> --against <live-file> [--json]`
+
+Shows a unified diff between the staged guest config and the live
+host-side file the operator names with `--against` (typically their
+`guestConfigFile`). Exits 0 whether or not they differ; `--json`
+reports `differs` + the diff text.
+
+**Disposition:** `rust-native` — read-only `diff -u`.
+
+### `config approve`
+
+**Synopsis:** `nixling config approve <vm> --to <target-file> [--json]`
+
+Validates the staged guest config (non-empty, valid UTF-8) and
+atomically writes it onto the operator-chosen `--to` target, then
+clears the staging file. The CLI never auto-locates the operator's
+config tree — the operator names the target explicitly. The
+authoritative containment + eval gate is the per-VM `guestConfigFile`
+assertion that runs on the subsequent `nixling switch`.
+
+**Disposition:** `rust-native` — host-operator-only; atomic publish.
+
+### `config reject`
+
+**Synopsis:** `nixling config reject <vm> [--json]`
+
+Discards the staged guest config for a VM.
+
+**Disposition:** `rust-native`.
+
+### `config status`
+
+**Synopsis:** `nixling config status [<vm>] [--all] [--json]`
+
+Reports whether a VM (or, with `--all`, every VM) has a pending
+(un-approved) staged guest config.
+
+**Disposition:** `rust-native` — read-only.
+
 ## Dispatch capability table
 
 | Command | Current disposition | Rationale |

@@ -12,6 +12,17 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixling config` verb group — the host-side review/approve workflow
+  for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
+  in-guest edited file over the existing per-VM SSH key into a
+  user-local staging copy; `config diff` shows a unified diff against a
+  live file; `config approve` atomically writes the staged copy onto an
+  operator-chosen target; `config reject` discards it; `config status`
+  reports pending stagings. The CLI only writes its own staging area and
+  the operator-named `--to` target — it never auto-touches the config
+  tree, and the authoritative containment gate remains the
+  `guestConfigFile` eval-time assertion on `nixling switch`. No new
+  privileged surface (no virtiofs, no new socket).
 - `nixling.vms.<vm>.guestConfigFile` — a dedicated, **guest-editable**
   per-VM NixOS module for the in-guest OS layer (packages, services,
   in-guest users, files). It is merged into the guest like `config`,

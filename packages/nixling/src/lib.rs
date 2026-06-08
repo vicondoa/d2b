@@ -416,6 +416,10 @@ enum NativeCommand {
     RotateKnownHost(KeysRotateKnownHostArgs),
     /// Analyse the host config and emit a migration plan.
     Migrate(MigrateArgs),
+    /// Sync / review / approve a VM's guest-editable config
+    /// (`guestConfigFile`): pull the operator's in-VM edits to a
+    /// host-side staging file, diff them, and approve them.
+    Config(ConfigArgs),
 }
 
 #[derive(Debug, Args)]
@@ -1590,7 +1594,544 @@ fn dispatch(
             cmd_keys_rotate_known_host(context, args, original_args)
         }
         NativeCommand::Migrate(args) => cmd_migrate(context, args, original_args),
+        NativeCommand::Config(args) => match &args.command {
+            ConfigCommand::Sync(args) => cmd_config_sync(context, args),
+            ConfigCommand::Diff(args) => cmd_config_diff(args),
+            ConfigCommand::Approve(args) => cmd_config_approve(args),
+            ConfigCommand::Reject(args) => cmd_config_reject(args),
+            ConfigCommand::Status(args) => cmd_config_status(args),
+        },
     }
+}
+
+// ============================================================
+// `nixling config` — guest-editable config sync / review / approve
+// ============================================================
+//
+// The per-VM `guestConfigFile` is the guest-editable OS layer. An
+// operator edits it from inside the VM; these verbs move that edit
+// host-side under review:
+//
+//   sync    pull the in-VM edited file into a host-side staging copy
+//   diff    compare the staging copy against the live host-side file
+//   approve write the staging copy onto an operator-chosen target file
+//   reject  discard the staging copy
+//   status  report whether a VM has a pending (un-approved) staging
+//
+// The CLI only ever writes to (a) its own user-local staging area and
+// (b) an operator-specified `--to` target. It never auto-locates or
+// writes the operator's config tree. The host treats the synced bytes
+// as untrusted data; the real containment + eval gate is the per-VM
+// `guestConfigFile` assertion that fires on `nixling switch`.
+
+#[derive(Debug, Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    command: ConfigCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Pull the VM's in-guest edited config into a host-side staging file.
+    Sync(ConfigSyncArgs),
+    /// Diff the staged guest config against a live host-side file.
+    Diff(ConfigDiffArgs),
+    /// Approve the staged guest config by writing it to a target file.
+    Approve(ConfigApproveArgs),
+    /// Discard the staged guest config.
+    Reject(ConfigRejectArgs),
+    /// Report whether a VM has a pending (un-approved) staged config.
+    Status(ConfigStatusArgs),
+}
+
+#[derive(Debug, Args)]
+struct ConfigSyncArgs {
+    /// VM name (must match the static manifest).
+    vm: String,
+    /// Path of the editable guest config INSIDE the VM to pull.
+    #[arg(long, default_value = "/var/lib/nixling-guest/guest-config.nix")]
+    guest_path: String,
+    /// Override the SSH host (defaults to the manifest `static_ip`).
+    #[arg(long)]
+    host: Option<String>,
+    /// Override the SSH user (defaults to the manifest `ssh_user`).
+    #[arg(long)]
+    user: Option<String>,
+    /// Override the SSH private key path.
+    #[arg(long)]
+    key: Option<PathBuf>,
+    /// Print the SSH command instead of running it.
+    #[arg(long)]
+    dry_run: bool,
+    /// Emit a JSON envelope.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ConfigDiffArgs {
+    /// VM name (must match the static manifest).
+    vm: String,
+    /// The live host-side guest config file to compare the staging against.
+    #[arg(long)]
+    against: PathBuf,
+    /// Emit a JSON envelope.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ConfigApproveArgs {
+    /// VM name (must match the static manifest).
+    vm: String,
+    /// The host-side file to write the approved staging copy onto. The
+    /// operator chooses this (typically their `guestConfigFile` path).
+    #[arg(long)]
+    to: PathBuf,
+    /// Emit a JSON envelope.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ConfigRejectArgs {
+    /// VM name (must match the static manifest).
+    vm: String,
+    /// Emit a JSON envelope.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ConfigStatusArgs {
+    /// VM name; omit together with `--all` to report every staged VM.
+    vm: Option<String>,
+    /// Report every VM that currently has a pending staging file.
+    #[arg(long)]
+    all: bool,
+    /// Emit a JSON envelope.
+    #[arg(long)]
+    json: bool,
+}
+
+/// Base directory for host-side config staging. User-local by default
+/// (no privileged surface). Overridable via `NIXLING_CONFIG_STAGING_DIR`
+/// (used by tests) or `XDG_STATE_HOME`.
+fn config_staging_base() -> PathBuf {
+    if let Some(dir) = std::env::var_os("NIXLING_CONFIG_STAGING_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(|| PathBuf::from("/tmp/nixling-state"));
+    base.join("nixling/config-staging")
+}
+
+fn config_staging_path_in(base: &Path, vm: &str) -> PathBuf {
+    base.join(format!("{vm}.guest.nix"))
+}
+
+fn config_staging_path(vm: &str) -> PathBuf {
+    config_staging_path_in(&config_staging_base(), vm)
+}
+
+/// Reject VM names that are not the framework's `^[a-z][a-z0-9-]*$`
+/// shape, so a VM arg can never traverse out of the staging dir.
+fn config_validate_vm_name(vm: &str) -> Result<(), CliFailure> {
+    let ok = !vm.is_empty()
+        && vm.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && vm
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(CliFailure::new(
+            1,
+            format!("config: invalid vm name '{vm}' (expected ^[a-z][a-z0-9-]*$)"),
+        ))
+    }
+}
+
+/// Validate a remote (in-guest) path passed to `config sync`: absolute
+/// and restricted to safe path characters, so the remote `cat` cannot
+/// be steered into shell metacharacters.
+fn config_validate_remote_path(p: &str) -> Result<(), CliFailure> {
+    let ok = p.starts_with('/')
+        && p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'));
+    if ok {
+        Ok(())
+    } else {
+        Err(CliFailure::new(
+            1,
+            format!("config sync: unsafe --guest-path '{p}' (absolute, [A-Za-z0-9._/-] only)"),
+        ))
+    }
+}
+
+/// Validate the bytes of a staging file before approval. Kept
+/// deliberately light — the authoritative eval + containment gate is
+/// the per-VM `guestConfigFile` assertion on `nixling switch`. Here we
+/// only refuse an empty / non-UTF-8 file so approve cannot silently
+/// land a truncated sync.
+fn config_validate_staging_bytes(bytes: &[u8]) -> Result<(), CliFailure> {
+    if bytes.is_empty() {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is empty; re-run `nixling config sync`".to_owned(),
+        ));
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is not valid UTF-8".to_owned(),
+        ));
+    }
+    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        return Err(CliFailure::new(
+            1,
+            "config approve: staged file is blank".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Core (testable) approve: validate the staging file, atomically write
+/// it onto `target`, then remove the staging file. Returns the byte
+/// count written.
+fn config_approve_core(staging: &Path, target: &Path) -> Result<usize, CliFailure> {
+    if !staging.exists() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config approve: nothing staged at {} (run `nixling config sync` first)",
+                staging.display()
+            ),
+        ));
+    }
+    let bytes = std::fs::read(staging)
+        .map_err(|e| CliFailure::new(1, format!("config approve: read staging: {e}")))?;
+    config_validate_staging_bytes(&bytes)?;
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        if !parent.exists() {
+            return Err(CliFailure::new(
+                1,
+                format!(
+                    "config approve: target dir {} does not exist",
+                    parent.display()
+                ),
+            ));
+        }
+    }
+    // Atomic publish: write a sibling temp then rename over target so a
+    // crash never leaves a half-written guest config.
+    let tmp = match parent {
+        Some(p) => p.join(format!(
+            ".{}.nixling-approve.tmp",
+            target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("guest-config")
+        )),
+        None => PathBuf::from(format!("{}.nixling-approve.tmp", target.display())),
+    };
+    std::fs::write(&tmp, &bytes)
+        .map_err(|e| CliFailure::new(1, format!("config approve: write temp: {e}")))?;
+    std::fs::rename(&tmp, target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        CliFailure::new(1, format!("config approve: publish to target: {e}"))
+    })?;
+    let _ = std::fs::remove_file(staging);
+    Ok(bytes.len())
+}
+
+/// Core (testable) reject: remove the staging file if present. Returns
+/// whether anything was removed.
+fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
+    if staging.exists() {
+        std::fs::remove_file(staging)
+            .map_err(|e| CliFailure::new(1, format!("config reject: {e}")))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
+    config_validate_vm_name(&args.vm)?;
+    config_validate_remote_path(&args.guest_path)?;
+    require_known_vm(context, &args.vm, args.json)?;
+    let manifest = context.load_manifest()?;
+    let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
+        CliFailure::new(1, format!("config sync: unknown vm '{}' in manifest", args.vm))
+    })?;
+    let host = args
+        .host
+        .clone()
+        .or_else(|| vm.static_ip.clone())
+        .ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!(
+                    "config sync: vm '{}' has no static_ip in manifest and no --host override",
+                    args.vm
+                ),
+            )
+        })?;
+    let user = args
+        .user
+        .clone()
+        .or_else(|| vm.ssh_user.clone())
+        .or_else(|| std::env::var("USER").ok())
+        .ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!(
+                    "config sync: vm '{}' has no ssh_user in manifest; pass --user or set $USER",
+                    args.vm
+                ),
+            )
+        })?;
+    let key_path = if let Some(p) = args.key.clone() {
+        p
+    } else {
+        konsole_resolve_bundle_key_path(&context.bundle_path, &args.vm, args.json)?
+            .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
+    };
+    let ssh_target = format!("{user}@{host}");
+    let argv: Vec<String> = vec![
+        "ssh".to_owned(),
+        "-i".to_owned(),
+        key_path.display().to_string(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=no".to_owned(),
+        "-o".to_owned(),
+        "UserKnownHostsFile=/dev/null".to_owned(),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        ssh_target.clone(),
+        "--".to_owned(),
+        "cat".to_owned(),
+        args.guest_path.clone(),
+    ];
+    let staging = config_staging_path(&args.vm);
+
+    if args.dry_run {
+        if args.json {
+            let body = serde_json::json!({
+                "command": "config sync",
+                "mode": "dry-run",
+                "vm": args.vm,
+                "argv": argv,
+                "staging": staging.display().to_string(),
+            });
+            print_json(&body)?;
+        } else {
+            print_stdout(&format!(
+                "config sync --dry-run: would run `{}` and stage to {}\n",
+                argv.join(" "),
+                staging.display()
+            ));
+        }
+        return Ok(0);
+    }
+
+    konsole_validate_key_exists(&key_path, args.json)?;
+    let output = Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .map_err(|e| CliFailure::new(1, format!("config sync: spawn ssh: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config sync: ssh exited {}: {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ),
+        ));
+    }
+    config_validate_staging_bytes(&output.stdout)?;
+    if let Some(parent) = staging.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliFailure::new(1, format!("config sync: create staging dir: {e}")))?;
+    }
+    std::fs::write(&staging, &output.stdout)
+        .map_err(|e| CliFailure::new(1, format!("config sync: write staging: {e}")))?;
+    let n = output.stdout.len();
+    if args.json {
+        let body = serde_json::json!({
+            "command": "config sync",
+            "vm": args.vm,
+            "staging": staging.display().to_string(),
+            "bytes": n,
+        });
+        print_json(&body)?;
+    } else {
+        print_stdout(&format!(
+            "config sync: staged {n} bytes from {ssh_target}:{} to {}\n\
+             Review with `nixling config diff {} --against <live-file>` then \
+             `nixling config approve {} --to <live-file>`.\n",
+            args.guest_path,
+            staging.display(),
+            args.vm,
+            args.vm
+        ));
+    }
+    Ok(0)
+}
+
+fn cmd_config_diff(args: &ConfigDiffArgs) -> Result<i32, CliFailure> {
+    config_validate_vm_name(&args.vm)?;
+    let staging = config_staging_path(&args.vm);
+    if !staging.exists() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config diff: nothing staged for '{}' (run `nixling config sync` first)",
+                args.vm
+            ),
+        ));
+    }
+    // `diff -u <live> <staged>`: exit 0 = identical, 1 = differ, >1 = error.
+    let output = Command::new("diff")
+        .arg("-u")
+        .arg(&args.against)
+        .arg(&staging)
+        .output()
+        .map_err(|e| CliFailure::new(1, format!("config diff: spawn diff: {e}")))?;
+    let code = output.status.code().unwrap_or(-1);
+    if code > 1 {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "config diff: diff failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    let differ = code == 1;
+    let diff_text = String::from_utf8_lossy(&output.stdout).to_string();
+    if args.json {
+        let body = serde_json::json!({
+            "command": "config diff",
+            "vm": args.vm,
+            "against": args.against.display().to_string(),
+            "staging": staging.display().to_string(),
+            "differs": differ,
+            "diff": diff_text,
+        });
+        print_json(&body)?;
+    } else if differ {
+        print_stdout(&diff_text);
+    } else {
+        print_stdout(&format!(
+            "config diff: staged config for '{}' is identical to {}\n",
+            args.vm,
+            args.against.display()
+        ));
+    }
+    Ok(0)
+}
+
+fn cmd_config_approve(args: &ConfigApproveArgs) -> Result<i32, CliFailure> {
+    config_validate_vm_name(&args.vm)?;
+    let staging = config_staging_path(&args.vm);
+    let n = config_approve_core(&staging, &args.to)?;
+    if args.json {
+        let body = serde_json::json!({
+            "command": "config approve",
+            "vm": args.vm,
+            "target": args.to.display().to_string(),
+            "bytes": n,
+        });
+        print_json(&body)?;
+    } else {
+        print_stdout(&format!(
+            "config approve: wrote {n} bytes to {}. Review the change in your config tree, \
+             then `nixling switch {}` to build + activate it (the guestConfigFile containment \
+             assertion runs during that eval).\n",
+            args.to.display(),
+            args.vm
+        ));
+    }
+    Ok(0)
+}
+
+fn cmd_config_reject(args: &ConfigRejectArgs) -> Result<i32, CliFailure> {
+    config_validate_vm_name(&args.vm)?;
+    let staging = config_staging_path(&args.vm);
+    let removed = config_reject_core(&staging)?;
+    if args.json {
+        let body = serde_json::json!({
+            "command": "config reject",
+            "vm": args.vm,
+            "removed": removed,
+        });
+        print_json(&body)?;
+    } else if removed {
+        print_stdout(&format!(
+            "config reject: discarded staged config for '{}'\n",
+            args.vm
+        ));
+    } else {
+        print_stdout(&format!(
+            "config reject: nothing staged for '{}'\n",
+            args.vm
+        ));
+    }
+    Ok(0)
+}
+
+fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
+    let base = config_staging_base();
+    let pending: Vec<String> = if args.all || args.vm.is_none() {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for entry in rd.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if let Some(vm) = name.strip_suffix(".guest.nix") {
+                        out.push(vm.to_owned());
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    } else {
+        let vm = args.vm.as_deref().unwrap();
+        config_validate_vm_name(vm)?;
+        if config_staging_path_in(&base, vm).exists() {
+            vec![vm.to_owned()]
+        } else {
+            Vec::new()
+        }
+    };
+    if args.json {
+        let body = serde_json::json!({
+            "command": "config status",
+            "pending": pending,
+        });
+        print_json(&body)?;
+    } else if pending.is_empty() {
+        match &args.vm {
+            Some(vm) => print_stdout(&format!("config status: no pending staged config for '{vm}'\n")),
+            None => print_stdout("config status: no pending staged guest configs\n"),
+        }
+    } else {
+        print_stdout(&format!(
+            "config status: pending (un-approved) staged config for: {}\n",
+            pending.join(", ")
+        ));
+    }
+    Ok(0)
 }
 
 fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
@@ -6411,5 +6952,154 @@ mod konsole_eacces_tests {
         assert!(msg.contains("cannot stat ssh key at"));
         assert!(msg.contains("stub other"));
         assert!(!msg.contains("permission denied on parent directory"));
+    }
+}
+
+#[cfg(test)]
+mod config_cmd_tests {
+    //! Host-side review/approve logic for `nixling config`. The SSH
+    //! `sync` path needs a live VM (Layer-2); these unit tests cover
+    //! the pure file-op core + the input validators.
+
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{
+        config_approve_core, config_reject_core, config_staging_path_in,
+        config_validate_remote_path, config_validate_staging_bytes, config_validate_vm_name,
+    };
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn scratch(name: &str) -> PathBuf {
+        let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!("config-cmd-{name}-{}-{counter}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch");
+        dir
+    }
+
+    #[test]
+    fn vm_name_validation_blocks_traversal_and_bad_shapes() {
+        assert!(config_validate_vm_name("work-aad").is_ok());
+        assert!(config_validate_vm_name("personal-dev").is_ok());
+        assert!(config_validate_vm_name("a1").is_ok());
+        for bad in ["", "../x", "..", "Work", "a/b", "1abc", "a_b", "a b", "sys/.."] {
+            assert!(
+                config_validate_vm_name(bad).is_err(),
+                "expected '{bad}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_path_validation_requires_absolute_safe_path() {
+        assert!(config_validate_remote_path("/var/lib/nixling-guest/guest-config.nix").is_ok());
+        assert!(config_validate_remote_path("/etc/nixling/guest-config.nix").is_ok());
+        for bad in [
+            "guest.nix",          // not absolute
+            "/a;rm -rf /",        // shell metachar
+            "/a b",               // space
+            "/a$(x)",             // command substitution
+            "/a`x`",              // backtick
+            "/a\nb",              // newline
+            "/a|b",               // pipe
+        ] {
+            assert!(
+                config_validate_remote_path(bad).is_err(),
+                "expected '{bad}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn staging_bytes_validation_rejects_empty_and_blank_and_non_utf8() {
+        assert!(config_validate_staging_bytes(b"{ environment.systemPackages = []; }").is_ok());
+        assert!(config_validate_staging_bytes(b"").is_err());
+        assert!(config_validate_staging_bytes(b"   \n\t  ").is_err());
+        assert!(config_validate_staging_bytes(&[0xff, 0xfe, 0x00]).is_err());
+    }
+
+    #[test]
+    fn approve_writes_staging_to_target_atomically_and_clears_staging() {
+        let dir = scratch("approve-ok");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        let target = dir.join("work.guest.nix");
+        let content = b"{ environment.systemPackages = [ ]; }\n";
+        fs::write(&staging, content).expect("write staging");
+        fs::write(&target, b"{ }\n").expect("seed target");
+
+        let n = config_approve_core(&staging, &target).expect("approve ok");
+        assert_eq!(n, content.len());
+        assert_eq!(fs::read(&target).expect("read target"), content);
+        // staging consumed
+        assert!(!staging.exists());
+        // no temp turds left behind
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("nixling-approve.tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "approve left a temp file behind");
+    }
+
+    #[test]
+    fn approve_errors_when_nothing_staged() {
+        let dir = scratch("approve-nostage");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        let target = dir.join("work.guest.nix");
+        fs::write(&target, b"{ }\n").expect("seed target");
+        let err = config_approve_core(&staging, &target).expect_err("must error");
+        assert!(err.message.contains("nothing staged"));
+        // target untouched
+        assert_eq!(fs::read(&target).expect("read target"), b"{ }\n");
+    }
+
+    #[test]
+    fn approve_refuses_empty_staging_and_leaves_target_intact() {
+        let dir = scratch("approve-empty");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        let target = dir.join("work.guest.nix");
+        fs::write(&staging, b"").expect("write empty staging");
+        fs::write(&target, b"{ keep = true; }\n").expect("seed target");
+        let err = config_approve_core(&staging, &target).expect_err("must error on empty");
+        assert!(err.message.contains("empty"));
+        assert_eq!(fs::read(&target).expect("read target"), b"{ keep = true; }\n");
+    }
+
+    #[test]
+    fn approve_errors_when_target_dir_missing() {
+        let dir = scratch("approve-nodir");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        fs::write(&staging, b"{ ok = true; }\n").expect("write staging");
+        let target = dir.join("does-not-exist").join("work.guest.nix");
+        let err = config_approve_core(&staging, &target).expect_err("must error");
+        assert!(err.message.contains("does not exist"));
+        // staging preserved so the operator can retry
+        assert!(staging.exists());
+    }
+
+    #[test]
+    fn reject_removes_staging_and_reports_absence() {
+        let dir = scratch("reject");
+        let staging = config_staging_path_in(&dir, "work-aad");
+        fs::write(&staging, b"{ }\n").expect("write staging");
+        assert!(config_reject_core(&staging).expect("reject"));
+        assert!(!staging.exists());
+        // second reject: nothing to remove
+        assert!(!config_reject_core(&staging).expect("reject-again"));
+    }
+
+    #[test]
+    fn staging_path_in_is_per_vm() {
+        let base = PathBuf::from("/x/state");
+        assert_eq!(
+            config_staging_path_in(&base, "work-aad"),
+            PathBuf::from("/x/state/work-aad.guest.nix")
+        );
     }
 }
