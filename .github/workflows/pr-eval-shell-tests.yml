@@ -15,10 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
       # ---------------------------------------------------------------------------
-      # Phase 1: static text/grep eval tests — no Nix required, instant.
+      # Phase 1: static text/grep eval tests.
       # ---------------------------------------------------------------------------
-      - name: Static eval tests (text/grep, no Nix required)
+      - name: Static eval tests
         run: |
           set -euo pipefail
           for t in \
@@ -68,12 +74,6 @@ jobs:
             fi
           done
 
-      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
       # ---------------------------------------------------------------------------
       # Phase 2: Nix eval tests — require `nix` on PATH.
       # ---------------------------------------------------------------------------
@@ -89,6 +89,7 @@ jobs:
             tests/observability-eval.sh \
             tests/per-vm-state-ownership-eval.sh \
             tests/principal-uid-collision-eval.sh \
+            tests/privileges-json-rust-vs-nix-eval.sh \
             tests/readiness-waves-eval.sh \
             tests/runner-shape-snapshot.sh \
             tests/umask-roundtrip-eval.sh \

@@ -772,6 +772,9 @@ fi
 if [ -x "$ROOT/tests/privileges-doc-completeness-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-doc-completeness-eval.sh" "$ROOT/tests/privileges-doc-completeness-eval.sh"
 fi
+if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
+  nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
+fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
