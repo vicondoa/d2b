@@ -349,12 +349,14 @@ in
             }
           ];
       in (composeVm name composedModules) // {
-        # SOUND containment for the guest-editable `guestConfigFile`:
-        # evaluated in an isolated sandbox (see lib.nix) with the same
-        # pkgs/specialArgs the real per-VM evaluator uses, so a guest
-        # config valid in the real eval doesn't spuriously fail here.
-        # Forbidden namespaces are detected by definition-existence
-        # (imports / generated modules / `_file` spoofing all caught).
+        # Namespace-containment policy lint for the guest-editable
+        # `guestConfigFile`: evaluated over the real nixpkgs NixOS module
+        # set (see lib.nix) with the same pkgs/specialArgs the per-VM
+        # evaluator uses, so a guest config that reads standard options
+        # resolves instead of false-positiving. Forbidden namespaces are
+        # detected by definition-existence (imports / generated modules /
+        # `_file` spoofing all caught). This is NOT an eval-time security
+        # sandbox — see lib.nix + docs/adr/0024 for the trust model.
         guestForbidden =
           if vm'.guestConfigFile == null then [ ]
           else nl.guestConfigForbiddenNamespaces

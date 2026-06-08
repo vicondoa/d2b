@@ -258,40 +258,56 @@ rec {
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
 
-  # guestConfigForbiddenNamespaces — SOUND containment check for the
-  # per-VM guest-editable `guestConfigFile` (the guest-editable OS
-  # layer).
+  # guestConfigForbiddenNamespaces — namespace-containment policy check
+  # for the per-VM guest-editable `guestConfigFile`.
   #
   # Returns the host-owned option path(s) (under `microvm.*` /
   # `nixling.*`) that the guest file — OR ANY MODULE IT IMPORTS /
-  # GENERATES — defined. An empty list means the guest file is contained
-  # (it touched only guest OS options).
+  # GENERATES — defined. An empty list means the guest file touched only
+  # guest-OS options.
   #
-  # Implementation: evaluate the guest file (and its full import
-  # closure) in an ISOLATED `lib.evalModules` sandbox whose ONLY
-  # declared options are the host-owned `microvm` / `nixling`
-  # namespaces; every other (guest-OS) option is accepted via a freeform
-  # type so a normal guest config evaluates. We then report a namespace
-  # iff `options.<ns>.isDefined` — i.e. a REAL definition exists for it.
-  #
-  # Soundness: detection is by definition-EXISTENCE, not by matching the
-  # module-system-reported source file. This closes the bypasses a
-  # `definitionsWithLocations`-by-`_file` check missed — a guest's
+  # Mechanism: evaluate the guest file (and its full import closure) with
+  # `lib.evalModules` over the REAL nixpkgs NixOS module set, so a guest
+  # module that READS a standard option (e.g.
+  # `config.networking.hostName` in a `mkIf` guard) resolves instead of
+  # crashing the host eval. `microvm` and `nixling` are redeclared as
+  # detector options that nothing else defines, and a namespace is
+  # reported iff `options.<ns>.isDefined` — i.e. the guest contributed a
+  # real definition. Detection is by definition-EXISTENCE, so a guest's
   # `imports`, a `builtins.toFile`-generated module, and `_file`
-  # spoofing all still register a definition and are caught.
+  # spoofing are all caught (none can hide a definition from the option
+  # system).
   #
-  # `pkgs` + `specialArgs` MUST mirror what the real per-VM evaluator
-  # passes (pkgs, inputs, name, site.extraSpecialArgs) so a guest config
-  # valid in the real eval does not spuriously fail to apply here. Any
-  # eval failure inside the sandbox is treated fail-closed (reported as
-  # a violation). See assertions.nix for the consuming assertion.
+  # SCOPE / NON-GOAL: this is a namespace-containment policy lint, NOT an
+  # eval-time security sandbox. `lib.evalModules` cannot stop an approved
+  # guest file from reading host paths at eval time (e.g.
+  # `builtins.readFile`); that exposure is bounded by the
+  # operator-review-and-approve trust gate — the host only ever evaluates
+  # a guest file the operator has reviewed (`config diff`) and approved.
+  # See docs/adr/0024 for the trust model and the future-work
+  # restricted-evaluator design.
+  #
+  # `pkgs` + `specialArgs` mirror what the real per-VM evaluator passes
+  # so a guest config valid in the real eval applies here too. Any eval
+  # failure is treated fail-closed (reported as a violation).
   guestConfigForbiddenNamespaces = { pkgs, specialArgs ? { } }: guestFile:
     let
+      modulesPath = toString (pkgs.path + "/nixos/modules");
+      baseModules = import (modulesPath + "/module-list.nix");
       ev = lib.evalModules {
-        specialArgs = { inherit lib pkgs; } // specialArgs;
-        modules = [
+        specialArgs = {
+          inherit lib pkgs modulesPath baseModules;
+          utils = import (pkgs.path + "/nixos/lib/utils.nix") {
+            inherit lib pkgs;
+            config = ev.config;
+          };
+        } // specialArgs;
+        modules = baseModules ++ [
           {
-            freeformType = lib.types.attrsOf lib.types.anything;
+            nixpkgs.pkgs = pkgs;
+            nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
+          }
+          {
             options.microvm = lib.mkOption { type = lib.types.anything; };
             options.nixling = lib.mkOption { type = lib.types.anything; };
           }
@@ -306,6 +322,6 @@ rec {
       probe = builtins.tryEval (namesIn "microvm" ++ namesIn "nixling");
     in
     if probe.success then probe.value
-    else [ "<guestConfigFile failed to evaluate in the containment sandbox>" ];
+    else [ "<guestConfigFile failed to evaluate in the containment check>" ];
 }
 

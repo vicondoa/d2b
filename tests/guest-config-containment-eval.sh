@@ -6,16 +6,24 @@
 # (the surface the in-VM config-sync workflow edits). It must be
 # CONTAINED: it may set only guest OS options, never host-owned
 # `microvm.*` / `nixling.*` options. assertions.nix enforces this with
-# a hard assertion driven by `lib.nix`'s `guestConfigForbiddenDefs`
-# walker (which attributes each forbidden option definition back to the
-# guest file via the module system's `definitionsWithLocations`).
+# a hard assertion driven by `lib.nix`'s
+# `guestConfigForbiddenNamespaces` check, which evaluates the guest file
+# over the real nixpkgs NixOS module set with `microvm`/`nixling`
+# redeclared as detector options and reports any namespace the guest
+# defines (by definition-existence, so imports / generated modules /
+# `_file` spoofing are all caught).
 #
 # This gate evaluates a minimal consumer-style nixosSystem whose
 # corp-vm sets `guestConfigFile` to each fixture under
 # `eval-cases/guest-fixtures/` and asserts:
-#   - clean-guest.nix  -> no containment assertion fires (only guest OS).
-#   - sets-microvm.nix -> rejected, naming the microvm.* options.
-#   - sets-nixling.nix -> rejected, naming the nixling.* option.
+#   - clean-guest.nix          -> no containment assertion fires.
+#   - reads-standard-option.nix -> no containment assertion fires (reads
+#                                  a standard option without crashing).
+#   - sets-microvm.nix         -> rejected, naming the microvm.* options.
+#   - sets-nixling.nix         -> rejected, naming the nixling.* option.
+#   - imports-microvm.nix      -> rejected (bypass via imports).
+#   - tofile-microvm.nix       -> rejected (bypass via builtins.toFile).
+#   - spoof-file.nix           -> rejected (bypass via _file spoofing).
 #
 # Run via: tests/guest-config-containment-eval.sh   (wired into static.sh)
 
@@ -88,6 +96,18 @@ else
   fail "clean guest config unexpectedly produced assertions: $clean"
 fi
 
+# --- guest READS a standard option: must NOT false-positive/crash ----
+# A guest module that reads `config.networking.hostName` in a mkIf guard
+# is contained (it sets only a guest OS option). The containment check
+# must evaluate it over real NixOS option context, not crash.
+log "==> reads-standard-option.nix (reads a standard config.* option)"
+rd=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/reads-standard-option.nix")
+if [ "$rd" = "[]" ]; then
+  ok "guest reading a standard option is contained (no false positive)"
+else
+  fail "guest reading a standard option spuriously failed containment: $rd"
+fi
+
 # --- guest sets microvm.* : must be rejected, naming the options ----
 log "==> sets-microvm.nix (host-owned microvm.*)"
 mv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/sets-microvm.nix")
@@ -111,8 +131,8 @@ fi
 
 # --- BYPASS #1: forbidden option set via an imported module ---------
 # A `definitionsWithLocations == guestConfigFile` check would miss this
-# (the def is attributed to the imported file); the sound sandbox check
-# must still reject it.
+# (the def is attributed to the imported file); definition-existence
+# detection must still reject it.
 log "==> imports-microvm.nix (bypass via imports)"
 iv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/imports-microvm.nix")
 if printf '%s' "$iv" | grep -q "may only set" \
@@ -122,7 +142,19 @@ else
   fail "containment BYPASS via imports not caught: $iv"
 fi
 
-# --- BYPASS #2: forbidden option with a spoofed module `_file` -------
+# --- BYPASS #2: forbidden option via a builtins.toFile module --------
+# The forbidden def comes from a module generated at eval time (no
+# on-disk source path). Definition-existence detection must catch it.
+log "==> tofile-microvm.nix (bypass via builtins.toFile)"
+tv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/tofile-microvm.nix")
+if printf '%s' "$tv" | grep -q "may only set" \
+   && printf '%s' "$tv" | grep -q "microvm.mem"; then
+  ok "guest setting microvm.* via a builtins.toFile module is still rejected"
+else
+  fail "containment BYPASS via builtins.toFile not caught: $tv"
+fi
+
+# --- BYPASS #3: forbidden option with a spoofed module `_file` -------
 log "==> spoof-file.nix (bypass via _file spoofing)"
 sv=$(eval_failing_messages "$HERE/eval-cases/guest-fixtures/spoof-file.nix")
 if printf '%s' "$sv" | grep -q "may only set" \

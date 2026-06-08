@@ -532,9 +532,11 @@ let
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
   # only set guest OS options, never host-owned microvm.* / nixling.*.
-  # The SOUND check (sandbox eval, definition-existence; catches
-  # imports / generated modules / `_file` spoofing) runs in host.nix's
-  # composeVm pass and is read here as `_computed.<name>.guestForbidden`.
+  # The namespace-containment check (evalModules over the real nixpkgs
+  # NixOS module set, definition-existence; catches imports / generated
+  # modules / `_file` spoofing) runs in host.nix's composeVm pass and is
+  # read here as `_computed.<name>.guestForbidden`. It is a policy lint,
+  # not an eval-time security sandbox (see lib.nix + docs/adr/0024).
   # Only VMs that set a guestConfigFile force that per-VM evaluation, so
   # VMs without one — i.e. every existing consumer — pay nothing here.
   guestConfigContainmentAssertions = lib.mapAttrsToList
