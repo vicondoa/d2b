@@ -4,6 +4,8 @@ let
   clean = builtins.unsafeDiscardStringContext;
 
   cfg = config.nixling;
+  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
   obsOtlpPort = 14317;
   waylandUid =
@@ -131,7 +133,7 @@ let
 
   cloudHypervisorArgv = name: vm: manifest:
     let
-      microvm = config.microvm.vms.${name}.config.config.microvm;
+      microvm = nl.vmRunner config name;
       extraArgs = microvm.cloud-hypervisor.extraArgs;
       processedExtraArgs = builtins.foldl'
         (args: opt: (extractOptValues opt args).args)
@@ -235,11 +237,16 @@ let
         ++ builtins.map (volume:
           opsMapped ({
             path = toString volume.image;
-            direct = if volume.direct then "on" else "off";
-            readonly = if volume.readOnly then "on" else "off";
-            image_type = toString volume.imageType;
+            # v1.1-final: defensive defaults for volume fields the
+            # consumer may omit. The nixling-owned vm-options.nix
+            # types `microvm.volumes` as `listOf attrs` (untyped)
+            # for forward compat; processes-json.nix supplies the
+            # CH defaults when the consumer doesn't.
+            direct = if (volume.direct or false) then "on" else "off";
+            readonly = if (volume.readOnly or false) then "on" else "off";
+            image_type = toString (volume.imageType or "raw");
           }
-          // lib.optionalAttrs (volume.serial != null) {
+          // lib.optionalAttrs ((volume.serial or null) != null) {
             serial = volume.serial;
           }
           // diskMqOps)
@@ -261,10 +268,14 @@ let
           throw "Unsupported interface type ${iface.type} for cloud-hypervisor argv emission"
       ) (resolvedInterfaces microvm);
       deviceParams = builtins.map (device:
-        if device.bus == "pci" then
+        # v1.1-final: defensive default for device.bus when the
+        # consumer doesn't specify (defaults to "pci" for the
+        # v1.0 contract preserved here).
+        let bus = device.bus or "pci"; in
+        if bus == "pci" then
           "path=/sys/bus/pci/devices/${device.path}"
         else
-          throw "Unsupported device bus ${device.bus} for cloud-hypervisor argv emission"
+          throw "Unsupported device bus ${bus} for cloud-hypervisor argv emission"
       ) microvm.devices;
       audioExtraArgs = lib.optionals vm.audio.enable [
         "--generic-vhost-user"
@@ -304,7 +315,7 @@ let
 
   virtiofsdRunner = name: share:
     let
-      microvm = config.microvm.vms.${name}.config.config.microvm;
+      microvm = nl.vmRunner config name;
     in {
       binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
       argv = [
@@ -351,7 +362,7 @@ let
 
   gpuRunner = name:
     let
-      microvm = config.microvm.vms.${name}.config.config.microvm;
+      microvm = nl.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
@@ -446,8 +457,15 @@ let
 
   node = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ] }:
     let
-      vm = cfg.vms.${name};
-      emitUnit = unit != null && vm.supervisor == "systemd";
+      # v1.1-P2: `vm.supervisor` was removed per ADR 0015; every
+      # enabled VM is daemon-supervised. `emitUnit` is permanently
+      # false so processes.json never reports a systemd unit
+      # reference for a daemon-owned VM (preserves the single-
+      # writer invariant). The retained `_` binding for the local
+      # `vm` keeps the rest of the closure shape intact for
+      # diff hygiene.
+      _vm = cfg.vms.${name};
+      emitUnit = false;
       emitRunner = binaryPath != null;
     in
     assert (binaryPath == null) == (argv == [ ]);
@@ -469,7 +487,7 @@ let
   vmDag = name: vm:
     let
       manifest = cfg.manifest.${name};
-      microvm = config.microvm.vms.${name}.config.config.microvm;
+      microvm = nl.vmRunner config name;
       guestSshEnabled = manifest.sshUser != null && manifest.staticIp != null;
       usbipEnabled = vm.usbip.yubikey && guestSshEnabled && manifest.usbipdHostIp != null;
       virtiofsShares = lib.filter

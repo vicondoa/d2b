@@ -20,6 +20,62 @@ Every row carries three policy flags:
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
 
+> **Authz-class vs system-group naming note** (resolves R16
+> security-r16-1 + R17 kernel-r17-1 + R18 security-r18-1). The
+> **Allowed groups** column below uses the broker's **authz class**
+> identifiers `nixling-launcher` (singular) and `nixling-admin`,
+> which are the classification outputs the **daemon's** authz
+> layer produces per
+> [ADR 0015](../adr/0015-daemon-only-clean-break.md). The
+> classification chain has two distinct sockets:
+>
+> 1. **Daemon public socket** at `/run/nixling/public.sock`
+>    (owned `nixlingd:nixling-launchers` mode `0660` per
+>    `nixos-modules/host-daemon.nix`). The CLI user `connect(2)`s
+>    here. The filesystem-permissions gate (group ownership +
+>    mode) requires the connecting user to be in the
+>    `nixling-launchers` Linux SYSTEM GROUP (the v1.0 lifecycle
+>    authz boundary). At `accept(2)` time, `nixlingd` reads the
+>    peer's pid/uid/gid via `SO_PEERCRED` (`man 7 unix` — the
+>    Linux SO_PEERCRED primitive returns ONLY pid+uid+gid, NOT
+>    supplementary groups), then classifies the peer's uid via
+>    lookup against the `launcherUsers` / `adminUsers` arrays in
+>    `/etc/nixling/daemon-config.json` to produce one of three
+>    authz-class outcomes: `nixling-launcher`, `nixling-admin`,
+>    or `deny`. (Membership in the `nixling-launchers` Linux
+>    system group is the conventional way operators add users to
+>    `launcherUsers`; the system group's mode-0660 connect gate
+>    is the FILESYSTEM-level deny-by-default protection BEFORE
+>    accept(2) even runs.)
+>
+> 2. **Broker private socket** at `/run/nixling/priv.sock` (owned
+>    `root:nixlingd` mode `0660` per
+>    `nixos-modules/host-broker.nix`). Only the `nixlingd` uid
+>    can `connect(2)` here. The broker accepts ONLY the
+>    `nixlingd` peer; it does NOT directly classify launcher /
+>    admin users (that's done upstream at the daemon's public
+>    socket per item 1 above). The daemon forwards the upstream
+>    authz-class identifier to the broker with each per-op
+>    request; the broker trusts the daemon's upstream
+>    classification and uses it as the authz-class input to its
+>    per-op deny matrix in the table below.
+>
+> The authz classes named in the **Allowed groups** column
+> (`nixling-launcher`, `nixling-admin`) are DISTINCT from the
+> Linux SYSTEM GROUP `nixling-launchers` (plural) on the host:
+> the system group gates **connect(2) reachability** to the
+> daemon's public socket at the filesystem layer; the authz
+> classes are the **classification outputs** the daemon
+> produces by `launcherUsers`/`adminUsers` uid lookup and
+> forwards to the broker. The pre-P6 singular `nixling-launcher`
+> POLKIT GROUP is retired per ADR 0015; the authz-class name
+> `nixling-launcher` shares the spelling for historical reasons
+> but is the v1.0 daemon-only authz classification identifier,
+> NOT a Linux group. Tracking: a v1.1-P12 doc-polish sweep will
+> optionally rename the authz-class identifier to `launcher`
+> (plain, no `nixling-` prefix) to fully disambiguate; until
+> then this note is the authoritative disambiguation.
+
 ## W3 operation catalog (PROTOCOL_VERSION = 2)
 
 The W3 wave-delivered subset of `BrokerRequest`. Every row carries
@@ -29,6 +85,7 @@ The W3 wave-delivered subset of `BrokerRequest`. Every row carries
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `DelegateCgroupV2` | cgroup | global | W3 | no (chown only) | no | `nixling-admin` | yes | deny | `slice_path`, `controllers_enabled`, `owner_uid` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `OpenCgroupDir` | cgroup | per VM / role | W3 | no | no | `nixling-launcher` + `nixling-admin` | yes | deny | `cgroup_id`, `path_class` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
+| `CgroupKill` | cgroup | per VM / role leaf | **v1.1-P10 addition** (NOT live at v1.0 HEAD; the v1.0 source has no `BrokerRequest::CgroupKill` variant — leaf-kill writes were daemon-internal in v1.0). v1.1-P10 lands the broker-mediated wire variant per [`docs/reference/cgroup-delegation.md`](cgroup-delegation.md) § "Broker ops on the cgroup tree". Scope-tightened to leaf-only per ADR 0011 Decision item 6. | yes (writes `cgroup.kill` on a leaf) | no | `nixling-launcher` + `nixling-admin` | yes | deny | Request DTO (opaque IDs only): `vm_id`, `role_id`. Audit `operation_fields` (broker-derived after subject resolution): `cgroup_id`, `path_class` (one of `vm-role-leaf` / `host-scoped-leaf`; OMITTED on subject-resolution failure per the v1.1 closed-four-value taxonomy; failure is `decision: denied-unknown` + `error_kind: unknown-subject` in the audit header). Refused with `cgroup-kill-on-ancestor-refused` if the resolved path's `path_class` is `slice` / `vm-interior` (per `assert_partition_member_only`-class guard). The daemon ONLY invokes this op as last-resort escalation after `pidfd_send_signal(SIGTERM)` does not drain the leaf within the role's grace period. | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `PrepareStateDir` | fs | global / per VM | W3 | yes (mkdir/chown/chmod) | no | `nixling-admin` | yes | deny | `base_dir_hash`, `vm_id_or_scope`, `created_paths_hash`, `mode`, `owner_uid`, `owner_gid`, `replace_or_create_result` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) |
 | `PrepareRuntimeDir` | fs (`/run/nixling`) | global / per VM | W3 | yes (mkdir/chown/chmod) | no | `nixling-admin` | yes | deny | `base_dir_hash`, `vm_id_or_scope`, `created_paths_hash`, `mode`, `owner_uid`, `owner_gid`, `replace_or_create_result` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) |
 | `OpenKvm` | device | per role | W3 | no | no | `nixling-launcher` | yes | deny | `device_class`, `role_id` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
@@ -45,8 +102,9 @@ The W3 wave-delivered subset of `BrokerRequest`. Every row carries
 | `UpdateHostsFile` | name resolution | global | W3 | yes | no | `nixling-admin` | yes | deny | `managed_block_hash_before`, `managed_block_hash_after` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) |
 | `BindUnixSocket` | socket | per VM / role | W3 | partial (replace stale only) | no | `nixling-admin` | yes | deny | `socket_path_hash`, `mode`, `acl_diff` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
 | `SetSocketAcl` | socket | per VM / role | W3 | partial (replace stale only) | no | `nixling-admin` | yes | deny | `socket_path_hash`, `mode`, `acl_diff` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) |
+| `RevokeSocketAclIfPresent` | socket | per VM / role | v1.1-P6 (reserved) | yes (revoke) | no | `nixling-admin` | yes | deny | `socket_path_hash`, `groups_revoked`, `acl_diff` | [0018](../adr/0018-microvm-nix-removal.md) |
 | `ModprobeIfAllowed` | kernel module | global / feature | W3 | yes | no | `nixling-admin` | yes | deny | `module_name`, `matrix_entry_id`, `modules_disabled_sysctl` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) |
-| `UsbipBindFirewallRule` | USBIP firewall | per busid | W3 (skeleton only) | no (rule add only) | no | `nixling-admin` | yes | deny | `busid`, `rule_hash` | [0013](../adr/0013-w3-firewall-coexistence-policy.md) |
+| `UsbipBindFirewallRule` | USBIP firewall | per busid | W3 (skeleton only); v1.1-P10 adds `destroy` field | yes (rule add OR remove, v1.1-P10) | no | `nixling-admin` | yes | deny | `busid`, `rule_hash`, `destroy` (bool, v1.1-P10; `false`=add carve-out, `true`=remove carve-out, per the standard W3 broker-op destroy convention shared with `ApplyNftables`/`ApplyRoute`/`ApplyNmUnmanaged`/`ApplySysctl`/`UpdateHostsFile`); v1.0 baseline omits `destroy` (rule-add only) and v1.1-P10 adds the field as `Option<bool>` defaulting to `Some(false)` for v1.0 wire-compat per the JsonSchema additive-change rule | [0013](../adr/0013-w3-firewall-coexistence-policy.md), [0018](../adr/0018-microvm-nix-removal.md) |
 
 ## W2-delivered variants (still callable in W3)
 
@@ -313,7 +371,7 @@ trust-boundary completeness, not because they are broker ops.
 | --- | --- | --- | --- | --- |
 | `OwnershipMatrixCheck` | `/var/lib/nixling/vms/<vm>/` ownership matrix | — (pure `fstatat` traversal; the daemon already has `CAP_DAC_READ_SEARCH` for its state dir, no new caps) | refuses VM start with typed `daemon.ownership-matrix-drift` envelope citing the first drifted leaf (path, expected `owner:group mode`, observed) | `ph2-p2-ownership-matrix` (plan line 546); full matrix at plan §"Ownership matrix for `/var/lib/nixling/vms/<vm>/`" (lines 230-253) |
 | `SshHostKeyPreflight` | `<vm>/sshd-host-keys/ssh_host_*_key` | — (`O_NOFOLLOW` `openat`, `fstat`) | refuses VM start with typed `daemon.ssh-host-key-drift` envelope on: symlink, owner/group != root, mode != `0400` | `ph2-p2-ssh-host-key-preflight` (plan line 548); security-r2-3 |
-| `DnsmasqLeaseHashPreflight` (net VMs only) | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/nixling/dnsmasq/<env>.conf`) vs bundle `hosts_intent` + `route_intent[env:<env>:*]` + `nft_intent[env:<env>]` | — (pure `read()` + SHA-256; the daemon already has read access to its state dir) | refuses net-VM start with typed `daemon.bundle-dnsmasq-drift` envelope (exit code `63`); covers `EnvMissing`, `ConfigMissing`, `ConfigReadFailed`, `HashMismatch`; remediation: re-render dnsmasq.conf (host singleton) and retry, or `nixos-rebuild switch`. See [`docs/reference/net-vm-bundle-gate.md`](./net-vm-bundle-gate.md). | `ph2-p2-net-vm-bundle-gate`; plan line 215; networking-r3-3 |
+| `DnsmasqLeaseHashPreflight` (net VMs only) | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/nixling/dnsmasq/<env>.conf`) vs bundle `hosts_intent` + `route_intent[env:<env>:*]` + `nft_intent[env:<env>]` | — (pure `read()` + SHA-256; the daemon already has read access to its state dir) | refuses net-VM start with typed `daemon.bundle-dnsmasq-drift` envelope (exit code `63`); covers `EnvMissing`, `ConfigMissing`, `ConfigReadFailed`, `HashMismatch`. **Remediation**: v1.0 — re-render dnsmasq.conf (host singleton) and retry, or `nixos-rebuild switch`; v1.1+ — `ConfigMissing` auto-repairs via the `RenderDnsmasqEnvConf{env}` host-prep DAG op (per [`net-vm-bundle-gate.md`](./net-vm-bundle-gate.md) v1.1+ ordering note + plan v1.1-P9b TDD row); `HashMismatch` remains operator-driven via `nixling host prepare --apply` (re-runs RenderDnsmasqEnvConf) or `nixos-rebuild switch`. See [`docs/reference/net-vm-bundle-gate.md`](./net-vm-bundle-gate.md). | `ph2-p2-net-vm-bundle-gate`; plan line 215; networking-r3-3; v1.1-P9b (per the plan TDD row, the v1.1+ RenderDnsmasqEnvConf{env} host-prep DAG op + reordered/soft-deferred preflight) |
 | `HostModuleMatrixPreflight` | trusted host kernel modules: `kvm_intel`/`kvm_amd`, `vhost`, `vhost_vsock`, `vhost_net`, `tun`, `bridge`, `nf_tables`, `nf_conntrack`, plus per-env `usbip-host`, plus `virtio_media` for video-enabled VMs | — (reads `/proc/modules`) | refuses VM start with `daemon.host-module-missing` envelope; remediation suggests `ModprobeIfAllowed` (broker op, separate path) | plan line 216; kernel-r2-4 |
 
 The four preflights run in fixed order on every `nixling vm start
@@ -543,9 +601,34 @@ process starts. The broker adopts the fd via `SD_LISTEN_FDS`.
   guarantees daemon readiness.
 - `nixlingd.service` carries `Wants=nixling-priv-broker.socket` (not
   `Requires=`) so the daemon can serve even when the broker has idled.
-- The socket group is `nixlingd`; `SO_PEERCRED` is used at accept time
-  to authorise callers: only peers whose gid is `nixling-launcher` or
-  `nixling-admin` are authorised; all others receive `denied-refused`.
+- The socket is the **broker private socket** at
+  `/run/nixling/priv.sock`, owned `root:nixlingd` with mode
+  `0660` (declared in `nixos-modules/host-broker.nix`). ONLY the
+  `nixlingd` system user can `connect(2)` to this socket; the
+  broker calls `getsockopt(SO_PEERCRED)` at `accept(2)` time
+  (Linux SO_PEERCRED returns pid+uid+gid only, NOT supplementary
+  groups) and rejects any peer whose effective uid is not the
+  `nixlingd` uid. The broker does NOT classify launcher / admin
+  authz at this socket — peer classification into
+  `nixling-launcher` / `nixling-admin` authz classes happens at
+  the **daemon's public socket** (`/run/nixling/public.sock`,
+  owned `nixlingd:nixling-launchers` 0660 per
+  `nixos-modules/host-daemon.nix`), where `nixlingd` classifies
+  the peer's uid against the `launcherUsers` / `adminUsers`
+  arrays in `/etc/nixling/daemon-config.json` and forwards the
+  resulting authz-class identifier to the broker over its own
+  `nixlingd→broker` priv.sock connection (the broker trusts
+  `nixlingd`'s upstream authz-class verdict, not the peer's
+  direct credentials). The authz-class identifiers
+  (`nixling-launcher` singular, `nixling-admin` singular) are
+  the broker authz layer's classification outputs propagated
+  from the daemon and are DISTINCT from the Linux SYSTEM GROUP
+  `nixling-launchers` (plural) — see the authz-class-vs-system-
+  group note at the top of this document. Authorisation
+  outcomes other than the two `nixling-launcher` /
+  `nixling-admin` authz classes (i.e., `deny` from the daemon's
+  upstream classification) result in `denied-refused` audit
+  emission at the broker.
 
 ### Per-operation cap usage
 
@@ -559,6 +642,7 @@ capabilities it exercises. Operations that require no elevated capability
 | `ExportBrokerAudit` | `CAP_DAC_READ_SEARCH` | open audit-log dir for export |
 | `DelegateCgroupV2` | `CAP_SYS_ADMIN`, `CAP_DAC_READ_SEARCH` | open + `fchown` nixling.slice subtree |
 | `OpenCgroupDir` | `CAP_DAC_READ_SEARCH` | open per-VM cgroup dir for fd-passing |
+| `CgroupKill` | (**v1.1-P10 addition** — NOT live at v1.0 HEAD; v1.1-P10 lands the broker-mediated wire op per [`docs/reference/cgroup-delegation.md`](cgroup-delegation.md) § "Broker ops on the cgroup tree"; broker holds the leaf write fd from Phase A `fchown` and is the sole writer of `cgroup.kill` files) | leaf-only teardown signal via broker-mediated `cgroup.kill` write |
 | `PrepareStateDir` / `PrepareRuntimeDir` | `CAP_DAC_OVERRIDE`, `CAP_FOWNER` | mkdir + chown + chmod under trusted paths |
 | `OpenKvm` / `OpenVhostNet` / `OpenFuse` / `OpenDevice` | `CAP_DAC_OVERRIDE` | open device node on behalf of launcher |
 | `CreateTapFd` / `CreatePersistentTap` | `CAP_NET_ADMIN` | `TUNSETIFF` + `TUNSETOWNER` on `/dev/net/tun` |

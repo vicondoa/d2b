@@ -31,14 +31,70 @@ W3 must pick:
 
 ## Decision
 
-1. **Single slice, fixed name.** The delegated subtree is
+1. **Single slice, fixed name; per-VM intermediate + per-role leaf
+   hierarchy (v1.1 reconciles SUPERSEDES the v1.0 flat
+   `<vm-id>.scope` model).** The delegated subtree is
    `/sys/fs/cgroup/nixling.slice` — literally that name, not
-   configurable. Per-VM leaves are `<vm-id>.scope` beneath it. This
-   keeps the operator mental model and the broker's bundle-derived
-   path resolution trivial.
+   configurable.
 
-2. **8-step algorithm.** The broker performs delegation in the exact
-   sequence documented in
+   - **v1.0 model (historical):** per-VM leaves at
+     `nixling.slice/<vm-id>.scope`. This held for v1.0 because every
+     per-VM systemd-template service mapped 1:1 to a scope unit.
+   - **v1.1 model (CANONICAL after this ADR's v1.1 update):**
+     per-VM **intermediate** cgroup directory at
+     `nixling.slice/<vm-id>/` (process-free per ADR 0011 § Decision
+     item 5 — "no internal processes" in non-leaf nodes), with
+     **per-role leaves** at `nixling.slice/<vm-id>/<role>/` for
+     each broker `SpawnRunner{role}` child per
+     [ADR 0018](0018-microvm-nix-removal.md) § "Sidecar/template
+     retirement — full role matrix". The role-leaf model is
+     required because v1.1 retires the per-VM systemd-template
+     scope model and replaces it with one broker-spawned child
+     per role; each role needs its own pidfd / cgroup.kill scope.
+
+   Operator-facing path-class values (referenced by audit records
+   per [ADR 0010](0010-wire-protocol-and-typed-errors.md) and
+   [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)):
+   - `slice` — `/sys/fs/cgroup/nixling.slice` (the delegated root).
+   - `vm-interior` (v1.1 only) — `nixling.slice/<vm-id>/` (process-
+     free intermediate). `cgroup.kill` on this path is REFUSED
+     with `cgroup-kill-on-ancestor-refused`.
+   - `vm-role-leaf` (v1.1 canonical) — `nixling.slice/<vm-id>/<role>/`
+     (leaf, per-SpawnRunner role). Carries processes; `cgroup.kill`
+     allowed during declared teardown per item 6 below.
+   - `host-scoped-leaf` — leaves for SpawnRunner roles that have no
+     associated workload VM. Two host-scope path patterns are
+     recognized, both carrying `path_class: host-scoped-leaf`:
+     - **Per-env host roles** at `nixling.slice/sys-<env>/<role>/`
+       (e.g., `usbipd-backend`, `usbipd-proxy` for each USBIP-enabled
+       environment per
+       [ADR 0018](0018-microvm-nix-removal.md)).
+       `sys-<env>/` is the process-free interior.
+     - **Host singletons** at `nixling.slice/host/<role>/` (e.g.,
+       `otel-host-bridge` per
+       [`docs/reference/privileges.md`](../reference/privileges.md)
+       § "Per-runner-role profile catalog"). `host/` is the
+       process-free interior. The `host/` interior is used for
+       runner roles whose scope is "exactly one per host" with no
+       env axis to substitute (resolves R12 virt-r12-2).
+
+   The v1.1 update **supersedes** the v1.0 `<vm-id>.scope` flat
+   reading of item 1; ADR 0018's role-disposition matrix is the
+   normative role inventory. Cross-references in
+   [ADR 0018](0018-microvm-nix-removal.md),
+   [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md),
+   and [`docs/reference/privileges.md`](../reference/privileges.md)
+   use the same path-class taxonomy. This resolves R10 security-r10-3
+   (cross-ADR cgroup-hierarchy contradiction).
+
+   v1.1-P10 migrates existing v1.0 scope-based audit records / path
+   parsers (`nixling-host`, `nixlingd::supervisor::pidfd`) to the
+   role-leaf taxonomy. The path-class enum lands in
+   `packages/nixling-ipc/src/audit_path_class.rs` in v1.1-P10.
+
+2. **8-step algorithm, split into Phase A (privileged setup) and
+   Phase B (post-delegation runtime mutation).** The broker performs
+   delegation in the exact sequence documented in
    [docs/reference/cgroup-delegation.md](../reference/cgroup-delegation.md):
    probe → controller floor → cpuset inheritance → ordered
    `+cpu/+memory/+io/+pids/+cpuset` enable with per-step verification
@@ -47,6 +103,28 @@ W3 must pick:
    a stable kebab-case error code that flows through the CLI
    contract (`docs/reference/error-codes.md`) and the broker audit
    record `error_kind` field.
+
+   **Phase A (privileged, uid 0) — steps 1-6** (probe, controllers,
+   cpuset inheritance, `+controller` enables, slice/leaf mkdir, fd-
+   based `fchown` of the delegated subtree to `nixlingd`'s uid/gid)
+   run as uid 0 because they require write access above the
+   delegated subtree (mkdir under cgroup root, `+controllers` on
+   parent cgroups, `fchown` to a target uid). This matches
+   [ADR 0015](0015-daemon-only-clean-break.md)'s "broker chowns
+   before drop-priv" lifecycle.
+
+   **Phase B (post-delegation, uid != 0) — steps 7-8** (leaf-only
+   kill enforcement, uid-0 refusal guard) run after the broker has
+   dropped privileges to `nixlingd`'s uid. Step 8's
+   `require_non_root_delegation()` (`getuid() != 0`) gates
+   **runtime mutation of the already-delegated subtree** — i.e., it
+   is enforced on subsequent calls into the cgroup module **AFTER
+   the initial delegation completes**, not on the Phase A setup
+   path. The R9 kernel reviewer flagged the earlier flat 8-step
+   reading as self-contradictory (steps 4-6 require root, step 8
+   refuses root). The split makes the privilege boundary explicit:
+   Phase A is one-shot at delegation time under root; Phase B is
+   the steady-state invariant after drop-priv.
 
 3. **`partition=member` everywhere.** `cpuset.cpus.partition` is never
    written by W3 code. `assert_partition_member_only` panics in
@@ -62,17 +140,31 @@ W3 must pick:
    cgroup directories MUST stay process-free; leaf role cgroups are
    the only directories that carry processes.
 
-6. **Kill scope is leaf-only.** `cgroup.kill` is allowed only on
-   broker/daemon-owned VM or role leaves during declared
-   teardown/cleanup; ancestor `cgroup.kill` is refused with
-   `cgroup-kill-on-ancestor-refused`. The supervisor uses
-   `pidfd_send_signal(SIGTERM)` first and only escalates to
-   `cgroup.kill` on the leaf as a last resort.
+6. **Kill scope is leaf-only.** `cgroup.kill` is **broker-mediated
+   only** in v1.1+ (per the v1.1-P10 `CgroupKill` broker op landing
+   per [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
+   § "Broker ops on the cgroup tree"). The broker is the sole
+   writer of `cgroup.kill` files; the daemon NEVER writes
+   `cgroup.kill` directly. The daemon's supervisor uses
+   `pidfd_send_signal(SIGTERM)` first and ONLY escalates to a
+   broker-mediated `CgroupKill` op as a last resort when SIGTERM
+   does not drain the leaf within the role's documented grace
+   period. The op writes only on per-VM role leaves or host-scoped
+   leaves during declared teardown/cleanup; ancestor `cgroup.kill`
+   is refused with `cgroup-kill-on-ancestor-refused`.
 
-7. **Non-root delegation is mandatory.** The broker delegates as the
-   target uid (`nixlingd`), never as uid 0. `require_non_root_delegation`
-   asserts `getuid() != 0` and returns `cgroup-delegation-refused`
-   otherwise.
+7. **Non-root delegation invariant (steady state).** **Phase B
+   runtime mutation** of the already-delegated subtree (post-Phase A
+   setup per item 2 above) MUST run as `nixlingd`'s target uid;
+   `require_non_root_delegation` asserts `getuid() != 0` and returns
+   `cgroup-delegation-refused` if violated. This is the steady-state
+   invariant after Phase A (which legitimately runs as root for
+   `+controllers` cascade, slice/leaf `mkdir`, and `fchown` to
+   `nixlingd`'s uid/gid before drop-priv per
+   [ADR 0015](0015-daemon-only-clean-break.md) lifecycle). The
+   R9+R10 reviews flagged the prior wording ("never as uid 0") as
+   self-contradictory with Phase A privileged setup; the steady-state
+   reading is the operative one for the broker process post-drop-priv.
 
 8. **pidfd handoff over SCM_RIGHTS.** The broker forks payloads via
    `clone3(CLONE_PIDFD)` (preferred) or `fork + pidfd_open` (fallback)
@@ -81,8 +173,59 @@ W3 must pick:
    `PidfdTable` and registers each pidfd in its tokio epoll/poll loop.
    Raw-pid kill/wait is forbidden except in the reconciliation path
    where pid + `/proc/<pid>/stat` field 22 are both validated.
-   `nixlingd` sets `PR_SET_CHILD_SUBREAPER` at startup with a self-test
-   on `PR_GET_CHILD_SUBREAPER`.
+
+   **Process-into-cgroup placement primitive** (resolves R21 kernel
+   blocker). A pidfd is NOT writable to `cgroup.procs` — the kernel
+   only accepts a PID/tgid in `cgroup.procs`. v1.1+ implementations
+   MUST use one of the following Linux primitives to place the
+   broker-spawned child into its role-leaf cgroup:
+
+   - **Preferred: `clone3(CLONE_INTO_CGROUP)`** (Linux ≥ 5.7). The
+     broker passes the role-leaf cgroup directory's `O_RDONLY`
+     dirfd (obtained via `openat(2)` against the delegated subtree)
+     in `clone_args.cgroup` along with `CLONE_PIDFD` (to obtain
+     the pidfd atomically in `clone_args.pidfd`). Atomic
+     fork+place; no race window where the child runs in the wrong
+     cgroup. The Linux 5.7+ kernel is well below the v1.1 floor of
+     6.9 so this is universally available.
+   - **Fallback (NOT used in v1.1+; documented for historical
+     completeness)**: parent-side write of the post-`fork(2)`
+     child PID into the role-leaf's `cgroup.procs` file BEFORE
+     calling `execve` in the child. This has a tiny race window
+     where the child runs briefly in the broker's cgroup before
+     the parent's write completes — acceptable for some payloads
+     but NOT for the v1.1 audit/lifecycle model where the child
+     must be in its declared leaf from the first instruction.
+
+   The broker's spawn helper MUST use `clone3(CLONE_INTO_CGROUP |
+   CLONE_PIDFD)` for every SpawnRunner role. Audit semantics: on
+   `clone3` failure the broker emits `SpawnFailed` with
+   `error_kind` derived from `errno` (e.g., `ESRCH` if the
+   cgroup-leaf dirfd was closed, `EPERM` if the broker lacks
+   write permission to the delegated subtree's leaf). The
+   `tests/broker-spawn-clone3-cgroup-eval.sh` gate (future,
+   v1.1-P10) asserts every SpawnRunner role uses
+   `CLONE_INTO_CGROUP` (e.g., via strace fixture or syscall
+   tracer); fallback parent-side-write is denied at compile
+   time. No `cgroup.procs` writes from outside the broker.
+
+   **Subreaper note — v1.0 said `nixlingd` sets
+   `PR_SET_CHILD_SUBREAPER`; v1.1 SUPERSEDES this for SpawnRunner
+   children.** Per
+   [ADR 0018](0018-microvm-nix-removal.md) § "set-booted race-free
+   serialization" / "broker-as-parent reaping model", NEITHER the
+   broker NOR `nixlingd` claims `PR_SET_CHILD_SUBREAPER` for the
+   SpawnRunner-child population in v1.1. The broker is the direct
+   parent of every SpawnRunner child (via `clone3(CLONE_PIDFD)`)
+   and reaps via `waitid(P_PIDFD)`; making either side a
+   subreaper would silently re-parent unrelated host processes
+   into the daemon/broker, breaking the audit/lifecycle model.
+   The v1.0 `nixlingd` PR_SET_CHILD_SUBREAPER self-test described
+   here remains historically accurate for v1.0 source but is
+   explicitly REMOVED in v1.1; ADR 0018's normative supersession
+   note is the operative contract for v1.1+ implementations.
+   `nixlingd` does NOT set `PR_SET_CHILD_SUBREAPER` in v1.1;
+   the R11 kernel reviewer flagged this contradiction.
 
 ## Rejected alternatives
 

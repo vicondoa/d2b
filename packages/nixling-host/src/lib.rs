@@ -81,3 +81,11 @@ pub mod ownership_matrix;
 // on every VM start. Replaces the per-VM `microvm-tap-interfaces@`
 // + `microvm-setup@` systemd templates.
 pub mod host_prep_dag;
+
+// v1.1-final: canonical Rust-side runner argv regenerator.
+// Documents the migration surface from the Nix-side argv
+// generation in processes-json.nix to the typed Rust generators
+// in this crate (ch_argv, virtiofsd_argv, gpu_argv, audio_argv,
+// swtpm_argv, usbip_argv, video_argv, vsock_relay_argv,
+// otel_host_bridge_argv). See ADR 0018.
+pub mod runner_argv_regenerator;

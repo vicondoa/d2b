@@ -51,14 +51,12 @@
             nixling.envs.work.mssClamp = lib.mkForce true;
             nixling.envs.work.lan.allowEastWest = lib.mkForce true;
 
-            # Mixed Tier 0 mode: one VM keeps the legacy systemd
-            # path, one VM opts into the experimental nixlingd
-            # supervisor. The NixOS module skips emitting per-VM
-            # systemd autostart wiring + processes.json unit
-            # references for the daemon-owned VM so the
-            # single-writer invariant holds.
-            nixling.vms.work-app.supervisor = lib.mkForce "nixlingd";
-            nixling.vms.personal-app.supervisor = lib.mkForce "systemd";
+            # v1.1-P2 (per ADR 0015): `nixling.vms.<vm>.supervisor`
+            # was removed. v1.1 is daemon-only — every enabled VM
+            # is daemon-supervised by default. The previous v1.0
+            # "mixed Tier 0 mode" example (one VM on systemd, one
+            # on nixlingd) no longer applies because the systemd
+            # template path is retired in v1.1-P10.
           })
         ];
       };

@@ -104,11 +104,15 @@ in
       ];
     }
 
-    # NOTE: the matching virtiofs share into sys-obs-stack is declared
-    # in `nixos-modules/store.nix`, where the `microvm.vms.<name>.config.
-    # microvm.shares` list is set with `lib.mkForce`. Adding the share
-    # from here would lose to that mkForce. Coordinating via store.nix
-    # also lines up the obs secrets share with the other framework-
-    # managed shares (`ro-store`, `nl-meta`, `nl-hkeys`).
+    # NOTE: the matching virtiofs share into sys-obs-stack is
+    # declared in `nixos-modules/host.nix`'s composedConfig pass
+    # (v1.1-final moved it out of store.nix to avoid module-system
+    # infinite recursion). The share lives inside the per-VM
+    # `microvm.shares` list at
+    # `config.nixling._computed.sys-obs-stack.config.microvm.shares`.
+    # Adding the share from here would lose to the mkForce in
+    # host.nix. Coordinating via host.nix also lines up the obs
+    # secrets share with the other framework-managed shares
+    # (`ro-store`, `nl-meta`, `nl-hkeys`).
   ]);
 }

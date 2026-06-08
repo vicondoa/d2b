@@ -80,6 +80,25 @@ non-zero value while `br_netfilter` is loaded. This prevents bridge
 traffic from unexpectedly traversing host iptables/ip6tables/arptables
 paths outside the marker-scoped nftables model.
 
+> **v1.1 reconciliation note** (resolves R10 networking-r10-2):
+> [ADR 0012](0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
+> § "Ordered sysctl set" enumerates the host-prepare sysctl write
+> ordering for IPv6 disablement and lists ONLY
+> `bridge-nf-call-iptables=0` and `bridge-nf-call-ip6tables=0`
+> in its ordered set (arptables is omitted there because it is not
+> in the IPv6-disablement codepath). The three-sysctl read+verify
+> set above remains authoritative for the `br_netfilter` host-check
+> contract (all three must be `0`); ADR 0012 is concerned with the
+> WRITE ordering for the IPv6 path and the two iptables/ip6tables
+> sysctls happen to also be in that set, but the arptables sysctl
+> is verified-only (not actively written by the IPv6-disablement
+> path because arptables traffic does not affect IPv6 link-up).
+> v1.1 implementations MUST write+verify all three per this ADR;
+> ADR 0012's omission of arptables from its ordered set is NOT
+> permission to skip the arptables verify-on-host-check (host
+> check fails closed if any of the three reads non-zero while
+> `br_netfilter` is loaded).
+
 ## References
 
 - plan.md, "Baseline: nixling v0.4.0"
@@ -98,6 +117,28 @@ nixling creates or reconciles. Nixling never flushes foreign tables or
 chains.
 
 The concrete chain layout is:
+
+> **v1.1 reconciliation note** (resolves R10 networking-r10-1 +
+> R11 networking-r11-1): [ADR 0013](0013-w3-firewall-coexistence-policy.md)
+> § "Chain layout (exactly four chains)" SUPERSEDES the six-chain
+> `nl_*`-named `-300/+300` layout below for v1.1+ implementations.
+> ADR 0013 declares exactly four chains — **`prerouting`,
+> `forward`, `output`, `input`** (no `nl_*` prefix; the chain
+> NAMES inside the `inet nixling` table use the hook names
+> directly per ADR 0013's table) — at priorities `-150` /
+> `-5` documented in
+> [`docs/reference/inet-nixling-chains.md`](../reference/inet-nixling-chains.md);
+> the six-chain split-by-policy layout in the table below uses
+> the legacy `nl_*` naming and `-300/+300` priorities — these
+> are the v1.0 historical decision retained for narrative
+> continuity. v1.1 implementation work (broker nftables emit +
+> drift detector) MUST follow ADR 0013 + the reference doc, NOT
+> this table. ADR 0013 formally extends ADR 0005 (per ADR 0013
+> § References) and is the canonical source. The carve-out
+> entries documented elsewhere in this ADR or in
+> [`components-usbip.md`](../reference/components-usbip.md) using
+> `nl_forward` should be read as the equivalent `forward` chain
+> per ADR 0013.
 
 | Chain | Type | Hook | Priority | Policy | Role |
 | --- | --- | --- | --- | --- | --- |

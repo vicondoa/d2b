@@ -64,12 +64,61 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
 > manager). The bullets below use the historical systemd unit
 > identifiers for traceability with the cgroup leaf names.
 
+> **v1.1 status (per [ADR 0018](../adr/0018-microvm-nix-removal.md)
+> § Sidecar/template retirement — full role matrix):**
+> the v1.0 in-process `Pre-spawn: modprobe usbip-host` step
+> documented below is **REMOVED** in v1.1-P10. The modprobe
+> invocation moves to a daemon **host-prep DAG op**
+> `ModprobeIfAllowed{module: "usbip-host", matrix_entry_id}` per
+> [`docs/reference/privileges.md:48`](./privileges.md). The
+> host-prep DAG runs the modprobe op BEFORE the first
+> `UsbipBackend` SpawnRunner starts for each env; modprobe
+> failure (module not built, `kernel.modules_disabled=1`,
+> allowlist denial) returns a typed `#broker-validation-failed`
+> envelope (exit 31) and the dependent `UsbipBackend` is NOT
+> started.
+>
+> Additionally, the per-attach `usbip bind`/`unbind`/`attach`/
+> `detach` lifecycle ops in v1.1 dispatch through the broker
+> `SpawnRunner` DAG as **ephemeral one-shot SpawnRunner leaves**
+> (NOT the pre-v1.1 interactive bash CLI helper which was
+> retired in P6). The v1.1 SpawnRunner role naming:
+> `UsbipBindOneShot{busid}`, `UsbipUnbindOneShot{busid}`,
+> `GuestUsbipAttachOneShot{vm, busid}`, `GuestUsbipDetachOneShot{vm, busid}`
+> (the `Guest*` prefix marks the leaves whose exec payload is
+> `ssh ... -- usbip <verb>` against the in-guest vhci_hcd; the
+> host-side counterparts are `UsbipBindOneShot{busid}` /
+> `UsbipUnbindOneShot{busid}` which exec the host `usbip` binary
+> directly). See [ADR 0018](../adr/0018-microvm-nix-removal.md)
+> § "Disposition matrix" USBIP row for the full role inventory
+> + ssh hardening contract.
+> Each ephemeral leaf runs under
+> `nixling.slice/sys-<env>/usbip-<verb>-<id>/` with pidfd
+> handoff per [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md).
+> Cross-env busid exclusivity is enforced by
+> `host.json.environments[].usbipBusidLocks[].busIds`; the
+> broker MUST hold the per-env flock for the duration of the
+> `bind → attach → detach → unbind` sequence and audit a
+> `UsbipLockAcquired` / `UsbipLockReleased` pair around it.
+> The per-attach OneShot leaves emit the full SpawnRunner
+> baseline audit kinds (`SpawnRequested`/`Succeeded`/`Failed` +
+> `ChildExited`); `Restarted` is N/A for one-shots and is
+> registered in `tests/fixtures/broker-spawn-audit-baseline-exceptions.yaml`
+> **(future, v1.1-P10 — fixture file does NOT exist at HEAD;
+> it will be created in v1.1-P10 alongside the role
+> implementations)** via the `applies_to: {lifecycle: one_shot}`
+> predicate entry.
+
 - **`nixling.slice/sys-<env>/usbipd-backend` runner** (pre-P6:
   `nixling-sys-<env>-usbipd-backend.service`) — runs
   `usbipd -4 --tcp-port <backendPort>`. usbipd has no `--host` flag
-  so it binds to `0.0.0.0`; the iptables rules below (DROP source ≠
+  so it binds to `0.0.0.0`; the nftables rules below (DROP source ≠
   127.0.0.1 to the backend port) restrict effective reachability to
-  host loopback. Pre-spawn: `modprobe usbip-host`. Confined
+  host loopback. Pre-spawn: **(v1.0)** `modprobe usbip-host` in-process;
+  **(v1.1+)** host-prep DAG op `ModprobeIfAllowed{module: "usbip-host"}`
+  per [`docs/reference/privileges.md`](./privileges.md) row
+  `ModprobeIfAllowed` runs BEFORE this backend SpawnRunner per
+  the v1.1 status callout above. Confined
   with `NoNewPrivileges`, `CapabilityBoundingSet = "CAP_NET_BIND_SERVICE
   CAP_NET_RAW"`, `RestrictAddressFamilies = "AF_INET AF_INET6
   AF_UNIX AF_NETLINK"`, `LockPersonality`.
@@ -83,14 +132,48 @@ Per opted-in env (declared in [`network.nix`](../../nixos-modules/network.nix); 
   `systemd-socket-proxyd 127.0.0.1:<backendPort>`. Requires +
   after the matching backend runner. `CapabilityBoundingSet = ""`.
 
-Iptables (inserted at position 1 in `nixos-fw`, so they win first-
-match against NixOS's generated accepts):
+Firewall carve-outs (W3 canonical nftables `inet nixling` table
+per [ADR 0013](../adr/0013-w3-firewall-coexistence-policy.md) +
+[`inet-nixling-chains.md`](./inet-nixling-chains.md) — v1.1+
+implementation; resolves R10 networking-r10-3):
+
+The W3 broker emits these source-based carve-outs through the
+existing `UsbipBindFirewallRule` broker op (per
+[`docs/reference/privileges.md`](./privileges.md) catalog —
+`UsbipBindFirewallRule` is a broker OP, NOT a SpawnRunner
+role; the prior draft confused the two per R11 networking-r11-2
+and docs-r11-2). Carve-out removal is performed by re-invoking
+`UsbipBindFirewallRule` with a `destroy: true` payload field
+(the standard W3 broker-op destroy convention per
+[`ApplyNftables`](../adr/0013-w3-firewall-coexistence-policy.md)
+precedent; there is NO separate `UsbipUnbindFirewallRule`
+op). The carve-outs land in the canonical `forward` chain
+inside the `inet nixling` table (per ADR 0013 § "Chain layout
+(exactly four chains)" — chain names are `prerouting`,
+`forward`, `output`, `input`; the v1.0 `nl_forward` naming
+shorthand is retired per R11 networking-r11-1) BEFORE the
+generic allow/drop rule per ADR 0013 § "USBIP firewall
+carve-out ordering". The carve-out matrix translates the
+legacy iptables semantics 1:1:
 
 - DROP source ≠ 127.0.0.1 to the env's backend loopback port.
 - DROP source ∉ `<env.uplinkSubnet>` to TCP 3240 on the env's
   uplink bridge.
 - ACCEPT source ∈ `<env.uplinkSubnet>` to TCP 3240 on the env's
   uplink bridge.
+
+The legacy iptables `nixos-fw` rules (the v0.x interim
+implementation that inserted at position 1 in `nixos-fw` to win
+first-match against NixOS's generated accepts) were retired in
+v1.0 in favour of the daemon-owned broker `inet nixling` table.
+Implementations MUST emit via the broker `UsbipBindFirewallRule`
+broker op so the carve-out ordering is enforced by
+`nixling_host::nftables::NftBatch::assert_carveout_ordering`.
+The op is invoked by the host-prep DAG (before the
+`UsbipBackend` SpawnRunner starts for each env) and by the
+per-attach state machine (before `UsbipBindOneShot` SpawnRunner
+runs); see [ADR 0018](../adr/0018-microvm-nix-removal.md) §
+"Disposition matrix" USBIP row for the full lifecycle.
 
 Per host (in [`host.nix`](../../nixos-modules/host.nix)):
 
@@ -151,7 +234,9 @@ The entire `components/usbip.nix` is two lines of payload:
   Rust CLI's `nixling usb attach` dispatch through the broker.)
 - The host-side proxy listens only on `<env.hostUplinkIp>:3240`. A
   workload VM in env A cannot reach env B's usbipd via routing —
-  the iptables ACCEPT rule keys on the env's own uplink subnet.
+  the nftables `ACCEPT source ∈ <env.uplinkSubnet>` carve-out (per
+  ADR 0013 + this doc's "Firewall carve-outs" section above) keys
+  on the env's own uplink subnet.
 - The guest's `usbip attach` connects to its own env's
   `usbipdHostIp` (the host-side end of that env's uplink bridge),
   not the host's WAN address.
@@ -159,7 +244,8 @@ The entire `components/usbip.nix` is two lines of payload:
 ## Hardening notes
 
 - Backend listens on TCP `<backendPort>` (bound to `0.0.0.0`
-  because usbipd has no `--host` flag); the iptables rule set
+  because usbipd has no `--host` flag); the nftables `inet
+  nixling` carve-out (per "Firewall carve-outs" section above)
   restricts source to 127.0.0.1, making the backend effectively
   loopback-bound via netfilter rather than socket bind. The
   cross-env proxy is a `systemd-socket-proxyd` instance with

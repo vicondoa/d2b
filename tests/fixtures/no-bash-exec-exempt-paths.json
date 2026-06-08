@@ -1,0 +1,9 @@
+{
+  "_comment": [
+    "v1.1-P1 / ADR 0017 allow-list for Command::new(bash|sh|...) sites.",
+    "Empty by design at v1.1-P1 landing: the Rust CLI does not execute bash at any source location.",
+    "Additions require panel review per ADR 0017 § Dev-tool dependency governance.",
+    "Format: one path (relative to repo root) per entry under exempt_paths."
+  ],
+  "exempt_paths": []
+}

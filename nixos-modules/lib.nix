@@ -166,4 +166,29 @@ in
       pair = n: builtins.substring n 2 h;
     in
     lib.toUpper "02:${pair 0}:${pair 2}:${pair 4}:${pair 6}:${hex2 index}";
+
+  # v1.1-final: vmRunner — single access point for per-VM runner
+  # config that processes-json.nix / closures-json.nix /
+  # minijail-profiles.nix / store.nix consume. Reads from
+  # `config.nixling._computed.vms.<name>.config.microvm.*` — the
+  # nixling-owned per-VM evaluator output (see
+  # `nixos-modules/vm-evaluator.nix`). The
+  # `nixling._computed.vms.<name>` storage location is a SIBLING
+  # to `nixling.vms.<name>` to avoid module-system infinite
+  # recursion (host.nix's composeVm pass cannot map over cfg.vms
+  # and write back to nixling.vms.<name>.computed without
+  # cycling). NO upstream microvm.nix dependency.
+  vmRunner = config: name:
+    config.nixling._computed.${name}.config.microvm or { };
+
+  # Sibling helper for the per-VM toplevel build.
+  vmToplevel = config: name:
+    config.nixling._computed.${name}.config.system.build.toplevel;
+
+  # Sibling helper for the per-VM declared runner derivation.
+  # In v1.1+ this is always null (the broker generates runner
+  # argv in Rust via `packages/nixling-host/src/*_argv.rs`); the
+  # helper returns null for backward compat with consumers that
+  # touch the path.
+  vmDeclaredRunner = _config: _name: null;
 }

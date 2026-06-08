@@ -5,6 +5,17 @@
 let
   nl = import ./lib.nix { inherit lib; };
   inherit (nl) subnetIp mkMac;
+  # v1.1-final: per-VM evaluator entry point. composeVm is the
+  # nixling-owned replacement for microvm.nix's per-VM
+  # lib.evalModules invocation; see vm-evaluator.nix +
+  # vm-options.nix. host.nix's `nixling._computed` mapping below
+  # calls composeVm for every enabled VM and stores the result
+  # at `config.nixling._computed.<name>.config.*`, where the
+  # lib.nix helpers (vmRunner / vmToplevel / vmDeclaredRunner)
+  # read it.
+  vmSubmodule = (import ./vm-submodule.nix { inherit inputs; })
+    { inherit config lib pkgs; };
+  composeVm = vmSubmodule._composeVm;
 
   cfg = config.nixling;
   envMeta = cfg._envMeta;
@@ -119,16 +130,14 @@ let
   };
 
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
-  # W3 (virt-3): systemd-supervised VMs only get a `microvm@<vm>`
-  # template instance. Daemon-supervised VMs (`supervisor = "nixlingd"`)
-  # are filtered out so the NixOS module never emits a parallel writer
-  # for state the nixlingd daemon owns. The fail-fast stub unit
-  # declared below makes the boundary explicit if an operator still
-  # tries to start the unit via systemctl.
-  systemdSupervisedVms =
-    lib.filterAttrs (_: vm: vm.supervisor == "systemd") enabledVms;
-  daemonSupervisedVmNames =
-    lib.attrNames (lib.filterAttrs (_: vm: vm.supervisor == "nixlingd") enabledVms);
+  # v1.1-P2: `nixling.vms.<vm>.supervisor` was removed per ADR 0015.
+  # Every enabled VM is now daemon-supervised; the systemd-template
+  # path is retired. The empty `systemdSupervisedVms` set keeps
+  # legacy iteration sites from emitting per-VM microvm@<vm>
+  # template instances; the v1.1-P10 phase deletes those sites
+  # outright when the template definitions themselves go.
+  systemdSupervisedVms = { };
+  daemonSupervisedVmNames = lib.attrNames enabledVms;
 
   usbipYubikeyVmEnabled =
     builtins.any (vm: vm.usbip.yubikey or false) (lib.attrValues enabledVms);
@@ -181,7 +190,15 @@ in
 
 {
   imports = [
-    inputs.microvm.nixosModules.host
+    # v1.1-final: inputs.microvm.nixosModules.host import REMOVED.
+    # The nixling-owned per-VM evaluator (vm-evaluator.nix +
+    # vm-options.nix) replaces microvm.nix's host module. The
+    # per-VM `microvm.*` option namespace lives inside the per-VM
+    # NixOS evaluation only (via vm-options.nix); no host-level
+    # `microvm.*` option set is exposed. The systemd
+    # `microvm@<vm>.service` / `microvm-virtiofsd@<vm>.service`
+    # templates microvm.nix would have emitted are not declared;
+    # the broker SpawnRunner pipeline owns every spawn directly.
     ./host-users.nix
     ./host-polkit.nix
     ./host-activation.nix
@@ -191,207 +208,134 @@ in
     ./host-daemon.nix
   ];
 
-  # Store per-VM state under /var/lib/nixling/vms/<vm>/ instead of
-  # microvm.nix's default /var/lib/microvms/<vm>/. Keeps every
-  # nixling-managed file under one tree:
-  #
-  #   /var/lib/nixling/
-  #     vms/<vm>/                            workload + sys VMs
-  #       state/audio-state.json
-  #       swtpm/                             per-VM TPM state
-  #       store/, store-meta/                per-VM nix store
-  #       host-keys/                         per-VM nixling-managed
-  #                                          host pubkey + user keys
-  #     keys/                                nixling-managed SSH keys
-  #
-  # Pre-Phase-2b consumers upgrading from an earlier nixling layout
-  # (where workload state lived under /var/lib/microvms/<vm>/ or
-  # /var/lib/nixling/<vm>/) should use the Phase 9 migration script
-  # to move their state into vms/<vm>/. New installs land on this
-  # layout directly.
-  #
-  # Note: with microvm.nix's current single-global stateDir, the auto-
-  # declared system VMs (`sys-<env>-net`) also land under
-  # /var/lib/nixling/vms/sys-<env>-net/. The split into a separate
-  # `sys/<env>-net/` tree requires either a microvm.nix patch
-  # exposing a per-VM stateDir override, or filesystem-level
-  # bind-mounts. Tracked for a future phase.
-  microvm.stateDir = cfg.store.stateDir;
+  # v1.1-final: per-VM state directory layout. /var/lib/nixling/vms/<vm>/
+  # carries every nixling-managed file for the VM (no more
+  # microvm.nix-driven /var/lib/microvms/<vm>/ path; nixling owns
+  # the substrate end-to-end). The `microvm.stateDir`,
+  # `microvm.autostart`, and `systemd.targets.microvms.wants`
+  # assignments that lived here under v1.0 are deleted with the
+  # upstream microvm.nix host module import.
 
-  # P6 (ph6-remove-systemd-emission): host-wrapper.nix used to emit
-  # the `nixling@<vm>.service` template plus the per-instance
-  # `systemd.targets.multi-user.wants` symlinks for autostart=true
-  # VMs. Both are deleted: the daemon (`nixlingd`) owns VM lifecycle
-  # end-to-end via broker `SpawnRunner{role: CloudHypervisor}` and
-  # the supervisor's `pidfd` watchdog. Autostart is now expressed as
-  # `nixling.vms.<vm>.autostart = true` in the bundle and consumed
-  # by `nixlingd::autostart` at daemon startup, not by systemd
-  # target.wants.
-  #
-  # The `microvm.autostart` / `systemd.targets.microvms.wants`
-  # forces below remain so that any residual `microvm@<vm>.service`
-  # unit files generated by the upstream microvm.nix host module
-  # (still imported above for option-schema reasons) do NOT get
-  # pulled into `multi-user.target` at boot.
-  microvm.autostart = [ ];
-  systemd.targets.microvms.wants = lib.mkForce [ ];
-
-  # Translate each enabled nixling.vms.<name> into microvm.vms.<name>.
-  # `specialArgs` is fixed here so VMs can pull from the same flake
-  # graph without each VM-file having to plumb it manually. Every VM
-  # gets `./base.nix` layered in for the common guest baseline
-  # (networkd, sshd, resolved, locale, stateVersion).
-  #
-  # Note: `autostart` is intentionally NOT propagated from
-  # nixling.vms.<name>.autostart into microvm.vms.<name>.autostart.
-  # Upstream microvm.nix would accumulate autostart entries from each
-  # microvm.vms.<name> with autostart=true into `microvm.autostart`,
-  # which would re-introduce `WantedBy=multi-user.target` onto
-  # `microvm@<vm>.service`. Nixling instead pins
-  # `microvm.autostart = []` (in ./host-wrapper.nix) and sets WantedBy
-  # on its own `nixling@<vm>.service` wrapper per-instance there.
-  microvm.vms = lib.mapAttrs
+  # v1.1-final: per-VM NixOS evaluation lives on the nixling-owned
+  # `nixling._computed.<name>` attribute (see vm-evaluator.nix).
+  # Populated via the composeVm closure imported at the top of this
+  # module. Storage location is `nixling._computed` (sibling to
+  # `nixling.vms`) rather than `nixling.vms.<name>.computed` to
+  # avoid module-system infinite recursion (a mapAttrs over
+  # cfg.vms cannot write back to the same nixling.vms attribute
+  # path it reads from).
+  nixling._computed = lib.mapAttrs
     (name: vm:
       let
-        # Phase 4 multi-arch: force the platform gate before the rest
-        # of the translation observes `vm`. `checkVmPlatform` either
-        # returns `vm` unchanged (x86_64-linux, or no x86_64-only
-        # components requested) or throws a clear, attributable error
-        # naming the VM. Forced via `let _ = …` so non-strict consumers
-        # still trip it.
         vm' = checkVmPlatform name vm;
         derived = vmDerive name vm';
         chVsock = observabilityVsock name vm';
-      in {
-        specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;
-        config = lib.mkMerge [
-          {
-            imports = [
-              ./base.nix
-              ./guest-sshd-host-keys.nix
-            ]
-              ++ lib.optional vm'.graphics.enable ./components/graphics.nix
-              ++ lib.optional vm'.tpm.enable ./components/tpm.nix
-              ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
-              ++ lib.optional vm'.audio.enable ./components/audio/guest.nix
-              ++ lib.optional vm'.audit.enable ./components/audit.nix
-              ++ lib.optional vm'.graphics.enable ./components/video/guest.nix
-              ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
-              # Note: Entra ID / Himmelblau is NOT a nixling component.
-              # Consumers who need it import it per-VM via:
-              #   nixling.vms.<vm>.config.imports = [
-              #     inputs.nixos-entra-id.nixosModules.default
-              #   ];
-              # See `vicondoa/nixos-entra-id` for the sibling flake.
-              ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
-              ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
-              ++ [ vm'.config ];
-          }
-          (lib.mkIf (chVsock == null) {
-            # Non-observability VMs keep the fallback per-VM vsock CID
-            # for cloud-hypervisor's systemd-notify path.
+        obsCfg = cfg.observability;
+        isObsVm = obsCfg.enable && name == obsCfg.vmName;
+        obsSecretsShare = lib.optional isObsVm {
+          source = "${cfg.site.stateDir}/observability";
+          mountPoint = "/run/nixling-obs-secrets";
+          tag = "nl-obs-sec";
+          proto = "virtiofs";
+        };
+        composedModules = [
+          # Framework guest baseline + nixling-managed sshd host keys.
+          ./base.nix
+          ./guest-sshd-host-keys.nix
+        ]
+          ++ lib.optional vm'.graphics.enable ./components/graphics.nix
+          ++ lib.optional vm'.tpm.enable ./components/tpm.nix
+          ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
+          ++ lib.optional vm'.audio.enable ./components/audio/guest.nix
+          ++ lib.optional vm'.audit.enable ./components/audit.nix
+          ++ lib.optional vm'.graphics.enable ./components/video/guest.nix
+          ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
+          ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
+          ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
+          ++ [ vm'.config ]
+          ++ lib.optional (chVsock == null) {
             microvm.vsock.cid = lib.mkDefault (fallbackVsockCid name);
-          })
-          (lib.mkIf (chVsock != null) {
+          }
+          ++ lib.optional (chVsock != null) {
             microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
             microvm.vsock.cid = lib.mkForce chVsock.cid;
             microvm.cloud-hypervisor.extraArgs = lib.mkAfter [
               "--vsock"
               "socket=${chVsock.socket}"
             ];
-          })
-          # Propagate host-side per-component config into the guest's
-          # matching option set. Each branch is gated on the matching
-          # toggle so the options-don't-exist error doesn't fire when
-          # the component module isn't imported. The mkIf must wrap the
-          # WHOLE module attrset (not just the inner value) for option
-          # resolution to see the definition as absent rather than as a
-          # mkIf-tagged-condition-false definition of a missing option.
-          (lib.mkIf vm'.homeManager.enable {
+          }
+          ++ lib.optional vm'.homeManager.enable {
             nixling.homeManager.users = vm'.homeManager.users;
-          })
-          # P5 W3: propagate the host-side cross-domain trust flag to
-          # the guest so graphics.nix can gate the crosvm GPU sidecar's
-          # cross-domain context type on it.
-          (lib.mkIf vm'.graphics.enable {
+          }
+          ++ lib.optional vm'.graphics.enable {
             nixling.graphics.crossDomainTrusted = vm'.graphics.crossDomainTrusted;
-          })
-          # Propagate the audio-user list to the guest. Default falls
-          # back to `[ ssh.user ]` if the per-VM file didn't override
-          # `audio.users` explicitly. The guest module adds each user
-          # to the `audio` group so they can talk to the virtio-snd
-          # device + PipeWire from non-logind-active sessions.
-          (lib.mkIf vm'.audio.enable {
+          }
+          ++ lib.optional vm'.audio.enable {
             nixling.audio.users =
               if vm'.audio.users != [ ]
               then vm'.audio.users
               else lib.optional (vm'.ssh.user != null) vm'.ssh.user;
-          })
-          (lib.mkIf vm'.audit.enable {
+          }
+          ++ lib.optional vm'.audit.enable {
             nixling.audit.enable = true;
             nixling.audit.rules = vm'.audit.rules;
-          })
-          (lib.mkIf vm'.observability.enable {
+          }
+          ++ lib.optional vm'.observability.enable {
             nixling.observability.scrapeJournal = vm'.observability.scrapeJournal;
             nixling.observability.scrapeNodeMetrics = vm'.observability.scrapeNodeMetrics;
             nixling.observability.identity.vmName = name;
             nixling.observability.identity.envName = if vm'.env != null then vm'.env else "none";
-          })
-          # Propagate the SSH user to the guest so
-          # nixling-load-host-keys.service knows whose
-          # authorized_keys to populate (Phase 2b nixling-managed keys).
-          { nixling.sshUser = vm'.ssh.user;
-            nixling.sudo = vm'.sudo;
           }
-        ];
-      })
-    systemdSupervisedVms;
+          ++ [
+            {
+              nixling.sshUser = vm'.ssh.user;
+              nixling.sudo = vm'.sudo;
+            }
+            # v1.1-final: per-VM framework-managed shares (moved
+            # from store.nix to break the module-system infinite
+            # recursion store.nix would cause when mapping over
+            # cfg.vms to write back to nixling.vms).
+            {
+              microvm.writableStoreOverlay = lib.mkDefault "/nix/.rw-store";
+              microvm.shares = lib.mkForce ([
+                {
+                  source = "/nix/store";
+                  mountPoint = "/nix/.ro-store";
+                  tag = "ro-store";
+                  proto = "virtiofs";
+                }
+                {
+                  source = "${cfg.store.stateDir}/${name}/store-meta";
+                  mountPoint = "/run/nixling-store-meta";
+                  tag = "nl-meta";
+                  proto = "virtiofs";
+                }
+                {
+                  source = "${cfg.site.stateDir}/vms/${name}/host-keys";
+                  mountPoint = "/run/nixling-host-keys";
+                  tag = "nl-hkeys";
+                  proto = "virtiofs";
+                }
+                {
+                  source = "${cfg.site.stateDir}/vms/${name}/sshd-host-keys";
+                  mountPoint = "/run/nixling-sshd-host-keys";
+                  tag = "nl-ssh-host";
+                  proto = "virtiofs";
+                }
+              ] ++ obsSecretsShare);
+            }
+          ];
+      in composeVm name composedModules)
+    enabledVms;
 
-  # W3 (virt-3): emit fail-fast stub `microvm@<vm>.service` units for
-  # every daemon-supervised VM. The systemd-side stub returns
-  # `single-writer-conflict` (exit 78) so an operator running
-  # `systemctl start microvm@<vm>` against a daemon-owned VM gets a
-  # clear pointer to `nixling host prepare` + the nixlingd daemon
-  # path. `RestartPolicy = "no"` and the `ConditionPathExists`
-  # negative match on the daemon-owned marker keep the stub from
-  # firing once the daemon has taken ownership.
+  # v1.1-final: fail-fast stub `microvm@<vm>.service` units are no
+  # longer needed — `microvm@<vm>.service` doesn't exist anymore
+  # (the upstream microvm.nix host module that declared it is no
+  # longer imported). Operators interacting via systemctl get
+  # systemd's standard "unknown unit" message; the daemon-owned
+  # broker SpawnRunner pipeline is the only path.
   systemd.services = lib.mkMerge [
-    (lib.genAttrs
-      (map (name: "microvm@${name}") daemonSupervisedVmNames)
-      (unitName:
-        let
-          name = lib.removePrefix "microvm@" unitName;
-        in {
-          description = "nixling W3 single-writer stub for ${name} (daemon-supervised)";
-          restartIfChanged = false;
-          unitConfig = {
-            ConditionPathExists = "!/run/nixling/state/${name}/owned-by-daemon";
-            X-RestartIfChanged = false;
-          };
-          serviceConfig = {
-            Type = lib.mkForce "oneshot";
-            RemainAfterExit = lib.mkForce false;
-            StandardOutput = "journal";
-            StandardError = "journal";
-            Restart = lib.mkForce "no";
-            SuccessExitStatus = "";
-          };
-          # Surface a clear pointer at the daemon path. Exit 78 is the
-          # documented `single-writer-conflict` / config-mismatch code.
-          script = ''
-            echo "nixling: microvm@${name}.service refused: VM '${name}' is supervised by the nixlingd daemon (single-writer-conflict)." >&2
-            echo "Remediation: use 'nixling host prepare' / 'nixling up ${name}' instead of 'systemctl start microvm@${name}'." >&2
-            exit 78
-          '';
-        }))
-    # P6 ph6-remove-systemd-emission + P3 ph3-p3-otelbridge-readiness:
-    # the per-VM `nixling-otel-relay@<vm>.service` template + drop-ins
-    # were deleted. The observability vsock relay is now broker-spawned
-    # via `SpawnRunner{role: VsockRelay}` (P1 ph1-vsock-relay role) with
-    # readiness gated by P3 ph3-p3-otelbridge-readiness. The
-    # `systemd.services."nixling-otel-relay@"` template + the per-VM
-    # `nixling-otel-relay@<vm>` drop-ins that were here have been
-    # removed. See docs/reference/otel-host-bridge-readiness.md +
+    {}
     # docs/adr/0015-daemon-only-clean-break.md.
     (lib.mkIf false {})
   ];

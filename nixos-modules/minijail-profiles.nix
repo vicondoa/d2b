@@ -2,6 +2,8 @@
 
 let
   cfg = config.nixling;
+  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
   obsOtlpPort = 14317;
   serviceControllers = [ "cpu" "memory" "pids" ];
@@ -116,7 +118,7 @@ let
       virtiofsdRootException = "ADR 0003 virtiofsd --sandbox=namespace setup exception";
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
-        config.microvm.vms.${name}.config.config.microvm.shares;
+        (nl.vmRunner config name).shares;
       virtiofsProfiles = lib.listToAttrs (lib.forEach virtiofsShares (share:
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;

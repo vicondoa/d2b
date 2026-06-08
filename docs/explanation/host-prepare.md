@@ -81,10 +81,25 @@ The broker forks role payloads with `clone3(CLONE_PIDFD)` (preferred)
 or `fork + pidfd_open` (fallback) and ships the resulting CLOEXEC
 pidfd to `nixlingd` over the private socket via `SCM_RIGHTS`. The
 daemon's supervisor takes ownership in an explicit per-VM/per-role fd
-table and uses `pidfd_send_signal` + `waitid(P_PIDFD)` for
-authoritative control — never raw PID kill/wait. `nixlingd` sets
-`PR_SET_CHILD_SUBREAPER` at startup and self-tests the prctl before
-entering its main loop.
+table and uses `pidfd_send_signal` for control (and for VM-scoped
+sidecars whose parent is the daemon, `waitid(P_PIDFD)` for reap) —
+never raw PID kill/wait.
+
+**SpawnRunner-child supervision** (v1.1 SUPERSEDES the v1.0 model
+per [ADR 0018](../adr/0018-microvm-nix-removal.md) § "set-booted
+race-free serialization" / "broker-as-parent reaping model"): the
+broker is the PARENT of every v1.1 `SpawnRunner` child and reaps
+via `waitid(P_PIDFD)` on its own pidfd-table entry; the daemon is
+an OBSERVER (it receives a duplicated pidfd via `SCM_RIGHTS` for
+BootedNotify identity verification and lifecycle signalling but
+does NOT reap). Per ADR 0011 Decision item 8's v1.1 supersession,
+NEITHER the broker NOR `nixlingd` claims `PR_SET_CHILD_SUBREAPER`
+for the SpawnRunner-child population in v1.1 — making either side
+a subreaper would silently re-parent unrelated host processes into
+the daemon/broker, breaking the audit/lifecycle model. The
+historical v1.0 `nixlingd` PR_SET_CHILD_SUBREAPER self-test
+described in earlier drafts of this section is explicitly REMOVED
+in v1.1; ADR 0018 is the operative contract.
 
 ## What the W3 host verbs may mutate
 

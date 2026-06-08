@@ -94,6 +94,12 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
 - [`how-to/migrate-nixos-to-daemon.md`](./how-to/migrate-nixos-to-daemon.md) —
   move a NixOS host from legacy systemd-owned VM lifecycle to
   `nixlingd`-owned lifecycle.
+- [`how-to/migrate-nixling-v0-to-v1.md`](./how-to/migrate-nixling-v0-to-v1.md) —
+  **primary v0.x → v1.0 operator runbook**. Manifest schema bump,
+  bash CLI removal, per-VM systemd template retirement, host singleton
+  retirement, polkit allowlist removal, W18 default flip, whole-migration
+  rollback. Also documents v1.1 deferred verbs and daemon-down
+  rendering pointers (`audit` / `console` / `audio` / `keys`).
 - [`how-to/uninstall-nixling.md`](./how-to/uninstall-nixling.md) —
   rollback and uninstall runbook for both NixOS and host-install
   scaffold paths.

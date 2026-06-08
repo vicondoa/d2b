@@ -8,13 +8,17 @@ people changing the framework.
 
 ## What this is
 
-Nixling is an opinionated NixOS desktop microVM framework built on
-top of [microvm.nix]. **From v1.0 the control plane is daemon-only:
-`nixlingd` supervises every per-VM DAG and `nixling-priv-broker`
-dispatches every audited host mutation.** Per-VM systemd templates,
-host-singleton framework services, and the bash CLI are removed
-wholesale at the v0.4.x → v1.0.0 boundary (see
-[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md)).
+Nixling is an opinionated NixOS desktop microVM framework that
+owns its microVM substrate end-to-end (**v1.1 removed the
+historical [microvm.nix] flake dependency**). **From v1.0 the
+control plane is daemon-only: `nixlingd` supervises every per-VM
+DAG and `nixling-priv-broker` dispatches every audited host
+mutation.** Per-VM systemd templates, host-singleton framework
+services, and the bash CLI were removed wholesale at the v0.4.x →
+v1.0.0 boundary (see
+[ADR 0015](./docs/adr/0015-daemon-only-clean-break.md)); the
+microvm.nix substrate was removed in v1.1
+(see [ADR 0018](./docs/adr/0018-microvm-nix-removal.md)).
 
 What the framework still provides: per-env isolated networks with an
 auto-declared NAT/DHCP "net VM", a per-VM `/nix/store` hardlink farm,
@@ -666,7 +670,7 @@ Touch these only with a clear plan and a corresponding test run.
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned (`manifestVersion`; bumped to 3 in P2 for the daemon-only end-state). Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
 | Manifest bundle — private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/nixling-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:nixlingd` 0640 and ground every broker/sandbox/runner behaviour. `nixling-core` DTOs are canonical; committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/bundle-drift.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
 | Control plane — `nixlingd` + `nixling-priv-broker` | `packages/nixling-ipc/**` + `packages/nixling-core/**` + `packages/nixlingd/**` + `packages/nixling-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/nixling/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `nixling-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `nixlingd.service` carries `Wants=nixling-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker drops to the `nixlingd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:nixlingd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `nixling.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/nixlingd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
-| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. The planned `ph6-p6-supervisor-removed-assertion` (eval-time rejection of the retired `nixling.vms.<vm>.supervisor` option) was deferred to v1.1 backlog; v1.0 retains the option for backward-compat with consumer flakes pinning pre-v1.0 manifests (see ADR 0015 § Decision). |
+| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. The planned `ph6-p6-supervisor-removed-assertion` (eval-time rejection of the retired `nixling.vms.<vm>.supervisor` option) is **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1 plan in `plan.md`); v1.0 retains the option for backward-compat with consumer flakes pinning pre-v1.0 manifests. The companion v1.1 ADRs are [ADR 0017 (no bash fallbacks)](./docs/adr/0017-no-bash-fallbacks-invariant.md) and [ADR 0018 (microvm.nix removal)](./docs/adr/0018-microvm-nix-removal.md). |
 | Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `nixling-launchers` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. The polkit allowlist that used to grant per-VM start/stop is retired (ADR 0015); wiring anything else into the group inverts the threat model. |
 | SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `nixling keys rotate` MUST NOT touch consumer-supplied keys. |
 
@@ -727,10 +731,17 @@ broker op mutating host state.
 - Delegation: the broker `fchown`s the delegated subtree (the
   `nixling.slice` directory and every descendant) to the `nixlingd`
   system user. The host cgroup root is never chowned.
-- Forbidden surfaces: writing `cpuset.cpus.partition` anywhere in the
-  subtree, threaded cgroups, `cgroup.kill` on `nixling.slice` or any
-  ancestor of a daemon-owned leaf, and delegation while the broker is
-  uid 0. See [`docs/reference/cgroup-delegation.md`](./docs/reference/cgroup-delegation.md)
+- Forbidden surfaces: writing `cpuset.cpus.partition` on
+  nixling-owned cgroups (the cgroup v2 root and other ancestors
+  are out of scope; nixling never reads/writes them), threaded
+  cgroups, `cgroup.kill` on `nixling.slice` or any ancestor of
+  a daemon-owned leaf, and **Phase B (post-delegation) runtime
+  mutation while running as uid 0** (Phase A privileged setup
+  — `+controllers` cascade, slice/leaf `mkdir`, `fchown` to
+  `nixlingd`'s uid/gid — legitimately runs as root per ADR 0011
+  Decision item 2; the uid != 0 invariant applies to the
+  steady-state cgroup code path after privilege drop). See
+  [`docs/reference/cgroup-delegation.md`](./docs/reference/cgroup-delegation.md)
   and ADR 0011 for the algorithm + audit shape.
 
 ### Ownership-marker conventions
@@ -785,8 +796,11 @@ following as the contract:
   for backward-compat with consumer flakes pinning pre-v1.0 manifests
   (the framework's Tier 0 detection still branches on it); the
   v1.0-intended hard removal + eval-time rejection assertion is
-  deferred to v1.1 backlog. See ADR 0015 § Decision for details.
-  Setting `supervisor = "nixlingd"` requires
+  **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1
+  plan in `plan.md`; the v1.1 follow-through is also tracked by
+  [ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md) and
+  [ADR 0018](./docs/adr/0018-microvm-nix-removal.md)). Setting
+  `supervisor = "nixlingd"` requires
   `nixling.daemonExperimental.enable = true`.
 - The polkit allowlist for `nixling-launcher` is retired.
   `nixling-launchers` group membership + `SO_PEERCRED` at
@@ -812,11 +826,11 @@ canonical tags are `( P6 )` and `( P6 <slice> )`:
   entrypoints. The AGENTS.md rewrite (this file) is folded into the
   same commit by the integrator.
 - `ph6-p6-supervisor-removed-assertion` — was planned to add the
-  eval-time rejection of `nixling.vms.<vm>.supervisor`; deferred
-  to v1.1 backlog (per ADR 0015 § Decision). The option remains
-  in v1.0 source for backward-compat with consumer flakes pinning
-  pre-v1.0 manifests; the v1.0-intended hard removal will land in
-  v1.1.
+  eval-time rejection of `nixling.vms.<vm>.supervisor`; **scheduled
+  for v1.1-P2** (per ADR 0015 § Decision and the v1.1 plan). The
+  option remains in v1.0 source for backward-compat with consumer
+  flakes pinning pre-v1.0 manifests; the v1.0-intended hard removal
+  will land in v1.1-P2.
 - `ph6-p6-polkit-retire` — retires the `nixling-launcher` polkit
   rules; the group itself remains declared for permission-boundary
   continuity.

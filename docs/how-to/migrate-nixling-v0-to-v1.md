@@ -48,9 +48,9 @@ There is **no deprecation window**. v0.5 was skipped; the v0.4.x →
 v1.0.0 boundary deletes every legacy surface in one cut. Operators
 who skip this guide will see runtime `manifest-version-mismatch`
 errors. (The `supervisor` option's v1.0-intended eval-time
-assertion was deferred to v1.1 backlog per ADR 0015 § Decision;
-v1.0 retains the option for backward-compat with consumer flakes
-pinning pre-v1.0 manifests.)
+assertion is **scheduled for v1.1-P2** per ADR 0015 § Decision and
+the v1.1 plan; v1.0 retains the option for backward-compat with
+consumer flakes pinning pre-v1.0 manifests.)
 
 ## Per-phase deliverable docs
 
@@ -95,10 +95,10 @@ git -C /etc/nixos push --tags    # if your config is in a remote repo
 
 Bump the nixling input in your `flake.nix` to v1.0.0 **after** you
 have applied every change in §§1–7 below. The `supervisor` option's
-v1.0-intended hard removal + eval-time rejection assertion was
-deferred to v1.1 backlog (per ADR 0015 § Decision); v1.0 retains
-the option for backward-compat with consumer flakes pinning pre-v1.0
-manifests.
+v1.0-intended hard removal + eval-time rejection assertion is
+**scheduled for v1.1-P2** (per ADR 0015 § Decision and the v1.1 plan);
+v1.0 retains the option for backward-compat with consumer flakes
+pinning pre-v1.0 manifests.
 
 ## 1. Manifest v2 → v3
 
@@ -351,10 +351,11 @@ pidfds. The per-VM lifecycle state lives in
 The `nixling.vms.<vm>.supervisor` option is **retained in v1.0
 source** (default `"systemd"`) for backward-compat with consumer
 flakes pinning pre-v1.0 manifests; the v1.0-intended hard
-removal + eval-time rejection assertion was deferred to v1.1
-backlog (see [ADR 0015](../adr/0015-daemon-only-clean-break.md)
-§ Decision). v1.0 consumers should declare every workload VM as
-`supervisor = "nixlingd"` and enable `nixling.daemonExperimental.enable = true`.
+removal + eval-time rejection assertion is **scheduled for v1.1-P2**
+(see [ADR 0015](../adr/0015-daemon-only-clean-break.md)
+§ Decision and the v1.1 plan). v1.0 consumers should declare every
+workload VM as `supervisor = "nixlingd"` and enable
+`nixling.daemonExperimental.enable = true`.
 The polkit per-VM allowlist is retired (see §6 below);
 `nixling-launchers` group membership + `SO_PEERCRED` on
 `public.sock` is the only lifecycle authorisation surface.
@@ -364,7 +365,7 @@ The polkit per-VM allowlist is retired (see §6 below);
 In your consumer `configuration.nix` (or whichever module declares
 your VMs), set every workload VM to `supervisor = "nixlingd"`
 (the v1.0 daemon-only convention per ADR 0015; the option's
-hard removal was deferred to v1.1 backlog so the v1.0 default
+hard removal is scheduled for v1.1-P2 so the v1.0 default
 remains `"systemd"` for backward-compat):
 
 ```diff
@@ -436,11 +437,12 @@ on any retired unit name reappearing in a `dry-build` output),
 ### Rollback
 
 The `supervisor` option remains live in v1.0 (its hard removal
-was deferred to v1.1 backlog per ADR 0015 § Decision), so an
-operator can revert individual VMs from `supervisor = "nixlingd"`
-back to `supervisor = "systemd"` without a flake rev rollback.
-For a full rollback to v0.4.x, pin the nixling flake input back
-to v0.4.x and `nixos-rebuild switch --rollback`.
+is **scheduled for v1.1-P2** per ADR 0015 § Decision and the v1.1
+plan), so an operator can revert individual VMs from
+`supervisor = "nixlingd"` back to `supervisor = "systemd"` without
+a flake rev rollback. For a full rollback to v0.4.x, pin the
+nixling flake input back to v0.4.x and `nixos-rebuild switch
+--rollback`.
 
 ## 5. Host singletons retired
 
@@ -733,6 +735,184 @@ If the rollback is post-incident, file an issue with the
 `host validate --json` dump, the relevant `journalctl -u
 nixlingd.service -u nixling-priv-broker.service` window, and the
 last broker audit log under `/var/lib/nixling/audit/broker-<utc-date>.jsonl`.
+
+## v1.1 deferred verbs and daemon-down rendering pointers
+
+> Operator pointer added in v1.1-P0 to back the typed-envelope
+> remediation-rendering links from
+> [`docs/reference/error-codes.md`](../reference/error-codes.md)
+> "Remediation rendering conventions". The section covers two
+> distinct verb categories that share the same multi-line
+> `Remediation:` block format:
+>
+> 1. **Truly deferred — operator implementation queued for
+>    v1.2+ (unscheduled); v1.1 only delivers the typed-envelope
+>    rendering + remediation per ADR 0017**
+>    (emits `#not-yet-implemented` exit 78 in v1.0 AND v1.1
+>    unconditionally): `console`, `audio`,
+>    `audit --strict` (the `--strict` flag arm specifically;
+>    the non-strict `audit` invocation is daemon-backed per
+>    Category 2).
+> 2. **v1.0 daemon-backed verbs** that emit `#daemon-down` (exit 1)
+>    only when the broker is stopped — they otherwise work normally
+>    in v1.0: `audit` (non-strict only), `keys list`, `keys show`.
+>    The multi-line rendering only fires on the rare daemon-down
+>    case for these three; the v1.0 successful-call path is
+>    unchanged.
+>
+> See [`docs/reference/cli-contract.md`](../reference/cli-contract.md)
+> for the authoritative per-verb v1.0 disposition.
+
+<a id="v11-deferred-verbs-audit"></a>
+### `nixling audit` (mixed disposition — see per-subverb detail)
+
+`nixling audit` has two distinct dispositions in v1.0 per
+`cli-contract.md` § `audit` and `ADR 0017` § "Migration target
+table":
+
+- **Without `--strict`**: **v1.0 daemon-backed** (Category 2 —
+  daemon-down rendering pointer). Returns audit data normally
+  when the broker is running; the multi-line remediation-rendering
+  convention applies only when the broker is stopped
+  (envelope `#daemon-down`, exit 1).
+- **With `--strict`** (`nixling audit --strict`): **truly deferred**
+  (Category 1). Returns `#not-yet-implemented` (exit 78)
+  unconditionally regardless of daemon state per ADR 0017
+  § "Migration target table" line 91 (`lib.rs:1615` early-strict
+  arm returns BEFORE socket probing). The strict-audit verb is
+  **NOT** in the v1.1 phase plan implementation set; it retains
+  the typed envelope in v1.1 with the new multi-line
+  `Remediation:` block format. Actual operator implementation
+  is queued for a future release (v1.2+ or later); there is no
+  v1.1 P<N> TDD row for the implementation work.
+
+**Category 2 (`nixling audit` no `--strict`) — Resolution when
+daemon-down**: start the daemon
+(`sudo systemctl start nixling-priv-broker.socket` followed by
+`sudo systemctl start nixlingd.service`); re-run the verb.
+
+**Category 1 (`nixling audit --strict`) — operator workaround**:
+strict-audit semantics are queued for a future release
+(post-v1.1, unscheduled). Operators who need strict-audit-like
+behavior in v1.0/v1.1 must read the raw broker audit JSON
+directly:
+
+```
+sudo cat /var/lib/nixling/audit/broker-$(date -u +%Y-%m-%d).jsonl | jq .
+```
+
+The v1.1 implementation does NOT lift the `--strict` flag to live
+operator status (queued for v1.2+ or later); v1.1 operators see
+the typed `#not-yet-implemented` envelope pointing here.
+
+**v1.0 successful invocation (non-strict) reads the raw broker
+audit JSON via the daemon**:
+
+```
+sudo nixling audit --json | jq .
+```
+
+For low-level diagnostic when the daemon is unreachable:
+
+```
+sudo cat /var/lib/nixling/audit/broker-$(date -u +%Y-%m-%d).jsonl | jq .
+```
+
+<a id="v11-deferred-verbs-console"></a>
+### `nixling console` (truly deferred — operator implementation queued for v1.2+ unscheduled)
+
+`nixling console <vm>` returns `#not-yet-implemented` (exit 78)
+in v1.0 AND v1.1 unconditionally (v1.1 only delivers the typed-
+envelope rendering + remediation per ADR 0017; the underlying
+per-VM serial-console attach operator implementation is queued
+for v1.2+ unscheduled — not in v1.1 phase plan). The cloud-
+hypervisor VM is running under the broker
+`SpawnRunner{role: Hypervisor}` per
+[ADR 0018](../adr/0018-microvm-nix-removal.md) Hypervisor row;
+the console socket fd is created by the runner but the
+operator-facing attach UX (terminal raw mode, escape sequences,
+detach handling) needs more design work.
+
+**v1.0 workaround**: connect directly to the VM via SSH, OR use
+`socat` against the host-side console UDS at
+`/run/nixling/vms/<vm>/console.sock` (read-only operator
+diagnostic; `socat - UNIX-CONNECT:/run/nixling/vms/<vm>/console.sock`).
+
+**v1.1 plan**: see plan P1 deliverables for the
+**migration-guide-rendering** lift (the Rust `Display` impl
+update in `packages/nixling-core/src/error/remediation_rendering.rs`
++ golden tests at `tests/golden/cli-output/audit-*-deferred.golden`,
+`console-deferred.golden`, `audio-deferred.golden`,
+`keys-deferred.golden` all land in v1.1-P1 per ADR 0017 +
+CHANGELOG); v1.1 retains the typed `#not-yet-implemented`
+envelope per ADR 0017 + cli-contract.md; the v1.1 change is
+the multi-line `Remediation:` block format pointing at this
+guide section, NOT the verb's actual implementation. The
+console verb's actual implementation (daemon-native serial-
+attach with terminal raw mode, escape sequences, detach
+handling) is **NOT** in the v1.1 phase plan (P1..P13); it is
+queued for a future release (v1.2+ or later). There is no
+v1.1 P<N> TDD row for the implementation work; the v1.1
+deliverable is the rendering + remediation contract only.
+
+<a id="v11-deferred-verbs-audio"></a>
+### `nixling audio` (truly deferred — operator CLI implementation queued for v1.2+ unscheduled)
+
+`nixling audio status|mic|speaker|off` returns
+`#not-yet-implemented` (exit 78) in v1.0 AND v1.1 unconditionally
+(v1.1 only delivers the typed-envelope rendering + remediation
+per ADR 0017; the underlying per-VM audio device-state mutation
+CLI surface is queued for v1.2+ unscheduled — not in v1.1 phase
+plan). The `SpawnRunner{role: Audio}` (per
+[ADR 0018](../adr/0018-microvm-nix-removal.md)) IS in the
+v1.1 role matrix (gated by `audio.enable = true` in the
+manifest, runs automatically when audio-enabled VMs start) but
+the CLI subverbs are NOT.
+
+**v1.0 workaround**: VMs with audio enabled in the manifest
+(`audio.enable = true`) start with mic+speaker OFF by default
+(toggled via `audio.allowMicByDefault` / `audio.allowSpeakerByDefault`
+per [`docs/reference/components-audio.md`](../reference/components-audio.md));
+runtime toggling via `nixling audio mic|speaker|off` is not
+exposed in v1.0.
+
+**v1.1 plan**: see plan P10 deliverables for the
+**SpawnRunner Audio role** implementation that the mic/speaker/off
+subverbs depend on (per ADR 0018 § "Disposition matrix" Audio
+row). The role lands; the operator-facing CLI subverbs
+(`nixling audio mic|speaker|off`) themselves are **NOT** in the
+v1.1 phase plan implementation set — they retain the typed
+`#not-yet-implemented` envelope (exit 78) in v1.1 per ADR 0017
++ cli-contract.md, with the v1.1 multi-line `Remediation:` block
+pointing at this guide section. The audio CLI subverbs' actual
+operator implementation is queued for a future release
+(v1.2+ or later). There is no v1.1 P<N> TDD row for the CLI
+implementation work; the v1.1 deliverables are the rendering +
+remediation contract AND the underlying Audio SpawnRunner role
+(which is gated by `audio.enable = true` in the manifest and
+runs automatically when VMs with that flag start).
+
+<a id="v11-deferred-verbs-keys"></a>
+### `nixling keys list` / `nixling keys show` (daemon-down rendering pointers)
+
+`nixling keys list` and `nixling keys show` are **v1.0
+daemon-backed** per `cli-contract.md` §§ `keys list` / `keys show`.
+They return key metadata normally when the broker is running.
+The multi-line remediation-rendering convention applies only when
+the broker is stopped (envelope `#daemon-down`, exit 1) so the
+operator-facing message points at the daemon-startup runbook.
+(The mutating subcommands `nixling keys rotate`, `nixling trust`,
+`nixling rotate-known-host` are also v1.0 daemon-backed and follow
+the same daemon-down rendering convention; they are not separately
+enumerated here because they map to the same daemon-down
+remediation as `keys list`/`show`.)
+
+**Resolution when daemon-down**: start the daemon and re-run.
+
+**v1.0 successful invocation**: `nixling keys list --json` etc.
+For diagnostic-only inspection when the daemon is unreachable,
+operators can read the on-disk key store directly under
+`/var/lib/nixling/keys/` (read-only, root-only).
 
 ## See also
 

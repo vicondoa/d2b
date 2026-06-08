@@ -34,7 +34,7 @@
 | The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in P6 (`ph6-p6-cli-nix-migrations`, `ph6-remove-systemd-emission`). Rust CLI is the only CLI. |
 | Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in P6. |
 | `W10-fu + 30/60/90/180 days` bash deprecation calendar (warning → fail-loud → binary removed) | Clean break. The clean-break framing is the deprecation: there is no warn-then-remove cadence because there is no coexistence period. |
-| `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Retained in v1.0 source (default `"systemd"`) for backward-compat with consumer flakes pinning pre-v1.0 manifests; the v1.0-intended hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision). Setting `supervisor = "nixlingd"` requires `nixling.daemonExperimental.enable = true`. |
+| `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Retained in v1.0 source (default `"systemd"`) for backward-compat with consumer flakes pinning pre-v1.0 manifests; the v1.0-intended hard removal + eval-time rejection assertion is **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1 plan). Setting `supervisor = "nixlingd"` requires `nixling.daemonExperimental.enable = true`. |
 | ADR 0007 (bash coexistence + migration plan) | Superseded by ADR 0015. ADR 0007 remains in the tree as historical context. |
 
 ## Why a clean break instead of the original deprecation cycle

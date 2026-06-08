@@ -6,7 +6,6 @@ use std::{
     fs,
     io::{self, IsTerminal as _, Write as _},
     os::fd::{AsRawFd as _, OwnedFd},
-    os::unix::process::CommandExt as _,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -41,7 +40,6 @@ const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/nixling/vms.js
 const DEFAULT_BUNDLE_PATH: &str = "/etc/nixling/bundle.json";
 const DEFAULT_PUBLIC_SOCKET: &str = "/run/nixling/public.sock";
 const DEFAULT_BROKER_SOCKET: &str = "/run/nixling/priv.sock";
-const DEFAULT_LEGACY_CLI: &str = "/run/current-system/sw/share/nixling/cli.sh";
 const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/nixling/runtime/host-runtime.json";
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const RUNTIME_UNKNOWN: &str = "unknown (daemon-experimental, W4 not landed)";
@@ -941,7 +939,6 @@ struct Context {
     public_socket: PathBuf,
     broker_socket: PathBuf,
     state_root: Option<PathBuf>,
-    legacy_cli: Option<PathBuf>,
     host_runtime_path: PathBuf,
     system_state_fixture: Option<SystemStateFixture>,
     auth_status_fixture: Option<AuthStatusFixture>,
@@ -963,7 +960,6 @@ impl Context {
             public_socket: env_path("NIXLING_PUBLIC_SOCKET", DEFAULT_PUBLIC_SOCKET),
             broker_socket: env_path("NIXLING_BROKER_SOCKET", DEFAULT_BROKER_SOCKET),
             state_root: env::var_os("NIXLING_STATE_ROOT").map(PathBuf::from),
-            legacy_cli: env::var_os("NIXLING_LEGACY_CLI").map(PathBuf::from),
             host_runtime_path: env_path("NIXLING_HOST_RUNTIME_PATH", DEFAULT_HOST_RUNTIME_PATH),
             system_state_fixture: maybe_load_json_env("NIXLING_TEST_SYSTEM_STATE_JSON")?,
             auth_status_fixture: maybe_load_json_env("NIXLING_AUTH_STATUS_FIXTURE")?,
@@ -1018,29 +1014,6 @@ impl Context {
             closures,
             host_runtime,
         }))
-    }
-
-    fn legacy_cli_path(&self) -> Option<PathBuf> {
-        if let Some(path) = &self.legacy_cli {
-            return Some(path.clone());
-        }
-
-        let current_exe_share = env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf))
-            .and_then(|bin_dir| bin_dir.parent().map(Path::to_path_buf))
-            .map(|prefix| prefix.join("share/nixling/cli.sh"));
-        if let Some(path) = current_exe_share {
-            if path.exists() {
-                return Some(path);
-            }
-        }
-        let default = PathBuf::from(DEFAULT_LEGACY_CLI);
-        if default.exists() {
-            Some(default)
-        } else {
-            None
-        }
     }
 }
 
@@ -1410,10 +1383,6 @@ where
         return 0;
     }
 
-    if should_fallback_to_legacy(&raw_args[1..]) {
-        return exec_legacy_passthrough(&raw_args[1..], None).unwrap_or_else(report_failure);
-    }
-
     let cli = match NativeCli::try_parse_from(raw_args.clone()) {
         Ok(cli) => cli,
         Err(err) => {
@@ -1609,11 +1578,8 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
 fn cmd_audit(
     context: &Context,
     args: &AuditArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    if args.strict {
-        return exec_legacy_passthrough(original_args, None);
-    }
     let json_mode = if args.human {
         false
     } else if args.json {
@@ -1621,34 +1587,34 @@ fn cmd_audit(
     } else {
         !stdout_is_tty()
     };
+    if args.strict {
+        return emit_host_error(&not_yet_implemented_envelope("audit --strict"), json_mode);
+    }
     match try_audit_via_socket(context, json_mode)? {
         AuditSocketOutcome::Lines(lines) => {
             render_daemon_audit_lines(&lines, json_mode)?;
             Ok(0)
         }
-        AuditSocketOutcome::Unreachable => exec_legacy_passthrough(
-            original_args,
-            Some(
-                "v1.0 daemon-only: nixlingd unreachable, native nixling audit daemon-native path is unavailable (returns exit-78 per ADR 0015)",
-            ),
-        ),
+        AuditSocketOutcome::Unreachable => {
+            emit_host_error(&daemon_down_envelope("audit"), json_mode)
+        }
     }
 }
 
 fn cmd_console(
     _context: &Context,
     _args: &ConsoleArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    exec_legacy_passthrough(original_args, None)
+    emit_host_error(&not_yet_implemented_envelope("console"), false)
 }
 
 fn cmd_audio(
     _context: &Context,
     _args: &AudioArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
-    exec_legacy_passthrough(original_args, None)
+    emit_host_error(&not_yet_implemented_envelope("audio"), false)
 }
 
 fn cmd_host_check(context: &Context, args: &HostCheckArgs) -> Result<i32, CliFailure> {
@@ -1773,6 +1739,38 @@ fn emit_host_error(env: &HostErrorEnvelope, json: bool) -> Result<i32, CliFailur
         );
     }
     Ok(env.exit_code)
+}
+
+/// v1.1-P1: typed `daemon-down` envelope (exit 1) for verbs whose
+/// daemon-backed path cannot be reached. Per ADR 0017, the Rust CLI
+/// never executes bash; verbs that previously degraded into
+/// `exec_legacy_passthrough` now surface this envelope unconditionally.
+fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
+    host_error_envelope(
+        &format!("nixling {verb} requires nixlingd"),
+        "daemon-down",
+        1,
+        "Daemon connectivity at /run/nixling/public.sock.",
+        "nixlingd is unreachable; v1.1 retired the bash fallback path per ADR 0017 — the daemon is the only operator surface.",
+        "Start nixlingd (systemctl start nixlingd nixling-priv-broker.socket) and re-run the same command. See docs/how-to/migrate-nixling-v1-0-to-v1-1.md#recovery-broker-bring-up-troubleshooting for the full bring-up checklist.",
+        "docs/reference/error-codes.md#daemon-down",
+    )
+}
+
+/// v1.1-P1: typed `not-yet-implemented` envelope (exit 78) for verbs
+/// whose daemon-native handler has not landed yet. Per ADR 0017, no
+/// bash fallback ever satisfies these — operators receive the typed
+/// envelope and the migration-guide cross-link.
+fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
+    host_error_envelope(
+        &format!("nixling {verb} has no daemon-native handler in v1.1"),
+        "not-yet-implemented",
+        78,
+        &format!("Native daemon dispatch for `nixling {verb}` (post-v1.1 surface per ADR 0017)"),
+        "The daemon-native handler is scheduled for post-v1.1; v1.1 itself only delivers the typed envelope contract (no bash fallback). See docs/reference/error-codes.md#not-yet-implemented for the rendering convention.",
+        "Track the post-v1.1 surface schedule in CHANGELOG.md \"Unreleased\" / ADR 0017 § Negative consequences; the typed envelope is the only operator path until the native handler ships.",
+        "docs/reference/error-codes.md#not-yet-implemented",
+    )
 }
 
 /// Bundle-derived deployment shape used by the `host prepare` /
@@ -2706,7 +2704,7 @@ fn render_usb_probe_human(entries: &[IpcUsbipProbeEntry]) -> String {
 fn cmd_keys_list(
     context: &Context,
     args: &KeysListArgs,
-    original_args: &[OsString],
+    _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
     let json_mode = if args.human { false } else { args.json };
     match try_keys_list_via_socket(context)? {
@@ -2725,12 +2723,9 @@ fn cmd_keys_list(
             }
             Ok(0)
         }
-        KeysSocketOutcome::Unavailable => exec_legacy_passthrough(
-            original_args,
-            Some(
-                "v1.0 daemon-only: nixlingd unreachable or no daemon-native path for keys list (returns exit-78 per ADR 0015)",
-            ),
-        ),
+        KeysSocketOutcome::Unavailable => {
+            emit_host_error(&daemon_down_envelope("keys list"), json_mode)
+        }
         KeysSocketOutcome::Show(_) => Err(CliFailure::new(
             1,
             "internal keysList/keysShow response mismatch".to_owned(),
@@ -2787,21 +2782,8 @@ fn cmd_keys_show(
             Ok(0)
         }
         KeysSocketOutcome::Unavailable => {
-            let fallback_args = if args.json || args.human {
-                vec![
-                    OsString::from("keys"),
-                    OsString::from("show"),
-                    OsString::from(&args.vm),
-                ]
-            } else {
-                original_args.to_vec()
-            };
-            exec_legacy_passthrough(
-                &fallback_args,
-                Some(
-                    "v1.0 daemon-only: nixlingd unreachable or no daemon-native path for keys show (returns exit-78 per ADR 0015)",
-                ),
-            )
+            let _ = original_args;
+            emit_host_error(&daemon_down_envelope("keys show"), json_mode)
         }
         KeysSocketOutcome::List(_) => Err(CliFailure::new(
             1,
@@ -2961,7 +2943,7 @@ fn cmd_migrate(
         "mode": "dry-run",
         "currentTier": tier_str,
         "classificationAvailable": false,
-        "perVmClassificationNote": "Per-VM supervisor classification is not available on the public manifest today, so the planner cannot reliably split VMs into legacy vs daemon-managed. Use `nixling status <vm>` for the per-VM systemd-unit state.",
+        "perVmClassificationNote": "v1.1 (per ADR 0015) made every enabled VM daemon-supervised by default; the `nixling.vms.<vm>.supervisor` option was removed in v1.1-P2. Per-VM systemd-unit inspection still uses `nixling status <vm>`.",
         "totalVms": vms.len(),
         "vms": vms.iter().map(|vm| serde_json::json!({
             "name": vm.name,
@@ -2969,14 +2951,13 @@ fn cmd_migrate(
             "classification": "unknown-not-in-public-manifest",
         })).collect::<Vec<_>>(),
         "plannedSteps": [
-            "Expose per-VM `supervisor` in the public manifest so the planner can classify VMs directly.",
-            "Per migrating VM: set `nixling.vms.<vm>.supervisor = \"nixlingd\"` in the consumer flake.",
+            "v1.1 daemon-only: every enabled VM is daemon-supervised by default; no consumer-flake action is required for supervisor classification.",
             "Per migrating VM: verify per-VM state under `/var/lib/nixling/vms/<vm>/` is owned root:nixlingd 0750.",
-            "Run `nixos-rebuild switch` so the daemon module materializes the per-VM systemd units.",
+            "Run `nixos-rebuild switch` so the daemon module materializes the per-VM broker SpawnRunner state.",
             "Verify each migrated VM via `nixling status <vm>`; `vm list` is still a placeholder inventory surface.",
             "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
         ],
-        "notes": "migrate reports the deployment-shape tier today; per-VM classification is still unavailable on the public manifest, but `--apply` is live.",
+        "notes": "migrate reports the deployment-shape tier today; v1.1 retired the per-VM supervisor option, so per-VM classification is uniformly daemon-supervised. `--apply` routes through nixlingd → broker RunMigrate.",
     });
 
     if args.json {
@@ -2990,8 +2971,9 @@ fn cmd_migrate(
             vms.len()
         ));
         print_stdout(
-            "Per-VM supervisor classification is not available on the public manifest today.\n\
-             Use `nixling status <vm>` to inspect each VM directly; `nixling migrate --apply`\n\
+            "v1.1 daemon-only: every enabled VM is daemon-supervised; the per-VM\n\
+             `supervisor` option was removed in v1.1-P2 (ADR 0015). Use\n\
+             `nixling status <vm>` to inspect each VM directly; `nixling migrate --apply`\n\
              is the live mutation path when you are ready.\n",
         );
     }
@@ -3848,178 +3830,11 @@ fn stdout_is_tty() -> bool {
     io::stdout().is_terminal()
 }
 
-fn is_help_token(arg: &OsString) -> bool {
-    matches!(arg.to_string_lossy().as_ref(), "-h" | "--help" | "help")
-}
-
-fn is_native_root_command(arg: &OsString) -> bool {
-    matches!(
-        arg.to_string_lossy().as_ref(),
-        "list"
-            | "status"
-            | "audit"
-            | "host"
-            | "auth"
-            | "usb"
-            | "vm"
-            | "up"
-            | "down"
-            | "restart"
-            | "build"
-            | "generations"
-            | "switch"
-            | "boot"
-            | "test"
-            | "rollback"
-            | "gc"
-            | "keys"
-            | "trust"
-            | "rotate-known-host"
-            | "migrate"
-            | "audio"
-            | "console"
-    )
-}
-
-fn requests_native_help(args: &[OsString]) -> bool {
-    if !args.iter().any(is_help_token) {
-        return false;
-    }
-    match args.first() {
-        Some(first) if first.to_string_lossy() == "help" => {
-            args.get(1).is_some_and(is_native_root_command)
-        }
-        Some(first) => is_native_root_command(first),
-        None => false,
-    }
-}
-
-fn should_fallback_to_legacy(args: &[OsString]) -> bool {
-    if args.is_empty() {
-        return false;
-    }
-    if requests_native_help(args) {
-        return false;
-    }
-    let first = args[0].to_string_lossy();
-    match first.as_ref() {
-        "list" | "status" | "audit" | "audio" | "console" | "-h" | "--help" | "-V"
-        | "--version" => false,
-        // P4 cli-up: top-level vm lifecycle aliases are daemon-only.
-        "up" | "down" | "restart" => false,
-        // W7-H1..H7: build / generations / switch / boot / test /
-        // rollback / gc all route natively. The W7-fu mutating
-        // --apply paths return the documented daemon-down envelope.
-        "build" | "generations" | "switch" | "boot" | "test" | "rollback" | "gc" => false,
-        // W8: keys subcommands + the top-level trust + rotate-
-        // known-host verbs (per cli-contract.md — these are NOT
-        // under the `keys` namespace despite being trust-related).
-        "keys" | "trust" | "rotate-known-host" => false,
-        // W6: usb attach/detach/probe now route natively through the
-        // daemon-backed USBIP surface.
-        "usb" => false,
-        // W9: migrate is daemon-routed (planner-only today).
-        "migrate" => false,
-        // W3fu1 H1 (product-1, software-1, product-2): every host
-        // verb is now natively dispatched. `host prepare --apply`
-        // and `host destroy --apply` are never passed through to
-        // the legacy bash CLI; the native command emits the
-        // documented refusal envelope (`legacy-no-prepare-apply` /
-        // `legacy-no-destroy-apply` exit 78 on Tier 0 legacy mode)
-        // per plan.md §"W3 bash-vs-Rust CLI parity gate".
-        "host" => args
-            .get(1)
-            .map(|arg| {
-                !matches!(
-                    arg.to_string_lossy().as_ref(),
-                    "check" | "prepare" | "destroy" | "doctor" | "install" | "reconcile" | "validate"
-                )
-            })
-            .unwrap_or(false),
-        "auth" => args
-            .get(1)
-            .map(|arg| arg.to_string_lossy() != "status")
-            .unwrap_or(false),
-        // W4-H7: every `vm` subcommand routes through the native
-        // supervisor path. In v1.0 daemon-only there is no bash
-        // fallback for the `vm` namespace; see ADR 0015.
-        "vm" => args
-            .get(1)
-            .map(|arg| {
-                !matches!(
-                    arg.to_string_lossy().as_ref(),
-                    "start" | "stop" | "restart" | "list"
-                )
-            })
-            .unwrap_or(false),
-        "help" => args
-            .get(1)
-            .map(|arg| {
-                !matches!(
-                    arg.to_string_lossy().as_ref(),
-                    "list"
-                        | "status"
-                        | "audit"
-                        | "host"
-                        | "auth"
-                        | "usb"
-                        | "vm"
-                        | "up"
-                        | "down"
-                        | "restart"
-                        | "build"
-                        | "generations"
-                        | "switch"
-                        | "boot"
-                        | "test"
-                        | "rollback"
-                        | "gc"
-                        | "keys"
-                        | "trust"
-                        | "rotate-known-host"
-                        | "migrate"
-                        | "audio"
-                        | "console"
-                )
-            })
-            .unwrap_or(false),
-        _ => true,
-    }
-}
-
-fn exec_legacy_passthrough(args: &[OsString], warning: Option<&str>) -> Result<i32, CliFailure> {
-    // P7fu2 software-r2 / security-r2 / docs-r2 closure per ADR 0015:
-    // The legacy bash CLI (cli.nix) was deleted in P6
-    // (ph6-p6-cli-nix-migrations + ph6-remove-bash-cli) and its
-    // companion fallback bridge was removed from the lifecycle verbs
-    // in P4 ph4-cli-up. For non-lifecycle verbs (console, audio,
-    // switch, gc, migrate, audit, keys list/show) the Rust CLI
-    // historically degraded to this passthrough; ADR 0015 ('What gets
-    // removed') retired the bash entrypoints wholesale at the v1.0
-    // boundary.
-    //
-    // Rather than leave the call sites silently exec(2)ing a missing
-    // binary, every passthrough now surfaces a typed v1.0-daemon-only
-    // envelope explaining the situation. The per-verb daemon-native
-    // implementations queued for v1.1+ replace this stub.
-    let _ = args; // intentionally unused — no exec in v1.0
-    let mut stderr = io::stderr().lock();
-    if let Some(warning) = warning {
-        let _ = stderr.write_all(warning.as_bytes());
-    }
-    let _ = stderr.write_all(
-        b"nixling: the legacy bash CLI was removed in v1.0 (ADR 0015 \
-          'daemon-only clean break'). This subcommand's daemon-native \
-          path is queued for v1.1+. Run `nixling host validate \
-          --apply` to confirm your readiness wave inventory; see \
-          docs/how-to/migrate-nixling-v0-to-v1.md for the per-verb \
-          v1.0 contract.\n",
-    );
-    Err(CliFailure::new(
-        78,
-        "subcommand not implemented in v1.0 (daemon-native path queued for v1.1+; see ADR 0015)",
-    ))
-}
+/// v1.1-P1 / ADR 0017: the `should_fallback_to_legacy` /
+/// `exec_legacy_passthrough` pair were removed wholesale. Every verb
+/// the Rust CLI accepts dispatches to clap → typed-envelope; verbs
+/// clap rejects fall through to the parse-error path. No bash exec
+/// site survives in the binary crate.
 
 /// W14c daemon mutating-verb outcome from
 /// [`try_daemon_mutating_verb`]. The CLI uses this to decide whether
@@ -4947,7 +4762,6 @@ mod host_install_dispatch_tests {
             public_socket: socket_path.clone(),
             broker_socket: PathBuf::from("/dev/null"),
             state_root: None,
-            legacy_cli: None,
             host_runtime_path: PathBuf::from("/dev/null"),
             system_state_fixture: None,
             auth_status_fixture: None,
@@ -5006,48 +4820,46 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
-    fn native_help_requests_stay_on_the_rust_cli() {
+    fn native_help_requests_parse_natively_through_clap() {
+        // v1.1-P1: `should_fallback_to_legacy` was deleted. The
+        // equivalent invariant is now "clap accepts every help
+        // request for a native root command without parse error".
+        // We assert via `NativeCli::try_parse_from` directly.
         for argv in [
-            ["host", "--help"],
-            ["host", "help"],
-            ["vm", "--help"],
-            ["vm", "help"],
+            vec!["nixling", "host", "--help"],
+            vec!["nixling", "host", "help"],
+            vec!["nixling", "vm", "--help"],
+            vec!["nixling", "vm", "help"],
+            vec!["nixling", "audio", "--help"],
+            vec!["nixling", "help", "audio"],
+            vec!["nixling", "console", "--help"],
+            vec!["nixling", "up", "--help"],
+            vec!["nixling", "down", "--help"],
+            vec!["nixling", "restart", "--help"],
+            vec!["nixling", "help", "up"],
+            vec!["nixling", "help", "down"],
+            vec!["nixling", "help", "restart"],
         ] {
-            let args = argv.iter().map(OsString::from).collect::<Vec<_>>();
-            assert!(
-                !super::should_fallback_to_legacy(&args),
-                "expected native help for {:?}",
-                argv
-            );
-        }
-
-        for argv in [["audio", "--help"], ["help", "audio"]] {
-            let args = argv.iter().map(OsString::from).collect::<Vec<_>>();
-            assert!(
-                !super::should_fallback_to_legacy(&args),
-                "expected native audio help for {:?}",
-                argv
-            );
-        }
-
-        let console_help = vec![OsString::from("console"), OsString::from("--help")];
-        assert!(!super::should_fallback_to_legacy(&console_help));
-
-        // P4 cli-up: `up/down/restart` are first-class native verbs.
-        for argv in [
-            ["up", "--help"],
-            ["down", "--help"],
-            ["restart", "--help"],
-            ["help", "up"],
-            ["help", "down"],
-            ["help", "restart"],
-        ] {
-            let args = argv.iter().map(OsString::from).collect::<Vec<_>>();
-            assert!(
-                !super::should_fallback_to_legacy(&args),
-                "expected native vm-alias help for {:?}",
-                argv
-            );
+            // clap's `--help` short-circuits with a `DisplayHelp`
+            // error kind; either Ok or DisplayHelp is acceptable —
+            // anything else means we lost native help routing.
+            match NativeCli::try_parse_from(argv.clone()) {
+                Ok(_) => {}
+                Err(err) => {
+                    let kind = err.kind();
+                    assert!(
+                        matches!(
+                            kind,
+                            clap::error::ErrorKind::DisplayHelp
+                                | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                                | clap::error::ErrorKind::DisplayVersion
+                        ),
+                        "expected clap help/version short-circuit for {:?}, got {:?}",
+                        argv,
+                        kind
+                    );
+                }
+            }
         }
     }
 

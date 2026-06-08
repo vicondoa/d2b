@@ -15,16 +15,20 @@ than literal byte-for-byte goldens unless the corresponding
 
 ## Scope and conventions
 
-> **P4 cli-up (2025-Q1):** the W14c "daemon-first / bash-fallback"
-> bridge has been retired. Every mutating verb that previously
-> degraded to the legacy bash CLI on `not-yet-implemented` or
-> `daemon-down` now surfaces a typed envelope (`not-yet-implemented`
-> exit 78, `daemon-down` exit 1) instead. The
-> `NIXLING_LEGACY_BASH_OPT_IN` escape hatch has been removed; the
-> `NIXLING_NATIVE_ONLY` env var is a no-op (its behaviour is now the
-> default). `nixling up/down/restart/list` are first-class top-level
-> aliases for `vm start/stop/restart/list` and route through the same
-> daemon path.
+> **v1.1-P1 (2026-Q2):** the bash fallback was *removed wholesale*
+> per ADR 0017 "No bash fallbacks invariant". Previous wording in this
+> document spoke of the W14c bridge as "retired"; v1.1 deletes the
+> `should_fallback_to_legacy` / `exec_legacy_passthrough` helpers,
+> drops the `NIXLING_LEGACY_BASH_OPT_IN` / `NIXLING_LEGACY_CLI_PATH`
+> env-var contract, and codifies the invariant via the
+> `tests/no-bash-exec-eval.sh` 3-mode gate. The Rust CLI in v1.1+
+> never executes bash. Every verb that previously degraded to bash on
+> `not-yet-implemented` or `daemon-down` now surfaces a typed envelope
+> (`not-yet-implemented` exit 78, `daemon-down` exit 1) — see
+> [`error-codes.md` § "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions)
+> for the multi-line block format used on those envelopes. `nixling
+> up/down/restart/list` are first-class top-level aliases for `vm
+> start/stop/restart/list` and route through the same daemon path.
 
 - Command headings use the dispatched **leaf** form (`keys list`,
   `audio mic`, `status --check-bridges`) because W2 disposition is
@@ -39,7 +43,7 @@ than literal byte-for-byte goldens unless the corresponding
   return a typed exit-78 envelope when invoked; commands marked
   `rust-native shim` own help / argument parsing in Rust and
   (post-P7fu2) return the same typed exit-78 envelope in v1.0
-  because their daemon-native backends are queued for v1.1+;
+  because their daemon-native backends are queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017);
   commands marked `rust-native` stay on the daemon/public-socket or
   native planner path.
 
@@ -544,10 +548,11 @@ corp-vm                  work         1-2          bound    corp-vm
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | Console launch failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native console surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally; the multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration guide. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (v1.2+ unscheduled) Success. | — |
+| `1` | (v1.2+ unscheduled) Console launch failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM, missing argument, or graphics VM selected. | [`usage`](./error-codes.md#usage) |
-| `130` | Console session interrupted with SIGINT. | — |
+| `130` | (v1.2+ unscheduled) Console session interrupted with SIGINT. | — |
 
 **Human example**
 
@@ -557,7 +562,7 @@ Connected to corp-vm serial console.
 Use ~. to detach.
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.1+; see ADR 0015).
+**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio status`
 
@@ -579,8 +584,9 @@ Use ~. to detach.
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | Unexpected filesystem or sidecar probe failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (v1.2+ unscheduled) Success. | — |
+| `1` | (v1.2+ unscheduled) Unexpected filesystem or sidecar probe failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown VM or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -594,7 +600,7 @@ sidecar:  inactive
 device:   detached
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.1+; see ADR 0015).
+**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio mic`
 
@@ -617,8 +623,9 @@ device:   detached
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio mic surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (v1.2+ unscheduled) Success. | — |
+| `1` | (v1.2+ unscheduled) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -634,7 +641,7 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.1+; see ADR 0015).
+**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio speaker`
 
@@ -657,8 +664,9 @@ device:   will-attach-on-next-up
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio speaker surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (v1.2+ unscheduled) Success. | — |
+| `1` | (v1.2+ unscheduled) Audio state write, sidecar, or hotplug failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Bad state literal, unknown VM, or audio not enabled for the VM. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -674,7 +682,7 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.1+; see ADR 0015).
+**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `audio off`
 
@@ -696,8 +704,9 @@ device:   will-attach-on-next-up
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. | — |
-| `1` | Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **v1.0 disposition** — typed `#not-yet-implemented` envelope (the daemon-native audio off surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015 and the disposition note below). v1.0 invocation returns this exit code unconditionally. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 1 — truly deferred) points operators at the migration runbook. v1.2+ (unscheduled) implementation MAY lift this to the codes below. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | (v1.2+ unscheduled) Success. Calling the command against a VM that never had audio enabled is an idempotent no-op. | — |
+| `1` | (v1.2+ unscheduled) Audio state write or sidecar failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Missing or unknown VM name. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -713,7 +722,7 @@ sidecar:  inactive
 device:   detached
 ```
 
-**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.1+; see ADR 0015).
+**W2 disposition:** `rust-native shim` — The Rust CLI now owns help and argument validation, but per P7fu2 returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
 
 ### `build`
 
@@ -1159,7 +1168,7 @@ nixling rotate-known-host --apply executed via the native daemon → broker path
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | `nixlingd` is unreachable and the CLI had to fall back, or the daemon could not read the configured public key material. | [`generic`](./error-codes.md#generic) |
+| `1` | `nixlingd` is unreachable; the typed `#daemon-down` envelope is emitted (the v1.0 daemon-only contract — there is no bash fallback; the v1.0 clean-break per ADR 0015 retired the legacy fallback in P6). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) (Category 2 — daemon-down rendering pointer) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unsupported invocation shape inherited from the `keys` subcommand dispatcher. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1211,8 +1220,8 @@ corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Unknown VM or unreadable key material. | [`generic`](./error-codes.md#generic) |
-| `2` | Missing VM argument. | [`usage`](./error-codes.md#usage) |
+| `1` | `nixlingd` is unreachable (typed `#daemon-down` envelope; multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook) — OR the daemon returned the request but the key material was unreadable (typed `#generic` envelope; rare). | [`daemon-down`](./error-codes.md#daemon-down) / [`generic`](./error-codes.md#generic) |
+| `2` | Unknown VM, missing VM argument, or unreadable key material reported by daemon as an unknown subject. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
 
@@ -1282,9 +1291,9 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--strict` | boolean | `false` | Preserve the legacy strict-audit path when the Rust shim falls back to the bash implementation. |
+| `--strict` | boolean | `false` | Preserve the strict-audit semantics (extra invariants; warns become errors). v1.0+ never falls back to bash regardless of flag; the historical bash-strict path was retired in P6 per ADR 0015. |
 | `--human` | boolean | `false` when stdout is not a TTY; otherwise effectively `true` unless `--json` is present | Force the human summary format. |
-| `--json` | boolean | `false` | Force the JSON document on stdout even on a TTY. W2 keeps the bash-compatible audit object shape. |
+| `--json` | boolean | `false` | Force the JSON document on stdout even on a TTY. The JSON document shape is stable across v1.0 → v1.1 unless a schema bump is annotated in the audit schema (`./cli-output/audit.schema.json`); v1.0 baseline preserves the audit object shape. |
 
 **Arguments**
 
@@ -1296,8 +1305,9 @@ nixling keys rotate --apply executed via the native daemon → broker path (vm=c
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Success. | — |
-| `1` | Unexpected audit probe or daemon dispatch failure. | [`generic`](./error-codes.md#generic) |
+| `78` | **`--strict` flag arm only** — `nixling audit --strict` emits typed `#not-yet-implemented` envelope unconditionally regardless of daemon state per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md) § "Migration target table" line 91 (the strict-audit surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017) implementation). The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the migration runbook. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `0` | Success (non-`--strict` arm only — `--strict` returns exit 78 unconditionally per above). | — |
+| `1` | (Non-`--strict` arm only) `nixlingd` is unreachable; typed `#daemon-down` envelope emitted. The multi-line `Remediation:` block per [`error-codes.md` "Remediation rendering conventions"](./error-codes.md#remediation-rendering-conventions) points operators at the daemon-startup runbook. | [`daemon-down`](./error-codes.md#daemon-down) |
 | `2` | Unknown flag or unexpected positional argument. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -1526,6 +1536,75 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical W10-fu bash-fallback shim was retired in P6.
 
+
+### `host reconcile-otel-acls` (v1.1-P6 reserved)
+
+**Synopsis:** `nixling host reconcile-otel-acls [--dry-run | --apply] [--human | --json]`
+
+Reconciles per-VM OTel relay/bridge filesystem ACLs to the
+current bundle's intended state. Replaces the v0.4-era
+`host-otel-relay-acl.nix` activation script (retired in v1.1-P6
+per [ADR 0018](../adr/0018-microvm-nix-removal.md) "Host-OTel
+ACL migration table"). Invoked from
+`system.activationScripts.nixlingReconcileOtelAcls` on every
+`nixos-rebuild switch` and from `nixlingd.service` `ExecStartPost=`
+on daemon startup; operators may also invoke it directly for
+mid-cycle reconciliation.
+
+**Behaviour**
+
+- `--dry-run` (default if neither flag given): reports the
+  planned ACL set/revoke ops without dispatching to the broker;
+  exit 0 with a planned-ops summary.
+- `--apply`: dispatches through `nixlingd` →
+  `daemon-api/host-prep ReconcileOtelAcls` → broker
+  `SetSocketAcl` / `RevokeSocketAclIfPresent` per the
+  ADR 0018 migration table. Emits daemon-side
+  `ReconcileOtelAclsStarted/Succeeded/Failed` `OpAuditRecord`
+  entries with a `broker_op_ids` correlation array, plus the
+  per-row broker-op entries.
+
+**Exit codes / typed envelopes (per
+[`docs/reference/error-codes.md`](./error-codes.md))**
+
+- Exit 0: success (`--dry-run` plan summary OR `--apply` complete).
+- Exit 1: `#daemon-down` (daemon unreachable; activation script
+  defers to the daemon-startup `ExecStartPost=` trigger).
+- Exit 31: `#broker-validation-failed` (broker rejected one or
+  more `SetSocketAcl` / `RevokeSocketAclIfPresent` ops with a
+  validation reason; see audit log for the per-op denial class
+  per `docs/reference/error-codes.md:115`).
+- Exit 50: `#internal-io` (broker dispatch error or daemon-side
+  I/O failure during the reconcile).
+- Exit 2: `#usage` (invalid flag combination).
+
+**JSON output shape** (committed in v1.1-P6 with full schema in
+`cli-output/host-reconcile-otel-acls.schema.json`):
+
+```json
+{
+  "mode": "dry-run|apply",
+  "planned": [
+    { "op": "SetSocketAcl", "path": "...", "group": "...", "mode": "rwx|--x|rw" },
+    { "op": "RevokeSocketAclIfPresent", "path": "...", "groups": ["..."] }
+  ],
+  "applied": [],
+  "broker_op_ids": ["..."],
+  "daemon_op_id": "..."
+}
+```
+
+(`applied` has the same shape as `planned`; it is populated only in
+`--apply` mode and omitted/empty in `--dry-run` mode.)
+
+**Native**
+
+- v1.1-P6 introduces this verb. v1.0 has no equivalent surface
+  (the legacy `host-otel-relay-acl.nix` script is bash, not a
+  daemon-dispatched CLI op).
+- Daemon-unreachable surfaces `#daemon-down` exit 1 per the
+  v1.1 typed-envelope contract.
+- No bash fallback exists per [ADR 0017](../adr/0017-no-bash-fallbacks-invariant.md).
 
 ### `host doctor` (W3 / P3)
 
@@ -1762,11 +1841,11 @@ denied commands:
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
 | `usb` | `rust-native` | USBIP attach/detach/probe now parse and dispatch through the native daemon path. |
-| `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.1+. Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.1+. Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.1+. Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio speaker` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native speaker grant surface is queued for v1.1+. Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
-| `audio off` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native `off` shorthand is queued for v1.1+. Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio speaker` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native speaker grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
+| `audio off` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native `off` shorthand is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `build` | `rust-native` | Build is a native non-destructive planner that renders the W7a eval/build preview without falling back to bash. |
 | `switch` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |
 | `boot` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in P6. |

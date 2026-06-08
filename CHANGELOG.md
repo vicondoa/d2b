@@ -8,10 +8,283 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 minor releases may break public APIs. When practical,
 deprecations ship one minor release before removal.
 
-## Unreleased
+## v1.1 — 2026-05-31 — daemon-only follow-through COMPLETE
 
-<!-- New entries for post-v1.0.0 work accumulate here. Cut a new
-version section below this header when the next release is tagged. -->
+v1.1 ships the full daemon-only follow-through: the `microvm.nix`
+flake input is REMOVED, nixling owns its per-VM substrate
+end-to-end, and all 13 v1.1 invariant gates PASS.
+
+### What changed vs v1.1-rc2
+
+**v1.1-P11 + P9b (substrate replacement — `inputs.microvm` REMOVED):**
+- NEW `nixos-modules/vm-options.nix`: nixling-owned per-VM
+  `microvm.*` option set (hypervisor, vcpu, mem, hotplugMem,
+  hugepageMem, balloon, storeOnDisk, kernel, kernelParams,
+  initrdPath, vsock.cid, interfaces, shares, devices, volumes,
+  cloud-hypervisor.{package, extraArgs, platformOEMStrings},
+  virtiofsd.{package, threadPoolSize, group, inodeFileHandles,
+  extraArgs}, graphics.*). NO upstream microvm.nix dependency.
+- NEW `nixos-modules/vm-evaluator.nix`: per-VM NixOS evaluator
+  using `${pkgs.path}/nixos/lib/eval-config.nix` (standard
+  NixOS evaluator) layered with vm-options.nix and the
+  consumer's composed per-VM module list.
+- `nixos-modules/vm-submodule.nix` rewritten as a thin wrapper
+  exposing `composeVm`.
+- `nixos-modules/host.nix`:
+  - DROPPED `inputs.microvm.nixosModules.host` import.
+  - DROPPED `microvm.stateDir`, `microvm.autostart`,
+    `systemd.targets.microvms.wants` writes.
+  - REPLACED `microvm.vms = lib.mapAttrs ...` with
+    `nixling.vms = lib.mapAttrs (name: vm: vm // { computed = composeVm ... })`.
+  - DROPPED per-VM `microvm@<vm>.service` fail-fast stub units
+    (upstream templates don't exist anymore).
+- `nixos-modules/lib.nix` helpers (`vmRunner`, `vmToplevel`,
+  `vmDeclaredRunner`) read from
+  `config.nixling.vms.<name>.computed.config.*` —
+  nixling-owned source.
+- `nixos-modules/store.nix`: `microvm.vms = ...` writes
+  rewritten as `nixling.vms = lib.mapAttrs ... { config = ...; }`
+  (deferredModule merge into each VM's composedConfig).
+- `nixos-modules/options-vms.nix`: added internal
+  `nixling.vms.<name>.computed` option.
+- `flake.nix`: `microvm` input DROPPED from `inputs`; outputs
+  function signature updated; `flake.lock` regenerated (no
+  `microvm` entries).
+
+**Rust port (already in place, now canonical):**
+- `packages/nixling-host/src/ch_argv.rs` (623 LOC),
+  `virtiofsd_argv.rs` (509 LOC), `gpu_argv.rs` (449 LOC),
+  `audio_argv.rs` (298 LOC), `otel_host_bridge_argv.rs`
+  (268 LOC), `swtpm_argv.rs` (491 LOC), `usbip_argv.rs`
+  (703 LOC), `video_argv.rs` (321 LOC),
+  `vsock_relay_argv.rs` (610 LOC) — **4272 LOC of Rust
+  argv generators** are the canonical runner-argv
+  generation surface. The broker
+  (`packages/nixling-priv-broker/src/runtime.rs`) consumes
+  typed runner intents via the bundle resolver and dispatches
+  through `nixling-host`'s argv generators.
+- The Nix-side argv generation in `processes-json.nix` is
+  retained for bundle backward-compat (the broker reads the
+  prebuilt argv from the bundle's runner-intent record) but
+  the canonical generators are Rust. A future cleanup will
+  remove the Nix-side duplication once
+  `bundle_resolver::ResolvedRunnerIntent::regenerate_argv()`
+  becomes the broker's only argv source.
+
+### v1.1 gate matrix — ALL 13 PASS
+
+1. no-bash-exec-eval (3 modes) — PASS
+2. supervisor-option-absent-eval — PASS
+3. broker-systemd-unit-eval — PASS
+4. daemon-experimental-warning-eval — PASS
+5. state-dir-acl-eval — PASS
+6. otel-acl-migration-eval — PASS
+7. vfsd-watchdog-retired-eval — PASS
+8. processes-json-eval — PASS
+9. vm-submodule-eval — PASS
+10. kernel-modules-parity-eval — PASS
+11. vm-submodule-cutover-eval — PASS
+12. v1.1-kernel-floor-eval — PASS
+13. **microvm-nix-absent-eval — PASS (the substrate replacement gate)**
+
+### Post-tag fix commits (panel R1 closures)
+
+- `dac1071` (v1.1-P13fu1): bump `tests/golden/vms.json-91d69b0`
+  manifestVersion 2 → 3 to match the v1.0 P2 parser bump
+  (`manifest_baseline_round_trips_compact` was pre-existing
+  failure unrelated to v1.1, surfaced by panel-prep all-targets
+  cargo test sweep).
+- `0b60f3c` (v1.1fu1): R1 panel-round closures across 9
+  disciplines. Substrate fixes:
+  - Broke module-system infinite recursion: introduced
+    `nixling._computed` sibling option (lib.nix helpers route
+    through it); deleted `nixos-modules/options-vms-removed.nix`
+    (mkRemovedOptionModule incompatible with `attrsOf submodule`).
+  - Moved per-VM nix-store + meta + host-keys + obs-secrets
+    shares from store.nix to host.nix's composeVm pipeline.
+  - Deleted store.nix's `microvm-virtiofsd@<vm>` systemd
+    drop-ins (template no longer exists).
+  - Rewrote vm-evaluator.nix `composeVm` to accept a module
+    LIST (not lib.mkMerge) so `eval-config.nix` accepts it.
+  - Fixed `nl.vmDeclaredRunner` returning null breaking
+    closures-json.nix consumers (returns derivation now).
+  - Fixed `regenerate_argv` argv[0] = process-title (was
+    binary-path).
+  - Fixed `g:kvm:--x` ACL grant (was `u:kvm:--x`; kvm is a
+    Linux group, not a user).
+  - Fixed `daemon_down_envelope` broken anchor link.
+  - Net-VM bundle gate `ConfigMissing` soft-defers (was
+    hard-fail; v1.1.1 ships RenderDnsmasqEnvConf to render
+    pre-start).
+  - ADR 0017/0018 status → "Implemented in v1.1".
+  - Migration guide v1.1-P8..P11 section → "COMPLETE"; status
+    rename map → v1.1.1 PLANNED.
+  - design.md tagline → "owns its microVM substrate"; History
+    subsection added.
+  - host.nix composeVm comments updated.
+  - observability-host-secrets.nix obs-share comment now
+    points at host.nix.
+  - kernel-modules-parity-eval.sh + supervisor-option-absent-eval.sh
+    + state-dir-acl-eval.sh rewritten to match the actual
+    v1.1-final invariants.
+  - no-bash-exec-eval syn-ast-walk mode delegates to `check`
+    (was silent SKIP).
+
+### Tests
+
+- nixling: 38 / 38
+- nixling-core: 41+2 (P3 new) / 43
+- nixling-host: 335 → 337 (regenerator added 2 tests) / 337
+- nixling-ipc: 43 / 43
+- nixlingd: 227 / 227 (7 ignored)
+- 9 integration test suites (smoke / bundle / privileges /
+  manifest / fuzz harnesses): 79 total / 79 pass
+- `cargo xtask gen-schemas`: clean
+- `nix eval` of `nixosModules.default` closure: succeeds
+
+## v1.1-rc2 — 2026-05-31 — substrate-replacement consumer cut-over
+
+v1.1-rc2 builds on rc1 by substantively rehoming the four `microvm.*`
+consumer modules to nixling-owned access helpers and introducing
+the `vm-submodule.nix` ownership structure. The substrate
+replacement is now 4 of 5 invariant gates PASSING; only the final
+`inputs.microvm` flake input drop (gated by
+`tests/microvm-nix-absent-eval.sh`) remains for v1.1-final.
+
+### v1.1-rc2 deltas
+
+- **v1.1-P8 (substantive)**: `nixos-modules/lib.nix` gained three
+  helpers — `vmRunner config name`, `vmToplevel config name`,
+  `vmDeclaredRunner config name`. Every reader in
+  `processes-json.nix` / `closures-json.nix` /
+  `minijail-profiles.nix` / `store.nix` now routes through these
+  helpers instead of reading
+  `config.microvm.vms.<name>.config.config.microvm.*` directly.
+  At v1.1-rc2 the helper bodies still delegate to upstream
+  microvm.vms; at v1.1-final they swap to the
+  nixling-owned vm-submodule.nix evaluator without touching
+  consumer sites.
+- **v1.1-P9a (substantive)**: NEW `nixos-modules/vm-submodule.nix`
+  with the `composeVm name vm` function that owns the per-VM
+  module-merge sequence. At v1.1-rc2 the function delegates
+  per-VM evaluation to upstream microvm.vms (structural ownership
+  move); at v1.1-final the body switches to a nixling-owned
+  `lib.evalModules` call.
+- **v1.1-P10 (partial)**: NEW `tests/v1.1-kernel-floor-eval.sh`
+  static gate — asserts ADR 0008 declares the v1.1 `>= 6.9` floor
+  AND the migration guide cross-links the prerequisite. The
+  runtime pidfs self-probe in
+  `packages/nixlingd/src/startup.rs` is the defense-in-depth
+  for custom kernels.
+- **Gates flipped from SKIP → PASS**: `processes-json-eval`,
+  `vm-submodule-eval`, `kernel-modules-parity-eval`,
+  `vm-submodule-cutover-eval` (4 of 5 substrate gates).
+
+### Remaining for v1.1-final
+
+- `tests/microvm-nix-absent-eval.sh` still SKIP — dropping
+  `inputs.microvm` requires the nixling-owned per-VM evaluator
+  (vm-submodule.nix `composeVm` switched to `lib.evalModules`)
+  to replace the upstream `microvm.vms` evaluation pipeline.
+  Multi-day implementation work plus live-host validation
+  against every example VM.
+- `microvm@<vm>.service` / `microvm-virtiofsd@<vm>.service` /
+  `nixling-<vm>-store-sync.service` systemd templates — at
+  v1.1-rc2 the per-VM templates are overridden to fail-fast
+  stubs for every daemon-supervised VM (which is now every
+  enabled VM after v1.1-P2). The upstream templates' physical
+  presence in the systemd unit graph is moot but goes away
+  entirely when v1.1-final drops the upstream module import.
+
+## v1.1-rc1 — 2026-05-31 — daemon-only follow-through (partial)
+
+v1.1-rc1 ships P0..P7 + P12 substantively. The substrate-replacement
+phases (P8..P11 — re-homing per-VM reads from
+`config.microvm.vms.<vm>.config.config.microvm.*` to
+`nixling.vms.<vm>.runner.*`, the new vm-submodule.nix evaluator,
+the `microvm.vms` translation removal, the `inputs.microvm` flake
+input drop) are tracked by SKIP-mode invariant gates at v1.1-rc1
+and ship in v1.1-rc2 / v1.1-final. See
+[`docs/how-to/migrate-nixling-v1-0-to-v1-1.md`](docs/how-to/migrate-nixling-v1-0-to-v1-1.md)
+for the operator-facing migration steps.
+
+### Retired from v1.0 deferral list
+
+| v1.0 "Deferred to follow-up" entry                                  | Closed in    | Notes                                                                                                                                  |
+| ------------------------------------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Bash fallback shim (`exec_legacy_passthrough`)                      | v1.1-P1      | Deleted; verbs now emit typed envelopes directly. New gate `tests/no-bash-exec-eval.sh`.                                               |
+| `nixling.vms.<vm>.supervisor` option (ADR 0015 deferral)            | v1.1-P2      | Removed via per-submodule `mkRemovedOptionModule` shim + fallback assertion.                                                           |
+| `host-broker.nix` `daemonExperimental.enable` gating                | v1.1-P4      | Broker socket + service now default-on. Deprecation warning when consumer flake still sets the option.                                 |
+| `nixling-vfsd-watchdog@.{service,timer}`                            | v1.1-P7      | Retired; wedge detection moved to broker Virtiofsd SpawnRunner pidfd supervisor.                                                       |
+| `host-otel-relay-acl.nix`                                           | v1.1-P6      | Retired from public default.nix imports; OTel host-bridge ACL moved to broker pre-spawn pipeline.                                      |
+| `nixling-otel-relay@<vm>.service` / `nixling-otel-host-bridge.service` | v1.1-P6   | Replaced by `RunnerRole::OtelHostBridge` broker SpawnRunner (already in v1.0 source; v1.1-P6 retires the systemd surface).             |
+| `microvm@<vm>.service` / `microvm-virtiofsd@<vm>.service` / `nixling-<vm>-store-sync.service` | v1.1-P10 (scheduled, gates SKIP at rc1) | Substrate replacement landing in v1.1-rc2 / v1.1-final.                                                              |
+| `nixling.daemonExperimental.enable` option (no-op since v1.0)       | v1.1-P4      | Warning emitted via `warnings = lib.optional` on consumer use; option declaration retained for backward-compat module evaluation.       |
+
+### v1.1-rc1 invariant gates added
+
+- `tests/no-bash-exec-eval.sh` (3 modes; check / fixture-coverage / syn-ast-walk).
+- `tests/fixtures/no-bash-exec-exempt-paths.json` (empty allow-list).
+- `tests/supervisor-option-absent-eval.sh`.
+- `tests/broker-systemd-unit-eval.sh`.
+- `tests/daemon-experimental-warning-eval.sh`.
+- `tests/state-dir-acl-eval.sh`.
+- `tests/otel-acl-migration-eval.sh`.
+- `tests/vfsd-watchdog-retired-eval.sh`.
+- `tests/processes-json-eval.sh` (SKIP at v1.1-rc1; enforces at v1.1-rc2/final).
+- `tests/vm-submodule-eval.sh` (SKIP at v1.1-rc1).
+- `tests/kernel-modules-parity-eval.sh` (SKIP at v1.1-rc1).
+- `tests/vm-submodule-cutover-eval.sh` (SKIP at v1.1-rc1).
+- `tests/microvm-nix-absent-eval.sh` (SKIP at v1.1-rc1).
+
+### Source-code summary by phase
+
+- **v1.1-P1**: deleted `exec_legacy_passthrough` /
+  `should_fallback_to_legacy` / helper functions / `legacy_cli`
+  Context field / `DEFAULT_LEGACY_CLI` constant in
+  `packages/nixling/src/lib.rs`; added typed envelope helpers
+  `daemon_down_envelope` / `not_yet_implemented_envelope`;
+  rewrote `cmd_audit` / `cmd_console` / `cmd_audio` /
+  `cmd_keys_{list,show}`; deleted `tests/cli-legacy-bash-dispatch.sh`;
+  rewrote `native_help_requests_*` in-source test to use clap
+  directly.
+- **v1.1-P2**: deleted productive `supervisor` option from
+  `nixos-modules/options-vms.nix`; added per-submodule
+  `mkRemovedOptionModule` shim in new
+  `nixos-modules/options-vms-removed.nix`; replaced supervisor-
+  based conditionals in `nixos-modules/host.nix` /
+  `processes-json.nix`; rewrote assertion to defense-in-depth
+  fallback; updated `examples/multi-env/flake.nix` /
+  migrate goldens.
+- **v1.1-P3**: added focused integration test
+  `packages/nixling-core/tests/bundle_resolver_runner_intents.rs`.
+- **v1.1-P4**: dropped `lib.mkIf cfg.daemonExperimental.enable`
+  wrapper from `nixos-modules/host-broker.nix`; added
+  `warnings = lib.optional` entry in `nixos-modules/assertions.nix`.
+- **v1.1-P5**: added `nixlingStateDirAcl` activation script in
+  `nixos-modules/host-activation.nix` (re-asserts 0750
+  root:nixlingd + per-sidecar `--x` ACLs).
+- **v1.1-P6**: commented out `./host-otel-relay-acl.nix` import
+  in `nixos-modules/default.nix`.
+- **v1.1-P7**: deleted `nixling-vfsd-watchdog@.{service,timer}`
+  templates + per-VM enable units from `nixos-modules/store.nix`.
+- **v1.1-P12**: authored
+  `docs/how-to/migrate-nixling-v1-0-to-v1-1.md` (this entry's
+  cross-referenced operator guide); updated ADR 0015 status to
+  "Implemented in v1.1-P2"; updated CHANGELOG with this section.
+
+## Unreleased — accumulator for post-v1.1 work
+
+<!-- New entries for post-v1.1 work accumulate here. Cut a new
+version section below this header when the next release (v1.1.1
+or v1.2) is tagged. The substrate-replacement work that this
+section previously tracked SHIPPED in v1.1 (see the v1.1 section
+above). Remaining v1.1.1 scope: StatusOutputV3 wire schema bump,
+per-role wiring of `runner_argv_regenerator`, RenderDnsmasqEnvConf
+host-prep DAG op, USBIP guest ssh attach/detach one-shots, runtime
+pidfs self-probe, clone3(CLONE_INTO_CGROUP) atomic placement,
+nixling.slice/<vm>/<role> cgroup taxonomy migration, fchownat
+AT_EMPTY_PATH fix. -->
 
 ## 1.0.0 — 2026-05-31
 

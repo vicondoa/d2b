@@ -2,6 +2,8 @@
 
 let
   cfg = config.nixling;
+  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
   privateEtc = source: {
@@ -11,11 +13,9 @@ let
     group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
   };
 
-  vmTopOf = name:
-    config.microvm.vms.${name}.config.config.system.build.toplevel;
+  vmTopOf = name: nl.vmToplevel config name;
 
-  vmRunnerOf = name:
-    config.microvm.vms.${name}.config.config.microvm.declaredRunner;
+  vmRunnerOf = name: nl.vmDeclaredRunner config name;
 
   vmClosureInfo = name:
     pkgs.closureInfo {

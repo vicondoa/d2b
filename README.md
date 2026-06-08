@@ -5,9 +5,14 @@
 > retired in P6 (see [ADR 0015](docs/adr/0015-daemon-only-clean-break.md)
 > and the [v0 → v1 migration guide](docs/how-to/migrate-nixling-v0-to-v1.md)).
 
-**Nixling is opinionated NixOS desktop microVM workspaces on top of
-[microvm.nix].** ("microVM" = a Linux VM booted via lightweight VMMs
-like cloud-hypervisor or crosvm.) It adds, on top of raw microvm.nix:
+**Nixling is opinionated NixOS desktop microVM workspaces — nixling
+owns its microVM substrate end-to-end.** ("microVM" = a Linux VM
+booted via lightweight VMMs like cloud-hypervisor or crosvm.) **v1.1
+removed the historical [microvm.nix] foundational dependency**;
+the framework owns its per-VM evaluator
+(`nixos-modules/vm-evaluator.nix` + `vm-options.nix`) and spawns
+every per-VM runner through `nixling-priv-broker`'s typed
+`SpawnRunner` pipeline. Nixling adds:
 
 - A single `nixling` CLI for daily VM ops (`vm start`, `vm stop`,
   `status`, `switch`, `keys rotate`, `audio …`, `usb …`).
@@ -71,8 +76,11 @@ look at raw [microvm.nix], NixOS containers, or
 
 - **Not a multi-tenant trust boundary** against a malicious local
   launcher user. SSH keys are readable by anyone in the
-  `nixling-launcher` group — see [docs/explanation/design.md] for the
-  full threat model.
+  `nixling-launchers` system group (the v1.0 daemon-only authz
+  boundary; the broker uses `SO_PEERCRED` at accept time to
+  classify peers as `launcher`/`admin`/`deny` per
+  [ADR 0015](docs/adr/0015-daemon-only-clean-break.md)) — see
+  [docs/explanation/design.md] for the full threat model.
 - **Not a server-VM platform.** Use NixOps or raw microvm.nix.
 - **Not a Qubes replacement.** Nixling shares the host kernel; Qubes
   uses Xen hypervisor isolation.
@@ -190,8 +198,8 @@ rather than starting fresh, this is the minimum surface area.
 
 **2. Drop in a `configuration.nix` block.** This is the minimum
 nixling needs from you — pick a Wayland user (alice here) plus
-one env + one VM. Everything else (sidecar users, polkit grants,
-SSH-key generation, dnsmasq, NAT, firewall, the auto-declared
+one env + one VM. Everything else (sidecar users, SSH-key
+generation, dnsmasq, NAT, firewall, the auto-declared
 net VM) is materialised by the framework.
 
 ```nix
@@ -204,8 +212,12 @@ net VM) is materialised by the framework.
     extraGroups = [ "wheel" "video" "audio" ];
   };
 
-  # Tell nixling about Alice + grant her the polkit-launcher group
-  # so 'nixling vm start <vm> --apply' works without sudo.
+  # Tell nixling about Alice + add her to the nixling-launchers
+  # system group (the v1.0 daemon-only authz boundary; per
+  # ADR 0015 the broker uses SO_PEERCRED at accept time to
+  # classify peers — no polkit, no setuid).
+  # 'nixling vm start <vm> --apply' works without sudo for
+  # users in the nixling-launchers group.
   nixling.site = {
     waylandUser = "alice";
     launcherUsers = [ "alice" ];
@@ -275,8 +287,8 @@ nixling vm stop corp-vm --apply       # clean shutdown
 
 That's it. Add a second env or a second VM by repeating the
 `nixling.envs.<env>` / `nixling.vms.<name>` blocks; the framework
-deals with bridges, sidecars, polkit grants, and key generation
-in lockstep.
+deals with bridges, sidecars (broker-spawned per ADR 0015),
+SSH-key generation, and dnsmasq in lockstep.
 
 ## Common gotchas
 
@@ -342,7 +354,7 @@ clean break:
   `rotate-known-host`, `host install`, `host prepare`,
   `host destroy`, `host reconcile`, `usb attach`, `usb detach`,
   `usb probe`.
-- **Queued for v1.1+ (returns typed exit-78 envelope in v1.0)**:
+- **Queued for v1.2+ unscheduled (v1.1 only delivers the typed-envelope rendering+remediation per ADR 0017; returns typed exit-78 envelope in v1.0)**:
   `console`, `audio status|mic|speaker|off`. The Rust subcommand
   surface (help, argument parsing, kebab-case alias compatibility)
   is preserved so operator runbooks and shell completions keep
@@ -351,6 +363,100 @@ clean break:
 
 See [`docs/how-to/migrate-nixling-v0-to-v1.md`](docs/how-to/migrate-nixling-v0-to-v1.md)
 for the operator migration runbook.
+
+## v1.1 upgrade-blockers preview (planning-only — v1.1 not released yet)
+
+> The interim notice below summarises hard blockers and
+> non-blocking but action-required cleanups operators will hit
+> when v1.1 lands. The authoritative migration guide for v1.1
+> ships with v1.1-P12; until then the items below are the
+> consolidated planning summary from the v1.1 ADRs and
+> CHANGELOG. Consumers preparing v1.0→v1.1 upgrades should
+> review these before pinning a v1.1 tag.
+
+### Hard blockers (block a v1.1 upgrade until resolved)
+
+- **Kernel floor uplift to `>= 6.9`.** v1.0 floor is 6.6 (per
+  [ADR 0008](docs/adr/0008-supported-platforms-and-rejected-targets.md));
+  v1.1 requires Linux 6.9+ for `pidfs`-backed pidfd identity
+  (`fstat(2)` of two pidfds for the same kernel process must
+  return identical `(st_dev, st_ino)`; pre-6.9
+  anon_inode-backed pidfds share the same inode and the
+  check is structurally impossible to satisfy). Verify with
+  `uname -r`; consumers on long-term-stable distro kernels
+  may need a backport pin. See
+  [ADR 0008](docs/adr/0008-supported-platforms-and-rejected-targets.md)
+  § "v1.1 kernel-floor uplift".
+- **`nixling.vms.<vm>.supervisor` removed.** The v1.0 option is
+  removed via a per-VM `mkRemovedOptionModule` shim in v1.1;
+  setting it will fail eval with a typed friendly message
+  pointing here. Delete every assignment of
+  `nixling.vms.<vm>.supervisor` (every surviving v0.x consumer
+  set it; v1.0 deferred the removal). See
+  [ADR 0015](docs/adr/0015-daemon-only-clean-break.md) § Decision
+  and CHANGELOG entry for v1.1-P2.
+- **`microvm.nix` flake input dropped from `nixling`.** v1.0 still
+  pinned `microvm.nix` as a flake input on the nixling side;
+  v1.1 removes that pin entirely (every per-VM systemd-template
+  surface becomes a broker `SpawnRunner` role per
+  [ADR 0018](docs/adr/0018-microvm-nix-removal.md)). Action for
+  consumers: if your consumer flake **only inherited** the
+  `microvm` input from `nixling.inputs.microvm.follows = ...`
+  (i.e., you did not directly add `microvm` as your own input),
+  no consumer-side change is required — updating to nixling
+  v1.1 and running `nix flake update nixling` (or
+  `nix flake lock --update-input nixling` on older Nix) is
+  sufficient. If your consumer flake **directly imports**
+  `microvm.url` for your own use, decide whether you still
+  need it: keep the direct input pinned independently of
+  nixling if so, or remove it from your flake's `inputs` block
+  and then run `nix flake lock` (with no `--update-input`
+  argument) to re-resolve. After either path, verify
+  `flake.lock` no longer carries a `microvm` entry sourced
+  from nixling by inspecting `jq '.nodes' flake.lock`. The
+  complete role-disposition matrix is in
+  [ADR 0018](docs/adr/0018-microvm-nix-removal.md)
+  § "Sidecar/template retirement — full role matrix".
+- **`nixling status` schema bump v2 → v3.** v1.1 introduces
+  `StatusOutputV3` (per
+  [ADR 0018](docs/adr/0018-microvm-nix-removal.md) § "StatusOutputV3
+  schema bump"). v1.0 consumers parsing `nixling status --json`
+  output will see additional/renamed fields. v1.1 supports
+  `--status-schema-version=2` as a one-release-only
+  compatibility flag for tooling that needs more time to
+  migrate; the flag is removed in v1.2. Audit
+  `nixling status --json` consumers (dashboards, scripts) and
+  either pin `--status-schema-version=2` temporarily or update
+  them to V3.
+
+### Non-blocking but action-required cleanups (warnings only — upgrade succeeds without these but eval-time noise is emitted until resolved)
+
+- **`nixling.daemonExperimental.enable` becomes a no-op.** v1.0
+  used this option to gate broker socket/service enablement;
+  v1.1-P4 promotes broker enablement to default-on (broker is
+  the only supervisor in v1.0+ daemon-only). The option name
+  stays known to the evaluator and continues to type-check, but
+  v1.1 emits a NixOS assertions/warning: "nixling.daemonExperimental.enable
+  is obsolete in v1.1; remove this option from your consumer
+  flake because the broker socket/service are enabled by
+  default. Leaving it set has no effect." Upgrade succeeds with
+  the warning present; remove the option from your flake at
+  your convenience. See
+  [ADR 0015](docs/adr/0015-daemon-only-clean-break.md) § Decision
+  and the v1.1-P4 CHANGELOG entry.
+- **No bash fallbacks (source-only).** Per
+  [ADR 0017](docs/adr/0017-no-bash-fallbacks-invariant.md) v1.1
+  adds compile-time and CI gates that forbid any new
+  `Command::new("bash")`/`/bin/sh`/`/usr/bin/env bash` site.
+  This affects only consumers who extended the Rust CLI
+  source; pure consumers of the published flake are unaffected.
+
+The bullets above are the consolidated v1.1 planning summary;
+each blocker links to its authoritative ADR (single source of
+truth). The [CHANGELOG](CHANGELOG.md) `Unreleased` section
+enumerates the same items with ADR cross-links. When v1.1 ships,
+this README section is replaced by a link to the v1.1 migration
+guide.
 
 ## Companion flakes
 

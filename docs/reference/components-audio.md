@@ -27,7 +27,7 @@ only enables the *capability* — in v1.0 (per ADR 0015) the
 `nixling audio` Rust CLI verbs are rust-native shims that return
 typed `not-yet-implemented` exit-78 envelopes; the daemon-native
 audio control plane (state-file owner, flock holder, sidecar
-respawn coordinator) is queued for v1.1+.
+respawn coordinator) is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017).
 both directions default to `off` on first materialisation unless the
 `allow{Mic,Speaker}ByDefault` options are flipped.
 
@@ -40,8 +40,8 @@ When both directions are off, the guest-side
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `nixling.vms.<vm>.audio.enable` | bool | `false` | Enable per-VM audio capability. Incompatible with `autostart = true` (asserted at eval). Implies `hypervisor = cloud-hypervisor`. |
-| `nixling.vms.<vm>.audio.allowMicByDefault` | bool | `false` | Initial value of the `mic` field when the per-VM state file is first materialised. Consulted at creation time only; subsequent edits via `nixling audio …` persisted pre-P6 (the v1.0 Rust CLI shim returns exit-78 per ADR 0015 until the daemon-native audio control plane lands in v1.1+). |
-| `nixling.vms.<vm>.audio.allowSpeakerByDefault` | bool | `false` | Initial value of the `speaker` field when the per-VM state file is first materialised. Same edit-survives semantics (pre-P6; daemon-native control deferred to v1.1+). |
+| `nixling.vms.<vm>.audio.allowMicByDefault` | bool | `false` | Initial value of the `mic` field when the per-VM state file is first materialised. Consulted at creation time only; subsequent edits via `nixling audio …` persisted pre-P6 (the v1.0 Rust CLI shim returns exit-78 per ADR 0015 until the daemon-native audio control plane lands in v1.2+ unscheduled — v1.1 only delivers typed-envelope rendering+remediation per ADR 0017). |
+| `nixling.vms.<vm>.audio.allowSpeakerByDefault` | bool | `false` | Initial value of the `speaker` field when the per-VM state file is first materialised. Same edit-survives semantics (pre-P6; daemon-native control deferred to v1.2+ unscheduled). |
 | `nixling.vms.<vm>.audio.users` | list of str | `[ ]` (defaults to `[ ssh.user ]` if non-null) | Guest-side usernames added to the `audio` group inside the VM. virtio-snd exposes `/dev/snd/*` as `0660 root:audio`; non-logind-active users need explicit group membership. |
 
 Site-level dependency:
@@ -86,7 +86,7 @@ The matching guest-visible option (declared in
 > The `nixling audio mic|speaker|status` CLI verbs in v1.0 are
 > rust-native shims that return a typed `not-yet-implemented`
 > envelope (exit 78 per ADR 0015); the daemon-native audio
-> control plane is queued for v1.1+. The pre-P6 bash audio
+> control plane is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). The pre-P6 bash audio
 > orchestration in `cli.nix` was retired in P6.
 
 Per audio-enabled VM:
@@ -99,7 +99,8 @@ Per audio-enabled VM:
   DAG (pre-P6 it was a systemd system service). Runs as
   `nixling-<vm>-snd:nixling-<vm>-snd`, `SupplementaryGroups = [ "audio" ]`.
   Started on demand by the v1.0 audio control plane (queued for
-  v1.1+; pre-P6 it was spawned by `nixling audio mic|speaker on <vm>`
+  v1.2+ unscheduled — v1.1 only delivers typed-envelope rendering+remediation per ADR 0017;
+  pre-P6 it was spawned by `nixling audio mic|speaker on <vm>`
   through the bash CLI's audioArgsScript).
   belt-and-suspenders fallback at VM boot). Started *and* ordered
   before `nixling-<vm>-gpu.service` via the latter's `wants`/`after`.
@@ -135,7 +136,7 @@ Per audio-enabled VM:
   `root:nixling-launchers`. The pre-P6 bash CLI took flock on it
   before mutating the state file; in v1.0 (per ADR 0015) the
   Rust CLI shim returns exit-78 and does NOT acquire this lock.
-  The v1.1+ daemon-native audio control plane will reclaim flock
+  The v1.2+ unscheduled daemon-native audio control plane will reclaim flock
   ownership on the broker side.
 - **vhost-device-sound v0.3.0** vendored at
   `pkgs/vhost-device-sound/` (nixpkgs ships v0.2.0 with a known
@@ -157,7 +158,7 @@ Per any audio-enabled host (emitted when at least one VM has
 
 CLI (`nixling audio` in the v1.0 Rust CLI — currently a rust-native
 shim that returns typed `not-yet-implemented` exit-78 per ADR 0015;
-daemon-native audio control queued for v1.1+. Pre-P6 bash CLI in
+daemon-native audio control queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Pre-P6 bash CLI in
 `cli.nix` was retired in P6):
 
 - `nixling audio mic on|off <vm>`

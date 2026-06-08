@@ -105,7 +105,14 @@ it from one place:
   in the slice's interior nodes. Per-VM
   `nixling.slice/<vm>/<role>` leaves are the only fork/exec
   destinations.
-- Teardown uses `cgroup.kill` against the leaf only; no parent-side
+- Teardown uses **broker-mediated `CgroupKill`** (v1.1-P10 op
+  per [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
+  Decision item 6 + [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
+  "Broker ops on the cgroup tree" — **the broker is the sole
+  writer of `cgroup.kill`; the daemon NEVER writes
+  `cgroup.kill` directly**) against the leaf only; daemon
+  uses `pidfd_send_signal(SIGTERM)` first and ONLY escalates to
+  broker-mediated `CgroupKill` as a last resort. No parent-side
   signalling. The pidfd registered in the supervisor pidfd table
   (see `packages/nixlingd/src/supervisor/pidfd_table.rs`) is the
   lifecycle-of-record for each runner.
@@ -143,7 +150,19 @@ fallback):
 
 - Every per-VM systemd template enumerated in the legacy-unit
   denylist gate
-  ([`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh)):
+  ([`tests/legacy-unit-denylist-eval.sh`](../../tests/legacy-unit-denylist-eval.sh))
+  AND every additional pattern listed below. **Denylist coverage
+  scoping note** (resolves R11 test-r11-2): at v1.0 HEAD the
+  `legacy-unit-denylist-eval.sh` gate source-scans
+  `nixos-modules/` for a subset of these patterns; the full list
+  below is the v1.1 design surface and the residual patterns
+  are **scheduled to be added to the denylist gate in their
+  owning v1.1-P<N> phase** (see the v1.1 plan TDD-table P10 rows
+  — `microvm@`, `microvm-virtiofsd@`, `microvm-pci-devices@`,
+  `microvm-set-booted@`, `nixling-vfsd-watchdog@`, and
+  `microvms.target` land their denylist registrations in
+  v1.1-P10). Until each row lands, this enumeration MUST be
+  read as "intent + design scope", not as "currently-gated":
   `nixling@<vm>.service`, `microvm@<vm>.service`,
   `microvm-virtiofsd@<vm>.service`,
   `microvm-{tap-interfaces,macvtap-interfaces,pci-devices,set-booted}@.service`,
@@ -163,24 +182,44 @@ fallback):
   `NIXLING_NATIVE_ONLY` (the latter retained as a no-op only because
   P4 cli-up already documented it; future minor releases may delete
   the no-op too).
-- The `nixling.vms.<vm>.supervisor` option. The intent of P6 was
-  to remove this option entirely with a hard eval-time assertion
-  emitting the operator-friendly message (DEFERRED TO v1.1 — see
-  Implementation status below). The v1.1-intended message
-  (NOT in v1.0; NOT emitted by the v1.0 source) was: ``nixling.vms.<vm>.supervisor` was removed in nixling v1.0. Remove this option; all VMs are daemon-supervised by `nixlingd`.``
+- The `nixling.vms.<vm>.supervisor` option. **Removed in v1.1-P2**
+  via a per-submodule `mkRemovedOptionModule` shim in
+  `nixos-modules/options-vms-removed.nix` (imported into the per-VM
+  submodule's `imports` list per the `attrsOf submodule` /
+  `mkRemovedOptionModule` interaction documented in
+  `nixpkgs/lib/modules.nix`). Setting the option in a consumer flake
+  produces this typed friendly error:
 
-  **Implementation status (v1.0):** the option DEFINITION remains in
-  `nixos-modules/options-vms.nix` because the framework's Tier 0
-  detection (`packages/nixling/src/lib.rs` `detect_deployment_shape`)
-  and per-VM `processes.json` emission still branch on its value
-  to distinguish "Tier 0 all-legacy" hosts (every VM declares
-  `supervisor = "systemd"`) from daemon-only hosts. The option's
-  default flipped from `"systemd"` to `"nixlingd"` in v1.0 (per
-  the ADR) but was reverted to `"systemd"` for backward-compat with
-  consumer flakes pinning pre-v1.0 manifests; the v1.0-intended
-  hard removal + assertion is **deferred to v1.1 backlog**. Setting
-  `supervisor = "nixlingd"` still requires `nixling.daemonExperimental.enable = true`
-  per `nixos-modules/assertions.nix:252`.
+  ```
+  nixling.vms.<vm>.supervisor was removed in v1.1 per ADR 0015
+  (daemon-only clean break). The v1.0 daemon-only end-state makes
+  "nixlingd" the only valid supervisor; v1.1 completes the migration
+  by deleting the option entirely.
+
+  Migration: remove every "supervisor = ..." line from your consumer
+  flake's nixling.vms.<vm>.* declarations. The daemon-only path is
+  the default and only path.
+  ```
+
+  **Implementation status (v1.1):** the option DEFINITION is deleted
+  from `nixos-modules/options-vms.nix`. The per-submodule
+  `mkRemovedOptionModule` shim in `options-vms-removed.nix` is the
+  primary error path; a defense-in-depth assertion in
+  `nixos-modules/assertions.nix` fires as a backup only when the
+  shim is bypassed (e.g. consumer flake subverts the module set).
+  Tier 0 detection in `packages/nixling/src/lib.rs`
+  `detect_deployment_shape` continues to function — every enabled VM
+  is now daemon-supervised, and the systemd-template path is
+  retired alongside the supervisor option (the `microvm@<vm>`
+  template definitions themselves go in v1.1-P10 per ADR 0018).
+
+  **Companion v1.1 ADRs:**
+  [ADR 0017 — No bash fallbacks invariant](0017-no-bash-fallbacks-invariant.md)
+  retires `exec_legacy_passthrough` and the residual bash-fallback
+  call sites in v1.1-P1. [ADR 0018 — Removal of the microvm.nix
+  flake dependency](0018-microvm-nix-removal.md) retires the per-VM
+  systemd templates listed below alongside the `microvm.nix`
+  substrate in v1.1-P8 → P11.
 
 - The `nixling-launcher` polkit allowlist and its per-VM rules. The
   group itself stays declared for permission-boundary continuity but
@@ -231,10 +270,12 @@ v2 → v3 auto-rewriter.
   [`docs/reference/cli-contract.md`](../reference/cli-contract.md).
 - **Manifest schema simplification.** The per-VM lock contract is
   gone, and `audioService` / `apiSocket` shrink to opaque
-  broker-spawn descriptors. The `supervisor` field is retained in
-  v1.0 source for backward-compat with consumer flakes pinning
-  pre-v1.0 manifests (its hard removal was deferred to v1.1
-  backlog; see § Decision above). The `tests/cli-json.sh` and
+  broker-spawn descriptors. **The `supervisor` field was removed in
+  v1.1-P2** via the top-level fallback assertion in
+  `nixos-modules/assertions.nix` (the per-submodule
+  `mkRemovedOptionModule` shim approach was incompatible with
+  `attrsOf submodule` semantics; the v1.1-final assertion fires the
+  same friendly ADR-0015 message). The `tests/cli-json.sh` and
   manifest contract gates have one branch per verb instead of two.
 - **Operator UX.** One CLI, one config option family
   (`nixling.daemonExperimental.*` retired alongside the bash
@@ -301,11 +342,18 @@ v2 → v3 auto-rewriter.
   (P6 `ph6-p6-unit-denylist-gate`) asserts none of the deleted unit
   names appear in `nixos-rebuild dry-build` output on any example.
 - [`tests/assertions-eval.sh`](../../tests/assertions-eval.sh)
-  (planned P6 `ph6-p6-supervisor-removed-assertion` — deferred to
-  v1.1) would assert that setting `nixling.vms.<vm>.supervisor`
-  fails eval with the operator-friendly message above; the v1.0
-  source retains the option for backward-compat with consumer
-  flakes pinning pre-v1.0 manifests.
+  (v1.1-P2 closure of the planned-in-P6 `ph6-p6-supervisor-removed-assertion`)
+  asserts that setting `nixling.vms.<vm>.supervisor` fails eval with
+  the operator-friendly message above. The primary error path is the
+  per-submodule `mkRemovedOptionModule` shim in
+  `nixos-modules/options-vms-removed.nix`; a defense-in-depth
+  assertion in `assertions.nix` is the fallback path when the shim
+  is bypassed.
+- [`tests/supervisor-option-absent-eval.sh`](../../tests/supervisor-option-absent-eval.sh)
+  (v1.1-P2 invariant gate) asserts the productive option declaration
+  is absent from `nixos-modules/options-vms.nix` AND the
+  `mkRemovedOptionModule` shim is present + wired into the
+  submodule's `imports` list.
 - P6 exit criterion:
   `systemctl list-units --no-pager --all | grep -E '^(nixling|microvm)' | wc -l`
   returns `3` on the test host.

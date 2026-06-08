@@ -171,8 +171,13 @@ outside the reconciliation path. Reconciliation is the only context
 where the daemon validates `(pid, start_time_ticks)` against the
 trusted snapshot before deciding to use raw-pid semantics for the
 re-adoption window — and even there, the moment the pidfd is
-re-opened the daemon switches back to `pidfd_send_signal` /
-`waitid(P_PIDFD)` exclusively.
+re-opened the daemon switches back to `pidfd_send_signal`
+exclusively for signal delivery (the v1.1 reaper for SpawnRunner
+children is the broker, not the daemon — per
+[ADR 0018](../adr/0018-microvm-nix-removal.md) § "broker-as-parent
+reaping model"; the daemon does not `waitid(P_PIDFD)` SpawnRunner
+children in v1.1+ because `waitid(P_PIDFD)` only works for the
+calling process's own children and the broker is the parent).
 
 ## Daemon-level `[pending restart]`
 
@@ -215,16 +220,39 @@ alongside the per-VM `[pending restart]` annotations.
 Before P2 the per-share `nixling-<vm>-virtiofsd@<share>.service`
 ExecStopPost-style bash health check, driven by the
 `nixling-vfsd-watchdog@<vm>.{timer,service}` pair, was the only
-surface that noticed a virtiofsd sidecar dying mid-run. P2 folds
-that detection into the daemon's pidfd reaper so the supervisor's
-typed state machine — not a bash one-shot — decides what happens
-next.
+surface that noticed a virtiofsd sidecar dying mid-run. **v1.0
+(P2 baseline):** detection folded into the daemon's pidfd reaper.
+**v1.1+ (per ADR 0018 § "broker-as-parent reaping model"):** the
+broker is the parent + sole reaper of every SpawnRunner child
+(including Virtiofsd); the daemon observes via the broker's
+`ChildExited` / `OneShotComplete` RPC notifications (per ADR 0010
++ ADR 0018 wire spec). The daemon's typed state machine — not a
+bash one-shot — decides what happens next in both versions; the
+v1.1 update is WHO reaps (broker, not daemon).
 
-Each virtiofsd runner the daemon spawns is registered in the W3 s1
-pidfd table under its `(vm, role_id)` key. When the reaper observes
-a pidfd exit for a slot whose `RunnerRole == Virtiofsd`, it consults
-[`supervisor::pidfd::handle_runner_exit`](../../packages/nixlingd/src/supervisor/pidfd.rs)
-with the exit's `(exit_code, signal)`. The handler:
+Each virtiofsd runner the broker spawns is registered:
+
+- **v1.0**: the daemon's W3 s1 pidfd table under its `(vm,
+  role_id)` key; the daemon's pidfd reaper observes a pidfd
+  exit and calls
+  [`supervisor::pidfd::handle_runner_exit`](../../packages/nixlingd/src/supervisor/pidfd.rs)
+  with `(exit_code, signal)` from `waitid(P_PIDFD)`.
+- **v1.1+**: the broker registers a parent-side pidfd-table
+  entry with `terminal_on_exit: true` (per ADR 0018) and reaps
+  via `waitid(P_PIDFD)`; on reap, the broker emits a
+  `ChildExited{vm, role_id, exit_code, signal}` RPC to the
+  daemon. The daemon's pidfd-table entry receives a SCM_RIGHTS
+  DUP of the broker's pidfd (per the v1.1+ Fd-ownership
+  contract in
+  [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
+  § "Fd ownership table") used only for `pidfd_send_signal`
+  + poll observability. On `ChildExited` RPC, the daemon
+  invokes `supervisor::pidfd::handle_runner_exit` with the
+  `(exit_code, signal)` from the broker's reap, NOT from a
+  local `waitid` (the daemon is not the parent and cannot
+  reap; `waitid(P_PIDFD)` would return `ECHILD`).
+
+The handler:
 
 1. Returns an empty outcome for clean shutdowns
    (`exit_code == 0`, no signal) — that's a stop-initiated reap, not
@@ -255,7 +283,11 @@ sweep; P2 only owns the in-daemon detection-and-degradation path.
 - [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) — CH
   argv shape + per-role minijail decision.
 - [ADR 0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md)
-  — pidfd handoff + `PR_SET_CHILD_SUBREAPER` contract.
+  — pidfd handoff + cgroup-v2 delegation (v1.1 update: the v1.0
+  `PR_SET_CHILD_SUBREAPER` contract is SUPERSEDED for the
+  SpawnRunner-child population per ADR 0018 § "set-booted race-free
+  serialization" — NEITHER broker NOR daemon claims subreaper for
+  SpawnRunner children).
 - [ADR 0014](../adr/0014-w3-modules-devices-runner-shape.md) —
   runner-shape preflight + CH net-handoff probe.
 - [Daemon API reference](../reference/daemon-api.md) — wire

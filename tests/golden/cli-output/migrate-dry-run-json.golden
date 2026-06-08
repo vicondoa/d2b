@@ -4,13 +4,12 @@
   "command": "migrate",
   "currentTier": "all-daemon",
   "mode": "dry-run",
-  "notes": "migrate reports the deployment-shape tier today; per-VM classification is still unavailable on the public manifest, but `--apply` is live.",
-  "perVmClassificationNote": "Per-VM supervisor classification is not available on the public manifest today, so the planner cannot reliably split VMs into legacy vs daemon-managed. Use `nixling status <vm>` for the per-VM systemd-unit state.",
+  "notes": "migrate reports the deployment-shape tier today; v1.1 retired the per-VM supervisor option, so per-VM classification is uniformly daemon-supervised. `--apply` routes through nixlingd → broker RunMigrate.",
+  "perVmClassificationNote": "v1.1 (per ADR 0015) made every enabled VM daemon-supervised by default; the `nixling.vms.<vm>.supervisor` option was removed in v1.1-P2. Per-VM systemd-unit inspection still uses `nixling status <vm>`.",
   "plannedSteps": [
-    "Expose per-VM `supervisor` in the public manifest so the planner can classify VMs directly.",
-    "Per migrating VM: set `nixling.vms.<vm>.supervisor = \"nixlingd\"` in the consumer flake.",
+    "v1.1 daemon-only: every enabled VM is daemon-supervised by default; no consumer-flake action is required for supervisor classification.",
     "Per migrating VM: verify per-VM state under `/var/lib/nixling/vms/<vm>/` is owned root:nixlingd 0750.",
-    "Run `nixos-rebuild switch` so the daemon module materializes the per-VM systemd units.",
+    "Run `nixos-rebuild switch` so the daemon module materializes the per-VM broker SpawnRunner state.",
     "Verify each migrated VM via `nixling status <vm>`; `vm list` is still a placeholder inventory surface.",
     "After all VMs migrate cleanly, keep the default-switch readiness gates aligned with the rollout evidence."
   ],

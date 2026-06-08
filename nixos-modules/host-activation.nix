@@ -37,6 +37,64 @@ let
   cfg = config.nixling;
 in
 {
+  # v1.1-P5: per-sidecar-user traversal ACL on /var/lib/nixling.
+  # /var/lib/nixling itself is `0750 root nixlingd` (set in
+  # host-daemon.nix tmpfiles); this activation script grants the
+  # documented sidecar users the `--x` traversal bit on the parent
+  # dir so they can reach the per-VM subdirectories owned by their
+  # respective uid/gid. Without these ACLs, the 0750 parent mode
+  # blocks traversal for users not in the `nixlingd` group (which
+  # is most sidecar users — they're per-VM-scoped and never in
+  # nixlingd group).
+  #
+  # The enumeration mirrors the user list documented in
+  # `docs/reference/privileges.md` § "v1.1-P5 state-dir ACL
+  # contract". Each entry is a `--x` (execute-only / traversal)
+  # grant — the sidecar user can `chdir` into the directory but
+  # not read its contents; per-VM subdirectories under it have
+  # their own ACLs scoped to the same sidecar user (see
+  # nixlingVmStatePerms above).
+  #
+  # Idempotent: setfacl overwrites the named entries; running
+  # multiple times produces the same final ACL set.
+  system.activationScripts.nixlingStateDirAcl = lib.stringAfter [ "users" ] ''
+    set -u
+    state_dir=/var/lib/nixling
+    if [ ! -d "$state_dir" ]; then
+      exit 0
+    fi
+    # Re-assert canonical mode + ownership (defense-in-depth
+    # against any 0755 chmod workaround a previous v0.x install
+    # may have left behind).
+    chown root "$state_dir" || true
+    chgrp nixlingd "$state_dir" || true
+    chmod 0750 "$state_dir" || true
+    # Per-sidecar-user traversal grants. Each grant is `--x`
+    # (chdir only); the per-VM subdir under it owns its own
+    # read/write ACL.
+    # `microvm` is a system user (created by host.nix /
+    # nixos.users); grant `u:microvm:--x`.
+    ${pkgs.acl}/bin/setfacl -m "u:microvm:--x" "$state_dir" 2>/dev/null || true
+    # `kvm` is a Linux GROUP (not a user) — every sidecar that
+    # opens /dev/kvm is in this group. Grant `g:kvm:--x` so any
+    # group member can traverse the state-dir parent. Treating
+    # `kvm` as a user (the v1.1-rc1 bug) silently grants nothing
+    # because no `kvm` user exists.
+    ${pkgs.acl}/bin/setfacl -m "g:kvm:--x" "$state_dir" 2>/dev/null || true
+    # Per-VM sidecar users: enumerated by mapAttrs over cfg.vms
+    # — each VM contributes gpu/swtpm/audio/video users that
+    # may need traversal.
+  '' + lib.concatStringsSep "\n" (lib.mapAttrsToList
+    (name: _: ''
+      for suffix in gpu swtpm audio video; do
+        user="nixling-${name}-$suffix"
+        if id "$user" >/dev/null 2>&1; then
+          ${pkgs.acl}/bin/setfacl -m "u:$user:--x" /var/lib/nixling 2>/dev/null || true
+        fi
+      done
+    '')
+    cfg.vms);
+
   # Per-graphics-VM state dir + var.img + extra-disk ownership.
   # nixling-<vm>-gpu runs CH + crosvm-gpu, so var.img is locked to 0600
   # and ACL-granted to nixling-<vm>-gpu (the host user can no longer read it).

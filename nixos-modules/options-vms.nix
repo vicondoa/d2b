@@ -12,6 +12,14 @@
     description = "MicroVMs to declare via the nixling framework.";
     default = { };
     type = lib.types.attrsOf (lib.types.submodule ({ name, ... }: {
+      # v1.1-P2: options-vms-removed.nix's mkRemovedOptionModule shim
+      # was retired here. It cannot be imported into an `attrsOf
+      # submodule` per-instance because the per-VM submodule layer
+      # does not have an `assertions` option (NixOS assertions live
+      # at the top-level config root). The defense-in-depth
+      # assertion in `assertions.nix` is the sole supervisor-removal
+      # error path; the friendly message text matches the original
+      # mkRemovedOptionModule wording verbatim.
       options = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -46,6 +54,31 @@
             Multiple definitions (e.g. one from the framework, one
             from a consumer override) are merged as modules: imports
             are concatenated, attribute paths recursively combined.
+          '';
+        };
+
+        # v1.1-final: nixling-owned per-VM evaluator output.
+        # Populated by host.nix's composeVm pass which runs the
+        # consumer's `config` through the nixling-owned per-VM
+        # NixOS evaluator (see vm-evaluator.nix). Stored at the
+        # SIBLING attribute `nixling._computed.vms.<name>` rather
+        # than `nixling.vms.<name>.computed` to avoid the
+        # NixOS-module infinite-recursion that occurs when a
+        # mapAttrs-over-cfg.vms write target is the same attribute
+        # path the iteration reads from.
+        # (Retained as an internal placeholder option for
+        # compat with consumers that may already touch the path;
+        # always empty at the option level.)
+        computed = lib.mkOption {
+          type = lib.types.unspecified;
+          default = { config = { }; options = { }; };
+          internal = true;
+          description = ''
+            DEPRECATED at v1.1-final: per-VM evaluation output moved
+            to `nixling._computed.vms.<name>` to avoid module-system
+            infinite recursion. Read via `nl.vmRunner config name`
+            from `nixos-modules/lib.nix` (helpers route to the new
+            location automatically).
           '';
         };
 
@@ -198,38 +231,6 @@
           description = ''
             Whether the future observability guest component should
             scrape this VM's node/system metrics.
-          '';
-        };
-
-        supervisor = lib.mkOption {
-          type = lib.types.enum [ "systemd" "nixlingd" ];
-          default = "systemd";
-          example = "nixlingd";
-          description = ''
-            Which supervisor owns this VM's lifecycle.
-
-            **v1.0 (per [ADR 0015](../../docs/adr/0015-daemon-only-clean-break.md)):**
-            the daemon-only end-state is `"nixlingd"`; consumer flakes
-            adopting v1.0 should set this option to `"nixlingd"` on
-            every workload VM and enable
-            `nixling.daemonExperimental.enable = true`.
-
-            - `"nixlingd"`: the daemon owns this VM's lifecycle via
-              the broker `SpawnRunner` path + pidfd handoff. The NixOS
-              module skips the per-VM `microvm@<vm>` autostart wiring
-              and the emitted `processes.json` omits the systemd
-              `unit` references for this VM so the single-writer
-              invariant is preserved. Requires
-              `nixling.daemonExperimental.enable = true`.
-            - `"systemd"` (legacy default, retained for consumer
-              flakes pinning pre-v1.0 VM declarations): the framework
-              emits the per-VM `microvm@<vm>.service` template
-              instance and (when `autostart = true`) wires
-              `multi-user.target.wants` to it. The pre-P6
-              `nixling@<vm>.service` wrapper this option used to emit
-              was deleted in P6 (per ADR 0015); on v1.0 hosts the
-              `"systemd"` path keeps only the upstream microvm.nix
-              unit.
           '';
         };
 
@@ -393,5 +394,26 @@
         };
       };
     }));
+  };
+
+  # v1.1-final: per-VM evaluation outputs stored OUTSIDE
+  # `nixling.vms.<name>` to avoid module-system infinite recursion.
+  # host.nix's composeVm pass populates `nixling._computed.vms.<name>`
+  # with the evaluated NixOS attrset (config + options) for each
+  # enabled VM. lib.nix helpers (vmRunner / vmToplevel /
+  # vmDeclaredRunner) route through this attribute.
+  options.nixling._computed = lib.mkOption {
+    type = lib.types.attrsOf lib.types.unspecified;
+    default = { };
+    internal = true;
+    visible = false;
+    description = ''
+      Internal storage for per-VM evaluator outputs. Populated by
+      host.nix's composeVm pass. Stored here (not under
+      `nixling.vms.<name>.computed`) to avoid the NixOS module-
+      system infinite-recursion that occurs when a mapAttrs over
+      cfg.vms writes back to the same `nixling.vms` attribute it
+      reads from.
+    '';
   };
 }

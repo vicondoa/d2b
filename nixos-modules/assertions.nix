@@ -249,12 +249,25 @@ let
         message = "nixling.vms.${name}.audit.enable requires observability.enable on the same VM";
       }
       {
-        assertion = !(vm.enable && vm.supervisor == "nixlingd" && !cfg.daemonExperimental.enable);
-        message = "nixling.vms.${name}.supervisor = \"nixlingd\" requires "
-          + "nixling.daemonExperimental.enable = true (the v1.0 daemon-only "
-          + "control plane per ADR 0015 owns the nixlingd path; on hosts "
-          + "where the W18 flip-gate readiness predicate is not satisfied "
-          + "the option must be explicitly enabled to opt in).";
+        # v1.1-P2 primary error path (per ADR 0015): the
+        # `mkRemovedOptionModule` shim approach is incompatible
+        # with `attrsOf submodule` semantics (no `assertions` option
+        # at the per-submodule layer). The supervisor-removal
+        # friendly message is therefore emitted by this top-level
+        # assertion, which fires whenever any per-VM `vm` attrset
+        # carries a `supervisor` attribute.
+        assertion = !(vm.enable && (vm ? supervisor));
+        message = ''
+          nixling.vms.${name}.supervisor was removed in v1.1
+          per ADR 0015 (daemon-only clean break). The v1.0
+          daemon-only end-state makes "nixlingd" the only valid
+          supervisor; v1.1 completes the migration by deleting
+          the option entirely. Remove every "supervisor = ..."
+          line from your consumer flake.
+
+          The daemon-only path is the default and only path; see
+          docs/how-to/migrate-nixling-v1-0-to-v1-1.md.
+        '';
       }
       {
         # Phase 2b: `nixling.vms.<name>.entra-id.*` was removed; the
@@ -464,4 +477,16 @@ in
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions
   );
+
+  # v1.1-P4: deprecation warning when a consumer flake still sets
+  # nixling.daemonExperimental.enable. The option is now obsolete
+  # because v1.1 promotes the broker socket/service to default-on
+  # (per ADR 0015 daemon-only clean break + the v1.1-P4 TDD row).
+  # We emit a warnings entry (NOT an assertion failure — leaving
+  # the option set must not block eval, only notify) so operators
+  # get a clear migration cue in nixos-rebuild output.
+  warnings =
+    lib.optional
+      (options.nixling.daemonExperimental.enable.isDefined or false)
+      "nixling.daemonExperimental.enable is obsolete in v1.1; remove this option from your consumer flake because the broker socket/service are enabled by default. Leaving it set has no effect.";
 }

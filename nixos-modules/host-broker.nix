@@ -39,7 +39,16 @@ let
 in
 
 {
-  config = lib.mkIf cfg.daemonExperimental.enable {
+  # v1.1-P4: the broker NixOS module was previously gated behind
+  # `cfg.daemonExperimental.enable`. v1.1 makes the broker
+  # socket/service default-on (ADR 0015 daemon-only clean break);
+  # the `daemonExperimental.enable` toggle is now a no-op (consumer
+  # flakes that still set it receive an eval-time warning, emitted
+  # via the v1.1-P4 assertion in `nixos-modules/assertions.nix`).
+  # The module body always materializes the broker — there is no
+  # `mkIf` wrapper. The legacy gating semantics are documented in
+  # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
+  config = {
 
     environment.systemPackages = [ brokerPackage ];
 

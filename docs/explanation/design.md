@@ -49,13 +49,26 @@ behaves like a unit-of-work boundary, and its sidecar processes
 whatever the consumer's NixOS config sets — typically a shared
 user with broader permissions than necessary.
 
-Nixling is the per-host glue that turns microvm.nix into an
-**opinionated workspace framework**: declare an env, declare some
+Nixling is an **opinionated workspace framework that owns its
+microVM substrate end-to-end**: declare an env, declare some
 workloads in it, get a fully isolated network + key management +
-hardened sidecars + a `nixling` CLI for daily ops. The framework
-does not fork microvm.nix; it composes on top of it by translating
-`nixling.vms.<vm>` into `microvm.vms.<vm>` in
-[`nixos-modules/host.nix:153-221`](../../nixos-modules/host.nix).
+hardened sidecars + a `nixling` CLI for daily ops. v1.1 dropped
+the historical [microvm.nix] flake input (per ADR 0018); the
+nixling-owned per-VM evaluator at
+[`nixos-modules/vm-evaluator.nix`](../../nixos-modules/vm-evaluator.nix)
++ [`nixos-modules/vm-options.nix`](../../nixos-modules/vm-options.nix)
+replaces the upstream module evaluation. The broker SpawnRunner
+pipeline (`nixling-priv-broker` + `nixling-host::*_argv`) spawns
+every per-VM runner directly; no Nix-side runner derivation is
+needed.
+
+### History
+
+Pre-v1.1, nixling composed on top of [microvm.nix] by translating
+`nixling.vms.<vm>` into `microvm.vms.<vm>` in `host.nix`'s
+mapAttrs pass. v1.1 retired this translation in favour of the
+nixling-owned per-VM evaluator + nixling-owned option set; the
+upstream microvm.nix flake input is no longer in `inputs`.
 
 [microvm.nix]: https://github.com/microvm-nix/microvm.nix
 
@@ -1491,8 +1504,16 @@ specific authority-bearing primitives this wave introduces.
    outside the reconciliation path; the daemon validates the pidfd
    against `(pid, start_time_ticks)` before it ever uses raw-pid
    semantics for the re-adoption window, and switches back to
-   `pidfd_send_signal` + `waitid(P_PIDFD)` the moment the pidfd is
-   re-opened.
+   `pidfd_send_signal` for signal delivery the moment the pidfd is
+   re-opened. (The v1.1 reaper for SpawnRunner children is the
+   broker per [ADR 0018](../adr/0018-microvm-nix-removal.md)
+   § "broker-as-parent reaping model"; the daemon does NOT
+   `waitid(P_PIDFD)` SpawnRunner children in v1.1+ because
+   `waitid(P_PIDFD)` only works for the calling process's own
+   children and the broker is the parent. The daemon uses
+   `pidfd_send_signal` for sending signals to SpawnRunner
+   children via its received pidfd; the broker reaps via
+   `waitid(P_PIDFD)` on its own pidfd-table entry.)
 
 3. **W4-H6 daemon state on disk:** the supervisor persists a
    per-(vm, role_id) snapshot under

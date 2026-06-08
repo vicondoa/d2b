@@ -45,8 +45,8 @@ first failure is what the operator sees:
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Delegation was attempted while running as uid 0, or the broker cannot drop to `nixlingd` uid. | Re-check the `nixlingd` user/group bootstrap and re-run `host prepare --apply`. |
-| `cgroup-kill-on-ancestor-refused` | A teardown path attempted `cgroup.kill` on `nixling.slice` or an intermediate VM cgroup. | This is a guard — the daemon retries on the leaf path instead. No operator action. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and re-run `host prepare --apply`; verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `nixling.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
 `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640),
@@ -64,18 +64,28 @@ sequence documented in [`cgroup-delegation.md`][ref]:
 4. enable `+cpu, +memory, +io, +pids, +cpuset` on `cgroup.subtree_control`
    in that strict order, verifying each enable by re-reading;
 5. create `/sys/fs/cgroup/nixling.slice`;
-6. keep `cpuset.cpus.partition` as `member` on every ancestor and on
-   `nixling.slice`;
+6. keep `cpuset.cpus.partition` as `member` on `nixling.slice`
+   and every nixling-created descendant (per-VM intermediate /
+   per-role / host-scoped leaves); nixling does NOT read or
+   write ancestor `cpuset.cpus.partition` (the cgroup v2 root
+   is typically a partition root and that state is the host's
+   concern, not nixling's);
 7. fd-relative `fchown` the delegated subtree to `nixlingd:nixlingd`;
-8. refuse delegation if the broker is running as uid 0.
+8. refuse Phase B (post-delegation) runtime mutation if the broker
+   is still running as uid 0; Phase A privileged setup
+   legitimately runs as root per ADR 0011 Decision item 2.
 
 After the apply, `nixling.slice` is owned by `nixlingd` and the
 delegated subtree carries every required controller in
 `cgroup.subtree_control`. Threaded cgroups are forbidden.
 
-`cgroup.kill` is permitted only on broker/daemon-owned per-VM or
-per-role leaves during declared teardown. Asking the broker to kill
-an ancestor returns `cgroup-kill-on-ancestor-refused`.
+`cgroup.kill` is permitted only via **broker-mediated** `CgroupKill`
+on per-VM role leaves or host-scoped leaves during declared
+teardown (v1.1+ — the broker is the sole writer per
+[`docs/reference/cgroup-delegation.md`](../../reference/cgroup-delegation.md)
+"Broker ops on the cgroup tree"; daemon NEVER writes `cgroup.kill`
+directly). Asking the broker to kill an ancestor returns
+`cgroup-kill-on-ancestor-refused`.
 
 [ref]: ../../reference/cgroup-delegation.md
 

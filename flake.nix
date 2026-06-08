@@ -1,13 +1,14 @@
 {
-  description = "Opinionated NixOS desktop microVM workspaces on microvm.nix";
+  description = "Opinionated NixOS desktop microVM workspaces";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    microvm = {
-      url = "github:microvm-nix/microvm.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # v1.1-final: `microvm` flake input DROPPED per ADR 0018.
+    # The nixling NixOS substrate owns its per-VM evaluator via
+    # `nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`.
+    # Runner argv generation lives in the Rust crate
+    # `packages/nixling-host/src/*_argv.rs` (broker-side).
 
     home-manager = {
       url = "github:nix-community/home-manager";
@@ -15,7 +16,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, microvm, home-manager, ... }@inputs:
+  outputs = { self, nixpkgs, home-manager, ... }@inputs:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;

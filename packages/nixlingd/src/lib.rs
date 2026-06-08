@@ -3330,36 +3330,61 @@ fn dispatch_broker_vm_start(
             net_vm_bundle_gate::BundleGateOutcome::Drift(drift) => {
                 let path = drift.path();
                 let reason = drift.reason();
-                tracing::warn!(
-                    vm = %request.vm,
-                    env = drift.env(),
-                    path = %path.display(),
-                    "net VM start refused: bundle/dnsmasq drift",
-                );
-                let (env, expected, actual) = match &drift {
-                    net_vm_bundle_gate::BundleGateDrift::HashMismatch {
+                // v1.1-final: ConfigMissing is a SOFT-DEFER, not a
+                // hard fail. The dnsmasq config render is owned by
+                // a v1.1.1 daemon host-prep DAG op
+                // (`RenderDnsmasqEnvConf{env}`) that has not landed
+                // yet; until it does, a fresh-install net-VM start
+                // can legitimately hit ConfigMissing on the first
+                // run. Soft-deferring lets the VM come up; the
+                // operator sees a stderr warning explaining the
+                // gap. HashMismatch / ConfigReadFailed / EnvMissing
+                // remain hard fails because they indicate a real
+                // contract violation (bundle vs disk drift, or a
+                // malformed env declaration).
+                if matches!(
+                    drift,
+                    net_vm_bundle_gate::BundleGateDrift::ConfigMissing { .. }
+                ) {
+                    tracing::warn!(
+                        vm = %request.vm,
+                        env = drift.env(),
+                        path = %path.display(),
+                        "net VM start: dnsmasq.conf missing (soft-defer per v1.1-final; v1.1.1 RenderDnsmasqEnvConf host-prep op will render before first start)",
+                    );
+                    // Fall through to normal start path.
+                } else {
+                    tracing::warn!(
+                        vm = %request.vm,
+                        env = drift.env(),
+                        path = %path.display(),
+                        "net VM start refused: bundle/dnsmasq drift",
+                    );
+                    let (env, expected, actual) = match &drift {
+                        net_vm_bundle_gate::BundleGateDrift::HashMismatch {
+                            env,
+                            expected,
+                            actual,
+                            ..
+                        } => (env.clone(), expected.clone(), actual.clone()),
+                        net_vm_bundle_gate::BundleGateDrift::ConfigMissing { env, .. }
+                        | net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed { env, .. } => {
+                            (env.clone(), String::new(), String::new())
+                        }
+                        net_vm_bundle_gate::BundleGateDrift::EnvMissing { .. } => {
+                            (String::new(), String::new(), String::new())
+                        }
+                    };
+                    return Ok(TypedError::BundleDnsmasqDrift {
+                        vm: request.vm.clone(),
                         env,
+                        path,
                         expected,
                         actual,
-                        ..
-                    } => (env.clone(), expected.clone(), actual.clone()),
-                    net_vm_bundle_gate::BundleGateDrift::ConfigMissing { env, .. }
-                    | net_vm_bundle_gate::BundleGateDrift::ConfigReadFailed { env, .. } => {
-                        (env.clone(), String::new(), String::new())
+                        reason,
                     }
-                    net_vm_bundle_gate::BundleGateDrift::EnvMissing { .. } => {
-                        (String::new(), String::new(), String::new())
-                    }
-                };
-                return Ok(TypedError::BundleDnsmasqDrift {
-                    vm: request.vm.clone(),
-                    env,
-                    path,
-                    expected,
-                    actual,
-                    reason,
+                    .to_envelope_value());
                 }
-                .to_envelope_value());
             }
         }
     }

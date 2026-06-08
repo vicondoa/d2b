@@ -44,6 +44,25 @@ the first milestone.
    `cgroup.kill` in Linux 5.14 or newer, `pidfd_open` in 5.3 or newer,
    io_uring `openat2` support in 5.6 or newer, and `fchmodat2` in 6.6 or
    newer. The highest required floor wins.
+
+   **v1.1 kernel-floor uplift (effective from `phase-daemon-only` HEAD
+   `00b24c5` + the v1.1 plan).** The v1.0 floor of `6.6` documented
+   above is preserved as the v1.0 historical baseline; v1.1+ requires
+   `>= 6.9` because the BootedNotify pidfd-identity contract specified
+   in [ADR 0018 § set-booted race-free serialization](0018-microvm-nix-removal.md#set-booted-race-free-serialization)
+   relies on **pidfs** (the per-process pidfd inode filesystem) which
+   landed in Linux 6.9. Pre-6.9 kernels use anon_inode-backed pidfds
+   where all pidfds share the same `(st_dev, st_ino)`, so the
+   fstat-based identity proof is structurally impossible to satisfy.
+   v1.1 operators MUST upgrade their kernel to `>= 6.9` before bumping
+   the nixling flake input; the v1.1 migration guide opens with this
+   requirement, the eval-time gate
+   `tests/v1.1-kernel-floor-eval.sh` (future, v1.1-P10) asserts the
+   uplift on consumer hosts, and the daemon's pidfs runtime self-probe
+   at startup is the runtime fail-closed defence. The Tier 1 Ubuntu
+   floor is correspondingly uplifted: Ubuntu 24.04 LTS users need a
+   HWE kernel `>= 6.9` (default 24.04 ships 6.8 at GA but the HWE
+   stack tracks newer point releases) or must downgrade to v1.0.
 7. Telemetry posture is none. `nixlingd` makes no outbound network
    connections by default. Any future diagnostics must be explicit
    opt-in and documented in `SECURITY.md`.

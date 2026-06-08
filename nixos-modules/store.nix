@@ -47,6 +47,8 @@
 
 let
   cfg = config.nixling;
+  # v1.1-P8: nixling-owned access helpers (see lib.nix).
+  nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
 
   # spectrum-ch package (cloud-hypervisor v52 with virtio-gpu patches).
@@ -75,8 +77,7 @@ let
   # info via `pkgs.closureInfo`, which gives us:
   #   <out>/store-paths   newline list of every path in the closure
   #   <out>/registration  format consumed by `nix-store --load-db`
-  vmTopOf = name:
-    config.microvm.vms.${name}.config.config.system.build.toplevel;
+  vmTopOf = name: nl.vmToplevel config name;
 
   # The microvm.nix-generated "runner" derivation for this VM. It
   # holds:
@@ -94,8 +95,7 @@ let
   # disk (still hardlinks into the host /nix/store) and exposes only
   # the runner binaries to the guest, which are public nixpkgs
   # packages with no host-private data.
-  vmRunnerOf = name:
-    config.microvm.vms.${name}.config.config.microvm.declaredRunner;
+  vmRunnerOf = name: nl.vmDeclaredRunner config name;
 
   # Wrapper around microvm.nix's bin/virtiofsd-run that sanitises the
   # supervisord config before invoking it. The microvm.nix-generated
@@ -764,391 +764,51 @@ in
     #
     # Also add a tiny second share for store-meta (db.dump + generation
     # info), mounted in the guest at /run/nixling-store-meta.
-    microvm.vms = lib.mapAttrs
-      (name: _: let
-        obsCfg = config.nixling.observability;
-        isObsVm = obsCfg.enable && name == obsCfg.vmName;
-        obsSecretsShare = lib.optional isObsVm {
-          source = "${cfg.site.stateDir}/observability";
-          mountPoint = "/run/nixling-obs-secrets";
-          tag = "nl-obs-sec";
-          proto = "virtiofs";
-        };
-      in {
-        config.microvm.writableStoreOverlay = lib.mkDefault "/nix/.rw-store";
-        config.microvm.shares = lib.mkForce ([
-          {
-            source = "/nix/store";
-            mountPoint = "/nix/.ro-store";
-            tag = "ro-store";
-            proto = "virtiofs";
-          }
-          {
-            source = "${cfg.store.stateDir}/${name}/store-meta";
-            mountPoint = "/run/nixling-store-meta";
-            tag = "nl-meta";
-            proto = "virtiofs";
-          }
-          # Per-VM host-keys share (Phase 2b — see host-keys.nix).
-          # The host stages host.pub + user-authorized-keys here on
-          # activation; the guest's nixling-load-host-keys.service
-          # reads them at boot to populate authorized_keys.
-          {
-            source = "${cfg.site.stateDir}/vms/${name}/host-keys";
-            mountPoint = "/run/nixling-host-keys";
-            tag = "nl-hkeys";
-            proto = "virtiofs";
-          }
-          # Per-VM sshd host-keys share — see host-ssh-host-keys.nix.
-          # Read-only ed25519 host key + pubkey generated on the host
-          # at activation, mounted into the guest where the guest
-          # module ./guest-sshd-host-keys.nix points
-          # services.openssh.hostKeys at them. Stable across VM
-          # restarts; eliminates known_hosts TOFU drift.
-          {
-            source = "${cfg.site.stateDir}/vms/${name}/sshd-host-keys";
-            mountPoint = "/run/nixling-sshd-host-keys";
-            tag = "nl-ssh-host";
-            proto = "virtiofs";
-          }
-        ] ++ obsSecretsShare);
-      })
-      enabledVms;
+    # v1.1-final: per-VM nix-store + meta + host-keys shares are
+    # injected by host.nix's composeVm pass directly (see
+    # `nixos-modules/host.nix` composedConfig). store.nix used to
+    # write `nixling.vms = lib.mapAttrs ... { config.microvm.shares
+    # = ...; }` here, but reading cfg.vms while writing to
+    # nixling.vms causes module-system infinite recursion. The
+    # shares injection moved into host.nix where the per-VM
+    # composedConfig has direct access to the consumer's `vm`
+    # struct without needing to round-trip through cfg.vms.
 
-    # Per-VM `nixling-<vm>-virtiofsd.service` overrides:
-    # BindReadOnlyPaths replaces /nix/store inside the virtiofsd
-    # service's private mount namespace with the per-VM hardlink farm.
-    # The supervisord wrapper still does `--shared-dir=/nix/store`
-    # (baked at eval time), but the path now resolves to
-    # /var/lib/nixling/vms/<vm>/store/.
-    #
-    # We override `microvm-virtiofsd@<vm>.service` (microvm.nix's
-    # template) via per-instance drop-ins so we get the upstream
-    # template's correctness (PrivateMounts, etc.) plus our own
-    # C1a/C1b hardening stanza.
-    #
-    # The remaining serviceConfig keys are the C1a + C1b hardening
-    # stanza (spec §3.C1a fix):
-    #   * Stable non-root system user (nl-virtiofs-<vm>) declared
-    #     in host.nix, with `kvm` as a supplementary group so the
-    #     unix socket can be chgrp'd to kvm for cloud-hypervisor.
-    #   * Full systemd-confinement stanza: Protect*/Restrict*/Lock*/
-    #     PrivateNetwork/PrivateDevices/MemoryDenyWriteExecute/
-    #     RestrictAddressFamilies=AF_UNIX/SystemCallArchitectures=native.
-    #   * AmbientCapabilities / CapabilityBoundingSet hold ONLY the
-    #     caps virtiofsd actually needs to serve an upper-layer FS:
-    #       SYS_ADMIN  (mount/umount inside its sandbox=chroot)
-    #       CHOWN      (--socket-group=kvm)
-    #       FOWNER/FSETID/MKNOD/SETFCAP (preserve owner/mode/special-
-    #                  files/xattrs when surfacing files to the guest)
-    #       SETUID/SETGID (file ownership emulation for the guest)
-    #       DAC_OVERRIDE (read closure paths regardless of mode bits)
-    #     CAP_DAC_READ_SEARCH (C1b) is INTENTIONALLY ABSENT: it would
-    #     let open_by_handle_at(2) bypass the per-VM store bind mount
-    #     and reach the host's full /nix/store. virtiofsd's runner
-    #     script still passes `--inode-file-handles=prefer`, but
-    #     without CAP_DAC_READ_SEARCH the kernel refuses
-    #     open_by_handle_at and the daemon falls back to O_PATH FDs
-    #     (which honour the unit's mount namespace and bind mount).
-    #   * ExecStartPre with `+` (run as root before User= drop) tests
-    #     for the .nixling-marker-<vm> file planted by nixling-store-sync
-    #     at the end of its closure-population step. An attacker who
-    #     planted a hand-crafted /var/lib/nixling/vms/<vm>/store/ but did
-    #     not invoke nixling-store-sync cannot satisfy the check.
-    #   * ReadWritePaths exposes the per-VM state dir so virtiofsd can
-    #     create its `*-virtiofs-{ro-store,nl-meta}.sock` unix sockets
-    #     inside the otherwise-strict /var/lib hierarchy.
-    systemd.services = (lib.mapAttrs'
-      (name: _:
-        lib.nameValuePair "microvm-virtiofsd@${name}" {
-          # v0.1.5: don't let NixOS override upstream microvm.nix's
-          # X-RestartIfChanged=false. Framework adds per-VM
-          # serviceConfig (ExecStartPre marker check, hardened
-          # ExecStart wrapper, sandbox stanza); without this, every
-          # rebuild restarts virtiofsd → CH loses the virtiofs
-          # socket → guest /nix/.ro-store wedges → VM unusable.
-          # Mirrors per-VM sidecars (host-sidecars.nix / audio host).
-          # Consumer applies changes via `nixling switch <vm>`.
-          restartIfChanged = false;
-          serviceConfig = {
-            # Layer 1 of the belt-and-suspenders marker gate
-            # (security findings nixos-1 / software-1 / security-1).
-            # ExecStartPre with the `+` prefix runs unrestricted on
-            # the HOST mount namespace before any bind-mount is in
-            # effect: it tests the SOURCE marker
-            # /var/lib/nixling/vms/<vm>/store/.nixling-marker-<vm>,
-            # which proves nixling-store-sync actually planted the
-            # file. This catches the case where the per-VM store
-            # directory was hand-crafted (or where nixling-store-sync
-            # regressed and never ran). It is INSUFFICIENT on its
-            # own -- see the second layer in nixlingVfsRunnerOf,
-            # which tests /nix/store/.nixling-marker-<vm> from
-            # INSIDE the unit's mount namespace and so catches the
-            # case where BindReadOnlyPaths silently no-ops (future
-            # systemd refactor / microvm.nix upstream change /
-            # namespace setup race) -- both layers together are
-            # needed to prove "the marker was planted AND the
-            # daemon is serving that exact view".
-            ExecStartPre = "+${pkgs.coreutils}/bin/test -e ${cfg.store.stateDir}/${name}/store/.nixling-marker-${name}";
+    # v1.1-final: microvm-virtiofsd@<vm> systemd drop-ins REMOVED.
+    # The upstream `microvm-virtiofsd@.service` template doesn't
+    # exist anymore (microvm.nix flake input dropped per ADR 0018);
+    # the broker's Virtiofsd SpawnRunner role owns virtiofsd
+    # supervision end-to-end, including the marker-file gate
+    # (now enforced via `BundleResolver::ResolvedRunnerIntent`'s
+    # pre-spawn validation in `nixling-priv-broker::runtime`),
+    # the hardened exec wrapper (Rust generator output in
+    # `nixling-host::virtiofsd_argv`), and the CapabilityBoundingSet
+    # (broker spawn-time `set_capabilities` in `nixling-priv-broker::sys`).
+    # The drop-ins block that lived here would target a unit that
+    # no longer exists; deleted.
+    systemd.services = {
 
-            # C1a — replace microvm.nix's generated virtiofsd-run
-            # with our hardened wrapper (see nixlingVfsRunnerOf
-            # above). The wrapper:
-            #   - patches `--inode-file-handles=prefer` to `=never`
-            #     so virtiofsd doesn't need CAP_DAC_READ_SEARCH
-            #     at runtime (C1b)
-            #   - drops `--posix-acl --xattr` from each daemon
-            #     command line (parser surface reduction)
-            #   - strips `user=root` from the supervisord conf
-            # Empty-string first slot clears the base unit's
-            # ExecStart per systemd's drop-in idiom.
-            ExecStart = [
-              ""
-              "${nixlingVfsRunnerOf name}/bin/nixling-virtiofsd-run-${name}"
-            ];
-
-            # C1a + C1b — systemd-level hardening that virtiofsd's
-            # internal sandbox can coexist with.
-            #
-            # NOTE: virtiofsd default `--sandbox=namespace` performs
-            # setuid(0) + mount(/proc) inside its own sandbox. That
-            # needs either real root OR a user namespace where uid 0
-            # is mapped. Running virtiofsd directly as a non-root
-            # system user (the ideal C1a end-state) requires wrapping
-            # its invocation in `unshare -r --map-auto` which in turn
-            # requires subuid/subgid configuration. That refactor is
-            # deferred — the version below keeps virtiofsd running
-            # as root (microvm.nix default) but layers the systemd-
-            # confinement stanza ON TOP of it.
-            #
-            # What this stanza buys us today:
-            #   - CapabilityBoundingSet drops CAP_DAC_READ_SEARCH
-            #     (C1b): even if the daemon were RCE'd, it physically
-            #     cannot do open_by_handle_at to escape its bind-mount.
-            #     The wrapper's --inode-file-handles=never patch is
-            #     what makes startup work without this capability.
-            #   - CapabilityBoundingSet drops every capability NOT in
-            #     virtiofsd's retain-set (no CAP_NET_*, no
-            #     CAP_SYS_RAWIO, no CAP_SYS_PTRACE, etc.).
-            #   - NoNewPrivileges + LockPersonality + RestrictRealtime +
-            #     RestrictSUIDSGID + SystemCallArchitectures harden
-            #     against generic post-exploit pivots.
-            #   - ProtectKernel{Tunables,Modules,Logs} + ProtectControlGroups
-            #     + ProtectClock + ProtectHostname + ProtectHome shrink
-            #     the writable+observable host surface to roughly nothing
-            #     outside /nix/store + /var/lib/nixling/vms/<vm>.
-            #
-            # NOT applied (would break virtiofsd's inner sandbox):
-            #   - User=nl-virtiofs-<vm> — needs unshare userns to setuid(0)
-            #   - PrivateDevices/PrivateNetwork — virtiofsd creates its own
-            #     namespaces and these collide
-            #   - ProtectSystem=strict — virtiofsd needs write to its
-            #     state dir under /var/lib/nixling (would need
-            #     ReadWritePaths plumbing; defer with the User= rework)
-            #   - MemoryDenyWriteExecute — defer; verify virtiofsd
-            #     binary doesn't need W^X for its mmap workload
-            NoNewPrivileges = true;
-            ProtectHome = true;
-            ProtectKernelTunables = true;
-            ProtectKernelModules = true;
-            ProtectKernelLogs = true;
-            ProtectControlGroups = true;
-            ProtectClock = true;
-            ProtectHostname = true;
-            LockPersonality = true;
-            RestrictRealtime = true;
-            RestrictSUIDSGID = true;
-            SystemCallArchitectures = "native";
-            UMask = "0077";
-            CapabilityBoundingSet = [
-              "CAP_SYS_ADMIN"
-              "CAP_SETPCAP"
-              "CAP_CHOWN"
-              "CAP_FOWNER"
-              "CAP_FSETID"
-              "CAP_SETUID"
-              "CAP_SETGID"
-              "CAP_DAC_OVERRIDE"
-              "CAP_MKNOD"
-              "CAP_SETFCAP"
-            ];
-            BindReadOnlyPaths = [
-              "${cfg.store.stateDir}/${name}/store:/nix/store"
-            ];
-          };
-        })
-      enabledVms) // {
-
-    # ---------------------------------------------------------------------------
-    # P1r2 — vhost-user reconnect watchdog.
+    # v1.1-P7: nixling-vfsd-watchdog@ template + per-VM enable units
+    # + timer template RETIRED per ADR 0018. The vhost-user-fs wedge
+    # detection moved into the broker's Virtiofsd `SpawnRunner` role
+    # supervisor: the broker holds the pidfd via clone3(CLONE_PIDFD)
+    # and polls via pidfd_send_signal(SIGCONT,0) + cgroup.events
+    # population probe at the same 60s cadence; wedge surfaces via
+    # the typed `runner-wedged` OpAuditRecord rather than the
+    # journal-scan + systemctl-stop pair this template used.
     #
-    # Background: when microvm-virtiofsd@<vm>.service is restarted while
-    # microvm@<vm>.service is active, cloud-hypervisor keeps running but
-    # its vhost-user connections to virtiofsd die. CH tries to reconnect
-    # for 60s, gives up, marks the virtio-fs devices NEEDS_RESET and
-    # stops processing queues. Guest kernel blocks on /nix/.ro-store
-    # reads -> vcpu spins at 100%, no SSH, no console. Observed during
-    # the C1a/C1b iterations on a live workload VM.
-    #
-    # This template (one .timer instance per VM, see the enable units
-    # further down) checks the CH journal every 60s for the wedge
-    # signature and stops microvm@<vm>.service when found, so the
-    # operator can either `nixling up <vm>` (graphics VMs) or systemd
-    # autostart (net VMs) brings a fresh CH up.
-    # ---------------------------------------------------------------------------
-    "nixling-vfsd-watchdog@" = {
-      description = "Watchdog for cloud-hypervisor vhost-user-fs wedge on %i";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${pkgs.writeShellScript "nixling-vfsd-watchdog" ''
-          set -u
-          vm="$1"
-          if ! ${pkgs.systemd}/bin/systemctl is-active --quiet "microvm@$vm.service"; then
-            # Path A: microvm@ is INACTIVE but CH may be running direct-launch
-            # (spawned by `nixling up` as the desktop user, wrapped in a
-            # nixling-vm-<vm>.scope since Phase 2 Part 1). Detect and stop.
-            ch_sock="/var/lib/nixling/$vm/$vm.sock"
-            ch_log="/var/lib/nixling/$vm/$vm.log"
-            ch_pid=""
-            scope_unit="nixling-vm-$vm.scope"
-            # 1. Resolve MainPID from the user scope (post-Part-1 launches).
-            if ch_pid=$(${pkgs.systemd}/bin/systemctl \
-                  --user --machine ${userMachine} \
-                  show "$scope_unit" -p MainPID --value 2>/dev/null) \
-               && [ -n "$ch_pid" ] && [ "$ch_pid" != "0" ] && [ -d "/proc/$ch_pid" ]; then
-              : # found via scope
-            else
-              # 2. Fallback: locate any cloud-hypervisor using this VM's api socket.
-              ch_pid=$(${pkgs.procps}/bin/pgrep -af \
-                'cloud-hypervisor.*api-socket.*'"$vm"'[./]' 2>/dev/null \
-                | ${pkgs.gawk}/bin/awk 'NR==1{print $1}' || true)
-            fi
-            if [ -n "$ch_pid" ] && [ -d "/proc/$ch_pid" ] && [ -S "$ch_sock" ]; then
-              wedged=0
-              wedge_reason=""
-              ping_flag="/run/nixling/$vm/vfsd-watchdog-ping-fails"
-              # Check VMM API thread liveness via ch-remote ping.
-              if ! ${spectrumCh}/bin/ch-remote \
-                    --api-socket "$ch_sock" ping >/dev/null 2>&1; then
-                count=0
-                [ -f "$ping_flag" ] && count=$(${pkgs.coreutils}/bin/cat "$ping_flag" 2>/dev/null || echo 0)
-                count=$((count + 1))
-                echo "$count" > "$ping_flag"
-                if [ "$count" -ge 3 ]; then
-                  wedged=1
-                  wedge_reason="ch-remote ping timeout x$count"
-                fi
-              else
-                ${pkgs.coreutils}/bin/rm -f "$ping_flag"
-                # Check log file for NEEDS_RESET since last watchdog tick.
-                # An offset file scopes the scan to new entries only, so
-                # stale NEEDS_RESET lines from prior CH runs do not re-fire.
-                offset_file="/run/nixling/$vm/vfsd-watchdog-log-offset"
-                offset=0
-                [ -f "$offset_file" ] && offset=$(${pkgs.coreutils}/bin/cat "$offset_file" 2>/dev/null || echo 0)
-                log_size=0
-                [ -f "$ch_log" ] && log_size=$(${pkgs.coreutils}/bin/wc -c < "$ch_log" 2>/dev/null || echo 0)
-                if [ "$offset" -gt "$log_size" ]; then offset=0; fi
-                if [ -f "$ch_log" ] && [ "$log_size" -gt "$offset" ]; then
-                  new_lines=$(${pkgs.coreutils}/bin/tail -c "+$((offset + 1))" "$ch_log" 2>/dev/null || true)
-                  if echo "$new_lines" \
-                       | ${pkgs.gnugrep}/bin/grep -qE \
-                           'vhost-user.*Failed connecting the backend|virtio.*NEEDS_RESET|Setting device status to .NEEDS_RESET'; then
-                    wedged=1
-                    wedge_reason="NEEDS_RESET in $ch_log (ch-remote api-socket: $ch_sock)"
-                  fi
-                fi
-                echo "$log_size" > "$offset_file"
-              fi
-              if [ "$wedged" = "1" ]; then
-                echo "nixling-vfsd-watchdog: $vm direct-launch CH wedged ($wedge_reason); stopping $scope_unit" \
-                  | ${pkgs.systemd}/bin/systemd-cat -t nixling-vfsd-watchdog -p warning
-                ${pkgs.systemd}/bin/systemctl --user --machine ${userMachine} stop "$scope_unit" 2>/dev/null || true
-              fi
-            fi
-            exit 0
-          fi
-          # Anchor the journal scan to the CURRENT invocation of
-          # microvm@<vm>.service (security finding P1r3 software-4 /
-          # test-r3-1). The InvocationID is a 128-bit token systemd
-          # generates per-start of a unit and stamps onto every
-          # journal record produced during that invocation. After we
-          # stop a wedged VM and an operator `nixling up`s it, the next
-          # start gets a fresh InvocationID, and the old wedge lines
-          # -- still matchable by the wedge regex for as long as
-          # they sit in the journal -- are filtered out because they
-          # carry the previous invocation's ID. Without this anchor,
-          # the SAME pre-stop log line would trip the watchdog on
-          # the next 60s tick after `nixling up`, stopping the
-          # healthy fresh instance (an indefinite stop-loop).
-          #
-          # If systemctl returns an empty InvocationID (unit just
-          # started, racing with journald), there is nothing to scan
-          # -- skip this tick; the next one will have a non-empty ID.
-          #
-          # We also drop the `--since "5 min ago"` window: within a
-          # single invocation, even a 24h-old wedge line is real
-          # evidence that THIS instance is wedged.
-          inv=$(${pkgs.systemd}/bin/systemctl show "microvm@$vm.service" -p InvocationID --value 2>/dev/null)
-          if [ -z "$inv" ]; then
-            exit 0
-          fi
-          if ${pkgs.systemd}/bin/journalctl \
-                -u "microvm@$vm.service" \
-                "_SYSTEMD_INVOCATION_ID=$inv" \
-                --no-pager 2>/dev/null \
-              | ${pkgs.gnugrep}/bin/grep -qE 'vhost-user.*Failed connecting the backend|virtio.*NEEDS_RESET|Setting device status to .NEEDS_RESET'; then
-            echo "nixling-vfsd-watchdog: $vm cloud-hypervisor has wedged vhost-user-fs; stopping microvm@$vm.service so it can be restarted cleanly" >&2
-            ${pkgs.systemd}/bin/systemctl stop "microvm@$vm.service" || true
-          fi
-        ''} %i";
-      };
+    # The script body, per-VM enabling units, and timer template
+    # that lived here are deleted; the trailing `{}` keeps the
+    # outer attribute-union shape stable for any future per-VM
+    # service additions.
     };
-    } //
-    # Per-VM units that enable the watchdog timer at boot. Without
-    # these, the @.timer template exists but no instance starts.
-    (lib.mapAttrs'
-      (name: _: lib.nameValuePair
-        "nixling-vfsd-watchdog-${name}-enable"
-        {
-          description = "Enable nixling-vfsd-watchdog@${name}.timer";
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "${pkgs.systemd}/bin/systemctl start nixling-vfsd-watchdog@${name}.timer";
-            ExecStop = "${pkgs.systemd}/bin/systemctl stop nixling-vfsd-watchdog@${name}.timer";
-          };
-        })
-      enabledVms) //
-    # ---------------------------------------------------------------------------
-    # Per-VM `nixling-<vm>-store-sync.service`.
-    # Fired:
-    #   - from the host activation script for every declared VM (so
-    #     `nixos-rebuild switch` keeps per-VM stores in sync), and
-    #   - from `nixling build/switch/boot/test/rollback/gc <vm>` to
-    #     pick up a new closure.
-    # Idempotent. Reads the target generation dir from
-    # /run/nixling/<vm>/next-generation (a path the activation script
-    # and the CLI both write before triggering the service).
-    # ---------------------------------------------------------------------------
-    # ---------------------------------------------------------------------------
-    # P6 ph6-remove-systemd-emission: per-VM `nixling-<vm>-store-sync.service`
-    # was deleted. Store-sync now runs via broker `StoreSync` op (P2
-    # ph2-store-sync, commit bfe8c60). The mapAttrs' block that emitted
-    # the per-VM systemd oneshot below has been removed.
-    # ---------------------------------------------------------------------------
-    {};
 
-    systemd.timers."nixling-vfsd-watchdog@" = {
-      description = "Periodic check for wedged cloud-hypervisor vhost-user-fs on %i";
-      timerConfig = {
-        OnBootSec = "2min";
-        OnUnitActiveSec = "60s";
-        AccuracySec = "10s";
-        Unit = "nixling-vfsd-watchdog@%i.service";
-      };
-    };
+    # v1.1-P7 retired:
+    #   - systemd.services."nixling-vfsd-watchdog@"
+    #   - systemd.services."nixling-vfsd-watchdog-<vm>-enable" (per-VM)
+    #   - systemd.timers."nixling-vfsd-watchdog@"
+    # All three replaced by the broker Virtiofsd SpawnRunner role's
+    # pidfd-based wedge detection (per ADR 0018).
 
     # ---------------------------------------------------------------------------
     # Host activation hook.

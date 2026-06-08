@@ -134,7 +134,7 @@ recorded.
 | <a id="cgroup-controllers-missing"></a>`cgroup-controllers-missing` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-v2-unified-not-present"></a>`cgroup-v2-unified-not-present` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-delegation-refused"></a>`cgroup-delegation-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
-| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `OpenCgroupDir`, supervisor teardown | `broker-validation-failed` |
+| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (v1.1-P10 addition; broker-mediated only — no daemon-direct `cgroup.kill` writes in v1.1+ per [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
 | <a id="ifname-too-long"></a>`ifname-too-long` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `CreateTapFd`, `CreatePersistentTap` | `wire-ifname-invalid` |
 | <a id="ifname-collision"></a>`ifname-collision` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | bundle render + `CreateTapFd` | `broker-validation-failed` |
 | <a id="bridge-port-flag-drift"></a>`bridge-port-flag-drift` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `SetBridgePortFlags` | `broker-validation-failed` |
@@ -169,3 +169,87 @@ any required prerequisite fails. Advisory-only `denied-refused`
 findings (Tier 1-later / Tier 2 hosts where the broker cannot
 positively confirm a prerequisite) return exit `1`
 (`#host-check-warning`).
+
+## Remediation rendering conventions
+
+> Added in v1.1-P0 (placeholder for v1.1-P1 implementation). The
+> reference shape below is normative for the migration-guide
+> cross-link remediation hint added in v1.1; v1.1-P1 lands the
+> Rust-side rendering changes in
+> `packages/nixling-core/src/error/remediation_rendering.rs` and
+> wires them into the typed-envelope `Display` impl for the four
+> verbs listed below.
+
+Most typed-error envelopes render `Remediation:` as a single-line
+hint inline with the envelope JSON / human pretty-printing. The
+historical inline rendering is preserved unchanged for every
+envelope EXCEPT the four cases below; operator grep patterns
+targeting other remediation strings are unaffected.
+
+**Multi-line `Remediation:` block format** applies to ONLY
+these four CLI verbs when they emit `#daemon-down` or
+`#not-yet-implemented` envelopes pointing operators at the
+migration guide:
+
+- `nixling audit` (and `nixling audit --strict`)
+- `nixling console`
+- `nixling audio` (and subcommands `audio status|mic|speaker|off`)
+- `nixling keys` (read-only subcommands)
+
+The multi-line block format renders differently for the two verb
+categories described above:
+
+**Category 1 — Truly deferred verbs** (`console`, `audio`,
+`audit --strict`) emit
+`#not-yet-implemented` (exit 78) unconditionally in v1.0; the
+remediation block renders as:
+
+```
+Remediation:
+  This subcommand was queued for v1.2+ (unscheduled).
+  See the operator migration runbook:
+    docs/how-to/migrate-nixling-v0-to-v1.md
+  Specifically the "<verb-specific anchor>" section.
+```
+
+**Category 2 — Daemon-down rendering pointers** (`audit` without
+`--strict`, `keys list`, `keys show`) emit `#daemon-down` (exit 1) only when
+the broker is stopped; otherwise the v1.0 successful invocation
+path runs normally. When `#daemon-down` does fire, the
+remediation block renders as:
+
+```
+Remediation:
+  nixlingd is not reachable. Start the daemon and re-run:
+    sudo systemctl start nixling-priv-broker.socket
+    sudo systemctl start nixlingd.service
+  For full v1.0 operator runbook context, see:
+    docs/how-to/migrate-nixling-v0-to-v1.md
+  Specifically the "<verb-specific anchor>" section.
+```
+
+Indentation is exactly 2 spaces per nesting level; the URL on its
+own line ensures the full path is copy-paste-safe on terminals
+narrower than 80 columns (the v1.0 inline rendering wrapped the
+URL across lines on narrow terminals, breaking
+copy-paste). Operator-facing grep patterns previously matching
+`Remediation: <inline-hint>` on the four verbs above MUST switch
+to matching `Remediation:` as a line prefix followed by the
+multi-line block; grep patterns targeting other envelopes (e.g.,
+`#bridge-port-flag-drift`, `#nft-coexistence-*`) keep working
+unchanged because their inline rendering is preserved.
+
+The four affected verbs and their migration-guide anchors are:
+
+- `nixling audit`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** — non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
+- `nixling console`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-console`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-console) (Category 1 — truly deferred)
+- `nixling audio`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audio`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-audio) (Category 1 — truly deferred)
+- `nixling keys list` / `nixling keys show`: [`docs/how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-nixling-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 — daemon-down only)
+
+The v1.1-P1 panel review verifies the
+Rust `Display` impl matches this rendering convention byte-for-
+byte for the four verbs; goldens at
+`tests/golden/cli-output/audit-*-deferred.golden`,
+`console-deferred.golden`, `audio-deferred.golden`,
+`keys-deferred.golden` (new in v1.1-P1) lock the multi-line
+format.
