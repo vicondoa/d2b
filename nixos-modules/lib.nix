@@ -77,6 +77,27 @@ in
   inherit hex2;
   inherit nixlingReadAudioState;
 
+  # v1.1.2-final-R1 (panel-software HIGH): SHARED helper extracted
+  # from minijail-profiles.nix and host-users.nix to eliminate the
+  # 4-line duplicate that was a drift-risk for broker/ownership-
+  # matrix UID agreement. If the hash algorithm or offset changes
+  # here, both consumers see the same UID, preventing the fu35-class
+  # bug from silently returning.
+  #
+  # Maps a principal name (e.g. "nixling-work-aad-swtpm") to a
+  # stable deterministic 24-bit UID in the range 50000..16827215.
+  # `principal == "root"` short-circuits to UID 0 for the broker's
+  # root-carve-out paths (ADR 0003).
+  #
+  # Birthday-bound collision risk: 50% at ~4096 principals,
+  # 1% at ~410. Typical workstation deployments stay under 400
+  # principals (≤100 VMs × 4 roles). For larger deployments,
+  # extend the hash to 8 hex chars (32 bits, ~65k birthday-bound).
+  # Eval-time collision detection lives in minijail-profiles.nix.
+  stablePrincipalId = principal:
+    if principal == "root" then 0
+    else 50000 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "sha256" principal));
+
   # subnetIp "10.20.0.0/24" 5  =>  "10.20.0.5"
   # subnetIp "192.0.2.252/30" 1 => "192.0.2.1"  (host-octet only,
   # caller knows the prefix length)

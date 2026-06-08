@@ -295,12 +295,16 @@ mod tests {
                 writable_paths: vec![],
                 nix_store_read_only: true,
                 hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
             },
             cgroup_placement: CgroupPlacement {
                 subtree: "system.slice/nixling-test".to_owned(),
                 controllers: vec![],
                 delegated: false,
             },
+            user_namespace: None,
+            umask: None,
         }
     }
 
@@ -311,6 +315,7 @@ mod tests {
             unit: None,
             binary_path: None,
             argv: vec![],
+            env: vec![],
             profile: dummy_profile(),
             readiness: vec![],
         }

@@ -237,6 +237,28 @@ profile (`nixos-modules/minijail-profiles.nix`) declares the bind set
 via `mountPolicy.deviceBinds` so the runner's mount namespace cannot
 see anything outside it.
 
+### Per-role file-creation mask (umask, v1.1.2-final)
+
+In v1.1.2-final the per-role minijail profile gained an optional
+`umask: Option<u32>` field. The broker child closure calls `umask(2)`
+with the role's mask immediately before `execve(2)`. Default is
+`None` (inherit broker's umask, current behaviour). Roles that bind
+shared Unix sockets declare `umask = 0o007` so the resulting sockets
+get mode 0660:
+
+| Role | umask | rationale |
+| --- | --- | --- |
+| `swtpm` (long-lived TPM sidecar) | `0o007` | `/run/nixling/vms/<vm>/tpm.sock` mode 0660 so cloud-hypervisor (named-user ACL grant) can connect via mask:rw |
+| `audio` (vhost-user-sound sidecar) | `0o007` | `/run/nixling/vms/<vm>/snd.sock` mode 0660 — same rationale |
+| `gpu` (crosvm-device-gpu sidecar) | `0o007` | `/run/nixling/vms/<vm>/gpu.sock` mode 0660 — same rationale |
+| `cloud-hypervisor` (long-lived runner) | (none) | CH reads from these sockets; it does not bind any of its own that need ACL-mediated access |
+| `virtiofsd` (per-share sidecar) | (none) | virtiofsd's `--sandbox=chroot` plus broker-pre-NS user-namespace handle access control; no shared sockets to harden |
+
+The broker enforces `umask <= 0o777` and exits with
+`CHILD_EXIT_INVALID_UMASK=75` for out-of-range values. The umask
+syscall is invoked AFTER setuid/setgid/cap-drop/seccomp but BEFORE
+execve, so the new process image inherits the configured mask.
+
 ### Gpu role
 
 | Device | `DeviceClass` | Rationale |
@@ -675,8 +697,8 @@ writes `/var/lib/nixling/validated/p1-<role>.json` on success.
 | --- | --- | --- | --- | --- |
 | `cloud-hypervisor` | `vm-<vm>-cloud-hypervisor` | `CAP_NET_ADMIN` (transient — runner drops it after the SCM_RIGHTS tap-fd recv path before entering its main loop; static minijail allowlist cannot express "transient", so the profile declares the setup-time union) | `/dev/kvm`, `/dev/net/tun` (per the P1 device matrix; optional `/dev/dri/renderD128` + `/dev/nvidia0` when graphics/accelerator passthrough is bound to this runner) | `tests/minijail-validator-cloud-hypervisor.sh` |
 | `virtiofsd` | `vm-<vm>-virtiofsd-<tag>` | empty (kernel-r2-4 steady-state) | startup carve-out: `CAP_SYS_ADMIN`, `CAP_SETPCAP`, `CAP_CHOWN`, `CAP_FOWNER`, `CAP_FSETID`, `CAP_SETUID`, `CAP_SETGID`, `CAP_DAC_OVERRIDE`, `CAP_MKNOD`, `CAP_SETFCAP` — required transiently during `virtiofsd --sandbox=namespace` setup before the daemon drops to an empty bounding set inside its own user namespace; ADR 0003 (`virtiofsdRootException` marker on the profile) | `tests/minijail-validator-virtiofsd.sh` (positive: `virtiofsd --version` under the carve-out profile; negative: `ptrace` probe under the `w1-virtiofsd` seccomp policy must exit with SIGSYS) |
-| `swtpm` (long-lived sidecar) | `vm-<vm>-swtpm` | empty | **CRITICAL** RW bind of `/var/lib/nixling/vms/<vm>/swtpm` (TPM 2.0 NVRAM + EK seed) + `/run/swtpm/<vm>` (control socket). MUST be real RW bind, NOT tmpfs. Wiping/losing the bind forces Entra/Intune re-enrollment for work-aad (AGENTS.md critical-subsystem invariant). | `tests/minijail-validator-swtpm.sh` + `tests/swtpm-persistence-smoke.sh` (write/stop/daemon-restart/read-back persistence regression) |
-| `swtpm-flush` (pre-start one-shot) | `vm-<vm>-swtpm-flush` | empty | Same `/var/lib/nixling/vms/<vm>/swtpm` + `/run/swtpm/<vm>` binds as the long-lived `swtpm` sidecar; runs `swtpm_ioctl -i` flush before the sidecar adopts state. | shares the swtpm validator + persistence smoke |
+| `swtpm` (long-lived sidecar) | `vm-<vm>-swtpm` | empty | **CRITICAL** RW bind of `/var/lib/nixling/vms/<vm>/swtpm` (TPM 2.0 NVRAM + EK seed) + `/run/nixling/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) (control socket). MUST be real RW bind, NOT tmpfs. Wiping/losing the bind forces Entra/Intune re-enrollment for work-aad (AGENTS.md critical-subsystem invariant). | `tests/minijail-validator-swtpm.sh` + `tests/swtpm-persistence-smoke.sh` (write/stop/daemon-restart/read-back persistence regression) |
+| `swtpm-flush` (pre-start one-shot) | `vm-<vm>-swtpm-flush` | empty | Same `/var/lib/nixling/vms/<vm>/swtpm` + `/run/nixling/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) binds as the long-lived `swtpm` sidecar; runs `swtpm_ioctl -i` flush before the sidecar adopts state. | shares the swtpm validator + persistence smoke |
 | `gpu` | `vm-<vm>-gpu` | empty (kernel-r2-4 corrected — previously `CAP_SYS_NICE`; per-role smoke proves virgl/venus/cross-domain run under SCHED_OTHER) | device binds: `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`; mount `/run/user/<uid>/wayland-0` → `/run/nixling-gpu/<vm>/wayland-0`; ioctls: full `DRM_IOCTL_VIRTGPU_*` family (via DeviceClass::Dri) | `tests/minijail-validator-gpu.sh` (positive: DRM_IOCTL_VIRTGPU_GET_CAPS under profile; negative: ptrace → SIGSYS) |
 | `audio` | `vm-<vm>-audio` | `CAP_NET_RAW` (vhost-user-sound bind on PipeWire mediation path; AF_NETLINK for virtio-snd) | RO bind of `/run/user/<uid>/pipewire-0`; RW bind of `/run/nixling/vms/<vm>/snd.sock`; seccompPolicyRef = `w1-audio` | `tests/minijail-validator-audio.sh` |
 | `video` | `vm-<vm>-video` | empty (kernel-r2-4) | RO bind of `/dev/dri/renderD128` for virtio-media decode (kernel-8 wire contract: `virtio_id=48`, 2×256 queues, 256 MiB SHM, `vring_base=0`); RW bind of `/run/nixling-video/<vm>/` (vhost-user-media socket dir); seccompPolicyRef = `w1-video`; principal shares `nixling-<vm>-gpu` uid for DRM access | `tests/minijail-validator-video.sh` |

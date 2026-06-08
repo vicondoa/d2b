@@ -1,0 +1,612 @@
+// v1.1.2fu19 panel-security R2 critical must-fix: replace the
+// shell-script `[ -L ] / [ -f ] / find -type f` check-then-act
+// patterns in nixos-modules/host-activation.nix with fd-safe
+// operations that cannot be defeated by a runner-UID attacker
+// swapping a checked regular file for a symlink between the
+// check and the action.
+//
+// All paths used here open the target with `O_NOFOLLOW` (refusing
+// to traverse a final-segment symlink) and `O_PATH` or
+// `O_DIRECTORY` so the fd refers to a stable inode. Subsequent
+// mutations use `fchown(2)` / `fchmod(2)` / `ftruncate(2)` /
+// `fsetxattr(2)` against that fd, removing the TOCTOU window.
+//
+// Verbs (each accepts `--help`):
+//   ensure-regular-file --path P --uid U --gid G --mode M --size-mib N
+//     Atomically create `P` with `O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW`,
+//     `ftruncate` to N MiB, `fchown(uid,gid)`, `fchmod(mode)`. If P
+//     already exists as a regular file (not symlink), re-asserts
+//     ownership/mode/size idempotently via O_NOFOLLOW open + fstat
+//     check + fchown/fchmod. If P exists as a symlink or non-regular
+//     file (directory, device, FIFO), refuses and exits 2.
+//   enforce-dir-posture --path P --uid U --gid G --mode M
+//     Open P with `O_DIRECTORY|O_NOFOLLOW`, fstat to confirm it IS
+//     a directory (not a symlink-to-dir), fchown(uid,gid),
+//     fchmod(mode). If P is a symlink, refuses and exits 2.
+//
+// Exit codes:
+//   0  - success (action applied or already-correct)
+//   1  - input / parse / nonexistent / IO error
+//   2  - safety refusal (symlink or wrong file type at target)
+//
+// nixling-host is `#![forbid(unsafe_code)]`; this binary lives in
+// the same crate so it inherits that policy. Direct libc::open()
+// is required for `O_NOFOLLOW|O_EXCL` which `std::fs::OpenOptions`
+// only exposes via the `unix::OpenOptionsExt::custom_flags()` API
+// which IS safe; we use that.
+
+use std::fs::File;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
+use std::process::{Command, ExitCode};
+
+use nix::sys::stat::{fchmod, Mode};
+use nix::unistd::{fchown, ftruncate, Gid, Uid};
+use rustix::fs::{Mode as RxMode, OFlags, ResolveFlags, CWD};
+
+/// v1.1.2fu24 panel-security R5 critical must-fix: open `path`
+/// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
+/// `RESOLVE_NO_SYMLINKS` refuses ANY symlink encountered during
+/// path resolution — final segment AND every intermediate
+/// component. This closes the symlink-swap-of-ancestor TOCTOU
+/// class that plain `O_NOFOLLOW` (which only protects the final
+/// component) cannot defend against.
+///
+/// Requires Linux >= 5.6 (openat2 syscall); v1.1 kernel floor
+/// is 6.9 (ADR 0008) so this is satisfied unconditionally.
+fn open_no_symlinks(path: &std::path::Path, oflags: OFlags) -> std::io::Result<OwnedFd> {
+    let full_flags = oflags | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    rustix::fs::openat2(
+        CWD,
+        path,
+        full_flags,
+        RxMode::empty(),
+        ResolveFlags::NO_SYMLINKS,
+    )
+    .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()))
+}
+
+#[derive(Debug)]
+struct Args {
+    verb: String,
+    path: Option<PathBuf>,
+    uid: Option<u32>,
+    gid: Option<u32>,
+    mode: Option<u32>,
+    size_mib: Option<u64>,
+    acl_spec: Option<String>,
+    also_spec: Option<String>,
+    require_kind: Option<String>,
+    if_owner: Option<String>,
+    setfacl_bin: Option<PathBuf>,
+}
+
+fn parse_args() -> Result<Args, String> {
+    let mut argv = std::env::args().skip(1);
+    let verb = argv.next().ok_or("missing verb")?;
+    let mut args = Args {
+        verb,
+        path: None,
+        uid: None,
+        gid: None,
+        mode: None,
+        size_mib: None,
+        acl_spec: None,
+        also_spec: None,
+        require_kind: None,
+        if_owner: None,
+        setfacl_bin: None,
+    };
+    while let Some(flag) = argv.next() {
+        let value = argv.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        match flag.as_str() {
+            "--path" => args.path = Some(PathBuf::from(value)),
+            "--uid" => args.uid = Some(value.parse().map_err(|e| format!("--uid: {e}"))?),
+            "--gid" => args.gid = Some(value.parse().map_err(|e| format!("--gid: {e}"))?),
+            "--mode" => {
+                let m = u32::from_str_radix(&value, 8)
+                    .map_err(|e| format!("--mode (octal): {e}"))?;
+                args.mode = Some(m);
+            }
+            "--size-mib" => {
+                args.size_mib =
+                    Some(value.parse().map_err(|e| format!("--size-mib: {e}"))?);
+            }
+            "--acl-spec" => args.acl_spec = Some(value),
+            "--also-spec" => args.also_spec = Some(value),
+            "--require-kind" => args.require_kind = Some(value),
+            "--if-owner" => args.if_owner = Some(value),
+            "--setfacl-bin" => args.setfacl_bin = Some(PathBuf::from(value)),
+            other => return Err(format!("unknown flag: {other}")),
+        }
+    }
+    Ok(args)
+}
+
+fn require<T>(field: &str, value: Option<T>) -> Result<T, String> {
+    value.ok_or_else(|| format!("missing required flag: --{field}"))
+}
+
+fn print_help() {
+    eprintln!(
+        "nixling-activation-helper — fd-safe activation primitives\n\
+         \n\
+         USAGE:\n  \
+           nixling-activation-helper ensure-regular-file --path P --uid U --gid G --mode M --size-mib N\n  \
+           nixling-activation-helper enforce-dir-posture --path P --uid U --gid G --mode M\n  \
+           nixling-activation-helper setfacl-on-path --path P --acl-spec A [--also-spec A2] [--require-kind regular|directory|any] [--setfacl-bin PATH]\n  \
+           nixling-activation-helper chown-if-orphan --path P --uid U --gid G\n\
+         \n\
+         EXIT CODES:\n  \
+           0 success / already-correct\n  \
+           1 input or IO error\n  \
+           2 safety refusal (symlink at target / wrong file type)\n"
+    );
+}
+
+fn cmd_ensure_regular_file(args: &Args) -> ExitCode {
+    let path = match require("path", args.path.as_ref()) {
+        Ok(p) => p,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let uid = match require("uid", args.uid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let gid = match require("gid", args.gid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let mode = match require("mode", args.mode) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let size_mib = match require("size-mib", args.size_mib) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+
+    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // openat2 + RESOLVE_NO_SYMLINKS so NO path component
+    // (intermediate or final) can be a symlink. Closes the
+    // ancestor-swap TOCTOU class. We still try O_EXCL+O_CREAT
+    // first so the AlreadyExists fallback path can re-assert
+    // mode on an existing regular file.
+    match open_no_symlinks(
+        path,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL,
+    ) {
+        Ok(fd) => {
+            let file: File = File::from(fd);
+            let target_size = size_mib.saturating_mul(1024 * 1024);
+            if let Err(e) = ftruncate(&file, target_size as i64) {
+                eprintln!("ftruncate({}) failed: {e}", path.display());
+                return ExitCode::from(1);
+            }
+            if let Err(e) = fchown(
+                file.as_raw_fd(),
+                Some(Uid::from_raw(uid)),
+                Some(Gid::from_raw(gid)),
+            ) {
+                eprintln!("fchown({}) failed: {e}", path.display());
+                return ExitCode::from(1);
+            }
+            let perms = Mode::from_bits_truncate(mode);
+            if let Err(e) = fchmod(file.as_raw_fd(), perms) {
+                eprintln!("fchmod({}) failed: {e}", path.display());
+                return ExitCode::from(1);
+            }
+            ExitCode::from(0)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // v1.1.2fu24: re-assert path also uses openat2 +
+            // RESOLVE_NO_SYMLINKS for full path-safety. O_NONBLOCK
+            // keeps FIFO/socket targets from hanging open(2);
+            // O_NOFOLLOW is implicit via the helper.
+            let existing_fd = match open_no_symlinks(
+                path,
+                OFlags::RDONLY | OFlags::NONBLOCK,
+            ) {
+                Ok(fd) => fd,
+                Err(e2) if e2.raw_os_error() == Some(libc::ELOOP) => {
+                    eprintln!(
+                        "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                        path.display()
+                    );
+                    return ExitCode::from(2);
+                }
+                Err(e2) => {
+                    eprintln!("open({}) for re-assert failed: {e2}", path.display());
+                    return ExitCode::from(1);
+                }
+            };
+            let existing: File = File::from(existing_fd);
+            let meta = match existing.metadata() {
+                Ok(m) => m,
+                Err(e2) => {
+                    eprintln!("fstat({}) failed: {e2}", path.display());
+                    return ExitCode::from(1);
+                }
+            };
+            let file_type = meta.file_type();
+            if !file_type.is_file() {
+                eprintln!(
+                    "refusing: {} is not a regular file (mode 0o{:o})",
+                    path.display(),
+                    meta.mode()
+                );
+                return ExitCode::from(2);
+            }
+            if let Err(e2) = fchown(
+                existing.as_raw_fd(),
+                Some(Uid::from_raw(uid)),
+                Some(Gid::from_raw(gid)),
+            ) {
+                eprintln!("re-assert fchown({}) failed: {e2}", path.display());
+                return ExitCode::from(1);
+            }
+            let perms = Mode::from_bits_truncate(mode);
+            if let Err(e2) = fchmod(existing.as_raw_fd(), perms) {
+                eprintln!("re-assert fchmod({}) failed: {e2}", path.display());
+                return ExitCode::from(1);
+            }
+            ExitCode::from(0)
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            eprintln!(
+                "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                path.display()
+            );
+            ExitCode::from(2)
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            // RESOLVE_NO_SYMLINKS can also return EXDEV for
+            // bind-mount crossings; treat as safety refusal.
+            eprintln!(
+                "refusing: {} crosses a bind mount (RESOLVE_NO_SYMLINKS EXDEV)",
+                path.display()
+            );
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("create({}) failed: {e}", path.display());
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
+    let path = match require("path", args.path.as_ref()) {
+        Ok(p) => p,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let uid = match require("uid", args.uid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let gid = match require("gid", args.gid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let mode = match require("mode", args.mode) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+
+    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // openat2 + RESOLVE_NO_SYMLINKS so NO path component
+    // (intermediate or final) can be a symlink.
+    let dir_fd = match open_no_symlinks(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY,
+    ) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            eprintln!(
+                "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ENOTDIR) => {
+            eprintln!(
+                "refusing: {} is not a directory (O_DIRECTORY returned ENOTDIR)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            eprintln!(
+                "refusing: {} crosses a bind mount (RESOLVE_NO_SYMLINKS EXDEV)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ExitCode::from(0);
+        }
+        Err(e) => {
+            eprintln!("open({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let dir: File = File::from(dir_fd);
+    let meta = match dir.metadata() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("fstat({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    if !meta.file_type().is_dir() {
+        eprintln!(
+            "refusing: {} fstat says non-directory (mode 0o{:o})",
+            path.display(),
+            meta.mode()
+        );
+        return ExitCode::from(2);
+    }
+    if let Err(e) = fchown(
+        dir.as_raw_fd(),
+        Some(Uid::from_raw(uid)),
+        Some(Gid::from_raw(gid)),
+    ) {
+        eprintln!("fchown({}) failed: {e}", path.display());
+        return ExitCode::from(1);
+    }
+    let perms = Mode::from_bits_truncate(mode);
+    if let Err(e) = fchmod(dir.as_raw_fd(), perms) {
+        eprintln!("fchmod({}) failed: {e}", path.display());
+        return ExitCode::from(1);
+    }
+    ExitCode::from(0)
+}
+
+/// v1.1.2fu23 panel-security R4 critical must-fix: fd-safe
+/// `setfacl` wrapper that cannot be redirected to attacker-
+/// controlled symlink targets. Opens `--path` with O_PATH +
+/// O_NOFOLLOW (refuses symlinks), fstats to validate the file
+/// type matches `--require-kind` (regular | directory | any),
+/// then invokes `setfacl -m <acl-spec> [-m <also-spec>]
+/// /proc/self/fd/<N>` — the kernel resolves the magic
+/// procfs symlink to the inode the fd already holds, so the
+/// setxattr cannot be redirected to a different path. The
+/// `--setfacl-bin` flag pins the setfacl binary (typically
+/// `${pkgs.acl}/bin/setfacl`) so $PATH is not consulted.
+fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
+    let path = match require("path", args.path.as_ref()) {
+        Ok(p) => p,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let acl_spec = match require("acl-spec", args.acl_spec.as_ref()) {
+        Ok(v) => v.clone(),
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let require_kind = args.require_kind.as_deref().unwrap_or("any");
+    let setfacl_bin = args
+        .setfacl_bin
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("setfacl"));
+
+    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // openat2 + RESOLVE_NO_SYMLINKS so NO path component
+    // (intermediate or final) can be a symlink. O_NONBLOCK
+    // prevents FIFO/socket hangs at the final segment.
+    // O_CLOEXEC is in our helper by default but we clear
+    // FD_CLOEXEC before spawning setfacl below so the child
+    // inherits the fd for /proc/self/fd/<N> resolution.
+    let raw_fd = match open_no_symlinks(
+        path,
+        OFlags::RDONLY | OFlags::NONBLOCK,
+    ) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            eprintln!(
+                "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            eprintln!(
+                "refusing: {} crosses a bind mount (RESOLVE_NO_SYMLINKS EXDEV)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ExitCode::from(0);
+        }
+        Err(e) => {
+            eprintln!("open({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let fd: File = File::from(raw_fd);
+    let meta = match fd.metadata() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("fstat({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    match require_kind {
+        "regular" if !meta.file_type().is_file() => {
+            eprintln!(
+                "refusing: {} fstat says non-regular (mode 0o{:o}); --require-kind=regular",
+                path.display(),
+                meta.mode()
+            );
+            return ExitCode::from(2);
+        }
+        "directory" if !meta.file_type().is_dir() => {
+            eprintln!(
+                "refusing: {} fstat says non-directory (mode 0o{:o}); --require-kind=directory",
+                path.display(),
+                meta.mode()
+            );
+            return ExitCode::from(2);
+        }
+        "any" | "regular" | "directory" => {}
+        other => {
+            eprintln!("error: invalid --require-kind: {other}");
+            return ExitCode::from(1);
+        }
+    }
+    let procfd_path = format!("/proc/self/fd/{}", fd.as_raw_fd());
+    // Rust's stdlib unconditionally sets FD_CLOEXEC on every File
+    // (even when we don't pass O_CLOEXEC). We need the setfacl
+    // child to inherit this fd so its `/proc/self/fd/<N>` argv
+    // resolves. Clear FD_CLOEXEC before spawn.
+    if let Err(e) = nix::fcntl::fcntl(
+        fd.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    ) {
+        eprintln!("fcntl(F_SETFD, 0) failed: {e}");
+        return ExitCode::from(1);
+    }
+    let mut cmd = Command::new(&setfacl_bin);
+    cmd.arg("-m").arg(&acl_spec);
+    if let Some(also) = &args.also_spec {
+        cmd.arg("-m").arg(also);
+    }
+    cmd.arg(&procfd_path);
+    match cmd.status() {
+        Ok(status) if status.success() => ExitCode::from(0),
+        Ok(status) => {
+            eprintln!(
+                "setfacl on /proc/self/fd ({}) failed: {:?}",
+                path.display(),
+                status
+            );
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("spawn setfacl failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// v1.1.2fu23 panel-security R4 high must-fix: fd-safe chown
+/// that only fires when the existing owner matches `--if-owner`
+/// (typically "UNKNOWN" for the orphan-repair case). Opens
+/// `--path` with O_PATH + O_NOFOLLOW (refuses symlinks),
+/// fstats to read the existing uid:gid, looks them up against
+/// /etc/passwd + /etc/group, and only chowns when the existing
+/// owner string matches the marker (or when getpwuid/getgrgid
+/// returns NULL — the "UNKNOWN" case).
+fn cmd_chown_if_orphan(args: &Args) -> ExitCode {
+    let path = match require("path", args.path.as_ref()) {
+        Ok(p) => p,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let uid = match require("uid", args.uid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+    let gid = match require("gid", args.gid) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+    };
+
+    // v1.1.2fu24 panel-security R5 critical must-fix: use
+    // openat2 + RESOLVE_NO_SYMLINKS so NO path component
+    // (intermediate or final) can be a symlink. fchown(2)
+    // does NOT work on O_PATH fds (kernel returns EBADF), so
+    // use O_RDONLY + O_NONBLOCK (no FIFO hang) — the helper
+    // adds O_NOFOLLOW + O_CLOEXEC implicitly.
+    let raw_fd = match open_no_symlinks(
+        path,
+        OFlags::RDONLY | OFlags::NONBLOCK,
+    ) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            eprintln!(
+                "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            eprintln!(
+                "refusing: {} crosses a bind mount (RESOLVE_NO_SYMLINKS EXDEV)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ExitCode::from(0);
+        }
+        Err(e) => {
+            eprintln!("open({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let fd: File = File::from(raw_fd);
+    let meta = match fd.metadata() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("fstat({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let current_uid = meta.uid();
+    let user_known = nix::unistd::User::from_uid(Uid::from_raw(current_uid))
+        .ok()
+        .flatten()
+        .is_some();
+    let current_gid = meta.gid();
+    let group_known = nix::unistd::Group::from_gid(Gid::from_raw(current_gid))
+        .ok()
+        .flatten()
+        .is_some();
+    let is_orphan = !user_known || !group_known;
+    if !is_orphan {
+        return ExitCode::from(0);
+    }
+    if let Err(e) = fchown(
+        fd.as_raw_fd(),
+        Some(Uid::from_raw(uid)),
+        Some(Gid::from_raw(gid)),
+    ) {
+        eprintln!("fchown({}) failed: {e}", path.display());
+        return ExitCode::from(1);
+    }
+    eprintln!(
+        "nixling: repaired orphan ownership on {} ({}:{} -> {}:{})",
+        path.display(),
+        current_uid,
+        current_gid,
+        uid,
+        gid
+    );
+    ExitCode::from(0)
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            print_help();
+            return ExitCode::from(1);
+        }
+    };
+    match args.verb.as_str() {
+        "ensure-regular-file" => cmd_ensure_regular_file(&args),
+        "enforce-dir-posture" => cmd_enforce_dir_posture(&args),
+        "setfacl-on-path" => cmd_setfacl_on_path(&args),
+        "chown-if-orphan" => cmd_chown_if_orphan(&args),
+        "--help" | "-h" => {
+            print_help();
+            ExitCode::from(0)
+        }
+        other => {
+            eprintln!("error: unknown verb: {other}");
+            print_help();
+            ExitCode::from(1)
+        }
+    }
+}

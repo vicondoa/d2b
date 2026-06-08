@@ -104,6 +104,18 @@
           '';
         };
 
+        graphics.videoSidecar = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            v1.1.1fu13: spawn the per-VM video-decoder sidecar
+            (vaapi-backed virtio-video). Requires a crosvm build
+            with the video-decoder feature compiled in (the
+            crosvmVideo overlay is broken on nixpkgs 26.05).
+            Default false so graphics VMs can boot without hwaccel.
+          '';
+        };
+
         tpm.enable = lib.mkEnableOption ''
           swtpm 2.0-backed TPM device exposed to the guest as a TPM
           CRB at /dev/tpm0 + /dev/tpmrm0. Implies hypervisor =

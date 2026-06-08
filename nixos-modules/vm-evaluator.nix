@@ -47,6 +47,12 @@ let
     import "${pkgs.path}/nixos/lib/eval-config.nix" {
       modules = [
         ./vm-options.nix
+        ./vm-guest-base.nix
+        # v1.1.1: inherit the host's nixpkgs.config so per-VM evals
+        # honor the consumer's allowUnfree / allowUnfreePredicate /
+        # permittedInsecurePackages settings without re-stating them
+        # in each per-VM module.
+        { nixpkgs.config = config.nixpkgs.config; }
         { _module.args.name = name; }
       ] ++ composedModules;
       specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;

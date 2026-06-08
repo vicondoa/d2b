@@ -1411,37 +1411,41 @@ fn ensure_runner_cgroup_leaf<B: nixling_host::cgroup::CgroupBackend>(
         return Ok(None);
     };
     let leaf_path = cgroup_leaf_path(parent_slice, &vm, &role_segments);
-    if placement.delegated {
-        let slice = crate::ops::cgroup::create_nixling_slice(
-            backend,
-            unified_hierarchy_root,
-            parent_slice,
-            uid,
-            gid,
-        )
-        .map_err(|err| LiveHandlerError::SpawnFailed {
-            detail: format!("delegate cgroup slice: {err}"),
-        })?;
-        let mut cursor = create_vm_subtree(backend, &slice, &vm, uid, gid).map_err(|err| {
-            LiveHandlerError::SpawnFailed {
-                detail: format!("delegate cgroup subtree for {vm}: {err}"),
-            }
-        })?;
-        for segment in &role_segments {
-            cursor.push(segment);
-            if !backend.exists(&cursor) {
-                backend
-                    .mkdir(&cursor)
-                    .map_err(|err| LiveHandlerError::SpawnFailed {
-                        detail: format!("create cgroup leaf {}: {err}", cursor.display()),
-                    })?;
-            }
+    // v1.1.1 live-deploy fu9: always materialize the cgroup leaf
+    // dir tree even when placement.delegated == false. The
+    // delegated flag is about controller delegation (enabling
+    // subtree control), not whether the directory exists. The
+    // broker spawn path always needs the leaf to write the
+    // child pid into cgroup.procs.
+    let slice = crate::ops::cgroup::create_nixling_slice(
+        backend,
+        unified_hierarchy_root,
+        parent_slice,
+        uid,
+        gid,
+    )
+    .map_err(|err| LiveHandlerError::SpawnFailed {
+        detail: format!("delegate cgroup slice: {err}"),
+    })?;
+    let mut cursor = create_vm_subtree(backend, &slice, &vm, uid, gid).map_err(|err| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("delegate cgroup subtree for {vm}: {err}"),
+        }
+    })?;
+    for segment in &role_segments {
+        cursor.push(segment);
+        if !backend.exists(&cursor) {
             backend
-                .fchown(&cursor, uid, gid)
+                .mkdir(&cursor)
                 .map_err(|err| LiveHandlerError::SpawnFailed {
-                    detail: format!("chown cgroup leaf {}: {err}", cursor.display()),
+                    detail: format!("create cgroup leaf {}: {err}", cursor.display()),
                 })?;
         }
+        backend
+            .fchown(&cursor, uid, gid)
+            .map_err(|err| LiveHandlerError::SpawnFailed {
+                detail: format!("chown cgroup leaf {}: {err}", cursor.display()),
+            })?;
     }
     Ok(Some(leaf_path))
 }
@@ -1525,6 +1529,21 @@ pub fn live_spawn_runner(
         seccomp_program,
         mount_policy: plan.mount_policy.clone(),
         cgroup_procs_fd,
+        // v1.1.1fu14: plumb through the user-NS spec from the
+        // role profile. When Some, the broker pre-creates the
+        // user NS and writes uid_map/gid_map; the child runs
+        // fake-root inside with no host-side capabilities.
+        // Used by virtiofsd (ADR 0021) for least-privilege FS
+        // serving.
+        user_namespace: plan.user_namespace.map(|spec| {
+            crate::sys::pidfd_sys::UserNamespaceSpec {
+                host_uid_for_zero: spec.host_uid_for_zero,
+                host_gid_for_zero: spec.host_gid_for_zero,
+            }
+        }),
+        // v1.1.2fu36: plumb the role profile's umask through to the
+        // child. None = inherit broker umask (current behaviour).
+        umask: plan.umask,
     };
 
     let outcome = crate::sys::pidfd_sys::clone3_spawn_runner(
@@ -2209,6 +2228,8 @@ mod tests {
             }],
             nix_store_read_only: false,
             hide_device_nodes_by_default: false,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
         }
     }
 
@@ -2245,7 +2266,12 @@ mod tests {
                 .join("virtiofsd-ro-store")
         );
         assert!(backend.directory_exists(&leaf));
-        assert!(!backend.directory_exists(Path::new("/sys/fs/cgroup/nixling.slice")));
+        // v1.1.1fu11: DEFAULT_DELEGATED_PARENT_SLICE is now the
+        // top-level `/sys/fs/cgroup/nixling.slice` (systemd
+        // top-level slice naming convention). The leaf path lives
+        // under that, so the slice MUST exist for the leaf to
+        // exist.
+        assert!(backend.directory_exists(Path::new("/sys/fs/cgroup/nixling.slice")));
         assert_eq!(
             backend
                 .file_contents(&root.join("cgroup.subtree_control"))
@@ -2271,6 +2297,8 @@ mod tests {
             cgroup_placement: test_cgroup_placement(),
             root_carve_out: false,
             skip_binary_exists_check: true,
+            user_namespace: None,
+            umask: None,
         };
         let err = live_spawn_runner(&plan).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
@@ -2317,10 +2345,14 @@ mod tests {
                 writable_paths: vec![],
                 nix_store_read_only: false,
                 hide_device_nodes_by_default: false,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
             },
             cgroup_placement: test_cgroup_placement(),
             root_carve_out: true,
             skip_binary_exists_check: false,
+            user_namespace: None,
+            umask: None,
         };
 
         let outcome = live_spawn_runner(&plan).expect("spawn privileged test child");

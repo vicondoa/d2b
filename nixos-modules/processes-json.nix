@@ -67,8 +67,19 @@ let
       lib.mapAttrsToList (k: v: "${k}=${toString v}") ops
     );
 
-  repeatedFlagArgs = flag: params:
-    lib.concatMap (param: [ flag param ]) params;
+  # v1.1.2fu30: CH 52 changed `--fs`/`--net`/`--disk`/`--device` from
+  # accepting repeated `--flag value` pairs to a single `--flag` followed
+  # by multiple positional values (clap variadic). The microvm.nix-derived
+  # net-VM argv path used the OLD repeated-flag style which CH 52 rejects
+  # with "the argument '--fs <fs>...' cannot be used multiple times".
+  #
+  # Fix: emit single-flag variadic for the `--fs`/`--net`/`--disk`/
+  # `--device` cases. Other CH variadic flags (`--vsock`, `--gpu`) only
+  # ever have one value and are not affected.
+  variadicFlagArgs = flag: params:
+    if params == [ ]
+    then [ ]
+    else [ flag ] ++ params;
 
   resolvedInterfaces = microvm:
     builtins.map (iface: {
@@ -93,7 +104,7 @@ let
       set -eu
       state_dir=/var/lib/nixling/vms/${name}/swtpm
       permall_file="$state_dir/swtpm_perm.state"
-      flush_sock=/run/swtpm/${name}/flush.sock
+      flush_sock=/run/nixling/vms/${name}/tpm-flush.sock
 
       if [ ! -f "$permall_file" ]; then
         exit 0
@@ -173,7 +184,7 @@ let
         else
           userVSockCID;
       supportsNotifySocket = vsockCID != null;
-      vsockPath = if userVSockPath != null then userVSockPath else "notify.vsock";
+      vsockPath = if userVSockPath != null then userVSockPath else "/var/lib/nixling/vms/${name}/notify.vsock";
       vsockOpts =
         if vsockCID == null then
           null
@@ -236,7 +247,13 @@ let
         } // diskMqOps))
         ++ builtins.map (volume:
           opsMapped ({
-            path = toString volume.image;
+            # v1.1.1fu13g: prefix relative volume.image with the
+            # per-VM state dir so CH (which has no cwd under broker
+            # spawn) can find the disk. Absolute paths pass through
+            # unchanged.
+            path = let s = toString volume.image; in
+              if lib.hasPrefix "/" s then s
+              else "${toString cfg.store.stateDir}/${name}/${s}";
             # v1.1-final: defensive defaults for volume fields the
             # consumer may omit. The nixling-owned vm-options.nix
             # types `microvm.volumes` as `listOf attrs` (untyped)
@@ -253,7 +270,16 @@ let
         ) microvm.volumes
         ++ lib.optionals (microvm.writableStoreOverlay != null) [
           (opsMapped {
-            path = "${toString microvm.writableStoreOverlay}/upper";
+            # v1.1.1fu13j: writableStoreOverlay is a guest-side
+            # overlayfs upper layer. Under microvm.nix v1 it lived
+            # on the host at /var/lib/microvms/<vm>/store-overlay.img
+            # (a separate raw disk). The broker-spawn migration
+            # doesn't create that backing file. Disable the disk
+            # arg until a per-VM overlay-backing-image creation step
+            # is in place (the guest still has var.img for writable
+            # storage; only nix-env / ad-hoc store mutations need
+            # the overlay).
+            path = "${toString cfg.store.stateDir}/${name}/store-overlay.img";
             serial = "rootfs";
             readonly = "off";
           })
@@ -305,17 +331,25 @@ let
     ++ lib.optionals (vsockOpts != null) [ "--vsock" vsockOpts ]
     ++ lib.optionals vm.graphics.enable [ "--gpu" "socket=${microvm.graphics.socket}" ]
     ++ lib.optionals microvm.balloon [ "--balloon" balloonOps ]
-    ++ repeatedFlagArgs "--disk" diskParams
-    ++ repeatedFlagArgs "--fs" fsParams
+    ++ variadicFlagArgs "--disk" diskParams
+    ++ variadicFlagArgs "--fs" fsParams
     ++ [ "--api-socket" manifest.apiSocket ]
-    ++ repeatedFlagArgs "--net" netParams
-    ++ repeatedFlagArgs "--device" deviceParams
+    ++ variadicFlagArgs "--net" netParams
+    ++ variadicFlagArgs "--device" deviceParams
     ++ processedExtraArgs
     ++ audioExtraArgs;
 
   virtiofsdRunner = name: share:
     let
       microvm = nl.vmRunner config name;
+      # v1.1.1fu14 (ADR 0021): under broker-pre-NS, virtiofsd is
+      # fake-root inside its own user namespace. Use --sandbox=chroot
+      # (now works because we have CAP_SYS_ADMIN inside the NS) and
+      # disable file handles (we don't need open_by_handle_at(2)
+      # for read-only or per-VM share serving). --posix-acl + --xattr
+      # are dropped: /nix/store has no ACLs, and the per-VM shares
+      # are nixling-managed (no foreign xattrs to preserve).
+      isRoStore = share.source == "/nix/store";
     in {
       binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
       argv = [
@@ -327,13 +361,12 @@ let
         "--shared-dir=${toString share.source}"
         "--thread-pool-size"
         (resolvedVirtiofsdThreadPoolSize microvm)
-        "--posix-acl"
-        "--xattr"
+        "--sandbox=chroot"
+        "--inode-file-handles=never"
         "--cache=${share.cache or "auto"}"
       ]
-      ++ lib.optionals (microvm.virtiofsd.inodeFileHandles != null) [ "--inode-file-handles=${microvm.virtiofsd.inodeFileHandles}" ]
       ++ lib.optionals (microvm.hypervisor == "crosvm") [ "--tag=${share.tag}" ]
-      ++ lib.optionals (share.readOnly or false) [ "--readonly" ]
+      ++ lib.optionals (isRoStore || (share.readOnly or false)) [ "--readonly" ]
       ++ microvm.virtiofsd.extraArgs;
     };
 
@@ -353,7 +386,12 @@ let
       "--tpmstate"
       "dir=/var/lib/nixling/vms/${name}/swtpm"
       "--ctrl"
-      "type=unixio,path=/run/swtpm/${name}/sock,mode=0600"
+      # v1.1.2fu36: mode=0660 (was 0600) so that combined with
+      # umask 0o007 from the swtpm role profile and the per-VM
+      # /run/nixling/vms/<vm>/ default ACL granting CH's UID rw,
+      # cloud-hypervisor can connect to the TPM control socket
+      # without operator setfacl intervention.
+      "type=unixio,path=/run/nixling/vms/${name}/tpm.sock,mode=0660"
       "--tpm2"
       "--flags"
       "startup-clear"
@@ -376,6 +414,14 @@ let
         "/run/user/${waylandUid}/wayland-0"
         "--params"
         gpuParams
+      ];
+      # v1.1.1fu11 (Option B): Wayland + XDG runtime for crosvm
+      # GPU sidecar. The --wayland-sock path is also in argv so
+      # crosvm knows where to bind; XDG_RUNTIME_DIR is for
+      # libwayland's auto-discovery + temporary state.
+      env = [
+        "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
+        "WAYLAND_DISPLAY=wayland-0"
       ];
     };
 
@@ -423,6 +469,12 @@ let
       "--backend"
       "vaapi"
     ];
+    # v1.1.1fu11 (Option B): video sidecar uses vaapi which
+    # talks to /dev/dri/renderD128 directly, but needs
+    # XDG_RUNTIME_DIR for libdrm + intel-media-driver state.
+    env = [
+      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
+    ];
   };
 
   audioRunner = name: {
@@ -433,6 +485,17 @@ let
       "/run/nixling/vms/${name}/snd.sock"
       "--backend"
       "pipewire"
+    ];
+    # v1.1.1fu11 (Option B): point libpipewire at the Wayland
+    # user's PipeWire socket. Without these env vars,
+    # vhost-device-sound (running as the ephemeral role UID)
+    # looks at /run/user/$EUID/pipewire-0 which doesn't exist
+    # for the ephemeral UID. The PipeWire socket itself is
+    # grant'd to the ephemeral UID by host-activation.nix's
+    # nixlingRoleUidAcls script.
+    env = [
+      "PIPEWIRE_RUNTIME_DIR=/run/user/${waylandUid}"
+      "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
     ];
   };
 
@@ -455,7 +518,7 @@ let
     ];
   };
 
-  node = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ] }:
+  node = name: { id, role, readiness, unit ? null, binaryPath ? null, argv ? [ ], env ? [ ] }:
     let
       # v1.1-P2: `vm.supervisor` was removed per ADR 0015; every
       # enabled VM is daemon-supervised. `emitUnit` is permanently
@@ -476,6 +539,9 @@ let
     // lib.optionalAttrs emitUnit { inherit unit; }
     // lib.optionalAttrs emitRunner {
       inherit binaryPath argv;
+    }
+    // lib.optionalAttrs (env != [ ]) {
+      inherit env;
     };
 
   edge = from: to: reason: { inherit from to reason; };
@@ -506,7 +572,8 @@ let
       optionalSidecarBaseNodeIds = if vm.observability.enable then [ "vsock-relay" ] else preOptionalNodeIds;
       preVmmNodeIds =
         lib.unique (
-          (lib.optionals vm.graphics.enable [ "video" ])
+          (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) [ "video" ])
+          ++ (lib.optionals (vm.graphics.enable && !vm.graphics.videoSidecar) [ "gpu" ])
           ++ (lib.optionals vm.audio.enable [ "audio" ])
           ++ lib.optionals (!vm.graphics.enable && !vm.audio.enable) optionalSidecarBaseNodeIds
         );
@@ -544,9 +611,16 @@ let
         id = "gpu";
         role = "gpu";
         unit = "nixling-${name}-gpu.service";
-        readiness = [ (unixSocketExists manifest.gpuSocket) ];
+      # v1.1.1fu11 (Option B): readiness uses microvm.graphics.socket
+      # (the same path the argv tells crosvm to create), not the
+      # stale /var/lib/nixling/vms/<vm>/<vm>-gpu.sock from manifest.
+      # The two paths diverged when the v1.1.1 substrate moved the
+      # gpu sidecar from /var/lib/nixling to /run/nixling without
+      # updating the readiness predicate. Without this fix the DAG
+      # times out waiting on a socket that crosvm never creates.
+      readiness = [ (unixSocketExists (nl.vmRunner config name).graphics.socket) ];
       } // gpuRunner name))
-      ++ lib.optional vm.graphics.enable (node name ({
+      ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (node name ({
         id = "video";
         role = "video";
         unit = "nixling-${name}-video.service";
@@ -565,6 +639,14 @@ let
           unit = if vm.graphics.enable then "nixling-${name}-gpu.service" else "microvm@${name}.service";
           binaryPath = cloudHypervisorBinaryPath microvm;
           argv = cloudHypervisorArgv name vm manifest;
+          # v1.1.1fu13d: the cloud-hypervisor binary is a bash
+          # wrapper that calls `dirname` to compute paths; under
+          # the broker spawn (empty PATH) it exits 127 on the
+          # very first line. Provide PATH with coreutils so the
+          # wrapper can find dirname + sed.
+          env = [
+            "PATH=${pkgs.coreutils}/bin:${pkgs.gnused}/bin"
+          ];
           readiness = [ (apiSocketInfo manifest.apiSocket) ];
         })
       ]
@@ -598,7 +680,8 @@ let
       )
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds "gpu" "The GPU sidecar starts only after every prerequisite sidecar is ready.")
-        ++ [ (edge "gpu" "video" "The optional video decoder sidecar depends on the GPU sidecar.") ]
+        ++ lib.optional vm.graphics.videoSidecar
+          (edge "gpu" "video" "The optional video decoder sidecar depends on the GPU sidecar.")
       )
       ++ lib.optionals vm.audio.enable (
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."

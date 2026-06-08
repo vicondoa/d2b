@@ -59,6 +59,15 @@ enum Command {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    // v1.1.1 live-deploy fu9: route tracing to stderr so
+    // RUST_LOG controls visibility under systemd.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
     let result = match cli.command {
         None => {

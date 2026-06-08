@@ -84,6 +84,22 @@ will introduce are:
   seccomp policy, and cgroup placement. `requiresStartRoot` is
   permitted only for audited carve-outs.
 
+  > **v1.1.2 update** ([ADR 0021](docs/adr/0021-broker-user-namespace-for-virtiofsd.md)):
+  > the virtiofsd `requiresStartRoot=true` carve-out from
+  > [ADR 0003](docs/adr/0003-minijail-provisioning-and-sandbox-interface.md)
+  > is RETIRED. virtiofsd profiles now declare zero host
+  > capabilities (`capabilities = []`), `requiresStartRoot = false`,
+  > and a `userNamespace` block mapping in-NS UID/GID 0 to the
+  > per-VM runner principal. The broker pre-establishes the
+  > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
+  > writes before exec; virtiofsd runs fake-root only inside the
+  > per-runner user NS. This is strictly stronger than v1.1.1: a
+  > compromised virtiofsd cannot access host resources outside its
+  > bind-mounted share, even with kernel exploits that bypass the
+  > sandbox, because the host kernel sees its credentials as the
+  > unprivileged runner principal — there are no in-host caps to
+  > escalate from.
+
 The first non-NixOS target is Ubuntu 24.04 LTS x86_64 with kernel
 >= 6.6, Nix daemon install, KVM, cgroup v2 unified hierarchy,
 nftables, NetworkManager, Cloud Hypervisor, and a Nix-built minijail.

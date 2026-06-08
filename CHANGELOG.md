@@ -8,6 +8,336 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 minor releases may break public APIs. When practical,
 deprecations ship one minor release before removal.
 
+## v1.1.2-final — 2026-06-02 — live-deploy hardening (fu25–fu37)
+
+v1.1.2-final closes every issue surfaced during the live 5-VM
+bring-up of the v1.1.2 tag (3 net VMs + 2 workload VMs including
+work-aad with vTPM). 16 production commits plus 9-discipline
+panel-review fixes (R1 round); **887 active tests pass + 9 ignored
+= 896 total, 0 failures** (692 workspace + 195 nixling-priv-broker;
+the broker crate is `exclude`d from the workspace per ADR 0002 and
+must be tested separately with `cd packages/nixling-priv-broker &&
+cargo test --lib`). All 9 panels signed off (panel-{rust, virt,
+kernel, networking, security, software, test, docs, product, build}),
+plus the v1.x retrospective panel cycle (10 disciplines, vx-rust
+through vx-build) confirmed PASS with v1.2 follow-up items tracked.
+
+### Consumer-visible changes (NO MANUAL MIGRATION REQUIRED)
+
+- **TPM socket path moved** from `/run/swtpm/<vm>/sock` to
+  `/run/nixling/vms/<vm>/tpm.sock`. Both halves of the wiring
+  (host-side swtpm sidecar argv + guest-side cloud-hypervisor
+  `--tpm socket=...`) update in lockstep on `nixos-rebuild switch`.
+  Operators must NOT preserve old `/run/swtpm/` paths — the
+  framework will not create them anymore. (fu36)
+- **`umask` field added to `MinijailProfile` schema.** Optional
+  `Option<u32>` field; default `null` preserves the broker's
+  inherited umask (current behaviour). Sidecar role profiles
+  (swtpm, audio, gpu) now declare `umask = 0o007` so their bound
+  Unix sockets get mode 0660 and the per-VM-runtime default ACL
+  named-user entries (granting cloud-hypervisor's UID rw) become
+  effective. Backward-compat: old bundles without the field
+  deserialise to `None` and behave exactly as before. (fu36)
+- **System user UIDs aligned with `stablePrincipalId` hash.**
+  The minijail profile UIDs and `/etc/passwd` entries for
+  `nixling-<vm>-{swtpm,gpu,snd,runner}` now share the same
+  hash-derived UID. Pre-v1.1.2-final installs that had the
+  NixOS-auto-assigned UIDs (range 100-999) get the new UIDs on
+  `nixos-rebuild switch`; existing state directories under
+  `/var/lib/nixling/vms/<vm>/{swtpm,gpu-state,…}` automatically
+  get `chown`'d to the new UIDs by the activation script.
+  (fu35)
+- **Cloud-hypervisor 52 required.** This release uses variadic
+  `--fs sock1,tag1 sock2,tag2` argv form (CH 52's clap parser
+  change). Earlier CH versions are no longer supported. (fu30)
+- **`microvm` flake input is NOT required** for consumers using
+  `inputs.nixling.nixosModules.default` as their import boundary.
+  Consumer flakes that still declare `inputs.microvm` can drop
+  it unless they consume microvm.nix directly for non-nixling
+  VMs (none typical).
+
+### What changed (internal)
+
+- **fu25** (`ssh_host_key_preflight.rs`) — accept mode 0440
+  when POSIX ACL xattr present (`system.posix_acl_access`).
+- **fu27** (`sys.rs`) — skip `apply_mount_actions` when
+  `in_ns_credentials = true`. Linux locks inherited mounts inside
+  a user namespace; bind-mount onto an inherited mount returns
+  EPERM regardless of in-NS capabilities. virtiofsd's
+  `--sandbox=chroot` does its own `pivot_root` inside the NS
+  where it has in-NS CAP_SYS_ADMIN.
+- **fu30** (`processes-json.nix`) — emit variadic
+  `--fs`/`--net`/`--disk`/`--device` argv for cloud-hypervisor
+  52. The `repeatedFlagArgs` helper is retained for legacy
+  callers; new `variadicFlagArgs` handles the CH 52+ form.
+- **fu31** (`processes-json.nix`) — `vsockPath` default is now
+  absolute (`/var/lib/nixling/vms/${name}/notify.vsock`). Was a
+  relative `"notify.vsock"` resolving to the broker's CWD `/`.
+- **fu32** (`pidfd_table.rs`) — fix tmpfile race in
+  `PidfdTable::snapshot()`. The previous `<path>.tmp` filename
+  caused concurrent autostart-spawned virtiofsd registrations to
+  collide ~50% of the time. New filename is `<path>.tmp.<pid>.
+  <atomic_seq>`. Also: best-effort tmpfile cleanup on every
+  error path (with DEBUG-level logging on cleanup failure).
+- **fu33** (`minijail-profiles.nix`) — bind `/dev/net/tun` into
+  the cloud-hypervisor runner sandbox. CH opens `/dev/net/tun`
+  + `TUNSETIFF` to attach to a pre-existing persistent TAP
+  created by the broker's `CreatePersistentTap` op. Without the
+  device node in the sandbox mount-NS, CH reports `EBUSY` (a
+  misleading errno from the kernel rejecting the missing
+  inode).
+- **fu34** (`lib.rs`) — `wait_for_one_shot_exit` detects zombie
+  state (`/proc/<pid>/stat` field 3 = `Z` or `X`). The broker
+  spawns OneShot DAG nodes (swtpm-flush etc.) but doesn't
+  explicitly `waitid(2)` to reap; the child becomes a zombie
+  whose `/proc/<pid>/stat` still reports the original starttime.
+  Treating `Z`/`X` as terminated unblocks the DAG instead of
+  spinning until the 30s `oneshot-timeout`. Returns explicit
+  `ProcState::{Alive, Gone, ParseFailed}` enum so callers can
+  distinguish parse-failure from process-gone.
+- **fu35** (`host-users.nix`) — declare system user UIDs using
+  the `stablePrincipalId` hash so the on-disk owner, the
+  ownership-matrix entry, and the broker setuid target all
+  agree. Hash extracted to `nixos-modules/lib.nix` as the
+  canonical definition (panel-software-R1 fix).
+- **fu36** (cross-cutting, 14 files) — `umask: Option<u32>`
+  plumbed through `MinijailProfile` → `RoleProfile` →
+  `ResolvedRunnerIntent` → `SpawnRunnerPlanInput` →
+  `SpawnRunnerPlan` → `RunnerIsolationSpec`. Broker child
+  closure calls `umask(2)` immediately before `execve(2)`.
+  Sidecar profiles set `umask = 0o007`. TPM socket consolidated
+  under per-VM runtime dir (see consumer-visible changes above).
+- **fu37 (R1)** — panel-review fixes:
+  - Extract `stablePrincipalId` to `nixos-modules/lib.nix`
+    (panel-software HIGH; eliminates the drift risk between
+    `host-users.nix` and `minijail-profiles.nix`).
+  - `read_proc_state` returns explicit `ProcState` enum and
+    logs ParseFailed at WARN level (panel-software HIGH +
+    panel-test HIGH; eliminates the silent 30s spin on
+    transient parse failures).
+  - Add umask range validation in the broker child closure
+    (panel-rust SHOULD-FIX; reject `umask > 0o777` with
+    `CHILD_EXIT_INVALID_UMASK=75`).
+  - Add `tracing::debug!` cleanup logging in `pidfd_table.rs`
+    `write_snapshot` error paths (panel-rust SHOULD-FIX).
+  - Tighten `DeviceClass::NetTun` ioctl allowlist to
+    `[TUNSETIFF, TUNSETGROUP]` only (panel-security SHOULD-FIX;
+    `TUNSETPERSIST`/`TUNSETOWNER` are broker-only and bypass
+    the per-role policy via raw libc::ioctl).
+  - Inline-comment clarification at the `/dev/net/tun`
+    deviceBind site explaining why CH cannot escape via rogue
+    TAP creation (panel-networking SHOULD-FIX).
+  - Add 10+ regression tests:
+    - `proc_state_tests` module (8 unit tests for the
+      `read_proc_state` parser covering comm-with-`)`,
+      truncated stat, etc.)
+    - `snapshot_under_concurrent_load_succeeds` (8-thread
+      stress test of `PidfdTable::snapshot`)
+    - `snapshot_tmp_path_is_unique_per_call`
+    - `isolation_spec_umask_field_*` (umask plumbing
+      verification)
+    - `umask_validation_bound_is_0o777`
+
+### Known limitations / deferred
+
+- **Seccomp BPF compilation from `ioctl_policy.rs` matrix**
+  is not yet wired. `load_runner_seccomp` returns `Ok(None)`
+  when `seccomp_policy_ref` is a non-absolute reference (e.g.
+  `"w1-cloud-hypervisor-runner"`). The declarative ioctl
+  allowlist serves as the source of truth that future BPF
+  compilation must honour. Tracked for v1.2.
+- **Test fixture builder** for `RoleProfile` /
+  `ResolvedRunnerIntent` not yet introduced. Future optional
+  fields will continue to require manual updates across ~5 test
+  files. Tracked for v1.2.
+- **CLI readiness-timeout false negative.**
+  `nixling vm start <vm> --apply` may return a non-zero exit
+  code with `SpawnRunner failed at cloud-hypervisor` even when
+  cloud-hypervisor spawns successfully and the VM is fully
+  functional (network, SSH, TPM, all sidecars working). The
+  daemon's readiness predicate polls CH's API socket for up to
+  30 seconds after spawn; CH 52 occasionally takes longer than
+  this window to bind the API socket on slower hosts or under
+  contention, and the gate fires `readiness-timeout:cloud-
+  hypervisor` even though the VM continues to boot and reach
+  the guest-ssh-ready state.
+  **Operator remediation:** ignore the CLI exit code; verify
+  with `ping <vm-ip>` or `ssh <vm-ip>`. The VM state is
+  authoritative. The pidfd-table snapshot at
+  `/var/lib/nixling/daemon-state/pidfd-table.json` shows the
+  live CH PID.
+  **v1.2 fix tracked.** Two candidate fixes under evaluation:
+  Option A — extend the CH-runner readiness timeout from 30s
+  to 60s (simple; covers the slow-bind case at the cost of
+  longer fail-closed feedback on real failures). Option B —
+  split the readiness gate into a fast `process-alive` check
+  (pidfd validation, returns immediately) and a slower
+  `api-ready` check (CH API HTTP probe, runs async). Option B
+  is the cleaner design but requires DAG-node decomposition.
+- **fu27 mount-action skip branch** lacks a hermetic unit
+  test. The `if !in_ns_credentials { apply_mount_actions(...) }`
+  guard in the broker child closure is exercised exhaustively
+  by every virtiofsd spawn (ADR 0021 user-NS path) in live
+  deploy, but no test in `cargo test --workspace` directly
+  asserts the skip behaviour. Tracked for v1.2 as a focused
+  unit test that spawns with `user_namespace = Some(...)` +
+  `mount_actions` non-empty and asserts `apply_mount_actions`
+  is not invoked.
+
+### Compatibility
+
+- Bundle schema: backward-compatible (additive optional
+  `umask` field; old bundles deserialize with `umask = None`).
+- Wire protocol: unchanged.
+- CLI: no verbs changed; no flags added or removed.
+
+## v1.1.2 — 2026-06-02 — broker-pre-established user namespace for virtiofsd + live-bring-up hardening
+
+v1.1.2 closes the v1.1.1 → live-VM-bring-up gap by retiring the
+`virtiofsd --sandbox=namespace + requiresStartRoot=true` carve-out
+from [ADR 0003](docs/adr/0003-minijail-provisioning-and-sandbox-interface.md)
+in favour of a fully broker-pre-established user namespace
+([ADR 0021](docs/adr/0021-broker-user-namespace-for-virtiofsd.md)).
+virtiofsd now runs with **zero** host capabilities; fake-root
+identity exists only inside the per-runner user NS. This is
+strictly stronger than v1.1.1: no `CAP_SYS_ADMIN`, no
+`CAP_DAC_OVERRIDE`, no `CAP_DAC_READ_SEARCH`, no `CAP_SETUID`,
+no `CAP_SETGID`, no `/etc/subuid` provisioning. Series HEAD:
+fu7 .. fu19, with 9-discipline panel R1+R2 closure cycle
+(unanimous panel sign-off after R2).
+
+### What changed
+
+- **ADR 0021** — broker-pre-established user namespace for
+  virtiofsd. New ADR documenting the v1.1.2 sandbox decision,
+  rejected alternatives (virtiofsd self-NS requiring
+  `/etc/subuid`/`/etc/subgid` + setuid `newuidmap`/`newgidmap`;
+  `--sandbox=none`; the ADR 0003 root carve-out), implementation
+  contract pseudocode (clone3 + pipe2 sync + uid_map writer),
+  consequences, and test coverage. ADR 0003 marks the
+  `requiresStartRoot` carve-out as superseded; ADR README adds
+  the row.
+- **Broker user-namespace plumbing.** New `UserNamespaceSpec`
+  (`host_uid_for_zero`, `host_gid_for_zero`) threaded through
+  `SpawnRunnerPlanInput`, `RunnerIsolationSpec`,
+  `ResolvedRunnerIntent`, `RoleProfile`, `MinijailProfile`. The
+  broker's `clone3_spawn_runner` now does a pipe2(O_CLOEXEC)-sync
+  dance: child closes inherited write_fd, blocks on read; parent
+  writes `/proc/<pid>/uid_map` (`0 host_uid 1`) → `setgroups=deny`
+  → `gid_map` (`0 host_gid 1`); parent writes 1 byte to unblock
+  child. Child then `setgid(0)` / `setuid(0)` to in-NS root,
+  SKIPS `setgroups()` entirely (would EPERM), `capset()`, exec.
+  New `CHILD_EXIT_USER_NS_SYNC=74` exit code for parent-death
+  scenarios.
+- **virtiofsd minijail profile changes.** `capabilities = []`,
+  `requiresStartRoot = false`, `userNamespace = {
+  hostUidForZero, hostGidForZero }` derived from
+  `stablePrincipalId("nixling-<vm>-<role>-runner")`. Carve-out
+  reference text updated to cite ADR 0021. virtiofsd argv now
+  uses `--sandbox=chroot --inode-file-handles=never`; ro-store
+  shares add `--readonly`.
+- **Operator-workaround codification.** Activation script
+  `nixlingRuntimeDirPosture` re-asserts ownership/mode on
+  `/run/nixling/{locks,state}` and per-VM `store`/`store-meta`
+  on every activation. `nixlingd` daemon gains
+  `PidfdTable::prune_dead_entries` (validates pid + start_time
+  against `/proc/<pid>/stat`) called from vm-start handler to
+  drop stale pidfd-table entries from prior runs. `nixlingd`
+  unit gains `extraGroups += "nixling-launchers"`. Activation
+  script SECURITY-hardens against TOCTOU on the role-UID-writable
+  VM dir: `store-overlay.img` creation refuses symlinks; `*.img`
+  loop replaced with `find -type f` that does not follow symlinks;
+  `nixlingRuntimeDirPosture` refuses symlinks on every path it
+  touches. per-keyfile ACL grants on `ssh_host_*_key` permit
+  virtiofsd-nl-ssh-host runner read access inside its user NS.
+- **W3 altname collision detection.** Activation script
+  `nixlingW3IfNameAltnames` no longer silently swallows ALL
+  errors when adding altnames to user-visible bridges. It now
+  compares ifindex of `$user` vs `$derived`; if `$derived`
+  already resolves to a DIFFERENT interface (foreign altname
+  collision), it logs loudly and exits 1 instead of letting
+  the broker silently route to the wrong device.
+- **`nixling vm konsole <vm>` CLI verb.** Spawns a terminal
+  emulator (default `konsole`, overridable) hosting an SSH
+  session into the named VM. Resolves user/host/key from the
+  manifest + bundle.managed_keys; `--user $USER` fallback
+  (replaces a previous hardcoded-username fallback);
+  validates key existence BEFORE emitting `--json` output;
+  propagates setsid exit-status as typed exit-1 envelope.
+  Supports `--dry-run`, `--json`, `--user`, `--host`, `--key`,
+  `--terminal`.
+- **Validation tests.** Plan-layer `user_namespace_round_trips_*`
+  tests; sys-layer `user_namespace_true_requires_spec` +
+  `user_namespace_spec_requires_namespace_flag` defensive
+  validation tests. virtiofsd minijail-validator updated for
+  the v1.1.2 shape (zero caps + userNamespace required).
+  broker-caps-eval canonical-caps set updated to the v1.1.1fu10
+  15-cap list. Error-codes reference regenerated via
+  `cargo xtask gen-error-codes`.
+
+### Verification
+
+| Surface | Result |
+| --- | --- |
+| `cargo test --workspace` | **890 / 890 pass** (38 nixling, 41 nixling-core, 344 nixling-host, 43 nixling-ipc, 232 nixlingd + 7 ignored, 192 nixling-priv-broker + 1 root-gated ignored) |
+| `nixos-rebuild eval` | clean |
+| 13 v1.1 invariant gates | all PASS |
+| ADR 0003 supersession marker | present + cross-linked from ADR 0021 |
+| `docs/adr/README.md` ADR 0021 row | present |
+| 9-discipline panel | unanimous panel signoff after R2/R3 closure cycle (fu14..fu20) |
+
+### Migration from v1.1.1
+
+Operators bumping the nixling flake input from v1.1.1 to v1.1.2:
+
+1. No flake input changes required.
+2. `nixos-rebuild switch` will:
+   - Update the broker binary (new sys.rs user-NS path).
+   - Update the activation script (new symlink-refusal + altname
+     collision gates).
+   - Update the virtiofsd minijail profile (zero host caps +
+     userNamespace).
+3. **Daemon restart required**: `nixlingd.service` has
+   `restartIfChanged = false` (by design — restarting the
+   daemon mid-VM-flight would disrupt pidfd supervision). The
+   new daemon-side pidfd-prune logic only takes effect after
+   an explicit restart. After `nixos-rebuild switch` completes,
+   stop all running VMs, then run:
+   ```
+   sudo systemctl restart nixling-priv-broker.socket nixling-priv-broker.service nixlingd
+   ```
+   then `nixling vm start --apply <vm>` to bring them back up
+   with the new code paths.
+4. Any running virtiofsd processes will be restarted on next
+   `nixling vm start --apply <vm>` (the new minijail profile
+   shape differs from v1.1.1's).
+5. The previously-required manual reset sequence between
+   `nixling vm start --apply` attempts (per the v1.1.1fu13
+   live-deploy session notes) is no longer needed: the new
+   activation script + daemon prune logic codify what was
+   previously documented as operator-side workaround.
+6. No `/etc/subuid` / `/etc/subgid` provisioning required.
+7. No kernel-floor bump beyond the existing v1.1 requirement
+   of Linux ≥ 6.9 ([ADR 0008](docs/adr/0008-supported-platforms-and-rejected-targets.md)).
+
+### Compatibility
+
+- Bundle schema: unchanged (additive `user_namespace` field on
+  spawn-runner role profiles; absent → `None` → no NS).
+- Wire protocol: unchanged for non-virtiofsd roles.
+- CLI: new `nixling vm konsole <vm>` verb; no existing verbs
+  changed.
+
+### Known limitations
+
+- v1.2 will extend broker-pre-NS to gpu/audio/swtpm roles
+  pending device-bind compatibility analysis.
+- `crosvmVideo` overlay still gated off via
+  `graphics.videoSidecar = false` default pending nixpkgs 26.05+
+  rebuild. Consumers can opt in at their own rebuild cost.
+- `writableStoreOverlay` disk-init not yet broker-spawned;
+  consumers can opt in by providing a backing image themselves.
+
 ## v1.1.1 — 2026-06-01 — zero-defer closures (fu1–fu6) — 9/9 unanimous signoff (R6 closure cycle)
 
 v1.1.1 closes every v1.1 deferred item via a TDD-first fix-up

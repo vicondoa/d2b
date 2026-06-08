@@ -1,28 +1,42 @@
 #!/usr/bin/env bash
-# tests/broker-caps-eval.sh — Layer-1 eval gate for P0 broker capability
+# tests/broker-caps-eval.sh — Layer-1 eval gate for v1.1.1 broker capability
 # hardening.
 #
 # Asserts that systemd.services.nixling-priv-broker.serviceConfig
-# .CapabilityBoundingSet matches the canonical P0 set EXACTLY — no
+# .CapabilityBoundingSet matches the canonical v1.1.1 set EXACTLY — no
 # additions, no omissions — and that AmbientCapabilities contains the
 # sentinel empty-string entry required to drop all ambient caps.
 #
-# Canonical set (per plan.md §"Canonical broker CapabilityBoundingSet"):
+# Canonical set (per host-broker.nix v1.1.1fu10+, expanded from the
+# original P0 8-cap set to the per-child-role union needed for
+# capset(2) to succeed in the spawned child; ADR 0021's broker-pre-NS
+# model for virtiofsd reduces the per-spawn requirements but does NOT
+# shrink this bounding set because CH/swtpm/gpu still need the union):
 #
-#   CAP_NET_ADMIN          tap create/destroy, bridge ops, route table
+#   CAP_NET_ADMIN          tap create/destroy, bridge ops, route table; CH tap-fd recv
 #   CAP_NET_RAW            nftables socket creation, USBIP firewall carve-outs
-#   CAP_DAC_OVERRIDE       writing /etc/hosts + /etc/NetworkManager drop-ins
-#   CAP_DAC_READ_SEARCH    reading per-VM state dirs across uids
-#   CAP_SYS_ADMIN          cgroup v2 delegation + minijail namespace setup
-#   CAP_SETUID             fchown of delegated cgroup subtree to nixlingd uid
-#   CAP_SETGID             fchown of delegated cgroup subtree to nixlingd gid
+#   CAP_DAC_OVERRIDE       writing /etc/hosts + /etc/NetworkManager drop-ins; per-uid file access
+#   CAP_DAC_READ_SEARCH    reading per-VM state dirs across uids; file handles
+#   CAP_SYS_ADMIN          cgroup v2 delegation + minijail namespace setup + mount(MS_BIND)
+#   CAP_SETUID             child setuid to runner uid before execve
+#   CAP_SETGID             child setgid to runner gid before execve
 #   CAP_FOWNER             mode ops on broker-owned state
+#   CAP_CHOWN              chown ops on per-VM state dirs + delegated cgroups
+#   CAP_FSETID             preserve setuid/setgid bits on writes
+#   CAP_SETPCAP            capset in child after setuid (cap-bound vs effective transition)
+#   CAP_SYS_RESOURCE       setrlimit for child runners
+#   CAP_IPC_LOCK           swtpm needs mlock for TPM2 sealing material
+#   CAP_MKNOD              swtpm needs to create device nodes for TPM CRB
+#   CAP_SETFCAP            virtiofsd / swtpm cap_setfcap for child cap inheritance (legacy
+#                          — minimized in v1.1.1fu14 ADR 0021 broker-pre-NS but retained
+#                          for other roles that don't use user NS)
 #
 # Notable absences that are a hard FAIL if present:
-#   CAP_SYS_PTRACE, CAP_CHOWN, CAP_NET_BIND_SERVICE, CAP_AUDIT_WRITE
+#   CAP_SYS_PTRACE, CAP_NET_BIND_SERVICE, CAP_AUDIT_WRITE
 #
 # Wired into tests/static.sh (mid-tier eval pool).
-# Authority: plan.md P0 security-r2-1 + ph0-broker-caps-audit.
+# Authority: plan.md P0 security-r2-1 + ph0-broker-caps-audit; updated
+# v1.1.1fu14 to match the v1.1.1fu10-expanded bounding set.
 
 set -uo pipefail
 
@@ -36,17 +50,25 @@ fail() { log "  FAIL: $*"; exit 1; }
 log "==> tests/broker-caps-eval.sh"
 
 # ---------------------------------------------------------------------------
-# Canonical P0 CapabilityBoundingSet (sorted; order-independent comparison).
+# Canonical v1.1.1 CapabilityBoundingSet (sorted; order-independent
+# comparison). Per host-broker.nix v1.1.1fu10+.
 # ---------------------------------------------------------------------------
 CANONICAL_CAPS=(
+  CAP_CHOWN
   CAP_DAC_OVERRIDE
   CAP_DAC_READ_SEARCH
   CAP_FOWNER
+  CAP_FSETID
+  CAP_IPC_LOCK
+  CAP_MKNOD
   CAP_NET_ADMIN
   CAP_NET_RAW
+  CAP_SETFCAP
   CAP_SETGID
+  CAP_SETPCAP
   CAP_SETUID
   CAP_SYS_ADMIN
+  CAP_SYS_RESOURCE
 )
 
 # Minimal config: daemonExperimental.enable=true is sufficient to

@@ -347,6 +347,7 @@ BATCHED_CASES=(
   graphics-with-autostart
   audit-without-observability
   observability-reserved-cid
+  principal-uid-collision
 )
 
 for case_name in "${BATCHED_CASES[@]}"; do

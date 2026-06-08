@@ -360,6 +360,35 @@ shared.mkBatch {
       );
     };
 
+    # v1.1.2fu19 panel-test R2 must-fix: stablePrincipalId UID
+    # collision assertion (per the new check in
+    # nixos-modules/minijail-profiles.nix:538-575). vm9163 and
+    # vm11019 are a known-colliding pair whose
+    # `nixling-<name>-runner` SHA-256 prefixes both map to UID
+    # 12139143 = 50000 + 0xb87737. Two enabled VMs with these
+    # names MUST trigger the assertion at eval time. The expected
+    # substring is from the assertion message template.
+    "principal-uid-collision" = {
+      expectedSubstring = "v1.1.2 stablePrincipalId collision: UID 12139143";
+      override = (
+        { lib, ... }:
+        {
+          nixling.vms.vm9163 = {
+            enable = true;
+            env = "work";
+            index = 30;
+            ssh.user = "alice";
+          };
+          nixling.vms.vm11019 = {
+            enable = true;
+            env = "work";
+            index = 31;
+            ssh.user = "alice";
+          };
+        }
+      );
+    };
+
     # Reserved CID for observability (1000 is reserved per spec).
     "observability-reserved-cid" = {
       expectedSubstring = "Vsock CID 1000 is reserved";

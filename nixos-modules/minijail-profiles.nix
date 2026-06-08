@@ -15,9 +15,29 @@ let
     group = if cfg.daemonExperimental.enable then "nixlingd" else "root";
   };
 
-  stablePrincipalId = principal:
-    if principal == "root" then 0
-    else 50000 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "sha256" principal));
+  # v1.1.1fu11 (Option B from live-deploy 010 checkpoint):
+  # Hash-derived ephemeral UID per principal. The matching
+  # named system users (`nixling-<vm>-{gpu,snd,swtpm,runner}`)
+  # are declared in `nixos-modules/host-users.nix` with the
+  # SAME hash via the shared helper, so when the broker
+  # `setuid()`s the spawned role to this UID, NSS resolves it
+  # back to the named user with its supplementary groups
+  # (audio, kvm, nixling-<vm>-runner) and the per-VM ACL
+  # grants the audio/graphics host modules install on
+  # PipeWire / Wayland / `/dev/kvm` sockets all apply
+  # transparently.
+  #
+  # Pure-ephemeral principals (no corresponding system user)
+  # still get a unique UID — they're served by the
+  # `nixlingRoleUidAcls` activation script in
+  # `host-activation.nix` that walks the bundle and grants
+  # per-VM-dir traversal for every distinct role UID.
+  #
+  # v1.1.2-final-R1 (panel-software HIGH): formula moved to
+  # nixos-modules/lib.nix as the canonical definition. This
+  # file imports it here to keep call-site readability;
+  # changing the algorithm now happens in ONE place.
+  inherit (nl) stablePrincipalId;
 
   defaultNamespaces = {
     ipc = true;
@@ -50,18 +70,42 @@ let
       requiresStartRoot ? false,
       exceptionRef ? null,
       adr_carve_out ? null,
+      # v1.1.2fu36: file-creation mask the broker installs in the
+      # spawned child before execve. None inherits the broker's
+      # umask (current behavior). Roles binding shared Unix sockets
+      # (vhost-user-sound, crosvm-gpu, swtpm) declare 0o007 so the
+      # bound socket has mode 0660 — combined with the per-VM
+      # runtime default ACL, cloud-hypervisor's named-user entry
+      # then becomes effective (mask:rw instead of mask:---).
+      umask ? null,
+      # v1.1.1fu14 (ADR 0021): when non-null, broker pre-establishes
+      # a per-runner user NS and writes uid_map/gid_map. The
+      # child runs fake-root inside; host-side capabilities should
+      # be empty. Used by virtiofsd roles for least-privilege FS
+      # serving without CAP_DAC_* on the host.
+      #
+      # Shape: { hostUidForZero, hostGidForZero }. Single-entry
+      # mapping (in-NS UID 0 → host UID hostUidForZero).
+      userNamespace ? null,
     }:
+    let
+      effectiveNamespaces =
+        if userNamespace != null
+        then namespaces // { user = true; }
+        else namespaces;
+    in
     {
       inherit
         profileId
         role
+        principal
         capabilities
-        namespaces
         seccompPolicyRef
         requiresStartRoot
         exceptionRef
         adr_carve_out
         ;
+      namespaces = effectiveNamespaces;
       uid = stablePrincipalId principal;
       gid = stablePrincipalId principal;
       mountPolicy = {
@@ -78,6 +122,8 @@ let
         inherit controllers delegated;
         subtree = cgroupSubtree;
       };
+      userNamespace = userNamespace;
+      umask = umask;
     };
 
   toRoleProfile = profile: {
@@ -92,6 +138,13 @@ let
       ;
     adr_carve_out = profile.adr_carve_out;
     caps = profile.capabilities;
+    # v1.1.1fu14 (ADR 0021): pass userNamespace through to the
+    # processes.json RoleProfile so the broker can pre-create
+    # the user NS when spawning the runner.
+    userNamespace = profile.userNamespace or null;
+    # v1.1.2fu36: pass umask through to the RoleProfile so the
+    # broker can install it in the spawned child before execve.
+    umask = profile.umask or null;
   };
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
@@ -100,7 +153,10 @@ let
   audioRuntimeDirOf = name: "/run/nixling/vms/${name}";
   videoRuntimeDirOf = name: "/run/nixling-video/${name}";
   gpuRuntimeDirOf = name: "/run/nixling-gpu/${name}";
-  swtpmRuntimeDirOf = name: "/run/swtpm/${name}";
+  # v1.1.2fu36: TPM socket consolidated under /run/nixling/vms/<vm>/
+  # (alongside snd.sock, gpu.sock). No separate /run/swtpm/ dir.
+  # Reuses the per-VM default ACL machinery in host-activation.nix.
+  swtpmRuntimeDirOf = name: "/run/nixling/vms/${name}";
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
 
   # P1 ph1-p1-gpu-seccomp: the Gpu profile cross-domain Wayland
@@ -115,7 +171,7 @@ let
   vmProfiles = name: vm:
     let
       manifest = cfg.manifest.${name};
-      virtiofsdRootException = "ADR 0003 virtiofsd --sandbox=namespace setup exception";
+      virtiofsdRootException = "ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS";
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
         (nl.vmRunner config name).shares;
@@ -129,18 +185,13 @@ let
             profileId = profileIdFor name shareNodeId;
             role = "virtiofsd";
             principal = "nixling-${name}-runner";
-            capabilities = [
-              "CAP_SYS_ADMIN"
-              "CAP_SETPCAP"
-              "CAP_CHOWN"
-              "CAP_FOWNER"
-              "CAP_FSETID"
-              "CAP_SETUID"
-              "CAP_SETGID"
-              "CAP_DAC_OVERRIDE"
-              "CAP_MKNOD"
-              "CAP_SETFCAP"
-            ];
+            # v1.1.1fu14 (ADR 0021): with broker-pre-NS, virtiofsd
+            # runs fake-root INSIDE its own user namespace. All
+            # caps within the NS scope are available implicitly;
+            # the host-side capabilities set is EMPTY. This is the
+            # principle-of-least-privilege model: no CAP_DAC_*,
+            # no CAP_SETUID, no CAP_SYS_ADMIN on the host.
+            capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
             readOnlyPaths = [ "/nix/store" ];
             writablePaths = [
@@ -149,9 +200,18 @@ let
             ];
             cgroupSubtree = "nixling.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
-            requiresStartRoot = true;
+            # v1.1.1fu14 (ADR 0021): broker pre-creates a user NS
+            # mapping in-NS UID 0 → the principal's stable
+            # ephemeral UID on the host. virtiofsd then runs
+            # fake-root inside the NS, so it can open/serve files
+            # with correct mode/UID semantics and `--sandbox=chroot`
+            # works without host CAP_SYS_ADMIN.
+            userNamespace = {
+              hostUidForZero = stablePrincipalId "nixling-${name}-runner";
+              hostGidForZero = stablePrincipalId "nixling-${name}-runner";
+            };
+            requiresStartRoot = false;
             exceptionRef = virtiofsdRootException;
-            adr_carve_out = virtiofsdRootException;
           };
         }));
     in
@@ -200,6 +260,49 @@ let
         readOnlyPaths = [ "/nix/store" ];
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Own the VM API socket, disks, and other runtime artifacts.")
+        ];
+        # v1.1.1fu13e: bind-mount /dev/kvm (and graphics-VM device
+        # nodes) into the runner mount namespace. CH opens /dev/kvm
+        # itself; without the bind it sees EROFS/ENOENT.
+        # v1.1.2fu33: /dev/net/tun must be bind-mounted so CH can
+        # open and configure its TAP interfaces inside the sandbox.
+        #
+        # IMPORTANT (panel-networking + panel-security
+        # v1.1.2-final-R2): the runner's static minijail caps grant
+        # CAP_NET_ADMIN as the **setup-time union** (see
+        # `capabilities` above + kernel-r2-4 comment). At spawn
+        # time CH has CAP_NET_ADMIN in its effective set; this is
+        # what lets the SCM_RIGHTS tap-fd recv path work and what
+        # CH itself uses to call TUNSETIFF on the pre-existing
+        # persistent TAP. CH's published behaviour is to drop
+        # CAP_NET_ADMIN before entering its main loop (after
+        # device init), but the minijail static allowlist cannot
+        # express "transient" — operators MUST audit the
+        # cloud-hypervisor build to confirm this drop happens.
+        #
+        # The /dev/net/tun bind exposure surface is bounded by:
+        # (a) the broker's `CreatePersistentTap` op runs FIRST in
+        #     the host-prep DAG (ApplyNftables → CreatePersistentTap
+        #     → SetBridgePortFlags → OpenVhostNet → SpawnRunner(CH))
+        #     so the named TAP always exists by the time CH attaches.
+        # (b) the declarative `DeviceClass::NetTun` ioctl allowlist
+        #     (packages/nixling-host/src/ioctl_policy.rs) is
+        #     tightened to [TUNSETIFF, TUNSETGROUP] — the broker is
+        #     the only legitimate caller of TUNSETPERSIST/TUNSETOWNER
+        #     and bypasses the per-role policy via raw libc::ioctl.
+        # (c) ADR-tracked v1.2 follow-up: seccomp BPF compilation
+        #     from the declarative ioctl matrix is NOT yet wired
+        #     (load_runner_seccomp returns Ok(None) for non-absolute
+        #     seccomp_policy_ref values). Until that lands, the
+        #     declarative allowlist is contractual only — operators
+        #     of high-threat environments should treat a
+        #     post-init-compromise of CH as capable of creating
+        #     additional TAPs until the BPF enforcement closes the
+        #     gap. See CHANGELOG.md "Known limitations".
+        deviceBinds = [
+          "/dev/kvm"
+          "/dev/vhost-net"
+          "/dev/net/tun"
         ];
         cgroupSubtree = "nixling.slice/${name}/cloud-hypervisor";
         controllers = serviceControllers;
@@ -250,6 +353,14 @@ let
         ];
         cgroupSubtree = "nixling.slice/${name}/swtpm";
         controllers = serviceControllers;
+        # v1.1.2fu36: bind swtpm control socket with mode 0660 (via
+        # explicit --ctrl mode= in argv) AND umask 0o007 here so any
+        # ancillary files swtpm creates inside its state dir also
+        # respect the group-rw default. Combined with the per-VM
+        # runtime dir default ACL (granting cloud-hypervisor's uid
+        # rwx), this lets CH connect to /run/swtpm/<vm>/sock without
+        # operator intervention.
+        umask = 7;
       };
     }
     // lib.optionalAttrs vm.graphics.enable {
@@ -263,6 +374,11 @@ let
         # under SCHED_OTHER on this host's NVIDIA Quadro T1000).
         capabilities = [ ];
         seccompPolicyRef = "w1-gpu";
+        # v1.1.2fu36: crosvm gpu sidecar binds the vhost-user socket
+        # at /run/nixling/vms/<vm>/gpu.sock. umask 0o007 makes the
+        # socket mode 0660; the per-VM runtime dir default ACL then
+        # grants cloud-hypervisor rw on it via the named-user entry.
+        umask = 7;
         writablePaths = [
           (mkWritablePath (stateDirOf name) "Own per-VM graphics runtime artifacts alongside the runner.")
           (mkWritablePath (gpuRuntimeDirOf name) "Expose the bound Wayland socket and GPU runtime state.")
@@ -329,18 +445,28 @@ let
         # store and is keyed by this ref. Renamed from the v0 placeholder
         # "w1-audio-sidecar" to the canonical "w1-audio" P1 name.
         seccompPolicyRef = "w1-audio";
-        # P1 ph1-p1-device-matrix: Audio binds nothing under /dev; the
-        # only host-side resource it talks to is the PipeWire client
-        # socket at /run/user/<uid>/pipewire-0 (RO traverse — the host
-        # ACL grants the per-VM principal rw on the socket inode itself
-        # per components/audio/host.nix).
-        readOnlyPaths = [ "/run/user" ];
+        # v1.1.1fu11 (Option B): the Wayland user's runtime dir
+        # holds the PipeWire socket. libpipewire connect()s to
+        # it, which on a read-only bind-mount fails with EROFS
+        # (the socket file is in a write-mediated dir). Make
+        # /run/user/<waylandUid> writable so connect() succeeds.
+        # The PipeWire socket file is still ACL-grant'd
+        # individually by host-activation.nix's
+        # nixlingRoleUidAcls script — this writablePaths just
+        # ensures the mount-namespace doesn't drop it to RO.
+        readOnlyPaths = [ ];
         writablePaths = [
           (mkWritablePath "${stateDirOf name}/state" "Read and persist the VM audio grant state.")
           (mkWritablePath (audioRuntimeDirOf name) "Create the PipeWire-backed vhost-user audio socket at /run/nixling/vms/<vm>/snd.sock.")
+          (mkWritablePath "/run/user/${waylandUid}" "Connect to the Wayland user's PipeWire socket.")
         ];
         cgroupSubtree = "nixling.slice/${name}/audio";
         controllers = serviceControllers;
+        # v1.1.2fu36: vhost-device-sound binds the socket at
+        # /run/nixling/vms/<vm>/snd.sock. umask 0o007 makes it
+        # mode 0660; the per-VM runtime dir default ACL then
+        # makes cloud-hypervisor's named-user entry effective.
+        umask = 7;
       };
     }
     // lib.optionalAttrs vm.observability.enable {
@@ -433,6 +559,39 @@ let
         roleProfile = toRoleProfile data;
       })
     fullProfileTable;
+
+  # v1.1.2fu15 panel-security should-fix: detect stablePrincipalId
+  # collisions at eval time. stablePrincipalId = 50000 + first-24
+  # bits of sha256(principal) — that's only 16.7M slots, so two
+  # principals hashing to the same UID is improbable but possible
+  # (birthday bound on ~5000 principals is ~99% safe; on ~12000
+  # it's ~50%). Without an eval-time check, a UID collision
+  # silently breaks broker-pre-NS user_namespace mapping (two
+  # roles share the same host_uid_for_zero, so one role's
+  # container UID 0 maps to another role's host identity).
+  # Walk every principal in fullProfileTable, group by UID, and
+  # fail eval if any UID has more than one distinct principal.
+  principalUidPairs = lib.flatten (lib.mapAttrsToList
+    (profileId: data: [
+      { principal = data.principal; uid = data.uid; profileId = profileId; }
+    ])
+    fullProfileTable);
+  principalUidByUid = lib.foldl'
+    (acc: pair:
+      let
+        key = toString pair.uid;
+        existing = acc.${key} or [ ];
+      in
+      acc // { ${key} = existing ++ [ pair ]; })
+    { }
+    principalUidPairs;
+  uidCollisions = lib.filter
+    (kv:
+      let
+        distinct = lib.unique (map (p: p.principal) kv.value);
+      in
+      lib.length distinct > 1)
+    (lib.mapAttrsToList (uid: pairs: { inherit uid; value = pairs; }) principalUidByUid);
 in
 {
   options.nixling._bundle.minijailProfiles = lib.mkOption {
@@ -447,5 +606,51 @@ in
     environment.etc = lib.mapAttrs'
       (_: profile: lib.nameValuePair "nixling/${profile.relativePath}" (privateEtc profile.path))
       renderedProfiles;
+
+    assertions = map
+      (kv: {
+        assertion = false;
+        message = ''
+          v1.1.2 stablePrincipalId collision: UID ${kv.uid} is claimed by
+          multiple distinct principals: ${lib.concatStringsSep ", "
+            (lib.unique (map (p: "'${p.principal}' (profile ${p.profileId})") kv.value))}.
+
+          stablePrincipalId is sha256(principal)[0..24] + 50000. Two
+          principals hashing to the same UID is a deployment hazard
+          for ADR 0021 broker-pre-NS user_namespace mapping (two
+          roles would share host_uid_for_zero, so one role's
+          container UID 0 maps to another role's host identity,
+          breaking least-privilege isolation).
+
+          Mitigation options (choose ONE; both require a coordinated
+          rebuild + restart):
+
+          1. Rename a colliding VM in `nixling.vms.<name>`. The
+             generated principal names embed the VM name (e.g.
+             `nixling-<name>-runner`, `nixling-<name>-gpu`), so
+             changing the VM name moves its principal off the
+             colliding hash. **THIS DOES CHANGE THE VM'S ON-DISK
+             STATE PATHS** (`/var/lib/nixling/vms/<name>/` and
+             every per-role subdir). Operators MUST drain the VM,
+             rename the state dir to the new name, and let the
+             daemon re-link the hardlink farm on next start. This
+             is bigger than a config rename — plan accordingly.
+
+          2. Rename a colliding host-singleton principal (e.g.
+             `nixling-otel-bridge`). These principals live only in
+             `nixos-modules/minijail-profiles.nix` and do NOT have
+             on-disk state paths keyed on the principal name; the
+             rename is purely an in-source rebuild. PREFERRED if a
+             host-singleton is the collision source.
+
+          For a VM-vs-VM collision, option 1 is the only path; for
+          a VM-vs-host-singleton or host-vs-host collision, option
+          2 is much less disruptive.
+
+          See docs/adr/0021-broker-user-namespace-for-virtiofsd.md
+          § "Stable principal IDs and collision resistance".
+        '';
+      })
+      uidCollisions;
   };
 }

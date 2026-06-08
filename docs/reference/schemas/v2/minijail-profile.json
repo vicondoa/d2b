@@ -90,10 +90,38 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
+    },
+    "umask": {
+      "description": "v1.1.2-final: optional file-creation mask installed in the spawned child via umask(2) immediately before execve. null inherits the broker's umask. Sidecar roles that bind shared Unix sockets declare 0o007 so sockets are mode 0660 and per-VM-runtime named-user ACL entries become effective for cloud-hypervisor. Broker rejects values >0o777 with CHILD_EXIT_INVALID_UMASK=75.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0.0
     }
   },
   "additionalProperties": false,
   "definitions": {
+    "BindMount": {
+      "description": "Cross-domain bind mount declaration for a minijail role.",
+      "type": "object",
+      "required": [
+        "dst",
+        "src"
+      ],
+      "properties": {
+        "dst": {
+          "description": "Destination path inside the role's mount namespace.",
+          "type": "string"
+        },
+        "src": {
+          "description": "Source path on the host (broker opens on the caller's behalf).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "CgroupPlacement": {
       "description": "Cgroup placement for a jailed role.",
       "type": "object",
@@ -131,6 +159,20 @@
         "writablePaths"
       ],
       "properties": {
+        "bindMounts": {
+          "description": "v1.1.1 live-deploy fu9: cross-domain bind mounts the broker performs into the role's mount namespace (e.g. a Wayland socket for the GPU sidecar). Each entry is a `{src, dst}` pair. Optional for backward-compat with older bundles.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BindMount"
+          }
+        },
+        "deviceBinds": {
+          "description": "v1.1.1 live-deploy fu9: closed-set device bind paths the broker opens on behalf of the role (e.g. `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidia*`). Optional for backward-compat with older bundles; empty for roles that don't need device access.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "hideDeviceNodesByDefault": {
           "description": "Whether device nodes are hidden unless broker-opened fds are passed.",
           "type": "boolean"

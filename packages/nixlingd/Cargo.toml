@@ -22,6 +22,12 @@ semver = "1"
 serde.workspace = true
 sha2 = "0.10"
 tracing = "0.1"
+# v1.1.1 live-deploy fu9: stderr tracing subscriber for nixlingd
+# so RUST_LOG=debug actually surfaces in journalctl. Without this
+# the daemon initializes no subscriber and every `tracing::error!`
+# call (e.g. InternalIo detail) is silently dropped, making live
+# debugging impossible.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }

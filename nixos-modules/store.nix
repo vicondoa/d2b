@@ -329,12 +329,12 @@ let
   };
 
   vmClosureOf = name:
+    let
+      runner = vmRunnerOf name;
+    in
     pkgs.closureInfo {
-      rootPaths = [
-        (vmTopOf name)
-        (vmRunnerOf name)
-        (nixlingVfsRunnerOf name)
-      ];
+      rootPaths = [ (vmTopOf name) (nixlingVfsRunnerOf name) ]
+        ++ lib.optional (runner != null) runner;
     };
 
   # Eval-time generation directory for a VM. The host activation

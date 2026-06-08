@@ -3,9 +3,19 @@ use std::process::ExitCode;
 use nixling_priv_broker::runtime::{parse_command, run, RunError};
 
 fn main() -> ExitCode {
+    // v1.1.1 live-deploy fu9: enable RUST_LOG-driven env filter
+    // so the broker surfaces detail-level spawn / live-handler
+    // failures in journalctl. Without env_filter() the tracing
+    // subscriber only forwards INFO+ messages with no context,
+    // and the daemon's "Broker.LiveHandlerFailed" envelope is
+    // useless for live operator debugging.
     tracing_subscriber::fmt()
         .with_target(false)
         .without_time()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     match parse_command(std::env::args().skip(1)) {

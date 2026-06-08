@@ -40,6 +40,28 @@ pub struct SpawnRunnerPlan {
     pub seccomp_policy_ref: Option<String>,
     pub mount_policy: MountPolicy,
     pub cgroup_placement: CgroupPlacement,
+    /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
+    /// pre-establishes a single-entry user namespace for this
+    /// runner. The child is fake-root inside the namespace
+    /// (all caps within the user-NS scope) and the host-side
+    /// `capabilities` set should be empty. Currently consumed
+    /// by virtiofsd roles for least-privilege FS serving.
+    pub user_namespace: Option<UserNamespaceSpec>,
+    /// v1.1.2fu36: file-creation mask the broker installs in the
+    /// spawned child before execve. See `MinijailProfile::umask`.
+    pub umask: Option<u32>,
+}
+
+/// Single-entry uid/gid mapping for a runner's user namespace.
+/// The child sees `0` mapped to `host_uid_for_zero` on the
+/// host (and `host_gid_for_zero` for groups). All other UIDs
+/// inside the namespace map to overflowuid (65534). This is
+/// the minimal mapping needed for virtiofsd to operate as
+/// fake-root over its `--shared-dir`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserNamespaceSpec {
+    pub host_uid_for_zero: u32,
+    pub host_gid_for_zero: u32,
 }
 
 /// Errors the preflight + cstring conversion can return.
@@ -129,9 +151,15 @@ pub struct SpawnRunnerPlanInput {
     /// Set to `true` only by unit tests so the preflight skips
     /// the binary-exists check.
     pub skip_binary_exists_check: bool,
+    /// v1.1.1fu14 (ADR 0021): when `Some`, broker creates a
+    /// per-runner user namespace and writes uid_map/gid_map. The
+    /// in-NS UID 0 maps to the supplied host UID. virtiofsd
+    /// roles set this to gain fake-root semantics with zero
+    /// host-side caps.
+    pub user_namespace: Option<UserNamespaceSpec>,
+    /// v1.1.2fu36: optional umask installed before execve.
+    pub umask: Option<u32>,
 }
-
-/// Validate a [`SpawnRunnerPlanInput`] and return a usable
 /// [`SpawnRunnerPlan`].
 pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnRunnerError> {
     if !input
@@ -197,6 +225,8 @@ pub fn preflight(input: &SpawnRunnerPlanInput) -> Result<SpawnRunnerPlan, SpawnR
         seccomp_policy_ref: input.seccomp_policy_ref.clone(),
         mount_policy: input.mount_policy.clone(),
         cgroup_placement: input.cgroup_placement.clone(),
+        user_namespace: input.user_namespace,
+        umask: input.umask,
     })
 }
 
@@ -256,6 +286,8 @@ mod tests {
             }],
             nix_store_read_only: true,
             hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
         }
     }
 
@@ -282,6 +314,8 @@ mod tests {
             cgroup_placement: test_cgroup_placement(),
             root_carve_out: false,
             skip_binary_exists_check: true,
+            user_namespace: None,
+            umask: None,
         }
     }
 
@@ -427,5 +461,52 @@ mod tests {
         assert_eq!(argv.len(), 2);
         assert_eq!(env.len(), 2);
         assert_eq!(argv[0].to_string_lossy(), "microvm@corp-vm");
+    }
+
+    // v1.1.1fu14 (ADR 0021) — user_namespace round-trips.
+    //
+    // The preflight is pure data; we only verify that the
+    // user_namespace field round-trips from the input to the
+    // resulting plan unchanged. Actual broker spawn behaviour
+    // is exercised in `sys::tests::clone3_spawn_runner_*` and
+    // in the integration tests under `live_handlers.rs`.
+
+    #[test]
+    fn user_namespace_round_trips_none() {
+        let plan = preflight(&good_input()).unwrap();
+        assert_eq!(plan.user_namespace, None);
+    }
+
+    #[test]
+    fn user_namespace_round_trips_some() {
+        let mut input = good_input();
+        input.user_namespace = Some(UserNamespaceSpec {
+            host_uid_for_zero: 11_032_050,
+            host_gid_for_zero: 11_032_050,
+        });
+        let plan = preflight(&input).unwrap();
+        assert_eq!(
+            plan.user_namespace,
+            Some(UserNamespaceSpec {
+                host_uid_for_zero: 11_032_050,
+                host_gid_for_zero: 11_032_050,
+            })
+        );
+    }
+
+    #[test]
+    fn user_namespace_with_zero_uid_is_allowed_in_plan_layer() {
+        // The preflight does NOT validate the host UID — the
+        // broker dispatch is responsible for refusing UID 0
+        // mappings when adr_carve_out is absent (separately
+        // enforced in runtime.rs). This test pins the plan
+        // layer's pass-through semantics.
+        let mut input = good_input();
+        input.user_namespace = Some(UserNamespaceSpec {
+            host_uid_for_zero: 0,
+            host_gid_for_zero: 0,
+        });
+        let plan = preflight(&input).unwrap();
+        assert_eq!(plan.user_namespace.unwrap().host_uid_for_zero, 0);
     }
 }

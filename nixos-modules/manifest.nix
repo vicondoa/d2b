@@ -122,7 +122,7 @@ let
       stateDir = stateRoot;
       apiSocket = "${stateRoot}/${name}.sock";
       gpuSocket = "${stateRoot}/${name}-gpu.sock";
-      tpmSocket = "/run/swtpm/${name}/sock";
+      tpmSocket = "/run/nixling/vms/${name}/tpm.sock";
       # security-2: state file under root-owned non-group-writable subdir.
       audioStateFile = "${stateRoot}/state/audio-state.json";
       audioService = "nixling-${name}-snd.service";
@@ -353,10 +353,13 @@ let
       tpmSocket = lib.mkOption {
         type = lib.types.str;
         description = ''
-          swtpm vTPM socket path (`/run/swtpm/<vm>/sock`). Only
-          meaningful when `tpm = true`. The framework's
-          `nixling-<vm>-swtpm.service` opens this and the microvm.nix
-          runner connects to it via `--tpm <socket>`.
+          swtpm vTPM socket path (`/run/nixling/vms/<vm>/tpm.sock`).
+          Only meaningful when `tpm = true`. The framework's
+          long-lived swtpm sidecar (spawned by the broker) creates
+          this socket; cloud-hypervisor connects to it via
+          `--tpm <socket>`. Lives under the per-VM runtime dir so
+          the existing default ACL grants every per-VM ephemeral
+          UID (including cloud-hypervisor) rw on it.
         '';
       };
 

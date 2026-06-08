@@ -49,6 +49,15 @@ pub struct ProcessNode {
     /// Full argv for daemon-spawned roles; `argv[0]` is the process title.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
+    /// v1.1.1fu11 (Option B): environment variables for the
+    /// spawned runner in `KEY=VALUE` form. Used to thread
+    /// session-resource paths (`PIPEWIRE_RUNTIME_DIR`,
+    /// `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`) for audio/gpu/
+    /// video sidecars whose libpipewire / libwayland clients
+    /// can't auto-discover them under the ephemeral runner
+    /// UID.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
     /// Typed minijail metadata for this role.
     pub profile: RoleProfile,
     /// Readiness predicates that mark the role available.
@@ -108,6 +117,31 @@ pub struct RoleProfile {
     pub mount_policy: MountPolicy,
     /// cgroup-v2 placement and delegation metadata.
     pub cgroup_placement: CgroupPlacement,
+    /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
+    /// pre-establishes a per-runner user namespace and writes
+    /// uid_map/gid_map. The child runs fake-root inside the NS;
+    /// host-side `caps` should be empty. Currently only set by
+    /// virtiofsd roles for least-privilege FS serving.
+    /// Older bundles omit this field; deserialize defaults to None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_namespace: Option<RoleUserNamespace>,
+    /// v1.1.2fu36: file-creation mask installed in the spawned
+    /// child before execve. See `MinijailProfile::umask` for the
+    /// rationale. Roles that bind shared Unix sockets
+    /// (vhost-user-sound, crosvm-gpu, swtpm) declare `0o007` so
+    /// downstream consumers (cloud-hypervisor) can connect via the
+    /// per-VM-runtime default ACL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub umask: Option<u32>,
+}
+
+/// v1.1.1fu14 — single-entry uid_map/gid_map declaration for the
+/// per-role user namespace. See ADR 0021.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RoleUserNamespace {
+    pub host_uid_for_zero: u32,
+    pub host_gid_for_zero: u32,
 }
 
 /// Directed dependency edge in the per-VM DAG.

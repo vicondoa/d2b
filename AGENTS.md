@@ -673,6 +673,7 @@ Touch these only with a clear plan and a corresponding test run.
 | Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. The planned `ph6-p6-supervisor-removed-assertion` (eval-time rejection of the retired `nixling.vms.<vm>.supervisor` option) is **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1 plan in `plan.md`); v1.0 retains the option for backward-compat with consumer flakes pinning pre-v1.0 manifests. The companion v1.1 ADRs are [ADR 0017 (no bash fallbacks)](./docs/adr/0017-no-bash-fallbacks-invariant.md) and [ADR 0018 (microvm.nix removal)](./docs/adr/0018-microvm-nix-removal.md). |
 | Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `nixling-launchers` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. The polkit allowlist that used to grant per-VM start/stop is retired (ADR 0015); wiring anything else into the group inverts the threat model. |
 | SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `nixling keys rotate` MUST NOT touch consumer-supplied keys. |
+| virtiofsd sandbox model (v1.1.2)    | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/nixling-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-VM runner principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` (with `--readonly` for ro-store shares). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md) and SUPERSEDES the retired [ADR 0003](./docs/adr/0003-minijail-provisioning-and-sandbox-interface.md) carve-out. Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
 
 ## Don'ts (security-relevant)
 
@@ -869,6 +870,13 @@ canonical tags are `( P6 )` and `( P6 <slice> )`:
   [ADR 0007](./docs/adr/0007-bash-coexistence-and-migration.md).
   Every section of this AGENTS.md rewrite resolves to ADR 0015 as
   the source of truth.
+- [docs/adr/0021-broker-user-namespace-for-virtiofsd.md](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md)
+  — **v1.1.2 virtiofsd sandbox decision**: broker pre-establishes a
+  single-entry user namespace via `clone3(CLONE_NEWUSER)` so
+  virtiofsd runs fake-root inside the NS while exposing **zero**
+  host capabilities. SUPERSEDES the [ADR 0003](./docs/adr/0003-minijail-provisioning-and-sandbox-interface.md)
+  `requiresStartRoot` carve-out. Any change to the virtiofsd
+  minijail profile or argv shape MUST preserve this contract.
 - [README.md](./README.md) — consumer-facing intro, install,
   manual integration walkthrough.
 - [CHANGELOG.md](./CHANGELOG.md) — Keep-a-Changelog, entries

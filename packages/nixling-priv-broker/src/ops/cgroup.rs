@@ -37,7 +37,7 @@ use crate::ops::exec_reconcile::SystemLiveExec;
 
 use super::AuditDecision;
 
-pub(crate) const DEFAULT_DELEGATED_PARENT_SLICE: &str = "/sys/fs/cgroup/system.slice/nixling.slice";
+pub(crate) const DEFAULT_DELEGATED_PARENT_SLICE: &str = "/sys/fs/cgroup/nixling.slice";
 
 /// Sub-error for [`super::OpError::Cgroup`]. Stays kebab-case to match
 /// the W3 audit `error_kind` field.

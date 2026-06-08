@@ -60,8 +60,8 @@ let
     priv=${lib.escapeShellArg (perVmHostKeyPriv name)}
     pub=${lib.escapeShellArg (perVmHostKeyPub name)}
 
-    install -d -m 0755 -o root -g root "${cfg.site.stateDir}/vms/${name}" 2>/dev/null || true
-    install -d -m 0755 -o root -g root "$vm_host_keys_dir"
+    install -d -m 2770 -o nixlingd -g users "${cfg.site.stateDir}/vms/${name}" 2>/dev/null || true
+    install -d -m 0750 -o nixlingd -g nixling-launcher "$vm_host_keys_dir"
 
     if [ ! -f "$priv" ]; then
       umask 077

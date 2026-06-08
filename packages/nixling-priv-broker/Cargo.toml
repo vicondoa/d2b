@@ -7,6 +7,7 @@ license = "Apache-2.0"
 
 [lints.rust]
 unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 
 [features]
 # W4-fu clean-break: `layer1-bootstrap` is no longer a default
@@ -51,7 +52,7 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 # `unsafe_code = "deny"` lint stays clean.
 rustix = { version = "0.38", features = ["fs", "process", "net"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 
 [dev-dependencies]

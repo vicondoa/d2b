@@ -703,6 +703,14 @@ enum VmCommand {
     /// Daemon-side runtime view (different from `nixling list`, which
     /// is the static manifest view).
     List(VmListArgs),
+    /// v1.1.1fu14 C1 + v1.1.2fu18: open an SSH session to the
+    /// VM in a host terminal. Resolves the per-VM SSH key from
+    /// the bundle's `managed_keys.effective_key_path(<vm>)`
+    /// (honors `nixling.site.keysDir` + per-VM overrides; legacy
+    /// `/var/lib/nixling/keys/<vm>_ed25519` is fallback) and the
+    /// IP from the manifest's `static_ip`. Default terminal:
+    /// konsole.
+    Konsole(VmKonsoleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -749,6 +757,53 @@ struct VmRestartArgs {
 
 #[derive(Debug, Args)]
 struct VmListArgs {
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
+/// v1.1.1fu14 C1: `nixling vm konsole <vm>` — open an SSH session to
+/// the VM in a host terminal. Resolves the per-VM SSH key from
+/// v1.1.1fu14 + v1.1.2fu18 product-panel must-fix wording.
+/// Spawn a terminal emulator (default `konsole`, overridable
+/// via `--terminal`) hosting an SSH session into the named VM.
+/// The SSH key is resolved from the bundle's
+/// `managed_keys.effective_key_path()` (which honors
+/// `nixling.site.keysDir` + per-VM overrides); the legacy
+/// `/var/lib/nixling/keys/<vm>_ed25519` is only the fallback when
+/// the bundle is absent. The host IP comes from the bundle's per-env
+/// LAN subnet + the VM's lan index. Detaches from the CLI process
+/// via setsid so closing the CLI doesn't take the terminal down.
+#[derive(Debug, Args)]
+struct VmKonsoleArgs {
+    /// VM name as declared in `nixling.vms.<name>`.
+    vm: String,
+    /// Terminal emulator binary to spawn. Must accept `-e` to
+    /// execute a command. Tested: konsole, alacritty, foot,
+    /// gnome-terminal, xterm. Default: konsole.
+    #[arg(long, default_value = "konsole")]
+    terminal: String,
+    /// SSH user inside the guest. Defaults to the per-VM
+    /// `ssh_user` from the manifest; falls back to `$USER` if
+    /// the manifest entry is absent. Override for ad-hoc
+    /// per-user sessions.
+    #[arg(long)]
+    user: Option<String>,
+    /// Override the SSH host (IP or hostname). Default:
+    /// manifest `static_ip` (bundle-resolved LAN address).
+    #[arg(long)]
+    host: Option<String>,
+    /// Override the SSH key path. Default: the bundle's
+    /// `managed_keys.effective_key_path(<vm>)` (honors
+    /// `nixling.site.keysDir` + per-VM overrides). Legacy
+    /// `/var/lib/nixling/keys/<vm>_ed25519` is only the
+    /// fallback when no bundle is staged.
+    #[arg(long)]
+    key: Option<std::path::PathBuf>,
+    /// Print the would-be command without executing.
+    #[arg(long)]
+    dry_run: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1527,6 +1582,7 @@ fn dispatch(
             VmCommand::Stop(args) => cmd_vm_stop(context, args),
             VmCommand::Restart(args) => cmd_vm_restart(context, args),
             VmCommand::List(args) => cmd_vm_list(context, args),
+            VmCommand::Konsole(args) => cmd_vm_konsole(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
         NativeCommand::Down(args) => cmd_vm_stop(context, args),
@@ -2403,6 +2459,214 @@ fn cmd_vm_list(_context: &Context, args: &VmListArgs) -> Result<i32, CliFailure>
         print_stdout(
             "vm list: daemon runner inventory not yet exposed here; use `nixling status <vm>`\n",
         );
+    }
+    Ok(0)
+}
+
+/// v1.1.1fu14 C1 + fu15 panel must-fixes: `nixling vm konsole <vm>` —
+/// spawn a terminal emulator hosting an SSH session into the named VM.
+///
+/// Resolution order:
+///   - VM name → manifest entry → static_ip + ssh.user
+///   - Key path: --key, else bundle.managed_keys.effective_key_path,
+///     else /var/lib/nixling/keys/<vm>_ed25519
+///   - Host: --host, else static_ip from manifest
+///   - User: --user, else ssh_user from manifest, else $USER env
+///   - Terminal: --terminal, else "konsole"
+///
+/// The spawned process is detached via setsid so the CLI can exit
+/// while the terminal keeps running. StrictHostKeyChecking is
+/// disabled and UserKnownHostsFile=/dev/null because the per-VM
+/// host keys are nixling-managed and the host's known_hosts entry
+/// would change every VM rebuild (defeating the security check).
+///
+/// fu15 panel-product must-fix: validate key existence + manifest
+/// entry BEFORE any --json output so machine consumers never see
+/// "success" JSON followed by an error envelope on stderr. fu15
+/// panel-product must-fix: --key resolves from bundle.managed_keys
+/// when --key is not given (consumer sites can override keysDir);
+/// the legacy /var/lib/nixling/keys path is only the last fallback.
+/// fu15 panel-product must-fix: drop the hardcoded username
+/// fallback; use $USER env var instead (still fails closed if
+/// unset). fu15 panel-rust should-fix: propagate setsid
+/// spawn-failure as a typed exit-1 envelope; the spawned terminal
+/// can fail to start even if setsid forks successfully.
+fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
+    require_known_vm(context, &args.vm, args.json)?;
+    let manifest = context.load_manifest()?;
+    let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
+        CliFailure::new(
+            1,
+            format!("vm konsole: unknown vm '{}' in manifest", args.vm),
+        )
+    })?;
+
+    let host = args
+        .host
+        .clone()
+        .or_else(|| vm.static_ip.clone())
+        .ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!(
+                    "vm konsole: vm '{}' has no static_ip in manifest and no --host override",
+                    args.vm
+                ),
+            )
+        })?;
+    let user = args
+        .user
+        .clone()
+        .or_else(|| vm.ssh_user.clone())
+        .or_else(|| std::env::var("USER").ok())
+        .ok_or_else(|| {
+            CliFailure::new(
+                1,
+                format!(
+                    "vm konsole: vm '{}' has no ssh_user in manifest; pass --user or set $USER",
+                    args.vm
+                ),
+            )
+        })?;
+    // fu15 panel-product must-fix: resolve key path from bundle's
+    // managed_keys (which honors site keysDir + per-VM overrides)
+    // when --key is not given. Fall back to /var/lib/nixling/keys
+    // legacy path only when the bundle is absent (e.g. running
+    // pre-staging or in a hermetic test harness).
+    let key_path = if let Some(p) = args.key.clone() {
+        p
+    } else if context.bundle_path.exists() {
+        let bundle: Bundle = read_json_file(&context.bundle_path).map_err(|err| {
+            CliFailure::new(
+                1,
+                format!(
+                    "vm konsole: failed to read bundle {}: {err}",
+                    context.bundle_path.display()
+                ),
+            )
+        })?;
+        bundle.managed_keys.effective_key_path(&args.vm)
+    } else {
+        PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm))
+    };
+
+    let terminal = &args.terminal;
+    let ssh_target = format!("{user}@{host}");
+    let key_arg = key_path.display().to_string();
+    let argv: Vec<String> = vec![
+        terminal.clone(),
+        "-e".to_owned(),
+        "ssh".to_owned(),
+        "-i".to_owned(),
+        key_arg.clone(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=no".to_owned(),
+        "-o".to_owned(),
+        "UserKnownHostsFile=/dev/null".to_owned(),
+        ssh_target.clone(),
+    ];
+
+    // fu15 panel-product must-fix: validate the key file BEFORE
+    // emitting any --json output. A consumer parsing the JSON would
+    // otherwise see success-shape JSON followed by an exit-1
+    // envelope on stderr, which is incoherent. Dry-run mode is
+    // exempt: it explicitly does NOT spawn anything, so the key
+    // file's existence is informational only.
+    if !args.dry_run && !key_path.exists() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "vm konsole: ssh key not found at {} (override with --key)",
+                key_path.display()
+            ),
+        ));
+    }
+
+    if args.dry_run || args.json {
+        let body = serde_json::json!({
+            "command": "vm konsole",
+            "mode": if args.dry_run { "dry-run" } else { "would-spawn" },
+            "vm": args.vm,
+            "terminal": terminal,
+            "host": host,
+            "user": user,
+            "key": key_arg,
+            "argv": argv,
+        });
+        let mut rendered = serde_json::to_string_pretty(&body)
+            .map_err(|err| CliFailure::new(1, format!("serialize: {err}")))?;
+        rendered.push('\n');
+        print_stdout(&rendered);
+        if args.dry_run {
+            return Ok(0);
+        }
+    } else if args.human {
+        print_stdout(&format!(
+            "vm konsole {}: spawning `{}` ssh session as {}@{}\n",
+            args.vm, terminal, user, host
+        ));
+    }
+
+    // Spawn detached so the CLI can exit while the terminal keeps
+    // running. setsid --fork is the conventional Unix pattern for
+    // fully detaching from the controlling tty/session.
+    let mut child = std::process::Command::new("setsid")
+        .arg("--fork")
+        .args(&argv)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            // fu17 panel-rust should-fix: emit typed envelope (not
+            // plain CliFailure text) so machine consumers parsing
+            // --json get a consistent error envelope shape via
+            // rendered_stderr instead of a bare "nixling: ..." line.
+            let operator_error = CoreError::internal_io(format!(
+                "vm konsole: failed to spawn `setsid --fork {}`: {err}",
+                terminal
+            ));
+            CliFailure {
+                exit_code: 1,
+                message: operator_error.message(),
+                rendered_stderr: render_operator_error(
+                    &operator_error,
+                    Some("vm konsole"),
+                ),
+            }
+        })?;
+    // setsid --fork exits immediately after forking the real child;
+    // we wait for setsid to reap its fork-state but do NOT wait for
+    // the terminal itself (it lives independently). fu15 panel-rust
+    // should-fix + fu17 typed-envelope: propagate non-zero setsid
+    // exit as a typed envelope so operators see a structured error
+    // message instead of a silently-failed konsole.
+    let status = child.wait().map_err(|err| {
+        let operator_error = CoreError::internal_io(format!(
+            "vm konsole: setsid wait failed: {err}"
+        ));
+        CliFailure {
+            exit_code: 1,
+            message: operator_error.message(),
+            rendered_stderr: render_operator_error(
+                &operator_error,
+                Some("vm konsole"),
+            ),
+        }
+    })?;
+    if !status.success() {
+        let operator_error = CoreError::internal_io(format!(
+            "vm konsole: setsid --fork {} exited with status {:?} (terminal binary missing?)",
+            terminal, status
+        ));
+        return Err(CliFailure {
+            exit_code: 1,
+            message: operator_error.message(),
+            rendered_stderr: render_operator_error(
+                &operator_error,
+                Some("vm konsole"),
+            ),
+        });
     }
     Ok(0)
 }

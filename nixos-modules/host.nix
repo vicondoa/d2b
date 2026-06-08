@@ -248,7 +248,7 @@ in
           ++ lib.optional vm'.usbip.yubikey ./components/usbip.nix
           ++ lib.optional vm'.audio.enable ./components/audio/guest.nix
           ++ lib.optional vm'.audit.enable ./components/audit.nix
-          ++ lib.optional vm'.graphics.enable ./components/video/guest.nix
+          ++ lib.optional (vm'.graphics.enable && vm'.graphics.videoSidecar) ./components/video/guest.nix
           ++ lib.optional vm'.observability.enable ./components/observability/guest.nix
           ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
           ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
@@ -296,7 +296,18 @@ in
             # recursion store.nix would cause when mapping over
             # cfg.vms to write back to nixling.vms).
             {
-              microvm.writableStoreOverlay = lib.mkDefault "/nix/.rw-store";
+              # v1.1.1fu13i+j: writableStoreOverlay path "/nix/.rw-store"
+              # is the GUEST path; the HOST backing infrastructure
+              # (per-VM rw-store disk + ext4 init + mount sequencing)
+              # doesn't exist under the broker-spawn model (microvm.nix
+              # v1 did this inline in the systemd unit). FORCE-disable
+              # for v1.1.1 — the consumer's `writableStoreOverlay = "/nix/.rw-store"`
+              # is overridden so the guest boots from the ro-store
+              # virtiofs share without an overlay. Ad-hoc nix-env
+              # installs won't persist; HM activation still works
+              # from the read-only store as long as the closure is
+              # complete.
+              microvm.writableStoreOverlay = lib.mkForce null;
               microvm.shares = lib.mkForce ([
                 {
                   source = "/nix/store";

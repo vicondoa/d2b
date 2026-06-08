@@ -256,6 +256,8 @@ mod tests {
                 writable_paths: vec![],
                 nix_store_read_only: true,
                 hide_device_nodes_by_default: false,
+                device_binds: vec![],
+                bind_mounts: vec![],
             },
             cgroup_placement: nixling_core::minijail_profile::CgroupPlacement {
                 subtree: "nixling.slice/test".to_owned(),
@@ -264,6 +266,8 @@ mod tests {
             },
             root_carve_out: false,
             profile_id: "test".to_owned(),
+            user_namespace: None,
+            umask: None,
         }
     }
 

@@ -411,6 +411,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                     "--api-socket".to_owned(),
                     "/var/lib/nixling/vms/work-vm/work-vm.sock".to_owned(),
                 ],
+                env: Vec::new(),
                 profile: RoleProfile {
                     profile_id: "ch-runner-default".to_owned(),
                     uid: 5001,
@@ -431,12 +432,16 @@ fn build_synthetic_resolver() -> BundleResolver {
                         writable_paths: Vec::new(),
                         nix_store_read_only: true,
                         hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
                     },
                     cgroup_placement: CgroupPlacement {
                         subtree: "nixling/work-vm/ch-runner".to_owned(),
                         controllers: Vec::new(),
                         delegated: true,
                     },
+                    user_namespace: None,
+                    umask: None,
                 },
                 readiness: vec![ReadinessPredicate::ApiSocketInfo(
                     "/run/nixling/vms/work-vm/api.sock".to_owned(),

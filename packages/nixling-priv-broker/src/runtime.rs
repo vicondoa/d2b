@@ -1569,6 +1569,15 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 cgroup_placement: intent.cgroup_placement.clone(),
                 root_carve_out: intent.root_carve_out,
                 skip_binary_exists_check: false,
+                // v1.1.1fu14: thread through the user-namespace
+                // spec from the resolved intent. ADR 0021.
+                user_namespace: intent.user_namespace.map(|spec| {
+                    crate::ops::spawn_runner::UserNamespaceSpec {
+                        host_uid_for_zero: spec.host_uid_for_zero,
+                        host_gid_for_zero: spec.host_gid_for_zero,
+                    }
+                }),
+                umask: intent.umask,
             };
             let runner_id = format!("{}:{}", req.vm_id.as_str(), req.role_id.as_str());
             let outcome = backend.spawn_runner(runner_id.as_str(), &plan_input)?;
@@ -3134,7 +3143,19 @@ impl DispatchBackend for LiveDispatchBackend {
         plan_input: &crate::ops::spawn_runner::SpawnRunnerPlanInput,
     ) -> Result<crate::live_handlers::SpawnRunnerResult, BrokerError> {
         let outcome = crate::live_handlers::live_spawn_runner(plan_input)
-            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            .map_err(|err| {
+                // v1.1.1 live-deploy fu9: log the actual
+                // LiveHandlerError detail before wrapping it in
+                // the opaque BrokerError::LiveHandler envelope so
+                // operators can see WHY the spawn failed in
+                // journalctl.
+                tracing::error!(
+                    runner_id = %runner_id,
+                    error = %err,
+                    "live_spawn_runner failed"
+                );
+                BrokerError::LiveHandler(err.to_string())
+            })?;
         register_runner_pidfd(runner_id, &outcome.pidfd)?;
         Ok(outcome)
     }
@@ -4771,6 +4792,7 @@ mod tests {
                     unit: Some("nixling@corp-vm.service".to_owned()),
                     binary_path: None,
                     argv: Vec::new(),
+                    env: Vec::new(),
                     profile: RoleProfile {
                         profile_id: "profile-ch".to_owned(),
                         uid: 1001,
@@ -4791,12 +4813,16 @@ mod tests {
                             writable_paths: Vec::new(),
                             nix_store_read_only: true,
                             hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
                         },
                         cgroup_placement: CgroupPlacement {
                             subtree: "nixling.slice/corp-vm/ch-runner".to_owned(),
                             controllers: vec!["cpu".to_owned(), "memory".to_owned()],
                             delegated: true,
                         },
+                        user_namespace: None,
+                        umask: None,
                     },
                     readiness: Vec::new(),
                 }],
@@ -5387,6 +5413,10 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    #[cfg_attr(
+        not(test_root),
+        ignore = "v1.1.1fu11: requires write access to /var/lib/nixling/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
+    )]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
         use nixling_core::bundle_resolver::{
             intent_id_activation, intent_id_gc_host, intent_id_hosts_host,

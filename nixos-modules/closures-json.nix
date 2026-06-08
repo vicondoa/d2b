@@ -18,17 +18,28 @@ let
   vmRunnerOf = name: nl.vmDeclaredRunner config name;
 
   vmClosureInfo = name:
+    let
+      runner = vmRunnerOf name;
+    in
     pkgs.closureInfo {
-      rootPaths = [
-        (vmTopOf name)
-        (vmRunnerOf name)
-      ];
+      rootPaths = [ (vmTopOf name) ]
+        ++ lib.optional (runner != null) runner;
     };
 
   closureArtifact = name:
     let
       top = "${vmTopOf name}";
-      runner = "${vmRunnerOf name}";
+      # v1.1.1: per-VM declared runner is null (broker generates
+      # argv in Rust via packages/nixling-host/src/*_argv.rs); the
+      # bundle's `declaredRunner` / `runnerParityPath` are kept in
+      # the schema for tooling that still reads them but rendered
+      # as the empty string when no derivation exists. The runner-
+      # parity invariant is enforced in the broker by comparing the
+      # bundle's prebuilt argv to the Rust regenerator's output
+      # (see packages/nixling-priv-broker/src/runtime.rs SpawnRunner
+      # dispatch arm).
+      runnerDrv = vmRunnerOf name;
+      runner = if runnerDrv == null then "" else "${runnerDrv}";
       closure = vmClosureInfo name;
       relativePath = "closures/${name}.json";
       file = pkgs.runCommand "nixling-${name}-closure.json" { nativeBuildInputs = [ pkgs.python3 ]; } ''

@@ -1,6 +1,6 @@
 # 0003. Minijail provisioning and sandbox interface
 
-- Status: Accepted
+- Status: Accepted; virtiofsd `requiresStartRoot` carve-out SUPERSEDED by [ADR 0021](0021-broker-user-namespace-for-virtiofsd.md) in v1.1.2 (the broker-pre-established user namespace replaces the `--sandbox=namespace + requiresStartRoot=true` carve-out)
 - Date: 2026-05-25
 - Wave: W0b
 - Plan slice: "Minijail is not assumed to come from a distro package. Nixling will ship a pinned, Nix-built minijail in its closure and CVE-track it like other bundled virtualization dependencies."
@@ -39,6 +39,18 @@ that introduces the actual crates.
 2. The preferred integration is libminijail FFI through a thin `libminijail-sys` crate wrapped by a safe `nixling-sandbox` crate, while generated `.conf` files are debugging and audit artifacts only because the daemon constructs jails programmatically from typed profiles.
 3. Every role profile declares uid, gid, supplementary groups, capabilities and ambient-capability policy, bind mounts and writable paths, device nodes, namespaces, seccomp policy, environment allowlist, rlimits, cgroup path, log handling, expected sockets, and expected pidfile.
 4. `requiresStartRoot` is allowed only for explicitly named roles such as virtiofsd with `--sandbox=namespace`, and each exception documents the setup capability set, syscalls, reason, drop point, and steady-state uid, gid, and capability assertions.
+
+   > **v1.1.1 supersession** ([ADR 0021](0021-broker-user-namespace-for-virtiofsd.md)):
+   > the virtiofsd `--sandbox=namespace` + `requiresStartRoot=true` carve-out
+   > described here is no longer the live model. The broker now
+   > pre-establishes a single-entry user namespace via
+   > `clone3(CLONE_NEWUSER)` before exec; virtiofsd profiles declare
+   > `requiresStartRoot = false`, zero host capabilities
+   > (`capabilities = []`), and a `userNamespace` block mapping in-NS
+   > UID/GID 0 to the per-VM runner principal. virtiofsd runs fake-root
+   > only inside the namespace. virtiofsd is the only role currently
+   > moved to this model; future roles (gpu/audio/swtpm) may follow
+   > pending device-bind compatibility analysis.
 5. The Cargo workspace keeps `unsafe_code = "forbid"` at workspace scope, and future `nixling-sandbox` or `libminijail-sys` exceptions require per-crate overrides approved by a follow-up ADR.
 6. Seccomp and ioctl policies are per-role and derived from typed device and resource requirements, and no profile may use an `ioctl: 1` catch-all.
 

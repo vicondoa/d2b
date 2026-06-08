@@ -187,4 +187,95 @@ if [ "$top_list_rc" = "99" ]; then
 fi
 ok "nixling list is native (exit $top_list_rc, no bash fallback)"
 
+# --- (5) vm konsole --dry-run --json shape (v1.1.2 panel-test must-fix) ---
+#
+# Asserts the new `vm konsole <vm>` verb (v1.1.2fu14d) emits the
+# documented JSON shape in --dry-run mode without requiring a real
+# ssh key file or actually spawning a terminal. Layer 1 (no socket,
+# no fork). Covers the panel-test + panel-software must-fix items.
+
+konsole_manifest="$scratch/konsole-manifest.json"
+cat > "$konsole_manifest" <<'JSON'
+{
+  "konsole-vm": {
+    "name": "konsole-vm",
+    "env": "work",
+    "graphics": false,
+    "tpm": false,
+    "audio": false,
+    "audioService": "none",
+    "usbipYubikey": false,
+    "staticIp": "10.30.0.99",
+    "isNetVm": false,
+    "stateDir": "/var/lib/nixling/vms/konsole-vm",
+    "bridge": "nl-work",
+    "sshUser": "alice"
+  }
+}
+JSON
+
+konsole_out="$scratch/konsole-dry.json"
+konsole_rc=0
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm konsole konsole-vm --dry-run --json > "$konsole_out" 2>/dev/null || konsole_rc=$?
+if [ "$konsole_rc" != "0" ]; then
+  fail "vm konsole --dry-run --json should exit 0, got $konsole_rc"
+  cat "$konsole_out" >&2
+  exit 1
+fi
+
+if command -v jq >/dev/null 2>&1; then
+  cmd=$(jq -r '.command' "$konsole_out")
+  mode=$(jq -r '.mode' "$konsole_out")
+  vm=$(jq -r '.vm' "$konsole_out")
+  terminal=$(jq -r '.terminal' "$konsole_out")
+  host=$(jq -r '.host' "$konsole_out")
+  user=$(jq -r '.user' "$konsole_out")
+  key=$(jq -r '.key' "$konsole_out")
+  argv0=$(jq -r '.argv[0]' "$konsole_out")
+  [ "$cmd" = "vm konsole" ] || { fail "vm konsole .command='$cmd' (want 'vm konsole')"; exit 1; }
+  [ "$mode" = "dry-run" ] || { fail "vm konsole .mode='$mode' (want 'dry-run')"; exit 1; }
+  [ "$vm" = "konsole-vm" ] || { fail "vm konsole .vm='$vm' (want 'konsole-vm')"; exit 1; }
+  [ "$terminal" = "konsole" ] || { fail "vm konsole .terminal='$terminal' (want 'konsole' default)"; exit 1; }
+  [ "$host" = "10.30.0.99" ] || { fail "vm konsole .host='$host' (want '10.30.0.99' from staticIp)"; exit 1; }
+  [ "$user" = "alice" ] || { fail "vm konsole .user='$user' (want 'alice' from sshUser)"; exit 1; }
+  [ -n "$key" ] || { fail "vm konsole .key is empty"; exit 1; }
+  [ "$argv0" = "konsole" ] || { fail "vm konsole .argv[0]='$argv0' (want 'konsole')"; exit 1; }
+fi
+ok "vm konsole --dry-run --json shape matches v1.1.2 contract"
+
+# --- (5b) vm konsole overrides reflected in dry-run output ---
+
+konsole_override_out="$scratch/konsole-override.json"
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm konsole konsole-vm \
+    --dry-run --json \
+    --user bob --host 192.0.2.44 --key /custom/key --terminal xterm \
+  > "$konsole_override_out" 2>/dev/null
+if command -v jq >/dev/null 2>&1; then
+  user=$(jq -r '.user' "$konsole_override_out")
+  host=$(jq -r '.host' "$konsole_override_out")
+  key=$(jq -r '.key' "$konsole_override_out")
+  terminal=$(jq -r '.terminal' "$konsole_override_out")
+  [ "$user" = "bob" ] || { fail "vm konsole --user override not reflected (got '$user')"; exit 1; }
+  [ "$host" = "192.0.2.44" ] || { fail "vm konsole --host override not reflected (got '$host')"; exit 1; }
+  [ "$key" = "/custom/key" ] || { fail "vm konsole --key override not reflected (got '$key')"; exit 1; }
+  [ "$terminal" = "xterm" ] || { fail "vm konsole --terminal override not reflected (got '$terminal')"; exit 1; }
+fi
+ok "vm konsole CLI overrides reflected in dry-run JSON"
+
+# --- (5c) vm konsole unknown VM exits 1 with clear error ---
+
+konsole_unknown_rc=0
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm konsole missing-vm --dry-run --json > /dev/null 2>&1 || konsole_unknown_rc=$?
+if [ "$konsole_unknown_rc" = "0" ]; then
+  fail "vm konsole on unknown vm should exit 1, got 0"
+  exit 1
+fi
+ok "vm konsole rejects unknown vm name with non-zero exit"
+
 log "==> cli-vm-verbs-eval OK"

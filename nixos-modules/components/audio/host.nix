@@ -313,11 +313,12 @@ in
               initial = ''{"mic":"${mic}","speaker":"${spk}"}'';
             in
             # 'd' = create directory if missing (won't change mode of existing).
-            # state/: root:kvm 0750 — kvm group can traverse; no group write.
-            # 'f' = create file if missing, leave alone if present.
-            # mode 0640 + owner root + group nixling-launcher.
-            [''d /var/lib/nixling/vms/${name}/state 0750 root nixling-launcher -''
-             ''f /var/lib/nixling/vms/${name}/state/audio-state.json 0640 root nixling-launcher - ${initial}''
+            # state/: nixlingd:nixling-launcher 0750 — daemon owns it,
+            # launcher-group traverses. v1.1.1 matches the ownership-
+            # matrix declaration (previously root:nixling-launcher
+            # which failed ownership-matrix preflight).
+            [''d /var/lib/nixling/vms/${name}/state 0750 nixlingd nixling-launcher -''
+             ''f /var/lib/nixling/vms/${name}/state/audio-state.json 0640 nixlingd nixling-launcher - ${initial}''
              # P4 A2: audio lock in /run/nixling/ (nixling-launcher 0660) so
              # nixling-launcher members can open it without kvm-group membership.
              ''f /run/nixling/audio-${name}.lock 0660 root nixling-launcher -''];
@@ -333,19 +334,18 @@ in
       system.activationScripts.nixlingAudioStateDirs =
         lib.stringAfter [ "users" ] (lib.concatStringsSep "\n" (lib.mapAttrsToList
           (name: _: ''
-            install -d -m 2770 -o microvm -g kvm /var/lib/nixling/vms/${name} || true
-            install -d -m 0750 -o root -g nixling-launcher /var/lib/nixling/vms/${name}/state || true
+            install -d -m 2770 -o nixlingd -g users /var/lib/nixling/vms/${name} || true
+            install -d -m 0750 -o nixlingd -g nixling-launcher /var/lib/nixling/vms/${name}/state || true
+            # v1.1.1 live-deploy fu9: chown -R to repair any state/
+            # dir that was pre-existing root:* before our fix. install
+            # -d is no-op when dir exists; force ownership repair.
+            chown nixlingd:nixling-launcher /var/lib/nixling/vms/${name}/state 2>/dev/null || true
+            chmod 0750 /var/lib/nixling/vms/${name}/state 2>/dev/null || true
             # One-time migration: move old audio-state.json to new path.
             old_f="/var/lib/nixling/vms/${name}/audio-state.json"
             new_f="/var/lib/nixling/vms/${name}/state/audio-state.json"
             if [ -f "$old_f" ] && [ ! -f "$new_f" ]; then
-              install -m 0640 -o root -g nixling-launcher "$old_f" "$new_f" && rm -f "$old_f" || true
-            fi
-            # P2r3 nixos-3/software-1: repair any state/ dir created root:root
-            # (by audio_write fallback before this fix). Idempotent.
-            _sd="/var/lib/nixling/vms/${name}/state"
-            if [ -d "$_sd" ] && [ "$(stat -c '%G' "$_sd" 2>/dev/null)" = "root" ]; then
-              chgrp nixling-launcher "$_sd" || true
+              install -m 0640 -o nixlingd -g nixling-launcher "$old_f" "$new_f" && rm -f "$old_f" || true
             fi
             # software-r2-1: grant nixling-launcher group x-only traversal on the VM
             # dir so nixling-launcher members (not kvm members) can reach state/.

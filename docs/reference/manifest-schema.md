@@ -76,7 +76,7 @@ verifying owner, mode, version, and hash.
     "stateDir":       "/var/lib/nixling/vms/<vm-name>",
     "apiSocket":      "/var/lib/nixling/vms/<vm-name>/<vm-name>.sock",
     "gpuSocket":      "/var/lib/nixling/vms/<vm-name>/<vm-name>-gpu.sock",
-    "tpmSocket":      "/run/swtpm/<vm-name>/sock",
+    "tpmSocket":      "/run/nixling/vms/<vm-name>/tpm.sock",
     "audioStateFile": "/var/lib/nixling/vms/<vm-name>/state/audio-state.json",
     "audioService":   "nixling-<vm-name>-snd.service",
     "observability": {
@@ -177,7 +177,7 @@ is the canonical type spec; the table below is for human readability.
 | `stateDir`       | string             | yes      | Per-VM state dir. Currently hardcoded to `/var/lib/nixling/vms/<name>`. See `nixling.site.stateDir`'s advisory note.    |
 | `apiSocket`      | string             | yes      | microvm.nix runner API socket (`<stateDir>/<name>.sock`). Used by `nixling vm stop` for clean shutdown.                       |
 | `gpuSocket`      | string             | yes      | crosvm-gpu sidecar control socket (`<stateDir>/<name>-gpu.sock`). Only meaningful when `graphics = true`.                  |
-| `tpmSocket`      | string             | yes      | swtpm vTPM socket (`/run/swtpm/<name>/sock`). Only meaningful when `tpm = true`.                                          |
+| `tpmSocket`      | string             | yes      | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Only meaningful when `tpm = true`.                                          |
 | `audioStateFile` | string             | yes      | Live audio-grant state file (`<stateDir>/state/audio-state.json`). `{ "mic": "on"\|"off", "speaker": "on"\|"off" }`.        |
 | `audioService`   | string             | yes      | Legacy/historical audio sidecar identifier (`nixling-<name>-snd.service`). In v1.0 (per ADR 0015) the pre-P6 systemd unit was retired and the audio runner is broker-spawned under `nixling.slice/<vm>/snd`; the field is retained for manifest-schema backward-compat with v0.x consumers. |
 | `observability`  | object             | yes      | Per-VM observability transport metadata. Always emitted; carries the enable bit, vsock CID/socket, and guest agent socket. |
@@ -389,7 +389,7 @@ produces exactly:
     "staticIp": "10.20.0.10",
     "tap": "work-l10",
     "tpm": false,
-    "tpmSocket": "/run/swtpm/corp-vm/sock",
+    "tpmSocket": "/run/nixling/vms/corp-vm/tpm.sock",
     "usbipYubikey": false,
     "usbipdHostIp": "192.0.2.1"
   },
@@ -416,7 +416,7 @@ produces exactly:
     "staticIp": "192.0.2.2",
     "tap": "work-u2",
     "tpm": false,
-    "tpmSocket": "/run/swtpm/sys-work-net/sock",
+    "tpmSocket": "/run/nixling/vms/sys-work-net/tpm.sock",
     "usbipYubikey": false,
     "usbipdHostIp": null
   }
@@ -485,7 +485,7 @@ are mechanically derived from `name` and the env):
   "staticIp": "10.20.0.11",
   "tap": "work-l11",
   "tpm": true,
-  "tpmSocket": "/run/swtpm/gui-vm/sock",
+  "tpmSocket": "/run/nixling/vms/gui-vm/tpm.sock",
   "usbipYubikey": true,
   "usbipdHostIp": "192.0.2.1"
 }

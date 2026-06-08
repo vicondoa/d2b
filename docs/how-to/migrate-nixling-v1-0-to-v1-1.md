@@ -279,3 +279,105 @@ ls -lZ /run/nixling/priv.sock
 - [`docs/reference/cli-contract.md`](../reference/cli-contract.md) — per-verb invariants in v1.1+.
 - [`docs/reference/error-codes.md`](../reference/error-codes.md) "Remediation rendering conventions" — typed-envelope format.
 - [`docs/reference/privileges.md`](../reference/privileges.md) — broker capability matrix + per-role ACL contract.
+
+## v1.1.1 → v1.1.2 operational notes
+
+v1.1.2 adds the broker-pre-established user namespace for
+virtiofsd per [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md),
+plus several host-activation hardening fixes and a new
+`nixling vm konsole` CLI verb. The bump is **drop-in for
+consumer flakes**: no flake-input changes, no manifest
+edits, no `/etc/subuid` / `/etc/subgid` provisioning.
+
+### What `nixos-rebuild switch` does on the v1.1.1 → v1.1.2 bump
+
+1. Updates the broker binary (new `sys.rs` user-NS path that
+   does `clone3(CLONE_NEWUSER)` + `pipe2`-sync + `/proc/<pid>/uid_map`
+   writes before exec'ing virtiofsd).
+2. Updates the virtiofsd minijail profile (`capabilities = []`,
+   `requiresStartRoot = false`, `userNamespace = { hostUidForZero,
+   hostGidForZero }`); virtiofsd argv now uses `--sandbox=chroot
+   --inode-file-handles=never` (with `--readonly` for the ro-store
+   share).
+3. Updates the activation script:
+   - `store-overlay.img` creation refuses to operate on
+     attacker-placed symlinks.
+   - `*.img` ACL loop uses `find -type f` instead of a shell
+     glob (does not follow symlinks).
+   - `/run/nixling/locks` + `/run/nixling/state` + per-VM
+     `store` / `store-meta` ownership reasserted on every
+     activation.
+   - W3 altname add no longer silently swallows ALL errors;
+     foreign-device altname collisions now fail loud.
+4. Updates the daemon (`nixlingd`) with `PidfdTable::prune_dead_entries`
+   called from the vm-start handler — stale pidfd-table entries
+   from prior runs are dropped automatically. The daemon's
+   `extraGroups += "nixling-launchers"` membership is now
+   declarative (previously a manual `gpasswd -a` operator step).
+
+### Live VM restart behaviour
+
+Any running virtiofsd processes will be restarted on the next
+`nixling vm start --apply <vm>` because the new minijail
+profile shape differs from v1.1.1's. Running VMs that have
+NOT been restarted continue to run with their v1.1.1 profile
+(host caps + `requiresStartRoot=true`); the bump is therefore
+forward-only — there is no security regression for in-flight
+processes, but the security improvement only takes effect on
+the next VM restart.
+
+The manual reset sequence operators previously used between
+`nixling vm start --apply` attempts (per the v1.1.1fu13
+live-deploy session notes — `chown`/`chmod`/`setfacl` on
+`/run/nixling/locks` + per-VM store dirs) is **no longer
+needed**: the new activation script + daemon prune logic
+codify those workarounds.
+
+### New CLI verb: `nixling vm konsole <vm>`
+
+Spawns a terminal emulator (default `konsole`, override with
+`--terminal`) hosting an SSH session into the named VM.
+Resolves user/host/key from the manifest + bundle. Useful
+for quickly opening a guest shell after `vm start --apply`.
+
+```
+nixling vm konsole personal-dev
+nixling vm konsole work-aad --terminal alacritty
+nixling vm konsole personal-dev --dry-run --json  # print resolved argv
+```
+
+The `--dry-run --json` mode prints the resolved configuration
+without spawning anything; useful for tooling integration.
+
+### No prerequisite changes
+
+- **No `/etc/subuid` / `/etc/subgid` provisioning required.** The
+  broker uses a single-entry user-NS map directly via
+  `/proc/<pid>/uid_map`, NOT via `newuidmap`/`newgidmap` setuid
+  helpers.
+- **No flake-input changes.** v1.1.2 is internal to the nixling
+  flake; consumers only need to bump the `nixling` input rev.
+- **No new kernel-floor bump.** v1.1.2 keeps the existing v1.1
+  Linux ≥ 6.9 floor unchanged
+  (see [ADR 0008](../adr/0008-supported-platforms-and-rejected-targets.md)
+  + the v1.1 prereq above). Hosts already running v1.1 / v1.1.1
+  satisfy v1.1.2 unchanged.
+
+### Required daemon restart after `nixos-rebuild switch`
+
+`nixlingd.service` is declared with `restartIfChanged = false`
+(by design — restarting the daemon mid-VM-flight would disrupt
+pidfd supervision). The new daemon-side pidfd-prune logic
+(v1.1.2fu14c) only takes effect after an explicit daemon
+restart. After `nixos-rebuild switch` completes, drain running
+VMs and restart the daemon + broker:
+
+```
+nixling vm stop --apply personal-dev
+nixling vm stop --apply work-aad
+sudo systemctl restart nixling-priv-broker.socket \
+                       nixling-priv-broker.service \
+                       nixlingd
+nixling vm start --apply personal-dev
+nixling vm start --apply work-aad
+```

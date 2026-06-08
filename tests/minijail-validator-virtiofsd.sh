@@ -51,23 +51,19 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 PROFILE_NIX="$ROOT/nixos-modules/minijail-profiles.nix"
 EVIDENCE_PATH=${NL_VALIDATED_DIR:-/var/lib/nixling/validated}/p1-virtiofsd.json
 
-# Canonical, ordered cap set from the W3 startup carve-out
-# (ADR 0003). Order matches nixos-modules/minijail-profiles.nix so
+# Canonical, ordered cap set from the v1.1.1fu14 broker-pre-NS model
+# (ADR 0021). Order matches nixos-modules/minijail-profiles.nix so
 # any future drift surfaces against the exact source array.
-EXPECTED_CAPS=(
-  CAP_SYS_ADMIN
-  CAP_SETPCAP
-  CAP_CHOWN
-  CAP_FOWNER
-  CAP_FSETID
-  CAP_SETUID
-  CAP_SETGID
-  CAP_DAC_OVERRIDE
-  CAP_MKNOD
-  CAP_SETFCAP
-)
+#
+# v1.1.1fu14 (ADR 0021): host-side capabilities are EMPTY. virtiofsd
+# runs fake-root inside a broker-pre-established user namespace
+# (single-entry uid_map "0 <runtime_uid> 1"). All caps virtiofsd
+# needs are available inside the user NS automatically; ZERO host
+# caps are required. This is the principle-of-least-privilege
+# model. See ADR 0021 + docs/adr/0021-broker-user-namespace-for-virtiofsd.md
+EXPECTED_CAPS=()
 
-EXPECTED_CARVE_OUT="ADR 0003 virtiofsd --sandbox=namespace setup exception"
+EXPECTED_CARVE_OUT="ADR 0021 v1.1.1fu14 virtiofsd fake-root via broker pre-established user NS"
 
 # Cleanup trap state — used by Layer 2 to undo any tempdir/socket
 # tampering even on early failure.
@@ -91,57 +87,66 @@ fail() { printf '[p1-virtiofsd] FAIL: %s\n' "$*" >&2; exit 1; }
 assert_profile_source() {
   [ -f "$PROFILE_NIX" ] || fail "missing $PROFILE_NIX"
 
-  # Carve-out marker: must appear in the canonical exception string
-  # and must be referenced as both exceptionRef and adr_carve_out
-  # on the virtiofsd profile.
+  # v1.1.1fu14 (ADR 0021): the carve-out marker now references the
+  # broker-pre-NS model. Only exceptionRef remains (adr_carve_out
+  # was retired because broker-pre-NS is the canonical, non-
+  # exceptional model — virtiofsd has zero host caps and full
+  # caps inside the user NS).
   grep -qF "$EXPECTED_CARVE_OUT" "$PROFILE_NIX" \
     || fail "virtiofsdRootException string '$EXPECTED_CARVE_OUT' not found in $PROFILE_NIX"
 
   grep -qE 'exceptionRef[[:space:]]*=[[:space:]]*virtiofsdRootException' "$PROFILE_NIX" \
     || fail "virtiofsd profile is missing exceptionRef = virtiofsdRootException"
-  grep -qE 'adr_carve_out[[:space:]]*=[[:space:]]*virtiofsdRootException' "$PROFILE_NIX" \
-    || fail "virtiofsd profile is missing adr_carve_out = virtiofsdRootException"
 
   # Extract the virtiofsd profile's mkProfile body. We anchor on
-  # `role = "virtiofsd";` and stop after the closing `adr_carve_out`
-  # line which is the last attribute in the profile.
+  # `role = "virtiofsd";` and stop after the closing `exceptionRef`
+  # line which is the last attribute in the v1.1.1fu14 profile.
   local block
   block=$(awk '
     /role[[:space:]]*=[[:space:]]*"virtiofsd";/ { active=1 }
     active { print }
-    active && /adr_carve_out[[:space:]]*=[[:space:]]*virtiofsdRootException;/ { exit }
+    active && /exceptionRef[[:space:]]*=[[:space:]]*virtiofsdRootException;/ { exit }
   ' "$PROFILE_NIX")
 
   [ -n "$block" ] || fail "could not locate virtiofsd profile block in $PROFILE_NIX"
 
-  local cap
-  for cap in "${EXPECTED_CAPS[@]}"; do
-    printf '%s' "$block" | grep -qE "\"${cap}\"" \
-      || fail "virtiofsd profile missing expected cap: $cap"
-  done
-
-  # Drift guard: count quoted CAP_* tokens inside the block; must
-  # equal the expected closed-set size. Catches accidental additions.
+  # v1.1.1fu14: cap set must be empty (broker-pre-NS gives full
+  # caps inside the user NS; host needs none). Drift guard: any
+  # CAP_* token inside the block is forbidden.
+  # NOTE: set -euo pipefail traps the empty grep (rc=1) here, so
+  # we wrap in `|| true` to keep the count semantics intact while
+  # tolerating "no matches" as the expected case.
   local found_count
-  found_count=$(printf '%s' "$block" \
-    | grep -oE '"CAP_[A-Z_]+"' \
-    | sort -u \
-    | wc -l)
-  if [ "$found_count" -ne "${#EXPECTED_CAPS[@]}" ]; then
-    fail "virtiofsd profile cap set drift: expected ${#EXPECTED_CAPS[@]} caps, found $found_count"
+  found_count=$( { printf '%s' "$block" | grep -oE '"CAP_[A-Z_]+"' || true ; } | sort -u | wc -l)
+  if [ "$found_count" -ne 0 ]; then
+    fail "virtiofsd profile must declare ZERO host caps (ADR 0021); found $found_count CAP_* tokens"
   fi
 
-  # requiresStartRoot must be true — that's the whole point of the
-  # ADR 0003 carve-out.
-  printf '%s' "$block" | grep -qE 'requiresStartRoot[[:space:]]*=[[:space:]]*true' \
-    || fail "virtiofsd profile must declare requiresStartRoot = true (ADR 0003 carve-out)"
+  # v1.1.1fu14: requiresStartRoot MUST be false. The "must start
+  # root then drop" carve-out (ADR 0003) was retired because the
+  # broker pre-establishes a user NS where virtiofsd is fake-root.
+  # Use the same `... || fail` pattern as the other shape checks
+  # (avoids `if cmd; then fail; fi` set -e edge case where the
+  # `if` clause's failing pipeline can trip pipefail).
+  if printf '%s' "$block" | grep -qE 'requiresStartRoot[[:space:]]*=[[:space:]]*true' ; then
+    fail "virtiofsd profile must declare requiresStartRoot = false (ADR 0021 retires the root carve-out)"
+  fi || true
+
+  # v1.1.1fu14: userNamespace must be set to a single-entry mapping
+  # of in-NS UID 0 → the principal's stable ephemeral UID.
+  printf '%s' "$block" | grep -qE 'userNamespace[[:space:]]*=' \
+    || fail "virtiofsd profile must declare userNamespace = { ... } (ADR 0021)"
+  printf '%s' "$block" | grep -qE 'hostUidForZero[[:space:]]*=' \
+    || fail "virtiofsd profile userNamespace must include hostUidForZero (ADR 0021)"
+  printf '%s' "$block" | grep -qE 'hostGidForZero[[:space:]]*=' \
+    || fail "virtiofsd profile userNamespace must include hostGidForZero (ADR 0021)"
 
   # Steady-state seccomp policy reference must be the closed
   # w1-virtiofsd allowlist.
   printf '%s' "$block" | grep -qE 'seccompPolicyRef[[:space:]]*=[[:space:]]*"w1-virtiofsd"' \
     || fail "virtiofsd profile missing seccompPolicyRef = \"w1-virtiofsd\""
 
-  log "Layer-1: source profile shape OK (${#EXPECTED_CAPS[@]} caps, carve-out tagged)"
+  log "Layer-1: source profile shape OK (0 host caps, broker-pre-NS userNamespace declared)"
 }
 
 assert_installed_profiles() {
@@ -163,24 +168,27 @@ assert_installed_profiles() {
   local f
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    local role carve caps_json
+    # v1.1.1fu14 (ADR 0021): drift checks shifted from
+    # adr_carve_out to userNamespace. The role + capabilities are
+    # also re-validated against the empty-set expectation.
+    local role caps_json user_ns
     role=$(jq -r '.role // empty' "$f")
-    carve=$(jq -r '.adr_carve_out // empty' "$f")
-    caps_json=$(jq -c '.capabilities // []' "$f")
+    caps_json=$(jq -c '.caps // []' "$f")
+    user_ns=$(jq -c '.userNamespace // null' "$f")
 
     [ "$role" = "virtiofsd" ] \
       || fail "$f: role != virtiofsd (got '$role')"
-    [ "$carve" = "$EXPECTED_CARVE_OUT" ] \
-      || fail "$f: adr_carve_out drift (got '$carve')"
-
-    # Build expected JSON array literal.
-    local expected_json
-    expected_json=$(printf '%s\n' "${EXPECTED_CAPS[@]}" | jq -R . | jq -sc .)
-    [ "$caps_json" = "$expected_json" ] \
-      || fail "$f: capabilities drift; expected $expected_json got $caps_json"
+    [ "$caps_json" = "[]" ] \
+      || fail "$f: caps drift; expected [] (ADR 0021 broker-pre-NS), got $caps_json"
+    [ "$user_ns" != "null" ] \
+      || fail "$f: missing userNamespace (ADR 0021 requires single-entry uid_map)"
+    jq -e '.userNamespace.hostUidForZero | type == "number"' "$f" >/dev/null \
+      || fail "$f: userNamespace.hostUidForZero must be a number"
+    jq -e '.userNamespace.hostGidForZero | type == "number"' "$f" >/dev/null \
+      || fail "$f: userNamespace.hostGidForZero must be a number"
   done <<<"$installed"
 
-  log "Layer-1: installed minijail profile(s) match documented carve-out"
+  log "Layer-1: installed minijail profile(s) match v1.1.1fu14 broker-pre-NS shape"
 }
 
 # ---------------------------------------------------------------------------

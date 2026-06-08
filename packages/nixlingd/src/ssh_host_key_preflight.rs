@@ -265,7 +265,27 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
             });
         }
         let mode = meta.permissions().mode() & 0o7777;
-        if mode != EXPECTED_KEY_MODE {
+        // v1.1.2fu25 panel-virt: when the file has POSIX ACL named
+        // entries (e.g. from the activation script's per-keyfile
+        // `u:virtiofsd_uid:r` grant required by ADR 0021 broker-
+        // pre-NS virtiofsd reading the 0400 root:root host key),
+        // Linux stores the mask in the file's group-mode bits. The
+        // group's BASE perm (in the ACL's ACL_GROUP_OBJ entry) is
+        // still ---, but stat() reports 0440 because the mask is r.
+        // Accept either 0400 (no ACL) or 0440 (ACL with mask r--)
+        // when the file has a system.posix_acl_access xattr; reject
+        // any other mode.
+        let mode_ok = if mode == EXPECTED_KEY_MODE {
+            true
+        } else if mode == 0o0440 {
+            // Only accept 0o0440 if a posix_acl_access xattr exists
+            // (which is what bumped the stat-reported group bits via
+            // the mask). Otherwise it really is mode drift.
+            has_posix_acl(&path)
+        } else {
+            false
+        };
+        if !mode_ok {
             return Err(SshdHostKeyDrift::KeyWrongMode {
                 path,
                 expected_mode: EXPECTED_KEY_MODE,
@@ -286,6 +306,24 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
         );
     }
     Ok(())
+}
+
+/// v1.1.2fu25: returns true when the file has a
+/// `system.posix_acl_access` xattr (i.e. the activation script's
+/// `setfacl -m u:UID:r` grant for ADR 0021 broker-pre-NS
+/// virtiofsd has been applied). Used by the preflight to
+/// distinguish 0o0440-with-ACL (legitimate) from 0o0440-without-ACL
+/// (real mode drift). Returns false on any xattr lookup error so
+/// the preflight fails closed.
+fn has_posix_acl(path: &Path) -> bool {
+    // Pass a tiny buffer; we only care whether the call succeeds
+    // (xattr exists) or fails with ENODATA / ENOTSUP / IO error.
+    let mut tiny_buf = [0u8; 4];
+    match rustix::fs::lgetxattr(path, "system.posix_acl_access", &mut tiny_buf) {
+        Ok(_) => true,
+        Err(e) if e.raw_os_error() == libc::ERANGE => true, // value exists, just too big for buf
+        _ => false,
+    }
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 # (eliminates address-in-use races and lets systemd own the socket's
 # ACL contract).
 #
-# Authority: paydro@nixos 2026-05-30 plan-review R4 panel 9/9 signoff.
+# Authority: framework maintainer 2026-05-30 plan-review R4 panel 9/9 signoff.
 # Per plan.md §"Canonical broker CapabilityBoundingSet" the bounding
 # set is exactly the listed caps (no CAP_SYS_PTRACE, no CAP_CHOWN
 # outside the cgroup-delegation startup window).
@@ -18,17 +18,35 @@
 let
   cfg = config.nixling;
 
+  # v1.1.1fu11: filter out `target/` dev caches from the source
+  # so the Nix copy stays small (broker target alone is ~6 GB).
+  packagesSrc = lib.cleanSourceWith {
+    src = ../packages;
+    filter = path: type:
+      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
+      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
+  };
+
   brokerPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-priv-broker";
     version =
       (builtins.fromTOML (builtins.readFile ../packages/nixling-priv-broker/Cargo.toml))
         .package.version;
-    src = lib.cleanSource ../packages/nixling-priv-broker;
+    src = packagesSrc;
+    sourceRoot = "source/nixling-priv-broker";
     cargoLock = {
       lockFile = ../packages/nixling-priv-broker/Cargo.lock;
     };
     cargoBuildFlags = [ "--no-default-features" ];
     doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
     meta.description = "nixling privileged broker (uid 0 host-mutation surface)";
   };
 
@@ -61,6 +79,23 @@ in
       "d /var/lib/nixling/current-bundle 0755 root root -"
     ];
 
+    # v1.1.1 live-deploy fu9: declare nixling.slice as a
+    # top-level slice (systemd naming convention: no dashes in
+    # the basename = top-level). The broker's
+    # DEFAULT_DELEGATED_PARENT_SLICE constant was updated to
+    # /sys/fs/cgroup/nixling.slice to match (was previously
+    # /sys/fs/cgroup/system.slice/nixling.slice, but that nested
+    # form requires systemd-style naming `system-nixling.slice`
+    # which would put it at system.slice/system-nixling.slice
+    # NOT system.slice/nixling.slice). Top-level is simpler and
+    # matches the broker's cgroup walk-up logic.
+    systemd.slices.nixling = {
+      description = "Slice for nixling-managed VMs and broker-spawned runners";
+      sliceConfig = {
+        Delegate = "cpu memory pids io";
+      };
+    };
+
     # SOCKET-ACTIVATED. systemd owns the bind, ACL, and lifecycle
     # of /run/nixling/priv.sock. The broker process receives the fd
     # via SD_LISTEN_FDS=1 LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock and
@@ -88,6 +123,26 @@ in
       # No wantedBy here.
       requires = [ "nixling-priv-broker.socket" ];
       after = [ "nixling-priv-broker.socket" "local-fs.target" ];
+      # v1.1.1 live-deploy fu9 + fu12: surface broker debug logs and
+      # point at the nft binary (NixOS has no /usr/sbin/nft default).
+      environment = {
+        RUST_LOG = "debug";
+        NIXLING_BROKER_NFT_BINARY = "${pkgs.nftables}/bin/nft";
+        # iproute2 binary lives in /bin not /sbin on NixOS.
+        NIXLING_BROKER_IP_BINARY = "${pkgs.iproute2}/bin/ip";
+        # usbip binary from linuxPackages_latest.usbip.
+        NIXLING_BROKER_USBIP_BINARY = "${pkgs.linuxPackages_latest.usbip}/bin/usbip";
+      };
+
+      # v1.1.1 live-deploy fu12: ApplyNftables / SpawnRunner mount-prep
+      # ops invoke nft / setfacl / mount via PATH lookup. Add the
+      # tools the broker live handlers shell out to.
+      path = with pkgs; [
+        nftables
+        acl
+        iproute2
+        util-linux
+      ];
 
       serviceConfig = {
         # Type=notify so the daemon can deterministically observe
@@ -106,7 +161,19 @@ in
         Group = "nixlingd";
 
         # Canonical CapabilityBoundingSet per plan §"Canonical broker
-        # CapabilityBoundingSet". NO CAP_SYS_PTRACE.
+        # CapabilityBoundingSet". v1.1.1 live-deploy fu10: expanded
+        # to include every cap the broker may need to pass through to
+        # a spawned runner. Child role caps live in the bundle's
+        # role profile; if the broker's bounding set is narrower
+        # than the role's cap list, capset(2) in the child fails
+        # with EPERM and the child exits silently with
+        # CHILD_EXIT_CAPSET. The full set required by virtiofsd /
+        # cloud-hypervisor / swtpm / gpu role profiles is:
+        # CAP_NET_ADMIN / CAP_NET_RAW / CAP_DAC_OVERRIDE /
+        # CAP_DAC_READ_SEARCH / CAP_SYS_ADMIN / CAP_SETUID /
+        # CAP_SETGID / CAP_FOWNER / CAP_SETPCAP / CAP_CHOWN /
+        # CAP_FSETID / CAP_MKNOD / CAP_SETFCAP / CAP_SYS_RESOURCE /
+        # CAP_IPC_LOCK.
         CapabilityBoundingSet = [
           "CAP_NET_ADMIN"
           "CAP_NET_RAW"
@@ -116,18 +183,45 @@ in
           "CAP_SETUID"
           "CAP_SETGID"
           "CAP_FOWNER"
+          "CAP_SETPCAP"
+          "CAP_CHOWN"
+          "CAP_FSETID"
+          "CAP_MKNOD"
+          "CAP_SETFCAP"
+          "CAP_SYS_RESOURCE"
+          "CAP_IPC_LOCK"
         ];
         AmbientCapabilities = [ "" ];
         # NoNewPrivileges=false because the broker re-execs after the
         # cgroup-delegation startup window with a reduced cap set.
         NoNewPrivileges = false;
 
+        # v1.1.1 live-deploy fu9: place broker under
+        # nixling.slice (which is itself nested under
+        # system.slice — see systemd.slices.nixling above) so
+        # the broker's cgroup path is
+        # /sys/fs/cgroup/system.slice/nixling.slice/* matching
+        # the broker's DEFAULT_DELEGATED_PARENT_SLICE.
+        Slice = "nixling.slice";
+        Delegate = true;
+
         # Isolation knobs compatible with broker's job.
         PrivateTmp = true;
-        ProtectHome = true;
+        # v1.1.1fu11 (Option B): ProtectHome=true also tmpfs-masks
+        # /run/user/<uid> which the audio role needs to reach the
+        # Wayland user's PipeWire socket. Drop it — the broker
+        # has no business reading /home regardless, and CAP_DAC_*
+        # in the bounding set is gated by minijail profile per
+        # spawned role anyway.
+        ProtectHome = false;
         ProtectClock = true;
         ProtectProc = "invisible";
-        ProcSubset = "pid";
+        # v1.1.1 live-deploy fu9: ProcSubset=pid blocks the broker
+        # from reading /proc/sys/kernel/random/uuid which audit.rs
+        # uses to generate event IDs. Drop the subset restriction
+        # so the audit pipeline works. (ProtectProc=invisible
+        # still hides other processes' /proc entries.)
+        # ProcSubset = "pid";
         RestrictAddressFamilies = [
           "AF_UNIX"
           "AF_NETLINK"

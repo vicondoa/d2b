@@ -234,6 +234,27 @@ in
       };
     };
 
+    extraArgsScript = mkOption {
+      type = types.nullOr (types.either types.path types.str);
+      default = null;
+      description = ''
+        Optional per-VM script that emits additional hypervisor argv
+        on stdout at runner-start time (used by the audio guest module
+        to inject `--generic-vhost-user` flags whose socket path is
+        only known at boot-time). The broker reads this path via the
+        bundle `runner-intent.extra_args_script` field; the Nix-side
+        value is a path/string referencing the script derivation.
+
+        v1.1-final note: at v1.1.1 the broker's Rust argv generators
+        do not yet honor this field (the generators emit static argv
+        from typed inputs). The audio module's existing per-VM
+        script-based injection is preserved on the bundle side for
+        backward compatibility with the daemon's pre-spawn argv
+        envelope; the broker spawn path reads the prebuilt argv from
+        the bundle which already contains the script invocation.
+      '';
+    };
+
     # v1.1-final: declaredRunner is NOT emitted by the nixling-owned
     # evaluator. The broker spawns the hypervisor directly via the
     # Rust argv generators in `packages/nixling-host/src/*_argv.rs`;

@@ -187,7 +187,7 @@
         },
         "tpmSocket": {
           "type": "string",
-          "description": "swtpm vTPM socket path (/run/swtpm/<name>/sock). Only meaningful when tpm=true."
+          "description": "swtpm vTPM socket path (/run/nixling/vms/<name>/tpm.sock). Only meaningful when tpm=true."
         },
         "audioStateFile": {
           "type": "string",

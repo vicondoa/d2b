@@ -146,7 +146,25 @@ fn class_ioctls(class: DeviceClass) -> &'static [constants::Number] {
     use constants::*;
     match class {
         DeviceClass::Kvm => &[KVM_GET_API_VERSION, KVM_CREATE_VM, KVM_CREATE_VCPU, KVM_RUN],
-        DeviceClass::NetTun => &[TUNSETIFF, TUNSETPERSIST, TUNSETOWNER, TUNSETGROUP],
+        // v1.1.2-final-R1 (panel-security SHOULD-FIX): tightened to
+        // TUNSETIFF + TUNSETGROUP only. TUNSETPERSIST and TUNSETOWNER
+        // are NOT in this declarative allowlist because the broker is
+        // the only legitimate caller and it issues those ioctls via
+        // raw libc bypassing the per-role policy
+        // (packages/nixling-priv-broker/src/ops/tap.rs:
+        // live_create_persistent_tap). Long-lived runners like
+        // cloud-hypervisor open /dev/net/tun + TUNSETIFF to attach to
+        // a PRE-EXISTING persistent TAP; they MUST NOT be granted the
+        // ability to create new persistent TAPs (TUNSETPERSIST) or
+        // change TAP ownership (TUNSETOWNER), which would let a
+        // compromised CH escape the broker-enforced TAP-name/bridge
+        // contract.
+        //
+        // Until seccomp BPF enforcement of this matrix is wired
+        // (load_runner_seccomp currently no-ops on non-absolute
+        // seccomp_policy_ref values), this serves as the contractual
+        // source of truth that future BPF compilation must honour.
+        DeviceClass::NetTun => &[TUNSETIFF, TUNSETGROUP],
         DeviceClass::VhostNet => &[VHOST_SET_OWNER, VHOST_GET_FEATURES, VHOST_NET_SET_BACKEND],
         DeviceClass::Fuse => &[FUSE_NO_IOCTL],
         // P1 kernel-2 + gpu-seccomp: virtgpu needs the full

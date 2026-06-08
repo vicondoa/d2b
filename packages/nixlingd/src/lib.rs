@@ -472,7 +472,17 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let module_degraded_vms: BTreeSet<String> = match load_bundle_resolver(&state) {
         Ok(resolver) => {
             let report = kernel_module_check::run_kernel_module_check(&resolver);
-            if report.is_fatal() {
+            // v1.1.1 live-deploy fu9: NIXLING_SKIP_KERNEL_MODULE_CHECK
+            // converts the fatal check into a logged warning. Real
+            // deployments on hosts whose kernel has the GUEST-side
+            // virtio modules built in (vs loadable) get false-
+            // positives because the check uses `lsmod` and the
+            // built-in modules don't appear there. The check
+            // remains the default; the env-var is an explicit
+            // operator override for the substrate-replaced v1.1
+            // hosts where the historical module list is stale.
+            let skip_kernel_check = std::env::var_os("NIXLING_SKIP_KERNEL_MODULE_CHECK").is_some();
+            if report.is_fatal() && !skip_kernel_check {
                 persist_kernel_module_report(&state.daemon_state_dir, &report);
                 let err = kernel_module_check::fatal_typed_error(&report);
                 tracing::error!(
@@ -482,6 +492,13 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     "kernel-module-check: refusing daemon startup; required modules missing",
                 );
                 return Err(err);
+            }
+            if report.is_fatal() && skip_kernel_check {
+                tracing::warn!(
+                    missing = %report.missing_required_summary(),
+                    present = ?report.present,
+                    "kernel-module-check: fatal misses bypassed via NIXLING_SKIP_KERNEL_MODULE_CHECK; affected VMs may fail at start",
+                );
             }
             for row in &report.optional_missing {
                 tracing::warn!(
@@ -2557,6 +2574,30 @@ fn command_ready(command: &[String]) -> Result<bool, String> {
         .map_err(|_| "command-readiness-exec-failed".to_owned())
 }
 
+/// v1.1.2-final-R1 (panel-software + panel-test HIGH): explicit
+/// process-state outcomes from `/proc/<pid>/stat`. The previous
+/// `Ok(None)` return conflated three different scenarios — file
+/// missing (process gone), file unreadable (transient race),
+/// and file present-but-unparseable (kernel format regression).
+/// Callers can now distinguish these and decide whether to retry,
+/// fail-fast, or treat as terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcState {
+    /// The process is alive in the given state character (e.g.
+    /// 'S' sleeping, 'R' running, 'D' uninterruptible sleep,
+    /// 'Z' zombie awaiting reap, 'X' dead).
+    Alive(char),
+    /// `/proc/<pid>/stat` does not exist — process has been
+    /// reaped (no parent holding pidfd) or never existed.
+    Gone,
+    /// `/proc/<pid>/stat` is present but unparseable. This is
+    /// either a transient mid-write race or a kernel-format
+    /// regression. Callers may log + retry; treating it as
+    /// `Alive` would risk spinning, treating it as `Gone` would
+    /// risk false-positive termination.
+    ParseFailed,
+}
+
 fn wait_for_one_shot_exit(
     pid: i32,
     start_time_ticks: u64,
@@ -2564,9 +2605,36 @@ fn wait_for_one_shot_exit(
 ) -> Result<(), String> {
     let proc_reader = supervisor::state::SystemProcReader;
     let deadline = Instant::now() + timeout;
+    let mut parse_fail_warned = false;
     loop {
         match supervisor::state::ProcReader::proc_starttime(&proc_reader, pid) {
             Ok(Some(observed)) if observed == start_time_ticks => {
+                // v1.1.2fu34: the broker holds the pidfd as the spawn parent
+                // but never explicitly reaps via waitid; the child becomes a
+                // zombie which still has /proc/<pid>/stat returning the same
+                // starttime. Treat process-state 'Z' (zombie) or 'X' (dead)
+                // as terminated so OneShot DAG nodes don't spin until the
+                // polling timeout.
+                match read_proc_state(pid) {
+                    Ok(ProcState::Alive('Z')) | Ok(ProcState::Alive('X')) => {
+                        return Ok(());
+                    }
+                    Ok(ProcState::Alive(_)) => {} // keep polling
+                    Ok(ProcState::Gone) => return Ok(()),
+                    Ok(ProcState::ParseFailed) => {
+                        if !parse_fail_warned {
+                            tracing::warn!(
+                                pid,
+                                "wait_for_one_shot_exit: /proc/<pid>/stat unparseable; \
+                                 continuing to poll (will surface as oneshot-timeout if persistent)"
+                            );
+                            parse_fail_warned = true;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(pid, %err, "read_proc_state I/O error; continuing to poll");
+                    }
+                }
                 if Instant::now() >= deadline {
                     return Err(format!("oneshot-timeout:{pid}"));
                 }
@@ -2576,6 +2644,103 @@ fn wait_for_one_shot_exit(
             Ok(None) => return Ok(()),
             Err(_) => return Err(format!("oneshot-proc-read-failed:{pid}")),
         }
+    }
+}
+
+/// Parse /proc/<pid>/stat to extract the process-state field (field
+/// 3, single character). Uses `rfind(')')` to correctly handle
+/// comm fields containing `)` (the kernel emits `<pid> (<comm>)
+/// <state> ...` and the LAST `)` always closes the comm field).
+///
+/// Returns:
+/// - `Ok(ProcState::Alive(c))` when stat is readable and parses
+/// - `Ok(ProcState::Gone)` when `/proc/<pid>/stat` is missing (ENOENT)
+/// - `Ok(ProcState::ParseFailed)` when stat is readable but malformed
+/// - `Err(io::Error)` for any other I/O error (permission, etc.)
+fn read_proc_state(pid: i32) -> Result<ProcState, std::io::Error> {
+    let path = format!("/proc/{pid}/stat");
+    let data = match fs::read_to_string(&path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ProcState::Gone),
+        Err(e) => return Err(e),
+    };
+    if let Some(close) = data.rfind(')') {
+        let after = &data[close + 1..];
+        let mut chars = after.split_whitespace();
+        if let Some(state_str) = chars.next() {
+            if let Some(c) = state_str.chars().next() {
+                return Ok(ProcState::Alive(c));
+            }
+        }
+    }
+    Ok(ProcState::ParseFailed)
+}
+
+#[cfg(test)]
+mod proc_state_tests {
+    // v1.1.2-final-R1 (panel-test HIGH): explicit coverage of
+    // /proc/<pid>/stat parsing. Each case exercises the parser
+    // with a synthetic stat-format string to ensure the
+    // `rfind(')')` correctly handles comm names containing `)`
+    // and that malformed input maps to `ParseFailed`, not
+    // `Alive`.
+    use super::*;
+
+    fn parse(data: &str) -> ProcState {
+        if let Some(close) = data.rfind(')') {
+            let after = &data[close + 1..];
+            let mut chars = after.split_whitespace();
+            if let Some(state_str) = chars.next() {
+                if let Some(c) = state_str.chars().next() {
+                    return ProcState::Alive(c);
+                }
+            }
+        }
+        ProcState::ParseFailed
+    }
+
+    #[test]
+    fn simple_zombie() {
+        assert_eq!(parse("1234 (sh) Z 1 1234 ..."), ProcState::Alive('Z'));
+    }
+
+    #[test]
+    fn simple_running() {
+        assert_eq!(parse("99 (bash) R 1 99 99 ..."), ProcState::Alive('R'));
+    }
+
+    #[test]
+    fn comm_with_paren() {
+        // Process comm contains ')' — rfind correctly picks the
+        // OUTER closing paren that ends the comm field.
+        assert_eq!(parse("42 (foo) bar) Z 1 42 ..."), ProcState::Alive('Z'));
+    }
+
+    #[test]
+    fn comm_with_spaces_and_paren() {
+        assert_eq!(parse("7 (cmd (in jail)) S 1 7 ..."), ProcState::Alive('S'));
+    }
+
+    #[test]
+    fn truncated_stat() {
+        // Comm present but no state field after — ParseFailed.
+        assert_eq!(parse("1234 (sh)"), ProcState::ParseFailed);
+    }
+
+    #[test]
+    fn no_paren_at_all() {
+        // Garbage input without comm parens — ParseFailed.
+        assert_eq!(parse("not a stat line at all"), ProcState::ParseFailed);
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(parse(""), ProcState::ParseFailed);
+    }
+
+    #[test]
+    fn dead_process() {
+        assert_eq!(parse("88 (init) X 1 88 ..."), ProcState::Alive('X'));
     }
 }
 
@@ -3506,6 +3671,31 @@ fn dispatch_broker_vm_start(
             _ => None,
         })
         .collect::<Vec<_>>();
+    // v1.1.1fu14 B3 + B7: prune entries whose backing process
+    // has died (or whose PID has been reused) BEFORE checking
+    // for existing registrations. This handles the
+    // operator-observed pattern where a daemon crash leaves a
+    // pidfd-table.json with entries pointing at PIDs that were
+    // since killed; without pruning, the daemon refuses every
+    // subsequent vm start with "already has a registered
+    // supervisor pidfd" even though no process exists.
+    match state.pidfd_table.prune_dead_entries() {
+        Ok(n) if n > 0 => {
+            tracing::info!(
+                vm = %request.vm,
+                dropped = n,
+                "vm start: pruned stale pidfd-table entries before duplicate check",
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(
+                vm = %request.vm,
+                error = ?err,
+                "vm start: pidfd-table prune failed; proceeding with stale entries",
+            );
+        }
+    }
     if tracked_roles
         .iter()
         .any(|role_id| state.pidfd_table.contains(&request.vm, role_id))

@@ -22,6 +22,25 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "BindMount": {
+      "description": "Cross-domain bind mount declaration for a minijail role.",
+      "type": "object",
+      "required": [
+        "dst",
+        "src"
+      ],
+      "properties": {
+        "dst": {
+          "description": "Destination path inside the role's mount namespace.",
+          "type": "string"
+        },
+        "src": {
+          "description": "Source path on the host (broker opens on the caller's behalf).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "CgroupPlacement": {
       "description": "Cgroup placement for a jailed role.",
       "type": "object",
@@ -83,6 +102,20 @@
         "writablePaths"
       ],
       "properties": {
+        "bindMounts": {
+          "description": "v1.1.1 live-deploy fu9: cross-domain bind mounts the broker performs into the role's mount namespace (e.g. a Wayland socket for the GPU sidecar). Each entry is a `{src, dst}` pair. Optional for backward-compat with older bundles.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BindMount"
+          }
+        },
+        "deviceBinds": {
+          "description": "v1.1.1 live-deploy fu9: closed-set device bind paths the broker opens on behalf of the role (e.g. `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidia*`). Optional for backward-compat with older bundles; empty for roles that don't need device access.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "hideDeviceNodesByDefault": {
           "description": "Whether device nodes are hidden unless broker-opened fds are passed.",
           "type": "boolean"
@@ -170,6 +203,13 @@
             "string",
             "null"
           ]
+        },
+        "env": {
+          "description": "v1.1.1fu11 (Option B): environment variables for the spawned runner in `KEY=VALUE` form. Used to thread session-resource paths (`PIPEWIRE_RUNTIME_DIR`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`) for audio/gpu/ video sidecars whose libpipewire / libwayland clients can't auto-discover them under the ephemeral runner UID.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "id": {
           "description": "Stable node id used by edges.",

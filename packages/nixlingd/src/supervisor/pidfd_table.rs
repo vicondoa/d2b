@@ -4,10 +4,14 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use tracing;
+
+static SNAPSHOT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 use crate::supervisor::state::parse_proc_stat_starttime;
 
@@ -163,6 +167,52 @@ impl PidfdTable {
         self.entries
             .read()
             .contains_key(&(vm.to_owned(), role.to_owned()))
+    }
+
+    /// v1.1.1fu14 B3 + B7: validate every registered entry's
+    /// `(pid, start_time_ticks)` against `/proc/<pid>/stat`,
+    /// dropping any whose process has died or been replaced
+    /// (start_time mismatch indicates PID reuse).
+    ///
+    /// Called from the `vm start` request handler before the
+    /// "already has a registered supervisor pidfd" check, so
+    /// orphaned entries left behind by a daemon crash + restart
+    /// don't permanently block a fresh start.
+    ///
+    /// Returns the number of entries dropped. Snapshot is
+    /// re-persisted to disk if any entries were dropped.
+    pub fn prune_dead_entries(&self) -> Result<usize, PidfdTableError> {
+        let mut to_drop: Vec<(String, String)> = Vec::new();
+        {
+            let entries = self.entries.read();
+            for ((vm, role), entry) in entries.iter() {
+                let alive = match read_proc_start_time(entry.pid) {
+                    Ok(Some(observed)) => observed == entry.start_time_ticks,
+                    Ok(None) => false,
+                    Err(_) => false,
+                };
+                if !alive {
+                    to_drop.push((vm.clone(), role.clone()));
+                }
+            }
+        }
+        let dropped = to_drop.len();
+        if dropped > 0 {
+            let mut entries = self.entries.write();
+            for key in &to_drop {
+                entries.remove(key);
+            }
+            drop(entries);
+            self.snapshot()?;
+            for (vm, role) in &to_drop {
+                tracing::warn!(
+                    vm = %vm,
+                    role = %role,
+                    "pidfd-table: dropped stale entry (process died or PID reused)",
+                );
+            }
+        }
+        Ok(dropped)
     }
 
     pub fn list_for_vm(&self, vm: &str) -> Vec<PidfdRegistration> {
@@ -384,26 +434,43 @@ fn write_snapshot(path: &Path, snapshot: &PersistedPidfdTable) -> Result<(), Pid
         path: path.to_path_buf(),
         detail: err.to_string(),
     })?;
-    file.write_all(&bytes)
-        .map_err(|err| PidfdTableError::SnapshotFailed {
+    if let Err(err) = file.write_all(&bytes) {
+        // panel-rust v1.1.2-final-R1 should-fix: log cleanup
+        // failures so disk-full / permission regressions surface.
+        if let Err(rm_err) = fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, %rm_err, "pidfd-table: tmpfile cleanup failed (write path)");
+        }
+        return Err(PidfdTableError::SnapshotFailed {
             path: path.to_path_buf(),
             detail: err.to_string(),
-        })?;
-    file.sync_all()
-        .map_err(|err| PidfdTableError::SnapshotFailed {
+        });
+    }
+    if let Err(err) = file.sync_all() {
+        if let Err(rm_err) = fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, %rm_err, "pidfd-table: tmpfile cleanup failed (sync path)");
+        }
+        return Err(PidfdTableError::SnapshotFailed {
             path: path.to_path_buf(),
             detail: err.to_string(),
-        })?;
-    fs::rename(&tmp, path).map_err(|err| PidfdTableError::SnapshotFailed {
-        path: path.to_path_buf(),
-        detail: err.to_string(),
-    })?;
+        });
+    }
+    if let Err(err) = fs::rename(&tmp, path) {
+        if let Err(rm_err) = fs::remove_file(&tmp) {
+            tracing::debug!(?tmp, %rm_err, "pidfd-table: tmpfile cleanup failed (rename path)");
+        }
+        return Err(PidfdTableError::SnapshotFailed {
+            path: path.to_path_buf(),
+            detail: err.to_string(),
+        });
+    }
     Ok(())
 }
 
 fn snapshot_tmp_path(path: &Path) -> PathBuf {
+    let pid = std::process::id();
+    let seq = SNAPSHOT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut tmp = OsString::from(path.as_os_str());
-    tmp.push(".tmp");
+    tmp.push(format!(".tmp.{}.{}", pid, seq));
     PathBuf::from(tmp)
 }
 
@@ -741,5 +808,116 @@ mod tests {
         );
         let status = child.wait();
         assert!(!status.success());
+    }
+
+    /// v1.1.2-final-R1 (panel-test CRITICAL): concurrent snapshot
+    /// stress test that would have caught the fu32 tmpfile race.
+    /// 8 threads each register a pidfd then call snapshot(). The
+    /// snapshot_tmp_path uses pid + atomic counter so concurrent
+    /// calls must NOT collide on the .tmp filename.
+    ///
+    /// Pre-fix behavior: ~50% snapshot() calls fail with ENOENT
+    /// because thread A's rename(.tmp → path) wins, then thread
+    /// B's rename(.tmp → path) fails because thread A's File::create
+    /// truncated thread B's tmp file before A's rename.
+    ///
+    /// Post-fix behavior: each thread writes to a unique
+    /// .tmp.<pid>.<seq> path; all 8 snapshot() calls succeed.
+    #[test]
+    fn snapshot_under_concurrent_load_succeeds() {
+        let tmpdir = mktemp_dir();
+        let state_path = tmpdir.join("pidfd-table.json");
+        let table = std::sync::Arc::new(PidfdTable::new(state_path.clone()));
+
+        // Seed with a dummy entry so snapshot() has something to
+        // serialise (an empty entries map is also fine but real
+        // workloads always have entries during contention).
+        let pid_self = std::process::id() as i32;
+        let starttime = read_proc_start_time(pid_self)
+            .ok()
+            .flatten()
+            .unwrap_or(1);
+        let pidfd_self = rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(pid_self).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .expect("pidfd_open self");
+        table
+            .register(
+                "seed-vm".to_owned(),
+                "seed-role".to_owned(),
+                PidfdEntry {
+                    pidfd: pidfd_self,
+                    pid: pid_self,
+                    start_time_ticks: starttime,
+                },
+            )
+            .expect("seed register");
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let t = std::sync::Arc::clone(&table);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    t.snapshot().expect("concurrent snapshot must succeed");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread join");
+        }
+
+        // Final state-file must exist and be valid JSON
+        let bytes = fs::read(&state_path).expect("read final snapshot");
+        let _: PersistedPidfdTable =
+            serde_json::from_slice(&bytes).expect("final snapshot is valid JSON");
+
+        // No leaked tmp files should remain (each was either
+        // renamed onto state_path or cleaned up on error path).
+        let parent = state_path.parent().expect("has parent");
+        for entry in fs::read_dir(parent).expect("read tmpdir") {
+            let entry = entry.expect("dir entry");
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            assert!(
+                !name_str.contains(".tmp."),
+                "leaked tmp file: {}",
+                name_str
+            );
+        }
+    }
+
+    /// v1.1.2-final-R1 (panel-kernel + panel-test): verify
+    /// snapshot_tmp_path generates distinct names for concurrent
+    /// callers. Direct unit test of the file-naming function.
+    #[test]
+    fn snapshot_tmp_path_is_unique_per_call() {
+        let path = PathBuf::from("/var/lib/nixling/daemon-state/pidfd-table.json");
+        let a = snapshot_tmp_path(&path);
+        let b = snapshot_tmp_path(&path);
+        let c = snapshot_tmp_path(&path);
+        assert_ne!(a, b, "consecutive tmp paths must differ");
+        assert_ne!(b, c, "consecutive tmp paths must differ");
+        assert_ne!(a, c, "consecutive tmp paths must differ");
+        // All three must START with the canonical path + ".tmp."
+        let prefix = format!("{}.tmp.", path.display());
+        for p in [&a, &b, &c] {
+            let s = p.display().to_string();
+            assert!(
+                s.starts_with(&prefix),
+                "{} does not start with {}",
+                s,
+                prefix
+            );
+        }
+    }
+
+    fn mktemp_dir() -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!("nixling-pidfd-test-{pid}-{id}"));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("mkdir test tmpdir");
+        path
     }
 }

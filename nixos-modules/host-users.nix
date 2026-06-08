@@ -2,6 +2,14 @@
 
 let
   cfg = config.nixling;
+  # v1.1.2-final-R1 (panel-software HIGH): use the shared helper
+  # from nixos-modules/lib.nix instead of duplicating the formula
+  # here. The duplicate was a drift-risk: if minijail-profiles.nix's
+  # copy changed, broker setuid target would diverge from system
+  # passwd uid and the fu35 ownership-matrix bug would silently
+  # return.
+  nixlingLib = import ./lib.nix { inherit lib; };
+  inherit (nixlingLib) stablePrincipalId;
 in
 {
   # ---------------------------------------------------------------------------
@@ -18,16 +26,16 @@ in
     # users to it via `nixling.site.launcherUsers`.
     nixling-launcher = { };
   } // (lib.mapAttrs' (name: _:
-      lib.nameValuePair "nixling-${name}-gpu" { })
+      lib.nameValuePair "nixling-${name}-gpu" { gid = stablePrincipalId "nixling-${name}-gpu"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
-      lib.nameValuePair "nixling-${name}-snd" { })
+      lib.nameValuePair "nixling-${name}-snd" { gid = stablePrincipalId "nixling-${name}-snd"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
-      lib.nameValuePair "nixling-${name}-swtpm" { })
+      lib.nameValuePair "nixling-${name}-swtpm" { gid = stablePrincipalId "nixling-${name}-swtpm"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
-      lib.nameValuePair "nixling-${name}-runner" { })
+      lib.nameValuePair "nixling-${name}-runner" { gid = stablePrincipalId "nixling-${name}-runner"; })
     (lib.filterAttrs (_: vm: vm.enable) cfg.vms));
 
   users.users =
@@ -41,31 +49,23 @@ in
     // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-gpu" {
       isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-gpu";
       group = "nixling-${name}-gpu";
-      # kvm: needs /dev/kvm to run cloud-hypervisor + crosvm device gpu.
-      # security-r2-1: "audio" removed — nixling-<vm>-gpu talks audio ONLY via
-      # the vhost-device-sound socket from nixling-<vm>-snd; direct /dev/snd/*
-      # access bypasses vhost mediation.  PAM rtprio limits are not needed here
-      # because the GPU sidecar itself does no audio mixing.
-      # E: nixling-launcher NOT in extraGroups — a compromised sidecar
-      # must not be a polkit launcher principal. Only `launcherUsers`
-      # (typically the Wayland user) needs nixling-launcher.
-      # The per-VM runner group is used for host-side relay sockets that
-      # only the matching VM runner should reach.
       extraGroups = [ "kvm" "nixling-${name}-runner" ];
       description = "nixling GPU+hypervisor sidecar for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-snd" {
       isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-snd";
       group = "nixling-${name}-snd";
-      # audio: PAM rtprio limits for the PipeWire audio thread.
       extraGroups = [ "audio" ];
       description = "nixling audio sidecar for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-swtpm" {
       isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-swtpm";
       group = "nixling-${name}-swtpm";
       description = "nixling swtpm emulator for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.tpm.enable) cfg.vms));

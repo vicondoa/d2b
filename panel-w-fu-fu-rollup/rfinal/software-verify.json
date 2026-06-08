@@ -1,0 +1,1 @@
+{"engineer":"software","signoff":true,"summary":"Verified 6383d24: W14 backlog table has all 13 verbs marked ✅, nixlingd comments now describe direct per-verb dispatch with no stale Pending/dispatch_mutating_verb wording, flake.nix rust-tests source packages tests/golden and tests/fixtures, and static-fast plus rust-tests build pass.","recommendations":[]}

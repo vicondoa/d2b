@@ -1242,6 +1242,10 @@ if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tes
 # + daemon state-persistence + [pending restart] machinery.
 if [ -x "$HERE/ch-argv-shape.sh" ]; then nl_static_parallel_script "tests/ch-argv-shape.sh" "$HERE/ch-argv-shape.sh"; fi
 if [ -x "$HERE/virtiofsd-argv-shape.sh" ]; then nl_static_parallel_script "tests/virtiofsd-argv-shape.sh" "$HERE/virtiofsd-argv-shape.sh"; fi
+# v1.1.2fu20 panel-test R3 must-fix: Layer-1 smoke for the
+# nixling-activation-helper binary (fd-safe activation primitives
+# per ADR 0021 + panel-security TOCTOU closures).
+if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
 # W5-H4 gate: GPU / audio / video sidecar argv generators.
 if [ -x "$HERE/sidecar-argv-shape.sh" ]; then nl_static_parallel_script "tests/sidecar-argv-shape.sh" "$HERE/sidecar-argv-shape.sh"; fi

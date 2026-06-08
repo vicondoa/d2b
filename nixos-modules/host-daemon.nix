@@ -3,16 +3,93 @@
 let
   cfg = config.nixling;
 
+  # v1.1.1fu11: filter out `target/` dev caches from the source
+  # so the Nix copy stays small (workspace target alone is ~17 GB).
+  packagesSrc = lib.cleanSourceWith {
+    src = ../packages;
+    filter = path: type:
+      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
+      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
+  };
+
   nixlingdPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixlingd";
     version = "0.0.0-bootstrap";
-    src = ../packages;
+    src = packagesSrc;
     cargoLock.lockFile = ../packages/Cargo.lock;
     cargoBuildFlags = [ "--package" "nixlingd" ];
     doCheck = false;
+    # v1.1.1: strip the dev-only sccache rustc-wrapper (see
+    # host-broker.nix for full rationale). Writing the empty
+    # rustc-wrapper into .cargo/config.toml shadows the dev
+    # value without touching the parent cargo config.
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
     installPhase = ''
       runHook preInstall
-      install -Dm755 target/release/nixlingd $out/bin/nixlingd
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixlingd $out/bin/nixlingd 2>/dev/null \
+        || install -Dm755 target/release/nixlingd $out/bin/nixlingd
+      runHook postInstall
+    '';
+  };
+
+  # v1.1.1: the user-facing CLI is now the Rust nixling crate
+  # (packages/nixling). The pre-v1.0 bash CLI was RETIRED in P6;
+  # v1.1.1 ships the daemon-native Rust CLI as the only
+  # `nixling` binary on the host.
+  nixlingCliPackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling";
+    version = "0.0.0-bootstrap";
+    src = packagesSrc;
+    cargoLock.lockFile = ../packages/Cargo.lock;
+    cargoBuildFlags = [ "--package" "nixling" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling $out/bin/nixling 2>/dev/null \
+        || install -Dm755 target/release/nixling $out/bin/nixling
+      runHook postInstall
+    '';
+  };
+
+  # v1.1.2fu19 panel-security R2 critical must-fix: small
+  # fd-safe activation helper that the host activation snippets
+  # call instead of `[ -L ] / [ -f ] / find -type f` shell
+  # check-then-act patterns. Lives in nixling-host because it
+  # only depends on libc + nix; no IPC; no async runtime.
+  nixlingActivationHelperPackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-activation-helper";
+    version = "0.0.0-bootstrap";
+    src = packagesSrc;
+    cargoLock.lockFile = ../packages/Cargo.lock;
+    cargoBuildFlags = [ "--package" "nixling-host" "--bin" "nixling-activation-helper" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-activation-helper $out/bin/nixling-activation-helper 2>/dev/null \
+        || install -Dm755 target/release/nixling-activation-helper $out/bin/nixling-activation-helper
       runHook postInstall
     '';
   };
@@ -89,10 +166,21 @@ in
           isSystemUser = true;
           group = "nixlingd";
           description = "nixling daemon user";
+          # v1.1.1fu14 B5: nixlingd MUST be a supplementary
+          # member of nixling-launchers so it can `chown(path,
+          # None, Some(gid))` the public socket to the launcher
+          # group on bind. Without this membership, the chown(2)
+          # call returns EPERM (kernel allows chown-to-gid only
+          # for one of the caller's groups, real/effective/
+          # supplementary). Documented bug observed in v1.1.1fu13
+          # live-deploy: the daemon failed at startup with
+          # "internal-io" when chown(public.sock, -1, 1000)
+          # returned EPERM.
+          extraGroups = [ "nixling-launchers" ];
         };
       };
 
-    environment.systemPackages = [ nixlingdPackage nixlingCliShellArtifactsPackage ];
+    environment.systemPackages = [ nixlingdPackage nixlingCliPackage nixlingCliShellArtifactsPackage nixlingActivationHelperPackage ];
 
     environment.etc."nixling/daemon-config.json" = {
       source = daemonConfigJson;
@@ -155,6 +243,14 @@ in
       description = "nixling daemon skeleton";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
+      # v1.1.1 live-deploy fu9: bypass the kernel-module fatal check
+      # because this host's kernel (linux-7.0.5) has the guest-side
+      # virtio modules (virtio_console, virtio_net, virtio_fs,
+      # drm_virtio_gpu) built-in (=y) rather than loadable (=m),
+      # which the daemon's lsmod-based check mis-reads as "missing".
+      # See packages/nixlingd/src/lib.rs P3 ph3-p3-kernel-module-check
+      # block for the operator-override env var.
+      environment.NIXLING_SKIP_KERNEL_MODULE_CHECK = "1";
       serviceConfig = {
         Type = "simple";
         # W3fu2 H5 (nixos-1): W3 cgroup v2 delegation requires the

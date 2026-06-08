@@ -67,8 +67,8 @@ let
     pub="$priv.pub"
 
     install -d -m 0710 -o root -g nixling-launcher "$vm_keys_dir"
-    install -d -m 0755 -o root -g root "$vm_state_dir" 2>/dev/null || true
-    install -d -m 0755 -o root -g root "$vm_host_keys_dir"
+    install -d -m 2770 -o nixlingd -g users "$vm_state_dir" 2>/dev/null || true
+    install -d -m 0750 -o nixlingd -g nixling-launcher "$vm_host_keys_dir"
 
     if [ ! -f "$priv" ]; then
       umask 077

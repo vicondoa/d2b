@@ -9,7 +9,7 @@
 Attaches a software-emulated TPM 2.0 device to the guest. Per-VM
 `swtpm socket` runs on the host as a dedicated `nixling-<vm>-swtpm`
 system user; cloud-hypervisor connects to it via
-`--tpm socket=/run/swtpm/<vm>/sock`. The guest kernel sees a normal
+`--tpm socket=/run/nixling/vms/<vm>/tpm.sock`. The guest kernel sees a normal
 TPM CRB device, exposes `/dev/tpm0` + `/dev/tpmrm0`, and an in-guest
 oneshot provisions the TPM2 Storage Root Key at the standard
 persistent handle `0x81000001` (ECC P-256 preferred, RSA-2048
@@ -45,9 +45,9 @@ all guest-side wiring is unconditional within the module.
   - `RuntimeDirectory = "swtpm/<vm>"`, `RuntimeDirectoryMode = 0711`.
   - `ExecStart`:
     `swtpm socket --tpmstate dir=/var/lib/nixling/vms/<vm>/swtpm
-    --ctrl type=unixio,path=/run/swtpm/<vm>/sock,mode=0600 --tpm2
+    --ctrl type=unixio,path=/run/nixling/vms/<vm>/tpm.sock,mode=0660 --tpm2
     --flags startup-clear`.
-  - `ExecStartPost`: `setfacl -m u:nixling-<vm>-gpu:rw /run/swtpm/<vm>/sock`
+  - `ExecStartPost`: `setfacl -m u:nixling-<vm>-gpu:rw /run/nixling/vms/<vm>/tpm.sock`
     so cloud-hypervisor (running as `nixling-<vm>-gpu` when graphics
     is also enabled) can connect. Failures are tolerated for non-
     graphics VMs.
@@ -96,7 +96,7 @@ together so the TPM socket survives the round-trip). See
 
 - `microvm.hypervisor = "cloud-hypervisor"` (via `mkDefault`).
 - `microvm.cloud-hypervisor.extraArgs =
-  [ "--tpm" "socket=/run/swtpm/<hostname>/sock" ]`.
+  [ "--tpm" "socket=/run/nixling/vms/<hostname>/tpm.sock" ]`.
 - `security.tpm2.enable = true`.
 - `boot.kernelModules = [ "tpm" "tpm_crb" ]` — belt-and-suspenders;
   the kernel normally auto-probes when it sees the CH TPM CRB at
@@ -112,7 +112,7 @@ together so the TPM socket survives the round-trip). See
 ## Runtime invariants
 
 - Each TPM-enabled VM has exactly one `nixling-<vm>-swtpm.service`
-  on the host. The socket at `/run/swtpm/<vm>/sock` is mode 0600,
+  on the host. The socket at `/run/nixling/vms/<vm>/tpm.sock` is mode 0660,
   owned by `nixling-<vm>-swtpm`. ACLs grant `nixling-<vm>-gpu` rw;
   no other user (including the kvm group) can reach the control
   protocol out-of-band.
@@ -138,10 +138,15 @@ together so the TPM socket survives the round-trip). See
   `ProtectControlGroups`, `LockPersonality`,
   `MemoryDenyWriteExecute = true`.
 - `RestrictAddressFamilies = [ "AF_UNIX" ]` — swtpm needs no network.
-- `UMask = "0177"`.
-- The control socket is mode `0600`; only the swtpm user can open it.
-  Access for cloud-hypervisor is granted post-start via a single
-  named-user ACL entry, not via group membership.
+- `UMask = "0007"` (v1.1.2-final, was `"0177"`): the broker's child
+  closure honours the `umask` field declared in the swtpm role
+  profile, which sets `umask = 0o007` so the bound control socket is
+  mode 0660.
+- The control socket is mode `0660` (v1.1.2-final, was `0600`); only
+  per-VM ephemeral UIDs that have a default-ACL named-user grant on
+  `/run/nixling/vms/<vm>/` (cloud-hypervisor's UID + the swtpm UID
+  itself) can open it. Cross-VM UIDs do NOT have access because the
+  per-VM runtime dir's default ACL only enumerates that VM's roles.
 
 ## Common gotchas / failure modes
 

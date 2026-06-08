@@ -246,6 +246,63 @@ pub struct ResolvedRunnerIntent {
     /// Profile id (matches `RoleProfile::profile_id` so the broker
     /// can look up the per-role minijail profile JSON).
     pub profile_id: String,
+    /// v1.1.1fu14 (ADR 0021): when `Some`, the broker
+    /// pre-establishes a single-entry user namespace for this
+    /// runner; the child is fake-root inside the NS and the
+    /// host-side `capabilities` set should be empty. Currently
+    /// only virtiofsd role profiles set this for least-privilege
+    /// FS serving without CAP_DAC_*.
+    pub user_namespace: Option<UserNamespaceSpec>,
+    /// v1.1.2fu36: umask the broker installs in the spawned child
+    /// before execve. None = inherit broker umask.
+    pub umask: Option<u32>,
+}
+
+/// v1.1.1fu14 — single-entry user-NS mapping. See [`ResolvedRunnerIntent::user_namespace`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserNamespaceSpec {
+    pub host_uid_for_zero: u32,
+    pub host_gid_for_zero: u32,
+}
+
+// v1.1.2fu19 panel-software R2 should-fix: convenience From impls
+// across the wire (`UserNamespaceProfile`) and intent
+// (`UserNamespaceSpec`) types so layer boundaries can `.into()`
+// instead of hand-copying fields.
+impl From<crate::minijail_profile::UserNamespaceProfile> for UserNamespaceSpec {
+    fn from(p: crate::minijail_profile::UserNamespaceProfile) -> Self {
+        Self {
+            host_uid_for_zero: p.host_uid_for_zero,
+            host_gid_for_zero: p.host_gid_for_zero,
+        }
+    }
+}
+
+impl From<UserNamespaceSpec> for crate::minijail_profile::UserNamespaceProfile {
+    fn from(s: UserNamespaceSpec) -> Self {
+        Self {
+            host_uid_for_zero: s.host_uid_for_zero,
+            host_gid_for_zero: s.host_gid_for_zero,
+        }
+    }
+}
+
+impl From<crate::processes::RoleUserNamespace> for UserNamespaceSpec {
+    fn from(rn: crate::processes::RoleUserNamespace) -> Self {
+        Self {
+            host_uid_for_zero: rn.host_uid_for_zero,
+            host_gid_for_zero: rn.host_gid_for_zero,
+        }
+    }
+}
+
+impl From<UserNamespaceSpec> for crate::processes::RoleUserNamespace {
+    fn from(s: UserNamespaceSpec) -> Self {
+        Self {
+            host_uid_for_zero: s.host_uid_for_zero,
+            host_gid_for_zero: s.host_gid_for_zero,
+        }
+    }
 }
 
 /// Resolved per-role Unix socket plan — input to broker
@@ -2001,7 +2058,12 @@ fn resolve_runner_node(dag: &VmProcessDag, node: &ProcessNode) -> Option<Resolve
         }
         _ => legacy_runner_spec(dag, &node.role, role_name)?,
     };
-    let env = vec![format!("NIXLING_VM={}", dag.vm)];
+    // v1.1.1fu11 (Option B): start with the baseline NIXLING_VM
+    // env var, then append any node-specific env entries from the
+    // bundle (used by audio/gpu/video sidecars to thread
+    // PIPEWIRE_RUNTIME_DIR / XDG_RUNTIME_DIR / WAYLAND_DISPLAY).
+    let mut env = vec![format!("NIXLING_VM={}", dag.vm)];
+    env.extend(node.env.iter().cloned());
     let RoleProfile {
         profile_id,
         uid,
@@ -2012,6 +2074,8 @@ fn resolve_runner_node(dag: &VmProcessDag, node: &ProcessNode) -> Option<Resolve
         seccomp_policy_ref,
         mount_policy,
         cgroup_placement,
+        user_namespace,
+        umask,
     } = &node.profile;
     Some(ResolvedRunnerIntent {
         intent_id: intent_id_runner(&dag.vm, &node.id.0),
@@ -2031,6 +2095,11 @@ fn resolve_runner_node(dag: &VmProcessDag, node: &ProcessNode) -> Option<Resolve
         cgroup_placement: cgroup_placement.clone(),
         root_carve_out: adr_carve_out.is_some(),
         profile_id: profile_id.clone(),
+        user_namespace: user_namespace.map(|ns| UserNamespaceSpec {
+            host_uid_for_zero: ns.host_uid_for_zero,
+            host_gid_for_zero: ns.host_gid_for_zero,
+        }),
+        umask: *umask,
     })
 }
 
@@ -2519,12 +2588,16 @@ mod tests {
                     .collect(),
                 nix_store_read_only: true,
                 hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
             },
             cgroup_placement: CgroupPlacement {
                 subtree: subtree.to_owned(),
                 controllers: vec!["cpu".to_owned(), "memory".to_owned()],
                 delegated: true,
             },
+            user_namespace: None,
+            umask: None,
         }
     }
 
@@ -2607,6 +2680,7 @@ mod tests {
                         unit: None,
                         binary_path: None,
                         argv: Vec::new(),
+                        env: Vec::new(),
                         profile: role_profile(
                             1100,
                             1100,
@@ -2621,6 +2695,7 @@ mod tests {
                         unit: None,
                         binary_path: None,
                         argv: Vec::new(),
+                        env: Vec::new(),
                         profile: role_profile(
                             1100,
                             1100,
@@ -2635,6 +2710,7 @@ mod tests {
                         unit: None,
                         binary_path: Some("/run/current-system/sw/bin/virtiofsd".to_owned()),
                         argv: vec!["virtiofsd".to_owned()],
+                        env: Vec::new(),
                         profile: role_profile(
                             1100,
                             1100,

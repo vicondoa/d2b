@@ -38,6 +38,7 @@ rustix = { workspace = true }
 # already a transitive workspace dependency (broker + nixlingd), so
 # this is not a new top-level supply-chain entry.
 nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
+libc = "0.2"
 sha2 = { workspace = true }
 # `miniz_oxide` is a raw-DEFLATE decoder; nixling-host wraps it in a
 # tiny inline gzip header/trailer skipper so the W3 kernel-module
