@@ -1863,6 +1863,68 @@ fn config_reject_core(staging: &Path) -> Result<bool, CliFailure> {
     }
 }
 
+/// Emit a human-output (stderr) note when a VM has a pending,
+/// un-approved staged guest config. Kept on stderr + gated by the
+/// caller on `!json` so it never perturbs a JSON stdout envelope.
+fn warn_pending_staged_config(vm: &str) {
+    if config_staging_path(vm).exists() {
+        eprintln!(
+            "note: vm '{vm}' has a pending un-approved guest config edit \
+             (`nixling config diff {vm} --against <live>` to review, \
+             `nixling config approve {vm} --to <live>` to land, or \
+             `nixling config reject {vm}` to discard)"
+        );
+    }
+}
+
+/// Emit a human-output (stderr) note listing every VM with a pending,
+/// un-approved staged guest config.
+fn warn_all_pending_staged_configs() {
+    let base = config_staging_base();
+    let mut pending: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&base) {
+        for entry in rd.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(vm) = name.strip_suffix(".guest.nix") {
+                    pending.push(vm.to_owned());
+                }
+            }
+        }
+    }
+    pending.sort();
+    if !pending.is_empty() {
+        eprintln!(
+            "note: pending un-approved guest config edit(s) for: {} \
+             (`nixling config status --all`)",
+            pending.join(", ")
+        );
+    }
+}
+
+/// Build the host→guest SSH argv for `config sync`. The `--` separator
+/// pins `cat <guest_path>` as the remote command, and `guest_path` is
+/// validated by [`config_validate_remote_path`] before reaching here so
+/// it cannot inject shell metacharacters. StrictHostKeyChecking is
+/// disabled (the per-VM connection is host→its-own-guest over the env
+/// bridge, not the internet) consistent with `nixling console`.
+fn config_sync_ssh_argv(key_path: &Path, ssh_target: &str, guest_path: &str) -> Vec<String> {
+    vec![
+        "ssh".to_owned(),
+        "-i".to_owned(),
+        key_path.display().to_string(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=no".to_owned(),
+        "-o".to_owned(),
+        "UserKnownHostsFile=/dev/null".to_owned(),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        ssh_target.to_owned(),
+        "--".to_owned(),
+        "cat".to_owned(),
+        guest_path.to_owned(),
+    ]
+}
+
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
     config_validate_vm_name(&args.vm)?;
     config_validate_remote_path(&args.guest_path)?;
@@ -1908,21 +1970,7 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
             .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
     };
     let ssh_target = format!("{user}@{host}");
-    let argv: Vec<String> = vec![
-        "ssh".to_owned(),
-        "-i".to_owned(),
-        key_path.display().to_string(),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=no".to_owned(),
-        "-o".to_owned(),
-        "UserKnownHostsFile=/dev/null".to_owned(),
-        "-o".to_owned(),
-        "BatchMode=yes".to_owned(),
-        ssh_target.clone(),
-        "--".to_owned(),
-        "cat".to_owned(),
-        args.guest_path.clone(),
-    ];
+    let argv: Vec<String> = config_sync_ssh_argv(&key_path, &ssh_target, &args.guest_path);
     let staging = config_staging_path(&args.vm);
 
     if args.dry_run {
@@ -2208,6 +2256,9 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
     }
 
     let selected_vm = resolve_selected_vm(args)?;
+    if !args.json {
+        warn_all_pending_staged_configs();
+    }
     if let Some(vm_name) = selected_vm {
         let vm = manifest
             .get_vm(&vm_name)
@@ -2904,6 +2955,9 @@ fn cmd_vm_lifecycle_verb(
 ) -> Result<i32, CliFailure> {
     let flags = require_explicit_mutation_flag(&format!("vm {verb}"), dry_run, apply, json)?;
     require_known_vm(context, vm, json)?;
+    if (verb == "start" || verb == "restart") && !json {
+        warn_pending_staged_config(vm);
+    }
     if flags.apply {
         // VM lifecycle verbs are daemon-only. The bash-translation
         // bridge has been removed; any failure mode
@@ -6971,7 +7025,7 @@ mod config_cmd_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        config_approve_core, config_reject_core, config_staging_path_in,
+        config_approve_core, config_reject_core, config_staging_path_in, config_sync_ssh_argv,
         config_validate_remote_path, config_validate_staging_bytes, config_validate_vm_name,
     };
 
@@ -7117,6 +7171,32 @@ mod config_cmd_tests {
         assert_eq!(
             config_staging_path_in(&base, "work-aad"),
             PathBuf::from("/x/state/work-aad.guest.nix")
+        );
+    }
+
+    #[test]
+    fn sync_ssh_argv_pins_remote_cat_after_double_dash() {
+        let argv = config_sync_ssh_argv(
+            &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
+            "alice@10.20.0.10",
+            "/var/lib/nixling-guest/guest-config.nix",
+        );
+        assert_eq!(argv[0], "ssh");
+        // key flag
+        let i = argv.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(argv[i + 1], "/var/lib/nixling/keys/work-aad_ed25519");
+        // no host-key TOFU prompt, batch mode (never hangs on a prompt)
+        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
+        assert!(argv.iter().any(|a| a == "BatchMode=yes"));
+        // the ssh target precedes the `--` separator
+        let target = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
+        let dash = argv.iter().position(|a| a == "--").unwrap();
+        assert!(target < dash, "ssh target must precede `--`");
+        // the remote command is exactly `cat <guest_path>` AFTER `--`,
+        // so the guest path can never be parsed as an ssh option.
+        assert_eq!(
+            &argv[dash + 1..],
+            &["cat", "/var/lib/nixling-guest/guest-config.nix"]
         );
     }
 }

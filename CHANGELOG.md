@@ -22,7 +22,9 @@ deprecations ship one minor release before removal.
   the operator-named `--to` target — it never auto-touches the config
   tree, and the authoritative containment gate remains the
   `guestConfigFile` eval-time assertion on `nixling switch`. No new
-  privileged surface (no virtiofs, no new socket).
+  privileged surface (no virtiofs, no new socket). `nixling up` /
+  `start` and `nixling status` also print a human-output note when a VM
+  has a pending un-approved staged config.
 - `nixling.vms.<vm>.guestConfigFile` — a dedicated, **guest-editable**
   per-VM NixOS module for the in-guest OS layer (packages, services,
   in-guest users, files). It is merged into the guest like `config`,

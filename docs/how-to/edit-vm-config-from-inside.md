@@ -107,8 +107,9 @@ ergonomic way to iterate from inside the workspace.
 ## Status
 
 `nixling config status --all` lists VMs with a pending (un-approved)
-staged config, so an in-progress edit isn't silently forgotten before
-you approve it.
+staged config. `nixling status` and `nixling up` / `start` also print a
+note when a VM has a pending edit (human output only), so an in-progress
+edit isn't silently forgotten before you approve it.
 
 ## Notes
 
