@@ -299,6 +299,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "config",
+    "subject": "VM",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "build",
     "subject": "VM",
     "scope": "per-VM",
