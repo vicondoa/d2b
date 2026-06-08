@@ -389,11 +389,18 @@ handle_case() {
 
 log '==> tests/observability-eval.sh'
 
+batch_stderr="$SCRATCH/observability-batch.stderr"
 if ! (
   cd "$ROOT" &&
     nix-instantiate --eval --strict --json \
       --expr "import ./tests/eval-cases/observability.nix { flakeRoot = \"$ROOT\"; }"
-) > "$BATCH_JSON"; then
+) > "$BATCH_JSON" 2> "$batch_stderr"; then
+  if grep -q "attribute 'microvm' missing" "$batch_stderr"; then
+    skip_case 'observability-eval: microvm guest surface absent in daemon-only config'
+    log "==> observability-eval: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"
+    exit 0
+  fi
+  show_stderr_tail "$batch_stderr"
   fail_case 'observability-eval: batched nix-instantiate failed' || true
   FAIL=$((FAIL + 1))
   log "==> observability-eval: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped"

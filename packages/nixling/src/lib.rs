@@ -1500,7 +1500,7 @@ where
     }
 
     if raw_args.len() == 1 {
-        print_stdout("nixling 0.0.0-bootstrap (W0a stub)\n");
+        print_stdout("nixling 0.0.0-bootstrap (bootstrap stub)\n");
         print_stdout("Rust-native CLI shim active; run `nixling --help` for subcommands.\n");
         return 0;
     }

@@ -177,7 +177,7 @@ run_stub() {
     "$var_lib_mtime_before" "$var_lib_list_before" "$xdg_before" "$tmp_before"
 }
 
-run_stub nixling "nixling 0.0.0-bootstrap (W0a stub)"
-run_stub nixlingd "nixlingd 0.0.0-bootstrap (W0a stub)"
+run_stub nixling "nixling 0.0.0-bootstrap (bootstrap stub)"
+run_stub nixlingd "nixlingd 0.0.0-bootstrap (bootstrap stub)"
 
 ok "Rust stubs left no socket/file runtime state"
