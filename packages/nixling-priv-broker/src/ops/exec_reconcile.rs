@@ -565,6 +565,15 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: "target store-view path missing after hardlink-farm build".to_owned(),
             });
         }
+        // Publish the freshly-built generation as the active store view
+        // by atomically swapping `store-view/current -> generations/<N>`.
+        // This stable `current` symlink is what virtiofsd-ro-store serves
+        // as the guest's `/nix/store` (closure-only). Without it the
+        // guest would fall back to the host's full `/nix/store`. The swap
+        // only manipulates a symlink (no cross-mount `link(2)` hazard) so
+        // it stays in-process.
+        hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, generation_number)
+            .map_err(map_hardlink_farm_error)?;
         Ok(())
     }
 
