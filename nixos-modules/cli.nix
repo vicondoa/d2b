@@ -54,6 +54,9 @@ let
         vmSshKeyPaths);
 
   storeSyncPkg = config.nixling.store.package;
+  cliTracingEnabled =
+    config.nixling.observability.enable
+    && config.nixling.observability.cli.traces.enable;
 
   # §4.5 audit subcommand — constants baked at Nix eval time.
   auditChVersion      = "52.0";
@@ -69,7 +72,7 @@ let
     # Suppress shellcheck warnings that flag false positives in this
     # script — most are jq-parsed vars in for-loops (SC2154) and
     # word-splitting that we want intentionally (SC2086 on $VM_PID).
-    excludeShellChecks = [ "SC2154" ];
+    excludeShellChecks = [ "SC2034" "SC2154" "SC2320" ];
     runtimeInputs = with pkgs; [
       coreutils
       util-linux
@@ -86,13 +89,172 @@ let
       curl
       acl
       storeSyncPkg
-    ];
+    ] ++ lib.optional cliTracingEnabled pkgs.otel-cli;
     text = ''
       set -euo pipefail
 
       MANIFEST=${config.nixling._manifestJsonPath}
       FLAKE_DEFAULT=${if config.nixling.site.flakePath == null then "" else config.nixling.site.flakePath}
       STATE_ROOT=${config.nixling.store.stateDir}
+      VM=""
+      ENV=""
+      VM_ROLE=""
+      SUBCMD=""
+
+      ${if cliTracingEnabled then ''
+        nl_filter_attrs() {
+          local raw_csv="" raw_part="" raw_attr="" attr_name="" attr_value="" attr_value_lc="" otel_name="" warn_name=""
+          local -a safe_attrs=()
+          local -a raw_attrs=()
+
+          for raw_part in "$@"; do
+            [ -n "$raw_part" ] || continue
+            raw_csv="''${raw_csv:+$raw_csv,}$raw_part"
+          done
+
+          IFS=',' read -r -a raw_attrs <<<"$raw_csv"
+          for raw_attr in "''${raw_attrs[@]}"; do
+            [ -n "$raw_attr" ] || continue
+            if [[ "$raw_attr" != *=* ]]; then
+              logger -t nixling-trace --priority user.warning \
+                -- "dropped malformed span attribute fragment" >/dev/null 2>&1 || true
+              continue
+            fi
+
+            attr_name="''${raw_attr%%=*}"
+            attr_value="''${raw_attr#*=}"
+            attr_value_lc="''${attr_value,,}"
+
+            case "$attr_name" in
+              vm|env|vm_role|subcommand)
+                warn_name="''${attr_name//[^[:alnum:]_.-]/_}"
+                logger -t nixling-trace --priority user.warning \
+                  -- "dropped reserved span attribute ''${warn_name:-unknown}" >/dev/null 2>&1 || true
+                continue
+                ;;
+              step|result|tap|bridge|static_ip|generation) otel_name="$attr_name" ;;
+              systemd_unit) otel_name="systemd.unit" ;;
+              *)
+                warn_name="''${attr_name//[^[:alnum:]_.-]/_}"
+                logger -t nixling-trace --priority user.warning \
+                  -- "dropped unapproved span attribute ''${warn_name:-unknown}" >/dev/null 2>&1 || true
+                continue
+                ;;
+            esac
+
+            case "$attr_value" in
+              /nix/store/*|*_ed25519|*_rsa)
+                logger -t nixling-trace --priority user.warning \
+                  -- "dropped sensitive span attribute $otel_name" >/dev/null 2>&1 || true
+                continue
+                ;;
+            esac
+
+            case "$attr_value_lc" in
+              *key*=*|*token*=*|*password*=*)
+                logger -t nixling-trace --priority user.warning \
+                  -- "dropped sensitive span attribute $otel_name" >/dev/null 2>&1 || true
+                continue
+                ;;
+            esac
+
+            safe_attrs+=("$otel_name=$attr_value")
+          done
+
+          local IFS=','
+          printf '%s' "''${safe_attrs[*]}"
+        }
+
+        declare -A NL_TRACE_IDS=()
+        declare -A NL_SPAN_IDS=()
+
+        # Emit an OTel span via otel-cli. Args: span name + key=value attrs.
+        nl_span_start() {
+          local name="$1"; shift
+          local attrs="vm.name=''${VM:-},vm.env=''${ENV:-},vm.role=''${VM_ROLE:-},nixling.subcommand=''${SUBCMD:-}"
+          local extra_attrs=""
+          local tp_output=""
+          local traceparent=""
+          local trace_id=""
+          local span_id=""
+          local line=""
+          if [ $# -gt 0 ]; then
+            extra_attrs=$(nl_filter_attrs "$@")
+            if [ -n "$extra_attrs" ]; then
+              attrs="$attrs,$extra_attrs"
+            fi
+          fi
+          NL_TRACE_IDS["$name"]=""
+          NL_SPAN_IDS["$name"]=""
+          # otel-cli runs in non-recording mode unless OTEL_EXPORTER_OTLP_ENDPOINT
+          # points at a reachable OTLP collector. Today the host Alloy receiver is
+          # only exposed as a Unix socket which otel-cli can't dial. We generate
+          # trace_id + span_id locally so the JSON event still carries the
+          # Loki↔Tempo correlation key. When --tp-print returns a populated
+          # traceparent (i.e. an endpoint IS configured), prefer otel-cli's IDs
+          # over the local ones so a real trace gets recorded.
+          trace_id=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          span_id=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          tp_output=$(otel-cli span --name "$name" --service nixling \
+            --attrs "$attrs" \
+            --tp-print 2>/dev/null || true)
+          while IFS= read -r line; do
+            case "$line" in
+              export\ TRACEPARENT=*|TRACEPARENT=*)
+                traceparent="''${line#export TRACEPARENT=}"
+                traceparent="''${traceparent#TRACEPARENT=}"
+                break
+                ;;
+            esac
+          done <<<"$tp_output"
+          if [ -n "$traceparent" ]; then
+            local otel_trace_id otel_span_id
+            IFS='-' read -r _ otel_trace_id otel_span_id _ <<<"$traceparent"
+            if [[ "$otel_trace_id" =~ ^[0-9A-Fa-f]{32}$ ]] \
+               && [[ "$otel_span_id" =~ ^[0-9A-Fa-f]{16}$ ]] \
+               && [ "$otel_trace_id" != "00000000000000000000000000000000" ] \
+               && [ "$otel_span_id" != "0000000000000000" ]; then
+              trace_id="''${otel_trace_id,,}"
+              span_id="''${otel_span_id,,}"
+            fi
+          fi
+          NL_TRACE_IDS["$name"]="$trace_id"
+          NL_SPAN_IDS["$name"]="$span_id"
+        }
+
+        # Emit a structured event line to the journal. Args: step + result.
+        nl_event() {
+          local step="$1" result="$2"
+          local trace_id="''${NL_TRACE_IDS[$step]:-}"
+          local span_id="''${NL_SPAN_IDS[$step]:-}"
+          jq -nc --arg vm "''${VM:-}" --arg env "''${ENV:-}" \
+                 --arg role "''${VM_ROLE:-}" --arg subcmd "''${SUBCMD:-}" \
+                 --arg step "$step" --arg result "$result" \
+                 --arg trace_id "$trace_id" --arg span_id "$span_id" \
+                 '({"vm.name": $vm, "vm.env": $env, "vm.role": $role, "nixling.subcommand": $subcmd, step: $step, result: $result, ts: (now | todate)})
+                  + (if $trace_id != "" then { trace_id: $trace_id } else { } end)
+                  + (if $span_id != "" then { span_id: $span_id } else { } end)' \
+          | logger -t nixling-event --priority user.info
+        }
+      '' else ''
+        # CLI traces disabled at module-eval time; helpers are no-ops.
+        nl_span_start() { : "$VM_ROLE" "$@"; }
+        nl_event() { : "$VM_ROLE" "$@"; }
+      ''}
+
+      nl_trace_context() {
+        local vm="$1"
+        VM="$vm"
+        ENV=$(vm_get "$vm" env)
+        [ "$ENV" = "null" ] && ENV=""
+        if jq -e --arg vm "$vm" '. as $root | $vm == ($root._observability.vmName // "")' "$MANIFEST" >/dev/null 2>&1; then
+          VM_ROLE="obs"
+        elif [ "$(vm_get "$vm" isNetVm)" = "true" ]; then
+          VM_ROLE="router"
+        else
+          VM_ROLE="workload"
+        fi
+      }
 
       usage() {
         cat <<EOF
@@ -292,31 +454,44 @@ ${vmSshKeyCaseBody}
       # ExecStart propagates to the underlying `microvm@<net-vm>`
       # (implementation detail — see host.nix wrapper template).
       ensure_net_vm_up() {
-        local rvm
+        local rvm rip router_ready=false
         rvm=$(vm_get "$1" netVm)
         if [ "$rvm" = "null" ] || [ -z "$rvm" ]; then
           return 0
         fi
-        if systemctl is-active --quiet "nixling@$rvm.service"; then
-          return 0
-        fi
-        echo "nixling: starting net VM '$rvm' for env"
-        sudo -A systemctl start "nixling@$rvm.service"
-        # Wait for the net VM's LAN-side default route to be answerable.
-        local rip
-        rip=$(jq -r --arg e "$(vm_get "$1" env)" \
-          '.[] | select(.isNetVm == true and .env == $e) | .staticIp' \
-          "$MANIFEST" | head -1)
-        if [ -n "$rip" ] && [ "$rip" != "null" ]; then
-          echo -n "nixling: waiting for $rvm sshd at $rip"
-          for _ in $(seq 1 60); do
-            if timeout 1 bash -c "</dev/tcp/$rip/22" 2>/dev/null; then
-              echo " — ready."; return 0
+
+        nl_span_start "ensure_router_up" "systemd_unit=nixling@$rvm.service"
+        nl_event "ensure_router_up" "started"
+        rc=0
+        {
+          if ! systemctl is-active --quiet "nixling@$rvm.service"; then
+            echo "nixling: starting net VM '$rvm' for env"
+            sudo -A systemctl start "nixling@$rvm.service"
+          fi
+          rip=$(jq -r --arg e "$(vm_get "$1" env)" \
+            '.[] | select(.isNetVm == true and .env == $e) | .staticIp' \
+            "$MANIFEST" | head -1)
+          if [ -n "$rip" ] && [ "$rip" != "null" ]; then
+            echo -n "nixling: waiting for $rvm sshd at $rip"
+            for _ in $(seq 1 60); do
+              if timeout 1 bash -c "</dev/tcp/$rip/22" 2>/dev/null; then
+                router_ready=true
+                echo " — ready."
+                break
+              fi
+              sleep 1; echo -n "."
+            done
+            if [ "$router_ready" != "true" ]; then
+              echo
+              echo "nixling: warning — $rvm:22 didn't answer within 60s; continuing anyway"
             fi
-            sleep 1; echo -n "."
-          done
-          echo
-          echo "nixling: warning — $rvm:22 didn't answer within 60s; continuing anyway"
+          fi
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "ensure_router_up" "ok"
+        else
+          nl_event "ensure_router_up" "err"
+          return "$rc"
         fi
       }
 
@@ -373,6 +548,14 @@ ${vmSshKeyCaseBody}
         if [ "$_any_pending" -eq 1 ]; then
           echo
           echo "(one or more VMs have unapplied unit-file changes; run \`nixling restart <vm>\` to apply)"
+        fi
+        if [ "$(jq -r '._observability.enabled' "$MANIFEST")" = "true" ]; then
+          local _grafana
+          _grafana=$(jq -r '._observability.grafanaUrl // empty' "$MANIFEST")
+          if [ -n "$_grafana" ]; then
+            echo
+            echo "Grafana: $_grafana"
+          fi
         fi
       }
 
@@ -511,11 +694,11 @@ BASH
         if [ -z "''${WAYLAND_DISPLAY:-}" ] || [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
           echo "nixling: '$VM' is a graphics VM and must be launched from a Wayland session" >&2
           echo "  (WAYLAND_DISPLAY and XDG_RUNTIME_DIR must be set)" >&2
-          exit 1
+          return 1
         fi
         if [ "$(id -un)" = "root" ]; then
           echo "nixling: do NOT run as root; run as your Plasma user." >&2
-          exit 1
+          return 1
         fi
         # P4 C3/H5: the host user is not in the kvm group; check nixling-launcher instead.
         # The nixling-launcher group grants polkit access to start/stop nixling
@@ -533,7 +716,7 @@ BASH
           fi
           echo "nixling: $(id -un) is not in the nixling-launcher group." >&2
           echo "  Add $(id -un) to nixling-launcher in configuration.nix and re-run nixos-rebuild." >&2
-          exit 5
+          return 5
         fi
 
         # If a previous headless run left the wrapper / microvm@ up,
@@ -569,14 +752,14 @@ BASH
           # elsewhere — CH v52 doesn't support live add/remove of
           # generic-vhost-user devices).
           if [ "$DETACH" = "true" ]; then
-            exit 0
+            return 0
           fi
           # Foreground mode: wait for the VM to exit (matches the
           # non-idempotent path which `wait`s on the runner).
           while sudo -A systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; do
             sleep 1
           done
-          exit 0
+          return 0
         fi
 
         # The workload VM expects its env's net VM (DHCP + default
@@ -591,45 +774,59 @@ BASH
         # OLD wrapper's EXIT trap (which fires when its `wait $VM_PID`
         # returns because we killed its VM) would race-`systemctl stop`
         # the virtiofsd / swtpm we're about to use.
-        reaped_pids=""
-        for pid in $(pgrep -af "nixling up $VM\b" 2>/dev/null | grep -v "^$$ " | awk '{print $1}'); do
-          [ "$pid" = "$$" ] && continue
-          echo "nixling: reaping concurrent wrapper pid=$pid"
-          kill "$pid" 2>/dev/null || true
-          reaped_pids="$reaped_pids $pid"
-        done
-        # Wait for the reaped wrappers to fully exit. SIGTERM triggers
-        # their EXIT trap, which `systemctl stop`s virtiofsd/swtpm and
-        # deletes the tap. If we proceed to our own `systemctl restart
-        # virtiofsd` before that finishes, the old wrapper's belated
-        # stop wins and kills the unit we just brought up — the
-        # symptom is "Job for microvm-virtiofsd@<vm>.service canceled"
-        # and a half-built VM that immediately falls over.
-        for pid in $reaped_pids; do
-          for _ in $(seq 1 40); do
-            [ -d "/proc/$pid" ] || break
-            sleep 0.25
+        nl_span_start "reap_orphans"
+        nl_event "reap_orphans" "started"
+        rc=0
+        {
+          reaped_pids=""
+          for pid in $(pgrep -af "nixling up $VM\b" 2>/dev/null | grep -v "^$$ " | awk '{print $1}'); do
+            [ "$pid" = "$$" ] && continue
+            echo "nixling: reaping concurrent wrapper pid=$pid"
+            kill "$pid" 2>/dev/null || true
+            reaped_pids="$reaped_pids $pid"
           done
-        done
-        for pid in $(vm_pids "$VM"); do
-          echo "nixling: reaping orphan pid=$pid from prior run"
-          kill "$pid" 2>/dev/null || true
-        done
-        for _ in 1 2 3; do
-          sleep 1
-          vm_running "$VM" || break
-        done
-        for pid in $(vm_pids "$VM"); do
-          kill -9 "$pid" 2>/dev/null || true
-        done
+          # Wait for the reaped wrappers to fully exit. SIGTERM triggers
+          # their EXIT trap, which `systemctl stop`s virtiofsd/swtpm and
+          # deletes the tap. If we proceed to our own `systemctl restart
+          # virtiofsd` before that finishes, the old wrapper's belated
+          # stop wins and kills the unit we just brought up — the
+          # symptom is "Job for microvm-virtiofsd@<vm>.service canceled"
+          # and a half-built VM that immediately falls over.
+          for pid in $reaped_pids; do
+            for _ in $(seq 1 40); do
+              [ -d "/proc/$pid" ] || break
+              sleep 0.25
+            done
+          done
+          for pid in $(vm_pids "$VM"); do
+            echo "nixling: reaping orphan pid=$pid from prior run"
+            kill "$pid" 2>/dev/null || true
+          done
+          for _ in 1 2 3; do
+            sleep 1
+            vm_running "$VM" || break
+          done
+          for pid in $(vm_pids "$VM"); do
+            kill -9 "$pid" 2>/dev/null || true
+          done
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "reap_orphans" "ok"
+        else
+          nl_event "reap_orphans" "err"
+          return "$rc"
+        fi
 
         echo "nixling: prepping host (tap''${TPM:+, swtpm}, virtiofsd)..."
         # P4 C3: CH now runs as nixling-$VM-gpu; the TAP must be owned by that
         # user so CH (running as nixling-$VM-gpu) can open /dev/net/tun.
         _GPU_USER="nixling-$VM-gpu"
-        sudo -A bash -s -- "$TAP" "$BRIDGE" "$VM" "$STATE" "$TPM" "$TP_SOCK" "$_GPU_USER" <<${"'"}BASH${"'"}
+
+        nl_span_start "prepare_tap" "tap=$TAP,bridge=$BRIDGE"
+        nl_event "prepare_tap" "started"
+        if sudo -A bash -s -- "$TAP" "$BRIDGE" "$VM" "$STATE" "$_GPU_USER" <<${"'"}BASH${"'"}
           set -euo pipefail
-          TAP=$1; BRIDGE=$2; VM=$3; STATE=$4; TPM=$5; TP_SOCK=$6; NL_USER=$7
+          TAP=$1; BRIDGE=$2; VM=$3; STATE=$4; NL_USER=$5
           if [ -e "/sys/class/net/$TAP" ]; then
             ip link delete "$TAP"
           fi
@@ -638,12 +835,42 @@ BASH
           ip link set "$TAP" up
           rm -f "$STATE/$VM-gpu.sock" "$STATE/$VM.sock"
           find "$STATE" -maxdepth 1 -name "$VM-virtiofs-*.sock" -delete 2>/dev/null || true
+BASH
+        then
+          nl_event "prepare_tap" "ok"
+        else
+          rc=$?
+          nl_event "prepare_tap" "err"
+          return "$rc"
+        fi
+
+        nl_span_start "restart_virtiofsd" "systemd_unit=microvm-virtiofsd@$VM.service"
+        nl_event "restart_virtiofsd" "started"
+        if sudo -A bash -s -- "$VM" "$STATE" <<${"'"}BASH${"'"}
+          set -euo pipefail
+          VM=$1; STATE=$2
           systemctl restart "microvm-virtiofsd@$VM.service"
           for _ in $(seq 1 20); do
-            [ -S "$STATE/$VM-virtiofs-ro-store.sock" ] && break
+            [ -S "$STATE/$VM-virtiofs-ro-store.sock" ] && exit 0
             sleep 0.25
           done
-          if [ "$TPM" = "true" ]; then
+          echo "nixling: virtiofsd socket $STATE/$VM-virtiofs-ro-store.sock did not appear" >&2
+          exit 1
+BASH
+        then
+          nl_event "restart_virtiofsd" "ok"
+        else
+          rc=$?
+          nl_event "restart_virtiofsd" "err"
+          return "$rc"
+        fi
+
+        if [ "$TPM" = "true" ]; then
+          nl_span_start "restart_swtpm" "systemd_unit=nixling-$VM-swtpm.service"
+          nl_event "restart_swtpm" "started"
+          if sudo -A bash -s -- "$VM" "$TP_SOCK" <<${"'"}BASH${"'"}
+            set -euo pipefail
+            VM=$1; TP_SOCK=$2
             systemctl restart "nixling-$VM-swtpm.service"
             for _ in $(seq 1 20); do
               [ -S "$TP_SOCK" ] && break
@@ -653,8 +880,15 @@ BASH
               echo "nixling: swtpm socket $TP_SOCK did not appear" >&2
               exit 1
             fi
-          fi
 BASH
+          then
+            nl_event "restart_swtpm" "ok"
+          else
+            rc=$?
+            nl_event "restart_swtpm" "err"
+            return "$rc"
+          fi
+        fi
 
         cleanup() {
           local rc=$?
@@ -754,31 +988,64 @@ BASH
           local _a_mic _a_spk
           read -r _a_mic _a_spk < <(audio_read "$VM" 2>/dev/null || echo "off off")
           if [ "$_a_mic" = "on" ] || [ "$_a_spk" = "on" ]; then
+            nl_span_start "start_audio_sidecar" "systemd_unit=nixling-$VM-snd.service"
+            nl_event "start_audio_sidecar" "started"
             echo "nixling: restarting nixling-$VM-snd.service for audio (mic=$_a_mic speaker=$_a_spk)..."
-            audio_sidecar_restart "$VM" || {
+            if audio_sidecar_restart "$VM"; then
+              nl_event "start_audio_sidecar" "ok"
+            else
+              nl_event "start_audio_sidecar" "err"
               echo "nixling: failed to restart nixling-$VM-snd.service; CH will be launched without audio" >&2
-            }
+            fi
           fi
         fi
 
-        echo "nixling: launching nixling-$VM-gpu.service ..."
-        sudo -A systemctl reset-failed "nixling-$VM-gpu.service" 2>/dev/null || true
-        sudo -A systemctl start "nixling-$VM-gpu.service"
-        VM_PID=""  # no background PID; service managed by systemd
+        nl_span_start "launch_cloud_hypervisor" "systemd_unit=nixling-$VM-gpu.service"
+        nl_event "launch_cloud_hypervisor" "started"
+        rc=0
+        {
+          echo "nixling: launching nixling-$VM-gpu.service ..."
+          sudo -A systemctl reset-failed "nixling-$VM-gpu.service" 2>/dev/null || true
+          sudo -A systemctl start "nixling-$VM-gpu.service"
+          VM_PID=""  # no background PID; service managed by systemd
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "launch_cloud_hypervisor" "ok"
+        else
+          nl_event "launch_cloud_hypervisor" "err"
+          return "$rc"
+        fi
 
-        echo -n "nixling: waiting for $SOCK"
-        for _ in $(seq 1 120); do
-          if [ -S "$SOCK" ]; then echo " — ready."; break; fi
-          if ! sudo -A systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; then
+        nl_span_start "wait_ch_api_socket" "systemd_unit=nixling-$VM-gpu.service"
+        nl_event "wait_ch_api_socket" "started"
+        local _wait_ch_rc=0
+        local _wait_ch_failed=""
+        if {
+          echo -n "nixling: waiting for $SOCK"
+          for _ in $(seq 1 120); do
+            if [ -S "$SOCK" ]; then echo " — ready."; break; fi
+            if ! sudo -A systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; then
+              echo
+              echo "nixling: nixling-$VM-gpu.service stopped before API socket appeared" >&2
+              sudo -A systemctl status "nixling-$VM-gpu.service" --no-pager -n 20 >&2 || true
+              _wait_ch_rc=4
+              _wait_ch_failed="service"
+              break
+            fi
+            sleep 0.5; echo -n "."
+          done
+          if [ -z "$_wait_ch_failed" ] && [ ! -S "$SOCK" ]; then
             echo
-            echo "nixling: nixling-$VM-gpu.service stopped before API socket appeared" >&2
-            sudo -A systemctl status "nixling-$VM-gpu.service" --no-pager -n 20 >&2 || true
-            exit 4
+            echo "nixling: timed out waiting for $SOCK" >&2
+            _wait_ch_rc=4
+            _wait_ch_failed="timeout"
           fi
-          sleep 0.5; echo -n "."
-        done
-        if [ ! -S "$SOCK" ]; then
-          echo; echo "nixling: timed out waiting for $SOCK" >&2; exit 4
+          [ -z "$_wait_ch_failed" ]
+        }; then
+          nl_event "wait_ch_api_socket" "ok"
+        else
+          nl_event "wait_ch_api_socket" "err"
+          return "$_wait_ch_rc"
         fi
 
         # Optional YubiKey USBIP attach at boot. The user can also do
@@ -799,21 +1066,46 @@ BASH
             local UP_ALL_ENVS
             UP_ALL_ENVS=$(jq -r '[.[].env] | map(select(. != null)) | unique | .[]' "$MANIFEST" | tr '\n' ' ')
             exec 9>/run/nixling/usbipd.lock
-            usbip_exclusive_attach "$ENV" "$USBIP_BUSID" "$UP_ALL_ENVS"
-            echo -n "nixling: waiting for VM sshd"
-            for _ in $(seq 1 60); do
-              if timeout 1 bash -c "</dev/tcp/$STATIC_IP/22" 2>/dev/null; then
-                echo " — ready."; break
+            nl_span_start "wait_guest_ssh" "static_ip=$STATIC_IP"
+            nl_event "wait_guest_ssh" "started"
+            local _wait_ssh_rc=1
+            if {
+              echo -n "nixling: waiting for VM sshd"
+              for _ in $(seq 1 60); do
+                if timeout 1 bash -c "</dev/tcp/$STATIC_IP/22" 2>/dev/null; then
+                  echo " — ready."
+                  _wait_ssh_rc=0
+                  break
+                fi
+                sleep 1; echo -n "."
+              done
+              if [ "$_wait_ssh_rc" -ne 0 ]; then
+                echo
+                echo "nixling: timed out waiting for VM sshd" >&2
               fi
-              sleep 1; echo -n "."
-            done
-            ssh -i "$SSH_KEY" \
-                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
-                -o ConnectTimeout=10 \
-                "$SSH_USER@$STATIC_IP" "
-                  sudo /run/current-system/sw/bin/modprobe vhci_hcd
-                  sudo /run/current-system/sw/bin/usbip attach -r $(vm_get "$VM" usbipdHostIp) -b $USBIP_BUSID
-                " || echo "nixling: YubiKey attach failed (non-fatal)"
+              [ "$_wait_ssh_rc" -eq 0 ]
+            }; then
+              nl_event "wait_guest_ssh" "ok"
+            else
+              nl_event "wait_guest_ssh" "err"
+            fi
+            nl_span_start "attach_usbip" "static_ip=$STATIC_IP"
+            nl_event "attach_usbip" "started"
+            if {
+              usbip_exclusive_attach "$ENV" "$USBIP_BUSID" "$UP_ALL_ENVS"
+              ssh -i "$SSH_KEY" \
+                  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+                  -o ConnectTimeout=10 \
+                  "$SSH_USER@$STATIC_IP" "
+                    sudo /run/current-system/sw/bin/modprobe vhci_hcd
+                    sudo /run/current-system/sw/bin/usbip attach -r $(vm_get "$VM" usbipdHostIp) -b $USBIP_BUSID
+                  "
+            }; then
+              nl_event "attach_usbip" "ok"
+            else
+              nl_event "attach_usbip" "err"
+              echo "nixling: YubiKey attach failed (non-fatal)" >&2
+            fi
             echo "nixling: YubiKey attached."
           fi
         fi
@@ -835,7 +1127,7 @@ EOF
           # exit. The YubiKey USBIP busid stays bound so the YubiKey remains
           # attached to the VM after we exit.
           trap - EXIT INT TERM
-          exit 0
+          return 0
         fi
         # Non-detach: block until the service stops (VM shutdown or error).
         while sudo -A systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; do
@@ -845,23 +1137,49 @@ EOF
 
       do_up_headless() {
         VM="$1"
-        ensure_net_vm_up "$VM"
-        echo "nixling: starting nixling@$VM.service via systemd..."
-        sudo -A systemctl start "nixling@$VM.service"
-        sudo -A systemctl status "nixling@$VM.service" --no-pager -n 5
+        nl_span_start "start_microvm_unit" "systemd_unit=nixling@$VM.service"
+        nl_event "start_microvm_unit" "started"
+        rc=0
+        {
+          ensure_net_vm_up "$VM"
+          echo "nixling: starting nixling@$VM.service via systemd..."
+          sudo -A systemctl start "nixling@$VM.service"
+          sudo -A systemctl status "nixling@$VM.service" --no-pager -n 5
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "start_microvm_unit" "ok"
+        else
+          nl_event "start_microvm_unit" "err"
+          return "$rc"
+        fi
       }
 
       do_up() {
         require_vm "''${1:-}"
         VM="$1"
         local DETACH="''${2:-false}"
+        nl_trace_context "$VM"
+        nl_span_start "up"
+        nl_event "up" "started"
         if [ "$(vm_get "$VM" graphics)" = "true" ]; then
-          do_up_graphics "$VM" "$DETACH"
+          if do_up_graphics "$VM" "$DETACH"; then
+            nl_event "up" "ok"
+          else
+            rc=$?
+            nl_event "up" "err"
+            return "$rc"
+          fi
         else
           # Headless VMs are already systemd-managed (microvm@<vm>.
           # service), so they're inherently detached from the caller.
           # -d is a no-op there; we accept it silently for symmetry.
-          do_up_headless "$VM"
+          if do_up_headless "$VM"; then
+            nl_event "up" "ok"
+          else
+            rc=$?
+            nl_event "up" "err"
+            return "$rc"
+          fi
         fi
       }
 
@@ -903,6 +1221,7 @@ EOF
         TPM=$(vm_get "$VM" tpm)
         IS_NET_VM=$(vm_get "$VM" isNetVm)
         ENV=$(vm_get "$VM" env)
+        nl_trace_context "$VM"
         # C4: validate identifier values before privileged use.
         # NOTE: STATE is an absolute path, not an identifier — already safe via
         # quoted heredoc positional args.
@@ -931,48 +1250,106 @@ EOF
           fi
         fi
 
-        echo "nixling: stopping $VM..."
-        # P4 B: stop GPU sidecar first (CH runs inside it; microvm@ manages state).
-        if systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; then
-          sudo -A systemctl stop "nixling-$VM-gpu.service" 2>/dev/null || true
-        fi
-        # Stop via the nixling@<vm> wrapper. Its ExecStop /
-        # PropagatesStopTo cascades to microvm@<vm> (backend /
-        # implementation detail). Falling through to microvm@ on
-        # the bare-microvm case (wrapper not loaded) keeps the
-        # CLI tolerant of mismatched generations.
-        if systemctl is-active --quiet "nixling@$VM.service"; then
-          sudo -A systemctl stop "nixling@$VM.service"
-        elif systemctl is-active --quiet "microvm@$VM.service"; then
-          sudo -A systemctl stop "microvm@$VM.service"
-        fi
-        for pid in $(vm_pids "$VM"); do
-          kill "$pid" 2>/dev/null || true
-        done
-        sleep 1
-        for pid in $(vm_pids "$VM"); do
-          kill -9 "$pid" 2>/dev/null || true
-        done
-        sudo -A bash -s -- "$VM" "$TAP" "$STATE" "$TPM" <<${"'"}BASH${"'"}
-          VM=$1; TAP=$2; STATE=$3; TPM=$4
+        nl_span_start "down"
+        nl_event "down" "started"
+        rc=0
+        {
+          echo "nixling: stopping $VM..."
+
+          nl_span_start "stop_microvm_unit" "systemd_unit=nixling@$VM.service"
+          nl_event "stop_microvm_unit" "started"
+          if {
+            # P4 B: stop GPU sidecar first (CH runs inside it; microvm@ manages state).
+            if systemctl is-active --quiet "nixling-$VM-gpu.service" 2>/dev/null; then
+              sudo -A systemctl stop "nixling-$VM-gpu.service" 2>/dev/null || true
+            fi
+            # Stop via the nixling@<vm> wrapper. Its ExecStop /
+            # PropagatesStopTo cascades to microvm@<vm> (backend /
+            # implementation detail). Falling through to microvm@ on
+            # the bare-microvm case (wrapper not loaded) keeps the
+            # CLI tolerant of mismatched generations.
+            if systemctl is-active --quiet "nixling@$VM.service"; then
+              sudo -A systemctl stop "nixling@$VM.service"
+            elif systemctl is-active --quiet "microvm@$VM.service"; then
+              sudo -A systemctl stop "microvm@$VM.service"
+            fi
+          }; then
+            nl_event "stop_microvm_unit" "ok"
+          else
+            nl_event "stop_microvm_unit" "err"
+            false
+          fi
+
+          nl_span_start "kill_interactive_processes"
+          nl_event "kill_interactive_processes" "started"
+          if {
+            for pid in $(vm_pids "$VM"); do
+              kill "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            for pid in $(vm_pids "$VM"); do
+              kill -9 "$pid" 2>/dev/null || true
+            done
+          }; then
+            nl_event "kill_interactive_processes" "ok"
+          else
+            nl_event "kill_interactive_processes" "err"
+            false
+          fi
+
+          nl_span_start "cleanup_tap" "tap=$TAP"
+          nl_event "cleanup_tap" "started"
+          if sudo -A bash -s -- "$TAP" <<${"'"}BASH${"'"}
+          TAP=$1
+          if [ -e "/sys/class/net/$TAP" ]; then
+            ip link delete "$TAP" || true
+          fi
+BASH
+          then
+            nl_event "cleanup_tap" "ok"
+          else
+            nl_event "cleanup_tap" "err"
+            false
+          fi
+
+          nl_span_start "cleanup_sockets"
+          nl_event "cleanup_sockets" "started"
+          if sudo -A bash -s -- "$VM" "$STATE" "$TPM" <<${"'"}BASH${"'"}
+          VM=$1; STATE=$2; TPM=$3
           systemctl stop "microvm-virtiofsd@$VM.service" 2>/dev/null || true
           if [ "$TPM" = "true" ]; then
             systemctl stop "nixling-$VM-swtpm.service" 2>/dev/null || true
           fi
-          if [ -e "/sys/class/net/$TAP" ]; then
-            ip link delete "$TAP" || true
-          fi
           rm -f "$STATE/$VM-gpu.sock" "$STATE/$VM.sock"
           find "$STATE" -maxdepth 1 -name "$VM-virtiofs-*.sock" -delete 2>/dev/null || true
 BASH
+          then
+            nl_event "cleanup_sockets" "ok"
+          else
+            nl_event "cleanup_sockets" "err"
+            false
+          fi
 
-
-        # P4 C3: audio sidecar is now a system service (nixling-$VM-snd.service).
-        # Stop it regardless of calling user.
-        if [ "$(vm_get "$VM" audio)" = "true" ]; then
-          sudo -A systemctl stop "nixling-$VM-snd.service" 2>/dev/null || true
+          # P4 C3: audio sidecar is now a system service (nixling-$VM-snd.service).
+          # Stop it regardless of calling user.
+          if [ "$(vm_get "$VM" audio)" = "true" ]; then
+            nl_span_start "stop_audio_sidecar" "systemd_unit=nixling-$VM-snd.service"
+            nl_event "stop_audio_sidecar" "started"
+            if audio_sidecar_stop "$VM"; then
+              nl_event "stop_audio_sidecar" "ok"
+            else
+              nl_event "stop_audio_sidecar" "err"
+              false
+            fi
+          fi
+          echo "nixling: $VM stopped."
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "down" "ok"
+        else
+          nl_event "down" "err"
+          return "$rc"
         fi
-        echo "nixling: $VM stopped."
       }
 
       # ----------------------------------------------------------------------
@@ -1237,7 +1614,11 @@ BASH
       do_usb() {
         require_vm "''${1:-}"
         VM="$1"
+        nl_trace_context "$VM"
+        nl_span_start "usb"
+        nl_event "usb" "started"
         if [ "$(vm_get "$VM" usbipYubikey)" != "true" ]; then
+          nl_event "usb" "err"
           echo "nixling: '$VM' does not have usbip.yubikey enabled" >&2
           exit 2
         fi
@@ -1251,14 +1632,17 @@ BASH
         assert_safe "$VM"
         [ "$ENV" = "null" ] || assert_safe "$ENV"
         if [ "$STATIC_IP" = "null" ] || [ "$SSH_USER" = "null" ] || [ "$SSH_KEY" = "null" ]; then
+          nl_event "usb" "err"
           echo "nixling: '$VM' needs staticIp + ssh.user + ssh.keyPath set to use 'usb'" >&2
           exit 2
         fi
         if [ "$HOST_IP" = "null" ] || [ -z "$HOST_IP" ]; then
+          nl_event "usb" "err"
           echo "nixling: '$VM' has no usbipdHostIp (env not set?). Set nixling.vms.$VM.env." >&2
           exit 2
         fi
         if [ "$ENV" = "null" ] || [ -z "$ENV" ]; then
+          nl_event "usb" "err"
           echo "nixling: '$VM' has no env — cannot pick a per-env usbipd service." >&2
           exit 2
         fi
@@ -1271,6 +1655,7 @@ BASH
           fi
         done
         if [ -z "$DEV_SYS" ]; then
+          nl_event "usb" "err"
           echo "nixling: no Yubico USB device plugged into the host." >&2
           exit 2
         fi
@@ -1278,10 +1663,16 @@ BASH
         PRODUCT=$(cat "$DEV_SYS/product" 2>/dev/null || echo Yubico)
         echo "nixling: found $PRODUCT at busid $BUSID"
 
-        if ! ssh -i "$SSH_KEY" \
+        nl_span_start "wait_guest_ssh" "static_ip=$STATIC_IP"
+        nl_event "wait_guest_ssh" "started"
+        if ssh -i "$SSH_KEY" \
                 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
                 -o ConnectTimeout=5 \
                 "$SSH_USER@$STATIC_IP" true 2>/dev/null; then
+          nl_event "wait_guest_ssh" "ok"
+        else
+          nl_event "wait_guest_ssh" "err"
+          nl_event "usb" "err"
           echo "nixling: VM at $STATIC_IP is not reachable. Run 'nixling up $VM' first." >&2
           exit 3
         fi
@@ -1309,17 +1700,33 @@ BASH
               " 2>/dev/null || true
           usbip_exclusive_cleanup "$ENV" "$BUSID" "$ALL_ENVS"
           echo "nixling: YubiKey returned to host."
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 130 ] || [ "$rc" -eq 143 ]; then
+            nl_event "usb" "ok"
+          else
+            nl_event "usb" "err"
+          fi
           exit $rc
         }
         trap cleanup_usb EXIT INT TERM
 
-        # P2r4 security-r4-1: shared helper acquires flock + enforces exclusive export + binds.
-        usbip_exclusive_attach "$ENV" "$BUSID" "$ALL_ENVS"
-        echo "nixling: hot-plugging $BUSID into VM..."
-        ssh -i "$SSH_KEY" \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
-            "$SSH_USER@$STATIC_IP" "sudo /run/current-system/sw/bin/modprobe vhci_hcd && \
-                                    sudo /run/current-system/sw/bin/usbip attach -r $HOST_IP -b $BUSID"
+        nl_span_start "attach_usbip" "static_ip=$STATIC_IP"
+        nl_event "attach_usbip" "started"
+        rc=0
+        {
+          # P2r4 security-r4-1: shared helper acquires flock + enforces exclusive export + binds.
+          usbip_exclusive_attach "$ENV" "$BUSID" "$ALL_ENVS"
+          echo "nixling: hot-plugging $BUSID into VM..."
+          ssh -i "$SSH_KEY" \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$STATE_ROOT/known_hosts.nixling" \
+              "$SSH_USER@$STATIC_IP" "sudo /run/current-system/sw/bin/modprobe vhci_hcd && \
+                                      sudo /run/current-system/sw/bin/usbip attach -r $HOST_IP -b $BUSID"
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "attach_usbip" "ok"
+        else
+          nl_event "attach_usbip" "err"
+          return "$rc"
+        fi
 
         cat <<EOF
 
@@ -1618,33 +2025,67 @@ BASH
         # nixling audio speaker on|off <vm>
         # nixling audio off     <vm>          (== mic off + speaker off)
         local sub="''${1:-status}"; shift || true
+        VM=""
+        ENV=""
+        VM_ROLE=""
+        nl_span_start "audio"
+        nl_event "audio" "started"
 
         case "$sub" in
           status)
             if [ -z "''${1:-}" ]; then
-              for v in $(jq -r 'to_entries[] | select(.value.audio == true) | .key' "$MANIFEST"); do
-                echo "=== $v ==="
-                audio_status_one "$v"
-                echo
-              done
-              return 0
+              nl_span_start "audio_status"
+              nl_event "audio_status" "started"
+              if {
+                for v in $(jq -r 'to_entries[] | select(.value.audio == true) | .key' "$MANIFEST"); do
+                  echo "=== $v ==="
+                  audio_status_one "$v"
+                  echo
+                done
+              }; then
+                nl_event "audio_status" "ok"
+                nl_event "audio" "ok"
+                return 0
+              else
+                rc=$?
+                nl_event "audio_status" "err"
+                nl_event "audio" "err"
+                return "$rc"
+              fi
             fi
             require_vm "$1"
-            audio_status_one "$1"
-            return 0
+            VM="$1"
+            nl_trace_context "$VM"
+            nl_span_start "audio_status"
+            nl_event "audio_status" "started"
+            if audio_status_one "$1"; then
+              nl_event "audio_status" "ok"
+              nl_event "audio" "ok"
+              return 0
+            else
+              rc=$?
+              nl_event "audio_status" "err"
+              nl_event "audio" "err"
+              return "$rc"
+            fi
             ;;
 
           mic|speaker)
             local dir="$sub" state="''${1:-}" vm="''${2:-}"
             if [ -z "$state" ] || [ -z "$vm" ]; then
+              nl_event "audio" "err"
               echo "nixling audio: usage: nixling audio $dir on|off <vm>" >&2
               exit 2
             fi
             case "$state" in on|off) ;; *)
+              nl_event "audio" "err"
               echo "nixling audio: state must be 'on' or 'off'" >&2; exit 2 ;;
             esac
             require_vm "$vm"
+            VM="$vm"
+            nl_trace_context "$VM"
             if [ "$(vm_get "$vm" audio)" != "true" ]; then
+              nl_event "audio" "err"
               echo "nixling audio: '$vm' does not have audio.enable=true." >&2
               echo "  Set nixling.vms.$vm.audio.enable = true; in modules/nixling/vms.nix, commit, rebuild, retry." >&2
               exit 2
@@ -1653,23 +2094,39 @@ BASH
             read -r old_mic old_spk < <(audio_read "$vm")
             new_mic="$old_mic"; new_spk="$old_spk"
             if [ "$dir" = "mic" ]; then new_mic="$state"; else new_spk="$state"; fi
-            _do_audio_apply "$vm" "$old_mic" "$old_spk" "$new_mic" "$new_spk"
+            if _do_audio_apply "$vm" "$old_mic" "$old_spk" "$new_mic" "$new_spk"; then
+              nl_event "audio" "ok"
+            else
+              rc=$?
+              nl_event "audio" "err"
+              return "$rc"
+            fi
             ;;
 
           off)
             local vm="''${1:-}"
             if [ -z "$vm" ]; then
+              nl_event "audio" "err"
               echo "nixling audio: usage: nixling audio off <vm>" >&2; exit 2
             fi
             require_vm "$vm"
+            VM="$vm"
+            nl_trace_context "$VM"
             if [ "$(vm_get "$vm" audio)" != "true" ]; then
               # Idempotent: "off" on a never-enabled VM is a no-op.
               echo "nixling audio: '$vm' has audio.enable=false; nothing to do."
+              nl_event "audio" "ok"
               return 0
             fi
             local old_mic old_spk
             read -r old_mic old_spk < <(audio_read "$vm")
-            _do_audio_apply "$vm" "$old_mic" "$old_spk" "off" "off"
+            if _do_audio_apply "$vm" "$old_mic" "$old_spk" "off" "off"; then
+              nl_event "audio" "ok"
+            else
+              rc=$?
+              nl_event "audio" "err"
+              return "$rc"
+            fi
             ;;
 
           ""|-h|--help|help)
@@ -1687,10 +2144,12 @@ Per-VM state lives at /var/lib/nixling/vms/<vm>/state/audio-state.json. Toggling
 a VM that's currently running tries cloud-hypervisor hotplug first; if
 that's not supported it tells you to restart the VM.
 EOF
+            nl_event "audio" "ok"
             return 0
             ;;
 
           *)
+            nl_event "audio" "err"
             echo "nixling audio: unknown subcommand '$sub'" >&2
             echo "  try: nixling audio --help" >&2
             exit 2
@@ -1705,70 +2164,82 @@ EOF
       _do_audio_apply() {
         local vm="$1" oM="$2" oS="$3" nM="$4" nS="$5"
         local was_on=false now_on=false running=false
+        nl_span_start "audio_apply"
+        nl_event "audio_apply" "started"
         [ "$oM" = "on" ] || [ "$oS" = "on" ] && was_on=true
         [ "$nM" = "on" ] || [ "$nS" = "on" ] && now_on=true
         if vm_running "$vm"; then running=true; fi
 
         if [ "$oM" = "$nM" ] && [ "$oS" = "$nS" ]; then
           echo "nixling audio: no change (mic=$nM, speaker=$nS)."
+          nl_event "audio_apply" "ok"
           return 0
         fi
 
-        audio_write "$vm" "$nM" "$nS"
-        echo "nixling audio: state -> mic=$nM, speaker=$nS"
+        rc=0
+        {
+          audio_write "$vm" "$nM" "$nS"
+          echo "nixling audio: state -> mic=$nM, speaker=$nS"
 
-        # Sidecar lifecycle. Sidecar should run iff at least one
-        # direction is on — BUT only when the VM is NOT running. If
-        # the VM is up, the sidecar is the AF_UNIX peer of CH's vhost-
-        # user connection; stopping it leaves CH with a dead peer and
-        # any guest audio call (e.g. Firefox initialising WebAudio)
-        # blocks forever. CH does not reconnect, so even restarting
-        # the sidecar won't help. For a running VM the right scope
-        # for "revoke speaker" is the state file (which we just
-        # wrote) plus the WirePlumber stream rule (see audio-host.nix
-        # for the input-direction null-target rule) — NOT process
-        # teardown.
-        #
-        # Concrete failure mode this guard prevents:
-        #   $ nixling audio off workload-vm   # while VM up
-        #   ...sidecar stops...
-        #   user opens Firefox -> WebAudio init -> writev() against
-        #   the dead vhost-user socket -> uninterruptible D-state.
-        if [ "$now_on" = "true" ]; then
-          audio_sidecar_start "$vm"
-        elif [ "$running" = "true" ]; then
-          echo "nixling audio: VM is running; leaving sidecar alive (will stop on next nixling down)."
-        else
-          audio_sidecar_stop "$vm"
-        fi
-
-        # WirePlumber reload is a no-op in v1 (no rule installed).
-        # Kept as a no-cost hook in case a stream-rule is added later.
-        audio_wireplumber_reload || true
-
-        # Hot-attach / hot-detach to a running VM when device-attached
-        # state crosses.
-        if [ "$running" = "true" ] && [ "$was_on" != "$now_on" ]; then
-          local rc=0
+          # Sidecar lifecycle. Sidecar should run iff at least one
+          # direction is on — BUT only when the VM is NOT running. If
+          # the VM is up, the sidecar is the AF_UNIX peer of CH's vhost-
+          # user connection; stopping it leaves CH with a dead peer and
+          # any guest audio call (e.g. Firefox initialising WebAudio)
+          # blocks forever. CH does not reconnect, so even restarting
+          # the sidecar won't help. For a running VM the right scope
+          # for "revoke speaker" is the state file (which we just
+          # wrote) plus the WirePlumber stream rule (see audio-host.nix
+          # for the input-direction null-target rule) — NOT process
+          # teardown.
+          #
+          # Concrete failure mode this guard prevents:
+          #   $ nixling audio off workload-vm   # while VM up
+          #   ...sidecar stops...
+          #   user opens Firefox -> WebAudio init -> writev() against
+          #   the dead vhost-user socket -> uninterruptible D-state.
           if [ "$now_on" = "true" ]; then
-            audio_hotplug_add "$vm" || rc=$?
+            audio_sidecar_start "$vm"
+          elif [ "$running" = "true" ]; then
+            echo "nixling audio: VM is running; leaving sidecar alive (will stop on next nixling down)."
           else
-            audio_hotplug_remove "$vm" || rc=$?
+            audio_sidecar_stop "$vm"
           fi
-          case "$rc" in
-            0)
-              echo "nixling audio: hot-attached/detached on running VM."
-              ;;
-            *)
-              echo "nixling audio: NOTE — this cloud-hypervisor build doesn't"
-              echo "  support live add/remove of generic-vhost-user devices."
-              echo "  The new state will take effect on next 'nixling down $vm && nixling up $vm'."
-              ;;
-          esac
-        fi
 
-        echo
-        audio_status_one "$vm"
+          # WirePlumber reload is a no-op in v1 (no rule installed).
+          # Kept as a no-cost hook in case a stream-rule is added later.
+          audio_wireplumber_reload || true
+
+          # Hot-attach / hot-detach to a running VM when device-attached
+          # state crosses.
+          if [ "$running" = "true" ] && [ "$was_on" != "$now_on" ]; then
+            local rc=0
+            if [ "$now_on" = "true" ]; then
+              audio_hotplug_add "$vm" || rc=$?
+            else
+              audio_hotplug_remove "$vm" || rc=$?
+            fi
+            case "$rc" in
+              0)
+                echo "nixling audio: hot-attached/detached on running VM."
+                ;;
+              *)
+                echo "nixling audio: NOTE — this cloud-hypervisor build doesn't"
+                echo "  support live add/remove of generic-vhost-user devices."
+                echo "  The new state will take effect on next 'nixling down $vm && nixling up $vm'."
+                ;;
+            esac
+          fi
+
+          echo
+          audio_status_one "$vm"
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "audio_apply" "ok"
+        else
+          nl_event "audio_apply" "err"
+          return "$rc"
+        fi
       }
 
       # ----------------------------------------------------------------------
@@ -1866,7 +2337,10 @@ BASH
 
       # In-VM activate using a specific action.
       vm_activate() {
-        local VM="$1" ACTION="$2"
+        local VM="$1" ACTION="$2" TRACE_ACTIVATE=false
+        case "$ACTION" in
+          switch|boot|test) TRACE_ACTIVATE=true ;;
+        esac
         # /run/nixling-store-meta/current/system is the new toplevel
         # the host just synced. The guest has a
         # nixling-load-store-db.path unit that's supposed to fire on
@@ -1883,7 +2357,11 @@ BASH
         # fails with "unknown flag", which causes the wait-loop to
         # always think the path isn't ready and gives nix-env --set
         # the same path that the daemon then rejects.
-        vm_ssh "$VM" "
+        if [ "$TRACE_ACTIVATE" = "true" ]; then
+          nl_span_start "guest_load_store_db" "systemd_unit=nixling-load-store-db.service"
+          nl_event "guest_load_store_db" "started"
+        fi
+        if vm_ssh "$VM" "
           set -euo pipefail
           SYS=\$(readlink -f /run/nixling-store-meta/current/system)
           if [ -z \"\$SYS\" ] || [ ! -d \"\$SYS\" ]; then
@@ -1899,66 +2377,177 @@ BASH
             sudo /run/current-system/sw/bin/nix-store --query --is-valid \"\$SYS\" >/dev/null 2>&1 && break
             sleep 1
           done
+        "; then
+          if [ "$TRACE_ACTIVATE" = "true" ]; then
+            nl_event "guest_load_store_db" "ok"
+          fi
+        else
+          rc=$?
+          if [ "$TRACE_ACTIVATE" = "true" ]; then
+            nl_event "guest_load_store_db" "err"
+          fi
+          return "$rc"
+        fi
+
+        if [ "$TRACE_ACTIVATE" = "true" ]; then
+          nl_span_start "ssh_switch_to_configuration"
+          nl_event "ssh_switch_to_configuration" "started"
+        fi
+        if vm_ssh "$VM" "
+          set -euo pipefail
+          SYS=\$(readlink -f /run/nixling-store-meta/current/system)
+          if [ -z \"\$SYS\" ] || [ ! -d \"\$SYS\" ]; then
+            echo 'nixling: /run/nixling-store-meta/current/system missing in VM' >&2
+            exit 1
+          fi
           if [ '$ACTION' = 'switch' ] || [ '$ACTION' = 'boot' ]; then
             sudo /run/current-system/sw/bin/nix-env --profile /nix/var/nix/profiles/system --set \"\$SYS\"
           fi
           sudo \$SYS/bin/switch-to-configuration '$ACTION'
-        "
+        "; then
+          if [ "$TRACE_ACTIVATE" = "true" ]; then
+            nl_event "ssh_switch_to_configuration" "ok"
+          fi
+        else
+          rc=$?
+          if [ "$TRACE_ACTIVATE" = "true" ]; then
+            nl_event "ssh_switch_to_configuration" "err"
+          fi
+          return "$rc"
+        fi
       }
 
       do_switch() {
         require_vm "''${1:-}"
         local VM="$1"
-        echo "nixling: building $VM..."
         local GEN
-        GEN=$(do_build_inner "$VM")
-        echo "nixling: syncing per-VM store..."
-        sync_store "$VM" "$GEN"
-        if ! vm_running "$VM" \
-           && ! vm_active "$VM"; then
-          echo "nixling: $VM is not running — staged the closure but skipping live activation."
-          echo "  Start with 'nixling up $VM' to boot into the new generation."
-          return 0
+        nl_trace_context "$VM"
+        nl_span_start "switch"
+        nl_event "switch" "started"
+        rc=0
+        {
+          echo "nixling: building $VM..."
+          nl_span_start "nix_build_vm"
+          nl_event "nix_build_vm" "started"
+          if GEN=$(do_build_inner "$VM"); then
+            nl_event "nix_build_vm" "ok"
+          else
+            nl_event "nix_build_vm" "err"
+            false
+          fi
+          echo "nixling: syncing per-VM store..."
+          nl_span_start "store_sync"
+          nl_event "store_sync" "started"
+          if sync_store "$VM" "$GEN"; then
+            nl_event "store_sync" "ok"
+          else
+            nl_event "store_sync" "err"
+            false
+          fi
+          if ! vm_running "$VM" \
+             && ! vm_active "$VM"; then
+            echo "nixling: $VM is not running — staged the closure but skipping live activation."
+            echo "  Start with 'nixling up $VM' to boot into the new generation."
+          else
+            echo "nixling: activating live in $VM..."
+            vm_activate "$VM" switch
+            echo "nixling: $VM switched to $GEN"
+          fi
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "switch" "ok"
+        else
+          nl_event "switch" "err"
+          return "$rc"
         fi
-        echo "nixling: activating live in $VM..."
-        vm_activate "$VM" switch
-        echo "nixling: $VM switched to $GEN"
       }
 
       do_boot() {
         require_vm "''${1:-}"
         local VM="$1"
-        echo "nixling: building $VM..."
         local GEN
-        GEN=$(do_build_inner "$VM")
-        echo "nixling: syncing per-VM store..."
-        sync_store "$VM" "$GEN"
-        if vm_running "$VM" \
-           || vm_active "$VM"; then
-          echo "nixling: bumping default-boot profile (no live activation)..."
-          vm_activate "$VM" boot
+        nl_trace_context "$VM"
+        nl_span_start "boot"
+        nl_event "boot" "started"
+        rc=0
+        {
+          echo "nixling: building $VM..."
+          nl_span_start "nix_build_vm"
+          nl_event "nix_build_vm" "started"
+          if GEN=$(do_build_inner "$VM"); then
+            nl_event "nix_build_vm" "ok"
+          else
+            nl_event "nix_build_vm" "err"
+            false
+          fi
+          echo "nixling: syncing per-VM store..."
+          nl_span_start "store_sync"
+          nl_event "store_sync" "started"
+          if sync_store "$VM" "$GEN"; then
+            nl_event "store_sync" "ok"
+          else
+            nl_event "store_sync" "err"
+            false
+          fi
+          if vm_running "$VM" \
+             || vm_active "$VM"; then
+            echo "nixling: bumping default-boot profile (no live activation)..."
+            vm_activate "$VM" boot
+          else
+            echo "nixling: $VM is down; new closure will be the default at next start."
+          fi
+          echo "nixling: $VM boot-staged on $GEN"
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "boot" "ok"
         else
-          echo "nixling: $VM is down; new closure will be the default at next start."
+          nl_event "boot" "err"
+          return "$rc"
         fi
-        echo "nixling: $VM boot-staged on $GEN"
       }
 
       do_test() {
         require_vm "''${1:-}"
         local VM="$1"
+        local GEN
         if ! vm_running "$VM" \
            && ! vm_active "$VM"; then
           echo "nixling: 'test' requires a running VM (it activates live without bumping default boot)." >&2
           exit 2
         fi
-        echo "nixling: building $VM..."
-        local GEN
-        GEN=$(do_build_inner "$VM")
-        echo "nixling: syncing per-VM store..."
-        sync_store "$VM" "$GEN"
-        echo "nixling: activating live (test — default boot NOT bumped)..."
-        vm_activate "$VM" test
-        echo "nixling: $VM tested on $GEN (default-boot unchanged)"
+        nl_trace_context "$VM"
+        nl_span_start "test"
+        nl_event "test" "started"
+        rc=0
+        {
+          echo "nixling: building $VM..."
+          nl_span_start "nix_build_vm"
+          nl_event "nix_build_vm" "started"
+          if GEN=$(do_build_inner "$VM"); then
+            nl_event "nix_build_vm" "ok"
+          else
+            nl_event "nix_build_vm" "err"
+            false
+          fi
+          echo "nixling: syncing per-VM store..."
+          nl_span_start "store_sync"
+          nl_event "store_sync" "started"
+          if sync_store "$VM" "$GEN"; then
+            nl_event "store_sync" "ok"
+          else
+            nl_event "store_sync" "err"
+            false
+          fi
+          echo "nixling: activating live (test — default boot NOT bumped)..."
+          vm_activate "$VM" test
+          echo "nixling: $VM tested on $GEN (default-boot unchanged)"
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "test" "ok"
+        else
+          nl_event "test" "err"
+          return "$rc"
+        fi
       }
 
       do_rollback() {
@@ -1969,15 +2558,34 @@ BASH
           echo "nixling: 'rollback' requires a running VM." >&2
           exit 2
         fi
-        echo "nixling: rolling back $VM..."
-        vm_ssh "$VM" "
-          set -euo pipefail
-          sudo /run/current-system/sw/bin/nix-env --profile /nix/var/nix/profiles/system --rollback
-          NEW=\$(readlink /nix/var/nix/profiles/system)
-          sudo \$NEW/bin/switch-to-configuration switch
-        "
-        echo "nixling: $VM rolled back. (Host per-VM store unchanged; the previous"
-        echo "         generation's closure was already retained by the sync helper.)"
+        nl_trace_context "$VM"
+        nl_span_start "rollback"
+        nl_event "rollback" "started"
+        rc=0
+        {
+          echo "nixling: rolling back $VM..."
+          nl_span_start "rollback_generation"
+          nl_event "rollback_generation" "started"
+          if vm_ssh "$VM" "
+            set -euo pipefail
+            sudo /run/current-system/sw/bin/nix-env --profile /nix/var/nix/profiles/system --rollback
+            NEW=\$(readlink /nix/var/nix/profiles/system)
+            sudo \$NEW/bin/switch-to-configuration switch
+          "; then
+            nl_event "rollback_generation" "ok"
+          else
+            nl_event "rollback_generation" "err"
+            false
+          fi
+          echo "nixling: $VM rolled back. (Host per-VM store unchanged; the previous"
+          echo "         generation's closure was already retained by the sync helper.)"
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "rollback" "ok"
+        else
+          nl_event "rollback" "err"
+          return "$rc"
+        fi
       }
 
       do_generations() {
@@ -2040,25 +2648,57 @@ BASH
           echo "nixling: $VM has no per-VM store yet (run 'nixling build $VM' first)." >&2
           exit 2
         fi
-        local CURGEN
-        CURGEN=$(readlink -f "$META/current")
-        echo "nixling: gc on $VM against $CURGEN"
-        sync_store "$VM" "$CURGEN"
-        # Re-running the sync helper short-circuits because the system
-        # path matches the current. Force the retention sweep by
-        # building a fresh closure (idempotent if config unchanged) and
-        # re-syncing — that path always runs the retention pass.
-        local GEN
-        GEN=$(do_build_inner "$VM")
-        if [ "$GEN" != "$CURGEN" ]; then
-          # Caller-driven race: someone changed the config between
-          # `gc` invocation and `nix build`. Fall through to a full
-          # sync (which also retains the old running generation).
-          echo "nixling: closure changed mid-gc — performing a full switch instead."
-          sync_store "$VM" "$GEN"
+        local CURGEN GEN
+        nl_trace_context "$VM"
+        nl_span_start "gc"
+        nl_event "gc" "started"
+        rc=0
+        {
+          CURGEN=$(readlink -f "$META/current")
+          echo "nixling: gc on $VM against $CURGEN"
+          nl_span_start "store_sync"
+          nl_event "store_sync" "started"
+          if sync_store "$VM" "$CURGEN"; then
+            nl_event "store_sync" "ok"
+          else
+            nl_event "store_sync" "err"
+            false
+          fi
+          # Re-running the sync helper short-circuits because the system
+          # path matches the current. Force the retention sweep by
+          # building a fresh closure (idempotent if config unchanged) and
+          # re-syncing — that path always runs the retention pass.
+          nl_span_start "nix_build_vm"
+          nl_event "nix_build_vm" "started"
+          if GEN=$(do_build_inner "$VM"); then
+            nl_event "nix_build_vm" "ok"
+          else
+            nl_event "nix_build_vm" "err"
+            false
+          fi
+          if [ "$GEN" != "$CURGEN" ]; then
+            # Caller-driven race: someone changed the config between
+            # `gc` invocation and `nix build`. Fall through to a full
+            # sync (which also retains the old running generation).
+            echo "nixling: closure changed mid-gc — performing a full switch instead."
+            nl_span_start "store_sync"
+            nl_event "store_sync" "started"
+            if sync_store "$VM" "$GEN"; then
+              nl_event "store_sync" "ok"
+            else
+              nl_event "store_sync" "err"
+              false
+            fi
+          fi
+          echo "nixling: gc done. Store size:"
+          sudo -A du -sh "$STATE_ROOT/$VM/store" 2>/dev/null || true
+        } || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          nl_event "gc" "ok"
+        else
+          nl_event "gc" "err"
+          return "$rc"
         fi
-        echo "nixling: gc done. Store size:"
-        sudo -A du -sh "$STATE_ROOT/$VM/store" 2>/dev/null || true
       }
 
       do_trust() {
@@ -2881,7 +3521,9 @@ EOF
       }
 
 
-            case "''${1:-}" in
+      SUBCMD="''${1:-}"
+
+      case "$SUBCMD" in
         list)    shift; do_list ;;
         up)
           shift

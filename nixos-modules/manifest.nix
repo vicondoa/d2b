@@ -53,6 +53,19 @@ let
 
   envMeta = config.nixling._envMeta;
   enabledVms = lib.filterAttrs (_: vm: vm.enable) config.nixling.vms;
+  obsCfg = config.nixling.observability;
+
+  # `lib.attrNames` returns names sorted lexicographically, so the
+  # env-index assignment is deterministic and stable across evals.
+  envNames = lib.attrNames config.nixling.envs;
+  envIndexMap = lib.listToAttrs (
+    lib.imap0 (i: name: { inherit name; value = i; }) envNames
+  );
+
+  # Legacy env-less VMs keep a deterministic fallback CID so the always-
+  # emitted observability block stays a no-op when observability is off.
+  legacyObsVsockCid = name:
+    4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
 
   netVmOfEnv = envName:
     let n = config.nixling.envs.${envName}.netName or "sys-${envName}-net";
@@ -67,8 +80,9 @@ let
   vmMeta = name: vm:
     let
       env = vm.env;
-      m = if env != null && envMeta ? ${env} then envMeta.${env} else null;
       asNetVmForEnv = envOfNetVm name;
+      envName = if env != null then env else asNetVmForEnv;
+      m = if env != null && envMeta ? ${env} then envMeta.${env} else null;
       derivedIp =
         if m != null then subnetIp m.lanSubnet vm.index
         else if asNetVmForEnv != null && envMeta ? ${asNetVmForEnv}
@@ -87,6 +101,10 @@ let
       usbipdHostIp =
         if m != null then m.hostUplinkIp
         else null;
+      obsVsockCid =
+        if envName != null && envIndexMap ? ${envName}
+        then 100 + (envIndexMap.${envName} * 100) + vm.index
+        else legacyObsVsockCid name;
     in
     {
       inherit name;
@@ -96,7 +114,7 @@ let
       audio = vm.audio.enable;
       tap = derivedTap;
       bridge = derivedBridge;
-      env = if env != null then env else asNetVmForEnv;
+      env = envName;
       isNetVm = asNetVmForEnv != null;
       netVm = if env != null then netVmOfEnv env else null;
       usbipdHostIp = usbipdHostIp;
@@ -107,6 +125,12 @@ let
       # security-2: state file under root-owned non-group-writable subdir.
       audioStateFile = "/var/lib/nixling/vms/${name}/state/audio-state.json";
       audioService = "nixling-${name}-snd.service";
+      observability = {
+        enabled = vm.observability.enable;
+        vsockCid = obsVsockCid;
+        vsockHostSocket = "/var/lib/nixling/vms/${name}/vsock.sock";
+        agentSocket = "/run/nixling/otlp.sock";
+      };
       staticIp =
         if derivedIp != null then derivedIp
         else vm.staticIp;
@@ -130,12 +154,23 @@ let
   computedManifest = lib.mapAttrs vmMeta enabledVms;
 
   # Top-level JSON shape: per-VM entries side-by-side with the
-  # reserved `_manifest` schema-version sentinel. The CLI's jq
-  # filters all use `--arg n` + `.[$n]` lookups, so adding the
-  # sentinel does not affect per-VM iteration patterns.
+  # reserved `_manifest` schema-version sentinel and the observability
+  # capability sentinel. The CLI's jq filters all use `--arg n` +
+  # `.[$n]` lookups, so reserved-key additions do not affect per-VM
+  # iteration patterns.
   manifestJson = computedManifest // {
     _manifest = {
       manifestVersion = config.nixling._manifestVersion;
+    };
+    _observability = {
+      enabled = obsCfg.enable;
+      vmName = obsCfg.vmName;
+      obsVsockCid = 1000;
+      obsVsockHostSocket = "/var/lib/nixling/vms/${obsCfg.vmName}/vsock.sock";
+      grafanaUrl = "http://${obsCfg.grafana.listenAddress}:${toString obsCfg.grafana.listenPort}";
+      chExporter = {
+        listenPort = obsCfg.ch.exporter.listenPort;
+      };
     };
   };
 
@@ -143,6 +178,43 @@ let
     name = "nixling-vms-manifest";
     text = builtins.toJSON manifestJson;
     destination = "/share/nixling/vms.json";
+  };
+
+  manifestObservabilityType = lib.types.submodule {
+    options = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        description = ''
+          True iff `nixling.vms.<name>.observability.enable` is set.
+        '';
+      };
+
+      vsockCid = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        description = ''
+          Deterministic observability vsock CID for this VM. Env-backed
+          VMs use `100 + envIndex * 100 + index`; legacy env-less VMs
+          keep a deterministic fallback so the field stays a no-op when
+          observability is disabled.
+        '';
+      };
+
+      vsockHostSocket = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          Host-side Unix socket backing this VM's Cloud Hypervisor vsock
+          device.
+        '';
+      };
+
+      agentSocket = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          In-guest Unix socket the future observability guest agent
+          listens on for local OTLP traffic.
+        '';
+      };
+    };
   };
 
   # Per-VM submodule type, matching docs/reference/manifest-schema.json. Every
@@ -329,6 +401,15 @@ let
           subcommands requiring SSH refuse to run when null.
         '';
       };
+
+      observability = lib.mkOption {
+        type = manifestObservabilityType;
+        description = ''
+          Per-VM observability transport metadata. Always emitted so the
+          observability track can rely on the field existing even before
+          the sidecars land.
+        '';
+      };
     };
   });
 in
@@ -369,7 +450,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 1;
+    default = 2;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -386,8 +467,11 @@ in
           undocumented and changed without bumps (e.g. the
           `isRouter`→`isNetVm` / `routerVm`→`netVm` rename in W2).
         * 1 — first documented, externally-stable version. Locks in
-          the per-VM field set documented in
+          the baseline per-VM field set documented in
           `docs/reference/manifest-schema.{md,json}`.
+        * 2 — observability schema expansion. Adds the always-emitted
+          per-VM `observability` block and the top-level
+          `_observability` sentinel.
     '';
   };
 

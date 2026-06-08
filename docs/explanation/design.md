@@ -25,6 +25,7 @@ the code.
 - [4. Defenses in depth](#4-defenses-in-depth)
 - [5. Limitations and known gaps](#5-limitations-and-known-gaps)
 - [6. Why not X — design rationale FAQ](#6-why-not-x--design-rationale-faq)
+- [Observability](#observability)
 - [7. References](#7-references)
 
 ## 1. The problem nixling solves
@@ -970,16 +971,193 @@ affected a VM: the CLI tells them. See
 [`docs/reference/cli-contract.md` — Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
+## Observability
+
+### The problem.
+
+Before observability, the operator who asks "did `nixling up
+work-aad` actually succeed?" has to reconstruct the answer from five
+surfaces that were never designed to read as one story:
+`nixling status`, `journalctl`, host process lists, Cloud Hypervisor
+API sockets, SSH probes, and the per-VM state directories under
+`/var/lib/nixling/`. Each tool answers only a slice of the question.
+None of them gives a first-class timeline from "the CLI asked for a
+VM" to "the workload booted, its sidecars came up, and it is now
+healthy", so even routine troubleshooting becomes archaeological work.
+
+### The shape of the solution.
+
+The design answers that by making observability a framework subsystem,
+not a consumer afterthought. Every workload VM that opts in gets an
+in-guest Alloy agent, the host gets its own forwarder plus a Cloud
+Hypervisor exporter, and the framework auto-declares a dedicated
+`sys-obs-stack` VM on its own `obs` env to run Grafana, Prometheus,
+Loki, Tempo, and the central Alloy receiver. The important design move
+is that the observability stack is materialised the same way nixling
+already materialises other cross-cutting infrastructure: as a declared
+VM with explicit boundaries, stable naming, and host-owned sidecars.
+
+That split keeps each signal close to the place where it originates.
+Workload metrics and logs are collected inside the guest, host-only
+facts such as Cloud Hypervisor counters are collected on the host, and
+CLI lifecycle spans are emitted by the existing shell wrapper rather
+than by some second orchestration path. The result is not "one big
+agent everywhere"; it is a composed system where the operator can open
+Grafana and see guest telemetry, host telemetry, and lifecycle traces
+in one place without weakening the isolation model that made nixling
+worth using in the first place. The concrete option surface, unit
+inventory, ports, and retention knobs live in the
+[observability component reference](../reference/components-observability.md),
+while the operator workflow for turning this design on and verifying it
+lives in the
+[enable-observability how-to](../how-to/enable-observability.md).
+
+### Why vsock instead of guest-initiated OTLP or reverse-SSH.
+
+The consequential choice is the transport. **Option A** was to let each
+workload VM push OTLP to the observability VM over IP. That sounds
+conventional, but it breaks nixling's per-env deny-by-default network
+shape: every workload environment would need a route into the
+observability environment. The obvious mitigation — multi-homing the
+obs VM into `work`, `personal`, and every future env — was also the
+framing in the upstream issue, and it was rejected for the same reason:
+it turns the observability VM into a network bridge between trust
+domains that are supposed to stay separate.
+
+**Option B** was to let the obs VM initiate reverse-SSH tunnels into
+each workload VM and forward remote OTLP ports back to itself. That
+would avoid new IP routes between guest environments, but at the price
+of putting credentials for every monitored VM inside the obs VM.
+Restricted `authorized_keys` entries with `permitlisten`, a no-shell
+user, and `command="/bin/false"` narrow the blast radius, but they do
+not remove the core problem: compromise of the obs VM would still hand
+an attacker authenticated reach into every monitored workload VM.
+
+**Option C**, the design that lands, is vsock. Each monitored VM gets a
+virtio-vsock device backed by a host Unix socket, and a small host-side
+`nixling-otel-relay@<vm>.service` bridges the workload VM's vsock
+backend socket to the obs VM's vsock backend socket. Telemetry never
+needs an IP hop, never asks the obs VM to hold SSH credentials for
+other guests, and never asks `network.nix` to make a policy exception
+for cross-env traffic. The host is a stateless byte broker, which is
+already the trust posture nixling accepts for virtiofsd, swtpm, audio,
+and the other sidecars that mediate devices into guests.
+
+That does not make vsock "free"; it concentrates more importance in the
+host's virtio boundary. But the attack surface here is the kernel's
+virtio-vsock driver and Cloud Hypervisor's existing device mediation,
+which is not qualitatively worse than the virtio devices nixling
+already relies on. The design goal was not zero trust in the host —
+that is impossible in this architecture — but to avoid inventing a new
+cross-VM trust path on top of the host-mediated one we already have.
+
+### Why two socat bridges instead of one.
+
+Two bridges exist because two different gaps exist. Inside the guest,
+Alloy speaks `AF_INET` and `AF_UNIX`, not `AF_VSOCK`, so a small UDS ↔
+vsock shim translates between the agent's local Unix socket and the
+virtio-vsock device. On the host, a second bridge is still required
+because vsock is point-to-point between one guest and the host. There
+is no native guest-to-guest vsock path, so nothing in the hypervisor can
+magically connect a workload VM's vsock device straight to the obs VM's
+vsock device without the host stitching those two backend sockets
+together.
+
+A zero-bridge design would therefore need native vsock support in Alloy
+or the upstream OpenTelemetry Collector, plus the plumbing to use it on
+both the workload side and the obs-VM side. That is the right long-term
+shape, but it is a multi-month upstream feature project, not a
+v0.2.0-sized module change. Until that exists, two tiny relays are the
+honest price of keeping the transport non-IP and credential-free.
+
+### Alternatives considered (and rejected).
+
+- **virtiofs file-tailing**: have the guest write OTLP-encoded output to
+  a shared file and let the host tail it. This removes the vsock device
+  and removes `socat`, but it is less standard transport-wise and gives
+  up the backpressure and acknowledgement semantics OTLP already has.
+  Rejected for v0.2.0; worth revisiting later for high-cardinality,
+  low-rate signals where file semantics may be good enough.
+- **Custom Rust binary instead of `socat`**: same topology, smaller
+  closure, and easier to instrument in its own right. Deferred to
+  v0.3.0. v0.2.0 ships `socat` behind
+  `cfg.transport.relayPackage` specifically so consumers can swap the
+  implementation with a one-line change when the Rust relay exists.
+- **systemd socket activation**: not wrong, just empty ceremony here.
+  `socat` with `UNIX-LISTEN:...,fork` already recreates its listener on
+  restart, so a paired `.socket` unit would add more nouns without
+  buying resilience.
+- **Native vsock support in Alloy / OTel Collector upstream**: the
+  correct long-term answer, because it deletes the in-guest bridge. It
+  remains an external dependency and a v0.3.0+ aspiration rather than a
+  prerequisite for v0.2.0.
+
+### CLI lifecycle traces — labels, not strings.
+
+The lifecycle-trace design is intentionally austere about attributes.
+Spans and structured journald events carry labels such as `vm.name`,
+`vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`,
+`bridge`, `static_ip`, and `generation` because those values are stable,
+indexable, and useful for correlation. They do **not** carry SSH key
+paths, command output, Nix derivation paths, or user data from Entra,
+TPM, or audio flows. That hygiene is not cosmetic. Tempo and Loki store
+what they are given; if the CLI emits high-cardinality strings or
+sensitive paths, disk usage and privacy risk both grow silently.
+
+Observability works best when the labels answer routing questions and
+nothing more: which VM, which env, which unit, which generation, which
+lifecycle step. The moment a trace turns into a dumping ground for raw
+strings, it stops being a durable operations signal and starts being an
+unbounded data-retention liability.
+
+### Trust concentration: the obs VM is privileged infrastructure.
+
+Vsock removes cross-VM credentials, but it does not make the
+observability VM low privilege. The obs VM has read access to every
+monitored VM's telemetry stream by design. If it is compromised, the
+attacker does not automatically get shell access to those VMs, but they
+do learn what every monitored guest is doing in near real time: service
+states, logs, metrics, and lifecycle traces. That is privileged
+infrastructure knowledge even when it is not an interactive login.
+
+The mitigation is architectural containment, not wishful thinking. The
+obs VM lives only in its own `obs` env, has no reason for outbound
+network access beyond that env, and is deliberately a single-host,
+single-VM component rather than a shared cross-host service. In the
+threat model it deserves the same care as the per-env net VMs: minimal
+exposure, conservative hardening, and the assumption that compromise of
+this infrastructure tier is operationally serious.
+
+### What this design is NOT.
+
+This design is not multi-host, not distributed, and not highly
+available. It is one host, one auto-declared observability VM, and one
+operator-facing Grafana surface for that host. That narrow scope is not
+an oversight; it is what keeps the transport and trust model simple
+enough to reason about in v0.2.0.
+
+If nixling ever grows into a multi-host framework, the scaling shape is
+not "stretch this obs VM across the fleet". It is "run one obs VM per
+host and forward into an external aggregator with explicit instance
+labelling". That design space is real, but it is explicitly out of
+scope for this release.
+
 ## 7. References
 
 Inside this repo:
 
 - [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md) —
   prose walkthrough of the per-VM JSON manifest at
-  `/run/current-system/sw/share/nixling/vms.json`, plus the v1
-  compatibility policy.
+  `/run/current-system/sw/share/nixling/vms.json`, plus the
+  `manifestVersion = 2` compatibility policy.
 - [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json) —
   the canonical JSON Schema Draft 2020-12 for the manifest.
+- [`docs/reference/components-observability.md`](../reference/components-observability.md) —
+  option surface, ports/CIDs/UDS, unit inventory, security boundaries,
+  and retention defaults for the observability subsystem.
+- [`docs/how-to/enable-observability.md`](../how-to/enable-observability.md) —
+  step-by-step enablement, verification, tuning, and troubleshooting
+  for observability on an existing nixling deployment.
 - [`docs/reference/cli-contract.md`](../reference/cli-contract.md) —
   the behavioural contract for any `nixling` CLI implementation
   (subcommand inventory, lifecycle FSM, exit codes, signal

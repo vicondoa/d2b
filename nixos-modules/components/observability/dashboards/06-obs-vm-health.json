@@ -1,0 +1,106 @@
+{
+  "uid": "obs-vm-health",
+  "title": "Obs VM Health",
+  "tags": ["nixling", "v0.2.0"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "label": "Stack job",
+        "type": "custom",
+        "query": "grafana,prometheus,loki,tempo,alloy",
+        "current": {"selected": true, "text": "grafana", "value": "grafana"},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Stack service health",
+      "description": "Repeated once per self-scraped obs-stack service.",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 0},
+      "repeat": "job",
+      "repeatDirection": "h",
+      "maxPerRow": 5,
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "mappings": []}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "colorMode": "background"},
+      "targets": [
+        {"refId": "A", "expr": "up{job=\"$job\"}", "instant": true}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Obs VM root filesystem used",
+      "description": "Backed by local unix-exporter metrics scraped inside the obs VM and remote-written into Prometheus.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 - (node_filesystem_avail_bytes{vm=\"__OBS_VM_NAME__\", mountpoint=\"/\", fstype!~\"tmpfs|overlay|nsfs\"} / node_filesystem_size_bytes{vm=\"__OBS_VM_NAME__\", mountpoint=\"/\", fstype!~\"tmpfs|overlay|nsfs\"})",
+          "legendFormat": "rootfs"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Loki ingestion rate",
+      "description": "Assumes the bundled Loki build exposes loki_distributor_bytes_received_total on its /metrics endpoint.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(loki_distributor_bytes_received_total{job=\"loki\"}[5m]))",
+          "legendFormat": "bytes/s"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Tempo ingestion rate",
+      "description": "Assumes the bundled Tempo build exposes tempo_distributor_spans_received_total on its /metrics endpoint.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(tempo_distributor_spans_received_total{job=\"tempo\"}[5m]))",
+          "legendFormat": "spans/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Prometheus TSDB size",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus_tsdb_storage_blocks_bytes{job=\"prometheus\"}",
+          "legendFormat": "TSDB blocks"
+        }
+      ]
+    }
+  ]
+}

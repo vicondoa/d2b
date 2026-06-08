@@ -1,0 +1,100 @@
+{
+  "uid": "lifecycle-traces",
+  "title": "Lifecycle Traces",
+  "tags": ["nixling", "v0.2.0"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nixling_vm_ch_api_up, vm)",
+        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Recent lifecycle traces",
+      "description": "Tempo TraceQL search results sorted by duration. Use Grafana Explore or Tempo field links to inspect the full trace.",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "search",
+          "query": "{ resource.service.name = \"nixling\" && span.\"vm.name\" =~ \"${vm:regex}\" }"
+        }
+      ],
+      "transformations": [
+        {"id": "sortBy", "options": {"fields": {}, "sort": [{"field": "Duration", "desc": true}]}},
+        {"id": "limit", "options": {"limit": 25}}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "heatmap",
+      "title": "Failures by step",
+      "description": "Assumes structured nixling-event JSON lines reach Loki so step/result can be parsed at query time.",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"legend": {"show": true}, "tooltip": {"show": true}},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "sum by (step) (count_over_time({service_name=~\".+\", vm=~\"${vm:regex}\"} | json | step=~\".+\" | result=\"err\" [5m]))",
+          "legendFormat": "{{step}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "heatmap",
+      "title": "Duration histogram by subcommand",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 9},
+      "datasource": {"type": "tempo", "uid": "tempo"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "options": {"legend": {"show": true}, "tooltip": {"show": true}},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"nixling\" && span.\"vm.name\" =~ \"${vm:regex}\" } | histogram_over_time(span:duration) by (span.\"nixling.subcommand\")"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Lifecycle event stream",
+      "description": "Pairs with Tempo trace-to-logs settings. Direct links depend on nixling-event JSON carrying a trace_id field.",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showLabels": true, "showTime": true, "enableLogDetails": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "{service_name=~\".+\", vm=~\"${vm:regex}\"} | json | step=~\".+\""
+        }
+      ]
+    }
+  ]
+}

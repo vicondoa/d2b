@@ -1,31 +1,34 @@
 # nixling examples
 
-Four ready-to-eval consumer flakes covering the headless,
-graphics, multi-env, and Entra-ID composition cases. Each is
-self-contained — read the per-directory README first.
+Five ready-to-eval consumer flakes covering the headless,
+graphics, multi-env, observability, and Entra-ID composition
+cases. Each is self-contained — read the per-directory README first.
 
 | Path                                          | Audience                                  | Notes                                                  |
 |-----------------------------------------------|-------------------------------------------|--------------------------------------------------------|
 | [`minimal/`](./minimal/)                      | Read-and-copy headless starter            | One env, one workload VM, ~25-line flake               |
 | [`graphics-workstation/`](./graphics-workstation/) | Desktop VM with Wayland + audio + USBIP | Requires a Wayland compositor on the host             |
 | [`multi-env/`](./multi-env/)                  | Two isolated envs (work + personal)       | Demonstrates per-env isolation and route preflight     |
+| [`with-observability/`](./with-observability/) | Single workload VM + auto-declared observability stack | Grafana/Prometheus/Loki/Tempo on a dedicated `obs` env |
 | [`with-entra-id/`](./with-entra-id/)          | Entra-ID-joined VM via the sibling flake  | Composes [`vicondoa/nixos-entra-id`][nei]              |
 
 [nei]: https://github.com/vicondoa/nixos-entra-id
 
 ## `flake.lock` policy
 
-Examples whose only flake input is `nixling.url = "path:../.."`
-(i.e. `minimal/`, `graphics-workstation/`, `multi-env/`) do **not**
-commit a `flake.lock`. There is nothing external to pin — the only
-input resolves to the in-tree framework via a relative path. A
-committed lock for such an example would be stale-by-construction
-and add noise to every `flake.lock` review.
+Examples that are primarily meant to evaluate the in-tree framework
+via `nixling.url = "path:../.."` do **not** commit a `flake.lock`
+(currently `minimal/`, `graphics-workstation/`, `multi-env/`, and
+`with-observability/`). Even when an example spells out shared inputs
+such as `nixpkgs`, `microvm`, or `home-manager`, the point is still to
+exercise the local checkout; a committed lock would be stale-by-
+construction and `tests/static.sh` will regenerate a local lock on
+first eval anyway.
 
-Examples that pull in external inputs (`with-entra-id/` consumes
-`github:vicondoa/nixos-entra-id`) **do** commit their `flake.lock`
-for reproducibility — the lock is the only way to ensure the
-example builds bit-identically across machines.
+Examples that pull in an external sibling flake (`with-entra-id/`
+consumes `github:vicondoa/nixos-entra-id`) **do** commit their
+`flake.lock` for reproducibility — the lock is the only way to ensure
+the example builds bit-identically across machines.
 
 ## In-tree vs published consumption
 

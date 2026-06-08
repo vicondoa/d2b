@@ -35,9 +35,9 @@ State directories follow the matching pattern:
 
 The per-VM manifest baked into the CLI generation lives at
 `/run/current-system/sw/share/nixling/vms.json`. The reserved
-`_manifest` top-level key carries `manifestVersion = 1` (the first
-documented/stable schema; W4 Phase 5). User-facing VM names cannot
-start with `_` (eval-time assertion in
+`_manifest` top-level key carries `manifestVersion = 2`, and the
+reserved `_observability` key carries host-wide observability metadata.
+User-facing VM names cannot start with `_` (eval-time assertion in
 `nixos-modules/assertions.nix`). The schema is documented in
 `docs/reference/manifest-schema.{md,json}`.
 
@@ -63,9 +63,13 @@ Layer-1 gates exercised (W4):
 - `tests/smoke-eval-aarch64.nix` — same shape, cross-evaluated on
   aarch64-linux to verify the headless workload eval graph stays
   multi-arch clean (Phase 4 W4 gate).
-- `tests/assertions-eval.sh` — 10/10 eval-time-assertion regression
-  tests (CIDR shape, CIDR overlap, key validation, `waylandUser`
-  presence, graphics/audio platform gating, etc.).
+- `tests/assertions-eval.sh` — eval-time assertion regression tests
+  (CIDR shape, CIDR overlap, key validation, `waylandUser`
+  presence, graphics/audio platform gating, and observability
+  collision/prefix cases).
+- `tests/observability-eval.sh` — 10 eval-time observability cases:
+  defaults, auto-declaration, manifest fields, CLI-traces gating,
+  and auto-SKIP negative cases for not-yet-merged Wave-1 work.
 - **Manifest contract gate** (Phase 5 W4): renders the smoke
   manifest, then runs a 5-check sequence:
   1. Manifest renders without errors.
@@ -78,6 +82,14 @@ Layer-1 gates exercised (W4):
      entry table in `docs/reference/manifest-schema.md` and the
      schema's `properties` keys must list the same field set.
   6. `_manifest.manifestVersion` is present and `>= 1`.
+
+Layer-1 script inventory:
+
+| Script | Purpose |
+| --- | --- |
+| `tests/assertions-eval.sh` | Eval-time assertion regressions, including the observability collision/prefix cases. |
+| `tests/observability-eval.sh` | Eval-time observability surface checks: defaults, auto-declared env/VM, manifest fields, CLI-traces gate, and assertion auto-SKIPs. |
+| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
 
 ## Layer 2 — `nixling-store.sh`
 

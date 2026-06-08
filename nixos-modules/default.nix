@@ -28,19 +28,24 @@
 {
   imports = [
     ./options.nix
+    ./options-observability.nix
     ./assertions.nix
     ./network.nix
     (import ./host.nix { inherit inputs; })
+    ./host-otel-relay-acl.nix
     # ./vms.nix is INTENTIONALLY OMITTED from the public flake — VM
     # registrations are consumer-specific. Downstream users declare
     # their VMs via `nixling.vms.<name> = ...` in their own NixOS
     # module, which is merged into nixling.vms here via option-system
     # semantics. There is no public file with example VMs (yet —
     # examples/ in Phase 6 will demonstrate the pattern).
+    ./observability-vm.nix
     ./store.nix
     ./manifest.nix
     ./cli.nix
+    ./host-ch-exporter.nix
     ./components/audio/host.nix
+    ./components/observability/default.nix
   ];
 
   # Entra ID / Himmelblau is NOT auto-imported here — it lives in

@@ -1,0 +1,113 @@
+{
+  "uid": "logs",
+  "title": "Logs",
+  "tags": ["nixling", "v0.2.0"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values(vm)",
+        "definition": "label_values(vm)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      },
+      {
+        "name": "env",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values(env)",
+        "definition": "label_values(env)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      },
+      {
+        "name": "unit",
+        "label": "Unit",
+        "type": "query",
+        "datasource": {"type": "loki", "uid": "loki"},
+        "query": "label_values({vm=~\"${vm:regex}\", env=~\"${env:regex}\"}, unit)",
+        "definition": "label_values({vm=~\"${vm:regex}\", env=~\"${env:regex}\"}, unit)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      },
+      {
+        "name": "severity",
+        "label": "Severity regex",
+        "type": "custom",
+        "query": ".*,debug,info,notice,warning,err|error,crit|critical,alert,emerg|panic",
+        "current": {"selected": true, "text": ".*", "value": ".*"},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "Logs",
+      "description": "Severity is a best-effort regex filter over log lines because journald priority labels are not currently relabeled into Loki streams.",
+      "gridPos": {"h": 14, "w": 24, "x": 0, "y": 0},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showLabels": true, "showTime": true, "enableLogDetails": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "{vm=~\"${vm:regex}\", env=~\"${env:regex}\", unit=~\"${unit:regex}\"} |~ \"(?i)${severity}\""
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Top units by log volume",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"displayMode": "gradient", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "topk(10, sum by (unit) (count_over_time({vm=~\"${vm:regex}\", env=~\"${env:regex}\", unit=~\"${unit:regex}\"}[5m])))",
+          "legendFormat": "{{unit}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "bargauge",
+      "title": "Top VMs by log volume",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"displayMode": "gradient", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "topk(10, sum by (vm) (count_over_time({vm=~\"${vm:regex}\", env=~\"${env:regex}\", unit=~\"${unit:regex}\"}[5m])))",
+          "legendFormat": "{{vm}}"
+        }
+      ]
+    }
+  ]
+}

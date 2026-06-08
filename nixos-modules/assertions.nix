@@ -10,10 +10,25 @@
 # network.nix where the env iteration happens. This file owns the
 # per-VM-name and per-env-name format / reserved-prefix checks that
 # don't depend on network.nix's iteration of cfg.envs.
-{ config, lib, ... }:
+{ config, lib, options, ... }:
 
 let
   cfg = config.nixling;
+  obsCfg = cfg.observability;
+  obsVsockCid = 1000;
+  nl = import ./lib.nix { inherit lib; };
+  inherit (nl) parseCidr subnetIp;
+
+  pow2 = n:
+    lib.foldl' (acc: _: acc * 2) 1 (lib.genList (i: i) n);
+
+  cidrContains = cidr: ip:
+    let
+      parsed = parseCidr cidr;
+      divisor = pow2 (32 - parsed.prefix);
+      ipInt = (parseCidr ip).netInt;
+    in
+    parsed.netInt / divisor == ipInt / divisor;
 
   # Allowed SSH public-key types. We match by prefix on the key line
   # ("ssh-ed25519 AAAA..."). Adding/removing types here is a deliberate
@@ -85,15 +100,15 @@ let
       })
       list);
 
-  # Auto-declared system VMs (added to cfg.vms by network.nix) have
-  # names of the form `sys-<env>-net`. We must NOT reject those for
-  # the `sys-` reserved-prefix rule, so derive the set of auto-system
-  # VM names from `nixling.envs.<env>.netName` (default
-  # `sys-${env}-net`) and treat them as allowed.
+  # Auto-declared system VMs (added to cfg.vms by network.nix and, when
+  # enabled, by observability-vm.nix) must NOT trip the `sys-`
+  # reserved-prefix rule. Derive the allowed set from the auto-net VMs
+  # plus the reserved observability stack VM name.
   autoSysVmNames =
-    lib.mapAttrsToList
+    (lib.mapAttrsToList
       (envName: env: env.netName or "sys-${envName}-net")
-      cfg.envs;
+      cfg.envs)
+    ++ lib.optional obsCfg.enable obsCfg.vmName;
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes:
@@ -143,6 +158,60 @@ let
   envNameOk = name:
     builtins.match "^[a-z][a-z0-9-]*$" name != null;
 
+  obsVmDefinitions = lib.filter
+    (d: builtins.isAttrs d.value && builtins.hasAttr obsCfg.vmName d.value)
+    options.nixling.vms.definitionsWithLocations;
+
+  # Pre-v0.2.0 the framework rejected ANY consumer definition under
+  # `nixling.vms.<obsCfg.vmName>` to prevent "user-declared VM collides
+  # with auto-declared one" mistakes. In practice that blocked
+  # perfectly safe extensions like `ssh.user = "root"` on the obs
+  # VM, because the framework's `observability-vm.nix` block already
+  # uses `lib.mkDefault` for every value it sets — a consumer extension
+  # MERGES on top of it via the module system. The assertion was
+  # over-conservative and the check was removed in v0.2.0. We retain
+  # `userObsVmDefinitions` purely for diagnostics in other error
+  # messages elsewhere.
+  userObsVmDefinitions = lib.filter
+    (d: !(lib.hasSuffix "/nixos-modules/observability-vm.nix" d.file))
+    obsVmDefinitions;
+
+  workloadObsCidPairs = lib.mapAttrsToList
+    (name: _vm: {
+      inherit name;
+      cid = config.nixling.manifest.${name}.observability.vsockCid;
+    })
+    (lib.filterAttrs
+      (name: vm: vm.enable && vm.observability.enable && name != obsCfg.vmName)
+      cfg.vms);
+
+  workloadObsCidGroups = lib.groupBy
+    (pair: toString pair.cid)
+    workloadObsCidPairs;
+
+  collidingWorkloadObsCidGroups = lib.filterAttrs
+    (_: pairs: builtins.length pairs > 1)
+    workloadObsCidGroups;
+
+  mkCidCollisionPairs = pairs:
+    if pairs == [ ] then [ ] else
+    let
+      first = builtins.head pairs;
+      rest = builtins.tail pairs;
+    in
+    (map (other: {
+      vm1 = first.name;
+      vm2 = other.name;
+      cid = first.cid;
+    }) rest)
+    ++ mkCidCollisionPairs rest;
+
+  workloadObsCidCollisions =
+    lib.flatten (map mkCidCollisionPairs (lib.attrValues collidingWorkloadObsCidGroups));
+
+  reservedObsCidUsers = map (pair: pair.name)
+    (lib.filter (pair: pair.cid == obsVsockCid) workloadObsCidPairs);
+
   vmAssertions = lib.mapAttrsToList
     (name: vm: [
       {
@@ -165,9 +234,15 @@ let
         assertion = !(reservedVmPrefix name);
         message = "nixling.vms.${name}: names starting with 'sys-' "
           + "are reserved for nixling's auto-declared system VMs "
-          + "(e.g. sys-<env>-net for each declared env). Rename "
-          + "this VM or — if it's intentionally a system VM — "
-          + "register it via nixling.envs.<env>.netName instead.";
+          + "(e.g. sys-<env>-net for each declared env, plus "
+          + "nixling.observability.vmName when observability is "
+          + "enabled). Rename this VM or — if it's intentionally a "
+          + "system VM — register it via nixling.envs.<env>.netName "
+          + "instead.";
+      }
+      {
+        assertion = !(vm.enable && vm.observability.enable && !obsCfg.enable);
+        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs-stack telemetry sink).";
       }
       {
         # Phase 2b: `nixling.vms.<name>.entra-id.*` was removed; the
@@ -234,17 +309,40 @@ let
     cfg.vms;
 
   envAssertions = lib.mapAttrsToList
-    (name: _env: [
-      {
-        assertion = envNameOk name;
-        message = "nixling.envs.${name}: env name must match the "
-          + "regex ^[a-z][a-z0-9-]*$ (lowercase alnum + '-', "
-          + "starting with a LETTER). This guarantees systemd-escape "
-          + "and `br-<env>-lan` / `<env>-l<index>` interface names "
-          + "are well-formed and unambiguous to `ip link`.";
-      }
-    ])
+    (name: env:
+      let
+        cidr = env.uplinkSubnet;
+        host = subnetIp cidr 1;
+        net = subnetIp cidr 2;
+      in [
+        {
+          assertion = envNameOk name;
+          message = "nixling.envs.${name}: env name must match the "
+            + "regex ^[a-z][a-z0-9-]*$ (lowercase alnum + '-', "
+            + "starting with a LETTER). This guarantees systemd-escape "
+            + "and `br-<env>-lan` / `<env>-l<index>` interface names "
+            + "are well-formed and unambiguous to `ip link`.";
+        }
+        {
+          assertion = cidrContains cidr host && cidrContains cidr net;
+          message = "env ${name}: uplinkSubnet ${cidr} cannot be materialized — derived host IP ${host} and net IP ${net} are outside the CIDR.";
+        }
+      ])
     cfg.envs;
+
+  observabilityAssertions =
+    map
+      (collision: {
+        assertion = false;
+        message = "Vsock CID collision: VMs ${collision.vm1}, ${collision.vm2} both compute to CID ${toString collision.cid}. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.";
+      })
+      workloadObsCidCollisions
+    ++ lib.optional (obsCfg.enable && reservedObsCidUsers != [ ]) {
+      assertion = false;
+      message = ''
+        Vsock CID 1000 is reserved for nixling.observability.vmName (${obsCfg.vmName}), but VMs ${lib.concatStringsSep ", " reservedObsCidUsers} also compute to CID 1000. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.
+      '';
+    };
 
   # Site-level assertions (Phase 2b — host-specific bias was extracted
   # into `nixling.site.*`; these checks make sure the consumer actually
@@ -330,6 +428,7 @@ in
   assertions = lib.flatten (
     vmAssertions
     ++ envAssertions
+    ++ observabilityAssertions
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions

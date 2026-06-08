@@ -57,6 +57,7 @@ cd "$ROOT"
 NL_FILES=(
   nixos-modules/default.nix
   nixos-modules/options.nix
+  nixos-modules/options-observability.nix
   nixos-modules/assertions.nix
   nixos-modules/lib.nix
   nixos-modules/base.nix
@@ -68,8 +69,10 @@ NL_FILES=(
   nixos-modules/host-activation.nix
   nixos-modules/host-known-hosts.nix
   nixos-modules/host-audit.nix
+  nixos-modules/host-ch-exporter.nix
   nixos-modules/network.nix
   nixos-modules/net.nix
+  nixos-modules/observability-vm.nix
   nixos-modules/store.nix
   nixos-modules/cli.nix
   nixos-modules/components/graphics.nix
@@ -78,6 +81,10 @@ NL_FILES=(
   nixos-modules/components/home-manager.nix
   nixos-modules/components/audio/guest.nix
   nixos-modules/components/audio/host.nix
+  nixos-modules/components/observability/default.nix
+  nixos-modules/components/observability/guest.nix
+  nixos-modules/components/observability/host.nix
+  nixos-modules/components/observability/stack.nix
   tests/smoke-eval-aarch64.nix
   tests/smoke-eval-graphics.nix
   tests/smoke-eval-home-manager.nix
@@ -278,6 +285,16 @@ if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
   fi
 fi
 
+log "--> tests/observability-eval.sh"
+if [ -x "$ROOT/tests/observability-eval.sh" ]; then
+  if bash "$ROOT/tests/observability-eval.sh" >/dev/null 2>&1; then
+    ok "observability-eval"
+  else
+    fail "observability-eval"
+    bash "$ROOT/tests/observability-eval.sh" 2>&1 | tail -40 >&2 || true
+  fi
+fi
+
 # v0.1.6 Test-H3/H4 + SWArch-M10 — autostart wiring invariants.
 # Verifies (a) `systemd.services."nixling@<vm>"` is NEVER materialized
 # as a per-instance attr (template-only; per-VM unit file would lack
@@ -296,12 +313,11 @@ if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
 fi
 
 # v0.1.6 Test-H7 — restart-policy regression. Spec correction #37
-# (v0.1.5): every per-VM lifecycle service in the framework MUST
-# carry `restartIfChanged = false` OR equivalent
-# `unitConfig.X-RestartIfChanged = false`. Six services in scope
-# (nixling@ template, microvm@ template, per-VM virtiofsd, swtpm,
-# snd, gpu). Synthesizes a graphics+audio+TPM workload VM so every
-# per-VM sidecar materialises in one eval.
+# (v0.1.5): every framework-owned long-running lifecycle service MUST
+# carry top-level `restartIfChanged = false`. Covers the baseline VM
+# templates/sidecars plus the host-side observability units once their
+# Wave-1 tracks merge. Synthesizes a graphics+audio+TPM+observability
+# workload VM so every relevant host unit can materialise in one eval.
 log "--> tests/restart-policy-eval.sh"
 if [ -x "$ROOT/tests/restart-policy-eval.sh" ]; then
   if bash "$ROOT/tests/restart-policy-eval.sh" >/dev/null 2>&1; then
@@ -327,6 +343,7 @@ fi
 log "--> manifest JSON contract (docs/reference/manifest-schema.json)"
 if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/smoke-eval.nix" ]; then
   _MANIFEST_DIR=$(mktemp -d -p "$ROOT" .manifest-gate.XXXXXX)
+  add_cleanup "rm -rf -- \"$_MANIFEST_DIR\""
   _MANIFEST_JSON="$_MANIFEST_DIR/manifest.json"
 
   # Render the manifest's JSON text via the smoke-eval consumer config.

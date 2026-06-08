@@ -126,6 +126,11 @@ Commit before running `static.sh` / the smoke evals. Two reasons:
    consumer-side concern, but the habit of committing-then-building
    is the right one to carry into framework work too.
 
+For plan-driven multi-phase work, green tests are not enough to
+advance the work. See [Panel review](#panel-review): the
+integrator may not dispatch implementation subagents for a phase,
+or begin the next phase, until the relevant panel gate passes.
+
 ### "Existing code is canon"
 
 When the spec, plan, README, or any reference doc disagrees with the
@@ -153,6 +158,7 @@ and operators can locate them mechanically. Don't invent new shapes.
 | ----------------------------------------- | ---------------------------------------------------- |
 | User-facing per-VM unit                   | `nixling@<vm>.service`                               |
 | Underlying microvm.nix backend unit       | `microvm@<vm>.service`                               |
+| Upstream-declared service                 | Keep the upstream unit name (for example `pipewire.service`, `alloy.service`, `grafana.service`, `swtpm@<vm>.service`, `microvm@<vm>.service`) |
 | Per-VM GPU sidecar                        | `nixling-<vm>-gpu.service`                           |
 | Per-VM audio sidecar                      | `nixling-<vm>-snd.service`                           |
 | Per-VM TPM emulator                       | `nixling-<vm>-swtpm.service`                         |
@@ -288,6 +294,129 @@ the template's `ExecStart`/`ExecStop` → systemd refuses with
 [host-wrapper.nix](nixos-modules/host-wrapper.nix)'s
 `systemd.targets.multi-user.wants = map (n: "nixling@${n}.service")` block.
 
+## Panel review
+
+### Phase gate
+
+Multi-phase plans MUST pass a panel sign-off gate at each phase
+boundary. The integrator MUST NOT begin the next phase until 8/8
+(or N/N for the plan's panel size) reviewers return `signoff: true`.
+
+For plan-driven work, a "phase" is usually one wave from the plan's
+parallelization graph (`Wave 0`, `Wave 1`, ...). For tiny plans that
+touch fewer than three files, a single phase covering the whole plan is
+acceptable.
+
+For each phase:
+
+1. **Plan review** — panel reviews the plan; iterate until 8/8
+   sign-off (or N/N for the selected panel size). The integrator may
+   not dispatch implementation subagents until this gate passes.
+2. **Implementation** — dispatch subagents in parallel per the
+   dependency graph.
+3. **Integration** — integrator merges subagent output.
+4. **Work review** — panel reviews the integrated diff; iterate via
+   fix-subagents until 8/8 sign-off (or N/N for the selected panel
+   size).
+5. **Advance** — only now may the integrator begin the next phase's
+   plan review.
+
+Each engineer returns a JSON sign-off record shaped like:
+
+```json
+{
+  "engineer": "software",
+  "signoff": true,
+  "summary": "What was reviewed and the overall posture.",
+  "recommendations": []
+}
+```
+
+By policy, `signoff` is `true` iff `recommendations` is `[]`.
+Otherwise, `recommendations[]` carries the actionable findings. If any
+reviewer returns findings, the integrator spawns follow-up
+implementation agents, lands the fixes, reruns the tests, and starts
+another panel round. Green tests do not waive this gate; a phase closes
+only on unanimous sign-off.
+
+Escape hatches are narrow:
+
+- **Trivial fixes** (typo, one-line, no semantic change) may skip the
+  panel gate.
+- **Time-critical hotfixes** (production breakage) may skip the
+  pre-fix panel, but MUST run a post-fix panel before the incident is
+  considered closed.
+- **Documentation-only changes** may skip the panel gate unless the doc
+  change describes a load-bearing behavior.
+
+Autopilot prompts encourage "bias to action." That is in tension with
+the panel gate. When in doubt, run the panel. A two-hour panel that
+catches one HIGH finding is cheaper than re-doing two days of
+integration.
+
+Canonical precedent: the v0.2.0 observability Wave-1 panel returned
+0/8 sign-offs with 11 HIGH findings. `tests/static.sh` caught none of
+them. This is the canonical "you can't test your way out of needing a
+panel" data point.
+
+### Default observability panel
+
+| Engineer          | Focus |
+|-------------------|-------|
+| `software`        | Shell + Nix shape of every new module, `cli.nix` instrumentation, idempotency of socat sidecars, error handling in `nixling-ch-exporter`. |
+| `test`            | Coverage of new option schema, vsock CID collision cases, restart-policy gate extension, manifest schema drift, what could regress invisibly. |
+| `nixos`           | Module wiring, `lib.mkForce` / `lib.mkDefault` correctness, option declarations, systemd unit composition, `restartIfChanged = false` invariant on every new sidecar. |
+| `networking`      | Reviews that vsock genuinely removes IP from the data path, sanity-checks that `network.nix` is **unchanged**, audits firewall posture across all envs, confirms no DHCP/DNS regression in the obs env. |
+| `security`        | Vsock attack surface vs the existing virtio devices, host-relay trust posture, capability sets / syscall filters on every new unit, telemetry-label PII review, retention defaults. |
+| `product`         | Default-off opt-in shape, naming surface across `nixling.observability.*`, operator UX (Grafana URL discovery, lite-mode story), deprecation policy for the eventual `socat → nixling-otel-relay` Rust binary swap. |
+| `docs`            | Diataxis adherence in `docs/{reference,how-to,explanation}/`, CHANGELOG entries, manifest-schema md↔json drift, AGENTS.md updates landing in the same commit as the load-bearing changes they describe. |
+| `observability`   | Cardinality of metric labels, span attribute hygiene (no secrets/cmd output/store paths), Loki label-set sizing, Tempo retention vs disk budget, Grafana datasource provisioning correctness. |
+
+This is the default composition for the in-progress v0.2.0
+observability track.
+
+### Historical security-hardening panel
+
+The original panel for the v0.1.x security-hardening work had six
+engineers: `nixos`, `rust`, `software`, `test`, `networking`, and
+`security`. That context helps when older commits or
+[CHANGELOG.md](CHANGELOG.md) entries refer to a panel sweep.
+
+The currently canonical roster files live in the host-local
+`/etc/nixos/scripts/panel-engineers-security.txt` and
+`/etc/nixos/scripts/panel-engineers-observability.txt`.
+
+### Commit-tag mapping
+
+The tag examples in [Commit conventions](#commit-conventions) use this
+mapping, and every commit that comes out of a panel-fix round MUST
+carry the relevant tag:
+
+- `Wn` = wave / phase number from the plan's parallelization graph
+- `Wnfu` = first follow-up round on wave `n` after the first panel
+  findings land
+- `Wnfu<M>` = follow-up round `M` on wave `n` when a specific
+  follow-up round must be named (for example `W5fu1`)
+- `CN`, `HN`, `MN`, `LN` = finding ordinal `N`, prefixed by the
+  severity letter from the JSON output (`critical` → `C`, `high` →
+  `H`, `medium` → `M`, `low` → `L`)
+
+Example: `(W1fu1 H3)` means "wave 1, follow-up round 1,
+addresses finding ranked HIGH-3."
+
+### Tooling note
+
+One host-local implementation lives in
+`/etc/nixos/scripts/panel-review.{md,sh}` and
+`/etc/nixos/scripts/panel-aggregate.sh`. That tooling is paydro's
+host-specific implementation, not an upstream nixling dependency;
+alternative implementations are welcome if they preserve the same
+review contract.
+
+In that implementation, the roster is selected per plan via
+`ENGINEERS_FILE`, and each engineer's focus file comes from
+`panel-roles/<engineer>.md`.
+
 ## Test layout
 
 | File                                  | Role                                                                                         |
@@ -333,8 +462,9 @@ iteration step.
   shows the what.
 - **Traceability.** When the change resolves a finding from a
   reviewer wave / phase, reference it inline: `(W5fu1 H1)`,
-  `(W6 H3)`, etc. These tags let reviewers cross-link commits to
-  the panel that surfaced them.
+  `(W6 H3)`, etc. Every commit produced in a panel-fix round MUST
+  carry the relevant tag; see [Panel review](#panel-review) for the
+  mapping and phase-gate policy.
 - **Signing.** Sign-offs / GPG signing are not used.
 - **Atomicity.** One logical change per commit. Mechanical
   reformat or rename passes go in their own commit so the

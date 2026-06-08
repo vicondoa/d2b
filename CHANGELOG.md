@@ -8,7 +8,340 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 minor releases may break public APIs. When practical,
 deprecations ship one minor release before removal.
 
-## Unreleased
+## [0.2.0] - 2026-05-20
+
+Minor release introducing the **observability subsystem**: a new
+opt-in component category that provisions a single-host telemetry
+sink VM (`sys-obs-stack`) wired over virtio-vsock — no IP between
+the observer and the observed VMs, no shared SSH credentials. The
+release ships per-VM Alloy agents, a Cloud Hypervisor metrics
+exporter, host-side journald forwarding, 6 provisioned Grafana
+dashboards, 8 Prometheus alert rules, and `otel-cli`-based CLI
+lifecycle traces with local trace-id generation for Loki↔Tempo
+correlation. Manifest schema bumped from version 1 to 2 to add the
+`_observability` reserved sentinel and per-VM `observability`
+block. A new `AGENTS.md` policy makes the panel-review process a
+**hard gate** per phase for multi-phase plans.
+
+### Added
+
+- **Observability subsystem** (`nixling.observability.enable`,
+  default `false`). When enabled, the framework auto-declares the
+  `obs` env (default `lanSubnet = 10.40.0.0/24`,
+  `uplinkSubnet = 203.0.113.0/30`) and the `sys-obs-stack` VM that
+  runs Grafana + Prometheus + Loki + Tempo + a central Alloy OTLP
+  receiver. Retention defaults: metrics 30d, logs 14d, traces 7d
+  (all per-knob configurable via
+  `nixling.observability.retention.{metrics,logs,traces}`).
+- **Per-VM guest agent** (opt-in via
+  `nixling.vms.<vm>.observability.enable`). Each monitored guest
+  runs Alloy scraping node metrics + journald (each
+  individually toggleable via
+  `vm.observability.{scrapeJournal,scrapeNodeMetrics}`), receives
+  in-VM OTLP on a UDS, and exports over virtio-vsock through the
+  hardened `nixling-otel-vsock-out.service` (socat sidecar:
+  `RestrictAddressFamilies=[AF_UNIX AF_VSOCK]`,
+  `DeviceAllow=/dev/vsock`, `restartIfChanged=false` per v0.1.7 H7).
+- **Host-side forwarder** (`services.alloy` on the host, forwarder
+  mode, no storage). Scrapes nixling sidecar units' journald + node
+  metrics + the loopback CH-exporter `/metrics`. Pushes all signals
+  through `nixling-otel-host-bridge.service` to the obs VM.
+- **Cloud Hypervisor metrics exporter**
+  (`nixling-ch-exporter.service`, pure-Bash + jq + curl + socat —
+  no new language runtime in the host closure). Polls each VM's CH
+  REST socket (`/vmm.ping`, `/vm.info`, `/vm.counters`), exposes
+  Prometheus text on `127.0.0.1:9101/metrics`. Counter allowlist
+  pinned to Cloud Hypervisor v50 device IDs (`_net*`, `_disk*`,
+  `_fs*`, `_pmem*`, `__rng`, `__balloon`, `__console`); unknown
+  schema rolls into `nixling_vm_unknown_counters_total`. Topology
+  labels (`bridge`, `tap`, `tpm`, `graphics`, `audio`,
+  `usbip_yubikey`) are off by default to keep the security-posture
+  surface narrow — flip
+  `nixling.observability.ch.exporter.includeTopologyLabels` on for
+  debug. Detects both `microvm@<vm>.service` and
+  `nixling-<vm>-gpu.service` so graphics VMs are reported running.
+- **Vsock transport** — no IP between VMs, no SSH credentials
+  between observer and observed. Cloud Hypervisor `--vsock cid=N,...`
+  is appended to every observability-enabled VM and to
+  `sys-obs-stack`; a per-VM `nixling-otel-relay@<vm>.service` (socat
+  host relay, `RestrictAddressFamilies=[AF_UNIX]`) stitches
+  workload-VM vsock to obs-VM vsock at the host. Relay is wired
+  via `microvm@%i.service.wants` for headless VMs and via
+  per-VM `wants` on `nixling-<vm>-gpu.service` for graphics VMs
+  (graphics VMs do not use `microvm@`).
+- **CLI lifecycle telemetry** — `nixling up/down/switch/boot/test/
+  rollback/gc/usb/audio` emit OTel spans via `otel-cli` and
+  structured JSON journald events for every high-value lifecycle
+  step. Spans are populated with allowed labels only (`vm.name`,
+  `vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`,
+  `bridge`, `static_ip`, `generation`) — never command output, key
+  paths, or Nix store paths. `nl_span_start` generates `trace_id` +
+  `span_id` locally via `/dev/urandom` so Loki↔Tempo correlation
+  works even when no upstream OTLP collector endpoint is configured;
+  honors otel-cli's traceparent when one is. `otel-cli` is
+  module-time-gated into `runtimeInputs` via
+  `nixling.observability.cli.traces.enable` (default `true`); hosts
+  with observability disabled pay zero closure cost.
+- **6 provisioned Grafana dashboards** under the "Nixling" folder:
+  Nixling Overview, VM Resources, Lifecycle Traces, Logs, Per-VM
+  Store, Obs VM Health. Default refresh 30s. Tempo→Loki
+  trace-to-logs correlation via `derivedFields`.
+- **8 Prometheus alert rules**: `NixlingVMDown`,
+  `NixlingNetVMDownWithRunningWorkloads`,
+  `NixlingObsVMUnreachableFromHost`, `NixlingVsockRelayDown`,
+  `NixlingCHAPISocketMissing`, `NixlingStoreSyncFailure`,
+  `NixlingGuestTelemetryMissing`, `NixlingObsVMStackUnhealthy`.
+  Each rule individually toggleable via
+  `nixling.observability.alerts.<name>.enable`. Notification
+  channels are intentionally unconfigured — operators choose
+  Alertmanager / Grafana contact-points.
+- **Grafana auth**: defaults to authenticated access as
+  `nixling-admin`. Password is generated at activation and stored
+  at `/var/lib/nixling-observability/grafana-admin-password` inside
+  `sys-obs-stack`, or sourced from sops/agenix via
+  `nixling.observability.grafana.adminPasswordFile`. Session signing
+  key follows the same pattern via
+  `nixling.observability.grafana.secretKeyFile`. Anonymous Viewer
+  is opt-in only for trusted single-host LANs via
+  `nixling.observability.grafana.anonymousViewer.enable`; the login
+  form remains available even in that mode.
+- **Eval assertions**: vsock CID uniqueness across enabled VMs
+  (reserved CID 1000 for `nixling.observability.vmName`),
+  per-VM-without-framework rejection, reserved-prefix exemption for
+  `cfg.vmName`, env uplink CIDR materialization check.
+- **Tests**: `tests/observability-eval.sh` (20 cases, 1 promtool
+  skip when absent — covers option schema, auto-declaration,
+  CID allocation, per-VM toggle defaults, name/prefix collisions,
+  CLI-traces closure gating, relay ACL wiring, stack VM guest
+  surface, dashboard schema validation, rule-file `promtool`
+  validation, metric-reference coverage, scrape-job exact-set,
+  and the graphics-VM runner wiring path).
+- **Examples**: `examples/with-observability/` minimal consumer
+  flake validated by the per-example flake-check loop.
+- **Docs**:
+  - `docs/reference/components-observability.md` — option schema,
+    port/CID/UDS table, naming conventions, systemd unit
+    inventory, dashboard inventory, alert severity table,
+    security boundaries, label conventions, retention defaults,
+    opt-out paths.
+  - `docs/how-to/enable-observability.md` — step-by-step recipe
+    including sops/agenix examples for both the Grafana
+    secret-key and admin-password.
+  - `docs/explanation/design.md` — appended Observability section
+    explaining the vsock-vs-reverse-SSH-vs-guest-init trade-off,
+    the two-bridge necessity, the alternatives-considered list,
+    CLI attribute hygiene, and the trust-concentration risk on
+    the obs VM.
+  - `docs/reference/manifest-schema.md` — `manifestVersion = 2`
+    rationale.
+
+### Changed
+
+- **`manifestVersion` 1 → 2** (breaking under pre-1.0 minor-bump
+  policy). The manifest now ships a top-level `_observability`
+  reserved sentinel and a per-VM `observability` block
+  (`enabled`, `vsockCid`, `vsockHostSocket`). Existing consumers
+  who do not enable `nixling.observability.enable` see the new
+  fields populated with `enabled = false` defaults — the
+  manifest still describes their VMs deterministically.
+- **`docs/reference/manifest-schema.{md,json}`** updated to
+  describe the v2 schema.
+- **AGENTS.md** adds a "Panel review" hard-gate policy: multi-phase
+  plans must pass plan-review BEFORE implementation and work-review
+  BEFORE phase advancement, with documented escape hatches for
+  trivial, hotfix, and docs-only changes.
+
+### Security
+
+- Telemetry sidecar trust posture: dedicated locked system users
+  (`nixling-otel-relay`, `nixling-otel-bridge`,
+  `nixling-ch-exporter`) with execute-only ACLs on per-VM state
+  directories and `rw` ACLs only on the per-port vsock sockets
+  they need (`vsock.sock_14317`, not the base `vsock.sock`).
+  Activation-time ACL refresh is idempotent and revokes stale
+  grants when an observed VM is later disabled.
+- `nixling-otel-acl-refresh` rejects symlinked state paths,
+  validates resolved paths stay under the state root, and uses
+  `setfacl --physical` when available — closes the TOCTOU
+  window on a group-writable state tree.
+- Grafana `secret_key` and admin password are never written to
+  the world-readable Nix store. Both are generated atomically at
+  activation (write-to-tmp + `mv -f`) and loaded via systemd
+  `LoadCredential` into `/run/credentials/grafana.service/`, or
+  sourced from operator-supplied files via
+  `nixling.observability.grafana.{secretKeyFile,adminPasswordFile}`.
+- Loki query selectors in shipped dashboards never default to a
+  whole-namespace scan: every variable-driven selector requires
+  a non-empty match (`.+`, not `.*`), and the trace-to-logs
+  derivedField is scoped by trace-derived `vm`/`env` labels.
+- Alert annotation templates carry `vm` and `env` only; full
+  unit/job names stay inside dashboards (not exported to
+  whichever notification backend an operator wires up).
+- CLI span attribute extras are filtered through an allowlist
+  in `nl_filter_attrs`: caller-supplied keys outside
+  `{step, result, systemd_unit, tap, bridge, static_ip, generation,
+  vm_role}` are dropped with a journald warning, as are values
+  matching common secret/store-path patterns.
+- The guest UDS→vsock relay is fork-bounded
+  (`max-children=16`, `TasksMax=32`, `MemoryMax=64M`,
+  `LimitNOFILE=1024`) to bound in-guest DoS surface.
+- The host telemetry bridge runs as `alloy` with
+  `SupplementaryGroups=[kvm]` (no over-broad `nixling-otel-host-bridge`
+  user) and connects to a narrowed
+  `/run/nixling/alloy/` subdirectory rather than the shared
+  `/run/nixling/` root.
+- Documented trust-concentration risk: `sys-obs-stack` has read
+  access to every monitored VM's telemetry; treat as privileged
+  infrastructure. Single-host single-VM by design (multi-host
+  is explicitly out of scope for v0.2.0).
+
+### Deferred to v0.3.0
+
+- **`NixlingVMStuckWithoutSSH` alert** — needs a new
+  CH-exporter metric (`nixling_vm_ssh_ready`) before the rule
+  can be defined non-trivially.
+- **`nixling_vm_store_path_count`** — the Per-VM Store
+  dashboard references this metric today but it is currently
+  **future-work absent**: no exporter emits it yet. The dashboard
+  panel renders empty until a future store-path-count exporter
+  lands (planned for v0.3.0). The `obs-metric-references`
+  test gate treats it as a documented future-work exception
+  rather than an unknown metric.
+- **`nixling_vm_counter_net_tx_bytes` and
+  `nixling_vm_counter_net_rx_bytes`** — referenced by the VM
+  Resources network panel for legacy compatibility; the actual
+  emitted metric names are `nixling_vm_counter_virtio_net_*`
+  (CH v50 device naming). Documented as **future-work absent**
+  pending dashboard query simplification — both legacy and
+  modern names will resolve via Prometheus `or` until the legacy
+  names are removed.
+- **Stable relay-binary interface.**
+  `nixling.observability.transport.relayPackage` still
+  requires a `bin/socat`-compatible CLI today. v0.3.0 will
+  define a stable interface so non-socat relays (e.g. a
+  purpose-built Rust binary) can be swapped in without
+  socat-compat shims.
+- **VM-runner abstraction.** Today the framework leaks the
+  runner-unit name (`microvm@<vm>` for headless,
+  `nixling-<vm>-gpu` for graphics) into the relay wiring, and
+  the observability code has to wire to both. v0.3.0 will
+  introduce a runner-agnostic abstraction (e.g.
+  `nixling-vm-runner@<vm>.service` aliased by whichever
+  concrete runner is used) so per-VM sidecar wiring stays
+  on a single name.
+
+--- *Wave 6 maturity additions (folded in pre-tag - v0.2.0 was deferred until the consumer-integration shakedown landed):* ---
+
+### Changed
+
+- **sshd host keys are now generated on the HOST and shared into
+  every guest read-only via virtiofs.** A new module
+  `nixos-modules/host-ssh-host-keys.nix` provisions per-VM ed25519
+  host keys at host activation under
+  `${nixling.site.stateDir}/vms/<name>/sshd-host-keys/` (mode 0400
+  root:root). `nixos-modules/store.nix` shares the directory into
+  the guest at `/run/nixling-sshd-host-keys/` (virtiofs tag
+  `nl-ssh-host`). A new `nixos-modules/guest-sshd-host-keys.nix`,
+  imported into every enabled VM by `host.nix`, points
+  `services.openssh.hostKeys` at the shared path and disables the
+  NixOS `ssh-keygen -A` activation hook. **Why**: pre-v0.2.0 each
+  guest regenerated its sshd host keys on first boot and stored
+  them on the tmpfs overlay over the read-only nix store, so they
+  were ephemeral. Every VM restart regenerated them, the host's
+  `known_hosts.nixling` pinned the first observed set and refused
+  to overwrite subsequent ones (correctly: from the host's point
+  of view, a host-key change IS a possible MITM/swap), and
+  operator SSH from the host would soft-brick until manual
+  `ssh-keygen -R` + a refresh-service kick. Host-managed keys
+  eliminate the drift class entirely.
+- **`nixos-modules/host-known-hosts.nix`**: the refresh script
+  now reads the host-side `.pub` file directly instead of probing
+  the live VM with `ssh-keyscan`. Faster (no boot wait), immune
+  to the live-vs-pinned drift the old logic had to handle (a VM
+  restart used to regenerate the in-VM key every time).
+- **Observability admin password + secret key are now generated
+  on the HOST, not inside `sys-obs-stack`.** A new module
+  `nixos-modules/observability-host-secrets.nix` provisions both
+  files at host activation under
+  `${nixling.site.stateDir}/observability/` (default
+  `/var/lib/nixling/observability/`, mode 0400 root:root) and
+  shares them read-only into the stack VM via virtiofs at
+  `/run/nixling-obs-secrets/`. The in-VM activation scripts that
+  used to generate these secrets in
+  `/var/lib/nixling-observability/` (inside `sys-obs-stack`) have
+  been removed. **Why**: putting both secrets inside the VM
+  pointed the trust flow the wrong way — anything on the host
+  that needed the Grafana admin password (a launcher, a health
+  probe, a backup) had to cross the VM boundary to read it, which
+  in practice forced consumers to add an SSH-able operator
+  account + sudoers rule inside `sys-obs-stack` just to claw the
+  password back out. With this change, host-side
+  `sudo cat ${nixling.site.stateDir}/observability/grafana-admin-password`
+  is the supported path; no operator account inside the stack VM
+  is required. The `nixling.observability.grafana.{secretKeyFile,
+  adminPasswordFile}` overrides still work for sops-nix / agenix
+  users.
+- **Consumer extensions of the auto-declared observability VM are
+  now allowed.** The pre-v0.2.0 assertion that rejected any
+  user-side definition under `nixling.vms.<obsCfg.vmName>` was
+  removed. The framework's auto-declaration block uses
+  `lib.mkDefault` for every value, so a consumer override
+  (e.g. `nixling.vms.sys-obs-stack.ssh.user = "root"`) merges
+  cleanly. The matching `assertions-eval.sh` test was renamed to
+  `observability-vmname-extension-allowed` and asserts the new
+  behaviour.
+- **Default obs-VM memory bumped 512 M → 2048 M.** Grafana
+  alone wants ~200 M RSS on idle; the full
+  Grafana+Prom+Loki+Tempo+Alloy stack in a single VM tripped the
+  in-VM OOM killer within seconds of boot at the previous 512 M
+  default. 2 GiB is the minimum that lets the whole stack come
+  up with default retention windows on a single-host install
+  monitoring ~tens of VMs. `lib.mkDefault` so operators can
+  override either way.
+- **`services.alloy` /run/nixling/alloy via `RuntimeDirectory`,
+  not tmpfiles**, on host + every guest + stack VM. The previous
+  tmpfiles rule could not chown to the DynamicUser-allocated
+  `alloy` UID at activation time; the directory either never
+  appeared or was owned by `nobody:nogroup`, breaking
+  `nixling-otel-host-bridge` setfacl + alloy's writability
+  expectations.
+- **Alloy `labels = { ... }` map literals updated with trailing
+  commas** in `components/observability/{host,guest}.nix`. Alloy
+  DSL distinguishes between newline-separated *blocks* (no `=`)
+  and comma-separated *map literals* (with `=`); the latter were
+  emitted without commas and rejected by Alloy's parser at boot.
+- **`host-otel-relay-acl` + `host-ch-exporter`**: added
+  `excludeShellChecks = [ "SC2034" ]` for bash namerefs and
+  positional placeholders in `read`. Both scripts use shell
+  patterns shellcheck cannot follow; the warnings became fatal
+  the moment `writeShellApplication` actually built them in a
+  consumer rebuild.
+- Eval test `obs-stack-vm-guest-surface: grafana LoadCredential
+  wires secret_key credential file` updated to assert the new
+  in-VM source path
+  `/run/nixling-obs-secrets/grafana-secret-key` (was the in-VM
+  `/var/lib/nixling-observability/grafana-secret-key`).
+
+### Migration
+
+- Fresh installs land on the new layout with no operator action.
+- Pre-existing installs that booted v0.2.0 with the in-VM
+  observability secret generator will see a **password rotation**
+  at the next `nixos-rebuild switch`: the new host-generated
+  secret displaces the old in-VM one. Operators should fetch the
+  new password via
+  `sudo cat /var/lib/nixling/observability/grafana-admin-password`
+  on the host.
+- Pre-existing installs that had ephemeral in-VM sshd host keys
+  pinned in `/var/lib/nixling/known_hosts.nixling` will see a
+  **one-time host-key change** for every VM at the next
+  activation+restart: the host now generates a stable ed25519
+  host key per VM and the refresh service swaps the pinned entry
+  on the next `microvm@<vm>` start. The framework handles this
+  automatically; operator SSH clients (outside the framework)
+  may need a one-time `ssh-keygen -R <ip>` against their personal
+  `~/.ssh/known_hosts` if they manually trusted the old key.
+
 
 ## [0.1.7] - 2026-05-19
 

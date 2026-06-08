@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** stable from `manifestVersion = 1` onward (Phase 5).
+**Status:** stable from `manifestVersion = 2` onward (Wave 0 of the observability track).
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this document and the JSON Schema
 disagree, the JSON Schema wins.
@@ -33,7 +33,15 @@ Consumer (tomorrow): a Rust CLI living in
 
 ```jsonc
 {
-  "_manifest": { "manifestVersion": 1 },
+  "_manifest": { "manifestVersion": 2 },
+  "_observability": {
+    "enabled": false,
+    "vmName": "sys-obs-stack",
+    "obsVsockCid": 1000,
+    "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs-stack/vsock.sock",
+    "grafanaUrl": "http://10.40.0.10:3000",
+    "chExporter": { "listenPort": 9101 }
+  },
 
   "<vm-name>": {
     "name":           "...",
@@ -53,6 +61,12 @@ Consumer (tomorrow): a Rust CLI living in
     "tpmSocket":      "/run/swtpm/<vm-name>/sock",
     "audioStateFile": "/var/lib/nixling/vms/<vm-name>/state/audio-state.json",
     "audioService":   "nixling-<vm-name>-snd.service",
+    "observability": {
+      "enabled":         false,
+      "vsockCid":        110,
+      "vsockHostSocket": "/var/lib/nixling/vms/<vm-name>/vsock.sock",
+      "agentSocket":     "/run/nixling/otlp.sock"
+    },
     "staticIp":       "..." | null,
     "sshUser":        "..." | null
   },
@@ -63,13 +77,15 @@ Consumer (tomorrow): a Rust CLI living in
 
 Every top-level key is either:
 
-1. **A reserved key** starting with `_` (currently only `_manifest`), or
+1. **A reserved key** starting with `_` (currently `_manifest` and
+   `_observability`), or
 2. **A VM name** matching `^[a-z][a-z0-9-]*$` (the regex enforced by
    `nixos-modules/assertions.nix`'s `vmNameOk`).
 
 The leading-underscore rule means reserved keys can never collide with
-a valid VM name, so the manifest can grow new sentinel fields without
-ever needing a schema-version bump for that reason alone.
+any valid VM name. Schema v2 requires `_observability`; future unknown
+reserved keys still remain ignorable by consumers built against the
+same schema version.
 
 ## Reserved keys
 
@@ -77,17 +93,45 @@ ever needing a schema-version bump for that reason alone.
 
 ```jsonc
 "_manifest": {
-  "manifestVersion": 1   // unsigned integer
+  "manifestVersion": 2   // unsigned integer
 }
 ```
 
-| Field             | Type             | Required | Description                                                                                  |
-|-------------------|------------------|----------|----------------------------------------------------------------------------------------------|
-| `manifestVersion` | unsigned integer | yes      | Schema version. Bumped on every breaking change. See "Compatibility policy" below.           |
+| Field             | Type             | Required | Description                                                                                |
+|-------------------|------------------|----------|--------------------------------------------------------------------------------------------|
+| `manifestVersion` | unsigned integer | yes      | Schema version. Bumped on every breaking change. This document describes manifest v2.      |
 
-Future reserved keys (none yet exist) would also start with `_`. CLI
-implementations MUST silently ignore unknown top-level keys whose name
-starts with `_`.
+v0.2.0 bumps `manifestVersion` from 1 to 2 because observability adds
+both a new reserved top-level sentinel (`_observability`) and a new
+per-VM `observability` block. Under the compatibility policy below,
+that is a breaking schema change; under nixling's documented pre-1.0
+semver policy, minor releases are still allowed to make that kind of
+public-API change when it is called out explicitly.
+
+### `_observability`
+
+```jsonc
+"_observability": {
+  "enabled": false,
+  "vmName": "sys-obs-stack",
+  "obsVsockCid": 1000,
+  "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs-stack/vsock.sock",
+  "grafanaUrl": "http://10.40.0.10:3000",
+  "chExporter": { "listenPort": 9101 }
+}
+```
+
+| Field                | Type             | Required | Description                                                                 |
+|----------------------|------------------|----------|-----------------------------------------------------------------------------|
+| `enabled`            | boolean          | yes      | Mirror of `nixling.observability.enable`. The block is still emitted when false. |
+| `vmName`             | string           | yes      | VM name reserved for the observability stack (default: `sys-obs-stack`).   |
+| `obsVsockCid`        | unsigned integer | yes      | Reserved fixed vsock CID for the observability stack VM (`1000`).           |
+| `obsVsockHostSocket` | string           | yes      | Host-side Unix socket backing the observability stack VM's vsock device.    |
+| `grafanaUrl`         | string           | yes      | Resolved Grafana URL derived from `nixling.observability.grafana.*`.        |
+| `chExporter`         | object           | yes      | Host-side Cloud Hypervisor exporter metadata. Currently `{ listenPort }`.   |
+
+Future reserved keys would also start with `_`. CLI implementations
+MUST silently ignore unknown top-level keys whose name starts with `_`.
 
 ## Per-VM entry
 
@@ -114,6 +158,7 @@ is the canonical type spec; the table below is for human readability.
 | `tpmSocket`      | string             | yes      | swtpm vTPM socket (`/run/swtpm/<name>/sock`). Only meaningful when `tpm = true`.                                          |
 | `audioStateFile` | string             | yes      | Live audio-grant state file (`<stateDir>/state/audio-state.json`). `{ "mic": "on"\|"off", "speaker": "on"\|"off" }`.        |
 | `audioService`   | string             | yes      | Host-side audio sidecar systemd unit (`nixling-<name>-snd.service`).                                                       |
+| `observability`  | object             | yes      | Per-VM observability transport metadata. Always emitted; carries the enable bit, vsock CID/socket, and guest agent socket. |
 | `staticIp`       | string \| null     | yes      | The VM's static LAN IP. Derived for env-attached VMs; null for legacy VMs with no `staticIp` set.                          |
 | `sshUser`        | string \| null     | yes      | `nixling`-driven SSH username. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs the CLI never SSH-attaches.|
 
@@ -181,6 +226,31 @@ addition is `sshPubKeyPath` (the `.pub` file under `<keysDir>/`).
 Public keys are not secret; the private key is then derivable by
 convention as the same path minus the `.pub` suffix.
 
+#### `observability` and `_observability`
+
+Schema v2 adds an always-emitted observability envelope in two places:
+
+1. `_observability` describes the host-wide stack wiring: whether the
+   observability track is enabled, which VM name is reserved for the
+   stack, the fixed stack CID (`1000`), the host-side stack vsock
+   socket path, the resolved Grafana URL, and the Cloud Hypervisor
+   exporter port.
+2. `observability` on each VM records that VM's per-guest transport
+   coordinates (`enabled`, `vsockCid`, `vsockHostSocket`,
+   `agentSocket`).
+
+The per-VM block is present even when
+`nixling.vms.<name>.observability.enable = false`. That is deliberate:
+Wave 0 reserves the shape so later PRs can land the transport and
+component modules without another manifest-structure change.
+
+`vsockCid` is deterministic. Env-backed VMs use
+`100 + envIndex * 100 + index`, where `envIndex` is the alphabetical
+position of the env name (`lib.attrNames` order). Legacy env-less VMs
+keep a deterministic fallback placeholder so the always-emitted field
+stays a no-op for existing consumers that still use the deprecated
+`staticIp` path.
+
 ## Compatibility policy
 
 **`manifestVersion` is a single non-negative integer.**
@@ -202,7 +272,7 @@ convention as the same path minus the `.pub` suffix.
 For `k > 0`:
 
 1. **REFUSE to operate on the manifest.** Print a clear error like
-   `nixling: manifest version 2 is newer than this CLI build (1); upgrade the CLI`.
+   `nixling: manifest version 3 is newer than this CLI build (2); upgrade the CLI`.
    Exit with status `4` (manifest-incompatible — see `cli-contract.md`).
 2. **DO NOT attempt graceful degradation.** A breaking schema change
    means at least one field's type or semantics has shifted. Best-effort
@@ -223,7 +293,7 @@ For `k < 0` (manifest is older):
 This case happens when the user's system flake is older than their
 installed CLI build (e.g. CLI installed via flake, system not
 rebuilt yet). The CLI MAY operate but SHOULD warn:
-`nixling: manifest version 0 is older than this CLI build (1); some fields may be missing — rebuild the system`.
+`nixling: manifest version 1 is older than this CLI build (2); some fields may be missing — rebuild the system`.
 
 The CLI MUST then handle missing fields gracefully (treating them as
 null where the type permits, or refusing the specific subcommand
@@ -260,7 +330,17 @@ produces exactly:
 ```json
 {
   "_manifest": {
-    "manifestVersion": 1
+    "manifestVersion": 2
+  },
+  "_observability": {
+    "chExporter": {
+      "listenPort": 9101
+    },
+    "enabled": false,
+    "grafanaUrl": "http://10.40.0.10:3000",
+    "obsVsockCid": 1000,
+    "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs-stack/vsock.sock",
+    "vmName": "sys-obs-stack"
   },
   "corp-vm": {
     "apiSocket": "/var/lib/nixling/vms/corp-vm/corp-vm.sock",
@@ -274,6 +354,12 @@ produces exactly:
     "isNetVm": false,
     "name": "corp-vm",
     "netVm": "sys-work-net",
+    "observability": {
+      "agentSocket": "/run/nixling/otlp.sock",
+      "enabled": false,
+      "vsockCid": 110,
+      "vsockHostSocket": "/var/lib/nixling/vms/corp-vm/vsock.sock"
+    },
     "sshUser": "alice",
     "stateDir": "/var/lib/nixling/vms/corp-vm",
     "staticIp": "10.20.0.10",
@@ -295,6 +381,12 @@ produces exactly:
     "isNetVm": true,
     "name": "sys-work-net",
     "netVm": null,
+    "observability": {
+      "agentSocket": "/run/nixling/otlp.sock",
+      "enabled": false,
+      "vsockCid": 110,
+      "vsockHostSocket": "/var/lib/nixling/vms/sys-work-net/vsock.sock"
+    },
     "sshUser": null,
     "stateDir": "/var/lib/nixling/vms/sys-work-net",
     "staticIp": "192.0.2.2",
@@ -312,9 +404,12 @@ Notes on what to read out of this:
 - Field order is alphabetical because the producer is
   `builtins.toJSON`, which sorts object keys. Consumers MUST NOT rely
   on ordering either way.
-- The workload entry (`corp-vm`) carries `netVm = "sys-work-net"` and
-  a non-null `usbipdHostIp` pointing at the env's host-side usbipd
-  proxy.
+- `_observability` is always present, even with
+  `nixling.observability.enable = false`, so consumers can always find
+  the reserved stack VM name and Grafana URL.
+- The workload entry (`corp-vm`) carries `netVm = "sys-work-net"`, a
+  non-null `usbipdHostIp` pointing at the env's host-side usbipd
+  proxy, and an always-emitted `observability` block.
 - The net VM (`sys-work-net`) has `isNetVm = true`, `netVm = null`,
   `usbipdHostIp = null`, `sshUser = null`, `bridge = "br-work-up"`
   (the env's uplink bridge — not the LAN bridge), and `tap = "work-u2"`
@@ -355,6 +450,12 @@ are mechanically derived from `name` and the env):
   "isNetVm": false,
   "name": "gui-vm",
   "netVm": "sys-work-net",
+  "observability": {
+    "agentSocket": "/run/nixling/otlp.sock",
+    "enabled": false,
+    "vsockCid": 111,
+    "vsockHostSocket": "/var/lib/nixling/vms/gui-vm/vsock.sock"
+  },
   "sshUser": "alice",
   "stateDir": "/var/lib/nixling/vms/gui-vm",
   "staticIp": "10.20.0.11",
@@ -373,7 +474,7 @@ are mechanically derived from `name` and the env):
 ```bash
 MANIFEST=/run/current-system/sw/share/nixling/vms.json
 
-# Enumerate VM names (skipping the _manifest sentinel):
+# Enumerate VM names (skipping the reserved _* sentinels):
 jq -r 'to_entries[] | select(.key | startswith("_") | not) | .key' "$MANIFEST"
 
 # Look up one VM's apiSocket:
@@ -390,6 +491,8 @@ jq -r '._manifest.manifestVersion' "$MANIFEST"
 struct Manifest {
     #[serde(rename = "_manifest")]
     meta: ManifestMeta,
+    #[serde(rename = "_observability")]
+    observability: ObservabilityMeta,
     #[serde(flatten)]
     vms: HashMap<String, VmEntry>,
 }
@@ -401,13 +504,29 @@ struct ManifestMeta {
 }
 
 #[derive(Deserialize)]
+struct ObservabilityMeta {
+    #[serde(rename = "vmName")]
+    vm_name: String,
+    #[serde(rename = "grafanaUrl")]
+    grafana_url: String,
+}
+
+#[derive(Deserialize)]
 struct VmEntry {
     name: String,
     graphics: bool,
+    observability: VmObservability,
     // ... see manifest-schema.json for the full field list
 }
 
-const SUPPORTED_VERSION: u32 = 1;
+#[derive(Deserialize)]
+struct VmObservability {
+    enabled: bool,
+    #[serde(rename = "vsockCid")]
+    vsock_cid: u32,
+}
+
+const SUPPORTED_VERSION: u32 = 2;
 let m: Manifest = serde_json::from_str(&fs::read_to_string("/run/current-system/sw/share/nixling/vms.json")?)?;
 if m.meta.version > SUPPORTED_VERSION {
     bail!("manifest version {} newer than CLI build ({}); upgrade the CLI",

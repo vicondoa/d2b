@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # tests/restart-policy-eval.sh — regression test for Spec correction
 # #37 (v0.1.5: every per-VM lifecycle service in the framework carries
-# `restartIfChanged = false` OR the equivalent
-# `unitConfig.X-RestartIfChanged = false`).
+# `restartIfChanged = false`).
 #
 # Pre-v0.1.5, `nixos-rebuild switch` cycled per-VM units mid-flight:
 #   * graphics VMs — the GPU sidecar IS the cloud-hypervisor process,
@@ -12,7 +11,7 @@
 #     refresh wiring, virtiofsd hardening) caused NixOS to override
 #     upstream microvm.nix's `X-RestartIfChanged=false` back to `true`.
 #
-# Six services must opt out (see CHANGELOG.md v0.1.5 entry):
+# Baseline services that must opt out (see CHANGELOG.md v0.1.5 entry):
 #
 #   - systemd.services."nixling@"                            (template)
 #   - systemd.services."microvm@"                            (template,
@@ -21,16 +20,17 @@
 #   - systemd.services."nixling-<vm>-swtpm"                  (per-VM)
 #   - systemd.services."nixling-<vm>-snd"                    (per-VM)
 #   - systemd.services."nixling-<vm>-gpu"                    (per-VM)
+#   - systemd.services."nixling-otel-relay@"                 (template)
 #
-# The framework uses TWO knobs:
-#   - `restartIfChanged = false`        → templates + virtiofsd
-#   - `unitConfig.X-RestartIfChanged = false` → sidecars (the lower-
-#     level systemd directive; NixOS leaves it alone)
+# Wave-1 observability extends the host-side allowlist with:
+#   - systemd.services."nixling-otel-relay@"                 (template)
+#   - systemd.services."nixling-otel-host-bridge"            (singleton)
+#   - systemd.services."nixling-ch-exporter"                 (singleton)
 #
-# We accept either form on each service (the panel's wording: "either
-# `false` (via `restartIfChanged`) or carries
-# `unitConfig.X-RestartIfChanged = \"false\"`").
-#
+# v0.1.7 tightened the invariant: top-level `restartIfChanged = false`
+# is REQUIRED. `unitConfig.X-RestartIfChanged = false` is rejected
+# because NixOS emits it under [Unit], where switch-to-configuration
+# ignores it.
 # Wired into tests/static.sh.
 
 set -uo pipefail
@@ -40,14 +40,14 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 
 log()  { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 ok()   { log "  PASS: $*"; }
+skip() { log "  SKIP: $*"; }
 fail() { log "  FAIL: $*"; exit 1; }
 
 log "==> tests/restart-policy-eval.sh"
 
 # Synthesize a single workload VM with graphics + audio + TPM all
-# enabled so EVERY per-VM lifecycle service materialises in one
-# eval.
-EXPR=$(cat <<EOF
+# enabled so EVERY per-VM lifecycle service materialises in one eval.
+EXPR=$(cat <<EOF2
 let
   flake = builtins.getFlake (toString $ROOT);
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
@@ -65,6 +65,7 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
         nixling.site = { waylandUser = "alice"; launcherUsers = [ "alice" ]; yubikey.enable = false; };
         nixling.envs.work = { lanSubnet = "10.20.0.0/24"; uplinkSubnet = "192.0.2.0/30"; };
+        nixling.observability.enable = true;
         nixling.vms.full-vm = {
           enable = true;
           env = "work";
@@ -73,6 +74,7 @@ let
           graphics.enable = true;
           audio.enable = true;
           tpm.enable = true;
+          observability.enable = true;
           config = { lib, ... }: {
             networking.hostName = lib.mkDefault "full-vm";
             users.users.alice = { isNormalUser = true; uid = 1000; };
@@ -82,7 +84,6 @@ let
     ];
   };
   svcs = nixos.config.systemd.services;
-  # Pull out each service's two knobs.
   pull = key:
     if !(builtins.hasAttr key svcs) then null
     else
@@ -98,21 +99,20 @@ in {
   "nixling-full-vm-swtpm" = pull "nixling-full-vm-swtpm";
   "nixling-full-vm-snd"   = pull "nixling-full-vm-snd";
   "nixling-full-vm-gpu"   = pull "nixling-full-vm-gpu";
+  "nixling-otel-relay@" = pull "nixling-otel-relay@";
+  "nixling-otel-host-bridge" = pull "nixling-otel-host-bridge";
+  "nixling-ch-exporter" = pull "nixling-ch-exporter";
 }
-EOF
+EOF2
 )
 
 OUT=$(nix-instantiate --eval --strict --json --expr "$EXPR" 2>/dev/null) || \
   fail "eval failed; cannot inspect restart policy"
 
-# v0.1.7: REQUIRE top-level `restartIfChanged == false` (NixOS option,
-# emitted as `[Service] X-RestartIfChanged=false`). The
-# `unitConfig.X-RestartIfChanged = false` shape — used in v0.1.5
-# host-sidecars.nix and audio/host.nix — emits under [Unit], which
-# NixOS's switch-to-configuration ignores. So that form is
-# silently broken: a rebuild WILL still cycle those sidecars
-# under the running VM. Reject it here so the regression cannot
-# reappear.
+# v0.1.7+: REQUIRE top-level `restartIfChanged == false` (NixOS option,
+# emitted as `[Service] X-RestartIfChanged=false`). The broken
+# `unitConfig.X-RestartIfChanged = false` shape emits under [Unit],
+# which NixOS's switch-to-configuration ignores.
 check() {
   local key="$1"
   local entry ric xric
@@ -120,7 +120,7 @@ check() {
   if [ "$entry" = "null" ]; then
     fail "$key: service not found in config (declaration regressed?)"
   fi
-  ric=$(printf  '%s' "$entry" | jq -r '.ric')
+  ric=$(printf '%s' "$entry" | jq -r '.ric')
   xric=$(printf '%s' "$entry" | jq -r '.xric')
   case "$ric" in
     false) ok "$key: restartIfChanged = false"; return ;;
@@ -131,11 +131,30 @@ check() {
   fail "$key: missing restartIfChanged=false (got ric=$ric). See CHANGELOG.md v0.1.5 + v0.1.7."
 }
 
+check_optional() {
+  local key="$1" why="$2"
+  local entry
+  entry=$(printf '%s' "$OUT" | jq -c --arg k "$key" '.[$k]')
+  if [ "$entry" = "null" ]; then
+    skip "$key: TODO post-integration — $why"
+    return 0
+  fi
+  check "$key"
+}
+
 check "nixling@"
 check "microvm@"
 check "microvm-virtiofsd@full-vm"
 check "nixling-full-vm-swtpm"
 check "nixling-full-vm-snd"
 check "nixling-full-vm-gpu"
+check "nixling-otel-relay@"
+check "nixling-otel-host-bridge"
+check "nixling-ch-exporter"
+
+# In-VM observability units (nixling-otel-vsock-out.service in workload
+# guests and nixling-otel-vsock-in.service in the obs VM) are out of
+# scope here: this file evaluates host systemd.services only. Future
+# in-VM tests will cover their restartIfChanged policy.
 
 log "==> restart-policy-eval OK"

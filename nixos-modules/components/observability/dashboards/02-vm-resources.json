@@ -1,0 +1,91 @@
+{
+  "uid": "vm-resources",
+  "title": "VM Resources",
+  "tags": ["nixling", "v0.2.0"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nixling_vm_ch_api_up, vm)",
+        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Per-VM CPU usage (user mode)",
+      "description": "Uses the guest Alloy-injected vm label to disambiguate similarly-prefixed VMs.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"refId": "A", "expr": "sum by (vm) (rate(node_cpu_seconds_total{mode=\"user\", vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}}"}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Per-VM memory availability",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"refId": "A", "expr": "node_memory_MemAvailable_bytes{vm=~\"${vm:regex}\"} / node_memory_MemTotal_bytes{vm=~\"${vm:regex}\"}", "legendFormat": "{{vm}}"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Per-VM filesystem free bytes",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"refId": "A", "expr": "node_filesystem_free_bytes{vm=~\"${vm:regex}\", fstype!~\"tmpfs|overlay|nsfs\"}", "legendFormat": "{{vm}} {{mountpoint}}"}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "VM network throughput (CH counters)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {"refId": "A", "expr": "sum by (vm) (rate(nixling_vm_counter_virtio_net_tx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} tx"},
+        {"refId": "B", "expr": "sum by (vm) (rate(nixling_vm_counter_virtio_net_rx_bytes{vm=~\"${vm:regex}\"}[5m]))", "legendFormat": "{{vm}} rx"}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Host CH exporter health",
+      "description": "Closest available host-side CH health signal today; no dedicated cloud-hypervisor process metrics are exported yet.",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "mappings": []}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "colorMode": "background"},
+      "targets": [
+        {"refId": "A", "expr": "up{job=\"nixling-ch-exporter\"}", "instant": true}
+      ]
+    }
+  ]
+}

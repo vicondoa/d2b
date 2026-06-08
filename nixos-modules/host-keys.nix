@@ -138,5 +138,16 @@ in
     fi
 
     ${generateKeysBody}
+
+    # Grant the nixling-launcher group traverse-only on the keys
+    # directory itself so members can read the individual key files
+    # (which have their own per-file ACL granting :r). This MUST run
+    # AFTER generateKeysBody because each VM's per-script call does
+    # `install -d -m 0700 -o root -g root "$vm_keys_dir"` which resets
+    # the dir mode and thereby strips named ACLs from the effective
+    # permission mask. Re-apply :--x AND bump the mask to :--x so the
+    # per-file :r grants stay effective.
+    ${pkgs.acl}/bin/setfacl -m "g:nixling-launcher:--x" "${cfg.site.keysDir}" || true
+    ${pkgs.acl}/bin/setfacl -m "m::--x" "${cfg.site.keysDir}" || true
   '';
 }

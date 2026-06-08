@@ -104,6 +104,7 @@ existing host config.
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` non-null      |
 | [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal)       | Demonstrates per-env isolation and route preflight              |
 | [`examples/with-entra-id`](./examples/with-entra-id) | Entra-ID-joined VM via the sibling flake  | Composes [`vicondoa/nixos-entra-id`][nixos-entra-id]; needs swtpm + Himmelblau |
+| [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs-stack` VM (Grafana/Prometheus/Loki/Tempo) and wires per-VM Alloy agents over virtio-vsock |
 
 ## Quick start (template path)
 
@@ -295,10 +296,12 @@ Organised as a [Diataxis] tree under [`docs/`](docs/):
 
 - **Tutorials / Examples** — [`examples/`](examples/) and
   [`templates/default/`](templates/default/).
-- **How-to** — [`docs/how-to/migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md).
+- **How-to** — [`docs/how-to/`](docs/how-to/):
+  [`migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md),
+  [`enable-observability.md`](docs/how-to/enable-observability.md).
 - **Reference** — [`docs/reference/`](docs/reference/): manifest
   schema, CLI contract, per-component docs (graphics, tpm, usbip,
-  audio, home-manager).
+  audio, home-manager, observability).
 - **Explanation** — [`docs/explanation/design.md`](docs/explanation/design.md):
   threat model + design rationale + *Why not X* FAQ.
 
@@ -312,6 +315,7 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 | Migrating from `microvm.nix`          | [`docs/how-to/migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md) |
 | Is this secure?                       | [`docs/explanation/design.md`](docs/explanation/design.md) → [`SECURITY.md`](SECURITY.md) |
 | How does `<component>` work?          | [`docs/reference/components-<name>.md`](docs/reference/)        |
+| Adding observability to an existing host | [`docs/how-to/enable-observability.md`](docs/how-to/enable-observability.md) → [`docs/reference/components-observability.md`](docs/reference/components-observability.md) |
 | Manifest contract                     | [`docs/reference/manifest-schema.md`](docs/reference/manifest-schema.md) + [`manifest-schema.json`](docs/reference/manifest-schema.json) |
 | CLI behaviour (exit codes, JSON)      | [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md) |
 

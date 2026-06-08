@@ -1,0 +1,102 @@
+{
+  "uid": "per-vm-store",
+  "title": "Per-VM Store",
+  "tags": ["nixling", "v0.2.0"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(nixling_vm_ch_api_up, vm)",
+        "definition": "label_values(nixling_vm_ch_api_up, vm)",
+        "includeAll": true,
+        "allValue": ".+",
+        "multi": true,
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Current generation per VM",
+      "description": "Extracts the most recent generation number from nixling-store-sync journal lines.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showHeader": true, "cellHeight": "sm", "footer": {"show": false}},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "max by (vm) (max_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} | regexp \"generation (?P<generation>[0-9]+)\" | unwrap generation [24h]))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Last store-sync result",
+      "description": "Best-effort journal tail for the most recent sync outcome. A dedicated success/failure metric does not exist yet.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "options": {"showLabels": true, "showTime": true, "enableLogDetails": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "{unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"nixling-store-sync:\""
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Store-sync success / failure events",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi", "sort": "none"}},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "expr": "sum by (vm) (count_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |= \"done (generation\" [30m]))",
+          "legendFormat": "{{vm}} success"
+        },
+        {
+          "refId": "B",
+          "queryType": "range",
+          "expr": "sum by (vm) (count_over_time({unit=~\"nixling-(store-sync@.+|.+-store-sync)\\\\.service\", vm=~\"${vm:regex}\"} |~ \"failed|error|not a valid generation dir\" [30m]))",
+          "legendFormat": "{{vm}} failure"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "bargauge",
+      "title": "Store path count per VM (future metric)",
+      "description": "Placeholder for future work: nixling does not currently export a per-VM store path count metric.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "options": {"displayMode": "gradient", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showUnfilled": true},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nixling_vm_store_path_count{vm=~\"${vm:regex}\"}",
+          "legendFormat": "{{vm}}"
+        }
+      ]
+    }
+  ]
+}

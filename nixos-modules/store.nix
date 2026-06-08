@@ -758,9 +758,18 @@ in
     # Also add a tiny second share for store-meta (db.dump + generation
     # info), mounted in the guest at /run/nixling-store-meta.
     microvm.vms = lib.mapAttrs
-      (name: _: {
+      (name: _: let
+        obsCfg = config.nixling.observability;
+        isObsVm = obsCfg.enable && name == obsCfg.vmName;
+        obsSecretsShare = lib.optional isObsVm {
+          source = "${cfg.site.stateDir}/observability";
+          mountPoint = "/run/nixling-obs-secrets";
+          tag = "nl-obs-sec";
+          proto = "virtiofs";
+        };
+      in {
         config.microvm.writableStoreOverlay = lib.mkDefault "/nix/.rw-store";
-        config.microvm.shares = lib.mkForce [
+        config.microvm.shares = lib.mkForce ([
           {
             source = "/nix/store";
             mountPoint = "/nix/.ro-store";
@@ -783,7 +792,19 @@ in
             tag = "nl-hkeys";
             proto = "virtiofs";
           }
-        ];
+          # Per-VM sshd host-keys share — see host-ssh-host-keys.nix.
+          # Read-only ed25519 host key + pubkey generated on the host
+          # at activation, mounted into the guest where the guest
+          # module ./guest-sshd-host-keys.nix points
+          # services.openssh.hostKeys at them. Stable across VM
+          # restarts; eliminates known_hosts TOFU drift.
+          {
+            source = "${cfg.site.stateDir}/vms/${name}/sshd-host-keys";
+            mountPoint = "/run/nixling-sshd-host-keys";
+            tag = "nl-ssh-host";
+            proto = "virtiofs";
+          }
+        ] ++ obsSecretsShare);
       })
       enabledVms;
 

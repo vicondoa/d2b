@@ -4,7 +4,7 @@
   "title": "nixling JSON manifest",
   "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract a future Rust CLI port consumes. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
   "type": "object",
-  "required": ["_manifest"],
+  "required": ["_manifest", "_observability"],
   "properties": {
     "_manifest": {
       "type": "object",
@@ -14,10 +14,13 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 1,
-          "description": "Schema version. This document IS the v1 schema; the field is locked to `const: 1`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v2.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v1 manifests (version 0) were the W2-followup stub and are no longer valid under this schema."
+          "const": 2,
+          "description": "Schema version. This document IS the v2 schema; the field is locked to `const: 2`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v3.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v2 manifests (versions 0 and 1) are historical and are no longer valid under this schema."
         }
       }
+    },
+    "_observability": {
+      "$ref": "#/$defs/observabilityMeta"
     }
   },
   "patternProperties": {
@@ -25,12 +28,79 @@
       "$ref": "#/$defs/vmEntry"
     },
     "^_": {
-      "description": "Reserved namespace for future schema-metadata keys. CLI consumers MUST tolerate unknown _-prefixed keys without bumping manifestVersion.",
+      "description": "Reserved namespace for future schema-metadata keys beyond `_manifest` and `_observability`. CLI consumers MUST tolerate unknown _-prefixed keys without bumping manifestVersion.",
       "type": ["object", "array", "string", "number", "boolean", "null"]
     }
   },
   "additionalProperties": false,
   "$defs": {
+    "observabilityMeta": {
+      "type": "object",
+      "description": "Reserved observability-metadata key. Always emitted so consumers can discover the observability stack wiring without looking inside any single VM entry.",
+      "required": ["enabled", "vmName", "obsVsockCid", "obsVsockHostSocket", "grafanaUrl", "chExporter"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Mirror of nixling.observability.enable. The metadata block is still present when false."
+        },
+        "vmName": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "VM name reserved for the observability stack (default: sys-obs-stack)."
+        },
+        "obsVsockCid": {
+          "type": "integer",
+          "const": 1000,
+          "description": "Reserved Cloud Hypervisor vsock CID for the observability stack VM."
+        },
+        "obsVsockHostSocket": {
+          "type": "string",
+          "description": "Host-side Unix socket backing the observability stack VM's vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
+        },
+        "grafanaUrl": {
+          "type": "string",
+          "description": "Resolved Grafana URL derived from nixling.observability.grafana.{listenAddress,listenPort}."
+        },
+        "chExporter": {
+          "type": "object",
+          "required": ["listenPort"],
+          "additionalProperties": false,
+          "properties": {
+            "listenPort": {
+              "type": "integer",
+              "description": "Loopback port exported by the host-side Cloud Hypervisor metrics exporter."
+            }
+          }
+        }
+      }
+    },
+    "vmObservability": {
+      "type": "object",
+      "description": "Per-VM observability transport metadata. Always emitted so future observability components can rely on the field existing.",
+      "required": ["enabled", "vsockCid", "vsockHostSocket", "agentSocket"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True iff nixling.vms.<name>.observability.enable is set."
+        },
+        "vsockCid": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Deterministic observability vsock CID. Env-backed VMs use 100 + envIndex * 100 + index, where envIndex is the alphabetical position of the env name. Legacy env-less VMs emit a deterministic fallback placeholder while observability is disabled."
+        },
+        "vsockHostSocket": {
+          "type": "string",
+          "description": "Host-side Unix socket backing this VM's Cloud Hypervisor vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
+        },
+        "agentSocket": {
+          "type": "string",
+          "const": "/run/nixling/otlp.sock",
+          "description": "In-guest Unix socket reserved for the workload observability agent."
+        }
+      }
+    },
     "vmEntry": {
       "type": "object",
       "description": "Per-VM metadata, indexed under the VM's name in the top-level object.",
@@ -52,6 +122,7 @@
         "tpmSocket",
         "audioStateFile",
         "audioService",
+        "observability",
         "staticIp",
         "sshUser"
       ],
@@ -125,6 +196,9 @@
         "audioService": {
           "type": "string",
           "description": "Host-side audio sidecar systemd unit name (nixling-<name>-snd.service)."
+        },
+        "observability": {
+          "$ref": "#/$defs/vmObservability"
         },
         "staticIp": {
           "type": ["string", "null"],

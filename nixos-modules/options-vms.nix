@@ -28,12 +28,23 @@
           '';
         };
         config = lib.mkOption {
-          type = lib.types.unspecified;
+          # `deferredModule` lets multiple definitions merge as
+          # modules: framework-side `lib.mkDefault { imports = [...]; }`
+          # combines with consumer-side `{ users.users.x = ...; }`
+          # via the module system's natural attribute merge,
+          # instead of one definition stomping the other (which is
+          # what `types.unspecified` used to do — see Wave-6
+          # consumer-integration findings).
+          type = lib.types.deferredModule;
           default = { };
           example = lib.literalExpression "{ imports = [ ../../vms/foo.nix ]; }";
           description = ''
             NixOS module merged into the guest's configuration.
             Typically `{ imports = [ ../../vms/<name>.nix ]; }`.
+
+            Multiple definitions (e.g. one from the framework, one
+            from a consumer override) are merged as modules: imports
+            are concatenated, attribute paths recursively combined.
           '';
         };
 
@@ -127,6 +138,29 @@
             Defaults to `[ ssh.user ]` when `ssh.user` is set,
             otherwise the empty list. Override here if the VM has
             additional interactive users.
+          '';
+        };
+
+        observability.enable = lib.mkEnableOption ''
+          guest Alloy agent + reverse OTLP tunnel from the
+          observability stack VM
+        '';
+
+        observability.scrapeJournal = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the future observability guest component should
+            scrape this VM's journald stream.
+          '';
+        };
+
+        observability.scrapeNodeMetrics = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the future observability guest component should
+            scrape this VM's node/system metrics.
           '';
         };
 

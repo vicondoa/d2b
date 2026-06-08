@@ -2,6 +2,8 @@
 
 let
   cfg = config.nixling;
+  obsCfg = cfg.observability;
+  otelAclRefreshCommand = "/run/current-system/sw/bin/nixling-otel-acl-refresh";
 
   # Wayland user's UID — used by the GPU sidecar to find the host
   # compositor's wayland-0 socket and ACL-grant the sidecar user. We
@@ -170,6 +172,18 @@ in
         # Only wayland-0 is visible in the sidecar's mount namespace.
         BindPaths = [ "/run/user/${waylandUid}/wayland-0:/run/nixling-gpu/${name}/wayland-0" ];
         ExecStart = "/var/lib/nixling/vms/${name}/current/bin/microvm-run";
+        # Graphics VMs bypass microvm@ and therefore need their own
+        # post-start ACL refresh once cloud-hypervisor's API socket exists.
+        ExecStartPost = lib.optionals (obsCfg.enable && obsCfg.ch.exporter.enable) [
+          ("+${pkgs.bash}/bin/bash -c '"
+            + "for i in $(${pkgs.coreutils}/bin/seq 1 120); do "
+            + "  if [ -S /var/lib/nixling/vms/${name}/${name}.sock ]; then "
+            + "    exec ${otelAclRefreshCommand}; "
+            + "  fi; "
+            + "  ${pkgs.coreutils}/bin/sleep 0.5; "
+            + "done; "
+            + "${otelAclRefreshCommand}'")
+        ];
         Environment = [
           "WAYLAND_DISPLAY=wayland-0"
           "XDG_RUNTIME_DIR=/run/nixling-gpu/${name}"
