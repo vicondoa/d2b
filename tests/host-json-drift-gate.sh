@@ -60,7 +60,7 @@ SCRATCH=${TMPDIR:-/tmp}/nl-host-json-drift.$$
 mkdir -p "$SCRATCH"
 add_cleanup "rm -rf -- '$SCRATCH'"
 
-log "W3 host.json per-field schema gold-file drift gate"
+log "host.json per-field schema gold-file drift gate"
 
 if [ ! -d "$FIXTURES_DIR" ]; then
   fail "host-json-drift-gate: fixtures directory missing: $FIXTURES_DIR"
@@ -162,7 +162,7 @@ if smoke_host_path and smoke_host_path.exists():
         violations.append(
             f"smoke host.json ({smoke_host_path}): missing required "
             f"top-level field(s) emitted by nixos-modules/host-json.nix: "
-            f"{sorted(missing_smoke)}. W4a-H3 requires "
+            f"{sorted(missing_smoke)}. The host schema contract requires "
             f"firewallCoexistencePolicy to be emitted even though the "
             f"Rust DTO is Option, so the broker always sees a coexistence "
             f"policy at apply-time."

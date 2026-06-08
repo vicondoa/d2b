@@ -9,6 +9,14 @@ HERE=$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(dirname "$HERE")}
 cd "$ROOT"
 
+search_legacy_refs() {
+  if command -v rg >/dev/null 2>&1; then
+    rg -n 'nixling-launcher(s)?' "$@"
+  else
+    grep -RInE 'nixling-launcher(s)?' "$@"
+  fi
+}
+
 allowlist=(
   'nixos-modules/host-activation\.nix:[0-9]+:[[:space:]]*(legacyLauncherGid|legacyLaunchersGid|getent group|for legacy_name in nixling-launcher nixling-launchers; do).*'
   'nixos-modules/host-activation-helper/.*'
@@ -28,7 +36,7 @@ allowlist=(
 )
 
 allowlist_regex="^($(IFS='|'; echo "${allowlist[*]}"))$"
-violations=$(rg -n 'nixling-launcher(s)?' ${NL_LEGACY_GROUP_DENYLIST_PATHS:-nixos-modules packages tests} \
+violations=$(search_legacy_refs ${NL_LEGACY_GROUP_DENYLIST_PATHS:-nixos-modules packages tests} \
   | grep -vE "$allowlist_regex" || true)
 if [ -n "$violations" ]; then
   echo "FAIL: legacy nixling-launcher{,s} references found:"

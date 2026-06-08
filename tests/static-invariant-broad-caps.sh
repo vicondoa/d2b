@@ -11,7 +11,7 @@ SCHEMA_DIR=${SCHEMA_DIR:-$ROOT/docs/reference/schemas/v1}
 . "$HERE/lib.sh"
 
 if [ ! -f "$SCHEMA_DIR/processes.json" ] || [ ! -f "$SCHEMA_DIR/minijail-profile.json" ]; then
-  log "schemas absent — skipping static-invariant-broad-caps (W1 unstaged)"
+  log "schemas absent — skipping static-invariant-broad-caps"
   exit 0
 fi
 

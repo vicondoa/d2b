@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1-P9a invariant gate: assert `nixos-modules/vm-submodule.nix`
+# VM submodule invariant gate: assert `nixos-modules/vm-submodule.nix`
 # exists with the expected `composeVm` ownership shape. The
 # full toplevel-hash parity test (vm-submodule.nix vs upstream
 # microvm.vms evaluation) lands at v1.1-final when the submodule's
@@ -21,5 +21,4 @@ if ! grep -q -E 'composeVm\s*=' "$submodule"; then
   exit 1
 fi
 
-printf 'vm-submodule-eval: PASS (v1.1-P9a structural ownership move; toplevel-hash parity tested at v1.1-final)\n'
-
+printf 'vm-submodule-eval: PASS (structural ownership move; toplevel-hash parity covered separately)\n'

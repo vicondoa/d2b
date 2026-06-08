@@ -129,13 +129,13 @@ catalog_waves=$(extract_catalog_waves)
 options_waves=$(extract_options_waves)
 
 if [ -z "$catalog_waves" ]; then
-  fail_check "phase2: failed to extract WAVE_CATALOG entries from $CATALOG_FILE"
+  fail_check "catalog parity: failed to extract WAVE_CATALOG entries from $CATALOG_FILE"
 elif [ -z "$options_waves" ]; then
-  fail_check "phase2: failed to extract readinessWaveSpecs from $OPTIONS_FILE"
+  fail_check "catalog parity: failed to extract readinessWaveSpecs from $OPTIONS_FILE"
 elif [ "$catalog_waves" = "$options_waves" ]; then
-  pass_check "phase2: WAVE_CATALOG order + names match readinessWaveSpecs"
+  pass_check "catalog parity: WAVE_CATALOG order + names match readinessWaveSpecs"
 else
-  fail_check "phase2: WAVE_CATALOG drift vs readinessWaveSpecs"
+  fail_check "catalog parity: WAVE_CATALOG drift vs readinessWaveSpecs"
   log "  catalog:"
   printf '%s\n' "$catalog_waves" | sed 's/^/    /' >&2
   log "  options:"
@@ -160,13 +160,13 @@ catalog_scripts=$(awk '/^pub const WAVE_CATALOG/,/^];/' "$CATALOG_FILE" \
   | sed -n 's/^[[:space:]]*"\([a-zA-Z0-9_-]*\.sh\)".*/\1/p' \
   | sort -u)
 if [ -z "$catalog_scripts" ]; then
-  fail_check "phase3: failed to extract validator basenames from WAVE_CATALOG"
+  fail_check "validator fixtures: failed to extract validator basenames from WAVE_CATALOG"
 fi
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   : > "$SCRIPTS_FULL/$name"
 done <<<"$catalog_scripts"
-pass_check "phase3: staged $(printf '%s\n' "$catalog_scripts" | wc -l) validator stubs"
+pass_check "validator fixtures: staged $(printf '%s\n' "$catalog_scripts" | wc -l) validator stubs"
 
 # ---------------------------------------------------------------
 # Refusal when neither --dry-run nor --apply is given.
@@ -180,9 +180,9 @@ refusal_rc=$?
 set -e
 if [ "$refusal_rc" = "78" ] \
   && printf '%s' "$refusal_out" | grep -q '"code": "--apply-or-dry-run-required"'; then
-  pass_check "phase4: missing-mode flag refused with exit 78 + typed envelope"
+  pass_check "mutation flag validation: missing mode refused with exit 78 + typed envelope"
 else
-  fail_check "phase4: expected exit 78 + --apply-or-dry-run-required envelope; got rc=$refusal_rc"
+  fail_check "mutation flag validation: expected exit 78 + --apply-or-dry-run-required envelope; got rc=$refusal_rc"
   log "    body: $(printf '%s' "$refusal_out" | head -c 200)"
 fi
 
@@ -197,9 +197,9 @@ dry_out=$(NIXLING_VALIDATE_SCRIPTS_DIR="$SCRIPTS_FULL" \
 dry_rc=$?
 set -e
 if [ "$dry_rc" = "0" ]; then
-  pass_check "phase5: dry-run exit 0"
+  pass_check "dry-run: exit 0"
 else
-  fail_check "phase5: dry-run expected exit 0, got $dry_rc"
+  fail_check "dry-run: expected exit 0, got $dry_rc"
 fi
 
 # Count waves in the JSON output (one `"wave":` per entry inside the
@@ -208,15 +208,15 @@ wave_count=$(printf '%s' "$dry_out" \
   | awk '/"waves":/{found=1; next} found && /"wave":/{n++} END{print n+0}')
 expected_count=$(printf '%s\n' "$catalog_waves" | wc -l | tr -d ' ')
 if [ "$wave_count" = "$expected_count" ]; then
-  pass_check "phase5: dry-run reports $wave_count waves (matches catalog)"
+  pass_check "dry-run: reports $wave_count waves (matches catalog)"
 else
-  fail_check "phase5: dry-run reported $wave_count waves; expected $expected_count"
+  fail_check "dry-run: reported $wave_count waves; expected $expected_count"
 fi
 
 if [ ! -e "$EVIDENCE/p1.json" ] && [ ! -e "$EVIDENCE/p0.json" ]; then
-  pass_check "phase5: dry-run wrote no evidence files"
+  pass_check "dry-run: wrote no evidence files"
 else
-  fail_check "phase5: dry-run unexpectedly wrote evidence files under $EVIDENCE"
+  fail_check "dry-run: unexpectedly wrote evidence files under $EVIDENCE"
 fi
 
 # ---------------------------------------------------------------
@@ -231,16 +231,16 @@ apply_out=$(NIXLING_VALIDATE_SCRIPTS_DIR="$SCRIPTS_FULL" \
 apply_rc=$?
 set -e
 if [ "$apply_rc" = "0" ]; then
-  pass_check "phase6: --apply --wave p1 exit 0"
+  pass_check "apply selected wave: --apply --wave p1 exit 0"
 else
-  fail_check "phase6: --apply --wave p1 expected exit 0, got $apply_rc"
+  fail_check "apply selected wave: --apply --wave p1 expected exit 0, got $apply_rc"
   log "    body: $(printf '%s' "$apply_out" | head -c 400)"
 fi
 
 if [ -f "$EVIDENCE/p1.json" ]; then
-  pass_check "phase6: evidence file $EVIDENCE/p1.json exists"
+  pass_check "apply selected wave: evidence file $EVIDENCE/p1.json exists"
 else
-  fail_check "phase6: evidence file $EVIDENCE/p1.json missing"
+  fail_check "apply selected wave: evidence file $EVIDENCE/p1.json missing"
 fi
 
 evidence_body=$(cat "$EVIDENCE/p1.json" 2>/dev/null || true)
@@ -248,9 +248,9 @@ check_field() {
   local field="$1" expected_substr="$2"
   if printf '%s' "$evidence_body" \
     | grep -qE "\"${field}\"[[:space:]]*:[[:space:]]*\"${expected_substr}"; then
-    pass_check "phase6: evidence carries $field"
+    pass_check "apply selected wave: evidence carries $field"
   else
-    fail_check "phase6: evidence missing/malformed $field"
+    fail_check "apply selected wave: evidence missing/malformed $field"
     log "    body: $evidence_body"
   fi
 }
@@ -261,9 +261,9 @@ check_field "operatorSignature" "sha256:"
 # Negative: only p1.json should exist, all other waves are `skipped`.
 other_files=$(find "$EVIDENCE" -maxdepth 1 -type f -name '*.json' ! -name 'p1.json' | wc -l | tr -d ' ')
 if [ "$other_files" = "0" ]; then
-  pass_check "phase6: --wave filter constrained evidence write to p1.json"
+  pass_check "apply selected wave: --wave filter constrained evidence write to p1.json"
 else
-  fail_check "phase6: --wave filter leaked $other_files unrelated evidence files"
+  fail_check "apply selected wave: --wave filter leaked $other_files unrelated evidence files"
 fi
 
 # ---------------------------------------------------------------
@@ -279,15 +279,15 @@ miss_out=$(NIXLING_VALIDATE_SCRIPTS_DIR="$SCRIPTS_EMPTY" \
 miss_rc=$?
 set -e
 if [ "$miss_rc" = "78" ]; then
-  pass_check "phase7: apply with missing validators exit 78"
+  pass_check "missing validators: apply exits 78"
 else
-  fail_check "phase7: apply with missing validators expected exit 78, got $miss_rc"
+  fail_check "missing validators: apply expected exit 78, got $miss_rc"
   log "    body: $(printf '%s' "$miss_out" | head -c 400)"
 fi
 if [ ! -e "$EVIDENCE/p1.json" ]; then
-  pass_check "phase7: no evidence file written for missing-validator wave"
+  pass_check "missing validators: no evidence file written"
 else
-  fail_check "phase7: evidence file unexpectedly written for missing-validator wave"
+  fail_check "missing validators: evidence file unexpectedly written"
 fi
 
 # ---------------------------------------------------------------
@@ -302,9 +302,9 @@ bogus_rc=$?
 set -e
 if [ "$bogus_rc" = "78" ] \
   && printf '%s' "$bogus_out" | grep -q '"code": "unknown-wave"'; then
-  pass_check "phase8: --wave bogus-wave returned unknown-wave envelope (exit 78)"
+  pass_check "unknown wave: returned unknown-wave envelope (exit 78)"
 else
-  fail_check "phase8: expected exit 78 + unknown-wave envelope; got rc=$bogus_rc"
+  fail_check "unknown wave: expected exit 78 + unknown-wave envelope; got rc=$bogus_rc"
   log "    body: $(printf '%s' "$bogus_out" | head -c 200)"
 fi
 

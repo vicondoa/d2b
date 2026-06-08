@@ -36,7 +36,7 @@ fi
 
 WORKSPACE_DIR=$ROOT/packages
 
-log "W3 ch-net-handoff executable canary"
+log "ch-net-handoff executable canary"
 
 # Step 1: exercise the real Rust probe via cargo test. These two
 # tests in packages/nixling-host/src/runner_shape.rs (named
@@ -71,7 +71,7 @@ ok "host-check golden envelope for ch-net-handoff-not-supported present and corr
 # variant disappears, the broker can no longer refuse it with the
 # documented audit shape.
 if grep -RnE 'CreateTapFd' "$ROOT/packages/nixling-ipc/src" >/dev/null; then
-  ok "CreateTapFd is declared in the W3 broker wire contract (nixling-ipc)"
+  ok "CreateTapFd is declared in the broker wire contract (nixling-ipc)"
 else
   fail "ch-net-handoff canary: CreateTapFd not declared in nixling-ipc"
 fi

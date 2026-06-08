@@ -30,6 +30,7 @@
 #   CAP_SETFCAP            virtiofsd / swtpm cap_setfcap for child cap inheritance (legacy
 #                          — minimized by ADR 0021 broker-pre-NS but retained for
 #                          other roles that don't use user NS)
+#   CAP_KILL               audited SignalRunner pidfd_send_signal across runner UIDs
 #
 # Notable absences that are a hard FAIL if present:
 #   CAP_SYS_PTRACE, CAP_NET_BIND_SERVICE, CAP_AUDIT_WRITE
@@ -59,6 +60,7 @@ CANONICAL_CAPS=(
   CAP_FOWNER
   CAP_FSETID
   CAP_IPC_LOCK
+  CAP_KILL
   CAP_MKNOD
   CAP_NET_ADMIN
   CAP_NET_RAW
@@ -148,7 +150,7 @@ if [ -n "$MISSING" ] || [ -n "$EXTRA" ]; then
   log "  Broker has    : $(printf '%s\n' "$GOT_SORTED" | tr '\n' ' ')"
   exit 1
 fi
-ok "CapabilityBoundingSet matches canonical P0 set exactly (8 caps)"
+ok "CapabilityBoundingSet matches canonical P0 set exactly (${#CANONICAL_CAPS[@]} caps)"
 
 # ---------------------------------------------------------------------------
 # 3. AmbientCapabilities must contain the sentinel "" entry to ensure all

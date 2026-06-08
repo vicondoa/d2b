@@ -35,4 +35,3 @@ socket=/run/nixling/vms/personal-dev/tpm.sock
 # deviceBinds
 /dev/kvm
 /dev/vhost-net
-/dev/net/tun

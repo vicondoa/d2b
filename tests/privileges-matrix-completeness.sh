@@ -23,7 +23,7 @@ BROKER_HINT=${BROKER_HINT:-$ROOT/packages/nixling-ipc/src/broker_wire.rs}
 cd "$ROOT"
 
 if [ ! -f "$SCHEMA" ] || [ ! -f "$CLI_DOC" ] || [ ! -d "$ROOT/packages" ]; then
-  log "privileges schema/doc/broker inputs absent — skipping privileges-matrix-completeness (W1 unstaged)"
+  log "privileges schema/doc/broker inputs absent — skipping privileges-matrix-completeness"
   exit 0
 fi
 

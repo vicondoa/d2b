@@ -9,11 +9,24 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
+nl_activate_rust_toolchain_path || true
+
 manifest="$ROOT/packages/Cargo.toml"
 workspace_target_dir=$(nl_cargo_target_dir workspace)
 if [ ! -f "$manifest" ]; then
   fail "missing Rust workspace manifest: $manifest"
   exit 1
+fi
+
+if [ -z "${NIXLING_STUB_NO_SOCKET_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; then
+  if ! command -v nix >/dev/null 2>&1; then
+    fail "stub-no-socket: neither cargo nor nix is on PATH"
+    exit 1
+  fi
+  export NIXLING_STUB_NO_SOCKET_IN_NIX_SHELL=1
+  exec nix shell --quiet --inputs-from "$ROOT" \
+    nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache \
+    --command bash "$0" "$@"
 fi
 
 scratch=$(nl_mktemp .nixling-stub-smoke.XXXXXX)
@@ -162,7 +175,10 @@ run_stub() {
 
   set +e
   output=$(
-    CARGO_TARGET_DIR="$workspace_target_dir" cargo run --manifest-path "$manifest" --quiet --bin "$bin" 2>&1
+    cd "$ROOT/packages" && \
+      RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+      CARGO_TARGET_DIR="$workspace_target_dir" \
+      cargo run --manifest-path "$manifest" --quiet --bin "$bin" 2>&1
   )
   rc=$?
   set -e
@@ -177,7 +193,7 @@ run_stub() {
     "$var_lib_mtime_before" "$var_lib_list_before" "$xdg_before" "$tmp_before"
 }
 
-run_stub nixling "nixling 0.0.0-bootstrap (W0a stub)"
-run_stub nixlingd "nixlingd 0.0.0-bootstrap (W0a stub)"
+run_stub nixling "nixling 0.0.0-bootstrap (bootstrap stub)"
+run_stub nixlingd "nixlingd 0.0.0-bootstrap (bootstrap stub)"
 
 ok "Rust stubs left no socket/file runtime state"

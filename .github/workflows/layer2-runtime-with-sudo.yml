@@ -1,6 +1,6 @@
 name: layer2-runtime-with-sudo
 
-# v1.2fu58: opt-in Layer-2 with-sudo workflow that exercises
+# Opt-in Layer-2 with-sudo workflow that exercises
 # adversarial coverage for the `/var/lib/nixling` traversal ACL
 # (and future Layer-2 host-state tests that need root).
 #

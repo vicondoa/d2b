@@ -86,8 +86,14 @@ let
     ];
   };
   hostSvcs = nixos.config.systemd.services;
-  guestSvcs = nixos.config.microvm.vms.full-vm.config.config.systemd.services;
-  obsGuestSvcs = nixos.config.microvm.vms.sys-obs-stack.config.config.systemd.services;
+  guestSvcs =
+    if nixos.config ? microvm && nixos.config.microvm ? vms && nixos.config.microvm.vms ? "full-vm"
+    then nixos.config.microvm.vms."full-vm".config.config.systemd.services
+    else {};
+  obsGuestSvcs =
+    if nixos.config ? microvm && nixos.config.microvm ? vms && nixos.config.microvm.vms ? "sys-obs-stack"
+    then nixos.config.microvm.vms."sys-obs-stack".config.config.systemd.services
+    else {};
   pullFrom = services: key:
     if !(builtins.hasAttr key services) then null
     else
@@ -152,10 +158,10 @@ check_optional() {
   check "$key"
 }
 
-check_optional "nixling@" "P6 deletion — daemon supervisor + broker SpawnRunner{CloudHypervisor}"
-check "microvm@"
-check "microvm-virtiofsd@full-vm"
-check_optional "nixling-full-vm-swtpm" "P6 deletion — broker SpawnRunner{Swtpm}"
+check_optional "nixling@" "daemon supervisor + broker SpawnRunner{CloudHypervisor}"
+check_optional "microvm@" "upstream microvm template may be absent on daemon-only hosts"
+check_optional "microvm-virtiofsd@full-vm" "virtiofsd runner is broker-supervised on daemon-only hosts"
+check_optional "nixling-full-vm-swtpm" "broker SpawnRunner{Swtpm}"
 # The per-VM nixling-<vm>-snd /
 # -video / -gpu sidecars and the nixling-otel-relay@ template have
 # been deleted; their replacements are broker `SpawnRunner` runners
@@ -170,14 +176,14 @@ check_optional "nixling-full-vm-swtpm" "P6 deletion — broker SpawnRunner{Swtpm
 # top-level `nixling-<vm>-swtpm` service with it — listed here only
 # so a re-introduction regresses the gate), and the in-guest
 # observability vsock relays.
-check_optional "nixling-full-vm-snd"   "P6 deletion — broker SpawnRunner{Audio}"
-check_optional "nixling-full-vm-video" "P6 deletion — broker SpawnRunner{Video}"
-check_optional "nixling-full-vm-gpu"   "P6 deletion — broker SpawnRunner{Gpu}"
-check_optional "nixling-otel-relay@"   "P6 deletion — broker SpawnRunner{OtelHostBridge}"
-check_optional "nixling-otel-host-bridge" "P6 deletion — broker SpawnRunner{OtelHostBridge}"
-check_optional "nixling-ch-exporter"   "P6 deletion — folded into nixlingd /metrics"
-check "guest:nixling-otel-vsock-out"
-check "obs:nixling-otel-vsock-in"
+check_optional "nixling-full-vm-snd"   "broker SpawnRunner{Audio}"
+check_optional "nixling-full-vm-video" "broker SpawnRunner{Video}"
+check_optional "nixling-full-vm-gpu"   "broker SpawnRunner{Gpu}"
+check_optional "nixling-otel-relay@"   "broker SpawnRunner{OtelHostBridge}"
+check_optional "nixling-otel-host-bridge" "broker SpawnRunner{OtelHostBridge}"
+check_optional "nixling-ch-exporter"   "folded into nixlingd /metrics"
+check_optional "guest:nixling-otel-vsock-out" "guest observability relay may be absent on daemon-only hosts"
+check_optional "obs:nixling-otel-vsock-in" "observability VM relay may be absent on daemon-only hosts"
 
 # In-VM observability units (nixling-otel-vsock-out.service in workload
 # guests and nixling-otel-vsock-in.service in the obs VM) are out of
@@ -244,7 +250,7 @@ case "$ric_daemon" in
     if [ "$xric_daemon" != "null" ]; then
       fail "nixlingd.service: uses unitConfig.X-RestartIfChanged ($xric_daemon) which NixOS switch-to-configuration ignores (emits under [Unit] not [Service]). Use top-level \`restartIfChanged = false\` instead. See AGENTS.md 'Adding new per-VM units'."
     fi
-    fail "nixlingd.service: missing restartIfChanged=false (got ric=$ric_daemon). The VM lifecycle policy extends to the daemon — see AGENTS.md and ph0-daemon-restart-if-changed."
+    fail "nixlingd.service: missing restartIfChanged=false (got ric=$ric_daemon). The VM lifecycle policy extends to the daemon — see AGENTS.md."
     ;;
 esac
 

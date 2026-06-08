@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/w18-default-flip-eval.sh — eval-time regression gate for the
+# tests/daemon-default-compat-eval.sh — eval-time regression gate for the
 # default flip of `nixling.daemonExperimental.enable`.
 #
 # Asserts:
@@ -18,7 +18,7 @@
 #      preserved.
 #
 # Shape: eval-only, no live host required. Wired into tests/static.sh
-# alongside the other Layer-1 eval gates.
+# alongside the other eval gates.
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ log()  { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 ok()   { log "  PASS: $*"; }
 fail() { log "  FAIL: $*"; exit 1; }
 
-log "==> tests/w18-default-flip-eval.sh"
+log "==> tests/daemon-default-compat-eval.sh"
 
 # The wave set the flip gate iterates over. Keep this list in sync
 # with `flipGateWaves` in nixos-modules/options-daemon.nix.
@@ -38,7 +38,7 @@ FLIP_GATE_WAVES=(w4Fu w5Fu w6Fu w7Fu w8Fu w9Fu p0 p0Fu p1 p2 p3 p4)
 # Per-test working directory under the worktree (NOT /tmp — disk
 # hygiene contract). Use a stable name so eval re-runs can reuse the
 # evidence files; cleaned at the end.
-WORKDIR="$ROOT/.tests-tmp/w18-default-flip"
+WORKDIR="$ROOT/.tests-tmp/daemon-default-compat"
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR/evidence-full" "$WORKDIR/evidence-missing-one" "$WORKDIR/evidence-empty"
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -49,7 +49,7 @@ write_evidence() {
 {
   "wave": "${wave}",
   "timestamp": "2025-01-01T00:00:00Z",
-  "operatorSignature": "w18-default-flip-eval@nixling-tests"
+  "operatorSignature": "daemon-default-compat-eval@nixling-tests"
 }
 EOF
 }
@@ -135,8 +135,8 @@ ${ALL_TRUE_READINESS}
     };
   });
 
-  # Scenario 2: same as #1 but w9Fu.validated = false. Default stays
-  # false because the readiness boolean half of the gate is red.
+  # Scenario 2: same as #1 but one readiness entry is not validated.
+  # The obsolete compatibility option still defaults true.
   gateRedReadiness = mk ({ lib, ... }: {
     nixling.daemonExperimental.defaultFlipEvidenceDir =
       "$WORKDIR/evidence-full";
@@ -145,9 +145,9 @@ ${ALL_TRUE_BUT_ONE_VALIDATED}
     };
   });
 
-  # Scenario 3: every wave implemented + validated, but the evidence
-  # file for w9Fu is absent from evidence-missing-one. Default stays
-  # false because the file-presence half of the gate is red.
+  # Scenario 3: every readiness entry implemented + validated, but
+  # one evidence file is absent. The obsolete compatibility option
+  # still defaults true.
   gateRedEvidence = mk ({ lib, ... }: {
     nixling.daemonExperimental.defaultFlipEvidenceDir =
       "$WORKDIR/evidence-missing-one";
@@ -187,7 +187,7 @@ EOF
 
 OUT=$(nix-instantiate --eval --strict --json --expr "$EXPR" 2>&1) || {
   printf '%s\n' "$OUT" >&2
-  fail "eval failed; cannot inspect W18 default-flip behavior"
+  fail "eval failed; cannot inspect daemon default compatibility"
 }
 
 check_bool() {
@@ -202,9 +202,9 @@ check_bool() {
 }
 
 check_bool "gateGreenAll"           "true"
-check_bool "gateRedReadiness"       "false"
-check_bool "gateRedEvidence"        "false"
+check_bool "gateRedReadiness"       "true"
+check_bool "gateRedEvidence"        "true"
 check_bool "overrideFalseWinsGreen" "false"
 check_bool "overrideTrueWinsRed"    "true"
 
-log "==> w18-default-flip-eval OK"
+log "==> daemon-default-compat-eval OK"

@@ -1500,7 +1500,7 @@ where
     }
 
     if raw_args.len() == 1 {
-        print_stdout("nixling 0.0.0-bootstrap (W0a stub)\n");
+        print_stdout("nixling 0.0.0-bootstrap (bootstrap stub)\n");
         print_stdout("Rust-native CLI shim active; run `nixling --help` for subcommands.\n");
         return 0;
     }
@@ -3757,7 +3757,7 @@ fn vm_counts_as_running(vm: &ManifestVm, services: &StatusServicesOutputV2) -> b
 }
 
 fn service_state_counts_as_running(state: &str) -> bool {
-    matches!(state, "active" | "activating" | "reloading")
+    matches!(state, "active" | "activating" | "reloading" | "running")
 }
 
 fn list_status_label(

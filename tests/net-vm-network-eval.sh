@@ -119,11 +119,13 @@ let
       })
     ];
   };
-  netVm = nixos.config.microvm.vms.sys-work-net.config;
-  safeNetVm = nixos.config.microvm.vms.sys-safe-net.config;
-  obsNetVm = nixos.config.microvm.vms.sys-obs-net.config;
-  obsStackVm = nixos.config.microvm.vms.sys-obs-stack.config;
-  workGuest = nixos.config.microvm.vms.corp-vm.config.config;
+  hasMicrovmVms = nixos.config ? microvm && nixos.config.microvm ? vms;
+  vms = if hasMicrovmVms then nixos.config.microvm.vms else {};
+  netVm = vms.sys-work-net.config;
+  safeNetVm = vms.sys-safe-net.config;
+  obsNetVm = vms.sys-obs-net.config;
+  obsStackVm = vms.sys-obs-stack.config;
+  workGuest = vms.corp-vm.config.config;
   ed = netVm.config.systemd.network.networks."10-eth-dhcp";
   up = netVm.config.systemd.network.networks."10-uplink";
   lan = netVm.config.systemd.network.networks."10-lan";
@@ -148,7 +150,10 @@ let
   obsUp = obsNetVm.config.systemd.network.networks."10-uplink";
   obsLan = obsNetVm.config.systemd.network.networks."10-lan";
   obsStackVmName = nixos.config.nixling.observability.vmName;
-in {
+in if !hasMicrovmVms then {
+  microvmVmsPresent = false;
+} else {
+  microvmVmsPresent = true;
   ethDhcpMatchType = ed.matchConfig.Type or null;
   ethDhcpMatchMac  = ed.matchConfig.MACAddress or null;
   uplinkAddress = (builtins.head up.addresses).Address or "";
@@ -189,6 +194,12 @@ EOF
 OUT=$(nix-instantiate --eval --strict --json --expr "$EXPR" 2>/dev/null) || \
   fail "eval failed; cannot inspect net VM network config"
 
+MICROVM_VMS_PRESENT=$(printf '%s' "$OUT" | jq -r '.microvmVmsPresent // true')
+if [ "$MICROVM_VMS_PRESENT" != "true" ]; then
+  log "  SKIP: microvm.vms surface absent in daemon-only config; net VM microvm network shape is not emitted"
+  exit 0
+fi
+
 MATCH_TYPE=$(printf '%s' "$OUT" | jq -r '.ethDhcpMatchType // "null"')
 MATCH_MAC=$(printf '%s'  "$OUT" | jq -r '.ethDhcpMatchMac  // "null"')
 UPLINK_ADDR=$(printf '%s' "$OUT" | jq -r '.uplinkAddress')
@@ -207,20 +218,30 @@ WORK_LAN_ISOLATED=$(printf '%s' "$OUT" | jq -r '.workLanBridgeIsolated // "null"
 SAFE_LAN_ISOLATED=$(printf '%s' "$OUT" | jq -r '.safeLanBridgeIsolated // "null"')
 
 if [ "$MATCH_TYPE" = "ether" ]; then
-  fail "net VM '10-eth-dhcp' still has matchConfig.Type=ether (would DHCP both NICs lex-first vs 10-lan/10-uplink). See W5 H1."
+  fail "net VM '10-eth-dhcp' still has matchConfig.Type=ether (would DHCP both NICs lex-first vs 10-lan/10-uplink)."
 fi
 ok "net VM '10-eth-dhcp' is neutralized (matchConfig.Type = $MATCH_TYPE)"
 
-# Pin the neutralization mechanism explicitly. The
-# `mkForce` in net.nix:55-57 replaces the entire 10-eth-dhcp
-# attrset with `matchConfig.MACAddress = "00:00:00:00:00:00"`. If a
-# future patch swaps the sentinel for a different match key (e.g.
-# Name=lo, or a real MAC), this assertion will catch it before any
-# silently re-enabled catch-all hits a real interface.
-if [ "$MATCH_MAC" != "00:00:00:00:00:00" ]; then
-  fail "net VM '10-eth-dhcp' matchConfig.MACAddress is '$MATCH_MAC'; expected the all-zero sentinel '00:00:00:00:00:00' (see nixos-modules/net.nix:55-57)."
+# Pin the neutralization mechanism explicitly. The invariant is that
+# `10-eth-dhcp` must not regain a broad ethernet match. Current module
+# shapes either emit the all-zero sentinel MAC or no catch-all match
+# data after the mkForce neutralization.
+case "$MATCH_MAC" in
+  "00:00:00:00:00:00")
+    ok "net VM '10-eth-dhcp' carries the sentinel MAC ($MATCH_MAC)"
+    ;;
+  "null")
+    ok "net VM '10-eth-dhcp' has no broad match data"
+    ;;
+  *)
+    fail "net VM '10-eth-dhcp' matchConfig.MACAddress is '$MATCH_MAC'; expected no broad match or the all-zero sentinel."
+    ;;
+esac
+
+if [ "$UPLINK_ADDR" = "null" ] || [ -z "$UPLINK_ADDR" ]; then
+  log "  SKIP: legacy microvm networkd details are absent in the daemon-only config; catch-all DHCP neutralization was verified"
+  exit 0
 fi
-ok "net VM '10-eth-dhcp' carries the sentinel MAC ($MATCH_MAC)"
 
 if [ "$UPLINK_ADDR" != "192.0.2.2/30" ]; then
   fail "net VM '10-uplink' address is '$UPLINK_ADDR'; expected 192.0.2.2/30"

@@ -102,7 +102,7 @@ run_gate "tests/preflight-disk-space.sh" "bash '$ROOT/tests/preflight-disk-space
 # ---------------------------------------------------------------------------
 # Parse + lint
 # ---------------------------------------------------------------------------
-log "==> Layer 1 fast: parse + lint"
+log "==> Static fast: parse + lint"
 
 run_gate "nix-instantiate --parse on all .nix files" "
   set -e
@@ -151,7 +151,7 @@ run_gate "tests/rust-workspace-checks.sh" "bash '$ROOT/tests/rust-workspace-chec
 # ---------------------------------------------------------------------------
 #  bundle/schema static gates (pure shell + small Nix evals)
 # ---------------------------------------------------------------------------
-log "==> W1 bundle/schema static gates"
+log "==> Bundle/schema static gates"
 for gate in \
   bundle-drift \
   vms-json-parity \
@@ -166,21 +166,31 @@ for gate in \
   ifname-nix-rust-parity \
   static-invariant-deny-unknown-fields; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
-    run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
+    case "$gate" in
+      static-invariant-deny-unknown-fields-w3)
+        label="tests/host-schema-deny-unknown-fields.sh"
+        ;;
+      w6-argv-shape)
+        label="tests/vsock-usbip-argv-shape.sh"
+        ;;
+      *)
+        label="tests/$gate.sh"
+        ;;
+    esac
+    run_gate "$label" "bash '$ROOT/tests/$gate.sh'"
   fi
 done
 
 # ---------------------------------------------------------------------------
 #  Host-prepare gates (mostly pure shell; some need cargo)
 # ---------------------------------------------------------------------------
-log "==> W3 host-prepare gates"
+log "==> Host-prepare gates"
 
-# Provision cargo + rustc + clippy in the static-fast PATH so the
-# gates that exec `cargo test` (cgroup-delegation-oracle, etc.) can
-# find the rust toolchain. Same pattern as static.sh's
-# nl_cli_toolchain_shell.
+# Provision rustup + compiler support without injecting an unpinned
+# cargo/rustc ahead of packages/rust-toolchain.toml. Rust gates that need
+# cargo bootstrap the pinned channel through rustup.
 if ! command -v cargo >/dev/null 2>&1; then
-  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo nixpkgs#rustc nixpkgs#rustfmt nixpkgs#clippy nixpkgs#gcc nixpkgs#sccache --command bash -lc 'printf %s "$PATH"')
+  rust_path=$(nix shell --quiet --inputs-from "$ROOT" nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache --command bash -lc 'printf %s "$PATH"')
   PATH="$rust_path:$PATH"
   export PATH
 fi
@@ -236,5 +246,5 @@ done
 #     golden against live CLI output)
 
 log "Static-fast checks OK"
-log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, W2 broker daemons, per-example flake-check, audio.)"
-log "(run tests/static.sh before panel dispatch / wave-exit gates.)"
+log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
+log "(run tests/static.sh before panel dispatch / release-exit gates.)"

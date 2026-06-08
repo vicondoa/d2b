@@ -97,4 +97,4 @@ for t in "${video_argv_tests[@]}"; do
   cargo test -p nixling-host --lib "$t" 2>&1 | tail -3
 done
 
-ok "tests/sidecar-argv-shape.sh: every W5-H1/H2/H3 sidecar argv-generator canary passed"
+ok "tests/sidecar-argv-shape.sh: every sidecar argv-generator canary passed"

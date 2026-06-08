@@ -36,13 +36,13 @@ HOST_W3_SRC="$ROOT/packages/nixling-core/src/host_w3.rs"
 HOST_SRC="$ROOT/packages/nixling-core/src/host.rs"
 
 if [ ! -f "$HOST_W3_SRC" ] || [ ! -f "$HOST_SRC" ]; then
-  log "nixling-core W3 sources absent — skipping W3 deny-unknown-fields gate (W3 unstaged)"
+  log "nixling-core host schema sources absent — skipping host schema deny-unknown-fields gate"
   exit 0
 fi
 
 fail_dto() {
   local dto=$1 reason=$2
-  fail "W3 DTO '$dto' is missing #[serde(deny_unknown_fields)] ($reason)"
+  fail "host schema DTO '$dto' is missing #[serde(deny_unknown_fields)] ($reason)"
 }
 
 # For each named struct, require a `deny_unknown_fields` attribute on
@@ -55,7 +55,7 @@ for dto in "${W3_DTOS[@]}"; do
   elif grep -qE "^pub struct $dto\b" "$HOST_SRC"; then
     src=$HOST_SRC
   else
-    fail "W3 DTO '$dto' not found in host_w3.rs nor host.rs"
+    fail "host schema DTO '$dto' not found in host_w3.rs nor host.rs"
   fi
   # Look at the 8 lines immediately preceding the struct decl for the
   # serde attribute. This is conservative enough to catch the canonical
@@ -75,4 +75,4 @@ for dto in "${W3_DTOS[@]}"; do
   fi
 done
 
-log "W3 deny-unknown-fields static gate passed for ${#W3_DTOS[@]} DTOs"
+log "host schema deny-unknown-fields static gate passed for ${#W3_DTOS[@]} DTOs"

@@ -21,4 +21,5 @@ jobs:
       - name: Eval with-entra-id example
         run: |
           cd examples/with-entra-id
-          nix flake check --no-build --all-systems --no-write-lock-file
+          rm -f flake.lock
+          nix flake check --no-build --all-systems

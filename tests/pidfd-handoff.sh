@@ -16,9 +16,6 @@
 #   - `nixlingd::supervisor::pidfd::set_child_subreaper_with_self_test`
 #     succeeds and is idempotent.
 #
-# Per AGENTS.md " tests/static.sh ownership rule": this script is
-# scope-owned by s1; the integrator wires it into `tests/static.sh` in
-# a separate commit.
 
 set -euo pipefail
 
@@ -28,12 +25,20 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 . "$ROOT/tests/lib.sh"
 
 CARGO=${CARGO:-cargo}
-if ! command -v "$CARGO" >/dev/null 2>&1; then
+if ! command -v "$CARGO" >/dev/null 2>&1 && ! command -v rustup >/dev/null 2>&1; then
   echo "pidfd-handoff: cargo not on PATH; expected the static gate's rust shell" >&2
   exit 1
 fi
 
-LOG_DIR=${TMPDIR:-/tmp}/nixling-w3-s1-pidfd-handoff.$$
+run_cargo() {
+  if command -v rustup >/dev/null 2>&1 && [ -n "${RUSTUP_TOOLCHAIN:-}" ]; then
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$RUSTUP_TOOLCHAIN" cargo "$@"
+  else
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" "$CARGO" "$@"
+  fi
+}
+
+LOG_DIR=${TMPDIR:-/tmp}/nixling-pidfd-handoff.$$
 mkdir -p "$LOG_DIR"
 cleanup() { rm -rf -- "$LOG_DIR"; }
 trap cleanup EXIT INT TERM
@@ -64,11 +69,13 @@ BROKER_UNIT_LOG="$LOG_DIR/broker-unit.log"
 DAEMON_LOG="$LOG_DIR/daemon.log"
 
 printf '\n[pidfd-handoff] broker SCM_RIGHTS integration test\n'
+set +e
 (
   cd "$ROOT/packages/nixling-priv-broker"
-  "$CARGO" test --all-features --test pidfd_handoff_scm_rights
+  run_cargo test --all-features --test pidfd_handoff_scm_rights
 ) >"$BROKER_INT_LOG" 2>&1
 status=$?
+set -e
 if [ $status -ne 0 ]; then
   printf 'pidfd-handoff: broker integration block failed (status %d)\n' "$status" >&2
   tail -80 "$BROKER_INT_LOG" >&2
@@ -84,11 +91,13 @@ done
 printf '  ok: SCM_RIGHTS pidfd transport + CLOEXEC preservation\n'
 
 printf '\n[pidfd-handoff] broker unit canaries (ops::pidfd)\n'
+set +e
 (
   cd "$ROOT/packages/nixling-priv-broker"
-  "$CARGO" test --all-features --lib ops::pidfd
+  run_cargo test --all-features --lib ops::pidfd
 ) >"$BROKER_UNIT_LOG" 2>&1
 status=$?
+set -e
 if [ $status -ne 0 ]; then
   printf 'pidfd-handoff: broker unit block failed (status %d)\n' "$status" >&2
   tail -80 "$BROKER_UNIT_LOG" >&2
@@ -104,11 +113,13 @@ done
 printf '  ok: %d broker unit canaries passed\n' "${#BROKER_UNIT[@]}"
 
 printf '\n[pidfd-handoff] daemon supervisor canaries (supervisor::pidfd_table)\n'
+set +e
 (
   cd "$ROOT/packages"
-  "$CARGO" test -p nixlingd --lib supervisor::pidfd_table
+  run_cargo test -p nixlingd --lib supervisor::pidfd_table
 ) >"$DAEMON_LOG" 2>&1
 status=$?
+set -e
 if [ $status -ne 0 ]; then
   printf 'pidfd-handoff: daemon block failed (status %d)\n' "$status" >&2
   tail -80 "$DAEMON_LOG" >&2
@@ -123,5 +134,5 @@ for canary in "${DAEMON_CANARIES[@]}"; do
 done
 printf '  ok: %d daemon supervisor canaries passed\n' "${#DAEMON_CANARIES[@]}"
 
-printf '\npidfd-handoff: all W3 s1 pidfd canaries passed\n'
+printf '\npidfd-handoff: all pidfd canaries passed\n'
 exit 0

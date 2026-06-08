@@ -29,7 +29,7 @@ LOG=${TMPDIR:-/tmp}/nixling-host-prepare-network.$$.log
 : > "$LOG"
 exec > >(tee -a "$LOG") 2>&1
 
-log "W3 s2 :: host-prepare-network canary"
+log "host-prepare-network canary"
 
 run_focused_host() {
   local label="$1"; shift

@@ -675,10 +675,10 @@ systemctl list-units --no-pager --all \
   | grep -E '^(nixling|microvm)' | wc -l
 # Expected: 3   (nixlingd.service + nixling-priv-broker.{service,socket})
 
-# Default-flip eval gate (tests/w18-default-flip-eval.sh) asserts
+# Default-flip eval gate (tests/daemon-default-compat-eval.sh) asserts
 # the gate honors readiness + evidence + operator override
 # semantics. It is wired into tests/static.sh.
-bash tests/w18-default-flip-eval.sh
+bash tests/daemon-default-compat-eval.sh
 
 # Confirm the wave-evidence schema is consistent across the live
 # config + the canonical schema.

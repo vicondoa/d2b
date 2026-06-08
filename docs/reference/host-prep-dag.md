@@ -86,10 +86,10 @@ copy of the bundle.
 
 | Step                          | Broker op (`nixling_ipc::broker_wire::BrokerRequest::…`) | Implementation status                                                                  |
 | ----------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs before tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
+| `ApplyNmUnmanaged`            | `ApplyNmUnmanaged`                                       | Live; runs BEFORE tap creation so NetworkManager does not race the broker's `TUNSETIFF` + `dev set master`, and replaces the `00-nixling-unmanaged.conf` materializer leaf of `microvm-setup@<vm>.service`. |
 | `BringUpTapInterface`         | `CreateTapFd` (or `CreatePersistentTap`)                 | Live; the per-VM start path resolves the tap intent row and creates or reuses the tap as needed. |
 | `ApplySysctl`                 | `ApplySysctl`                                            | Live; runs after tap creation so per-tap `/proc/sys/net/ipv4/conf/<ifname>/` entries exist, and replaces the sysctl-apply leaf of `microvm-setup@<vm>.service`. |
-| `SetBridgePortFlags`          | `SetBridgePortFlags`                                     | Live; runs after `ApplySysctl` so `learning off`, `flood off`, and `mcast_to_unicast off` reflect the final per-tap config, replacing the `bridge link set` leaf of `microvm-tap-interfaces@<vm>.service`. |
+| `SetBridgePortFlags`          | `SetBridgePortFlags`                                     | Live; runs AFTER `ApplySysctl` so `learning off`, `flood off`, and `mcast_to_unicast off` reflect the final per-tap config, replacing the `bridge link set` leaf of `microvm-tap-interfaces@<vm>.service`. |
 | `PreOpenVhostNetFd`           | `OpenVhostNet`                                           | Live; waits for bridge-port flags to be pinned before vhost-net adopts the path. |
 | `SeedDnsmasqLease`            | `SeedDnsmasqLease`                                       | Typed scaffold; the live handler remains deferred. |
 | `BindMountFromHardlinkFarm`   | `BindMountFromHardlinkFarm`                              | Typed scaffold; the live handler remains deferred. |

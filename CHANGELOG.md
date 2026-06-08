@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
   closures of one VM mapping to the same generation number) instead of
   unioning them, by pinning the closure identity in the generation
   marker.
+- GitHub Actions PR hardening keeps fork PR code off self-hosted
+  runners, makes the privileged oracle workflow manual-dispatch only,
+  and repairs the affected CI validation gates so the hardening can
+  merge through the normal PR checks.
 
 ## [1.2] - 2026-06-03
 

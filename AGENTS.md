@@ -568,6 +568,11 @@ shipping. Do **not** introduce these markers into:
   `README.md`, `SECURITY.md`, or example READMEs;
 - any user-facing CLI surface (`clap` `about`/`help`/`long_help`
   text, error/observed-state messages, JSON envelope fields);
+- CI workflow names, job names, step names, and test output that a
+  contributor sees in GitHub Actions logs. CI labels should describe
+  the behavior being validated (for example, "ADR index coverage
+  guard" or "host validate dry-run"), not historical phase/process
+  codes;
 - released CHANGELOG sections.
 
 These markers are still expected and welcome in the contexts where

@@ -55,6 +55,8 @@ live_consumer_hits() {
   local pattern="$1"
   shift
   grep -RIln --exclude-dir=.git --exclude-dir=target \
+    --exclude-dir=.cli-rust-native-cache --exclude-dir='.nl-smoke-cache.*' \
+    --exclude-dir=.tests-tmp \
     --include='*.nix' --include='*.sh' --include='*.rs' \
     -e "$pattern" "$@" . 2>/dev/null \
   | grep -v -E '^\./(nixos-modules/cli\.nix|tests/cli-nix-consumers-eval\.sh)$' \
@@ -114,6 +116,8 @@ ok "no live nixling.store.{package,generations} consumers outside cli.nix"
 # 5. No module imports ./cli.nix any more.
 mapfile -t import_hits < <(
   grep -RIln --exclude-dir=.git --exclude-dir=target \
+    --exclude-dir=.cli-rust-native-cache --exclude-dir='.nl-smoke-cache.*' \
+    --exclude-dir=.tests-tmp \
     --include='*.nix' -e './cli\.nix' . 2>/dev/null \
   | grep -v -E '^\./(nixos-modules/cli\.nix|tests/cli-nix-consumers-eval\.sh)$' \
   || true

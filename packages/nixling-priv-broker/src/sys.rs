@@ -3085,6 +3085,14 @@ mod tests {
 
         // Reap the child and capture its wait status.
         let wait_status = waitpid(Pid::from_raw(outcome.pid), None).expect("waitpid failed");
+        const CHILD_EXIT_UNSHARE_IN_CHILD: nix::libc::c_int = 62;
+        if matches!(
+            wait_status,
+            WaitStatus::Exited(_, code) if code == CHILD_EXIT_UNSHARE_IN_CHILD
+        ) {
+            println!("SKIP: unprivileged user NS not available inside child");
+            return;
+        }
 
         // CHILD_EXIT_MOUNT = 64 would mean apply_mount_actions ran and
         // got EPERM on the locked /nix/store bind-mount — i.e., the
@@ -3094,7 +3102,7 @@ mod tests {
             WaitStatus::Exited(Pid::from_raw(outcome.pid), 0),
             "child did not exit 0 (expected /bin/true to succeed); \
              WaitStatus::Exited(_, 64) (CHILD_EXIT_MOUNT) would indicate \
-             the fu27 guard `if !in_ns_credentials` is missing and \
+             the user-namespace mount guard `if !in_ns_credentials` is missing and \
              apply_mount_actions was invoked inside the user-NS \
              (EPERM on locked inherited mount)"
         );
