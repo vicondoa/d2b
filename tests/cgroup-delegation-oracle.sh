@@ -22,9 +22,9 @@ fi
 
 run_cargo() {
   if command -v rustup >/dev/null 2>&1 && [ -n "${RUSTUP_TOOLCHAIN:-}" ]; then
-    rustup run "$RUSTUP_TOOLCHAIN" cargo "$@"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$RUSTUP_TOOLCHAIN" cargo "$@"
   else
-    "$CARGO" "$@"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" "$CARGO" "$@"
   fi
 }
 
