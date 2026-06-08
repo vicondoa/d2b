@@ -3,7 +3,7 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(dirname "$HERE")}
-scratch="$ROOT/.legacy-group-denylist-self-test.$$"
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/nixling-legacy-group-denylist-self-test.XXXXXX")
 denylist_script="$ROOT/tests/legacy-group-name-denylist.sh"
 cleanup() { rm -rf -- "$scratch"; }
 trap cleanup EXIT

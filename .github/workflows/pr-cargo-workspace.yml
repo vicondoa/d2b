@@ -21,10 +21,7 @@ jobs:
             experimental-features = nix-command flakes
       - name: Cargo workspace gate
         run: |
-          cd packages
-          CARGO_BUILD_RUSTC_WRAPPER='' nix develop --command bash -c '
-            cargo fmt --all -- --check &&
-            cargo clippy --workspace --all-targets -- -D warnings &&
-            cargo test --workspace &&
-            (cd nixling-priv-broker && cargo test && cargo test --features layer1-bootstrap)
-          '
+          nix build \
+            .#checks.x86_64-linux.rust-build \
+            .#checks.x86_64-linux.rust-tests \
+            .#checks.x86_64-linux.rust-clippy
