@@ -3,6 +3,120 @@
 Operator-facing follow-up work captured as we hit it. New items go at
 the top. Move closed items to CHANGELOG and delete from here.
 
+## Flake provides no `devShell` → `cargo-ubuntu` CI job and `nix develop` fail
+
+**Symptom.** The `cargo-ubuntu` job in `.github/workflows/pr-cargo-workspace.yml`
+(which runs `cd packages && nix develop --command bash -c 'cargo fmt … &&
+cargo clippy … && cargo test …'`) fails immediately:
+
+```
+error: flake 'git+file:///…/nixling?shallow=1' does not provide attribute
+'devShells.x86_64-linux.default', 'devShell.x86_64-linux',
+'packages.x86_64-linux.default' or 'defaultPackage.x86_64-linux'
+```
+
+Any local `nix develop` in the repo root fails the same way. Observed
+red on PR #31 and PR #32; not specific to either change (both have
+clean Rust locally — the job never gets as far as building).
+
+**Root cause.** `flake.nix` exposes `nixosModules`, `templates`, and
+`checks`, but **no `devShells` / `devShell` output**, so the CI's
+`nix develop` has nothing to enter. The Rust workspace is otherwise
+built/tested directly with the pinned `rust-toolchain.toml` (see the
+documented manual env: `~/.rustup/toolchains/1.94.1-*/bin` + a nix
+gcc-wrapper `bin` for `cc` + `CARGO_BUILD_RUSTC_WRAPPER=''`).
+
+**Fix options.**
+1. Add `devShells.${system}.default` to `flake.nix` providing the
+   pinned Rust toolchain (1.94.1), a C compiler/`cc` wrapper, and the
+   codegen deps (so `cargo fmt/clippy/test` + `xtask gen-*` run inside
+   `nix develop`), then keep the workflow as-is.
+2. Or drop `nix develop` from `pr-cargo-workspace.yml` and invoke
+   cargo via the documented manual toolchain env directly.
+
+Option 1 is preferable: it makes `nix develop` the single source of
+truth for the build env both in CI and locally, matching the cargo
+workflow's existing expectation.
+
+## `DiskInit` leaves `store-overlay.img` unformatted if interrupted between create and `mkfs.ext4` (guest hangs in initrd)
+
+**Symptom.** A `writableStoreOverlay` VM hangs ~3 s into boot, no
+network, and `nixling up <vm>` eventually returns `broker-error`. The
+guest serial console (in the host journal, tagged
+`nixling-priv-broker[<ch-pid>]`) shows the initrd looping on:
+
+```
+EXT4-fs (vdc): VFS: Can't find ext4 filesystem
+         Mounting /sysroot/nix/.rw-store...
+```
+
+`vdc` is `store-overlay.img` (CH `serial=rootfs`). `blkid` on the host
+confirms the image is raw (`TYPE` absent / `file -s` → `data`) while
+`home.img`/`var.img` are valid `ext4`.
+
+**Root cause.** `disk_init_one`
+(`packages/nixling-priv-broker/src/ops/disk_init.rs`) is not
+crash-atomic and its skip check is existence-only:
+
+- L83–85: `if spec.if_absent && spec.target_path.exists() { return Skipped }`
+  — skips purely on the path existing, never validating that the
+  existing image contains a filesystem.
+- L100–112: `create_new(true)` (O_CREAT|O_EXCL) creates the empty file.
+- L118–130: `fallocate` allocates blocks (non-zeroing).
+- L165–198: `mkfs.ext4` runs **after** the file already exists at its
+  final path.
+
+The window between "file created + fallocated" (L112) and "mkfs.ext4
+completed" (L191) is not atomic. If the broker (or the mkfs child) is
+killed in that window — e.g. OOM/SIGKILL under host CPU starvation, a
+host reboot, or a `nixling down` mid-init — the target path is left as a
+fallocated-but-unformatted image. On every subsequent start, L83–85
+sees the file exists and returns `Skipped`, so `mkfs.ext4` never
+re-runs. CH then attaches the blank image (`serial=rootfs`) and the
+guest (`nixos-modules/vm-guest-base.nix:142–147`, which mounts
+`/dev/disk/by-id/virtio-rootfs` at the overlay path and relies on "the
+broker's DiskInit op runs mkfs.ext4 when creating the image") hangs in
+initrd. `home.img`/`var.img` survive because they were formatted by an
+earlier, completed init; only the freshly-added overlay image was
+caught mid-init.
+
+The plan-op is emitted in
+`nixos-modules/processes-json.nix:279–293` and `:797–818`; the
+host-activation owner re-assert path is
+`nixos-modules/host-activation.nix:397–408`.
+
+**Repro.** Enable `writableStoreOverlay` on a VM whose
+`store-overlay.img` does not yet exist, then induce heavy host load (or
+SIGKILL the broker) so the first-boot `mkfs.ext4` is interrupted.
+Subsequent boots hang as above.
+
+**Manual recovery (today).** `nixling down <vm> --apply`; on the host
+`mkfs.ext4 -F /var/lib/nixling/vms/<vm>/store-overlay.img`; restore the
+runner owner + `0600`; `nixling up <vm> --apply`.
+
+**Proposed fix.** Make `DiskInit` crash-atomic and/or self-healing:
+
+1. Atomic publish: create + `fallocate` + `mkfs.ext4` against a
+   `*.img.tmp` (or an `O_TMPFILE`) and only `rename(2)` into the final
+   path after mkfs succeeds, so a partially-initialized image never
+   lands at the target name. A crash leaves only the temp file, which
+   the next init can discard and redo.
+2. Validate-then-repair: when `if_absent` and the file exists, probe for
+   a valid ext4 superblock before skipping; if the image exists but has
+   no recognizable filesystem, re-`mkfs.ext4` (safe for the overlay
+   upperdir, which is empty by construction). Guard against reformatting
+   an image that already carries a valid fs (data preservation).
+3. Defense in depth: a guest-side `mkfs`-if-empty on the
+   `serial=rootfs` device in initrd (as microvm.nix does for ordinary
+   volumes) so a blank overlay disk is repaired in the guest rather than
+   wedging the mount.
+
+Option 1 closes the race for new inits; option 2 repairs images already
+corrupted in the field. Add regression coverage alongside the existing
+`mkfs_ext4_env_var_rejects_*` tests (e.g. a "pre-existing unformatted
+image is re-initialized, pre-existing ext4 is preserved" case). Touches
+the privileged broker disk path, so route through panel review.
+
 ## Speed up the `assertions-eval` gate by folding probe cases into the batch
 
 `tests/assertions-eval.sh` now evaluates its 26-case batch via a
