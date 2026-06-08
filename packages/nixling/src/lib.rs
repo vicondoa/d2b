@@ -1980,12 +1980,23 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
 /// the byte count. Spawning `argv[0]` (an absolute path or PATH-resolved
 /// binary) makes this hermetically testable with a fake `ssh`.
 fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
-    use std::io::Read as _;
     // A guest config file is small; bound the untrusted pull on both
     // size and time. The guest controls the remote file, so both limits
     // are load-bearing security controls, not just hygiene.
     const MAX_BYTES: usize = 1 << 20; // 1 MiB
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    config_sync_capture_to_staging_limited(argv, staging, MAX_BYTES, TIMEOUT)
+}
+
+/// Inner capture with injectable limits so the byte-cap AND timeout
+/// paths are both hermetically testable.
+fn config_sync_capture_to_staging_limited(
+    argv: &[String],
+    staging: &Path,
+    max_bytes: usize,
+    timeout: std::time::Duration,
+) -> Result<usize, CliFailure> {
+    use std::io::Read as _;
 
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
@@ -2004,8 +2015,8 @@ fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usi
             match stdout.read(&mut chunk) {
                 Ok(0) => break Ok(buf),
                 Ok(n) => {
-                    if buf.len() + n > MAX_BYTES {
-                        break Err(format!("guest config exceeds the {MAX_BYTES}-byte limit"));
+                    if buf.len() + n > max_bytes {
+                        break Err(format!("guest config exceeds the {max_bytes}-byte limit"));
                     }
                     buf.extend_from_slice(&chunk[..n]);
                 }
@@ -2015,7 +2026,7 @@ fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usi
         let _ = tx.send(res);
     });
 
-    let stdout_bytes = match rx.recv_timeout(TIMEOUT) {
+    let stdout_bytes = match rx.recv_timeout(timeout) {
         Ok(Ok(buf)) => buf,
         Ok(Err(msg)) => {
             let _ = child.kill();
@@ -2030,8 +2041,8 @@ fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usi
             return Err(CliFailure::new(
                 1,
                 format!(
-                    "config sync: timed out after {}s pulling guest config",
-                    TIMEOUT.as_secs()
+                    "config sync: timed out after {}ms pulling guest config",
+                    timeout.as_millis()
                 ),
             ));
         }
@@ -7166,8 +7177,9 @@ mod config_cmd_tests {
 
     use super::{
         config_approve_core, config_atomic_write, config_reject_core, config_staging_path_in,
-        config_sync_capture_to_staging, config_sync_ssh_argv, config_validate_remote_path,
-        config_validate_staging_bytes, config_validate_vm_name,
+        config_sync_capture_to_staging, config_sync_capture_to_staging_limited,
+        config_sync_ssh_argv, config_validate_remote_path, config_validate_staging_bytes,
+        config_validate_vm_name,
     };
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -7399,6 +7411,34 @@ mod config_cmd_tests {
             err.message
         );
         assert!(!staging.exists(), "must not stage an oversized pull");
+    }
+
+    #[test]
+    fn sync_capture_times_out_and_does_not_stage() {
+        // A guest that stalls (writes nothing, never closes stdout) must
+        // hit the wall-clock timeout, get killed, and not stage. Uses an
+        // injected 200 ms timeout against a fake ssh that sleeps.
+        let dir = scratch("sync-timeout");
+        let argv = fake_ssh(&dir, "ssh", "exec sleep 30\n");
+        let staging = dir.join("work-aad.guest.nix");
+        let start = std::time::Instant::now();
+        let err = config_sync_capture_to_staging_limited(
+            &argv,
+            &staging,
+            1 << 20,
+            std::time::Duration::from_millis(200),
+        )
+        .expect_err("must time out");
+        assert!(
+            err.message.contains("timed out"),
+            "expected a timeout error, got: {}",
+            err.message
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "timeout did not fire promptly"
+        );
+        assert!(!staging.exists(), "must not stage on timeout");
     }
 
     #[test]

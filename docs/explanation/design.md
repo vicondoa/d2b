@@ -1043,11 +1043,14 @@ evaluation, so it is contained on three independent axes (see
   trusting the module system's reported source file — so `imports`,
   `builtins.toFile`-generated modules, and `_file` spoofing are all
   caught. A guest can change its own OS, never the host's
-  substrate/framework control of it. This is a namespace boundary, not
-  an eval-time sandbox: it does not constrain an *approved* guest
-  file's eval-time filesystem access (e.g. `builtins.readFile`), which
-  is governed by the operator-review-and-approve gate below (a sound
-  structural purity boundary is deferred future work in ADR 0024).
+  substrate/framework control of it. This is a *best-effort* namespace
+  lint, not an eval-time sandbox: it does not constrain an *approved*
+  guest file's eval-time filesystem access (e.g. `builtins.readFile`),
+  and because it evaluates over the base module set (not the full per-VM
+  stack) it can miss a forbidden definition gated on `lib.mkIf` of a
+  value the real eval sets but the lint context does not. Both gaps are
+  governed by the operator-review-and-approve gate below (a sound
+  structural boundary is deferred future work in ADR 0024).
 - **Host-operator review before evaluation.** A synced file lands in a
   user-local staging copy and is never evaluated until an operator
   reviews (`config diff`) and approves it onto an operator-named

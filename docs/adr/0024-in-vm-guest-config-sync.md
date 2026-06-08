@@ -49,22 +49,31 @@ inversion.
    substrate/framework control of it. Only VMs that set a
    `guestConfigFile` pay this cost.
 
-   **Scope / non-goal (eval-time purity).** This check is a *namespace*
-   policy boundary, not an eval-time security sandbox. `lib.evalModules`
-   cannot prevent an approved guest file from reading host paths at eval
-   time (e.g. `builtins.readFile "/etc/…"`) — and a sound structural
-   purity boundary is not achievable for a single module merged into the
-   otherwise-impure per-VM `nixosSystem` eval without a larger redesign
-   (a restricted/pure evaluator whose normalized output is the only
-   thing the host consumes — see Future work). The eval-time exposure is
-   therefore bounded by the **operator-review-and-approve trust gate**:
-   the host only ever evaluates a guest file the operator has reviewed
-   (`config diff`) and explicitly approved, at which point it is trusted,
-   operator-reviewed host Nix — no more privileged than config the
-   operator writes by hand. The namespace lint guarantees the operator
-   cannot *accidentally* let a guest escape into `microvm.*`/`nixling.*`;
-   it does not claim to sandbox a malicious approved file's eval-time
-   filesystem access.
+   **Scope / non-goal (best-effort lint, not a sound sandbox).** This
+   check is a *namespace* policy lint, not a sound eval-time boundary.
+   Two known limits, both inherent to evaluating guest-authored Nix as a
+   module, share the same backstop and the same deferred sound fix (see
+   Future work):
+   (i) `lib.evalModules` cannot prevent an approved guest file from
+   reading host paths at eval time (e.g. `builtins.readFile "/etc/…"`);
+   (ii) the lint evaluates the guest file over the base NixOS module set,
+   not the full per-VM stack (`vm.config`, components, framework), so a
+   forbidden definition gated on `lib.mkIf <cond>` where `<cond>`
+   depends on a value the real eval sets but the lint context does not
+   can be missed. A sound structural boundary for either is not
+   achievable for a single module merged into the otherwise-impure
+   per-VM `nixosSystem` eval without a larger redesign (a restricted/pure
+   evaluator whose normalized output is the only thing the host
+   consumes — see Future work). Both exposures are therefore bounded by
+   the **operator-review-and-approve trust gate**: the host only ever
+   evaluates a guest file the operator has reviewed (`config diff`) and
+   explicitly approved, at which point it is trusted, operator-reviewed
+   host Nix — no more privileged than config the operator writes by
+   hand. The lint reliably catches the common case (unconditional
+   host-owned sets, and conditional ones whose guard resolves the same
+   in both contexts, from any source incl. `imports`/`builtins.toFile`/
+   `_file` spoofing); it is defense-in-depth against accidental escape,
+   not a sandbox around a malicious approved file.
 
 3. **Canonical config stays in its current host-side location.** No new
    source-of-truth repo. History/rollback come from the operator's
@@ -130,15 +139,18 @@ inversion.
 
 ## Future work
 
-- **Structurally sound eval-time purity.** The namespace lint does not
-  constrain a guest file's eval-time filesystem access (see Decision 2,
-  scope note). A fully-sound boundary would evaluate the per-VM system
-  for `guestConfigFile` VMs under a restricted/pure evaluator and have
-  the host consume only that evaluator's normalized output (toplevel
-  drv + runner attrs + namespace result), never re-importing the guest
-  file impurely. This is a larger change than the namespace lint and is
-  deferred; until then, operator review/approve is the eval-purity
-  trust boundary.
+- **Structurally sound containment (eval purity + full-context
+  attribution).** The namespace lint does not constrain a guest file's
+  eval-time filesystem access, and evaluates it over the base module set
+  rather than the full per-VM stack (see Decision 2, scope note). A
+  fully-sound boundary would evaluate the per-VM system for
+  `guestConfigFile` VMs under a restricted/pure evaluator with the full
+  module context, and have the host consume only that evaluator's
+  normalized output (toplevel drv + runner attrs + namespace result),
+  never re-importing the guest file impurely. This closes both the
+  eval-purity and the conditional-context gaps. It is a larger change
+  than the lint and is deferred; until then, operator review/approve is
+  the trust boundary.
 - **Guest-build mode.** In-guest `nixos-rebuild` for fast local
   iteration (store DB, build users, inputs, closure reconciliation) is a
   separate spike. Durable persistence always flows config → sync →

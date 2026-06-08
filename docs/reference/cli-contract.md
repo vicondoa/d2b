@@ -1928,8 +1928,9 @@ All `config` verbs share these exit codes:
 | Exit | Meaning |
 | --- | --- |
 | `0` | Success (including `diff` whether or not files differ). |
-| `1` | Runtime error: nothing staged, SSH failure, size-cap/timeout, missing `ssh.user`, missing `--to`/`--against` target dir, I/O error, unknown VM in the manifest. |
+| `1` | Runtime error: nothing staged, SSH failure, size-cap/timeout, missing `ssh.user`, missing `--to`/`--against` target dir, I/O error. |
 | `2` | Usage error (bad/missing arguments; surfaced by `clap`). |
+| `70` | `config sync` only: the VM is not declared in the active manifest (`require_known_vm` emits the typed `not-yet-implemented` host-error envelope). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest and so never return `70`. |
 
 With `--json` each verb emits a single stdout object:
 
