@@ -216,6 +216,20 @@ The reviewer signal that "this PR needs Layer-2 with-sudo coverage"
 is the `paths` checklist in the workflow YAML — touching any of
 those paths is a hint to the maintainer to dispatch after review.
 
+### Running the L1c privilege oracle
+
+The [`pr-l1c-privilege-oracle`](.github/workflows/pr-l1c-privilege-oracle.yml)
+workflow validates live `nixling-priv-broker` process posture on a
+root-capable self-hosted runner labeled `nixos`. It is manual-dispatch
+only for the same trust-boundary reason: fork PR code must not run
+automatically on persistent self-hosted runner infrastructure.
+
+Maintainers dispatch the workflow only against a reviewed ref:
+
+```bash
+gh workflow run pr-l1c-privilege-oracle.yml --ref <ref>
+```
+
 To provision a runner:
 
 1. Provision a host that the framework supports (NixOS recommended;

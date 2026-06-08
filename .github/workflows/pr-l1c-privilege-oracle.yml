@@ -1,52 +1,24 @@
 name: pr-l1c-privilege-oracle
+
+# The oracle reads live host process state and requires a root-capable
+# self-hosted runner. Keep it manual-only so fork PR code cannot execute on
+# persistent runner infrastructure.
+
 on:
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  probe-nixos-runner:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      available: ${{ steps.probe.outputs.available }}
-    steps:
-      - id: probe
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if runners_json=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100" 2>/dev/null); then
-            if echo "$runners_json" | jq -e 'any(.runners[]?; .status == "online" and ([.labels[].name] | index("self-hosted")) != null and ([.labels[].name] | index("nixos")) != null)' >/dev/null; then
-              echo "available=true" >> "$GITHUB_OUTPUT"
-              echo "Using online self-hosted nixos runner for l1c oracle."
-            else
-              echo "available=false" >> "$GITHUB_OUTPUT"
-              echo "No online self-hosted nixos runner detected; skipping l1c oracle."
-            fi
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Runner probe unavailable; skipping l1c oracle."
-          fi
-
   l1c-privilege-oracle:
-    needs: probe-nixos-runner
-    if: needs.probe-nixos-runner.outputs.available == 'true'
     runs-on: [self-hosted, nixos]
     timeout-minutes: 30
+    env:
+      NIXLING_L1C_SELF_HOSTED: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Layer 1c privilege oracle
         run: bash tests/l1c-privilege-oracle.sh
-
-  skip-when-no-runner:
-    needs: probe-nixos-runner
-    if: needs.probe-nixos-runner.outputs.available != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Skip l1c oracle
-        run: echo "No online self-hosted nixos runner with labels [self-hosted, nixos]; skipping tests/l1c-privilege-oracle.sh"
