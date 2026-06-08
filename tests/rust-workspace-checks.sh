@@ -244,12 +244,14 @@ cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
+        cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
@@ -261,12 +263,12 @@ cargo_audit_check() {
   local label="$1" lock_path="$2"
   if command -v cargo-audit >/dev/null 2>&1; then
     log "--> cargo audit ($label)"
-    cargo audit --file "$lock_path"
+    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
     ok "cargo audit ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo audit ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-      cargo audit --file "$lock_path"
+      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path"
     ok "cargo audit ($label)"
   else
     fail "cargo audit cannot run for $label: cargo-audit and nix are unavailable; ADR 0009 does not authorize a W0a waiver"
