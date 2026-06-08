@@ -10,6 +10,19 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- `nixling.vms.<vm>.guestConfigFile` — a dedicated, **guest-editable**
+  per-VM NixOS module for the in-guest OS layer (packages, services,
+  in-guest users, files). It is merged into the guest like `config`,
+  but is **contained**: a hard eval-time assertion rejects it if it
+  sets any host-owned `microvm.*` (runner substrate) or `nixling.*`
+  (framework) option, naming the offending option(s). This is the
+  foundation for the in-VM config-sync workflow — an operator can edit
+  this file from inside the VM and sync it back for review without
+  being able to escape the VM's own OS boundary. Host-owned settings
+  stay in `config`, which the guest cannot edit.
+
 ### Fixed
 
 - `nixling switch` / `boot` / `test` no longer fail with `broker-error`

@@ -257,4 +257,40 @@ rec {
   # helper returns null for backward compat with consumers that
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
+
+  # guestConfigForbiddenDefs — containment check for the per-VM
+  # `guestConfigFile` (the guest-editable OS layer).
+  #
+  # Given a per-VM evaluator `options` attrset and the guest config
+  # file path (as a string), return the dotted paths of host-owned
+  # options (anything under `microvm.*` or `nixling.*`) that the guest
+  # file illegitimately defined. An empty list means the guest file is
+  # contained (only touched guest OS options).
+  #
+  # Implementation: recurse the `microvm` and `nixling` option
+  # subtrees; for each leaf option, ask the module system (via
+  # `definitionsWithLocations`) whether ANY of its definitions was
+  # sourced from the guest file. This attributes a forbidden write to
+  # the exact file that made it, so a guest can never silently set
+  # host-owned runner/framework options even after an operator
+  # approves its synced config. See assertions.nix for the assertion
+  # that consumes this.
+  guestConfigForbiddenDefs = vmOptions: guestFile:
+    let
+      isOpt = a: builtins.isAttrs a && (a._type or null) == "option";
+      walk = prefix: attrs:
+        lib.concatLists (lib.mapAttrsToList
+          (name: val:
+            let path = if prefix == "" then name else "${prefix}.${name}"; in
+            if lib.hasPrefix "_" name then [ ]
+            else if isOpt val then
+              (if builtins.any (d: d.file == guestFile)
+                 (val.definitionsWithLocations or [ ])
+               then [ path ] else [ ])
+            else if builtins.isAttrs val then walk path val
+            else [ ])
+          attrs);
+    in
+    (walk "microvm" (vmOptions.microvm or { }))
+    ++ (walk "nixling" (vmOptions.nixling or { }));
 }

@@ -253,6 +253,7 @@ in
           ++ lib.optional vm'.homeManager.enable ./components/home-manager.nix
           ++ lib.optional (derived != null) (envWorkloadGuestModule derived)
           ++ [ vm'.config ]
+          ++ lib.optional (vm'.guestConfigFile != null) vm'.guestConfigFile
           ++ lib.optional (chVsock == null) {
             microvm.vsock.cid = lib.mkDefault (fallbackVsockCid name);
           }

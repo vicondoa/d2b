@@ -644,6 +644,11 @@ fi
 if [ -x "$ROOT/tests/usbip-gating-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
 fi
+if [ -x "$ROOT/tests/guest-config-containment-eval.sh" ]; then
+  # Asserts the per-VM guest-editable `guestConfigFile` may only set
+  # guest OS options, never host-owned microvm.* / nixling.* options.
+  nl_static_parallel_script_gate "tests/guest-config-containment-eval.sh" "$ROOT/tests/guest-config-containment-eval.sh"
+fi
 if [ -x "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh" ]; then
   # Asserts every declared bridge has a boot.kernel.sysctl entry that
   # suppresses IPv6 at NixOS activation, closing the boot-time window.
