@@ -62,11 +62,23 @@ let
   ed = netVm.config.systemd.network.networks."10-eth-dhcp";
   up = netVm.config.systemd.network.networks."10-uplink";
   lan = netVm.config.systemd.network.networks."10-lan";
+  # v0.1.6 Test-H2 (Spec correction #31): the HOST-side uplink-bridge
+  # networkd entry MUST carry ConfigureWithoutCarrier=true plus a
+  # static route to the LAN subnet via the net VM's uplink address.
+  # Without ConfigureWithoutCarrier the bridge cannot apply Address +
+  # Route before its first tap attaches — but
+  # nixling-net-route-preflight runs BEFORE the net VM start and
+  # checks the route exists → deadlock.
+  hostBrUp = nixos.config.systemd.network.networks."20-br-work-up";
+  hostBrUpRoute = builtins.head hostBrUp.routes;
 in {
   ethDhcpMatchType = ed.matchConfig.Type or null;
   ethDhcpMatchMac  = ed.matchConfig.MACAddress or null;
   uplinkAddress = (builtins.head up.addresses).Address or "";
   lanAddress    = (builtins.head lan.addresses).Address or "";
+  hostBrUpConfigureWithoutCarrier = hostBrUp.networkConfig.ConfigureWithoutCarrier or null;
+  hostBrUpRouteDestination = hostBrUpRoute.Destination or null;
+  hostBrUpRouteGateway     = hostBrUpRoute.Gateway or null;
 }
 EOF
 )
@@ -107,5 +119,27 @@ if [ "$LAN_ADDR" != "10.20.0.1/24" ]; then
   fail "net VM '10-lan' address is '$LAN_ADDR'; expected 10.20.0.1/24 (env work, lanSubnet=10.20.0.0/24)."
 fi
 ok "net VM '10-lan' carries the env's static LAN gateway address ($LAN_ADDR)"
+
+# v0.1.6 Test-H2 (Spec correction #31): host-side uplink-bridge
+# checks. ConfigureWithoutCarrier=true is the v0.1.2 fix that lets
+# networkd apply Address+Route before the bridge has carrier. The
+# route entry must point at the env's LAN subnet via the net VM's
+# uplink IP — that's what the route-preflight unit polls for at boot.
+HOST_BR_CWC=$(printf '%s' "$OUT" | jq -r '.hostBrUpConfigureWithoutCarrier // "null"')
+HOST_BR_DEST=$(printf '%s' "$OUT" | jq -r '.hostBrUpRouteDestination // "null"')
+HOST_BR_GW=$(printf '%s' "$OUT" | jq -r '.hostBrUpRouteGateway // "null"')
+
+if [ "$HOST_BR_CWC" != "true" ]; then
+  fail "host '20-br-work-up' networkConfig.ConfigureWithoutCarrier is '$HOST_BR_CWC'; expected 'true' (route-preflight deadlock; see nixos-modules/network.nix:335-353)."
+fi
+ok "host '20-br-work-up' carries ConfigureWithoutCarrier=true"
+
+if [ "$HOST_BR_DEST" != "10.20.0.0/24" ]; then
+  fail "host '20-br-work-up' route Destination is '$HOST_BR_DEST'; expected '10.20.0.0/24' (env work lanSubnet)."
+fi
+if [ "$HOST_BR_GW" != "192.0.2.2" ]; then
+  fail "host '20-br-work-up' route Gateway is '$HOST_BR_GW'; expected '192.0.2.2' (env work netUplinkIp)."
+fi
+ok "host '20-br-work-up' route points at $HOST_BR_DEST via $HOST_BR_GW"
 
 log "==> net-vm-network-eval OK"

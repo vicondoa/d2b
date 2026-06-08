@@ -304,6 +304,10 @@ the per-VM component toggles:
   whole `microvm-run` (cloud-hypervisor + crosvm GPU sidecar) as
   the dedicated `nixling-<vm>-gpu` user
   ([`nixos-modules/host-sidecars.nix:100-182`](../../nixos-modules/host-sidecars.nix)).
+  Carries `DeviceAllow=/dev/net/tun rw` so cloud-hypervisor can
+  attach to the workload's tap (created upstream by
+  `microvm-tap-interfaces@<vm>.service`; cloud-hypervisor only
+  opens the cdev — it does not need `CAP_NET_ADMIN`).
 - `nixling-<vm>-snd.service` — present when
   `nixling.vms.<vm>.audio.enable = true`. Runs
   vhost-device-sound as `nixling-<vm>-snd`, exposes its
@@ -313,6 +317,63 @@ the per-VM component toggles:
   `nixling.vms.<vm>.tpm.enable = true`. Per-VM software TPM
   emulator, state under `/var/lib/nixling/vms/<vm>/swtpm/`
   ([`nixos-modules/host-sidecars.nix:46-99`](../../nixos-modules/host-sidecars.nix)).
+  The `nixlingVmStatePerms` activation script
+  ([`nixos-modules/host-activation.nix`](../../nixos-modules/host-activation.nix))
+  grants `nixling-<vm>-swtpm` a traversal-only ACL (`--x`) on
+  the parent state dir so the swtpm process — which runs in its
+  own `StateDirectory=` subdir under `microvm:kvm 2770` — can
+  reach `tpm2-00.permall`. Required because TPM-bound creds
+  (Entra device join, Intune compliance) must survive any
+  framework upgrade or user rename without re-enrollment.
+
+#### Why all per-VM sidecars carry `restartIfChanged = false`
+
+Every per-VM lifecycle service — `nixling@<vm>`, `microvm@<vm>`,
+`microvm-virtiofsd@<vm>`, `nixling-<vm>-{gpu,snd,swtpm}` — sets
+`restartIfChanged = false` (the same opt-out upstream microvm.nix
+applies to `microvm@.service`). A `nixos-rebuild switch` that
+touches any of these units updates the file in
+`/etc/systemd/system/` but does NOT cycle the running unit.
+
+The motivating constraint is graphics VMs: the GPU sidecar IS the
+cloud-hypervisor process. Restarting it kills CH, evaporating
+every in-RAM piece of session state — Wayland clients,
+interactive logins, Entra device-bound tokens, virtiofsd socket
+handshakes. For headless VMs the damage is smaller (no Wayland
+session to lose) but still material (network connections drop,
+filesystem caches discard).
+
+The trade-off is that consumers must explicitly opt into picking
+up sidecar config changes. The framework provides two paths:
+
+- `nixling restart <vm>` — clean `down` + `up` of the existing
+  closure. Use this when `nixling list` flags a VM as
+  `[pending restart]` after a `nixos-rebuild switch`.
+- `nixling switch <vm>` — full per-VM closure rebuild + live
+  activation via SSH (no VM reboot). Use this when you edited
+  the VM's own NixOS module.
+
+#### Pending-restart detection via `booted` vs `current`
+
+Two per-VM symlinks track the closure the VM is *running* vs the
+closure the host *declares*:
+
+- `/var/lib/nixling/vms/<vm>/current` — points at the latest
+  declared closure (`microvm-cloud-hypervisor-<vm>` for graphics,
+  `microvm-qemu-<vm>` for headless). Updated at every
+  `nixos-rebuild switch`.
+- `/var/lib/nixling/vms/<vm>/booted` — points at the closure the
+  running VM actually exec'd. Updated either by upstream
+  microvm.nix's `microvm-set-booted@<vm>.service` (headless +
+  net VMs) or — new in v0.1.5 — by the `nixling-<vm>-gpu.service`
+  `ExecStartPre` (graphics VMs).
+
+When `booted != current` AND the VM is running, the pending-
+restart predicate fires: `nixling list` adds `[pending restart]`
+to the STATUS column, and `nixling status <vm>` prints both
+store paths plus the remediation command. A first-boot VM has
+no `booted` yet — that's not "pending" — and a stopped VM has
+nothing to apply.
 
 Per-env sidecars (one set per declared env, not per VM):
 
@@ -599,6 +660,35 @@ declares `Requires=` on this preflight, so a failed preflight
 refuses to start any VM. `RemainAfterExit=true` keeps the unit
 "active" between probes so the dependency is well-defined.
 
+The v0.1.0 H1 fix tightened the preflight script: pre-v0.1.0,
+`ip route get … 2>/dev/null | head -n1 || true` could silently
+yield an empty result (lookup failed, bridge missing, no route at
+all) and the wrong-dev check was inside `if [ -n "$_probe_ip" ]`,
+so the very case the preflight exists to catch passed. The script
+now treats empty output as a fatal error.
+
+#### `ConfigureWithoutCarrier` on the per-env uplink bridge
+
+A subtler bootstrap deadlock surfaces if the per-env uplink bridge
+(`br-<env>-up`) is configured WITHOUT
+`ConfigureWithoutCarrier = true`. The chain:
+
+1. systemd-networkd refuses to apply Address + static Route to a
+   bridge that has no carrier (default policy).
+2. The env's uplink bridge gets carrier only when the net VM
+   attaches its uplink tap (`<env>-u2`).
+3. The net VM start (`nixling@sys-<env>-net.service`) is
+   `Requires=` the route preflight.
+4. The route preflight checks the static route is installed.
+
+Without `ConfigureWithoutCarrier = true`, no carrier → no route →
+preflight fails → net VM can't start → no carrier. v0.1.2 sets
+this flag on `br-<env>-up`
+([`nixos-modules/network.nix:330-352`](../../nixos-modules/network.nix));
+the LAN bridge `br-<env>-lan` already had it. The route is
+installed without waiting for carrier; once the net VM attaches,
+traffic flows.
+
 ### Per-env USBIP, no host-wide singleton
 
 **Threat:** a single host-wide `nixling-sys-usbipd.service`
@@ -841,6 +931,44 @@ same base), and produces an unambiguous "this matches nothing"
 signal at the systemd-networkd level. It is the minimum
 mechanical change that fixes the lex-sort preemption
 ([`nixos-modules/net.nix:47-57`](../../nixos-modules/net.nix)).
+
+### Why doesn't `nixos-rebuild switch` restart VMs?
+
+Every per-VM lifecycle service in the framework carries
+`restartIfChanged = false`. The motivating constraint is
+graphics VMs: the GPU sidecar IS the cloud-hypervisor process.
+Restarting it on every `nixos-rebuild switch` would terminate
+CH, evaporating in-RAM session state — interactive Wayland
+clients, in-flight Entra device-bound tokens, virtiofsd socket
+handshakes. For a single-user desktop workspace where the VM
+is sometimes the user's primary working environment for hours
+at a time, that loss is unacceptable to take silently on
+every framework-internal config change (NixOS adds many of
+these automatically — environment vars, X-Restart-Triggers,
+home-manager regeneration ripple-throughs).
+
+The trade is that consumers must opt into picking up sidecar
+config changes. The framework provides two paths and a clear
+signal:
+
+- `nixling list` flags any VM whose declared closure
+  (`current` symlink) has drifted from the running one
+  (`booted` symlink) with `[pending restart]`.
+- `nixling restart <vm>` does a clean `down` + `up` of the
+  existing closure. Use this when you ran `nixos-rebuild
+  switch` and a sidecar config changed.
+- `nixling switch <vm>` does a per-VM closure rebuild + live
+  activation via SSH (no VM reboot). Use this when you edited
+  the VM's own NixOS module.
+
+The alternative — letting NixOS bounce VMs on every rebuild —
+was the v0.1.0 behavior; v0.1.5 changed it after migration
+testing showed silent VM restarts caused unacceptable
+session-state loss. The pending-restart indicator means
+consumers no longer have to *guess* whether their rebuild
+affected a VM: the CLI tells them. See
+[`docs/reference/cli-contract.md` — Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015)
+for the exact predicate.
 
 ## 7. References
 

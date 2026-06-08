@@ -137,6 +137,21 @@ CLI (`nixling audio` in `cli.nix`):
 - `nixling audio status` / `nixling audio status <vm>` — reports
   current grant state per VM.
 
+## Lifecycle (v0.1.5+)
+
+`nixling-<vm>-snd.service` carries `unitConfig.X-RestartIfChanged
+= false` (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
+A `nixos-rebuild switch` updates the unit file but does NOT cycle
+the running `vhost-user-sound` sidecar — vhost-user-sound's socket
+connection to cloud-hypervisor cannot survive a restart, and
+killing this sidecar mid-VM produces silent speakers and mic
+stuck in whatever state it was in. After a rebuild, `nixling
+list` flags the VM with `[pending restart]` if its `current`
+closure has drifted from `booted`; apply with `nixling restart
+<vm>` (clean down+up cycles the audio sidecar and CH together so
+the socket gets re-established). See
+[`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
+
 ## Guest-side resources created
 
 In [`components/audio/guest.nix`](../../nixos-modules/components/audio/guest.nix):

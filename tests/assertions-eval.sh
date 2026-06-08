@@ -253,6 +253,20 @@ test_platform_gate_audio_aarch64() {
     "aarch64-linux"
 }
 
+# v0.1.6 SWArch-M9 — graphics VMs cannot be autostart. The wrapper's
+# default path (microvm@<vm>) bypasses the GPU sidecar that binds to
+# /run/user/<uid>/wayland-0, so an autostart=true graphics VM would
+# silently boot without display. Must fail at eval time.
+test_graphics_with_autostart() {
+  run_assertion_test \
+    "graphics-with-autostart" \
+    '({ ... }: {
+       nixling.vms.corp-vm.graphics.enable = true;
+       nixling.vms.corp-vm.autostart = true;
+     })' \
+    'graphics.enable = true is incompatible'
+}
+
 # ---------------------------------------------------------------------------
 
 log "==> tests/assertions-eval.sh"
@@ -267,6 +281,7 @@ test_overlap_containment
 test_env_vs_host_overlap
 test_platform_gate_graphics_aarch64
 test_platform_gate_audio_aarch64
+test_graphics_with_autostart
 
 log "==> assertions-eval: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

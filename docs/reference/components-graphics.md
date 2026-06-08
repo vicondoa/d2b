@@ -64,9 +64,17 @@ The matching guest-visible option lives in the imported
   - `BindPaths`: `/run/user/<wayland-uid>/wayland-0:/run/nixling-gpu/<vm>/wayland-0` — only the socket is visible inside the sidecar's mount namespace, not the parent directory.
   - `ExecStopPost`: `setfacl -x u:nixling-<vm>-gpu /run/user/<wayland-uid>/wayland-0`.
   - `Restart = "no"` — graphics VMs are launched interactively from a Plasma terminal via `nixling up`; restart-on-failure would re-attempt a doomed start.
-- **/dev/kvm + /dev/dri/renderD128 device allow** via
+  - `unitConfig.X-RestartIfChanged = false` (v0.1.5+) — the GPU sidecar IS the cloud-hypervisor process. A `nixos-rebuild switch` updates the unit file but does NOT cycle the running CH. Use `nixling restart <vm>` to apply pending changes. See [`design.md`](../explanation/design.md#why-doesnt-nixos-rebuild-switch-restart-vms) for rationale.
+  - `ExecStartPre` (v0.1.5+) replicates upstream `microvm-set-booted_-start`: `rm -f booted && ln -s $(readlink current) booted` so graphics VMs maintain the per-VM `booted` symlink that the pending-restart indicator compares against `current`. Headless VMs get this from `microvm-set-booted@<vm>.service`; graphics VMs bypass that template, so the GPU sidecar owns it instead.
+- **/dev/kvm + /dev/dri/renderD128 + /dev/net/tun device allow** via
   `DevicePolicy = "closed"` + explicit `DeviceAllow` (no
-  `PrivateDevices`).
+  `PrivateDevices`). `/dev/net/tun` (v0.1.4+) is required because
+  cloud-hypervisor calls `open("/dev/net/tun") +
+  ioctl(TUNSETIFF, …)` to attach to the workload's tap. The tap
+  itself is created by upstream microvm.nix's
+  `microvm-tap-interfaces@<vm>.service` helper (which runs as
+  root with CAP_NET_ADMIN); the sidecar only needs access to the
+  cdev to attach.
 - **fontconfig defaults** — `dejavu_fonts`, `liberation_ttf`,
   `noto-fonts` are added to `fonts.packages` so the guest's monospace
   alias resolves to DejaVu Sans Mono and `foot` doesn't warn.
@@ -120,7 +128,36 @@ The matching guest-visible option lives in the imported
   `ps -fC crosvm` on the host.
 - `graphics.enable = true` is x86_64-linux only. `checkVmPlatform`
   in `host.nix` throws an eval-time error naming the VM if the host
-  is not `x86_64-linux`.
+  is `aarch64-linux`.
+
+## Lifecycle (v0.1.5+)
+
+The GPU sidecar IS the cloud-hypervisor process. There is no
+separate `microvm@<vm>` wrapper for graphics VMs — `nixling up
+<vm>` from a Plasma terminal starts `nixling-<vm>-gpu.service`
+directly via polkit, and that service's ExecStart is the
+`microvm-run` binary the framework built into the per-VM closure.
+
+Implications:
+
+- **`nixos-rebuild switch` does NOT restart the running VM.**
+  All per-VM lifecycle services (including this one) carry
+  `restartIfChanged = false`. After a rebuild, `nixling list`
+  flags the VM with `[pending restart]` if its `current` closure
+  has drifted from `booted`. Apply with `nixling restart <vm>`.
+
+- **`booted` symlink is owned by this sidecar.** `ExecStartPre`
+  runs `rm -f booted && ln -s $(readlink current) booted` so the
+  per-VM `booted`/`current` mismatch detection (the basis of
+  `[pending restart]`) works for graphics VMs the same way it
+  works for headless VMs via `microvm-set-booted@<vm>`. Cleared
+  by `ExecStopPost`.
+
+- **`nixling status <vm>` reports `pending-restart: yes/no`** with
+  both store paths and the exact remediation command.
+
+See [`docs/explanation/design.md`](../explanation/design.md#per-vm-sidecars)
+for the full lifecycle rationale.
 
 ## Hardening notes
 
@@ -136,9 +173,14 @@ The matching guest-visible option lives in the imported
 - `RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" "AF_VSOCK" ]` —
   `AF_VSOCK` is required because cloud-hypervisor uses vsock for
   `sd_notify`, `AF_NETLINK` for the tap helper.
-- `DevicePolicy = "closed"` + explicit `DeviceAllow` for `/dev/kvm`
-  and `/dev/dri/renderD128`. `PrivateDevices` is intentionally NOT
-  set (it would override the explicit allow list).
+- `DevicePolicy = "closed"` + explicit `DeviceAllow` for `/dev/kvm`,
+  `/dev/dri/renderD128`, and `/dev/net/tun`. `PrivateDevices` is
+  intentionally NOT set (it would override the explicit allow
+  list). `/dev/net/tun` (v0.1.4+) is required because
+  cloud-hypervisor `open()`s the cdev to attach to the workload's
+  tap (created upstream by `microvm-tap-interfaces@<vm>`); without
+  it the VM crashes at boot with "Cannot create virtio-net device
+  / Couldn't open /dev/net/tun / Operation not permitted".
 - **`MemoryDenyWriteExecute` is intentionally OMITTED.** crosvm's
   GPU command-buffer translation needs `PROT_WRITE+PROT_EXEC` JIT
   pages; MDWE would SIGSEGV the sidecar on first frame. This is the

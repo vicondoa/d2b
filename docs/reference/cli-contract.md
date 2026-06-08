@@ -25,10 +25,11 @@ The CLI exposes the subcommands below. The shell-level `nixling
 
 | Subcommand                | Purpose                                                                |
 |---------------------------|------------------------------------------------------------------------|
-| `nixling list`            | Enumerate declared VMs + capabilities.                                 |
+| `nixling list`            | Enumerate declared VMs + capabilities. v0.1.5+: flags `[pending restart]` for VMs whose `current` closure differs from `booted` while running (rename of the v0.1.5 `[pending switch]` label — see v0.1.6 release notes). |
 | `nixling up <vm> [-d]`    | Bring VM up. Interactive for graphics VMs; systemd-managed otherwise.  |
 | `nixling down <vm>`       | Stop VM cleanly. `--force` to stop a net VM with running workloads.    |
-| `nixling status [<vm>]`   | Service / process / SSH health. Always includes a per-bridge section.  |
+| `nixling restart <vm>`    | **v0.1.5+**: convenience wrapper — `down <vm>` then `up <vm>`. Idempotent (stopped VM is just brought up). Use this when `nixling list` shows `[pending restart]` to apply pending unit-file changes. `--force` is forwarded to the down step. |
+| `nixling status [<vm>]`   | Service / process / SSH health. Always includes a per-bridge section. v0.1.5+: per-VM view also reports `pending-restart: yes/no` with `booted` and `current` store paths. |
 | `nixling status --check-bridges` | Bridge health table only. Exit non-zero if any bridge unhealthy. |
 | `nixling usb <vm>`        | YubiKey USBIP attach. Ctrl-C detaches.                                 |
 | `nixling console <vm>`    | Foreground serial console (headless VMs only).                         |
@@ -46,6 +47,40 @@ The CLI exposes the subcommands below. The shell-level `nixling
 | `nixling keys show <vm>`  | Print the public key for one VM (stdout, single line).                 |
 | `nixling keys rotate <vm>`| Rotate a VM's nixling-managed key. Atomic + idempotent.                |
 | `nixling audit [--strict] [--human]` | One-shot security/posture audit. JSON by default; `--human` emits a human-readable summary instead (auto-enabled when stdout is a TTY). `--strict` exits non-zero if any field deviates from the post-hardening target state. |
+
+### `restart` vs `switch`
+
+`restart <vm>` is for the case where the framework's units have changed but the running VM is still on the old closure (signalled by `[pending restart]` in `nixling list`). It does a clean stop+start of the existing closure — no rebuild, no SSH activation.
+
+`switch <vm>` is for the case where the VM's *own* config (e.g., `vms/work.nix`) has changed and you want to apply it without rebooting the VM. It builds the new closure, syncs the per-VM `/nix/store`, and runs `switch-to-configuration switch` over SSH inside the running VM.
+
+Use `restart` when you ran `nixos-rebuild switch` on the host and `nixling list` flags `[pending restart]`. Use `switch` when you edited a VM's NixOS module and want it live without restarting.
+
+## Pending-restart signal (v0.1.5+)
+
+Every per-VM lifecycle service in the framework (`nixling@<vm>`, `microvm@<vm>`, `microvm-virtiofsd@<vm>`, `nixling-<vm>-{gpu,snd,swtpm}`) carries `restartIfChanged = false`. A `nixos-rebuild switch` updates the unit files in `/etc/systemd/system/` but does NOT cycle the running VM — the in-flight cloud-hypervisor, virtiofsd, and swtpm processes keep going on the old closure. This protects against silent session-state loss (interactive logins, in-RAM Entra device-bound tokens, virtiofs sockets) on every framework-internal edit.
+
+The framework signals the resulting drift via two state files per VM:
+
+- `/var/lib/nixling/vms/<vm>/current` — symlink to the latest declared closure (updated at every `nixos-rebuild switch`).
+- `/var/lib/nixling/vms/<vm>/booted` — symlink to the closure the running VM actually exec'd (updated by `microvm-set-booted@<vm>` for headless VMs, or by `nixling-<vm>-gpu.service` ExecStartPre for graphics VMs).
+
+Pending-restart predicate: `booted` exists AND `booted != current` AND the VM is running. `nixling list` adds `[pending restart]` to the STATUS column; `nixling status <vm>` prints both store paths and the exact remediation (`nixling restart <vm>` or `nixling switch <vm>`).
+
+A first-run VM (booted not yet created) is not "pending" — it just hasn't started. A stopped VM is not "pending" either — there's nothing to apply.
+
+## Consumer-side extension point: `nixling.site.extraSpecialArgs` (v0.1.1+)
+
+The framework forwards its own flake's `inputs` (nixpkgs, microvm, home-manager) into every per-VM module's `microvm.vms.<vm>.specialArgs`. Consumer flakes that need to thread *their own* inputs into per-VM modules — e.g., to reference `inputs.nixos-entra-id.nixosModules.default` or `inputs.llm-agents.packages.<sys>.copilot-cli` from inside a `vms/<vm>.nix` file — set:
+
+```nix
+{ inputs, ... }:
+{
+  nixling.site.extraSpecialArgs = { inherit inputs; };
+}
+```
+
+Consumer keys take precedence on collision (so the consumer's full `inputs` attrset replaces the framework's narrower one). The pattern mirrors `home-manager.extraSpecialArgs` semantics.
 
 ## Lifecycle state machine
 

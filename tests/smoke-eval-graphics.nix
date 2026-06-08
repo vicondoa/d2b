@@ -79,5 +79,24 @@ in
   # Force the readOnly path by strictly evaluating the manifest in
   # addition to the toplevel build. `deepSeq` ensures we don't
   # accept a thunk that lazily skips the manifest assignment.
-  builtins.deepSeq nixos.config.nixling.manifest
-    nixos.config.system.build.toplevel
+  #
+  # v0.1.6 Test-H5 (Spec correction #34): also force the GPU
+  # sidecar's serviceConfig.DeviceAllow list so a regression that
+  # drops `/dev/net/tun rw` (the v0.1.4 fix for graphics VMs unable
+  # to attach to their tap) surfaces here. Cloud-hypervisor needs
+  # to open /dev/net/tun + ioctl(TUNSETIFF) on the tap created by
+  # upstream microvm.nix's microvm-tap-interfaces@<vm> helper;
+  # without the DeviceAllow entry the GPU sidecar crashes early
+  # with "Couldn't open /dev/net/tun / Operation not permitted".
+  let
+    gpuDeviceAllow =
+      nixos.config.systemd.services."nixling-demo-gfx-gpu".serviceConfig.DeviceAllow;
+    _checkTun =
+      if builtins.elem "/dev/net/tun rw" gpuDeviceAllow
+      then null
+      else throw "smoke-eval-graphics: nixling-demo-gfx-gpu.serviceConfig.DeviceAllow is missing '/dev/net/tun rw' (Spec correction #34 / v0.1.4). Got: ${builtins.toJSON gpuDeviceAllow}";
+  in
+    builtins.deepSeq nixos.config.nixling.manifest
+      (builtins.deepSeq gpuDeviceAllow
+        (builtins.deepSeq _checkTun
+          nixos.config.system.build.toplevel))

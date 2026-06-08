@@ -10,6 +10,172 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.6] - 2026-05-19
+
+Docs catch-up release. The v0.1.1–v0.1.5 patches shipped fixes for
+five framework bugs surfaced during the first real consumer
+migration, but the public docs hadn't been updated to describe the
+resulting behavior changes. This release brings the docs in sync
+with the code, plus a small audit-strict fix that completes
+`v0.1.4`'s skip-stopped-VMs work, and (in the v0.1.6 follow-up
+panel sweep) tightens the autostart wiring + adds regression tests
+for every v0.1.x patch.
+
+### Changed
+
+- **`nixling list` status label**: `[pending switch]` →
+  `[pending restart]`. The label tracks the *recommended action*,
+  and the recommended action for unit-file drift after a host
+  `nixos-rebuild switch` is `nixling restart <vm>` (clean down+up
+  cycles the running closure over the staged unit files); `nixling
+  switch <vm>` is the heavier per-VM-closure-rebuild path for
+  VM-NixOS-module edits. CLI messages in `nixling status` and the
+  `nixling list` trailer updated to match.
+
+- **`systemd.targets.microvms.wants` is now `lib.mkForce []`** on
+  every consumer. Previously v0.1.3 narrowed the list to
+  autostart=true VMs; v0.1.6 narrows further to `[]` so all
+  autostart wiring goes through `systemd.targets.multi-user.wants
+  -> nixling@<vm>.service` exclusively. Removes the duplicate
+  boot path (target.wants pulling `microvm@<vm>` directly,
+  bypassing the framework wrapper).
+
+### Added (assertions)
+
+- **`graphics.enable + autostart` is now an eval-time error.** A
+  graphics VM with `autostart = true` would boot through the
+  upstream microvm@<vm> runner without the GPU sidecar's
+  Wayland-socket bind, leaving the VM with no display. The
+  assertion's remediation message points at `nixling up <vm>`
+  from a Plasma terminal.
+
+### Added (tests)
+
+- `tests/smoke-eval-extraspecialargs.nix` — regression for Spec
+  correction #30 (v0.1.1 extraSpecialArgs propagation through
+  `nixos-modules/host.nix:165`).
+- `tests/net-vm-network-eval.sh` extended — Spec correction #31
+  (v0.1.2 ConfigureWithoutCarrier + route entry on the host's
+  uplink bridge).
+- `tests/autostart-wiring-eval.sh` — Spec corrections #32 + #33
+  + v0.1.6 SWArch-M10 (`nixling@<vm>` is template-only;
+  multi-user.target.wants wiring; `microvms.target.wants == []`).
+- `tests/smoke-eval-graphics.nix` extended — Spec correction #34
+  (v0.1.4 `/dev/net/tun rw` in the GPU sidecar's DeviceAllow).
+- `tests/smoke-eval-tpm.nix` — Spec correction #35 (v0.1.4
+  swtpm parent-dir ACL traversal grant).
+- `tests/restart-policy-eval.sh` — Spec correction #37 (v0.1.5
+  `restartIfChanged = false` across all six services).
+- Negative-assertion regression for v0.1.6 SWArch-M9 in
+  `tests/assertions-eval.sh` (`test_graphics_with_autostart`).
+
+### Added (docs)
+
+- **`docs/reference/cli-contract.md`** documents:
+  - `nixling restart <vm> [--force]` (v0.1.5)
+  - `pending-restart` indicator semantics in `nixling list` /
+    `nixling status` (v0.1.5)
+  - `nixling.site.extraSpecialArgs` consumer-side escape hatch
+    (v0.1.1)
+
+- **`docs/explanation/design.md`**:
+  - New "VM lifecycle policy" section explaining
+    `restartIfChanged = false` on all per-VM units, the
+    `booted`/`current` symlink contract, and how
+    `pending-restart` is computed (v0.1.5).
+  - New "Per-env bridge bootstrap" subsection covering the
+    `ConfigureWithoutCarrier = true` requirement on the uplink
+    bridge and how it breaks the route-preflight deadlock at
+    boot (v0.1.2).
+  - New "GPU sidecar substitutes microvm-run" subsection
+    explaining why the GPU sidecar carries `DeviceAllow=/dev/net/tun`
+    (v0.1.4), the `microvm-set-booted`-equivalent ExecStartPre
+    (v0.1.5), and the swtpm-user ACL grant (v0.1.4).
+  - "Why not X" — new FAQ entry: "Why doesn't `nixos-rebuild
+    switch` restart VMs?", cross-linking to the cli-contract's
+    pending-restart predicate.
+  - Removed `tests/static.sh doesn't iterate examples` and
+    `ROOT defaults to /etc/nixos` from "Limitations / known
+    gaps" (resolved in W6).
+
+- **`docs/how-to/migrating-from-microvm.md`**:
+  - Required minimum `nixling = github:vicondoa/nixling/v0.1.6`
+    (or later) — earlier versions exposed framework bugs that
+    blocked real-world graphics + TPM bring-up. (Aligned with
+    the CHANGELOG; v0.1.6 is the first release where the docs
+    match the shipping code.)
+  - New "After every rebuild" step in the procedure: check
+    `nixling list` for `[pending restart]`, apply with
+    `nixling restart <vm>`. Cross-links to the cli-contract's
+    pending-restart section.
+  - New troubleshooting note: `nixling status <vm>` shows
+    `booted` vs `current` mismatch and the exact remediation
+    command.
+
+- **`docs/reference/components-graphics.md`**:
+  - Added `/dev/net/tun rw` to the documented DeviceAllow list,
+    with the rationale (cloud-hypervisor attaches to the tap
+    upstream microvm.nix's `microvm-tap-interfaces@<vm>.service`
+    helper created).
+  - New "Lifecycle" subsection: GPU sidecar IS the
+    cloud-hypervisor process; `restartIfChanged = false` keeps
+    rebuilds from killing the VM.
+
+- **`docs/reference/components-tpm.md`**:
+  - Added the ACL traversal grant on the parent state dir to
+    the documented host-side resources. No manual `chown`
+    required for v0.1.4+ consumers — the framework's
+    `nixlingVmStatePerms` activation script handles it.
+  - Updated the "DO NOT WIPE" warning to also point at the
+    `pending-restart` indicator as the right signal for
+    "TPM-bound creds may be re-read after restart".
+  - New "Lifecycle (v0.1.5+)" subsection documenting
+    `nixling-<vm>-swtpm.service`'s `unitConfig.X-RestartIfChanged
+    = false`.
+
+- **`docs/reference/components-audio.md`**:
+  - New "Lifecycle (v0.1.5+)" subsection documenting
+    `nixling-<vm>-snd.service`'s `unitConfig.X-RestartIfChanged
+    = false`.
+
+- **`AGENTS.md`**:
+  - New "VM lifecycle policy" subsection documenting
+    `restartIfChanged = false` as a framework invariant for
+    contributors.
+  - New convention: per-VM `wantedBy` ALWAYS via
+    `systemd.targets.multi-user.wants` symlinks, never via
+    per-instance `systemd.services."nixling@${name}"`
+    declarations (which NixOS materializes as separate unit
+    files lacking the template's lifecycle hooks).
+
+- Example READMEs (`minimal`, `graphics-workstation`, `multi-env`,
+  `with-entra-id`) gain a short "After subsequent rebuilds"
+  cross-link block pointing at the template README's post-rebuild
+  section.
+
+- Plan/spec corrections (#30-#38) tracking the v0.1.x patches
+  plus the v0.1.6 follow-up sweep.
+
+### Fixed
+
+- **`nixos-modules/cli.nix`** (`audit --strict`): the
+  `bridge_isolated_workload.<vm>` skip-when-down predicate (added
+  in v0.1.4) only checked `microvm@<vm>.service`. Graphics VMs
+  run cloud-hypervisor via the `nixling-<vm>-gpu.service` sidecar
+  (the GPU sidecar replaces the upstream runner), so the audit
+  was blanket-skipping all graphics VMs even when they were
+  running. Now: a VM is "running" if any of `nixling@<vm>`,
+  `microvm@<vm>`, or `nixling-<vm>-gpu` is active.
+
+- **`nixos-modules/cli.nix`** (`nixling list` / `nixling status`):
+  pending-drift messages used to recommend `nixling switch <vm>`,
+  which is the heavier per-VM-closure-rebuild path. The correct
+  remediation for unit-file drift after a host `nixos-rebuild
+  switch` is `nixling restart <vm>` (clean down+up cycles the
+  running closure over the staged unit files). Messages updated;
+  status label `[pending switch]` renamed to `[pending restart]`
+  to match.
+
 ## [0.1.5] - 2026-05-19
 
 Patch release. Three consumer-impacting items from the first
@@ -37,16 +203,23 @@ config drift had built up.
 
   ```
   NAME             ENV    GRAPHICS TPM   USBIP   STATIC_IP       STATUS
-  work-aad         work   true     true  true    10.20.0.10      systemd [pending switch]
+  work-aad         work   true     true  true    10.20.0.10      systemd [pending restart]
   ```
 
   And `nixling status work-aad` adds:
 
   ```
-  pending-restart: YES — config changed; run `nixling switch work-aad` to apply
+  pending-restart: YES — unit files changed; run `nixling restart work-aad` to apply
     booted : /nix/store/...-microvm-cloud-hypervisor-work-aad
     current: /nix/store/...-microvm-cloud-hypervisor-work-aad
   ```
+
+  Note: v0.1.5 originally shipped the label as `[pending switch]`
+  with a `run nixling switch <vm>` recommendation; v0.1.6 renamed
+  the label to `[pending restart]` and the message to recommend
+  `nixling restart <vm>` (the correct action for unit-file drift
+  is the lighter `restart`, not the per-VM-closure-rebuild
+  `switch`). Pre-v0.1.6 docs may show the legacy strings.
 
   Required because of the `restartIfChanged = false` changes below
   — without that signal, consumers had no way to know their

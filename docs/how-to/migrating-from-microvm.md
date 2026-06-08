@@ -357,7 +357,15 @@ has built cleanly. See "Rollback" at the end of this section.
        microvm.url   = "github:microvm-nix/microvm.nix";
        microvm.inputs.nixpkgs.follows = "nixpkgs";
 
-       nixling.url = "github:vicondoa/nixling/v0.1.0";
+       # IMPORTANT: pin >= v0.1.6. Earlier v0.1.x releases shipped
+       # known framework bugs surfaced by the first real consumer
+       # migration (graphics-VM /dev/net/tun device-deny, swtpm
+       # parent-dir ACL gap, route-preflight bootstrap deadlock,
+       # nixos-rebuild restarting VMs mid-flight). v0.1.5 fixed the
+       # code; v0.1.6 ships the matching docs catch-up so this
+       # how-to and the rest of the reference docs describe the
+       # behaviour you're actually running.
+       nixling.url = "github:vicondoa/nixling/v0.1.6";
        nixling.inputs.nixpkgs.follows = "nixpkgs";
        nixling.inputs.microvm.follows = "microvm";
      };
@@ -444,6 +452,45 @@ has built cleanly. See "Rollback" at the end of this section.
    `systemctl status microvm@<vm>` will show the same unit state
    `microvm.nix` always reported. SSH into each migrated VM to
    confirm reachability.
+
+### After every subsequent `nixos-rebuild switch` (v0.1.5+)
+
+Every per-VM lifecycle service in the framework carries
+`restartIfChanged = false`. Rebuilds update the unit files in
+`/etc/systemd/system/` but do NOT cycle the running VMs — this
+protects in-flight session state (interactive Wayland clients,
+in-RAM Entra device-bound tokens, virtiofsd socket handshakes).
+
+After `nixos-rebuild switch`, check whether any VM has pending
+changes:
+
+```bash
+nixling list
+```
+
+A VM with a drift between its declared closure and its booted
+closure is flagged in the STATUS column:
+
+```
+NAME             ENV    GRAPHICS TPM   USBIP   STATIC_IP       STATUS
+work             work   true     true  true    10.20.0.10      systemd [pending restart]
+```
+
+Apply with:
+
+```bash
+nixling restart <vm>
+```
+
+(Or `nixling switch <vm>` if you want a per-VM closure rebuild +
+live activation via SSH; restart cycles the existing closure
+cleanly.)
+
+`nixling status <vm>` prints both the `booted` and `current`
+store paths plus the exact remediation command, so the user
+doesn't have to memorize which command applies which kind of
+change. For the full predicate semantics see
+[`docs/reference/cli-contract.md` — Pending-restart signal](../reference/cli-contract.md#pending-restart-signal-v015).
 
 ### Rollback
 

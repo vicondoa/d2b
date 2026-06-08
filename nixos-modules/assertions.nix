@@ -202,6 +202,34 @@ let
           nixos-entra-id README for the full migration recipe.
         '';
       }
+      {
+        # v0.1.6 SWArch-M9: graphics VMs CANNOT be autostart. The
+        # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
+        # which is the upstream microvm.nix runner — but graphics
+        # VMs run cloud-hypervisor via the `nixling-<vm>-gpu`
+        # sidecar (which replaces the upstream runner). The sidecar
+        # binds to /run/user/<wayland-uid>/wayland-0, which only
+        # exists in a live user session, so it MUST be launched
+        # interactively from a Plasma terminal via `nixling up <vm>`.
+        # An autostart=true graphics VM would silently boot through
+        # the wrong path and never attach to the host compositor.
+        assertion = !(vm.enable && vm.graphics.enable && vm.autostart);
+        message = ''
+          nixling.vms.${name}: graphics.enable = true is incompatible
+          with autostart = true. Graphics VMs are launched by the
+          nixling CLI through nixling-${name}-gpu.service, which
+          binds to /run/user/<uid>/wayland-0 — that socket only
+          exists in a live user session. The systemd boot path
+          would start microvm@${name}.service (the upstream runner)
+          bypassing the GPU sidecar entirely, and the VM would have
+          no display.
+
+          Set `nixling.vms.${name}.autostart = false` and launch
+          the VM interactively via `nixling up ${name}` from a
+          Plasma terminal (or wire it to your Plasma session's
+          autostart entries).
+        '';
+      }
     ])
     cfg.vms;
 

@@ -213,6 +213,70 @@ without it."
 
 [nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
 
+### VM lifecycle policy (v0.1.5+)
+
+Every per-VM lifecycle service the framework owns or touches
+carries `restartIfChanged = false`. This is a framework
+invariant; new sidecars added in this repo MUST carry the same
+flag.
+
+Covered services:
+
+- `nixling@<vm>.service` ([host-wrapper.nix](nixos-modules/host-wrapper.nix))
+- `microvm@<vm>.service` (upstream; overridden via host-known-hosts.nix's drop-in)
+- `microvm-virtiofsd@<vm>.service` (upstream; overridden via store.nix's drop-in)
+- `nixling-<vm>-swtpm.service` ([host-sidecars.nix](nixos-modules/host-sidecars.nix))
+- `nixling-<vm>-snd.service` ([components/audio/host.nix](nixos-modules/components/audio/host.nix))
+- `nixling-<vm>-gpu.service` ([host-sidecars.nix](nixos-modules/host-sidecars.nix))
+
+The motivating constraint: graphics VMs run cloud-hypervisor IN
+the GPU sidecar. Restarting the sidecar terminates CH and
+evaporates every in-flight piece of session state. For headless
+VMs the damage is smaller but still material. Consumers apply
+pending changes explicitly via `nixling restart <vm>` (clean
+down+up of the same closure) or `nixling switch <vm>` (per-VM
+closure rebuild + live activation via SSH).
+
+Drift detection is via two per-VM symlinks under
+`/var/lib/nixling/vms/<vm>/`:
+
+- `current` — points at the latest declared closure; updated by
+  `nixos-rebuild switch`.
+- `booted` — points at the closure the running VM actually
+  exec'd. Updated by:
+  - `microvm-set-booted@<vm>.service` for headless/net VMs (upstream).
+  - The `nixling-<vm>-gpu.service` `ExecStartPre` (`+`-prefixed → root)
+    for graphics VMs ([host-sidecars.nix](nixos-modules/host-sidecars.nix)).
+    Graphics VMs bypass upstream's `microvm@<vm>.service` template,
+    so they don't get `microvm-set-booted` for free; the framework's
+    GPU sidecar takes ownership.
+
+`nixling list` flags any VM where `booted != current` AND the VM
+is running with `[pending restart]`; `nixling status <vm>` prints
+both store paths and the exact remediation command.
+
+#### Adding new per-VM units
+
+Any new framework-owned per-VM service that the user might be
+running through (i.e., not a build-time or activation-only
+oneshot) MUST also carry `unitConfig.X-RestartIfChanged = false`
+(or equivalently `restartIfChanged = false` on the NixOS-side
+declaration). If your new service legitimately needs to restart
+on config change (e.g., it's only a periodic timer or a one-shot
+helper), document the reasoning in a comment so future readers
+know why this one is different.
+
+The convention also extends to `wantedBy` declarations: per-VM
+`wantedBy = [ "multi-user.target" ]` must ALWAYS go through
+`systemd.targets.multi-user.wants` symlinks, never via per-instance
+`systemd.services."nixling@${name}"` declarations. NixOS
+materializes per-instance declarations as SEPARATE unit files
+(not drop-ins on the template) and the per-instance file lacks
+the template's `ExecStart`/`ExecStop` → systemd refuses with
+"no SuccessAction" at boot. See
+[host-wrapper.nix](nixos-modules/host-wrapper.nix)'s
+`systemd.targets.multi-user.wants = map (n: "nixling@${n}.service")` block.
+
 ## Test layout
 
 | File                                  | Role                                                                                         |

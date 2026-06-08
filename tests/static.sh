@@ -81,6 +81,8 @@ NL_FILES=(
   tests/smoke-eval-aarch64.nix
   tests/smoke-eval-graphics.nix
   tests/smoke-eval-home-manager.nix
+  tests/smoke-eval-extraspecialargs.nix
+  tests/smoke-eval-tpm.nix
   flake.nix
 )
 log "--> nix-instantiate --parse"
@@ -183,6 +185,50 @@ if [ -f "$ROOT/tests/smoke-eval-home-manager.nix" ]; then
   fi
 fi
 
+# v0.1.6 H1 — `nixling.site.extraSpecialArgs` propagation regression.
+# Spec correction #30: the v0.1.1 change wired
+# `cfg.site.extraSpecialArgs` into the per-VM `specialArgs` in
+# nixos-modules/host.nix:165. This test synthesizes a workload VM
+# whose `config` module consumes a positional `sentinel` argument
+# defined in `extraSpecialArgs`, then forces an env.etc value that
+# pins `sentinel == "ok"`. A regression that drops the merge fails
+# the eval at "called without required argument 'sentinel'".
+log "--> tests/smoke-eval-extraspecialargs.nix"
+if [ -f "$ROOT/tests/smoke-eval-extraspecialargs.nix" ]; then
+  if nix-instantiate --eval --strict --expr \
+      "let f = import $ROOT/tests/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" \
+      >/dev/null 2>&1; then
+    ok "smoke-eval-extraspecialargs"
+  else
+    fail "smoke-eval-extraspecialargs"
+    nix-instantiate --eval --strict --expr \
+      "let f = import $ROOT/tests/smoke-eval-extraspecialargs.nix; r = f {}; in r.drvPath" 2>&1 \
+      | tail -20 >&2 || true
+  fi
+fi
+
+# v0.1.6 Test-H6 — swtpm parent-dir ACL regression. Spec correction
+# #35 (v0.1.4): nixling-<vm>-swtpm needs `--x` on
+# /var/lib/nixling/vms/<vm> to traverse into its `swtpm/` leaf. The
+# activation snippet only emits the grant for graphics+TPM VMs, so
+# the smoke eval declares a `graphics.enable = true; tpm.enable =
+# true` VM and asserts the literal `setfacl -m
+# "u:nixling-<vm>-swtpm:--x" /var/lib/nixling/vms/<vm>` fragment
+# appears in `system.activationScripts.nixlingVmStatePerms.text`.
+log "--> tests/smoke-eval-tpm.nix"
+if [ -f "$ROOT/tests/smoke-eval-tpm.nix" ]; then
+  if nix-instantiate --eval --strict --expr \
+      "let f = import $ROOT/tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath" \
+      >/dev/null 2>&1; then
+    ok "smoke-eval-tpm"
+  else
+    fail "smoke-eval-tpm"
+    nix-instantiate --eval --strict --expr \
+      "let f = import $ROOT/tests/smoke-eval-tpm.nix; r = f {}; in r.drvPath" 2>&1 \
+      | tail -20 >&2 || true
+  fi
+fi
+
 # Phase 4 multi-arch gate. Sister of smoke-eval.nix that cross-evaluates
 # a headless workload VM config on aarch64-linux. The refactor plan
 # requires headless VMs (no graphics, no audio) to evaluate clean on
@@ -229,6 +275,40 @@ if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
   else
     fail "assertions-eval"
     bash "$ROOT/tests/assertions-eval.sh" 2>&1 | tail -40 >&2 || true
+  fi
+fi
+
+# v0.1.6 Test-H3/H4 + SWArch-M10 — autostart wiring invariants.
+# Verifies (a) `systemd.services."nixling@<vm>"` is NEVER materialized
+# as a per-instance attr (template-only; per-VM unit file would lack
+# ExecStart/ExecStop), (b) autostart=true VMs go through
+# `multi-user.target.wants -> nixling@<vm>.service`, and (c)
+# `microvms.target.wants` is `[]` after SWArch-M10 (single autostart
+# path; no duplicate microvm@<vm> direct-pull).
+log "--> tests/autostart-wiring-eval.sh"
+if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
+  if bash "$ROOT/tests/autostart-wiring-eval.sh" >/dev/null 2>&1; then
+    ok "autostart-wiring-eval"
+  else
+    fail "autostart-wiring-eval"
+    bash "$ROOT/tests/autostart-wiring-eval.sh" 2>&1 | tail -20 >&2 || true
+  fi
+fi
+
+# v0.1.6 Test-H7 — restart-policy regression. Spec correction #37
+# (v0.1.5): every per-VM lifecycle service in the framework MUST
+# carry `restartIfChanged = false` OR equivalent
+# `unitConfig.X-RestartIfChanged = false`. Six services in scope
+# (nixling@ template, microvm@ template, per-VM virtiofsd, swtpm,
+# snd, gpu). Synthesizes a graphics+audio+TPM workload VM so every
+# per-VM sidecar materialises in one eval.
+log "--> tests/restart-policy-eval.sh"
+if [ -x "$ROOT/tests/restart-policy-eval.sh" ]; then
+  if bash "$ROOT/tests/restart-policy-eval.sh" >/dev/null 2>&1; then
+    ok "restart-policy-eval"
+  else
+    fail "restart-policy-eval"
+    bash "$ROOT/tests/restart-policy-eval.sh" 2>&1 | tail -20 >&2 || true
   fi
 fi
 

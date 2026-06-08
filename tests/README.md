@@ -193,6 +193,25 @@ boots a dummy nested host + microVM and drives the same assertions.
   default` on options that have **no** matching `config.<…>`
   assignment — is intentional and must NOT trip the lint).
 
+- **Audit `--strict` graphics-VM running-check mock test** (Spec
+  correction #38 / v0.1.6 follow-up Test-H8). The v0.1.6 fix in
+  `nixos-modules/cli.nix` extended the
+  `bridge_isolated_workload.<vm>` running-check from the previous
+  `microvm@<vm>` probe to also accept `nixling@<vm>` or
+  `nixling-<vm>-gpu` as evidence the VM is up — without this,
+  graphics VMs were blanket-skipped by `nixling audit --strict`
+  even when actively running. A regression test would PATH-override
+  `systemctl` with a stub that reports `nixling-<vm>-gpu.service`
+  active and then assert the audit emits NO
+  `AUDIT SKIP [bridge_isolated_workload.<vm>]`. Deferred to v0.2.0:
+  the v0.1.6 cli.nix change is small and the existing audit
+  scaffolding doesn't yet have a hermetic harness for stubbing
+  `systemctl` calls baked into the shell-application closure
+  (`pkgs.systemd` is a runtimeInputs dep, so a stub on `PATH`
+  alone isn't enough — the harness would need to override
+  `runtimeInputs` and rebuild the wrapper). Track alongside the
+  other v0.2.0 testing items.
+
 > Per-example iteration is now part of the static gate:
 > `tests/static.sh` iterates every `examples/*/flake.nix` and runs
 > `nix flake check --no-build --all-systems` against each. The

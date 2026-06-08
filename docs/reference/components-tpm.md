@@ -53,9 +53,42 @@ all guest-side wiring is unconditional within the module.
     graphics VMs.
   - `partOf = [ "microvms.target" ]` so a system-wide microvm
     restart cycles it; `Restart = "on-failure"`, `RestartSec = 2`.
+  - `unitConfig.X-RestartIfChanged = false` (v0.1.5+) — a
+    `nixos-rebuild switch` updates the unit file but does NOT
+    cycle the running swtpm. Killing swtpm under a live VM means
+    the guest loses its TPM socket and Entra/Intune device-bound
+    credentials become unreachable; the framework refuses to do
+    this silently. Use `nixling restart <vm>` to apply pending
+    changes.
 - **State directory** `/var/lib/nixling/vms/<vm>/swtpm/`, mode 0700
   owned by `nixling-<vm>-swtpm`. Contents are swtpm NVRAM + state
   blobs — not human-readable, not portable across VMs.
+- **Parent-dir traversal ACL** (v0.1.4+). The VM's state dir at
+  `/var/lib/nixling/vms/<vm>/` is `microvm:kvm 2770`; the
+  `nixling-<vm>-swtpm` user is in neither set. The framework's
+  `nixlingVmStatePerms` activation script
+  ([`host-activation.nix`](../../nixos-modules/host-activation.nix))
+  adds `setfacl -m u:nixling-<vm>-swtpm:--x` (gated on
+  `tpm.enable`) so swtpm can traverse the parent to reach its
+  `StateDirectory=` subdir. Without this ACL, swtpm starts but
+  EACCES'es on `tpm2-00.permall` → libtpms enters failure mode →
+  guest boots with a fresh TPM → Entra/Intune treats the device
+  as tampered. **No manual `chown` or `setfacl` required for new
+  installs or per-VM additions; the framework handles it.**
+
+## Lifecycle (v0.1.5+)
+
+`nixling-<vm>-swtpm.service` carries `unitConfig.X-RestartIfChanged
+= false` (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
+A `nixos-rebuild switch` updates the unit file but does NOT cycle
+the running swtpm — killing swtpm under a live VM tears down the
+CH TPM socket, the guest's libtpms enters failure mode, and
+Entra/Intune device-bound creds become unreachable. After a
+rebuild, `nixling list` flags the VM with `[pending restart]` if
+its `current` closure has drifted from `booted`; apply with
+`nixling restart <vm>` (clean down+up cycles swtpm and CH
+together so the TPM socket survives the round-trip). See
+[`docs/reference/cli-contract.md` — Pending-restart signal](./cli-contract.md#pending-restart-signal-v015).
 
 ## Guest-side resources created
 

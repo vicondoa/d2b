@@ -369,6 +369,19 @@ back into sync.
   framework can't enforce policy visibility, only the
   authentication primitives.
 
+## After subsequent rebuilds
+
+Every per-VM lifecycle service in the framework carries
+`restartIfChanged = false`, so a `nixos-rebuild switch` updates
+unit files but does NOT cycle running VMs. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted
+from the running one as `[pending restart]`; apply with
+`nixling restart <vm>`. See
+[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+for the recommended workflow and
+[`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
+for the exact predicate.
+
 ## See also
 
 - [`examples/minimal`](../minimal/) — read-and-copy headless starter

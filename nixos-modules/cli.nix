@@ -114,6 +114,12 @@ Subcommands:
                           (same as plain \`up\`). \`--force\` is passed
                           through to the down step. Idempotent: a
                           stopped VM is just brought up.
+                          Use this to apply pending unit-file changes
+                          after \`nixos-rebuild switch\` (when
+                          \`nixling list\` flags \`[pending restart]\`).
+                          For VM-NixOS-module edits, see \`switch\` below
+                          (and docs/reference/cli-contract.md
+                          "restart vs switch").
   status  [<vm>]        Service / process / SSH health. Always
                         appends a per-bridge health section.
   status  --check-bridges
@@ -143,6 +149,10 @@ Lifecycle subcommands (per-VM closures + live activation):
                             \`switch-to-configuration switch\` over SSH.
                             Live activation: no VM reboot, default boot
                             updated. Default fast-path for VM edits.
+                            Use \`switch\` when you edited the VM's own
+                            NixOS module; use \`restart\` (above) when
+                            only the framework's unit files moved during
+                            a host \`nixos-rebuild switch\`.
   boot        <vm>          build + sync + bump default boot only (no live
                             activation). Takes effect on next start.
   test        <vm>          build + sync + live \`switch-to-configuration
@@ -346,9 +356,14 @@ ${vmSshKeyCaseBody}
           # symlink (latest declared closure) against `booted`
           # (the closure the running VM actually executed). If
           # they differ AND the VM is running, the consumer
-          # needs `nixling switch <vm>` to apply changes.
+          # needs `nixling restart <vm>` to apply changes (a
+          # clean down+up cycles the running closure over the
+          # already-staged new unit files). `nixling switch <vm>`
+          # is for the different case of editing the VM's own
+          # NixOS module — see docs/reference/cli-contract.md
+          # ("restart vs switch").
           if vm_pending_restart "$vm"; then
-            st="$st [pending switch]"
+            st="$st [pending restart]"
             _any_pending=1
           fi
           [ -n "$tag" ] && st="$st ($tag)"
@@ -357,7 +372,7 @@ ${vmSshKeyCaseBody}
         done
         if [ "$_any_pending" -eq 1 ]; then
           echo
-          echo "(one or more VMs have unapplied config changes; run \`nixling switch <vm>\` to roll over)"
+          echo "(one or more VMs have unapplied unit-file changes; run \`nixling restart <vm>\` to apply)"
         fi
       }
 
@@ -1200,13 +1215,15 @@ BASH
         # v0.1.5: pending-restart hint. Per-VM sidecars carry
         # X-RestartIfChanged=false, so a nixos-rebuild updates unit
         # files but does NOT bounce the running VM. Surface that
-        # mismatch here so the user knows when `nixling switch <vm>`
-        # is required.
+        # mismatch here so the user knows when `nixling restart <vm>`
+        # is required to cycle the running closure (use `nixling
+        # switch <vm>` only when editing the VM's own NixOS module —
+        # see docs/reference/cli-contract.md "restart vs switch").
         if vm_pending_restart "$VM"; then
           local _booted _current
           _booted=$(readlink "/var/lib/nixling/vms/$VM/booted" 2>/dev/null || echo "(none)")
           _current=$(readlink "/var/lib/nixling/vms/$VM/current" 2>/dev/null || echo "(none)")
-          echo "pending-restart: YES — config changed; run \`nixling switch $VM\` to apply"
+          echo "pending-restart: YES — unit files changed; run \`nixling restart $VM\` to apply"
           echo "  booted : $_booted"
           echo "  current: $_current"
         else
@@ -2757,8 +2774,19 @@ EOF
             _bridge=$(vm_get "$_vm" bridge)
             [ "$_bridge" = "null" ] || [ -z "$_bridge" ] && continue
             # Skip stopped VMs: the tap doesn't exist on the bridge.
-            local _vm_active
-            _vm_active=$(systemctl is-active "microvm@''${_vm}.service" 2>/dev/null || echo inactive)
+            # v0.1.6: graphics VMs run cloud-hypervisor via the
+            # nixling-<vm>-gpu sidecar, NOT microvm@<vm>.service (the
+            # GPU sidecar replaces the upstream runner). Pre-v0.1.6
+            # the audit only checked microvm@<vm>, which made it
+            # blanket-skip all graphics VMs even when they were
+            # running. Now: a VM is "running" if any of nixling@<vm>,
+            # microvm@<vm>, or nixling-<vm>-gpu is active.
+            local _vm_active=inactive
+            if systemctl is-active --quiet "nixling@''${_vm}.service" 2>/dev/null \
+               || systemctl is-active --quiet "microvm@''${_vm}.service" 2>/dev/null \
+               || systemctl is-active --quiet "nixling-''${_vm}-gpu.service" 2>/dev/null; then
+              _vm_active=active
+            fi
             if [ "$_vm_active" != "active" ]; then
               echo "AUDIT SKIP [bridge_isolated_workload.$_vm]: VM not running" >&2
               continue

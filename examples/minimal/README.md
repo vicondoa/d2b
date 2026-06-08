@@ -191,6 +191,19 @@ nixling down corp-vm
   way `nixling` itself talks to the VM.** Removing it forces a
   fresh keypair on next activation.
 
+## After subsequent rebuilds
+
+Every per-VM lifecycle service in the framework carries
+`restartIfChanged = false`, so a `nixos-rebuild switch` updates
+unit files but does NOT cycle running VMs. After rebuilding,
+`nixling list` flags any VM whose declared closure has drifted
+from the running one as `[pending restart]`; apply with
+`nixling restart <vm>`. See
+[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+for the recommended workflow and
+[`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
+for the exact predicate.
+
 ## See also
 
 - [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP

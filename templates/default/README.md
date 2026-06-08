@@ -126,6 +126,28 @@ construction in `nixos-modules/network.nix` — it has to come up
 before any workload VM can use the LAN. Workload VMs are NOT
 autostarted unless you flip `nixling.vms.<vm>.autostart = true`.
 
+### After every subsequent rebuild
+
+Every per-VM lifecycle service carries `restartIfChanged = false`,
+so a `nixos-rebuild switch` updates unit files but does NOT cycle
+running VMs (this protects in-flight session state). After
+rebuilding, check whether any VM has pending changes:
+
+```bash
+nixling list
+# … STATUS column shows `systemd [pending restart]` for VMs whose
+# `current` closure differs from `booted` while they're running.
+
+nixling restart <vm>               # apply pending unit-file changes
+# or
+nixling switch <vm>                # full per-VM closure rebuild + live activation
+```
+
+`nixling status <vm>` (per-VM view) reports `pending-restart: yes/no`
+with both store paths and the exact remediation command. See
+[`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
+for the full semantics.
+
 ## Going further
 
 - **More VMs**: copy the `nixling.vms.corp-vm` block, give it a new

@@ -12,20 +12,26 @@ in
   # is the single source of truth for boot starts.
   microvm.autostart = [ ];
 
-  # v0.1.3 fix: `microvm.autostart = []` above is NOT sufficient.
-  # Upstream microvm.nix unconditionally emits
-  # `systemd.targets.microvms.wants = ["microvm@<vm>.service" …]`
+  # v0.1.3 fix + v0.1.6 SWArch-M10: `microvm.autostart = []` above is
+  # NOT sufficient on its own. Upstream microvm.nix unconditionally
+  # emits `systemd.targets.microvms.wants = ["microvm@<vm>.service" …]`
   # for every `microvm.vms.<vm>`, and `microvms.target` itself is
   # wantedBy multi-user.target. The cascade pulls in microvm@<vm>
   # at boot regardless of `microvm.autostart`.
   #
-  # Override `microvms.target` to ONLY want the autostart=true VMs
-  # (which already go through the `nixling@<vm>` wrapper via
-  # `multi-user.target.wants`). Workload VMs (autostart=false) are
-  # then started exclusively on-demand via `nixling up <vm>`.
-  systemd.targets.microvms.wants = lib.mkForce
-    (map (name: "microvm@${name}.service")
-      (lib.attrNames (lib.filterAttrs (_: vm: vm.enable && vm.autostart) cfg.vms)));
+  # v0.1.6 (SWArch-M10): force `microvms.target.wants` to the empty
+  # list. Autostart=true VMs are pulled in EXCLUSIVELY via
+  # `systemd.targets.multi-user.wants` ("nixling@<vm>.service") below
+  # — that's the single source of truth for boot starts and routes
+  # the wrapper (which carries BindsTo/After microvm@%i and the
+  # framework-managed restartIfChanged=false policy). Leaving the
+  # mkForce filter `(autostart=true vms)` from v0.1.3 in place would
+  # create a duplicate boot path (target.wants pulling microvm@<vm>
+  # directly, bypassing the nixling@<vm> wrapper), which is the
+  # principle-of-least-surprise hazard the followup panel flagged.
+  # Workload VMs (autostart=false) are still started exclusively
+  # on-demand via `nixling up <vm>`.
+  systemd.targets.microvms.wants = lib.mkForce [ ];
 
   # ---------------------------------------------------------------------------
   # nixling@.service template — user-facing per-VM wrapper.
