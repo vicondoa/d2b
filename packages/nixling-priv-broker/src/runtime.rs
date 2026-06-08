@@ -1505,6 +1505,56 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 });
             }
             apply_vm_start_prerequisites(backend, resolver, req.vm_id.as_str(), req.role_id.as_str())?;
+            // v1.1.1 defense-in-depth: the canonical Rust argv
+            // regenerator (`nixling_host::runner_argv_regenerator::regenerate_argv`)
+            // is wired here as a no-op tamper check. The v1.1.1
+            // bundle still carries `intent.argv` as a prebuilt
+            // `Vec<String>` (Nix-side processes-json.nix is the
+            // single source of truth for argv at v1.1.1), so the
+            // typed `RunnerArgvExtra` inputs that the regenerator
+            // requires (ChArgvInput / VirtiofsdArgvInput / etc.)
+            // are intentionally empty here and the regenerator
+            // returns `Err(MissingInput)` for every populated
+            // bundle row. The v1.1.2 wire-cleanup will (a) extend
+            // the bundle schema with typed argv inputs per role,
+            // (b) populate `RunnerArgvExtra` from those typed
+            // inputs at this point, (c) call `regenerate_argv`
+            // and assert byte-equality against `intent.argv` as
+            // a defense-in-depth tamper check. The call is wired
+            // now so the wire is exercised end-to-end (the
+            // regenerator's MissingInput arm IS exercised in the
+            // v1.1.1 broker integration tests) rather than living
+            // as dead code on the v1.1.1 release branch.
+            let regenerator_extra = nixling_host::runner_argv_regenerator::RunnerArgvExtra::default();
+            match nixling_host::runner_argv_regenerator::regenerate_argv(intent, &regenerator_extra) {
+                Ok(regenerated) => {
+                    if regenerated != intent.argv {
+                        tracing::warn!(
+                            vm_id = %req.vm_id.as_str(),
+                            role_id = %req.role_id.as_str(),
+                            "regenerate_argv: bundle argv differs from Rust regenerator output; \
+                             v1.1.1 trusts bundle argv (Nix-side processes-json.nix is source of truth); \
+                             diff will become a hard failure in v1.1.2 once typed argv inputs land"
+                        );
+                    }
+                }
+                Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::MissingInput { .. })
+                | Err(nixling_host::runner_argv_regenerator::RegenerateArgvError::NotYetWired(_)) => {
+                    // Expected at v1.1.1: bundle does not yet
+                    // carry typed argv inputs. Fall through to
+                    // the bundle-argv path. v1.1.2 will populate
+                    // `RunnerArgvExtra` and this arm will be
+                    // removed.
+                }
+                Err(other) => {
+                    tracing::warn!(
+                        vm_id = %req.vm_id.as_str(),
+                        role_id = %req.role_id.as_str(),
+                        error = %other,
+                        "regenerate_argv: unexpected regenerator failure; falling through to bundle argv"
+                    );
+                }
+            }
             let plan_input = crate::ops::spawn_runner::SpawnRunnerPlanInput {
                 binary_path: intent.binary_path.clone(),
                 argv: intent.argv.clone(),

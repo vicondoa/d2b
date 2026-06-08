@@ -89,3 +89,11 @@ pub mod host_prep_dag;
 // swtpm_argv, usbip_argv, video_argv, vsock_relay_argv,
 // otel_host_bridge_argv). See ADR 0018.
 pub mod runner_argv_regenerator;
+
+// v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
+// Per ADR 0018 + plan v1.1-P9b TDD row. Pure-Rust dnsmasq config
+// rendering from typed env metadata; the broker writes the
+// rendered file to /var/lib/nixling/dnsmasq/<env>.conf
+// atomically (broker-only sole-writer invariant). Replaces the
+// retired host-singleton dnsmasq render path.
+pub mod dnsmasq;

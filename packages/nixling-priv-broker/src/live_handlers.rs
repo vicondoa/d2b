@@ -1379,6 +1379,8 @@ fn parse_runner_cgroup_subtree(
         role_segments.push(segment.to_owned());
     }
     Ok(Some((
+        // v1.1.1: per-VM identifier no longer has a `.scope`
+        // suffix; per-VM-interior + per-role-leaf taxonomy.
         vm.trim_end_matches(".scope").to_owned(),
         role_segments,
     )))
@@ -1386,7 +1388,9 @@ fn parse_runner_cgroup_subtree(
 
 fn cgroup_leaf_path(parent_slice: &Path, vm: &str, role_segments: &[String]) -> PathBuf {
     let mut path = parent_slice.to_path_buf();
-    path.push(format!("{vm}.scope"));
+    // v1.1.1 per-VM-interior path (no `.scope` suffix); the role
+    // segments build the per-role leaf under it.
+    path.push(vm);
     for segment in role_segments {
         path.push(segment);
     }
@@ -2237,7 +2241,7 @@ mod tests {
         assert_eq!(
             leaf,
             Path::new(crate::ops::cgroup::DEFAULT_DELEGATED_PARENT_SLICE)
-                .join("personal-dev.scope")
+                .join("personal-dev")
                 .join("virtiofsd-ro-store")
         );
         assert!(backend.directory_exists(&leaf));

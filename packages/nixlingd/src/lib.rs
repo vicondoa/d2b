@@ -115,6 +115,11 @@ pub mod otel_host_bridge_readiness;
 // See `docs/explanation/host-prepare.md` and plan.md row
 // `ph3-p3-net-route-degraded-mode`.
 pub mod net_route_preflight;
+// v1.1.1 runtime pidfs self-probe: hard-refuses daemon startup on
+// kernels without pidfs (CONFIG_FS_PID stripped or kernel < 6.9).
+// Defense-in-depth alongside the static `tests/v1.1-kernel-floor-eval.sh`
+// gate. Per ADR 0008 + ADR 0018.
+pub mod pidfs_probe;
 // P2 ph2-p2-daemon-autostart: contract for bringing autostart VMs
 // up on daemon startup (net VMs first, concurrency cap,
 // degraded-mode tolerant, idempotent). See
@@ -408,6 +413,18 @@ pub fn load_config(path: &Path) -> Result<DaemonConfig, TypedError> {
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
+
+    // v1.1.1 runtime pidfs self-probe: refuse startup on kernels
+    // without pidfs support. Static `tests/v1.1-kernel-floor-eval.sh`
+    // catches the easy case (operator flake declares < 6.9 kernel);
+    // this probe catches the hard case (custom-built kernel at >= 6.9
+    // that strips CONFIG_FS_PID). Soft-fail opt-in via the
+    // `NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL` env var (CI/dev hosts).
+    {
+        let outcome = pidfs_probe::probe_pidfs();
+        pidfs_probe::enforce_probe_outcome(&outcome)?;
+    }
+
     let runtime_identity =
         resolve_runtime_identity(&config, options.allow_unprivileged_runtime_dir)?;
     validate_lock_parent(&config.state_lock_path, &runtime_identity)?;

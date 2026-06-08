@@ -15,6 +15,15 @@ license = "Apache-2.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# `test_root` is an opt-in cfg flag used by a small set of
+# nixlingd integration tests that require running as uid 0 (or
+# with delegated CAP_CHOWN) to exercise broker-owner production
+# policy. Set via `RUSTFLAGS="--cfg test_root" cargo test
+# --features=...` when executing as root. Declaring the
+# check-cfg entry here silences the `unexpected_cfgs` warning
+# the v1.1.1 panel reviewer flagged without weakening the
+# safety guard for production callers.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

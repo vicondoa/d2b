@@ -1111,12 +1111,28 @@ pub mod pidfd_sys {
         pub used_fork_fallback: bool,
     }
 
-    /// Drive `clone3(CLONE_PIDFD)`; falls back to `fork(2)` +
+    /// Drive `clone3(CLONE_PIDFD)` with optional atomic cgroup
+    /// placement (`CLONE_INTO_CGROUP`); falls back to `fork(2)` +
     /// `pidfd_open(2)` on `ENOSYS`/`EINVAL`/`E2BIG`. The closure
     /// `child_main` is invoked in the child; the parent receives the
     /// pidfd. The child is expected to `execve` shortly; if
     /// `child_main` returns the child process exits with the returned
     /// code.
+    ///
+    /// v1.1.1 `into_cgroup_dirfd` parameter (per ADR 0011
+    /// Decision item 8 + ADR 0018 § "Atomic cgroup placement"):
+    /// when `Some(dirfd)`, the clone3 syscall is invoked with
+    /// `CLONE_INTO_CGROUP` and `args.cgroup = dirfd as u64`. The
+    /// kernel atomically places the new child into the cgroup
+    /// pointed at by `dirfd` (typically the per-role leaf
+    /// `nixling.slice/<vm>/<role>/`) — eliminating the
+    /// classical race window where the parent writes the child's
+    /// PID to `cgroup.procs` AFTER fork (during which the child
+    /// is unaccounted in the per-role cgroup).
+    ///
+    /// `CLONE_INTO_CGROUP` is supported on kernel ≥ 5.7; the
+    /// fork+cgroup.procs fallback retains the v1.0 semantics for
+    /// any kernel that returns ENOSYS/EINVAL on the new flag.
     #[allow(unsafe_code)]
     pub fn clone3_pidfd_or_fork_fallback<F>(
         extra_clone_flags: u64,
@@ -1125,13 +1141,42 @@ pub mod pidfd_sys {
     where
         F: FnMut() -> i32,
     {
+        clone3_pidfd_or_fork_fallback_with_cgroup(extra_clone_flags, None, child_main)
+    }
+
+    /// v1.1.1 variant of [`clone3_pidfd_or_fork_fallback`] that
+    /// accepts an optional cgroup dirfd for atomic placement via
+    /// `CLONE_INTO_CGROUP`. See the wrapper docstring for the
+    /// rationale.
+    #[allow(unsafe_code)]
+    pub fn clone3_pidfd_or_fork_fallback_with_cgroup<F>(
+        extra_clone_flags: u64,
+        into_cgroup_dirfd: Option<i32>,
+        mut child_main: F,
+    ) -> io::Result<SpawnOutcome>
+    where
+        F: FnMut() -> i32,
+    {
+        // CLONE_INTO_CGROUP = 0x200000000 per kernel
+        // include/uapi/linux/sched.h (libc 0.2.95+ exposes this
+        // constant; we hard-code the value as a u64 to keep the
+        // build portable to libc crates that don't surface it as
+        // a public constant on the current target triple).
+        const CLONE_INTO_CGROUP: u64 = 0x2_0000_0000;
+
         let mut pidfd: libc::c_int = -1;
+        let (flags, cgroup_arg) = match into_cgroup_dirfd {
+            Some(dirfd) if dirfd >= 0 => (
+                (libc::CLONE_PIDFD as u64) | extra_clone_flags | CLONE_INTO_CGROUP,
+                dirfd as u64,
+            ),
+            _ => ((libc::CLONE_PIDFD as u64) | extra_clone_flags, 0u64),
+        };
         let mut args = CloneArgs {
-            flags: (libc::CLONE_PIDFD as u64) | extra_clone_flags,
-            // The kernel writes the pidfd into the i32 pointed to by
-            // `pidfd` (treated as a u64 in clone_args).
+            flags,
             pidfd: &mut pidfd as *mut libc::c_int as u64,
             exit_signal: libc::SIGCHLD as u64,
+            cgroup: cgroup_arg,
             ..Default::default()
         };
 
@@ -1148,10 +1193,7 @@ pub mod pidfd_sys {
         };
 
         if ret == 0 {
-            // Child.
             let code = child_main();
-            // SAFETY: `_exit` is async-signal-safe; we have not
-            // touched any stdlib state that requires `exit(3)`.
             unsafe { libc::_exit(code) };
         }
 

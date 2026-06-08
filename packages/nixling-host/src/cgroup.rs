@@ -634,9 +634,10 @@ pub fn create_nixling_slice<B: CgroupBackend>(
     Ok(slice)
 }
 
-/// Create a per-VM subtree under `nixling.slice`. Intermediate VM
-/// directories are kept process-free; only leaf role cgroups carry
-/// processes (step 5).
+/// v1.1.1 per-VM-interior + per-role-leaf taxonomy. Creates the
+/// process-free intermediate directory `nixling.slice/<vm_id>/`
+/// (NOT a leaf). Per-role leaf cgroups are created by
+/// `create_vm_role_leaf`. Per ADR 0011 Decision item 1.
 pub fn create_vm_subtree<B: CgroupBackend>(
     backend: &B,
     slice: &Path,
@@ -649,7 +650,10 @@ pub fn create_vm_subtree<B: CgroupBackend>(
             detail: format!("invalid vm_id: {vm_id:?}"),
         });
     }
-    let vm = slice.join(format!("{vm_id}.scope"));
+    // v1.1.1: per-VM intermediate is `<slice>/<vm_id>/`, NOT
+    // `<slice>/<vm_id>.scope`. The intermediate stays
+    // process-free; per-role leaves under it hold the processes.
+    let vm = slice.join(vm_id);
     if !backend.exists(&vm) {
         backend.mkdir(&vm)?;
     }
@@ -658,6 +662,37 @@ pub fn create_vm_subtree<B: CgroupBackend>(
     chown_subtree_to_nixlingd(backend, &vm, nixlingd_uid, nixlingd_gid)?;
     assert_no_internal_processes(backend, &vm)?;
     Ok(vm)
+}
+
+/// v1.1.1 per-role leaf cgroup creation. Creates
+/// `<slice>/<vm_id>/<role_id>/` under the previously-created
+/// per-VM intermediate. The leaf is the ONLY entry that carries
+/// processes; ancestors stay process-free.
+pub fn create_vm_role_leaf<B: CgroupBackend>(
+    backend: &B,
+    slice: &Path,
+    vm_id: &str,
+    role_id: &str,
+    nixlingd_uid: u32,
+    nixlingd_gid: u32,
+) -> Result<PathBuf, CgroupError> {
+    if role_id.is_empty() || role_id.contains('/') || role_id.contains('\0') {
+        return Err(CgroupError::Io {
+            detail: format!("invalid role_id: {role_id:?}"),
+        });
+    }
+    let vm_dir = create_vm_subtree(backend, slice, vm_id, nixlingd_uid, nixlingd_gid)?;
+    let leaf = vm_dir.join(role_id);
+    if !backend.exists(&leaf) {
+        backend.mkdir(&leaf)?;
+    }
+    assert_not_threaded(backend, &leaf)?;
+    // Per-role leaves DON'T enable subtree_controllers further
+    // (they're the leaf — no descendants need controllers
+    // enabled at this layer); chown so nixlingd can write
+    // cgroup.procs / cgroup.kill.
+    chown_subtree_to_nixlingd(backend, &leaf, nixlingd_uid, nixlingd_gid)?;
+    Ok(leaf)
 }
 
 // ---------------------------------------------------------------------------
@@ -739,24 +774,39 @@ impl CgroupBackend for RealCgroupBackend {
 
     fn fchown(&self, path: &Path, uid: u32, gid: u32) -> Result<(), CgroupError> {
         use rustix::fs::{open, Mode, OFlags};
-        // O_PATH lets us hold a kernel-side handle for fchown without
-        // requiring read access to the file's contents.
+        // v1.1.1 kernel-correctness fix: O_PATH descriptors can NOT
+        // be passed to fchown(2) — the syscall returns EBADF on
+        // Linux per `man 2 fchown` because O_PATH fds have no
+        // associated open file description. The correct primitive
+        // for changing ownership via an O_PATH dirfd is
+        // fchownat(dirfd, "", uid, gid, AT_EMPTY_PATH) which the
+        // kernel resolves through the dirfd itself.
+        //
+        // Documented in
+        // [`docs/reference/cgroup-delegation.md`](../../../docs/reference/cgroup-delegation.md)
+        // § Path-safety contract; the v1.1.1 fix matches the v1.1-P0
+        // ADR commitment in
+        // [ADR 0018 § "Path-safety: O_PATH + fchownat(AT_EMPTY_PATH)"](../../../docs/adr/0018-microvm-nix-removal.md#path-safety-o_path--fchownataT_EMPTY_PATH).
         let fd = open(
             path,
             OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )
         .map_err(io_err)?;
-        // `nix`'s safe Uid/Gid/fchown wrappers are used here because
-        // `rustix 0.38`'s Uid/Gid constructors are `unsafe` (see
-        // packages/nixling-host/Cargo.toml note). The crate-level
-        // `#![forbid(unsafe_code)]` would otherwise block this path.
+        // nix's safe Uid/Gid/fchownat wrappers (rustix 0.38's Uid/Gid
+        // constructors are `unsafe`, which the crate-level
+        // `#![forbid(unsafe_code)]` would block).
         let raw_uid = nix::unistd::Uid::from_raw(uid);
         let raw_gid = nix::unistd::Gid::from_raw(gid);
-        nix::unistd::fchown(fd.as_raw_fd(), Some(raw_uid), Some(raw_gid)).map_err(|err| {
-            CgroupError::Io {
-                detail: format!("fchown {}: {err}", path.display()),
-            }
+        nix::unistd::fchownat(
+            Some(fd.as_raw_fd()),
+            "",
+            Some(raw_uid),
+            Some(raw_gid),
+            nix::fcntl::AtFlags::AT_EMPTY_PATH | nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(|err| CgroupError::Io {
+            detail: format!("fchownat(AT_EMPTY_PATH) {}: {err}", path.display()),
         })
     }
 
@@ -1174,7 +1224,9 @@ mod tests {
     }
 
     #[test]
-    fn vm_subtree_creates_chowned_leaf() {
+    fn vm_subtree_creates_chowned_per_vm_interior() {
+        // v1.1.1: vm_subtree now creates `<slice>/<vm>/` (interior;
+        // process-free), not `<slice>/<vm>.scope` (leaf).
         let backend = fresh(nixlingd_uid());
         let slice = create_nixling_slice(
             &backend,
@@ -1185,9 +1237,37 @@ mod tests {
         .unwrap();
         let vm =
             create_vm_subtree(&backend, &slice, "alpha", nixlingd_uid(), nixlingd_gid()).unwrap();
-        assert_eq!(vm, slice.join("alpha.scope"));
+        assert_eq!(vm, slice.join("alpha"));
         assert_eq!(
             backend.owner(&vm).unwrap(),
+            (nixlingd_uid(), nixlingd_gid())
+        );
+    }
+
+    #[test]
+    fn vm_role_leaf_creates_chowned_per_role_leaf_under_vm_interior() {
+        // v1.1.1: per-role leaf `<slice>/<vm>/<role>/` is the
+        // canonical placement target for SpawnRunner processes.
+        let backend = fresh(nixlingd_uid());
+        let slice = create_nixling_slice(
+            &backend,
+            Path::new(FAKE_ROOT),
+            nixlingd_uid(),
+            nixlingd_gid(),
+        )
+        .unwrap();
+        let leaf = create_vm_role_leaf(
+            &backend,
+            &slice,
+            "alpha",
+            "cloud-hypervisor",
+            nixlingd_uid(),
+            nixlingd_gid(),
+        )
+        .unwrap();
+        assert_eq!(leaf, slice.join("alpha").join("cloud-hypervisor"));
+        assert_eq!(
+            backend.owner(&leaf).unwrap(),
             (nixlingd_uid(), nixlingd_gid())
         );
     }

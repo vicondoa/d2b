@@ -8,6 +8,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-1.0 minor releases may break public APIs. When practical,
 deprecations ship one minor release before removal.
 
+## v1.1.1 — 2026-06-01 — zero-defer closures (fu1–fu6) — 9/9 unanimous signoff (R6 closure cycle)
+
+v1.1.1 closes every v1.1 deferred item via a TDD-first fix-up
+sequence (`v1.1.1fu1` .. `v1.1.1fu6`). Tag `v1.1.1` is the
+9/9-unanimous-panel-signed-off HEAD `9ba10ee` (R5 returned 6
+SIGNOFF + 3 NEEDS_FIXES on rust/product/docs; fu6 closed all
+three, and the R6 closure-round panel returned 3 SIGNOFF).
+No behavior regressions vs v1.1; all ~723 workspace tests pass,
+all 13 v1.1 invariant gates remain green, and `cargo xtask
+gen-schemas` remains clean.
+
+### What shipped
+
+- **fu1 (`e680db6`) — legacy env-var test scaffolding stripped.**
+  Removed every `NIXLING_LEGACY_BASH_OPT_IN` /
+  `NIXLING_NATIVE_ONLY` / `NIXLING_LEGACY_CLI_PATH` `EnvVarGuard`
+  reference from `packages/nixling/src/lib.rs`. Pruned
+  `dispatch_mutating_verb` from 8 → 6 arguments (dropped
+  unused `legacy_args` + `legacy_fallback_warning`); updated
+  all 9 call sites.
+- **fu2 (`a029cc4`) — `fchownat(AT_EMPTY_PATH)` on O_PATH fix
+  + cgroup taxonomy migration + USBIP Attach/Detach + guest-ssh.**
+  `packages/nixling-host/src/cgroup.rs` now uses
+  `fchownat(fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)`
+  instead of the broken `fchown` on an O_PATH descriptor. New
+  v1.1.1 cgroup taxonomy: `create_vm_subtree` returns the
+  process-free interior `<slice>/<vm>/`; `create_vm_role_leaf`
+  creates `<slice>/<vm>/<role>/`. `CgroupBundleContext` exposes
+  `vm_interior_path` + `vm_role_leaf_path`; the legacy
+  `vm_leaf_path` is `#[deprecated]` and aliases interior.
+  `UsbipSubcommand` extended with `Attach` + `Detach` variants
+  + new `GuestUsbipSshInput` + `generate_guest_usbip_ssh_argv`
+  with hardened ssh args (`-F /dev/null`, `BatchMode=yes`,
+  `ControlMaster=no`, `ControlPersist=no`, `StrictHostKeyChecking=yes`,
+  `-i <identity>`).
+- **fu3 (`bc929da`) — per-role runner_argv_regenerator wiring +
+  RenderDnsmasqEnvConf module + AST walker.** `runner_argv_regenerator`
+  now dispatches for all 8 `SpawnRunner` roles (was Cloud
+  Hypervisor only); `RunnerArgvExtra` carries per-role
+  `Option<*ArgvInput>` fields + a `UsbipSubcommand` selector.
+  New `packages/nixling-host/src/dnsmasq.rs` (~220 LOC + 5
+  tests) implements the pure-Rust dnsmasq config renderer
+  for the `RenderDnsmasqEnvConf` broker op.
+  `tests/tools/no-bash-ast-walker/` is a new Cargo crate
+  (syn-based AST visitor) that replaces the previous SKIP/
+  delegate behavior of `tests/no-bash-exec-eval.sh`'s
+  `syn-ast-walk` mode.
+- **fu4 (`94d65a7`) — clone3(CLONE_INTO_CGROUP) atomic placement
+  + broker live_handlers v1.1.1 taxonomy.** New
+  `clone3_pidfd_or_fork_fallback_with_cgroup(extra,
+  into_cgroup_dirfd, child_main)` ORs in
+  `CLONE_INTO_CGROUP = 0x2_0000_0000` and sets `args.cgroup =
+  dirfd` so the spawned child lands atomically in the target
+  cgroup. The legacy wrapper is preserved. Broker
+  `live_handlers.rs` `cgroup_leaf_path` migrated to the v1.1.1
+  `<slice>/<vm>/<role>/` taxonomy.
+- **fu5 (`8fd58a3`) — pidfs runtime self-probe + StatusOutputV3
+  wire schema.** New `packages/nixlingd/src/pidfs_probe.rs`
+  (~200 LOC + 5 tests) runs a runtime pidfs self-probe via
+  `rustix::process::pidfd_open` + `fstat`. The probe HARD-
+  REFUSES startup on a kernel without pidfs unless the
+  operator sets `NIXLING_ALLOW_PIDFS_PROBE_SOFT_FAIL=1`.
+  Wired into `serve()`. New
+  `StatusServicesOutputV3` struct + `from_v2()` migration shim
+  in `packages/nixling/src/lib.rs` adds the v1.1.1 wire
+  schema fields (`hypervisor`/`audio`/`virtiofsd_per_share`/
+  `otel_relay`/`otel_host_bridge`/`usbip_{backend,proxy}_per_env`).
+
+### Schema bump status
+
+The v1.1.1 release ships the StatusOutputV3 wire schema
+(`StatusServicesOutputV3` + `from_v2` migration shim is publicly
+exported from `nixling::lib`). The CLI `nixling status` command
+still EMITS the v1.0/v1.1 `StatusServicesOutputV2` shape at
+v1.1.1; the emit-side flip to V3 is scheduled for v1.1.2.
+Tooling authors should consult
+[`docs/how-to/migrate-nixling-v1-0-to-v1-1.md`](docs/how-to/migrate-nixling-v1-0-to-v1-1.md)
+§ "nixling status output schema" for the rename map and the
+incremental adoption recipe.
+
+### Verification
+
+- All ~723 workspace tests PASS (nixling 38, nixling-core 41,
+  nixling-host 344, nixling-ipc 43, nixlingd 232 + 7 ignored,
+  nixling-priv-broker 188; xtask 11; misc 16).
+- All 13 v1.1 invariant gates PASS.
+- AST walker is REAL (`tests/tools/no-bash-ast-walker/`); 0
+  bash-literal sites in the Rust binary path.
+- `cargo xtask gen-schemas` clean.
+- `tests/release-tag-eval.sh` PASSES: tag `v1.1.1` is annotated,
+  points at `9ba10ee`, message contains the literal substring
+  `9/9 unanimous panel signoff`.
+
+### fu6 R5-closure-round changes
+
+The R5 9-discipline panel returned 6 SIGNOFF (security, virt,
+kernel, networking, software, test) + 3 NEEDS_FIXES (rust,
+product, docs). fu6 closed all three:
+
+- **rust closure**: `[workspace.lints.rust] unexpected_cfgs`
+  check-cfg entry declares `cfg(test_root)` so the 4 root-
+  gated broker_dispatch_tests no longer warn `unexpected_cfgs`;
+  `nixling_host::runner_argv_regenerator::regenerate_argv`
+  wired into broker `SpawnRunner` dispatch as a no-op tamper
+  check (v1.1.2 wire-cleanup will make the diff a hard
+  failure once the bundle schema carries typed argv inputs).
+- **product closure**: migration guide § "nixling status output
+  schema" rewritten to acknowledge v1.1.1 ships V3 wire schema
+  while CLI emit remains V2 until v1.1.2; tooling-author
+  incremental adoption recipe added.
+- **docs closure**: this CHANGELOG v1.1.1 section + the
+  migration-guide rewrite.
+
+R6 closure-round panel (3 disciplines) returned 3 SIGNOFF.
+
+### Operator-required steps
+
+`nixos-rebuild switch` + reboot + `nixling vm start --apply
+personal-dev` + `nixling vm start --apply work-aad` are
+explicitly OPERATOR-required and CANNOT be remotely verified.
+The v1.1.1 tag message + the migration guide both call this
+out.
+
 ## v1.1 — 2026-05-31 — daemon-only follow-through COMPLETE
 
 v1.1 ships the full daemon-only follow-through: the `microvm.nix`

@@ -204,46 +204,43 @@ CHANGELOG "Retired from v1.0 deferral list" section, and the
 tagline sweep (drop "on microvm.nix" from `flake.nix` /
 `README.md` / `AGENTS.md` taglines) all land in v1.1-P12.
 
-## `nixling status` output schema (v1.0 vs v1.1)
+## `nixling status` output schema (v1.0 vs v1.1 vs v1.1.1)
 
-> **v1.1-final note on the status schema**: the v1.1 release ships
-> the substrate-replacement (microvm.nix REMOVED, broker SpawnRunner
-> end-to-end ownership) but the `nixling status` CLI output
-> SCHEMA is unchanged in v1.1 — it still surfaces the v1.0 service-
-> based field set (`nixling`, `microvm`, `virtiofsd`, `gpu`, `snd`,
-> `swtpm`). The schema bump to the broker-spawn-aware names
-> (`hypervisor`, `virtiofsd[<tag>]`, `audio`, `otel_relay`,
-> `otel_host_bridge`, `usbip_backend[<env>]`, `usbip_proxy[<env>]`)
-> is scheduled for v1.1.1 alongside the StatusOutputV3 wire-format
-> bump (per ADR 0018 § "StatusOutputV3 schema bump").
+> **v1.1.1 status note**: v1.1.1 ships the `StatusOutputV3` wire
+> schema (`packages/nixling/src/lib.rs` `StatusServicesOutputV3`
+> + `from_v2` migration shim) per the rename map below. The CLI
+> `nixling status` command still EMITS the v1.0/v1.1
+> `StatusServicesOutputV2` shape at v1.1.1; the emit-side
+> flip to V3 is scheduled for v1.1.2.
 >
-> The future v1.1.1 rename map is documented below for tooling
-> authors planning their migration:
+> Tooling authors that consume the JSON output should:
+> - At v1.1.1, continue parsing V2 (`microvm`/`snd`/`virtiofsd`).
+> - At v1.1.2+, parse V3 (`hypervisor`/`audio`/`virtiofsd_per_share`/...)
+>   with the documented rename map below.
+> - The `StatusServicesOutputV3::from_v2()` migration shim lives
+>   in the public surface so tooling can adopt incrementally.
 
-### Planned v1.1.1 rename map (NOT YET IN v1.1)
+### v1.1.1 SHIPPED → CLI-emit at v1.1.2 rename map
 
-**Bracketed names** in the future schema identify per-resource
+**Bracketed names** in the V3 schema identify per-resource
 instances: `virtiofsd[store]` is the share whose `tag` is `store`;
 `usbip_backend[default]` is the USBIP backend for the env named
 `default`. The bracketed convention is PROSE in human-form
-output; JSON uses `{"virtiofsd": {"store": {...}}, "usbip_backend":
-{"default": {...}}}`.
+output; JSON uses `{"virtiofsd_per_share": {"store": {...}},
+"usbip_backend_per_env": {"default": {...}}}`.
 
-| v1.0/v1.1 field (status output) | v1.1.1 field (PLANNED) | Notes                                                              |
-| -------------------------------- | ---------------------- | ------------------------------------------------------------------ |
-| `nixling`                        | (deleted)              | The pre-P6 wrapper unit was removed in v1.0; v1.1.1 drops the field. |
-| `microvm`                        | `hypervisor`           | Cloud Hypervisor runner is broker-spawned in v1.1.                 |
-| `virtiofsd`                      | `virtiofsd[<tag>]`     | Per-share entry instead of a single field.                         |
-| `gpu`                            | `gpu`                  | Unchanged name; broker-spawned in v1.1.                            |
-| `snd`                            | `audio`                | Renamed to match the role-catalog naming convention.               |
-| `swtpm`                          | `swtpm`                | Unchanged name; broker-spawned in v1.1.                            |
-| (no v1.0/v1.1 field)             | `otel_relay`           | New per-VM field — broker-spawned OtelGuestRelay per ADR 0018.     |
-| (no v1.0/v1.1 field)             | `otel_host_bridge`     | New host-scoped field — broker-spawned OtelHostBridge.             |
-| (no v1.0/v1.1 field)             | `usbip_backend[<env>]` | New host-scoped field — broker-spawned USBIP backend per env.      |
-| (no v1.0/v1.1 field)             | `usbip_proxy[<env>]`   | New host-scoped field — broker-spawned USBIP proxy per env.        |
-
-Until v1.1.1 ships StatusOutputV3, the v1.0 schema remains the
-operator interface for `nixling status` / `nixling list`.
+| V2 field (current CLI output)    | V3 field (wire-side, v1.1.1+) | Notes                                                              |
+| -------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| `nixling`                        | (deleted)                     | The pre-P6 wrapper unit was removed in v1.0; V3 drops the field.   |
+| `microvm`                        | `hypervisor`                  | Cloud Hypervisor runner is broker-spawned in v1.1.                 |
+| `virtiofsd`                      | `virtiofsd_per_share[<tag>]`  | Per-share entry instead of a single field.                         |
+| `gpu`                            | `gpu`                         | Unchanged name; broker-spawned in v1.1.                            |
+| `snd`                            | `audio`                       | Renamed to match the role-catalog naming convention.               |
+| `swtpm`                          | `swtpm`                       | Unchanged name; broker-spawned in v1.1.                            |
+| (no V2 field)                    | `otel_relay`                  | New per-VM field — broker-spawned OtelGuestRelay per ADR 0018.     |
+| (no V2 field)                    | `otel_host_bridge`            | New host-scoped field — broker-spawned OtelHostBridge.             |
+| (no V2 field)                    | `usbip_backend_per_env[<env>]`| New host-scoped field — broker-spawned USBIP backend per env.      |
+| (no V2 field)                    | `usbip_proxy_per_env[<env>]`  | New host-scoped field — broker-spawned USBIP proxy per env.        |
 
 ## Recovery — broker bring-up troubleshooting
 

@@ -130,8 +130,37 @@ impl CgroupBundleContext {
         self.parent_slice.clone()
     }
 
+    /// v1.1.1 per-VM-interior + per-role-leaf taxonomy per ADR 0011
+    /// Decision item 1: `vm_interior_path` returns the
+    /// process-free intermediate directory `nixling.slice/<vm_id>/`.
+    /// Per-role leaf cgroups (`nixling.slice/<vm_id>/<role>/`) are
+    /// the only entries that carry processes.
+    pub fn vm_interior_path(&self, vm_id: &str) -> PathBuf {
+        self.slice_path().join(vm_id)
+    }
+
+    /// v1.1.1 per-role leaf cgroup path
+    /// `nixling.slice/<vm_id>/<role_id>/`. Processes for the
+    /// `(vm_id, role_id)` SpawnRunner instance are placed here via
+    /// `clone3(CLONE_INTO_CGROUP)` at spawn time.
+    pub fn vm_role_leaf_path(&self, vm_id: &str, role_id: &str) -> PathBuf {
+        self.vm_interior_path(vm_id).join(role_id)
+    }
+
+    /// v1.0 backward-compat alias: returns the per-VM INTERIOR
+    /// `<slice>/<vm_id>/` (NOT the legacy `<vm_id>.scope` leaf).
+    /// The interior path is the one create_vm_subtree actually
+    /// materializes in v1.1+; read-side callers
+    /// (`handle_open_cgroup_dir`) work transparently against the
+    /// interior. Write-side callers should migrate to
+    /// `vm_role_leaf_path(vm_id, role_id)` for per-role-leaf
+    /// granularity.
+    #[deprecated(
+        since = "1.1.1",
+        note = "v1.1.1 migrated to per-VM-interior + per-role-leaf; use vm_interior_path or vm_role_leaf_path"
+    )]
     pub fn vm_leaf_path(&self, vm_id: &str) -> PathBuf {
-        self.slice_path().join(format!("{vm_id}.scope"))
+        self.vm_interior_path(vm_id)
     }
 
     pub fn knows_vm(&self, vm_id: &str) -> bool {

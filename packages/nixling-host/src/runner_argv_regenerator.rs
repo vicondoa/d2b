@@ -40,7 +40,15 @@
 use nixling_core::bundle_resolver::ResolvedRunnerIntent;
 use nixling_core::processes::ProcessRole;
 
+use crate::audio_argv::{generate_audio_argv, AudioArgvInput};
 use crate::ch_argv::{generate_ch_argv, ChArgvInput};
+use crate::gpu_argv::{generate_gpu_argv, GpuArgvInput};
+use crate::otel_host_bridge_argv::OtelHostBridgeArgvInputs;
+use crate::swtpm_argv::{generate_swtpm_argv, SwtpmArgvInput};
+use crate::usbip_argv::{generate_usbip_argv, UsbipArgvInput, UsbipSubcommand};
+use crate::video_argv::{generate_video_argv, VideoArgvInput};
+use crate::virtiofsd_argv::{generate_virtiofsd_argv, VirtiofsdArgvInput};
+use crate::vsock_relay_argv::{generate_vsock_relay_argv, VsockRelayArgvInput};
 
 /// Errors that can occur during regeneration.
 #[derive(Debug)]
@@ -66,15 +74,47 @@ impl std::fmt::Display for RegenerateArgvError {
 impl std::error::Error for RegenerateArgvError {}
 
 /// Supplementary per-VM runner inputs that the bundle resolver does
-/// not yet carry as typed data. v1.1.1 will add these to the
-/// `processes.json` schema; at v1.1 the broker constructs them at
+/// not yet carry as typed data. v1.2 will fold these into
+/// `processes.json` schema; at v1.1.1 the broker constructs them at
 /// spawn time from the resolved bundle + host state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RunnerArgvExtra {
     /// Pre-built [`ChArgvInput`] when the role is
-    /// [`ProcessRole::CloudHypervisorRunner`]. Mandatory for that
-    /// role; ignored otherwise.
+    /// [`ProcessRole::CloudHypervisorRunner`].
     pub ch_input: Option<ChArgvInput>,
+    /// Pre-built [`VirtiofsdArgvInput`] when the role is
+    /// [`ProcessRole::Virtiofsd`].
+    pub virtiofsd_input: Option<VirtiofsdArgvInput>,
+    /// Pre-built [`SwtpmArgvInput`] when the role is
+    /// [`ProcessRole::Swtpm`].
+    pub swtpm_input: Option<SwtpmArgvInput>,
+    /// Pre-built [`GpuArgvInput`] when the role is
+    /// [`ProcessRole::Gpu`].
+    pub gpu_input: Option<GpuArgvInput>,
+    /// Pre-built [`AudioArgvInput`] when the role is
+    /// [`ProcessRole::Audio`].
+    pub audio_input: Option<AudioArgvInput>,
+    /// Pre-built [`VideoArgvInput`] when the role is
+    /// [`ProcessRole::Video`].
+    pub video_input: Option<VideoArgvInput>,
+    /// Pre-built [`VsockRelayArgvInput`] when the role is
+    /// [`ProcessRole::VsockRelay`].
+    pub vsock_relay_input: Option<VsockRelayArgvInput>,
+    /// Pre-built [`UsbipArgvInput`] when the role is
+    /// [`ProcessRole::Usbip`]. Pair with `usbip_subcommand`
+    /// (bind | unbind) since the same input struct serves both
+    /// subcommands.
+    pub usbip_input: Option<UsbipArgvInput>,
+    /// USBIP subcommand selector (Bind / Unbind) for the
+    /// generate_usbip_argv invocation. Defaults to Bind because
+    /// initial host-side dispatch always binds before attach.
+    pub usbip_subcommand: Option<UsbipSubcommand>,
+    /// Pre-built [`OtelHostBridgeArgvInputs`] for the otel-host-bridge
+    /// SpawnRunner. Not on processes-json's role enum at v1.1 (the
+    /// broker dispatches via a separate code path); the field is
+    /// preserved here so callers can use the same regenerate_argv
+    /// dispatcher uniformly.
+    pub otel_host_bridge_input: Option<OtelHostBridgeArgvInputs>,
 }
 
 /// Regenerate the spawn argv for a resolved runner intent using the
@@ -90,40 +130,99 @@ pub fn regenerate_argv(
 ) -> Result<Vec<String>, RegenerateArgvError> {
     match &intent.role {
         ProcessRole::CloudHypervisorRunner => {
-            let ch_input =
-                extra
-                    .ch_input
-                    .as_ref()
-                    .ok_or_else(|| RegenerateArgvError::MissingInput {
-                        role: intent.role.clone(),
-                        field: "ch_input".to_owned(),
-                    })?;
+            let ch_input = require(&extra.ch_input, &intent.role, "ch_input")?;
             let mut argv = generate_ch_argv(ch_input)
                 .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
-            // SpawnRunnerPlanInput convention: argv[0] is the
-            // process title (`microvm@<vm>` historically), NOT the
-            // CH binary path. The binary path lives separately in
-            // ResolvedRunnerIntent::binary_path. generate_ch_argv
-            // emits argv[0] = ch_binary_path for execve(2) parity;
-            // we replace it with the resolved-intent arg0 so the
-            // broker's SpawnRunnerPlanInput shape matches.
-            if !argv.is_empty() {
-                argv[0] = intent
-                    .argv
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| format!("microvm@{}", intent.vm_name));
-            }
+            // SpawnRunnerPlanInput argv[0] = process-title convention.
+            replace_arg0(&mut argv, intent);
             Ok(argv)
         }
-        // All other roles already have dedicated Rust generators in
-        // sibling modules (virtiofsd_argv, gpu_argv, audio_argv,
-        // swtpm_argv, usbip_argv, video_argv, vsock_relay_argv,
-        // otel_host_bridge_argv). v1.1.1 wires each through this
-        // dispatcher; at v1.1 the canonical generators are exposed
-        // but per-role regeneration arms remain stubs.
-        other => Err(RegenerateArgvError::NotYetWired(other.clone())),
+        ProcessRole::Virtiofsd => {
+            let input = require(&extra.virtiofsd_input, &intent.role, "virtiofsd_input")?;
+            let mut argv = generate_virtiofsd_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::Swtpm => {
+            let input = require(&extra.swtpm_input, &intent.role, "swtpm_input")?;
+            let mut argv = generate_swtpm_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::Gpu => {
+            let input = require(&extra.gpu_input, &intent.role, "gpu_input")?;
+            let mut argv = generate_gpu_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::Audio => {
+            let input = require(&extra.audio_input, &intent.role, "audio_input")?;
+            let mut argv = generate_audio_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::Video => {
+            let input = require(&extra.video_input, &intent.role, "video_input")?;
+            let mut argv = generate_video_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::VsockRelay => {
+            let input = require(&extra.vsock_relay_input, &intent.role, "vsock_relay_input")?;
+            let mut argv = generate_vsock_relay_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::Usbip => {
+            let input = require(&extra.usbip_input, &intent.role, "usbip_input")?;
+            let sub = extra.usbip_subcommand.unwrap_or(UsbipSubcommand::Bind);
+            let mut argv = generate_usbip_argv(input, sub)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        // Roles handled by other dispatch surfaces (readiness probes,
+        // pre-start hooks). The regenerator does not own these.
+        ProcessRole::HostReconcile
+        | ProcessRole::StoreVirtiofsPreflight
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::SwtpmPreStartFlush => {
+            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
+        }
     }
+}
+
+/// Replace argv[0] with the resolved-intent's arg0 (`microvm@<vm>`
+/// or similar). Per-role generators emit argv[0] = binary_path for
+/// execve(2) parity; SpawnRunnerPlanInput expects the process title.
+fn replace_arg0(argv: &mut [String], intent: &ResolvedRunnerIntent) {
+    if argv.is_empty() {
+        return;
+    }
+    argv[0] = intent
+        .argv
+        .first()
+        .cloned()
+        .unwrap_or_else(|| format!("microvm@{}", intent.vm_name));
+}
+
+fn require<'a, T>(
+    value: &'a Option<T>,
+    role: &ProcessRole,
+    field: &str,
+) -> Result<&'a T, RegenerateArgvError> {
+    value
+        .as_ref()
+        .ok_or_else(|| RegenerateArgvError::MissingInput {
+            role: role.clone(),
+            field: field.to_owned(),
+        })
 }
 
 #[cfg(test)]
@@ -171,7 +270,7 @@ mod tests {
     #[test]
     fn ch_role_without_input_errors_with_missing_field() {
         let intent = fake_intent(ProcessRole::CloudHypervisorRunner);
-        let err = regenerate_argv(&intent, &RunnerArgvExtra { ch_input: None }).unwrap_err();
+        let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
         match err {
             RegenerateArgvError::MissingInput { field, .. } => assert_eq!(field, "ch_input"),
             other => panic!("expected MissingInput, got {other:?}"),
@@ -179,15 +278,40 @@ mod tests {
     }
 
     #[test]
-    fn non_ch_role_returns_not_yet_wired() {
+    fn all_wired_roles_return_missing_input_without_extras() {
+        // After v1.1.1 wires every role's regenerator, the
+        // dispatcher returns MissingInput when the caller doesn't
+        // provide the per-role input record.
         for role in [
             ProcessRole::Virtiofsd,
             ProcessRole::Swtpm,
             ProcessRole::Gpu,
             ProcessRole::Audio,
+            ProcessRole::Video,
+            ProcessRole::VsockRelay,
+            ProcessRole::Usbip,
         ] {
             let intent = fake_intent(role.clone());
-            let err = regenerate_argv(&intent, &RunnerArgvExtra { ch_input: None }).unwrap_err();
+            let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
+            assert!(
+                matches!(err, RegenerateArgvError::MissingInput { ref role, .. } if role == &intent.role),
+                "expected MissingInput({role:?}, ...), got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_only_roles_return_not_yet_wired() {
+        // Pure readiness / pre-start roles aren't dispatchable
+        // through the regenerator; they live on other surfaces.
+        for role in [
+            ProcessRole::HostReconcile,
+            ProcessRole::StoreVirtiofsPreflight,
+            ProcessRole::GuestSshReadiness,
+            ProcessRole::SwtpmPreStartFlush,
+        ] {
+            let intent = fake_intent(role.clone());
+            let err = regenerate_argv(&intent, &RunnerArgvExtra::default()).unwrap_err();
             assert!(
                 matches!(err, RegenerateArgvError::NotYetWired(ref r) if r == &role),
                 "expected NotYetWired({role:?}), got {err:?}"

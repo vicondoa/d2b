@@ -116,6 +116,88 @@ pub struct StatusServicesOutputV2 {
     pub swtpm: Option<String>,
 }
 
+/// v1.1.1 StatusOutputV3 per-VM service-state map.
+///
+/// Per ADR 0018 § "StatusOutputV3 schema bump" + the v1.1.1
+/// migration-guide rename map. The v1.0/v1.1 StatusServicesOutputV2
+/// shape (single `microvm`/`snd`/`gpu` slots) is replaced by
+/// broker-spawn-aware fields:
+///
+/// | v1.0/v1.1 (V2)  | v1.1.1 (V3)            |
+/// | --------------- | ---------------------- |
+/// | `nixling`       | (deleted)              |
+/// | `microvm`       | `hypervisor`           |
+/// | `virtiofsd`     | `virtiofsd_per_share`  |
+/// | `gpu`           | `gpu`                  |
+/// | `snd`           | `audio`                |
+/// | `swtpm`         | `swtpm`                |
+/// | (new)           | `otel_relay`           |
+/// | (new)           | `otel_host_bridge`     |
+/// | (new)           | `usbip_backend_per_env`|
+/// | (new)           | `usbip_proxy_per_env`  |
+///
+/// All fields are optional so V3-emitting consumers can omit a role
+/// when the VM doesn't enable it. The wire shape uses camelCase
+/// + `deny_unknown_fields` to keep schema-drift gates honest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusServicesOutputV3 {
+    /// Cloud Hypervisor runner state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypervisor: Option<String>,
+    /// Per-share virtiofsd state, keyed by share `tag`.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", default)]
+    pub virtiofsd_per_share: std::collections::BTreeMap<String, String>,
+    /// crosvm GPU sidecar state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<String>,
+    /// vhost-device-sound audio sidecar state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<String>,
+    /// swtpm sidecar state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swtpm: Option<String>,
+    /// Per-VM OtelGuestRelay state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_relay: Option<String>,
+    /// Host-scoped OtelHostBridge state (broker-spawned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub otel_host_bridge: Option<String>,
+    /// Per-env USBIP backend state, keyed by env name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", default)]
+    pub usbip_backend_per_env: std::collections::BTreeMap<String, String>,
+    /// Per-env USBIP proxy state, keyed by env name.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty", default)]
+    pub usbip_proxy_per_env: std::collections::BTreeMap<String, String>,
+}
+
+impl StatusServicesOutputV3 {
+    /// v1.1.1 conversion shim: takes a V2 record and projects it
+    /// into V3 by applying the documented rename map. Used during
+    /// the v1.1 → v1.1.1 wire transition so callers consuming the
+    /// old V2 shape can be migrated incrementally without breaking
+    /// the bundle-resolver / status-output contract.
+    pub fn from_v2(v2: &StatusServicesOutputV2) -> Self {
+        let mut virtiofsd_per_share = std::collections::BTreeMap::new();
+        // V2 had a single `virtiofsd` slot; we expose it under the
+        // synthetic share tag `default` so the V3 consumer can read
+        // it without losing data. v1.1.2+ wire bumps populate the
+        // map per-share via the broker's per-share spawn records.
+        virtiofsd_per_share.insert("default".to_owned(), v2.virtiofsd.clone());
+        Self {
+            hypervisor: Some(v2.microvm.clone()),
+            virtiofsd_per_share,
+            gpu: v2.gpu.clone(),
+            audio: v2.snd.clone(),
+            swtpm: v2.swtpm.clone(),
+            otel_relay: None,
+            otel_host_bridge: None,
+            usbip_backend_per_env: std::collections::BTreeMap::new(),
+            usbip_proxy_per_env: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunnerParityOutputV2 {
@@ -2079,8 +2161,6 @@ fn cmd_host_install(
             args.dry_run,
             args.apply,
             args.json,
-            original_args,
-            "warning: nixling host install --apply currently routes through the daemon → broker RunHostInstall path (W15+W14b).\n",
         );
     }
     // --dry-run path
@@ -2157,8 +2237,6 @@ fn cmd_host_reconcile(
         args.dry_run,
         args.apply,
         args.json,
-        original_args,
-        "warning: nixling host reconcile --network --apply re-runs the broker-side net slice of host prepare and resets the daemon's net-route preflight counter on success (P3 ph3-p3-net-route-degraded-mode).\n",
     )
 }
 
@@ -2256,8 +2334,6 @@ fn cmd_vm_lifecycle_verb(
             flags.dry_run,
             flags.apply,
             json,
-            &[],
-            "",
         );
     }
     let summary = vm_dag_dry_run_summary(verb, vm);
@@ -2428,10 +2504,6 @@ fn w7_mutating_verb(
             flags.dry_run,
             flags.apply,
             json,
-            original_args,
-            &format!(
-                "v1.0 daemon-only: native nixling {verb} --apply daemon-native path is unavailable (returns exit-78 per ADR 0015). The daemon -> broker activation path is the only supported path in v1.0",
-            ),
         );
     }
     let summary = w7_dry_run_summary(verb, Some(vm));
@@ -2526,8 +2598,6 @@ fn cmd_gc(context: &Context, args: &GcArgs, original_args: &[OsString]) -> Resul
             flags.dry_run,
             flags.apply,
             args.json,
-            original_args,
-            "v1.0 daemon-only: native nixling gc --apply daemon-native path is unavailable (returns exit-78 per ADR 0015). The daemon -> broker store-cleanup path is the only supported path",
         );
     }
     let summary = w7_dry_run_summary("gc", None);
@@ -2606,10 +2676,6 @@ fn usb_mutating_verb(
             flags.dry_run,
             flags.apply,
             json_mode,
-            &[],
-            &format!(
-                "warning: nixling {verb} --apply requires a reachable nixlingd; this native USBIP surface has no legacy bash fallback.\n",
-            ),
         );
     }
     let summary = serde_json::json!({
@@ -2819,10 +2885,6 @@ fn w8_mutating_verb(
             flags.dry_run,
             flags.apply,
             json,
-            original_args,
-            &format!(
-                "v1.0 daemon-only: native nixling keys {verb} --apply daemon-native path is unavailable (returns exit-78 per ADR 0015). The daemon -> broker key-management path is the only supported path",
-            ),
         );
     }
     let summary = serde_json::json!({
@@ -2933,8 +2995,6 @@ fn cmd_migrate(
             flags.dry_run,
             flags.apply,
             args.json,
-            original_args,
-            "v1.0 daemon-only: native nixling migrate --apply daemon-native path is unavailable (returns exit-78 per ADR 0015). The daemon -> broker RunMigrate path is the only supported path",
         );
     }
 
@@ -4150,11 +4210,11 @@ fn broker_error_envelope(
 /// P4 cli-up: top-level dispatcher for mutating verbs. Runs the
 /// native daemon path; failure modes surface as typed envelopes
 /// (daemon-down exit-1, broker-error exit-78, not-yet-implemented
-/// exit-78) per ADR 0015. The historical `NIXLING_LEGACY_BASH_OPT_IN`
-/// escape hatch and the bash-fallback shim were both retired in P6;
-/// the Rust CLI dispatching through nixlingd → broker is the only
-/// operator path in v1.0.
-#[allow(clippy::too_many_arguments)]
+/// exit-78) per ADR 0015. v1.1-P1 removed every bash-fallback
+/// escape hatch (NIXLING_LEGACY_BASH_OPT_IN / NIXLING_NATIVE_ONLY /
+/// NIXLING_LEGACY_CLI_PATH env vars are no longer honoured); the
+/// Rust CLI dispatching through nixlingd → broker is the only
+/// operator path.
 fn dispatch_mutating_verb(
     context: &Context,
     request_type: &str,
@@ -4162,8 +4222,6 @@ fn dispatch_mutating_verb(
     dry_run: bool,
     apply: bool,
     json: bool,
-    legacy_args: &[OsString],
-    legacy_fallback_warning: &str,
 ) -> Result<i32, CliFailure> {
     let outcome =
         try_daemon_mutating_verb(context, request_type, extra_fields, dry_run, apply, json)?;
@@ -4203,12 +4261,8 @@ fn dispatch_mutating_verb(
             target_wave,
             remediation,
         } => {
-            // P4 cli-up: bash fallback removed. Surface the typed
-            // envelope unconditionally; the legacy
-            // NIXLING_LEGACY_BASH_OPT_IN / NIXLING_NATIVE_ONLY env
-            // toggles are no longer honoured.
-            let _ = legacy_fallback_warning;
-            let _ = legacy_args;
+            // v1.1-P1: bash fallback removed. Surface the typed
+            // envelope unconditionally.
             let tw = target_wave
                 .as_deref()
                 .unwrap_or("the matching W*-fu deferral");
@@ -4229,16 +4283,14 @@ fn dispatch_mutating_verb(
             )
         }
         DaemonVerbOutcome::Unreachable => {
-            // P4 cli-up: daemon-only. No bash fallback.
-            let _ = legacy_fallback_warning;
-            let _ = legacy_args;
+            // v1.1-P1: daemon-only. No bash fallback.
             emit_host_error(
                 &host_error_envelope(
                     "Daemon required for native --apply",
                     "daemon-down",
                     1,
                     "Daemon connectivity at /run/nixling/public.sock.",
-                    "nixlingd is unreachable; v1.0 daemon-only (ADR 0015) surfaces the typed `daemon-down` envelope with exit 1.",
+                    "nixlingd is unreachable; v1.1 daemon-only (ADR 0015 + ADR 0017) surfaces the typed `daemon-down` envelope with exit 1.",
                     "Start nixlingd on the host, then re-run the same command.",
                     "docs/reference/error-codes.md#daemon-down",
                 ),
@@ -4781,12 +4833,6 @@ mod host_install_dispatch_tests {
     #[test]
     fn host_install_apply_dispatches_host_install_request_frame_under_native_only() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
-        let _native_only = EnvVarGuard::set("NIXLING_NATIVE_ONLY", "1");
-        let _legacy_opt_in = EnvVarGuard::remove("NIXLING_LEGACY_BASH_OPT_IN");
-        let _legacy_cli = EnvVarGuard::set(
-            "NIXLING_LEGACY_CLI_PATH",
-            test_socket_path("missing-legacy-cli", ".sh"),
-        );
         let args = HostInstallArgs {
             dry_run: false,
             apply: true,
@@ -4934,12 +4980,6 @@ mod host_install_dispatch_tests {
     #[test]
     fn host_install_broker_error_returns_exit_78_without_bash_fallback() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
-        let _native_only = EnvVarGuard::remove("NIXLING_NATIVE_ONLY");
-        let _legacy_opt_in = EnvVarGuard::remove("NIXLING_LEGACY_BASH_OPT_IN");
-        let _legacy_cli = EnvVarGuard::set(
-            "NIXLING_LEGACY_CLI_PATH",
-            test_socket_path("missing-legacy-cli", ".sh"),
-        );
         let args = HostInstallArgs {
             dry_run: false,
             apply: true,
@@ -4972,12 +5012,6 @@ mod host_install_dispatch_tests {
     #[test]
     fn host_install_authz_not_admin_error_uses_typed_envelope() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
-        let _native_only = EnvVarGuard::remove("NIXLING_NATIVE_ONLY");
-        let _legacy_opt_in = EnvVarGuard::remove("NIXLING_LEGACY_BASH_OPT_IN");
-        let _legacy_cli = EnvVarGuard::set(
-            "NIXLING_LEGACY_CLI_PATH",
-            test_socket_path("missing-legacy-cli", ".sh"),
-        );
         let args = HostInstallArgs {
             dry_run: false,
             apply: true,

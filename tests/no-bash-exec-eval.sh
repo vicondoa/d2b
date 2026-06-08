@@ -144,18 +144,17 @@ mode_fixture_coverage() {
 
 mode_syn_ast_walk() {
   local walker_dir="$HERE/tools/no-bash-ast-walker"
-  if [ -d "$walker_dir" ]; then
-    ( cd "$walker_dir" && cargo run --quiet --release -- "$ROOT/packages" )
+  if [ -d "$walker_dir" ] && [ -f "$walker_dir/Cargo.toml" ]; then
+    # v1.1.1: dedicated AST walker is the deeper-coverage gate
+    # (per ADR 0017 § "Toolchain provisioning"). It uses `syn` to
+    # visit every `Command::new(...)` ExprCall and refuse any
+    # `Command::new("bash"|"sh"|...)` literal.
+    ( cd "$walker_dir" && unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER && \
+        nix shell nixpkgs#rustc nixpkgs#cargo nixpkgs#gcc --command \
+        env CARGO_BUILD_RUSTC_WRAPPER= cargo run --release --quiet -- "$ROOT/packages" )
     return $?
   fi
-  # v1.1: dedicated AST walker tool is scheduled for v1.1.1 per
-  # ADR 0017 § "Toolchain provisioning". v1.1's
-  # syn-ast-walk mode delegates to the more conservative `check`
-  # mode (ripgrep-based) which catches the same class of bash
-  # exec hits at the source-string layer. The walker upgrade
-  # adds AST-aware false-positive elimination but does not
-  # change the invariant the gate enforces.
-  printf 'no-bash-exec-eval[syn-ast-walk]: delegating to `check` mode (v1.1; dedicated walker arrives v1.1.1)\n'
+  printf 'no-bash-exec-eval[syn-ast-walk]: walker tool missing at %s — falling back to check mode\n' "$walker_dir"
   mode_check
 }
 
