@@ -10,6 +10,37 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.1] - 2026-05-19
+
+Patch release. Two consumer-impacting items surfaced during the
+first real `/etc/nixos`-side migration to v0.1.0.
+
+### Added
+
+- **`nixling.site.extraSpecialArgs`** (`attrsOf unspecified`,
+  default `{}`). Merged into every per-VM
+  `microvm.vms.<vm>.specialArgs` after the framework's own
+  baseline. Consumer keys take precedence on collision, so a
+  consumer that wants its full flake `inputs` (rather than just
+  nixling's narrower input set) visible inside per-VM modules
+  can set:
+  ```nix
+  nixling.site.extraSpecialArgs = { inherit inputs; };
+  ```
+  Mirrors `home-manager.extraSpecialArgs` from the Home-Manager
+  NixOS module — same semantics, same intent.
+
+### Fixed
+
+- **`scripts/migrate-nixling-v0.1.0.sh`**: `[[ -d "$dir" ]] && info ...`
+  under `set -euo pipefail` aborted the script silently when the
+  optional private-TPM-state directory didn't exist (return-value
+  of the compound `&&` chain propagated up as the function's exit
+  status). Replaced with explicit `if [[ -d ]]; then info; fi` for
+  set-e safety. The bug aborted the snapshot phase before the
+  `tpm2_getcap` step could run, leaving the migration in an
+  in-progress state that required a manual cleanup.
+
 ## [0.1.0] - 2026-05-19
 
 First public alpha release.

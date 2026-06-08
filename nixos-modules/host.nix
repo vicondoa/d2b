@@ -162,7 +162,7 @@ in
         vm' = checkVmPlatform name vm;
         derived = vmDerive name vm';
       in {
-        specialArgs = { inherit inputs; };
+        specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;
         config = lib.mkMerge [
           {
             imports = [ ./base.nix ]

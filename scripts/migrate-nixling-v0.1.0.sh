@@ -635,8 +635,16 @@ snapshot_swtpm_state() {
     hash_dir "$dir1" "${SNAPSHOT_HASHES_DIR}/${vm}__public.sha256"
     hash_dir "$dir2" "${SNAPSHOT_HASHES_DIR}/${vm}__private.sha256"
     if [[ "$DRY_RUN" -eq 0 ]]; then
-      [[ -d "$dir1" ]] && info "Hashed swtpm public  $vm: $(wc -l <"${SNAPSHOT_HASHES_DIR}/${vm}__public.sha256") file(s)"
-      [[ -d "$dir2" ]] && info "Hashed swtpm private $vm: $(wc -l <"${SNAPSHOT_HASHES_DIR}/${vm}__private.sha256") file(s)"
+      # v0.1.0 BUGFIX: [[ -d ... ]] && info ... under set -e aborts
+      # silently when the dir doesn't exist (return-value of compound
+      # is treated as function exit status). Use `if` for set-e
+      # safety. See https://github.com/vicondoa/nixling/issues/<TBD>.
+      if [[ -d "$dir1" ]]; then
+        info "Hashed swtpm public  $vm: $(wc -l <"${SNAPSHOT_HASHES_DIR}/${vm}__public.sha256") file(s)"
+      fi
+      if [[ -d "$dir2" ]]; then
+        info "Hashed swtpm private $vm: $(wc -l <"${SNAPSHOT_HASHES_DIR}/${vm}__private.sha256") file(s)"
+      fi
     fi
   done
 }

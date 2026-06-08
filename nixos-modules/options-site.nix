@@ -173,6 +173,37 @@
         consumer's primary nixos configuration.
       '';
     };
+
+    extraSpecialArgs = lib.mkOption {
+      type = lib.types.attrsOf lib.types.unspecified;
+      default = { };
+      example = lib.literalExpression ''
+        # Pass the consumer flake's `inputs` to every per-VM module
+        # so VMs can reference `inputs.<consumer-input>.*`. Mirrors
+        # home-manager's `extraSpecialArgs` pattern.
+        { inherit inputs; }
+      '';
+      description = ''
+        Extra module-arguments merged into every per-VM
+        `microvm.vms.<vm>.specialArgs` after the framework's own
+        baseline (`{ inherit inputs; }` where `inputs` is the
+        nixling FLAKE's inputs). Consumer keys take precedence on
+        collision — set `inputs = consumerInputs;` here if your
+        per-VM modules need `inputs.<your-flake>` visibility (e.g.
+        `inputs.nixos-entra-id`, `inputs.llm-agents`).
+
+        Use this when:
+        - A per-VM module file (e.g. `vms/work.nix`) takes
+          `{ inputs, ... }:` and references inputs your consumer
+          flake declares but nixling's flake does not.
+        - You want to thread a consumer-side overlay set (e.g.
+          `{ myOverlay = inputs.something.overlays.default; }`)
+          into per-VM evals without re-importing it in each VM.
+
+        Mirrors `home-manager.extraSpecialArgs` from the
+        Home-Manager NixOS module — same semantics, same intent.
+      '';
+    };
   };
 
   # Top-level option: CIDRs of the host's own physical LAN(s). These
