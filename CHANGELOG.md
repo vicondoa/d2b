@@ -10,6 +10,38 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.3] - 2026-05-19
+
+Patch release. Two more framework bugs surfaced during the first
+real consumer migration, both around the nixling@<vm> wrapper +
+microvm.nix interaction.
+
+### Fixed
+
+- **`nixos-modules/host-wrapper.nix`**: per-VM `nixling@<vm>.service`
+  units for `autostart=true` VMs were emitted as separate unit files
+  (via `systemd.services."nixling@${name}"`) that NixOS materialised
+  WITHOUT the template's `ExecStart`/`ExecStop`/`PropagatesStopTo`/
+  `Type=oneshot` settings — so systemd refused them at boot with
+  "Service has no ExecStart=, ExecStop=, or SuccessAction=. Refusing."
+
+  Fix: drop the per-instance `systemd.services` declarations and
+  use `systemd.targets.multi-user.wants` symlinks instead. systemd
+  then resolves each `nixling@<vm>.service` against the template
+  with all its lifecycle wiring intact.
+
+- **`nixos-modules/host-wrapper.nix`**: upstream microvm.nix emits
+  `systemd.targets.microvms.wants = ["microvm@<vm>.service" …]`
+  for every `microvm.vms.<vm>` declaration. `microvms.target` is
+  itself `wantedBy = ["multi-user.target"]`, so workload VMs got
+  pulled into boot regardless of `microvm.autostart = []`. Setting
+  `microvm.autostart` only controls upstream's `multi-user.target.wants`
+  on the microvm@ unit, not the `microvms.target` Wants= relation.
+
+  Fix: `lib.mkForce` `systemd.targets.microvms.wants` to enumerate
+  ONLY `autostart=true` VMs. Workload VMs are now exclusively
+  on-demand via `nixling up <vm>`.
+
 ## [0.1.2] - 2026-05-19
 
 Patch release. Surfaced during the first real consumer migration to
