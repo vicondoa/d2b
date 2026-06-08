@@ -1998,6 +1998,23 @@ fn config_sync_capture_to_staging_limited(
 ) -> Result<usize, CliFailure> {
     use std::io::Read as _;
 
+    // The deadline bounds the ENTIRE child lifetime, not just the stdout
+    // read: a hostile endpoint could send a small valid payload, close
+    // stdout (EOF), then linger to hang `child.wait()` forever.
+    let deadline = std::time::Instant::now() + timeout;
+    let timed_out = |child: &mut std::process::Child, reader: std::thread::JoinHandle<()>| {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        CliFailure::new(
+            1,
+            format!(
+                "config sync: timed out after {}ms pulling guest config",
+                timeout.as_millis()
+            ),
+        )
+    };
+
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -2026,7 +2043,8 @@ fn config_sync_capture_to_staging_limited(
         let _ = tx.send(res);
     });
 
-    let stdout_bytes = match rx.recv_timeout(timeout) {
+    let read_budget = deadline.saturating_duration_since(std::time::Instant::now());
+    let stdout_bytes = match rx.recv_timeout(read_budget) {
         Ok(Ok(buf)) => buf,
         Ok(Err(msg)) => {
             let _ = child.kill();
@@ -2034,24 +2052,35 @@ fn config_sync_capture_to_staging_limited(
             let _ = reader.join();
             return Err(CliFailure::new(1, format!("config sync: {msg}")));
         }
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
-            return Err(CliFailure::new(
-                1,
-                format!(
-                    "config sync: timed out after {}ms pulling guest config",
-                    timeout.as_millis()
-                ),
-            ));
-        }
+        Err(_) => return Err(timed_out(&mut child, reader)),
     };
     let _ = reader.join();
 
-    let status = child
-        .wait()
-        .map_err(|e| CliFailure::new(1, format!("config sync: wait: {e}")))?;
+    // Bounded wait for the child to actually exit (covers the
+    // stdout-closed-but-process-lingers case); kill on the deadline.
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CliFailure::new(
+                        1,
+                        format!(
+                            "config sync: timed out after {}ms pulling guest config",
+                            timeout.as_millis()
+                        ),
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(CliFailure::new(1, format!("config sync: wait: {e}")));
+            }
+        }
+    };
     if !status.success() {
         let mut stderr = String::new();
         if let Some(es) = child.stderr.take() {
@@ -7439,6 +7468,39 @@ mod config_cmd_tests {
             "timeout did not fire promptly"
         );
         assert!(!staging.exists(), "must not stage on timeout");
+    }
+
+    #[test]
+    fn sync_capture_times_out_when_process_lingers_after_stdout_close() {
+        // A hostile endpoint sends a small valid payload, CLOSES stdout
+        // (EOF), then lingers. The deadline must cover the whole child
+        // lifetime (not just the stdout read), so this still times out,
+        // is killed, and does not stage.
+        let dir = scratch("sync-linger");
+        let argv = fake_ssh(
+            &dir,
+            "ssh",
+            "printf '{ environment.systemPackages = []; }\\n'\nexec 1>&-\nsleep 30\n",
+        );
+        let staging = dir.join("work-aad.guest.nix");
+        let start = std::time::Instant::now();
+        let err = config_sync_capture_to_staging_limited(
+            &argv,
+            &staging,
+            1 << 20,
+            std::time::Duration::from_millis(200),
+        )
+        .expect_err("must time out on the lingering process");
+        assert!(
+            err.message.contains("timed out"),
+            "expected a timeout error, got: {}",
+            err.message
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "lingering-process timeout did not fire promptly"
+        );
+        assert!(!staging.exists(), "must not stage when the process lingers");
     }
 
     #[test]
