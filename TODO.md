@@ -3,6 +3,57 @@
 Operator-facing follow-up work captured as we hit it. New items go at
 the top. Move closed items to CHANGELOG and delete from here.
 
+## Speed up the `assertions-eval` gate by folding probe cases into the batch
+
+`tests/assertions-eval.sh` now evaluates its 26-case batch via a
+minimal `lib.evalModules` (nixling modules + `nixos/modules/misc/assertions.nix`
++ namespace sinks in `tests/eval-cases/shared.nix`) instead of a full
+`nixpkgs.lib.nixosSystem` per case — the batch dropped from ~2 min to
+~68 s. The remaining wall time (~9 min) is dominated by the ~9 tail
+"probe" cases at the bottom of the gate, each of which spawns a
+SEPARATE `nix-instantiate` whose cost is process startup
+(`builtins.getFlake` + nixpkgs import), not module eval. Fold those
+probes into the single batch process — extend the case schema in
+`shared.nix` with an optional `probe` projection (reusing the now-safe
+faithful `systemd` sink for the cases that read
+`config.systemd.services` / `config.systemd.tmpfiles.rules`) so the
+whole gate runs in one eval. The 3 throw-message-capture fallbacks
+(`graphics-without-wayland-user`, `platform-gate-*-aarch64`) must stay
+on a per-case `--show-trace` eval unless their stderr-message
+assertion is relaxed (or moved to `nix-unit`'s `expectedError.msg`).
+The same minimal-evalModules technique also applies to
+`tests/eval-cases/observability.nix` and `processes-dag-order.nix`,
+which still call full `nixosSystem`. This touches a critical contract
+gate, so route it through panel review. Target: whole gate under
+~2 min.
+
+## `docs/reference/cli-output/status.schema.json` is stale (missing `api_ready` defs)
+
+`cargo run -p xtask -- gen-cli-schemas` emits `ApiReadySimple` /
+`ApiReadyStatusV1` definitions (from the `api_ready` field on
+`StatusRequest`/status response in `packages/nixling-ipc/src/public_wire.rs`,
+shipped in v1.2), but the committed `status.schema.json` predates them
+and was never regenerated. No drift gate enforces this file
+(`cli-json-drift.sh` only checks host-check rendering), so CI is green
+despite the staleness. Regenerate and commit the schema, and consider
+wiring a `cli-schemas` drift gate so it can't silently drift again.
+
+## `privileges-doc-completeness-eval.sh` reports 10 contradictory doc rows
+
+`tests/privileges-doc-completeness-eval.sh` fails with 10
+"has a live (unmarked) doc row AND an obituary row — contradictory"
+violations for retired units (`microvm-tap-interfaces@`,
+`microvm-set-booted@`, `microvm-pci-devices@`, `nixling-*-store-sync`,
+`nixling-known-hosts-refresh@`, `nixling-vfsd-watchdog@`,
+`nixling-ch-exporter`, `nixling-otel-host-bridge`, per-env
+`usbipd-proxy`/`usbipd-backend`). This is pre-existing (fails
+identically on the original tree, independent of the marker scrub):
+`docs/reference/privileges.md` lists these units both in a live table
+and in the `## Legacy systemd surface obituary` section. Reconcile the
+doc so each retired unit appears only in the obituary, or adjust the
+gate's live/obituary partition logic. The gate is wired into
+`tests/static.sh`.
+
 ## `nixling usb attach` never performs the guest-side `usbip attach` (vhci import unwired)
 
 **Current state.** `nixling usb attach <vm> <busid> --apply` does only the
