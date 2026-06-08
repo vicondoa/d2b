@@ -10,6 +10,33 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.2] - 2026-05-19
+
+Patch release. Surfaced during the first real consumer migration to
+v0.1.x — a runtime bootstrap deadlock between
+`nixling-net-route-preflight.service` and the per-env uplink bridge.
+
+### Fixed
+
+- **`nixos-modules/network.nix`**: per-env uplink bridge
+  (`br-<env>-up`) now has `networkConfig.ConfigureWithoutCarrier =
+  true`. Without it, networkd refuses to apply the Address + static
+  Route to the env's LAN subnet until the bridge has carrier. But
+  carrier only appears when the per-env net VM attaches its uplink
+  tap to the bridge, and the net VM start is gated on
+  `nixling-net-route-preflight.service`, which checks the static
+  route exists. Deadlock.
+
+  The LAN bridge already had `ConfigureWithoutCarrier = true`; the
+  uplink-bridge case was missing. The fix is one option per env;
+  no consumer config changes required.
+
+  Existing v0.1.0 / v0.1.1 consumers can work around by running
+  `sudo ip route add <env-lan>/<mask> via <env-uplink-gw> dev
+  br-<env>-up` once per env before any
+  `nixos-rebuild switch` — but the proper fix is to upgrade to
+  v0.1.2 and re-rebuild.
+
 ## [0.1.1] - 2026-05-19
 
 Patch release. Two consumer-impacting items surfaced during the

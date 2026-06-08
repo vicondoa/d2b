@@ -331,6 +331,14 @@ in
       (envName: m: {
         # Uplink bridge: host has the /30 .1 here, plus a static
         # route to the LAN via the net VM's .2.
+        #
+        # v0.1.2: ConfigureWithoutCarrier = true is REQUIRED here.
+        # Without it, networkd refuses to apply Address + Route
+        # before the bridge has carrier, but the bridge only gets
+        # carrier when the net VM attaches its uplink tap. The
+        # `nixling-net-route-preflight.service` checks the static
+        # route exists; it runs BEFORE the net VM start; deadlock.
+        # Caught during the first real consumer migration.
         "20-${m.uplinkBridge}" = {
           matchConfig.Name = m.uplinkBridge;
           addresses = [{ Address = "${m.hostUplinkIp}/${m.uplinkMask}"; }];
@@ -338,6 +346,9 @@ in
             Destination = m.lanSubnet;
             Gateway = m.netUplinkIp;
           }];
+          networkConfig = {
+            ConfigureWithoutCarrier = true;
+          };
           linkConfig.RequiredForOnline = "no";
         };
 
