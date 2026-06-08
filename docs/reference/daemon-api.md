@@ -172,23 +172,23 @@ names are rejected during deserialization.
 | `OpenFuseRequest` | struct | [`OpenFuseRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L693) | struct { `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `PrepareDirRequest` | struct | [`PrepareDirRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L704) | struct { `vm_id`: `VmId`; `path_class`: `PathClass`; `tracing_span_id`: `Option<TracingSpanId>` } |
 | `PrepareStoreViewRequest` | struct | [`PrepareStoreViewRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L713) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `StoreSyncRequest` | struct | [`StoreSyncRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L727) | struct { `vm_id`: `VmId`; `bundle_closure_ref`: `BundleClosureRef`; `generation`: `u32`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SetBridgePortFlagsRequest` | struct | [`SetBridgePortFlagsRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L761) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SetSocketAclRequest` | struct | [`SetSocketAclRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L770) | struct { `bundle_socket_intent_ref`: `BundleOpId`; `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SetupMountNamespaceRequest` | struct | [`SetupMountNamespaceRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L780) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `UpdateHostsFileRequest` | struct | [`UpdateHostsFileRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L791) | struct { `bundle_hosts_intent_ref`: `BundleOpId`; `destroy`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `UsbipBindRequest` | struct | [`UsbipBindRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L803) | struct { `bus_id`: `String`; `vm_id`: `VmId` } |
-| `UsbipBindFirewallRuleRequest` | struct | [`UsbipBindFirewallRuleRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L819) | struct { `bundle_usbip_firewall_intent_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `UsbipProxyReconcileRequest` | struct | [`UsbipProxyReconcileRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L827) | struct { `scope_id`: `ScopeId` } |
-| `UsbipUnbindRequest` | struct | [`UsbipUnbindRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L833) | struct { `bus_id`: `String` } |
-| `SignalRunnerRequest` | struct | [`SignalRunnerRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L886) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `signal`: `RunnerSignal`; `pid`: `Option<i32>`; `expected_start_time_ticks`: `Option<u64>`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `DeregisterRunnerPidfdRequest` | struct | [`DeregisterRunnerPidfdRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L908) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SpawnRunnerRequest` | struct | [`SpawnRunnerRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L985) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `bundle_runner_intent_ref`: `BundleOpId`; `runtime_allocations`: `Vec<RunnerAllocation>`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SeedDnsmasqLeaseRequest` | struct | [`SeedDnsmasqLeaseRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1133) | struct { `vm_id`: `VmId`; `scope_id`: `ScopeId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `BindMountFromHardlinkFarmRequest` | struct | [`BindMountFromHardlinkFarmRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1145) | struct { `vm_id`: `VmId`; `bundle_store_view_intent_ref`: `Option<BundleOpId>`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `OwnershipMatrixCheckRequest` | struct | [`OwnershipMatrixCheckRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1160) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `SshHostKeyPreflightRequest` | struct | [`SshHostKeyPreflightRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1171) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
-| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1189) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `StoreSyncRequest` | struct | [`StoreSyncRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L730) | struct { `vm_id`: `VmId`; `bundle_closure_ref`: `BundleClosureRef`; `generation`: `u32`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SetBridgePortFlagsRequest` | struct | [`SetBridgePortFlagsRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L764) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SetSocketAclRequest` | struct | [`SetSocketAclRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L773) | struct { `bundle_socket_intent_ref`: `BundleOpId`; `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SetupMountNamespaceRequest` | struct | [`SetupMountNamespaceRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L783) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `UpdateHostsFileRequest` | struct | [`UpdateHostsFileRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L794) | struct { `bundle_hosts_intent_ref`: `BundleOpId`; `destroy`: `bool`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `UsbipBindRequest` | struct | [`UsbipBindRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L806) | struct { `bus_id`: `String`; `vm_id`: `VmId` } |
+| `UsbipBindFirewallRuleRequest` | struct | [`UsbipBindFirewallRuleRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L822) | struct { `bundle_usbip_firewall_intent_ref`: `BundleOpId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `UsbipProxyReconcileRequest` | struct | [`UsbipProxyReconcileRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L830) | struct { `scope_id`: `ScopeId` } |
+| `UsbipUnbindRequest` | struct | [`UsbipUnbindRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L836) | struct { `bus_id`: `String` } |
+| `SignalRunnerRequest` | struct | [`SignalRunnerRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L889) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `signal`: `RunnerSignal`; `pid`: `Option<i32>`; `expected_start_time_ticks`: `Option<u64>`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `DeregisterRunnerPidfdRequest` | struct | [`DeregisterRunnerPidfdRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L911) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SpawnRunnerRequest` | struct | [`SpawnRunnerRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L988) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `bundle_runner_intent_ref`: `BundleOpId`; `runtime_allocations`: `Vec<RunnerAllocation>`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SeedDnsmasqLeaseRequest` | struct | [`SeedDnsmasqLeaseRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1136) | struct { `vm_id`: `VmId`; `scope_id`: `ScopeId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `BindMountFromHardlinkFarmRequest` | struct | [`BindMountFromHardlinkFarmRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1148) | struct { `vm_id`: `VmId`; `bundle_store_view_intent_ref`: `Option<BundleOpId>`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `OwnershipMatrixCheckRequest` | struct | [`OwnershipMatrixCheckRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1163) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `SshHostKeyPreflightRequest` | struct | [`SshHostKeyPreflightRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1174) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
+| `DiskInitRequest` | struct | [`DiskInitRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L1192) | struct { `vm_id`: `VmId`; `tracing_span_id`: `Option<TracingSpanId>` } |
 <!-- END AUTO-GENERATED: request-types -->
 
 <!-- BEGIN AUTO-GENERATED: response-types -->
@@ -223,16 +223,16 @@ names are rejected during deserialization.
 | `BrokerErrorResponse` | struct | [`BrokerErrorResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L428) | struct { `kind`: `String`; `operation`: `String`; `target_wave`: `Option<String>`; `message`: `String`; `action`: `String` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L442) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
 | `OpenPidfdResponse` | struct | [`OpenPidfdResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L670) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `pid`: `i32`; `verified_start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
-| `StoreSyncResponse` | struct | [`StoreSyncResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L742) | struct { `vm`: `String`; `generation`: `u32`; `hardlink_farm_path`: `String`; `closure_count`: `u32` } |
-| `AckResponse` | struct | [`AckResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L839) | struct { `accepted`: `bool`; `operation`: `String` } |
-| `TapReadyResponse` | struct | [`TapReadyResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L846) | struct { `bridge`: `Option<IfName>`; `tap`: `IfName` } |
-| `ExportBrokerAuditResponse` | struct | [`ExportBrokerAuditResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L853) | struct { `lines`: `Vec<String>` } |
-| `BridgePortFlagsResponse` | struct | [`BridgePortFlagsResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L859) | struct { `bridge`: `IfName`; `isolated`: `bool`; `neigh_suppress`: `bool`; `port`: `IfName` } |
-| `ValidateBundleResponse` | struct | [`ValidateBundleResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L868) | struct { `valid`: `bool` } |
-| `SignalRunnerResponse` | struct | [`SignalRunnerResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L900) | struct { `signaled`: `bool`; `vm_id`: `VmId`; `role_id`: `RoleId` } |
-| `DeregisterRunnerPidfdResponse` | struct | [`DeregisterRunnerPidfdResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L917) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `removed`: `bool` } |
-| `SpawnRunnerResponse` | struct | [`SpawnRunnerResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1047) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
-| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1250) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
+| `StoreSyncResponse` | struct | [`StoreSyncResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L745) | struct { `vm`: `String`; `generation`: `u32`; `hardlink_farm_path`: `String`; `closure_count`: `u32` } |
+| `AckResponse` | struct | [`AckResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L842) | struct { `accepted`: `bool`; `operation`: `String` } |
+| `TapReadyResponse` | struct | [`TapReadyResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L849) | struct { `bridge`: `Option<IfName>`; `tap`: `IfName` } |
+| `ExportBrokerAuditResponse` | struct | [`ExportBrokerAuditResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L856) | struct { `lines`: `Vec<String>` } |
+| `BridgePortFlagsResponse` | struct | [`BridgePortFlagsResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L862) | struct { `bridge`: `IfName`; `isolated`: `bool`; `neigh_suppress`: `bool`; `port`: `IfName` } |
+| `ValidateBundleResponse` | struct | [`ValidateBundleResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L871) | struct { `valid`: `bool` } |
+| `SignalRunnerResponse` | struct | [`SignalRunnerResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L903) | struct { `signaled`: `bool`; `vm_id`: `VmId`; `role_id`: `RoleId` } |
+| `DeregisterRunnerPidfdResponse` | struct | [`DeregisterRunnerPidfdResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L920) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `removed`: `bool` } |
+| `SpawnRunnerResponse` | struct | [`SpawnRunnerResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1050) | struct { `vm_id`: `VmId`; `role_id`: `RoleId`; `role`: `RunnerRole`; `pid`: `i32`; `start_time_ticks`: `u64`; `pidfd_index`: `u32` } |
+| `PollChildReapedResponse` | struct | [`PollChildReapedResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L1253) | struct { `notifications`: `Vec<ChildReapedNotification>` } |
 <!-- END AUTO-GENERATED: response-types -->
 
 ## Per-VM lifecycle state
@@ -266,12 +266,12 @@ state-machine node.
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
 | `ActivationMode` | enum | [`ActivationMode`](../../packages/nixling-ipc/src/broker_wire.rs#L266) | `Switch`; `Boot`; `Test`; `Rollback` |
-| `RunnerSignal` | enum | [`RunnerSignal`](../../packages/nixling-ipc/src/broker_wire.rs#L878) | `Term`; `Kill`; `Quit` |
-| `RunnerRole` | enum | [`RunnerRole`](../../packages/nixling-ipc/src/broker_wire.rs#L936) | `CloudHypervisor`; `Virtiofsd`; `Swtpm`; `SwtpmFlush`; `Gpu`; `Audio`; `Video`; `VsockRelay`; `Usbip`; `OtelHostBridge` |
-| `RunnerAllocationKind` | enum | [`RunnerAllocationKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1025) | `VsockCid`; `TapFdSlot`; `ApiSocketPath` |
-| `BrokerCallerRole` | enum | [`BrokerCallerRole`](../../packages/nixling-ipc/src/broker_wire.rs#L1091) | `AdminUid` — struct { `uid`: `u32` }; `LauncherUid` — struct { `uid`: `u32` }; `RootUid` — struct { `uid`: `u32` }; `NotAuthorized` |
-| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1202) | `Exited`; `Signaled`; `Killed` |
-| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/nixling-ipc/src/broker_wire.rs#L1240) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
+| `RunnerSignal` | enum | [`RunnerSignal`](../../packages/nixling-ipc/src/broker_wire.rs#L881) | `Term`; `Kill`; `Quit` |
+| `RunnerRole` | enum | [`RunnerRole`](../../packages/nixling-ipc/src/broker_wire.rs#L939) | `CloudHypervisor`; `Virtiofsd`; `Swtpm`; `SwtpmFlush`; `Gpu`; `Audio`; `Video`; `VsockRelay`; `Usbip`; `OtelHostBridge` |
+| `RunnerAllocationKind` | enum | [`RunnerAllocationKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1028) | `VsockCid`; `TapFdSlot`; `ApiSocketPath` |
+| `BrokerCallerRole` | enum | [`BrokerCallerRole`](../../packages/nixling-ipc/src/broker_wire.rs#L1094) | `AdminUid` — struct { `uid`: `u32` }; `LauncherUid` — struct { `uid`: `u32` }; `RootUid` — struct { `uid`: `u32` }; `NotAuthorized` |
+| `ChildExitKind` | enum | [`ChildExitKind`](../../packages/nixling-ipc/src/broker_wire.rs#L1205) | `Exited`; `Signaled`; `Killed` |
+| `BrokerNotification` | enum | [`BrokerNotification`](../../packages/nixling-ipc/src/broker_wire.rs#L1243) | `ChildReaped` — (ChildReapedNotification); `Unknown` |
 | `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L140) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 | `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L324) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
 | `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-ipc/src/public_wire.rs#L408) | `Bound`; `Unbound` |

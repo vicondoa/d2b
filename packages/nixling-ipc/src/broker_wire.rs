@@ -720,8 +720,11 @@ pub struct PrepareStoreViewRequest {
 /// by `vm_id` (canonical id form `"store-view:vm:<vm>"`) and refuses
 /// the op if `bundle_closure_ref` does not match. The broker also
 /// refuses if the wire-supplied `generation` does not match the bundle's
-/// resolved generation — generations are monotonic, so a stale daemon
-/// must not race the activator.
+/// resolved generation. The generation is a content-derived stable
+/// equality token (see `closures-json.nix`), not a monotonic counter:
+/// the daemon and broker both read it from the same trusted bundle, so
+/// a mismatch means a stale daemon is racing the activator and the op
+/// is refused fail-closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreSyncRequest {
