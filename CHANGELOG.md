@@ -51,6 +51,21 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- VM start (`nixling up` / `switch`) no longer aborts with
+  `SpawnRunner failed ... broker-error` ("Invalid cross-device link")
+  while building the per-VM store-view hardlink farm on hosts where
+  `/nix/store` is bind-mounted read-only on top of itself (the stock
+  NixOS layout). `link(2)` is rejected across that vfsmount boundary
+  even when both paths share the same underlying filesystem, so the
+  broker's in-process farm build failed with `EXDEV`. The broker now
+  builds the farm inside a private mount namespace where `/nix/store`
+  is lazily detached (mirroring the existing activation-time
+  `nixling-store-sync` workaround), via the `nixling-activation-helper
+  build-store-view-farm` subprocess, and only falls back to that
+  namespace path when an in-process build actually hits the cross-mount
+  case (so same-filesystem hosts and tests stay in-process). The
+  hardlink primitive also now maps a raw `EXDEV` at the `link(2)` site
+  to the typed `DifferentFilesystem` error for clearer diagnostics.
 - `nixling switch` / `boot` / `test` no longer fail with `broker-error`
   ("no store-view intent in the trusted bundle"). The per-VM closure
   artifact now emits a populated `hostGeneration` (a deterministic,

@@ -544,7 +544,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
                 detail: format!("generation {} exceeds u32", intent.generation),
             })?;
-        let generation_dir = hardlink_farm::build_farm(
+        let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
             &intent.hardlink_farm_path,
             intent.generation,
             &intent.closure_paths,

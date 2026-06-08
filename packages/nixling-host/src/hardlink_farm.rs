@@ -34,6 +34,12 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+/// `EXDEV` ("Invalid cross-device link") errno. `link(2)` returns this
+/// when source and destination are on different mounts. Defined locally
+/// so this `#![forbid(unsafe_code)]` crate needs no `libc` dependency
+/// for a single integer constant.
+const EXDEV: i32 = 18;
+
 /// Errors the hardlink-farm primitives can return.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
@@ -117,6 +123,30 @@ pub struct GenerationMarker {
     /// Generation number; redundant with the directory name but
     /// pinned in the marker so a rename can be detected.
     pub generation_number: u32,
+}
+
+/// Wire request for an out-of-process store-view farm build.
+///
+/// The privileged broker serialises this to a subprocess that runs
+/// the hardlink farm build inside a private mount namespace where
+/// `/nix/store` is lazily detached (so cross-vfsmount `link(2)` EXDEV
+/// — the NixOS `/nix/store` self-bind-mount — does not block the
+/// hardlinks). The subprocess deserialises it and calls [`build_farm`].
+/// Kept here, next to [`build_farm`] + [`GenerationMarker`], so the
+/// broker (serialiser) and the `nixling-activation-helper` binary
+/// (deserialiser) share one definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BuildStoreViewFarmRequest {
+    /// Per-VM farm root (`.../store-view`), not the generation dir.
+    pub farm_root: PathBuf,
+    /// Content-derived u32 generation number (carried as u64 to match
+    /// [`build_farm`]'s signature; validated to fit u32 upstream).
+    pub generation: u64,
+    /// Absolute `/nix/store/<...>` closure paths to hardlink in.
+    pub closure_paths: Vec<PathBuf>,
+    /// Marker pinned into `generations/<N>/marker.json`.
+    pub marker: GenerationMarker,
 }
 
 /// Returns `Ok(())` iff `a` and `b` live on the same filesystem
@@ -318,9 +348,39 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                 detail: "existing destination is not a file".to_owned(),
             });
         }
-        std::fs::hard_link(source, destination).map_err(|e| HardlinkFarmError::Io {
-            path: destination.display().to_string(),
-            detail: e.to_string(),
+        std::fs::hard_link(source, destination).map_err(|e| {
+            // EXDEV (cross-device link, errno 18) at the actual
+            // `link(2)` site means `source` and `destination` are on
+            // different mounts even though `assert_same_filesystem`
+            // (st_dev only) passed — the canonical case is NixOS
+            // bind-mounting `/nix/store` ro on top of itself, so a
+            // hardlink from `/nix/store/<x>` to `/var/lib/nixling/<y>`
+            // is rejected as cross-vfsmount. Surface the typed
+            // `DifferentFilesystem` error (with the mount-distinguishing
+            // detail) instead of a generic I/O error so the broker can
+            // map it to `StoreViewFilesystemMismatch`. The supported
+            // build path runs this inside a mount namespace where
+            // `/nix/store` is lazily detached, so this branch only
+            // fires when that namespace trick was bypassed or cannot
+            // apply.
+            if e.raw_os_error() == Some(EXDEV) {
+                let dst_dev = destination
+                    .parent()
+                    .and_then(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.dev())
+                    .unwrap_or(0);
+                let src_dev = std::fs::metadata(source).map(|m| m.dev()).unwrap_or(0);
+                return HardlinkFarmError::DifferentFilesystem {
+                    a: source.display().to_string(),
+                    a_dev: src_dev,
+                    b: destination.display().to_string(),
+                    b_dev: dst_dev,
+                };
+            }
+            HardlinkFarmError::Io {
+                path: destination.display().to_string(),
+                detail: e.to_string(),
+            }
         })?;
         return Ok(());
     }
