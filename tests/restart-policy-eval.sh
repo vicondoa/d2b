@@ -105,11 +105,14 @@ EOF
 OUT=$(nix-instantiate --eval --strict --json --expr "$EXPR" 2>/dev/null) || \
   fail "eval failed; cannot inspect restart policy"
 
-# Accept either `restartIfChanged == false` or `unitConfig.X-RestartIfChanged`
-# being any of "false" / false. (NixOS coerces unitConfig values
-# through generators.toINIWithGlobalSection later, but at the option
-# layer it's a free-form attrset; the framework writes either the
-# string "false" or the bool false depending on the file.)
+# v0.1.7: REQUIRE top-level `restartIfChanged == false` (NixOS option,
+# emitted as `[Service] X-RestartIfChanged=false`). The
+# `unitConfig.X-RestartIfChanged = false` shape — used in v0.1.5
+# host-sidecars.nix and audio/host.nix — emits under [Unit], which
+# NixOS's switch-to-configuration ignores. So that form is
+# silently broken: a rebuild WILL still cycle those sidecars
+# under the running VM. Reject it here so the regression cannot
+# reappear.
 check() {
   local key="$1"
   local entry ric xric
@@ -122,11 +125,10 @@ check() {
   case "$ric" in
     false) ok "$key: restartIfChanged = false"; return ;;
   esac
-  case "$xric" in
-    false)
-      ok "$key: unitConfig.X-RestartIfChanged = $xric"; return ;;
-  esac
-  fail "$key: neither restartIfChanged=false NOR unitConfig.X-RestartIfChanged=false (got ric=$ric, xric=$xric). See CHANGELOG.md v0.1.5 'restartIfChanged = false on every per-VM lifecycle service'."
+  if [ "$xric" != "null" ]; then
+    fail "$key: uses unitConfig.X-RestartIfChanged ($xric) which NixOS switch-to-configuration ignores (emits under [Unit] not [Service]). Use top-level \`restartIfChanged = false\` instead. See CHANGELOG.md v0.1.7 'unitConfig.X-RestartIfChanged silently ignored — replaced with restartIfChanged'."
+  fi
+  fail "$key: missing restartIfChanged=false (got ric=$ric). See CHANGELOG.md v0.1.5 + v0.1.7."
 }
 
 check "nixling@"

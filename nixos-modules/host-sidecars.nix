@@ -53,10 +53,20 @@ in
       # v0.1.5: never restart on rebuild. swtpm changing under a
       # running VM means CH loses the TPM socket → guest TPM is wedged
       # → Entra/Intune device-bound creds become unreachable. The
-      # consumer applies sidecar changes via `nixling switch <vm>`
-      # (which stops + starts the VM cleanly). Mirrors upstream
+      # consumer applies sidecar changes via `nixling restart <vm>`
+      # (clean stop+start of the existing closure). Mirrors upstream
       # microvm.nix's X-RestartIfChanged=false on microvm@.
-      unitConfig.X-RestartIfChanged = false;
+      #
+      # v0.1.7 BUGFIX: pre-v0.1.7 this used
+      # `unitConfig.X-RestartIfChanged = false`, which emits the
+      # setting under the [Unit] section. NixOS's
+      # switch-to-configuration logic only reads
+      # `X-RestartIfChanged=` from the [Service] section, so the
+      # `unitConfig` form was silently ignored and every
+      # `nixos-rebuild switch` did cycle this sidecar. Use the
+      # top-level `restartIfChanged = false` instead — NixOS
+      # emits that under [Service] where the switch logic looks.
+      restartIfChanged = false;
       serviceConfig = {
         Type = "exec";
         # H6: dedicated per-VM static user; DynamicUser removed so state is
@@ -114,9 +124,19 @@ in
       # the running VM, destroying any in-flight session state (login
       # session, Entra device-bound tokens in RAM, virtiofsd
       # connections, etc.). Consumer applies sidecar config changes
-      # via `nixling switch <vm>` (graceful stop + start). Mirrors
-      # upstream microvm.nix's X-RestartIfChanged=false on microvm@.
-      unitConfig.X-RestartIfChanged = false;
+      # via `nixling restart <vm>` (clean stop+start of the existing
+      # closure). Mirrors upstream microvm.nix's
+      # X-RestartIfChanged=false on microvm@.
+      #
+      # v0.1.7 BUGFIX: pre-v0.1.7 this used
+      # `unitConfig.X-RestartIfChanged = false`, which emits the
+      # setting under the [Unit] section. NixOS's
+      # switch-to-configuration logic only reads
+      # `X-RestartIfChanged=` from the [Service] section, so the
+      # `unitConfig` form was silently ignored and every
+      # `nixos-rebuild switch` did cycle this sidecar. Use the
+      # top-level `restartIfChanged = false` instead.
+      restartIfChanged = false;
       serviceConfig = {
         Type = "exec";
         # C3: run as nixling-${name}-gpu — a dedicated system user,

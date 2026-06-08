@@ -259,12 +259,23 @@ both store paths and the exact remediation command.
 
 Any new framework-owned per-VM service that the user might be
 running through (i.e., not a build-time or activation-only
-oneshot) MUST also carry `unitConfig.X-RestartIfChanged = false`
-(or equivalently `restartIfChanged = false` on the NixOS-side
-declaration). If your new service legitimately needs to restart
-on config change (e.g., it's only a periodic timer or a one-shot
-helper), document the reasoning in a comment so future readers
-know why this one is different.
+oneshot) MUST carry **`restartIfChanged = false`** at the top
+level of its `systemd.services.<name>` attrset. If your new
+service legitimately needs to restart on config change (e.g.,
+it's only a periodic timer or a one-shot helper), document the
+reasoning in a comment so future readers know why this one is
+different.
+
+**Do NOT use `unitConfig.X-RestartIfChanged = false`.** That
+shape emits the setting under `[Unit]` in the generated unit
+file, but NixOS's switch-to-configuration logic only reads
+`X-RestartIfChanged=` from `[Service]`. The `unitConfig` form
+is silently ignored — a rebuild WILL still cycle the unit. This
+bug shipped in v0.1.5 host-sidecars.nix and audio/host.nix and
+was caught + fixed in v0.1.7. The
+[`tests/restart-policy-eval.sh`](./tests/restart-policy-eval.sh)
+regression test asserts the correct form on every per-VM
+service.
 
 The convention also extends to `wantedBy` declarations: per-VM
 `wantedBy = [ "multi-user.target" ]` must ALWAYS go through

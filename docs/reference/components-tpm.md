@@ -53,13 +53,15 @@ all guest-side wiring is unconditional within the module.
     graphics VMs.
   - `partOf = [ "microvms.target" ]` so a system-wide microvm
     restart cycles it; `Restart = "on-failure"`, `RestartSec = 2`.
-  - `unitConfig.X-RestartIfChanged = false` (v0.1.5+) — a
+  - `restartIfChanged = false` (v0.1.5+, top-level NixOS option; emitted under `[Service]`) — a
     `nixos-rebuild switch` updates the unit file but does NOT
     cycle the running swtpm. Killing swtpm under a live VM means
     the guest loses its TPM socket and Entra/Intune device-bound
     credentials become unreachable; the framework refuses to do
     this silently. Use `nixling restart <vm>` to apply pending
-    changes.
+    changes. (Pre-v0.1.7 this was the broken
+    `unitConfig.X-RestartIfChanged = false` form; see v0.1.7
+    CHANGELOG.)
 - **State directory** `/var/lib/nixling/vms/<vm>/swtpm/`, mode 0700
   owned by `nixling-<vm>-swtpm`. Contents are swtpm NVRAM + state
   blobs — not human-readable, not portable across VMs.
@@ -78,8 +80,8 @@ all guest-side wiring is unconditional within the module.
 
 ## Lifecycle (v0.1.5+)
 
-`nixling-<vm>-swtpm.service` carries `unitConfig.X-RestartIfChanged
-= false` (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
+`nixling-<vm>-swtpm.service` carries `restartIfChanged = false`
+(matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
 A `nixos-rebuild switch` updates the unit file but does NOT cycle
 the running swtpm — killing swtpm under a live VM tears down the
 CH TPM socket, the guest's libtpms enters failure mode, and

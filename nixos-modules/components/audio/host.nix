@@ -123,8 +123,16 @@ in
         # connection to CH cannot survive a restart; killing this
         # sidecar mid-VM kills audio for the running VM (silent
         # speakers, mic stuck on/off whatever it was). Consumer
-        # applies changes via `nixling switch <vm>`.
-        unitConfig.X-RestartIfChanged = false;
+        # applies changes via `nixling restart <vm>` (clean
+        # stop+start of the existing closure).
+        #
+        # v0.1.7 BUGFIX: pre-v0.1.7 this used
+        # `unitConfig.X-RestartIfChanged = false`, which emits under
+        # the [Unit] section. NixOS's switch-to-configuration logic
+        # only reads `X-RestartIfChanged=` from [Service], so the
+        # `unitConfig` form was silently ignored. Use top-level
+        # `restartIfChanged = false` instead.
+        restartIfChanged = false;
         serviceConfig = {
           # C3: dedicated system user per VM.
           User = "nixling-${name}-snd";

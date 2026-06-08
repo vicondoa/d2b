@@ -139,8 +139,8 @@ CLI (`nixling audio` in `cli.nix`):
 
 ## Lifecycle (v0.1.5+)
 
-`nixling-<vm>-snd.service` carries `unitConfig.X-RestartIfChanged
-= false` (matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
+`nixling-<vm>-snd.service` carries `restartIfChanged = false`
+(matches the [graphics sidecar lifecycle policy](./components-graphics.md#lifecycle-v015)).
 A `nixos-rebuild switch` updates the unit file but does NOT cycle
 the running `vhost-user-sound` sidecar — vhost-user-sound's socket
 connection to cloud-hypervisor cannot survive a restart, and

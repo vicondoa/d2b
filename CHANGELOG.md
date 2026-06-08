@@ -10,6 +10,57 @@ deprecations ship one minor release before removal.
 
 ## Unreleased
 
+## [0.1.7] - 2026-05-19
+
+Patch release. v0.1.6 panel review caught a silent bug in the
+v0.1.5 lifecycle policy: three of the six per-VM sidecars used
+`unitConfig.X-RestartIfChanged = false` instead of the top-level
+NixOS option `restartIfChanged = false`. The two forms LOOK
+equivalent and both compile to a setting on the unit file —
+but NixOS's `switch-to-configuration` logic only reads
+`X-RestartIfChanged=` from the `[Service]` section. The
+`unitConfig.X-RestartIfChanged` form emits under `[Unit]`,
+where it is silently ignored. Result: pre-v0.1.7, every
+`nixos-rebuild switch` that touched the GPU, swtpm, or snd
+sidecar config STILL cycled those sidecars under the running
+VM, defeating the v0.1.5 policy on the exact services whose
+restart causes the most damage (CH termination, TPM socket
+loss, audio sidecar disconnect).
+
+### Fixed
+
+- **`nixos-modules/host-sidecars.nix`** (swtpm + GPU sidecars):
+  replaced `unitConfig.X-RestartIfChanged = false` with
+  top-level `restartIfChanged = false`.
+- **`nixos-modules/components/audio/host.nix`** (snd sidecar):
+  same fix.
+- **`tests/restart-policy-eval.sh`** (Test-H7 regression added
+  in v0.1.6): tightened the predicate to REJECT
+  `unitConfig.X-RestartIfChanged`. The previous version
+  accepted either form, so it would have passed against the
+  v0.1.5/v0.1.6 broken setup. Now any service using the broken
+  form fails the test with an explicit message pointing at this
+  CHANGELOG entry.
+- **AGENTS.md** "Adding new per-VM units" guidance: explicitly
+  forbids `unitConfig.X-RestartIfChanged`; mandates the
+  top-level `restartIfChanged = false` form.
+- **`docs/reference/components-{graphics,tpm,audio}.md`**:
+  updated lifecycle subsections to reference the corrected
+  form. The Lifecycle section subheaders still call this
+  v0.1.5+ behaviour because the policy was always v0.1.5;
+  v0.1.7 is just making the v0.1.5 intent actually work.
+
+### Verification
+
+The three sidecar files now match the pattern already used in
+`host-wrapper.nix`, `host-known-hosts.nix`, and `store.nix`
+(`restartIfChanged = false` at the top level). The
+`tests/restart-policy-eval.sh` gate now asserts the correct
+form on all 6 services and would have caught the v0.1.5 bug
+at landing time. All other v0.1.6 gates remain green.
+
+Spec correction #39 added.
+
 ## [0.1.6] - 2026-05-19
 
 Docs catch-up release. The v0.1.1–v0.1.5 patches shipped fixes for
