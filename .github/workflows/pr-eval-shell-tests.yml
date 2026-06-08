@@ -50,7 +50,7 @@ jobs:
             tests/minijail-version-check.sh \
             tests/no-bash-exec-eval.sh \
             tests/otel-acl-migration-eval.sh \
-            tests/p2-deliverable-gate-inventory.sh \
+            tests/deliverable-gate-inventory.sh \
             tests/polkit-allowlist-eval.sh \
             tests/privileges-doc-completeness-eval.sh \
             tests/processes-json-eval.sh \

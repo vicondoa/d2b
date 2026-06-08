@@ -813,7 +813,7 @@ for _d13_gate in \
   no-bash-exec-eval \
   otel-acl-migration-eval \
   otel-host-bridge-argv-shape \
-  p2-deliverable-gate-inventory \
+  deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   processes-json-eval \
   readiness-waves-eval \

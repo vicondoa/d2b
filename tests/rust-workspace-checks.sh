@@ -223,13 +223,13 @@ snapshot_schema_out() {
   )
 }
 
-log "--> schema-drift placeholder (W1 will replace with real schemas)"
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+log "--> schema generation reproducibility"
+(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
-  fail "schema-drift placeholder: cargo xtask gen-schemas output is not reproducible"
+  fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
   diff -u \
     <(printf '%s\n' "$schema_snapshot_1") \
     <(printf '%s\n' "$schema_snapshot_2") >&2 || true
@@ -238,7 +238,7 @@ fi
 if [ "$schema_out_preexisting" = "0" ]; then
   rm -rf -- "$schema_out"
 fi
-ok "schema-drift placeholder (W1 will replace with real schemas)"
+ok "schema generation reproducibility"
 
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
