@@ -1957,39 +1957,115 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
     std::fs::rename(&tmp, target).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         CliFailure::new(1, format!("config: publish to {}: {e}", target.display()))
-    })
+    })?;
+    // fsync the parent directory so the rename (the directory-entry
+    // update that publishes the new file) is itself durable. Without
+    // this a power loss right after the rename can lose the approved
+    // target update even though the staging file has already been
+    // consumed.
+    if let Some(p) = parent {
+        if let Ok(dir) = std::fs::File::open(p) {
+            let _ = dir.sync_all();
+        }
+    }
+    Ok(())
 }
 
 /// Run the `config sync` capture (testable, no `Context`): spawn
-/// `argv[0]` with `argv[1..]`, fail on non-zero exit, validate the
-/// captured stdout (non-empty/UTF-8), then atomically publish it to
-/// `staging`. Returns the byte count. Spawning `argv[0]` (an absolute
-/// path or PATH-resolved binary) makes this hermetically testable with
-/// a fake `ssh`.
+/// `argv[0]` with `argv[1..]`, STREAM its stdout into a bounded buffer
+/// (hard byte cap + wall-clock timeout so a hostile guest cannot stream
+/// an unbounded file — e.g. a symlink to `/dev/zero` — and OOM/hang the
+/// host), fail on non-zero exit, validate the captured stdout
+/// (non-empty/UTF-8), then atomically publish it to `staging`. Returns
+/// the byte count. Spawning `argv[0]` (an absolute path or PATH-resolved
+/// binary) makes this hermetically testable with a fake `ssh`.
 fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
-    let output = Command::new(&argv[0])
+    use std::io::Read as _;
+    // A guest config file is small; bound the untrusted pull on both
+    // size and time. The guest controls the remote file, so both limits
+    // are load-bearing security controls, not just hygiene.
+    const MAX_BYTES: usize = 1 << 20; // 1 MiB
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    let mut child = Command::new(&argv[0])
         .args(&argv[1..])
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| CliFailure::new(1, format!("config sync: spawn {}: {e}", argv[0])))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+    let reader = std::thread::spawn(move || {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let res = loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break Ok(buf),
+                Ok(n) => {
+                    if buf.len() + n > MAX_BYTES {
+                        break Err(format!("guest config exceeds the {MAX_BYTES}-byte limit"));
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                Err(e) => break Err(format!("read guest stdout: {e}")),
+            }
+        };
+        let _ = tx.send(res);
+    });
+
+    let stdout_bytes = match rx.recv_timeout(TIMEOUT) {
+        Ok(Ok(buf)) => buf,
+        Ok(Err(msg)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(CliFailure::new(1, format!("config sync: {msg}")));
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(CliFailure::new(
+                1,
+                format!(
+                    "config sync: timed out after {}s pulling guest config",
+                    TIMEOUT.as_secs()
+                ),
+            ));
+        }
+    };
+    let _ = reader.join();
+
+    let status = child
+        .wait()
+        .map_err(|e| CliFailure::new(1, format!("config sync: wait: {e}")))?;
+    if !status.success() {
+        let mut stderr = String::new();
+        if let Some(es) = child.stderr.take() {
+            let mut raw = Vec::new();
+            let _ = es.take(8192).read_to_end(&mut raw);
+            stderr = String::from_utf8_lossy(&raw).trim().to_owned();
+        }
         return Err(CliFailure::new(
             1,
             format!(
                 "config sync: {} exited {}: {}",
                 argv[0],
-                output.status.code().unwrap_or(-1),
-                stderr.trim()
+                status.code().unwrap_or(-1),
+                stderr
             ),
         ));
     }
-    config_validate_staging_bytes(&output.stdout)?;
+
+    config_validate_staging_bytes(&stdout_bytes)?;
     if let Some(parent) = staging.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| CliFailure::new(1, format!("config sync: create staging dir: {e}")))?;
     }
-    config_atomic_write(staging, &output.stdout)?;
-    Ok(output.stdout.len())
+    config_atomic_write(staging, &stdout_bytes)?;
+    Ok(stdout_bytes.len())
 }
 
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
@@ -2020,13 +2096,14 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
         .user
         .clone()
         .or_else(|| vm.ssh_user.clone())
-        .or_else(|| std::env::var("USER").ok())
         .ok_or_else(|| {
             CliFailure::new(
                 1,
                 format!(
-                    "config sync: vm '{}' has no ssh_user in manifest; pass --user or set $USER",
-                    args.vm
+                    "config sync: vm '{vm}' has no SSH user; set `nixling.vms.{vm}.ssh.user` \
+                     in your host config (the account that owns the writable guest config copy) \
+                     or pass `--user <name>`",
+                    vm = args.vm
                 ),
             )
         })?;
@@ -2309,7 +2386,12 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
 
     let selected_vm = resolve_selected_vm(args)?;
     if !args.json {
-        warn_all_pending_staged_configs();
+        match &selected_vm {
+            // Single-VM status only warns about THAT VM's pending edit,
+            // never unrelated VMs.
+            Some(vm) => warn_pending_staged_config(vm),
+            None => warn_all_pending_staged_configs(),
+        }
     }
     if let Some(vm_name) = selected_vm {
         let vm = manifest
@@ -7083,7 +7165,7 @@ mod config_cmd_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        config_approve_core, config_reject_core, config_staging_path_in,
+        config_approve_core, config_atomic_write, config_reject_core, config_staging_path_in,
         config_sync_capture_to_staging, config_sync_ssh_argv, config_validate_remote_path,
         config_validate_staging_bytes, config_validate_vm_name,
     };
@@ -7161,17 +7243,48 @@ mod config_cmd_tests {
         assert_eq!(fs::read(&target).expect("read target"), content);
         // staging consumed
         assert!(!staging.exists());
-        // no temp turds left behind
+        // no temp turds left behind (impl writes `.<base>.nixling-tmp.*`)
         let leftovers: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .flatten()
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .contains("nixling-approve.tmp")
-            })
+            .filter(|e| e.file_name().to_string_lossy().contains("nixling-tmp"))
             .collect();
         assert!(leftovers.is_empty(), "approve left a temp file behind");
+    }
+
+    #[test]
+    fn atomic_write_publishes_whole_value_under_concurrency() {
+        // Prove rename-atomicity: many threads each publish a DISTINCT
+        // full value to the same target; the final target must equal
+        // exactly ONE complete value (never a torn/mixed/truncated
+        // result), and no temp files may be left behind.
+        let dir = scratch("atomic-race");
+        let target = dir.join("work.guest.nix");
+        let values: Vec<Vec<u8>> = (0..16)
+            .map(|i| format!("{{ environment.systemPackages = [ \"pkg-{i}\" ]; }}\n").into_bytes())
+            .collect();
+        let target_for = target.clone();
+        let mut handles = Vec::new();
+        for v in values.clone() {
+            let t = target_for.clone();
+            handles.push(std::thread::spawn(move || {
+                config_atomic_write(&t, &v).expect("atomic write");
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let final_bytes = fs::read(&target).expect("read target");
+        assert!(
+            values.iter().any(|v| v == &final_bytes),
+            "target was torn/mixed: not equal to any single complete value"
+        );
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("nixling-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "atomic write left a temp file behind");
     }
 
     #[test]
@@ -7269,6 +7382,23 @@ mod config_cmd_tests {
         let err = config_sync_capture_to_staging(&argv, &staging).expect_err("empty rejected");
         assert!(err.message.contains("empty"));
         assert!(!staging.exists());
+    }
+
+    #[test]
+    fn sync_capture_oversized_stdout_is_rejected_and_not_staged() {
+        // A hostile guest streaming an unbounded file must be cut off by
+        // the byte cap, not buffered until OOM, and must not stage.
+        let dir = scratch("sync-oversized");
+        // Emit ~2 MiB, well past the 1 MiB cap.
+        let argv = fake_ssh(&dir, "ssh", "exec head -c 2097152 /dev/zero\n");
+        let staging = dir.join("work-aad.guest.nix");
+        let err = config_sync_capture_to_staging(&argv, &staging).expect_err("oversized rejected");
+        assert!(
+            err.message.contains("limit"),
+            "expected a size-limit error, got: {}",
+            err.message
+        );
+        assert!(!staging.exists(), "must not stage an oversized pull");
     }
 
     #[test]
