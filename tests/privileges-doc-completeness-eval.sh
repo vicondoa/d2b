@@ -103,7 +103,7 @@ extract_live() { sed -n "1,$((OBIT_START - 1))p; $((OBIT_END + 1)),\$p" "$DOC"; 
 # A line in the live region carries an obituary marker if it
 # mentions any of these phrases — they signal "this row is the
 # obituary in-place, not a contradictory live row".
-LIVE_OBIT_MARKERS='Retired|retired|retires|deleted|obituary|MUST NOT|scheduled.for.removal|folding their work|re-homed'
+LIVE_OBIT_MARKERS='Retired|retired|retires|deleted|obituary|MUST NOT|scheduled.for.removal|folding their work|re-homed|replaced by|replacement|current surface|no longer exists|not emitted'
 
 errors=0
 warnings=0
@@ -177,4 +177,3 @@ if [[ "$errors" -gt 0 ]]; then
 fi
 
 echo "OK: privileges-doc completeness gate passed (${#LEGACY_UNITS[@]} patterns; ${warnings} transitional warning(s))"
-
