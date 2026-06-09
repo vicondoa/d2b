@@ -181,6 +181,23 @@ Concretely, the agent that owns a worktree:
 
 Only after the merge lands does the agent call `task_complete`.
 
+### Local host validation after updating nixling
+
+When a host configuration switches to a new nixling checkout (for
+example a local `path:/home/paydro/projects/nixling` input), the host
+switch updates `/etc/nixling/*` and the system packages but does **not**
+restart `nixlingd` (`restartIfChanged = false`). Before runtime
+validation, restart the daemon explicitly so it reloads the updated
+bundle/process contract and binary paths:
+
+```bash
+sudo systemctl restart nixlingd.service
+```
+
+Then restart affected VMs with the normal lifecycle commands (on this
+host, prefer `nixling down <vm> --apply` followed by
+`nixling up <vm> --apply`; `nixling switch <vm>` is not reliable here).
+
 #### Integrator-prep-first pattern (W3 onwards)
 
 For waves whose thematic scopes are NOT file-disjoint by default —
