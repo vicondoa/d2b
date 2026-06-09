@@ -37,22 +37,35 @@ At a high level:
 ```mermaid
 flowchart LR
     subgraph host["NixOS host"]
+        direction LR
         cli["nixling CLI"]
         desktop["Wayland desktop"]
-        control["nixlingd + privileged broker"]
-        sidecars["mediated sidecars<br/>TPM / USB / audio / graphics / virtiofs"]
+        devices["devices<br/>TPM / USB / audio / graphics / files"]
+
+        subgraph nixling_box["nixling"]
+            direction LR
+            nixlingd["nixlingd"]
+            broker["privileged broker"]
+            vhost["vhost-user sidecars"]
+            wayland["Wayland mediation"]
+        end
 
         subgraph vm["microVM"]
+            direction LR
             kernel["guest Linux kernel"]
             apps["workspace apps"]
             kernel --> apps
         end
     end
 
-    cli --> control
-    control --> vm
-    desktop <--> sidecars
-    sidecars <--> vm
+    cli --> nixlingd
+    nixlingd --> broker
+    broker --> vm
+    broker --> vhost
+    broker --> wayland
+    wayland --> desktop
+    vhost --> devices
+    vhost <--> vm
 ```
 
 **Quick start** (full walkthroughs under
