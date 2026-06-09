@@ -49,11 +49,15 @@ let
       let rel = lib.removePrefix (toString ../packages + "/") (toString path);
       in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
   };
+  cargoLock = {
+    lockFile = ../packages/Cargo.lock;
+    outputHashes."wl-proxy-0.1.2" = "sha256-RX5Fl8CTmktV1dHdfO9SpTDjtmD/r5bCc2w/MaW448M=";
+  };
   activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
-    cargoLock.lockFile = ../packages/Cargo.lock;
+    inherit cargoLock;
     cargoBuildFlags = [ "--package" "nixling-host" "--bin" "nixling-activation-helper" ];
     doCheck = false;
     postPatch = ''
@@ -77,7 +81,7 @@ EOF
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     cargoBuildFlags = [ "--package" "nixling-host-activation-helper" ];
-    cargoLock.lockFile = ../packages/Cargo.lock;
+    inherit cargoLock;
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo

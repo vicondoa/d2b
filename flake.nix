@@ -116,7 +116,10 @@
           version = "0.0.0-bootstrap";
           src = rustPackagesSrc;
           sourceRoot = "nixling-rust-src/packages";
-          cargoLock.lockFile = ./packages/Cargo.lock;
+          cargoLock = {
+            lockFile = ./packages/Cargo.lock;
+            outputHashes."wl-proxy-0.1.2" = "sha256-RX5Fl8CTmktV1dHdfO9SpTDjtmD/r5bCc2w/MaW448M=";
+          };
           # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
           # have sccache on PATH (and even if it did, sccache wants
@@ -226,6 +229,7 @@
         rust-deny = let
           mainVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.lock;
+            outputHashes."wl-proxy-0.1.2" = "sha256-RX5Fl8CTmktV1dHdfO9SpTDjtmD/r5bCc2w/MaW448M=";
           };
           brokerVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/nixling-priv-broker/Cargo.lock;

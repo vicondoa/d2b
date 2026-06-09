@@ -62,6 +62,3 @@ rtnetlink = "0.14"
 # rationalized fallback (typed NftBatch + `nft -f -` text rendering,
 # verified by the broker's hash readback).
 sha2 = "0.10"
-
-[patch.crates-io]
-wl-proxy = { path = "vendor/wl-proxy" }
