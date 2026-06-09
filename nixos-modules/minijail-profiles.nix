@@ -153,7 +153,7 @@ let
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
   stateDirOf = name: "${toString cfg.store.stateDir}/${name}";
-  runtimeDirOf = name: "/run/nixling/${name}";
+  runtimeDirOf = name: "/run/nixling/vms/${name}";
   audioRuntimeDirOf = name: "/run/nixling/vms/${name}";
   videoRuntimeDirOf = name: "/run/nixling-video/${name}";
   gpuRuntimeDirOf = name: "/run/nixling-gpu/${name}";
