@@ -38,8 +38,12 @@ At a high level:
 flowchart TB
     subgraph host["NixOS host"]
         direction TB
-        cli["nixling CLI"]
-        desktop["Wayland desktop"]
+        subgraph human["human-facing host session"]
+            direction LR
+            cli["nixling CLI"]
+            desktop["Wayland desktop"]
+        end
+
         devices["devices<br/>TPM / USB / audio / graphics / files"]
 
         subgraph nixling_box["nixling"]
@@ -57,9 +61,10 @@ flowchart TB
         end
     end
 
+    cli --> nixlingd
+    desktop --> wayland
+    vhost --> devices
     nixling_box --- vm
-    nixling_box --- devices
-    nixling_box --- desktop
 ```
 
 **Quick start** (full walkthroughs under
