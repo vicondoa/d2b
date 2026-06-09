@@ -136,7 +136,10 @@
     # /var/lib/nixling/keys/corp-desktop_ed25519 is used.
 
     # --- component toggles (the point of this example) ---------
-    graphics.enable = true;         # crosvm GPU sidecar + Wayland cross-domain
+    graphics.enable = true;         # crosvm GPU sidecar
+    # Opt into the cross-domain + host-filter path this example documents.
+    # Do not enable this for VMs that run privileged Docker/container workloads.
+    graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
     usbip.yubikey   = true;         # `nixling usb corp-desktop` attaches a YubiKey
 

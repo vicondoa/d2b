@@ -25,7 +25,8 @@ whatever you actually run.
 
 | `nixling.vms.corp-desktop.<opt>` | What it pulls in                                      |
 |----------------------------------|-------------------------------------------------------|
-| `graphics.enable = true`         | crosvm GPU sidecar, Wayland cross-domain forwarding   |
+| `graphics.enable = true`         | crosvm GPU sidecar                                    |
+| `graphics.crossDomainTrusted = true` | Virtio-gpu cross-domain forwarding through the host-side filter proxy |
 | `audio.enable = true`            | vhost-user-sound sidecar → host PipeWire client       |
 | `usbip.yubikey = true`           | Per-env USBIP proxy + in-VM `vhci_hcd` + `usbip` CLI  |
 
@@ -86,6 +87,9 @@ Practical implications:
   filter proxy. If you use niri, you can opt into a generated
   window-rule include file via `nixling.site.niriVmBorders.enable = true`
   — see [`docs/how-to/niri-vm-borders.md`](../../docs/how-to/niri-vm-borders.md).
+- This example explicitly sets `graphics.crossDomainTrusted = true` so it
+  exercises the filtered cross-domain path. Do not use that setting for
+  VMs that run privileged Docker/container workloads.
 
 ## The audio model
 

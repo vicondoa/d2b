@@ -38,7 +38,7 @@ of the store.
 | `outputMode` | `"json"` | `nixling vm start --apply --json` emits the typed envelope so failures are parseable. |
 | `waitForHostCompositor` | `true` | Wrapper waits up to 30 s for the host `$WAYLAND_DISPLAY` socket before invoking the daemon. The GPU sidecar's cross-domain bind-mount target must exist when the runner starts. |
 | `hostCompositorSocketEnv` | `"WAYLAND_DISPLAY"` | The env var the wrapper resolves to find the host compositor's socket under `$XDG_RUNTIME_DIR`. |
-| `waitForGpuSocket` | `"/run/nixling-wlproxy/<vm>/wayland-0"` | After the daemon reports the VM up, the wrapper waits up to 30 s for the host-side Wayland filter socket when the filter is enabled. The guest `wl-cross-domain-proxy` path reaches the host compositor through this filtered socket. |
+| `waitForGpuSocket` | `"/run/nixling-wlproxy/<vm>/wayland-0"` when the host filter is enabled; otherwise `"/run/nixling-gpu/<vm>/wayland-0"` | After the daemon reports the VM up, the wrapper waits up to 30 s for the compositor socket path used by the graphics DAG. The default filtered path uses the host-side Wayland filter socket; the direct fallback uses the legacy GPU runtime socket. |
 | `failureSurfaces` | `[ "notify-send" "log" ]` | Daemon failures surface as a `notify-send` desktop bubble and an appended line in the per-VM launcher log. |
 | `failureLogPath` | `${XDG_STATE_HOME:-$HOME/.local/state}/nixling/launchers/<vm>.log` | Operator-readable forensic trail beyond the transient `notify-send` bubble. The daemon's `--json` stdout/stderr lands here verbatim. |
 | `scriptText` | `string` | Full script body. Tests assert load-bearing substrings. |
@@ -59,11 +59,12 @@ of the store.
    - `nixling status <vm>` (per-VM state)
    - `journalctl -u nixlingd.service` (daemon log)
    - the per-VM launcher log
-3. **Wait for the per-VM GPU wayland socket.** Polls
-   `/run/nixling-wlproxy/<vm>/wayland-0` for up to 30 s. The daemon's
-   `ssh-ready` DAG node only guarantees sshd; the filter socket (and
-   through it the GPU sidecar's cross-domain channel) can race
-   slightly behind on cold starts.
+3. **Wait for the per-VM graphics Wayland socket.** Polls
+   `/run/nixling-wlproxy/<vm>/wayland-0` when
+   `graphics.waylandFilter.enable = true`; otherwise polls
+   `/run/nixling-gpu/<vm>/wayland-0` for the direct compositor path. The
+   daemon's `ssh-ready` DAG node only guarantees sshd; the graphics
+   socket can race slightly behind on cold starts.
 4. **Wait for SSH.** Probes `<sshUser>@<staticIp>` with the per-VM
    key (copied to a 0600 tempfile because the source is 0640
    `root:nixling`). Classifies failure into "host key
