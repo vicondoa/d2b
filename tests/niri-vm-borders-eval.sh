@@ -86,9 +86,11 @@ let
   kdlText = if hasKdl then etcFiles.\${kdlKey}.text else "";
 in {
   inherit hasKdl kdlText;
-  hasWorkRule     = builtins.match ".*nixling\\\\.work\\\\..*" kdlText != null;
-  hasHeadlessRule = builtins.match ".*nixling\\\\.headless\\\\..*" kdlText != null;
-  hasCrosvmRule   = builtins.match ".*crosvm.*" kdlText != null;
+  # Match on the comment anchor "// Borders for VM: <name>" which
+  # nixling emits for each graphics VM and which contains no backslashes.
+  hasWorkRule     = builtins.match ".*// Borders for VM: work.*" kdlText != null;
+  hasHeadlessRule = builtins.match ".*// Borders for VM: headless.*" kdlText != null;
+  hasCrosvmRule   = builtins.match ".*match app-id=.*crosvm.*" kdlText != null;
   includeComment  = builtins.match ".*include.*niri-vm-borders\\.kdl.*" kdlText != null;
 }
 EOF
