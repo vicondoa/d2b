@@ -375,6 +375,16 @@ For each phase:
 5. **Advance** — only now may the integrator begin the next phase's
    plan review.
 
+Panel prompts MUST include the validation evidence the integrator already
+ran for the phase (commands and pass/fail results) and MUST instruct
+reviewers not to rerun tests, builds, evals, or other long validations
+unless the integrator explicitly requests that reviewer to do so.
+Reviewers should inspect the plan or diff, reason over the supplied
+evidence, and call out missing or insufficient validation as a finding
+rather than duplicating the validation themselves. This keeps panel
+review from stampeding the shared Nix store, cargo target, and git
+worktrees while parallel implementation agents are still active.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json
