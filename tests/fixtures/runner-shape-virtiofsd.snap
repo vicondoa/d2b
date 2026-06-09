@@ -1,7 +1,7 @@
 # argv
 microvm-virtiofsd@personal-dev-ro-store
 --socket-path=/run/nixling/vms/personal-dev/ro-store.sock
---shared-dir=/nix/store
+--shared-dir=/var/lib/nixling/vms/personal-dev/store
 --thread-pool-size
 1
 --sandbox=chroot
