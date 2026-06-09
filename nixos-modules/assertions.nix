@@ -298,27 +298,26 @@ let
           nixling.vms.${name}.entra-id.* was removed.
           Himmelblau / Microsoft Entra ID support has moved out of
           the nixling framework into the sibling
-          `vicondoa/nixos-entra-id` flake. To migrate:
+          `vicondoa/entrablau.nix` flake. To migrate:
 
-            inputs.nixos-entra-id.url =
-              "github:vicondoa/nixos-entra-id";
+            inputs.entrablau.url =
+              "github:vicondoa/entrablau.nix";
 
             nixling.vms.${name}.config.imports = [
-              inputs.nixos-entra-id.nixosModules.default
+              inputs.entrablau.nixosModules.default
             ];
 
             # Move each `nixling.vms.${name}.entra-id.<key>` setting
             # into the VM's guest config under the sibling module's
-            # `services.entra-id.<key>` (or whatever attribute path
-            # the sibling module declares — see its README).
-            nixling.vms.${name}.config.services.entra-id = {
+            # `entrablau.<key>` option tree.
+            nixling.vms.${name}.config.entrablau = {
               enable    = true;
               domain    = [ "contoso.com" ];
               # ...
             };
 
           See CHANGELOG.md and the
-          nixos-entra-id README for the full migration recipe.
+          entrablau README for the full migration recipe.
         '';
       }
       {

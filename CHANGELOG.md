@@ -1390,12 +1390,12 @@ First public alpha release.
 - Nixling-managed SSH keys
 - Components: `graphics`, `tpm`, `usbip`, `audio`, `home-manager`
 
-**Composition:** Sibling flake [`vicondoa/nixos-entra-id`][nei] (also
+**Composition:** Sibling flake [`vicondoa/entrablau.nix`][entrablau] (also
 v0.1.0) provides Entra ID device-join via the per-VM
-`nixling.vms.<vm>.config.imports = [ inputs.nixos-entra-id.nixosModules.default ]`
+`nixling.vms.<vm>.config.imports = [ inputs.entrablau.nixosModules.default ]`
 seam.
 
-[nei]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix
 
 > Maintainer GitHub metadata reminder (apply on the GitHub UI, not in git):
 >
@@ -1436,7 +1436,7 @@ seam.
   isolation, per-env net VMs, per-env USBIP backends, and the
   route-preflight fail-closed gate.
 - **`examples/with-entra-id/`** — composition with the sibling
-  [`vicondoa/nixos-entra-id`][nixos-entra-id] flake; shows how
+  [`vicondoa/entrablau.nix`][entrablau] flake; shows how
   the two trees meet at `nixling.vms.<vm>.config.imports`
   without either flake depending on the other.
 - **`templates/default/`** — `nix flake init` scaffold with
@@ -1744,7 +1744,7 @@ seam.
   the development branch and are preserved as historical record of how
   the architecture got to v1.0.
 - v1.0.0 ships in lockstep with
-  [`vicondoa/nixos-entra-id`][nixos-entra-id] v1.0.0; consumers
+  [`vicondoa/entrablau.nix`][entrablau] v1.0.0; consumers
   using both should pin matching tags.
 
 ### Fixed
@@ -1796,19 +1796,19 @@ seam.
 
 - **`nixling.vms.<vm>.entra-id.*` option removed.** Himmelblau /
   Microsoft Entra ID support has moved out of the nixling framework
-  and into the sibling `vicondoa/nixos-entra-id` flake. To migrate,
+  and into the sibling `vicondoa/entrablau.nix` flake. To migrate,
   add the flake as an input and import its module into the VM's guest
   config:
 
   ```nix
-  inputs.nixos-entra-id.url = "github:vicondoa/nixos-entra-id";
+  inputs.entrablau.url = "github:vicondoa/entrablau.nix";
 
   nixling.vms.<vm>.config.imports = [
-    inputs.nixos-entra-id.nixosModules.default
+    inputs.entrablau.nixosModules.default
   ];
 
   # Move each `nixling.vms.<vm>.entra-id.<key>` into the guest
-  # config; see the nixos-entra-id README for the new schema.
+  # config; see the entrablau README for the new schema.
   ```
 
   The `nixling.vms.<vm>.entra-id` attribute is kept as a hidden
@@ -1864,7 +1864,7 @@ seam.
   `examples/with-entra-id`.** `tests/static.sh` iterates
   `examples/*/flake.nix` and runs `nix flake check --no-build
   --all-systems` per example, but `with-entra-id` depends on the
-  sibling `vicondoa/nixos-entra-id` flake which the core flake
+  sibling `vicondoa/entrablau.nix` flake which the core flake
   cannot pull in as an input. The example's own flake.lock pins
   the sibling and the iteration step exercises eval through it,
   but a clean-tree CI run cannot fully isolate the eval graph
@@ -1879,4 +1879,4 @@ seam.
   (e.g. `nixling.envs.<env>.intraLanIsolation = false`) is on the
   v0.2.0 wishlist.
 
-[nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix

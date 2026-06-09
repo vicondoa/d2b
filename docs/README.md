@@ -22,7 +22,7 @@ live one level up under
   doc-friendly alias for the checked `examples/with-entra-id/`
   flake; VM name `work-entra`.
 
-[nei]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix
 
 The examples are intentionally small enough to read end-to-end;
 each example's README explains the pattern.

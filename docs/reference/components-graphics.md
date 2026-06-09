@@ -215,4 +215,4 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
 - [`examples/graphics-workstation`](../../examples/graphics-workstation/) —
   end-to-end example with graphics + audio + USBIP YubiKey.
 - [`examples/with-entra-id`](../../examples/with-entra-id/) — graphics
-  VM composed with the sibling `nixos-entra-id` flake.
+  VM composed with the sibling `entrablau` flake.

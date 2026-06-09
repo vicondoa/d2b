@@ -490,7 +490,7 @@
         # appear in generated docs.
         #
         # Migration: see CHANGELOG.md and the
-        # `vicondoa/nixos-entra-id` flake README for the new
+        # `vicondoa/entrablau.nix` flake README for the new
         # composition pattern (per-VM config.imports of the sibling
         # flake's nixosModules.default).
         entra-id = lib.mkOption {
@@ -499,7 +499,7 @@
           internal = true;
           visible = false;
           description = ''
-            REMOVED. Use `vicondoa/nixos-entra-id`'s
+            REMOVED. Use `vicondoa/entrablau.nix`'s
             module per-VM via `nixling.vms.<vm>.config.imports`.
           '';
         };

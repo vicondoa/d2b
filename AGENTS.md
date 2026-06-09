@@ -280,7 +280,7 @@ CLI, the manifest contract.
 Anything **identity- or workload-specific** lives in a sibling
 flake and is composed per-VM:
 
-- [`vicondoa/nixos-entra-id`][nixos-entra-id] — Microsoft Entra ID
+- [`vicondoa/entrablau.nix`][entrablau] — Microsoft Entra ID
   joins (Himmelblau + TPM-bound machine credential).
 
 The composition pattern is intentionally one-way: sibling flakes
@@ -289,7 +289,7 @@ Consumers compose them on a specific workload VM:
 
 ```nix
 nixling.vms.work.config.imports = [
-  inputs.nixos-entra-id.nixosModules.default
+  inputs.entrablau.nixosModules.default
 ];
 ```
 
@@ -300,7 +300,7 @@ instead. The bar for landing it in core is: "every nixling user
 plausibly wants this, and the framework cannot do the right thing
 without it."
 
-[nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix
 
 ### VM lifecycle (daemon-supervised)
 
@@ -516,7 +516,7 @@ The root flake exposes these eval-only checks under
 | `eval-graphics`        | `examples/graphics-workstation/configuration.nix`. **x86_64-linux only** — the framework's `checkVmPlatform` gate refuses graphics on aarch64. |
 
 `with-entra-id` is intentionally absent from the root `flake.checks`
-because it depends on the sibling `nixos-entra-id` input, which the
+because it depends on the sibling `entrablau` input, which the
 core flake does not (and should not) pull in. Its own flake is
 still eval-checked by `tests/static.sh` during the per-example
 iteration step, and CI also runs
@@ -734,7 +734,7 @@ by-release history.
   defaults to 7 days; override with `NL_POST_GATE_DEEP_GC_DAYS=N`.
   Off by default — this is operator policy, not gate policy.
 - `NL_SKIP_WITH_ENTRA_ID=1` skips the per-example flake check for
-  `examples/with-entra-id` when its pinned `vicondoa/nixos-entra-id`
+  `examples/with-entra-id` when its pinned `vicondoa/entrablau.nix`
   input fails the per-example cargo fetch with a transient crates.io
   403 against `libhimmelblau-0.8.18` / `kanidm-hsm-crypto-0.3.6`.
   `tests/static.sh` performs one in-band retry before failing the

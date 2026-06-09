@@ -158,7 +158,7 @@ for the full semantics.
 - **Graphics / audio**: flip `graphics.enable = true` (and/or
   `audio.enable = true`) on a VM. Requires `nixling.site.waylandUser`
   set. See [`examples/graphics-workstation`][gfx-example].
-- **Microsoft Entra ID**: compose [`vicondoa/nixos-entra-id`][nixos-entra-id]
+- **Microsoft Entra ID**: compose [`vicondoa/entrablau.nix`][entrablau]
   per-VM via `nixling.vms.<vm>.config.imports`. See
   [`examples/with-entra-id`][entra-example].
 - **Two-env isolation**: see [`examples/multi-env`][multi-env-example].
@@ -166,7 +166,7 @@ for the full semantics.
 [gfx-example]: https://github.com/vicondoa/nixling/tree/main/examples/graphics-workstation
 [entra-example]: https://github.com/vicondoa/nixling/tree/main/examples/with-entra-id
 [multi-env-example]: https://github.com/vicondoa/nixling/tree/main/examples/multi-env
-[nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix
 
 ## Common gotchas
 

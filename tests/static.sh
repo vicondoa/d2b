@@ -400,7 +400,7 @@ cd "$ROOT"
 #   * vms.nix is NOT lifted into the public flake (consumers declare
 #     their own nixling.vms.<name> bindings).
 #   * audio.nix split into components/audio/{guest,host}.nix.
-#   * entra-id.nix moved to the sibling nixos-entra-id flake.
+#   * entra-id.nix moved to the sibling entrablau flake.
 # Consumer-specific `vms/<name>.nix` paths are excluded — they only
 # exist on the maintainer's host. The loop below skips any entry that
 # isn't present on disk so the gate stays useful for the public flake
@@ -1312,7 +1312,7 @@ nl_static_gate_end "W2 control-plane skeleton gates"
 #
 # Carve-out: the `with-entra-id` example-flake check can fail with a
 # transient/external crates.io 403 against a `libhimmelblau`-/`kanidm-hsm-
-# crypto`-pinned vicondoa/nixos-entra-id revision. Set
+# crypto`-pinned vicondoa/entrablau.nix revision. Set
 # `NL_SKIP_WITH_ENTRA_ID=1` to skip the per-example check for that one
 # example (the per-example loop honors the knob in the per-example block
 # below). Use only after one in-band retry; this is an explicit carve-out
@@ -1411,7 +1411,7 @@ nl_static_gate_end "tests/harness-ubuntu-eval.sh"
 nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
 if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
   nl_time_begin "with-entra-id input prewarm"
-  _WITH_ENTRA_ID_REF=$(jq -er '.nodes["nixos-entra-id"].locked | "github:\(.owner)/\(.repo)/\(.rev)"' "$ROOT/examples/with-entra-id/flake.lock")
+  _WITH_ENTRA_ID_REF=$(jq -er '.nodes["entrablau"].locked | "github:\(.owner)/\(.repo)/\(.rev)"' "$ROOT/examples/with-entra-id/flake.lock")
   nix build --no-link "$_WITH_ENTRA_ID_REF#checks.x86_64-linux.himmelblau-tpm-drv" >/dev/null
   nl_time_end "with-entra-id input prewarm"
 fi
@@ -1433,7 +1433,7 @@ nl_static_parallel_wait_all
 if [ -f "$ROOT/examples/with-entra-id/flake.nix" ]; then
   if [ -n "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
     # Carve-out: explicit operator opt-in to skip the with-entra-id
-    # per-example check when its pinned vicondoa/nixos-entra-id input
+    # per-example check when its pinned vicondoa/entrablau.nix input
     # fails the cargo fetch with a crates.io 403 against the
     # `libhimmelblau` / `kanidm-hsm-crypto` versions in its lockfile.
     # Used only after the in-band retry below failed.

@@ -71,7 +71,7 @@
       # — which is what we want from a `nix flake check` gate.
       #
       # `with-entra-id` is intentionally absent: it imports
-      # `nixos-entra-id.nixosModules.default` from a separate sibling
+      # `entrablau.nixosModules.default` from a separate sibling
       # flake, and the root flake doesn't (and shouldn't) pull that
       # in as an input. The example's own `flake.nix` still gates
       # eval via `nix flake check` in its own directory; the
