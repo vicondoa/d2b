@@ -35,15 +35,15 @@ Nixling gives you:
 At a high level:
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph host["NixOS host"]
-        direction LR
+        direction TB
         cli["nixling CLI"]
         desktop["Wayland desktop"]
         devices["devices<br/>TPM / USB / audio / graphics / files"]
 
         subgraph nixling_box["nixling"]
-            direction LR
+            direction TB
             nixlingd["nixlingd"]
             broker["privileged broker"]
             vhost["vhost-user sidecars"]
@@ -51,14 +51,13 @@ flowchart LR
         end
 
         subgraph vm["microVM"]
-            direction LR
+            direction TB
             kernel["guest Linux kernel"]
             apps["workspace apps"]
         end
     end
 
     cli --> nixlingd
-    nixlingd --> broker
     broker --> vm
     broker --> vhost
     broker --> wayland
