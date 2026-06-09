@@ -9,6 +9,7 @@
 //!             -> FilterXdgToplevelHandler (per xdg_toplevel)
 
 use std::{
+    cell::RefCell,
     collections::{BTreeSet, HashSet},
     rc::Rc,
 };
@@ -39,11 +40,12 @@ use crate::{
 /// State-level handler: creates per-client display handlers.
 pub struct FilterStateHandler {
     policy: Rc<FilterPolicy>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl FilterStateHandler {
-    pub fn new(policy: Rc<FilterPolicy>) -> Self {
-        Self { policy }
+    pub fn new(policy: Rc<FilterPolicy>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
+        Self { policy, diag }
     }
 }
 
@@ -51,6 +53,7 @@ impl StateHandler for FilterStateHandler {
     fn new_client(&mut self, client: &Rc<Client>) {
         let handler = FilterDisplayHandler {
             policy: self.policy.clone(),
+            diag: self.diag.clone(),
         };
         client.display().set_handler(handler);
         log::debug!(
@@ -63,6 +66,7 @@ impl StateHandler for FilterStateHandler {
 /// Per-client display handler: intercepts `get_registry`.
 struct FilterDisplayHandler {
     policy: Rc<FilterPolicy>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
 }
 
 impl WlDisplayHandler for FilterDisplayHandler {
@@ -71,7 +75,10 @@ impl WlDisplayHandler for FilterDisplayHandler {
         // registry is established.
         slf.send_get_registry(registry);
         // Install our registry handler to filter globals.
-        registry.set_handler(FilterRegistryHandler::new(self.policy.clone()));
+        registry.set_handler(FilterRegistryHandler::new(
+            self.policy.clone(),
+            self.diag.clone(),
+        ));
     }
 }
 
@@ -83,7 +90,7 @@ impl WlDisplayHandler for FilterDisplayHandler {
 pub struct FilterRegistryHandler {
     policy: Rc<FilterPolicy>,
     mapper: GlobalMapper,
-    diag: DiagRateLimiter,
+    diag: Rc<RefCell<DiagRateLimiter>>,
     /// Server names we explicitly ignored (mapped to None in the mapper).
     /// Used to distinguish hidden-global bind attempts from
     /// completely-unadvertised bind attempts in diagnostic messages.
@@ -97,12 +104,11 @@ pub struct FilterRegistryHandler {
 }
 
 impl FilterRegistryHandler {
-    pub fn new(policy: Rc<FilterPolicy>) -> Self {
-        let vm = policy.vm_name.clone();
+    pub fn new(policy: Rc<FilterPolicy>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             policy,
             mapper: GlobalMapper::default(),
-            diag: DiagRateLimiter::new(vm),
+            diag,
             ignored_server_names: HashSet::new(),
             advertised_client_names: BTreeSet::new(),
             next_mapper_client_name: 1,
@@ -136,7 +142,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
         let crate::policy::GlobalAction::Allow = action else {
             // Denied: ignore and suppress global_remove forwarding too.
             if self.policy.log_filtered_globals {
-                self.diag.global_filtered(iface_name);
+                self.diag.borrow_mut().global_filtered(iface_name);
             }
             self.mapper.ignore_global(name);
             self.record_ignore(name);
@@ -169,7 +175,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
             } else {
                 DropReason::BindDeniedUnadvertised
             };
-            self.diag.bind_denied(reason, name);
+            self.diag.borrow_mut().bind_denied(reason, name);
             // Drop `id` without forwarding — fail-closed.
             drop(id);
             return;
@@ -284,7 +290,8 @@ mod tests {
 
     #[test]
     fn ignored_globals_do_not_consume_mapper_client_names() {
-        let mut handler = FilterRegistryHandler::new(policy());
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut handler = FilterRegistryHandler::new(policy(), diag);
 
         handler.record_forward();
         handler.record_ignore(42);
@@ -293,5 +300,30 @@ mod tests {
         assert!(handler.advertised_client_names.contains(&1));
         assert!(handler.advertised_client_names.contains(&2));
         assert!(!handler.advertised_client_names.contains(&3));
+    }
+
+    #[test]
+    fn registry_handler_records_bind_denials_in_shared_limiter() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let handler = FilterRegistryHandler::new(policy(), diag.clone());
+
+        for name in 0..6 {
+            handler.diag.borrow_mut().bind_denied(
+                crate::diag::DropReason::BindDeniedUnadvertised,
+                name,
+            );
+        }
+
+        let suppressed_before_flush = diag
+            .borrow()
+            .suppressed_total_for_tests();
+        assert_eq!(suppressed_before_flush, 1);
+
+        diag.borrow_mut().flush_suppressed();
+
+        let suppressed_after_flush = diag
+            .borrow()
+            .suppressed_total_for_tests();
+        assert_eq!(suppressed_after_flush, 0);
     }
 }

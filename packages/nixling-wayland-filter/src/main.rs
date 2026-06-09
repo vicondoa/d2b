@@ -12,6 +12,7 @@
 //!   5. Enter the dispatch loop.
 
 use std::{
+    cell::RefCell,
     io,
     os::{
         fd::OwnedFd,
@@ -129,8 +130,10 @@ fn main() {
         }
     };
 
+    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(policy.vm_name.clone())));
+
     // Install state handler to set up per-client handlers on accept.
-    state.set_handler(FilterStateHandler::new(policy.clone()));
+    state.set_handler(FilterStateHandler::new(policy.clone(), diag.clone()));
 
     // Step 4: create the listen socket AFTER successful upstream connect.
     let listen_path = &args.listen;
@@ -172,11 +175,15 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    run_loop(&state, &listener, &policy.vm_name);
+    run_loop(&state, &listener, &policy.vm_name, &diag);
 }
 
-fn run_loop(state: &Rc<wl_proxy::state::State>, listener: &UnixListener, vm: &str) {
-    let mut diag = DiagRateLimiter::new(vm.to_owned());
+fn run_loop(
+    state: &Rc<wl_proxy::state::State>,
+    listener: &UnixListener,
+    vm: &str,
+    diag: &Rc<RefCell<DiagRateLimiter>>,
+) {
     let mut last_diag_flush = Instant::now();
     loop {
         // Accept all pending new client connections (non-blocking).
@@ -218,7 +225,7 @@ fn run_loop(state: &Rc<wl_proxy::state::State>, listener: &UnixListener, vm: &st
         }
 
         if last_diag_flush.elapsed() >= Duration::from_secs(60) {
-            diag.flush_suppressed();
+            diag.borrow_mut().flush_suppressed();
             last_diag_flush = Instant::now();
         }
     }
