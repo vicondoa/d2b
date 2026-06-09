@@ -1,16 +1,13 @@
-# `with-entra-id` — composing nixling with `nixos-entra-id`
+# `with-entra-id` — composing nixling with `entrablau`
 
 This example is the **integration showcase** for using
 [`vicondoa/nixling`][nixling] together with the framework-agnostic
-[`vicondoa/nixos-entra-id`][nixos-entra-id] flake to spin up an
+[`vicondoa/entrablau.nix`][entrablau] flake to spin up an
 Entra-ID-joined work microVM on a NixOS host.
 
 The two flakes are deliberately decoupled — neither imports the
 other. This directory is the **consumer-side composition** that
-wires them together in your top-level `flake.nix`. Read the same
-pattern from the `nixos-entra-id` side at
-[`examples/inside-nixling-vm/`][entra-from-the-other-side] in that
-repo.
+wires them together in your top-level `flake.nix`.
 
 ## What you get
 
@@ -24,25 +21,25 @@ work environment with one Entra-joined VM:
 | swtpm 2.0                | nixling          | Software TPM exposed to guest at `/dev/tpmrm0`       |
 | Wayland / audio / GPU    | nixling          | (Off in this minimal example — TPM-only headless VM) |
 | YubiKey USBIP backend    | nixling          | (Available; toggle `usbip.yubikey = true` per VM)    |
-| Himmelblau daemon + PAM  | nixos-entra-id   | Linux-native Entra ID client (TPM-enabled rebuild)   |
-| Intune compliance shims  | nixos-entra-id   | Fake DMI / `/etc/os-release`, `FileDescriptorStoreMax` for PRT survival |
-| Firefox SSO + pinentry   | nixos-entra-id   | Browser-broker plumbing for the interactive MFA flow |
+| Himmelblau daemon + PAM  | entrablau        | Linux-native Entra ID client (TPM-enabled rebuild)   |
+| Intune compliance shims  | entrablau        | `dmiOverride` / `osReleaseOverride`, `FileDescriptorStoreMax` for PRT survival |
+| Firefox SSO + pinentry   | entrablau        | Browser-broker plumbing for the interactive MFA flow |
 
 ## File layout
 
 ```
 examples/with-entra-id/
-├── flake.nix           inputs: nixpkgs, nixling, nixos-entra-id
+├── flake.nix           inputs: nixpkgs, nixling, entrablau
 │                       outputs: nixosConfigurations.demo
 ├── configuration.nix   host-side: user, nixling.site, nixling.envs.work
-├── work-entra.nix         guest-side: hostname, security.tpm2, nixosEntraId.*
+├── work-entra.nix         guest-side: hostname, security.tpm2, entrablau.*
 └── README.md           you are here
 ```
 
 ## Two-flake composition: who owns what
 
 The split is intentional. **`nixling` owns VM lifecycle and host
-plumbing**; **`nixos-entra-id` owns Entra protocol + Intune
+plumbing**; **`entrablau` owns Entra protocol + Intune
 compatibility**. Putting Entra inside nixling would have coupled the
 framework to Microsoft-specific machinery that the average single-
 user NixOS desktop will never want.
@@ -67,21 +64,21 @@ configure the VM itself.
 | `nixling.vms.<vm>.ssh.user`           | `flake.nix`         | SSH user the CLI uses to talk into the VM       |
 | `nixling.vms.<vm>.config.imports`     | `flake.nix`         | **The composition seam** — guest NixOS modules  |
 
-### Options that live in `nixosEntraId.*` (from the other flake)
+### Options that live in `entrablau.*` (from the other flake)
 
 These are set **inside the VM** in `work-entra.nix`. They configure
 Himmelblau and the Intune compliance shim. The full schema is in
-the [`nixos-entra-id` README][nixos-entra-id-readme].
+the [`entrablau` README][entrablau-readme].
 
 | Option                                       | Purpose                                                            |
 |----------------------------------------------|--------------------------------------------------------------------|
-| `nixosEntraId.enable`                        | Activate the Himmelblau workspace + module                         |
-| `nixosEntraId.domain`                        | Tenant domain(s) (`listOf str`)                                    |
-| `nixosEntraId.userMap.<local> = <UPN>`       | Local-user → Entra UPN mapping (`/etc/himmelblau/user-map`)        |
-| `nixosEntraId.joinType`                      | `"join"` (Intune-enrolled) or `"register"` (BYOD)                  |
-| `nixosEntraId.localUser`                     | Diagnostic — name of the local user that maps to the UPN           |
-| `nixosEntraId.intuneCompliance.enable`       | Turn on/off the Intune compliance shim                             |
-| `nixosEntraId.intuneCompliance.fakeDmi`      | SMBIOS values bind-mounted into himmelblau's mount ns              |
+| `entrablau.enable`                        | Activate the Himmelblau workspace + module                         |
+| `entrablau.domain`                        | Tenant domain(s) (`listOf str`)                                    |
+| `entrablau.userMap.<local> = <UPN>`       | Local-user → Entra UPN mapping (`/etc/himmelblau/user-map`)        |
+| `entrablau.joinType`                      | `"join"` (Intune-enrolled) or `"register"` (BYOD)                  |
+| `entrablau.localUser`                     | Diagnostic — name of the local user that maps to the UPN           |
+| `entrablau.intuneCompliance.enable`       | Turn on/off the Intune compliance shim                             |
+| `entrablau.intuneCompliance.dmiOverride`      | SMBIOS values bind-mounted into himmelblau's mount ns              |
 
 ### The seam
 
@@ -92,7 +89,7 @@ nixling.vms.work-entra = {
   tpm.enable = true;             # nixling option
   config = {
     imports = [
-      nixos-entra-id.nixosModules.default   # bring in the other flake
+      entrablau.nixosModules.default   # bring in the other flake
       ./work-entra.nix                         # bring in our own VM config
     ];
   };
@@ -122,12 +119,12 @@ either skip the TPM portion (failing CA) or emit a CSR the
 endpoint refuses with
 `400 Bad Request: Value must be a valid PEM-encoded PKCS#10 CSR`.
 
-`nixos-entra-id` ships a TPM-enabled rebuild of the Himmelblau
+`entrablau` ships a TPM-enabled rebuild of the Himmelblau
 workspace specifically because the upstream build has the `tpm`
 cargo feature off by default and requires two vendored crate
 patches to make the Intune CSR validation pass. See
 [`pkgs/himmelblau-tpm/MAINTAINING.md`][himmelblau-tpm-maintaining]
-in `nixos-entra-id` for the patch rationale.
+in `entrablau` for the patch rationale.
 
 **swtpm satisfies this requirement**, because the kernel inside
 the VM sees a real TPM CRB at `/dev/tpmrm0` and exposes it through
@@ -176,7 +173,7 @@ restarts should keep the same device identity.
 This is **compatibility, not bypass**.
 
 The `intuneCompliance` shim makes a Linux/microVM guest *look* to
-Intune the way a supported corporate device would — same fake DMI
+Intune the way a supported corporate device would — same DMI override
 strings, same `/etc/os-release` shape, same `FileDescriptorStoreMax`
 behaviour the Windows / macOS clients rely on for PRT survival
 across restarts. That gets you past the device-compliance gate so
@@ -195,7 +192,7 @@ Himmelblau:
   validating attestation provenance (Microsoft Defender for
   Identity, conditional access policies inspecting TPM EK
   thumbprints) will flag this device as "Linux with software TPM."
-- The vendored fake DMI values are static text — they will not
+- The vendored DMI override values are static text — they will not
   satisfy any compliance check that cross-references a
   Manufacturer-Vendor-ID against a hardware database.
 
@@ -205,7 +202,7 @@ device. If your acceptable-use policy says "only corporate
 Windows," using this is a policy violation regardless of whether
 the technical compliance check passes.
 
-`nixos-entra-id` was written to support migrating a corporate
+`entrablau` was written to support migrating a corporate
 workstation off Windows onto NixOS, with the IT department's
 explicit awareness. That's the supported use case. If you need to
 actually circumvent enterprise controls, this is the wrong tool
@@ -242,7 +239,7 @@ real `hardware-configuration.nix`):
 sudo -A nixos-rebuild build  --flake .#demo
 ```
 
-The first build pulls in `nixos-entra-id`'s TPM-enabled Himmelblau
+The first build pulls in `entrablau`'s TPM-enabled Himmelblau
 rebuild — ~10 minutes of Rust compile on a cold cache, cached
 afterwards. **Do not skip the `build` step**: a broken Entra config
 that switches live is harder to recover from than one that fails
@@ -356,9 +353,9 @@ journalctl -b -u var.mount -u local-fs.target --no-pager
 
 - **Other tenants** — swap `contoso.com` for your domain and
   update `userMap` + `localUser`. Read the
-  [`nixos-entra-id` README quick start][nixos-entra-id-readme]
+  [`entrablau` README quick start][entrablau-readme]
   for tenant prerequisites (admin role, Conditional Access caveats,
-  `dmidecode` for realistic `fakeDmi` values).
+  `dmidecode` for realistic `dmiOverride` values).
 - **Add graphics** — set `nixling.vms.work-entra.graphics.enable =
   true` in `flake.nix` and the VM gains a virtio-gpu + Wayland
   forward to the host compositor (a `foot` terminal auto-launches
@@ -370,8 +367,8 @@ journalctl -b -u var.mount -u local-fs.target --no-pager
   host's USB controller to the VM via USBIP. Useful for the MFA
   prompt during `aad-tool auth-test` and any downstream FIDO2
   flow.
-- **BYOD / no Intune** — set `nixosEntraId.joinType = "register"`
-  and `nixosEntraId.intuneCompliance.enable = false`. The TPM is
+- **BYOD / no Intune** — set `entrablau.joinType = "register"`
+  and `entrablau.intuneCompliance.enable = false`. The TPM is
   still useful (PRT survival), but the compliance shim drops out
   of the picture.
 
@@ -386,9 +383,9 @@ The framework itself is multi-arch (headless VMs eval on
 + `audio.enable` only — **not on `tpm.enable`** — so a future
 `aarch64`-clean variant of this example would be possible if
 upstream Himmelblau gained an `aarch64` cargo build. Today,
-`nixos-entra-id`'s TPM-enabled Himmelblau package is wired for
+`entrablau`'s TPM-enabled Himmelblau package is wired for
 `x86_64-linux` only via its `himmelblauSystems` allowlist
-(see the `nixos-entra-id` flake.nix), so the practical answer
+(see the `entrablau` flake.nix), so the practical answer
 remains `x86_64-linux` for the foreseeable future.
 
 ## Where the two flakes' docs disagree
@@ -441,20 +438,15 @@ for the exact predicate.
 - [`examples/graphics-workstation`](../graphics-workstation/) — desktop VM with Wayland + audio + USBIP
 - [`examples/multi-env`](../multi-env/) — two isolated envs (work + personal)
 - [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
-- [`vicondoa/nixos-entra-id`][nixos-entra-id] — the Entra/Himmelblau
+- [`vicondoa/entrablau.nix`][entrablau] — the Entra/Himmelblau
   module bundle. Read its README for tenant prerequisites,
-  detailed enrolment troubleshooting, and the full `nixosEntraId.*`
+  detailed enrolment troubleshooting, and the full `entrablau.*`
   schema.
-- [`vicondoa/nixos-entra-id/examples/inside-nixling-vm/`][entra-from-the-other-side]
-  — the same composition pattern documented from the Entra flake's
-  side. Slightly different emphasis (Entra-first); cross-link
-  rather than duplicate.
 - [`vicondoa/nixling` README][nixling-readme] — quick start, common
   gotchas, full option index.
 
 [nixling]: https://github.com/vicondoa/nixling
 [nixling-readme]: ../../README.md
-[nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
-[nixos-entra-id-readme]: https://github.com/vicondoa/nixos-entra-id#readme
-[entra-from-the-other-side]: https://github.com/vicondoa/nixos-entra-id/tree/main/examples/inside-nixling-vm
-[himmelblau-tpm-maintaining]: https://github.com/vicondoa/nixos-entra-id/blob/main/pkgs/himmelblau-tpm/MAINTAINING.md
+[entrablau]: https://github.com/vicondoa/entrablau.nix
+[entrablau-readme]: https://github.com/vicondoa/entrablau.nix#readme
+[himmelblau-tpm-maintaining]: https://github.com/vicondoa/entrablau.nix/blob/main/pkgs/himmelblau-tpm/MAINTAINING.md

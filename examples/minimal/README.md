@@ -133,7 +133,7 @@ checkout).
   parallel `nixling.envs.<name>` instances with no cross-traffic
   between them.
 - **Add Entra ID** — `examples/with-entra-id` consumes the sibling
-  `nixos-entra-id` flake to put a domain-joined VM behind nixling
+  `entrablau` flake to put a domain-joined VM behind nixling
   without the framework knowing about Himmelblau.
 
 ## After activation

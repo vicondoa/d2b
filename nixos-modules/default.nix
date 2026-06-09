@@ -66,11 +66,11 @@
   ];
 
   # Entra ID / Himmelblau is NOT auto-imported here — it lives in
-  # the sibling `vicondoa/nixos-entra-id` flake. Consumers bring
+  # the sibling `vicondoa/entrablau.nix` flake. Consumers bring
   # it in per-VM
   #
   #   nixling.vms.<vm>.config.imports = [
-  #     inputs.nixos-entra-id.nixosModules.default
+  #     inputs.entrablau.nixosModules.default
   #   ];
   #
   # That keeps the himmelblau NixOS module out of nixling's eval
