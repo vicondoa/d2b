@@ -12,6 +12,34 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
+  window-rule include generator. When enabled, installs a KDL file at
+  the configured path (default `/etc/nixling/niri-vm-borders.kdl`)
+  containing a crosvm scanout-window hide rule and one
+  `window-rule` per enabled graphics VM. Rules match the
+  `nixling.<vm>.` app-id prefix that the host Wayland filter proxy
+  writes onto guest windows. Include the file from niri config with
+  `include "/etc/nixling/niri-vm-borders.kdl"`. Requires niri ≥ 0.1.9.
+- `nixling.vms.<vm>.graphics.niriBorderColor` — per-VM active border
+  color override for the generated niri rules, as a six-digit CSS hex
+  color (`#rrggbb`). Defaults to `null`, which uses a deterministic
+  palette color derived from the VM name.
+- `nixling.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions}`
+  — host-side Wayland filter controls for graphics VMs that opt into
+  cross-domain forwarding. The filter is enabled by default when
+  `graphics.crossDomainTrusted = true`, denies unknown/high-risk globals
+  by default, and exposes explicit allow/deny/version-cap overrides.
+- `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
+  include, customizing colors, verifying the setup, and understanding
+  the `crossDomainTrusted` requirement for app-id matching.
+- `docs/how-to/migrate-to-wayland-proxy.md` — migration guide covering
+  app-id renaming, Xwayland fail-closed behavior, `crossDomainTrusted`
+  requirement, niri rule updates, and rollback procedure.
+- `docs/reference/wayland-filter-warnings.md` — reference warning
+  catalog for `graphics.waylandFilter` listing every warning condition,
+  the triggering option or global, why the warning exists, and how to
+  override intentionally.
+
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
   in-guest edited file over the existing per-VM SSH key into a
@@ -49,8 +77,23 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Changed
+
+- Graphics VMs that opt into cross-domain forwarding use
+  `wl-cross-domain-proxy` in the guest and a host-side
+  `nixling-wayland-filter` proxy instead of the former
+  `wayland-proxy-virtwl` guest relay.
+- `nixling.vms.<vm>.graphics.xwayland.enable = true` now fails eval
+  during the Wayland-only migration. X11 application support will return
+  through a separately validated helper path.
+
 ### Security
 
+- Graphics VMs that opt into cross-domain forwarding now route guest
+  Wayland traffic through a host-jailed `nixling-wayland-filter` process
+  before reaching the real host compositor. The GPU sidecar connects to
+  the per-VM filter socket; the dedicated `nixling-<vm>-wlproxy`
+  principal is the VM-specific role with compositor socket access.
 - Per-VM store isolation: the daemon-native virtiofsd `ro-store` runner
   served the host's entire `/nix/store` to every guest, so a guest's
   `/nix/store` exposed all host store paths instead of only the VM's own

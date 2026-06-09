@@ -30,30 +30,13 @@ let
   # `passthru.testedWithCrosvmRev` and compare to `pkgs.crosvm.src.rev`.
   spectrumCH = import ../../pkgs/spectrum-ch { inherit pkgs; };
 
-  # Patched wayland-proxy-virtwl that forwards EVERY host `wl_output`
-  # global to the guest, not just the first one. Upstream
-  # talex5/wayland-proxy-virtwl's relay.ml builds a single-entry-per-
-  # interface registry, so the guest only ever sees one virtual
-  # monitor regardless of how many physical monitors the host has —
-  # which breaks SDL3 `/list:monitor`, FreeRDP `/multimon`, and
-  # anything else that does Wayland-based monitor enumeration. The
-  # patch special-cases `wl_output` to forward every host instance
-  # through the existing per-entry-host_name machinery. See
-  # patches/wayland-proxy-virtwl-multimon.patch for the diff.
-  #
-  # Upstream candidate: consider PR'ing this to
-  # https://github.com/talex5/wayland-proxy-virtwl — the fix is
-  # ~20 lines and obviously correct (multi-instance globals are
-  # standard Wayland).
-  waylandProxyVirtwlMultiMon = pkgs.wayland-proxy-virtwl.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [
-      ../../pkgs/patches/wayland-proxy-virtwl-multimon.patch
-    ];
-  });
-
-  waylandProxyXwaylandArgs =
-    lib.optionalString config.nixling.graphics.xwayland.enable
-      " --x-display=0 --xwayland-binary=${pkgs.xwayland}/bin/Xwayland";
+  # wl-cross-domain-proxy: replaces wayland-proxy-virtwl as the
+  # guest-side virtio-gpu Wayland transport. It handles the kernel
+  # cross-domain channel only; filtering, global hiding, and app-id
+  # rewriting are performed by the host-side nixling-wayland-filter
+  # proxy. The binary is gated on crossDomainTrusted so it does not
+  # start crash-looping when the cross-domain crosvm context is absent.
+  wlCrossDomainProxy = import ../../pkgs/wl-cross-domain-proxy { inherit pkgs; };
 
   # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's
   # cloud-hypervisor runner over vhost-user-gpu. Use the crosvm
@@ -327,7 +310,7 @@ in
   options.nixling.graphics.xwayland.enable = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Guest-side mirror of nixling.vms.<vm>.graphics.xwayland.enable. Default false: wayland-proxy-virtwl starts without Xwayland support and DISPLAY is not set unless explicitly enabled.";
+    description = "Guest-side mirror of nixling.vms.<vm>.graphics.xwayland.enable. Intentionally unsupported: graphics.xwayland.enable = true fails eval with a clear message for the Wayland-only migration period.";
   };
 
   config = {
@@ -512,28 +495,23 @@ in
       # severity=warning. The fallbacks always work, so silence the
       # probe noise.
       EGL_LOG_LEVEL = "fatal";
-    } // lib.optionalAttrs config.nixling.graphics.xwayland.enable {
-      DISPLAY = ":0";
     };
 
-    systemd.user.services.wayland-proxy = {
-      description = "Wayland Proxy (virtio-gpu cross-domain to host compositor)";
+    # wl-cross-domain-proxy provides the guest-side virtio-gpu
+    # cross-domain Wayland transport. It is gated on
+    # crossDomainTrusted so it does not crash-loop when the
+    # cross-domain crosvm context is absent (crossDomainTrusted=false
+    # strips the context-type from crosvm's --params, so no
+    # cross-domain channel exists for the proxy to connect to).
+    #
+    # Title rewriting and app-id prefixing are performed on the HOST
+    # side by nixling-wayland-filter; the guest proxy does not use
+    # --tag or any filtering flag.
+    systemd.user.services.wayland-proxy = lib.mkIf config.nixling.graphics.crossDomainTrusted {
+      description = "Wayland cross-domain proxy (guest virtio-gpu transport)";
       wantedBy = [ "default.target" ];
       serviceConfig = {
-        # waylandProxyVirtwlMultiMon = nixpkgs wayland-proxy-virtwl +
-        # our multi-wl_output patch. Without the patch the guest only
-        # sees one host monitor; see the let-binding above for context.
-        #
-        # --tag prefixes every guest window's title with the VM name
-        # in square brackets (e.g. "[corp-desktop] Mozilla Firefox"),
-        # so the operator can tell at a glance which VM a window
-        # belongs to when multiple graphics VMs are running side-by-
-        # side on the host. config.networking.hostName is set to the
-        # VM name in the manifest (base.nix). wayland-proxy-virtwl's
-        # --tag is prepended verbatim, so include the brackets and
-        # trailing
-        # space in the value.
-        ExecStart = "${waylandProxyVirtwlMultiMon}/bin/wayland-proxy-virtwl --virtio-gpu --tag=[${config.networking.hostName}]\\ ${waylandProxyXwaylandArgs}";
+        ExecStart = "${wlCrossDomainProxy}/bin/wl-cross-domain-proxy";
         Restart = "on-failure";
         RestartSec = 5;
       };
@@ -549,16 +527,16 @@ in
     # The problem: foot is a Wayland-native terminal that by design
     # does NOT implement CSD (https://codeberg.org/dnkl/foot/wiki/Frequently-asked-questions).
     # It relies on xdg-decoration for SSD from the compositor.
-    # Inside the guest, foot's xdg-decoration request transits
-    # wayland-proxy-virtwl → virtio-gpu cross-domain channel → host
-    # KDE compositor, but Plasma's response (SSD-mode) doesn't reach
-    # foot via that path in a usable way. Result: a chromeless
-    # terminal pops up on every boot with no title bar, no close
-    # button, and the default "W" icon (Plasma's unknown-app
+    # Inside the guest, foot's xdg-decoration request transits the
+    # virtio-gpu cross-domain channel to the host-side filter proxy
+    # and on to the host compositor, but Plasma's response (SSD-mode)
+    # doesn't reach foot via that path in a usable way. Result: a
+    # chromeless terminal pops up on every boot with no title bar,
+    # no close button, and the default "W" icon (Plasma's unknown-app
     # placeholder).
     #
     # Fix: don't auto-launch a guest terminal at all. The per-VM
-    #.desktop entry (cli.nix `desktopItems`) now launches a HOST-
+    # .desktop entry (cli.nix `desktopItems`) now launches a HOST-
     # side foot terminal that SSHes into the VM, which gets proper
     # chrome from the host KDE compositor via standard
     # xdg-decoration. Operators can still SSH from any other host

@@ -1567,6 +1567,10 @@ pub(crate) fn policy_ref_device_classes(
         "w1-usbip" => Some(&[DeviceClass::UsbipHost]),
         // USBIP proxy only binds/listens/connects TCP sockets; no device ioctls.
         "w1-usbip-proxy" => Some(&[]),
+        // wayland-proxy sidecar: no device binds (only a Wayland socket bind-mount),
+        // no ioctl surface → permissive BPF. Seccomp is mandatory for this role
+        // (set in minijail-profiles.nix) but the ioctl matrix is empty.
+        "w1-wayland-proxy" => Some(&[]),
         _ => None,
     }
 }
@@ -1892,6 +1896,42 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
         }
     }
 
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-wayland-proxy") {
+        // Wayland-proxy gets ACL on the real host compositor socket only.
+        // PipeWire and Pulse sockets are explicitly revoked: the proxy
+        // has no audio role and must not connect to them.
+        let runtime_dir = env_value(plan, "XDG_RUNTIME_DIR");
+        if let Some(runtime_dir) = runtime_dir {
+            let runtime = Path::new(runtime_dir);
+            let wayland_display = env_value(plan, "WAYLAND_DISPLAY").unwrap_or("wayland-0");
+            setfacl_fd_safe(
+                &runtime.join(wayland_display),
+                &format!("u:{}:rwx", plan.uid),
+                AclPathKind::Socket,
+            )
+            .map_err(|detail| LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "refresh host compositor socket ACL for wayland-proxy uid {}: {detail}",
+                    plan.uid
+                ),
+            })?;
+            for socket in ["pipewire-0", "pulse/native"] {
+                let path = runtime.join(socket);
+                setfacl_fd_safe(
+                    &path,
+                    &format!("u:{}:---", plan.uid),
+                    AclPathKind::Socket,
+                )
+                .map_err(|detail| LiveHandlerError::SpawnFailed {
+                    detail: format!(
+                        "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
+                        plan.uid
+                    ),
+                })?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1945,6 +1985,23 @@ pub fn live_spawn_runner(
     plan_input: &SpawnRunnerPlanInput,
 ) -> Result<SpawnRunnerResult, LiveHandlerError> {
     let plan = preflight(plan_input).map_err(LiveHandlerError::SpawnPreflight)?;
+
+    // Wayland-proxy role: mandatory seccomp. The proxy parses untrusted
+    // guest Wayland bytes while holding the host compositor socket; a
+    // null/absent seccomp policy is a hard reject.
+    if plan.seccomp_policy_ref.as_deref() == Some("w1-wayland-proxy") {
+        // Caps must be empty: wayland-proxy must never hold host capabilities.
+        if !plan.capabilities.is_empty() {
+            return Err(LiveHandlerError::SpawnFailed {
+                detail: format!(
+                    "wayland-proxy role must have empty capabilities; \
+                     got {:?}",
+                    plan.capabilities
+                ),
+            });
+        }
+    }
+
     let (binary, argv, env) =
         build_cstring_vectors(&plan).map_err(LiveHandlerError::SpawnPreflight)?;
     let seccomp_program = load_runner_seccomp(&plan)?;

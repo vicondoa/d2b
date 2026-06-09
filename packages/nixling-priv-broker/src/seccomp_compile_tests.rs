@@ -210,11 +210,14 @@ fn all_known_policy_refs_compile_to_some() {
         "w1-guest-ssh-readiness",
         "w1-swtpm",
         "w1-gpu",
+        "w1-gpu-render-node",
         "w1-video",
         "w1-audio",
         "w1-vsock-relay",
         "w1-usbip",
+        "w1-usbip-proxy",
         "w1-otel-host-bridge",
+        "w1-wayland-proxy",
     ];
     for &policy_ref in &known_refs {
         let classes = policy_ref_device_classes(policy_ref).unwrap_or_else(|| {

@@ -4016,6 +4016,7 @@ fn runner_role_for_process_role(
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
         ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
         ProcessRole::Usbip => Some(RunnerRole::Usbip),
+        ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness => None,

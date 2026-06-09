@@ -4312,6 +4312,13 @@
           "enum": [
             "otel-host-bridge"
           ]
+        },
+        {
+          "description": "Host-jailed Wayland filter proxy. Broker invokes `nixling_host::wayland_proxy_argv::generate_wayland_proxy_argv`. Empty host capabilities; mandatory `seccompPolicyRef`; no PipeWire/Pulse socket access. Runs as `nixling-<vm>-wlproxy` with the real host compositor socket bound read/write at a fixed in-jail upstream path.",
+          "type": "string",
+          "enum": [
+            "wayland-proxy"
+          ]
         }
       ]
     },

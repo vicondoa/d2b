@@ -181,6 +181,23 @@ Concretely, the agent that owns a worktree:
 
 Only after the merge lands does the agent call `task_complete`.
 
+### Local host validation after updating nixling
+
+When a host configuration switches to a new nixling checkout (for
+example a local `path:/home/paydro/projects/nixling` input), the host
+switch updates `/etc/nixling/*` and the system packages but does **not**
+restart `nixlingd` (`restartIfChanged = false`). Before runtime
+validation, restart the daemon explicitly so it reloads the updated
+bundle/process contract and binary paths:
+
+```bash
+sudo systemctl restart nixlingd.service
+```
+
+Then restart affected VMs with the normal lifecycle commands (on this
+host, prefer `nixling down <vm> --apply` followed by
+`nixling up <vm> --apply`; `nixling switch <vm>` is not reliable here).
+
 #### Integrator-prep-first pattern (W3 onwards)
 
 For waves whose thematic scopes are NOT file-disjoint by default —
@@ -375,6 +392,16 @@ For each phase:
 5. **Advance** — only now may the integrator begin the next phase's
    plan review.
 
+Panel prompts MUST include the validation evidence the integrator already
+ran for the phase (commands and pass/fail results) and MUST instruct
+reviewers not to rerun tests, builds, evals, or other long validations
+unless the integrator explicitly requests that reviewer to do so.
+Reviewers should inspect the plan or diff, reason over the supplied
+evidence, and call out missing or insufficient validation as a finding
+rather than duplicating the validation themselves. This keeps panel
+review from stampeding the shared Nix store, cargo target, and git
+worktrees while parallel implementation agents are still active.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json
@@ -489,9 +516,11 @@ In that implementation, the roster is selected per plan via
 | `tests/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
 | `tests/assertions-eval.sh`            | Negative assertion cases (CIDR overlap, naming invariants, platform gate, missing `waylandUser`, reserved-path invariants, boot-cleaned `tmpDir`, etc.). Each bad case must fail eval with the expected message. |
 | `tests/usbip-gating-eval.sh`          | Host-side USBIP gating: absent until both host + enabled-VM opt-ins are set, and scoped to opted-in envs only. |
+| `tests/niri-vm-borders-eval.sh`       | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom `outputPath`. |
 | `tests/net-vm-network-eval.sh`        | Net VM networkd + nftables invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS, cross-env drops, and east-west toggles. |
 | `tests/volume-mounts-eval.sh`         | Declared `microvm.volumes` invariant: Cloud Hypervisor disk serials and guest `fileSystems` mounts stay aligned, and duplicate/reserved/overlong serials fail eval. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
+| `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
 | `tests/state-dir-acl-runtime.sh`      | **Layer-2 + root-only.** Skips unless `NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh` is run. `.github/workflows/layer2-runtime-with-sudo.yml` is **manual-dispatch only** on a self-hosted `nixling-sudo` runner — never `pull_request` (panel R9 security: passwordless-sudo on PR-controlled checkout). Maintainers dispatch via `gh workflow run layer2-runtime-with-sudo.yml --ref <ref>` after review. See `CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted runner". |
 | `tests/bridge-isolation-runtime.sh`   | Hermetic runtime bridge-isolation test: net-VM port stays reachable, workload taps stay isolated even after peer-style MAC spoofing. |
 | `tests/legacy-unit-denylist-eval.sh`  | Fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |

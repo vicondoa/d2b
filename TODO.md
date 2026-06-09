@@ -218,77 +218,45 @@ that attaches the declared busids from the per-env proxy.
 
 ## wayland-proxy-virtwl advertises globals inconsistently (xdg_wm_base / wl_seat late)
 
-**Current state.** The cross-domain `wayland-proxy-virtwl --virtio-gpu`
-(guest-side, forwarding to the host compositor) does not advertise the
+> **Superseded.** The guest-side `wayland-proxy-virtwl` relay has been
+> replaced by `wl-cross-domain-proxy` (guest) + `nixling-wayland-filter`
+> (host). The new host filter enumerates upstream compositor globals and
+> enforces the complete advertised set before accepting guest clients, so
+> the race described below no longer applies to the new proxy chain. See
+> `docs/reference/components-graphics.md` § "Runtime invariants".
+
+**Original observation (2026-06-07, historic).** The cross-domain `wayland-proxy-virtwl --virtio-gpu`
+(guest-side, forwarding to the host compositor) did not advertise the
 re-exported host globals to a freshly-connected guest client in a single
 registry round. In particular `xdg_wm_base` and `wl_seat` (and the
-`wl_seat.capabilities` that follow a seat bind) frequently arrive AFTER
+`wl_seat.capabilities` that follow a seat bind) frequently arrived AFTER
 the client's first `wl_display_dispatch`, i.e. across multiple event
-batches with proxy/host latency in between.
-
-**Symptom.** A guest GUI client that follows the common-but-sloppy idiom
-of a single `wl_display_dispatch()` to collect globals (instead of
-`wl_display_roundtrip()`) races the proxy: ~80% of launches it sees
-`xdg_wm_base == nullptr` (→ "no shell, cannot create window", often a
-segfault) and/or `wl_seat == nullptr` (→ window comes up but NO
-pointer/keyboard listeners are ever attached, so input is silently
-dead). Reproduced 2026-06-07 with the Openterface KVM client in
-`work-ssd`: 4/5 launches failed; the one that created a window still had
-`seat=null` so keyboard/mouse never forwarded. Worked around by patching
-that app to `wl_display_roundtrip()` (forked to
-`vicondoa/openterface`), but the proxy is the common cause and other
-Wayland-EGL apps will hit the same race.
-
-**Right answer.** Make the proxy's global advertisement deterministic so
-a single registry round exposes the full, stable global set:
-- Ensure the proxy has fully established its upstream host-compositor
-  connection and enumerated host globals BEFORE it accepts guest client
-  connections / answers `get_registry` (don't lazily forward globals as
-  they trickle in from the host).
-- Advertise `xdg_wm_base` and `wl_seat` (with capabilities) atomically in
-  the first registry burst, and flush promptly.
-- Add an integration check: a tiny guest client that does ONE
-  `wl_display_roundtrip` must always see `wl_compositor`, `wl_shm`,
-  `xdg_wm_base`, and `wl_seat` (+ pointer/keyboard caps) — run it against
-  every graphics VM's proxy in the live-smoke suite.
-
-This is the same `wayland-proxy-virtwl` the framework patches for
-multimon; the fix belongs alongside those patches (or upstreamed to
-talex5/wayland-proxy-virtwl). Related: the llvmpipe-fallback TODO below
-(the proxy also doesn't expose the guest virtio-gpu render node to the
-Wayland-EGL platform).
+batches with proxy/host latency in between. Reproduced 2026-06-07 with
+the Openterface KVM client in `work-ssd`: 4/5 launches failed; worked
+around by patching the app to `wl_display_roundtrip()` (forked to
+`vicondoa/openterface`).
 
 ## Guest Wayland-EGL apps fall back to llvmpipe (cross-domain proxy hides virgl render node)
 
-**Current state.** In a graphics VM, `eglinfo` shows the GBM/surfaceless
-EGL platform correctly bound to `virgl (NVIDIA …)`, but the **Wayland**
-EGL platform falls back to `llvmpipe`. A guest app that renders through
-`wl_egl_window` (standard Wayland-EGL) therefore gets a software GL
-context even though `/dev/dri/renderD128` (virtio-gpu/virgl) is present
-and works for GBM.
+> **Partially superseded.** The guest-side proxy is now
+> `wl-cross-domain-proxy` instead of `wayland-proxy-virtwl`. Whether
+> `wl-cross-domain-proxy` exposes `zwp_linux_dmabuf_v1` with the
+> virtio-gpu render node (and thus whether in-guest Wayland-EGL binds
+> virgl rather than llvmpipe) has not yet been confirmed on a live VM
+> with the new proxy chain. The host-side `nixling-wayland-filter` passes
+> `linux_dmabuf_v1` by default (not denied in the secure preset) so the
+> host compositor's dmabuf globals are available at the filter socket.
+> The open question is whether the guest cross-domain proxy correctly
+> presents the virtio-gpu render node to the in-guest EGL platform. Track
+> the result in the Wave 4 host acceptance checklist.
 
-**Cause.** `wayland-proxy-virtwl --virtio-gpu` (the cross-domain proxy
-the guest app connects to) does not advertise a usable `wl_drm` /
-`zwp_linux_dmabuf` render-node global to the guest, so Mesa's
-Wayland-EGL platform cannot pick virgl and falls back to the `wl_shm` +
-swrast (llvmpipe) path.
-
-**Impact.** Guest GUI apps that do their own GL rendering (e.g. the
-Openterface KVM client in `work-ssd`: CPU MJPEG decode → GLES textured
-quad present) run that GL on llvmpipe in-guest. The final surface is
-still composited on the host GPU via the cross-domain channel, so for
-light rendering it is functional, but any non-trivial in-guest GL is
-software. Firefox/Chromium in `work-aad`/`personal-dev` mostly dodge
-this via the VA-API/dmabuf shim, but raw Wayland-EGL apps don't.
-
-**Right answer.** Make the cross-domain Wayland path expose the guest
-virtio-gpu render node to Wayland-EGL clients so Mesa binds virgl, not
-llvmpipe — e.g. ensure `wayland-proxy-virtwl` (or the guest compositor
-the app talks to) advertises `zwp_linux_dmabuf_v1` with the virtio-gpu
-device, or document a supported pattern (run the app against a nested
-guest compositor that owns `/dev/dri/renderD128`) for GPU-accelerated
-in-guest Wayland-EGL rendering. Until then, document that in-guest
-Wayland-EGL GL is software and only the host composite is GPU-accelerated.
+**Original observation (2026-06-07, historic).** `wayland-proxy-virtwl --virtio-gpu`
+did not advertise a usable `wl_drm` / `zwp_linux_dmabuf` render-node
+global to the guest, so Mesa's Wayland-EGL platform fell back to
+`wl_shm` + swrast (llvmpipe). Guest apps that render via `wl_egl_window`
+(e.g. the Openterface KVM client) got a software GL context even though
+`/dev/dri/renderD128` (virtio-gpu/virgl) was present and worked for GBM.
+Firefox/Chromium dodged this via the VA-API/dmabuf shim.
 
 ## `nixling switch <vm>` fails with `broker-error` (RunActivation intent not found)
 
@@ -374,39 +342,29 @@ host switch for the new VM to get its lease.
 
 ## GPU/audio sidecars hardcode host `wayland-0`; breaks non-wayland-0 compositors
 
-**Current state.** `nixos-modules/processes-json.nix` hardcodes the
-host compositor socket name as `wayland-0` in four places — the
+> **Superseded (GPU sidecar).** The GPU sidecar no longer connects to the
+> host compositor socket directly. It connects to the per-VM filter socket
+> at `/run/nixling-wlproxy/<vm>/wayland-0`, which is the
+> `nixling-wayland-filter` proxy. The filter proxy reads the actual
+> compositor socket from the broker-emitted process bundle (derived from
+> `nixling.site.waylandDisplay`), so the hardcoded `wayland-0` path is no
+> longer in the GPU runner's argv or environment. The `wayland-0`
+> hardcoding in the minijail profiles for the GPU role is also removed.
+> The audio sidecar's PipeWire socket dependency is unchanged.
+>
+> The `nixling.site.waylandDisplay` option was added during Wave 2 wiring
+> and defaults to `"wayland-0"` for back-compat; set it to the actual
+> compositor socket name (e.g. `"wayland-1"` for niri) in
+> `nixling.site`.
+
+**Original observation (2026-06-07, historic).** `nixos-modules/processes-json.nix`
+hardcoded the host compositor socket name as `wayland-0` in four places — the
 `gpuRunner` and `gpuRenderNodeRunner` each set
 `--wayland-sock /run/user/<uid>/wayland-0` and
-`WAYLAND_DISPLAY=wayland-0`. The minijail profile
-(`nixos-modules/minijail-profiles.nix`) and host-activation socket
-binds use the same literal `wayland-0`.
-
-**Symptom.** On a host whose primary compositor is NOT on `wayland-0`
-(e.g. **niri** defaulting to `wayland-1`), the GPU sidecar's
-`--wayland-sock /run/user/<uid>/wayland-0` points at a non-existent
-socket. crosvm logs `vhost-user connection closed` and the daemon
-rolls back: `vm start failed; rolling back runner spawned during this
-start attempt vm=<vm> role=gpu`. The graphics VM cannot start at all.
-Reproduced 2026-06-07 on this host (niri at `wayland-1`); affects
-`work-ssd`, and any graphics VM on a non-wayland-0 host.
-
-**Workaround used.** `ln -s wayland-1 /run/user/<uid>/wayland-0`
-(session-runtime, lost on session end), then restart the VM.
-
-**Right answer.** Add a `nixling.site.waylandDisplay` option
-(default `"wayland-0"` for back-compat) and thread it through:
-- `processes-json.nix` `gpuRunner` / `gpuRenderNodeRunner`
-  `--wayland-sock` path + `WAYLAND_DISPLAY` env (and the audio sidecar
-  if it grows a wayland dependency),
-- `minijail-profiles.nix` the `/run/user/<uid>/wayland-0` bind-mount
-  `src`,
-- any host-activation socket-prep referencing `wayland-0`.
-
-Validate the socket exists at host-prep time and fail closed with a
-clear `nixling.site.waylandDisplay=<name> does not exist at
-/run/user/<uid>/<name>` message instead of the opaque
-`vhost-user connection closed` rollback.
+`WAYLAND_DISPLAY=wayland-0`. On a host whose primary compositor is NOT
+on `wayland-0` (e.g. niri defaulting to `wayland-1`), the GPU sidecar
+pointed at a non-existent socket. Workaround was `ln -s wayland-1
+/run/user/<uid>/wayland-0` (session-runtime, lost on session end).
 
 ## Per-VM state child dirs inherit setgid → ownership-matrix drift blocks VM start
 
@@ -855,16 +813,17 @@ envelope. The CLI surface is shipped; the daemon side is not.
 
 ## wayland-proxy-virtwl does not forward `xdg_toplevel.close` to the guest
 
-Compositor-initiated window closes (e.g. niri `close-window` /
-Mod+Q, which send `xdg_toplevel.close`) never reach guest graphics
-apps over the cross-domain `wayland-proxy-virtwl` path. Observed with
-the `work-ssd` Openterface app on niri: `niri msg action close-window
---id <id>` leaves the guest window mapped and the client running; only
-client-side close affordances (the libdecor title-bar close button) or
-a guest-side signal (SIGINT/SIGTERM) terminate it. Consumers currently
-work around this by running the app under a process supervisor or
-relying on the app's own close button. Investigate whether the proxy
-drops `xdg_toplevel.close` (and possibly other toplevel events) in the
-host→guest direction, or whether libdecor's internally-bound
-`xdg_wm_base` is not being proxied symmetrically. A correct fix lets
-guest apps honor `Mod+Q` like native windows.
+> **Superseded.** The guest-side `wayland-proxy-virtwl` relay has been
+> replaced by `wl-cross-domain-proxy` (guest) + `nixling-wayland-filter`
+> (host). The host filter passes `xdg_toplevel` events in the
+> host→guest direction without filtering them, so compositor-initiated
+> `xdg_toplevel.close` events should propagate to the guest. Verify in
+> the Wave 4 host acceptance checklist that `Mod+Q` (niri close-window)
+> reaches the guest app cleanly.
+
+**Original observation (2026-06-07, historic).** Compositor-initiated
+window closes never reached guest apps over the `wayland-proxy-virtwl`
+cross-domain path. Observed with the `work-ssd` Openterface app on niri:
+`niri msg action close-window --id <id>` left the guest window mapped.
+Consumers worked around this by using the app's own close button or a
+guest-side signal (SIGINT/SIGTERM).

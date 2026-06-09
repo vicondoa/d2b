@@ -58,11 +58,12 @@
 
   # ---------------------------------------------------------------
   # The Wayland-session user `nixling.site.waylandUser` references.
-  # Required: the GPU + audio sidecars bind this user's
-  #   /run/user/<uid>/wayland-0
+  # Required: the Wayland filter proxy (`nixling-<vm>-wlproxy`) connects
+  # to this user's compositor socket; the audio sidecar also uses this
+  # user's PipeWire socket.
+  #   /run/user/<uid>/<waylandDisplay>   (filter proxy; not the GPU sidecar)
   #   /run/user/<uid>/pipewire-0
-  # sockets into their private mount namespaces. The framework
-  # does NOT create the user — you do, here.
+  # The framework does NOT create the user — you do, here.
   # ---------------------------------------------------------------
   users.users.alice = {
     isNormalUser = true;
@@ -135,7 +136,10 @@
     # /var/lib/nixling/keys/corp-desktop_ed25519 is used.
 
     # --- component toggles (the point of this example) ---------
-    graphics.enable = true;         # crosvm GPU sidecar + Wayland cross-domain
+    graphics.enable = true;         # crosvm GPU sidecar
+    # Opt into the cross-domain + host-filter path this example documents.
+    # Do not enable this for VMs that run privileged Docker/container workloads.
+    graphics.crossDomainTrusted = true;
     audio.enable    = true;         # vhost-user-sound → host PipeWire
     usbip.yubikey   = true;         # `nixling usb corp-desktop` attaches a YubiKey
 

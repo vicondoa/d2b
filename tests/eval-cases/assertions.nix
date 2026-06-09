@@ -349,6 +349,18 @@ shared.mkBatch {
       );
     };
 
+    # graphics.xwayland.enable = true fails closed during Wayland-only migration.
+    "graphics-xwayland-unsupported" = {
+      expectedSubstring = "supported in this release";
+      override = (
+        { ... }:
+        {
+          nixling.vms.corp-vm.graphics.enable = true;
+          nixling.vms.corp-vm.graphics.xwayland.enable = true;
+        }
+      );
+    };
+
     # Issue #22 — guest audit forwarding requires per-VM observability.
     "audit-without-observability" = {
       expectedSubstring = "nixling.vms.corp-vm.audit.enable requires observability.enable on the same VM";

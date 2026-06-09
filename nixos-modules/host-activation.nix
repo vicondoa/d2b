@@ -49,11 +49,15 @@ let
       let rel = lib.removePrefix (toString ../packages + "/") (toString path);
       in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
   };
+  cargoLock = {
+    lockFile = ../packages/Cargo.lock;
+    outputHashes."wl-proxy-0.1.2" = "sha256-eCj59oWFWSdxW3cEibzJMSPW045N6GC2KCxmLzhblg0=";
+  };
   activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
     version = "0.0.0-bootstrap";
     src = packagesSrc;
-    cargoLock.lockFile = ../packages/Cargo.lock;
+    inherit cargoLock;
     cargoBuildFlags = [ "--package" "nixling-host" "--bin" "nixling-activation-helper" ];
     doCheck = false;
     postPatch = ''
@@ -77,7 +81,7 @@ EOF
     version = "0.0.0-bootstrap";
     src = packagesSrc;
     cargoBuildFlags = [ "--package" "nixling-host-activation-helper" ];
-    cargoLock.lockFile = ../packages/Cargo.lock;
+    inherit cargoLock;
     doCheck = false;
     postPatch = ''
       mkdir -p .cargo
@@ -198,11 +202,11 @@ in
       SETFACL_BIN=${pkgs.acl}/bin/setfacl \
       . ${./host-activation.d/state-dir-acl.sh}
     # Per-VM sidecar users: enumerated by mapAttrs over cfg.vms
-    # — each VM contributes gpu/swtpm/audio/video users that
+    # — each VM contributes gpu/swtpm/audio/video/wlproxy users that
     # may need traversal.
   '' + lib.concatStringsSep "\n" (lib.mapAttrsToList
     (name: _: ''
-      for suffix in gpu swtpm audio video; do
+      for suffix in gpu swtpm audio video wlproxy; do
         user="nixling-${name}-$suffix"
         if id "$user" >/dev/null 2>&1; then
           ${pkgs.acl}/bin/setfacl -m "u:$user:--x" /var/lib/nixling 2>/dev/null || true
@@ -393,7 +397,14 @@ in
             # work item to enforce non-empty kvm_consuming_uids.
             kvm_consuming_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "gpu") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             video_media_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "cloud-hypervisor-runner" or .role == "video") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
-            session_socket_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node" or .role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            # Split session-socket grants by socket type:
+            #   wlproxy → Wayland socket only (no PipeWire/Pulse)
+            #   audio   → PipeWire/Pulse only (no Wayland)
+            #   gpu/gpu-render-node → Wayland only when no proxy is emitted,
+            #                         no session socket grant when proxy is active
+            wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
@@ -526,29 +537,65 @@ in
                 ${pkgs.acl}/bin/setfacl -x "u:$uid" /run/nixling-video/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-video/${name} 2>/dev/null || true
               fi
-              # Pre-create the Wayland socket bind destination as
-              # an empty regular file (mount --bind needs the dst
-              # to exist with the same inode-type as src).
-              [ ! -e /run/nixling-gpu/${name}/wayland-0 ] && ${pkgs.coreutils}/bin/touch /run/nixling-gpu/${name}/wayland-0 2>/dev/null || true
-              # Option B: grant ONLY session-consuming role
-              # UIDs access to the Wayland user's PipeWire + Wayland
-              # sockets. The video runner is explicitly excluded: it
-              # uses a separate vhost-user media socket + device
-              # allowlist, and sharing/regranting host session sockets
-              # breaks the GPU/video principal split.
+              # Per-VM Wayland filter proxy runtime dir.
+              # wlproxy UID gets rwx (binds the listen socket);
+              # all other UIDs get --x (traverse to connect-by-path).
+              ${pkgs.coreutils}/bin/mkdir -p /run/nixling-wlproxy/${name} 2>/dev/null || true
+              ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling-wlproxy/${name} 2>/dev/null || true
+              ${pkgs.coreutils}/bin/chmod 0750 /run/nixling-wlproxy/${name} 2>/dev/null || true
+              if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling-wlproxy/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-wlproxy/${name} 2>/dev/null || true
+              elif [ -n "$wlproxy_wayland_uids" ] && echo "$gpu_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling-wlproxy/${name} 2>/dev/null || true
+                # DEFAULT ACL so the wlproxy-created socket (mode 0660
+                # under umask 0o007) inherits a named-user rw entry for
+                # the GPU principal that connects to it.
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling-wlproxy/${name} 2>/dev/null || true
+              else
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling-wlproxy/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -x "u:$uid" /run/nixling-wlproxy/${name} 2>/dev/null || true
+              fi
+              # Split host session-socket grants by role:
+              #   wayland-proxy role → Wayland socket only (ACL: rx on dir, rwx on wayland sock, --- on pipewire/pulse)
+              #   audio role         → PipeWire/Pulse only (ACL: rx on dir, rwx on pipewire/pulse, --- on wayland)
+              #   all other roles    → deny everything (--- on dir and all sockets)
               ${lib.optionalString (cfg.site.waylandUser != null) ''
                 wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
                 if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
-                    if echo "$session_socket_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                    if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                      # wlproxy: traversal on dir + rwx on Wayland socket only
                       ${activationHelper} setfacl-on-path \
                         --path "$rdir" \
                         --acl-spec "u:$uid:rx" \
                         --require-kind directory \
                         --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                         2>/dev/null || true
-                      for sock in pipewire-0 ${cfg.site.waylandDisplay} pulse/native; do
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/${cfg.site.waylandDisplay}" \
+                        --acl-spec "u:$uid:rwx" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 pulse/native; do
+                        ${activationHelper} setfacl-on-path \
+                          --path "$rdir/$sock" \
+                          --acl-spec "u:$uid:---" \
+                          --require-kind socket \
+                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                          2>/dev/null || true
+                      done
+                    elif echo "$audio_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                      # audio: traversal on dir + rwx on PipeWire/Pulse, deny Wayland
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir" \
+                        --acl-spec "u:$uid:rx" \
+                        --require-kind directory \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 pulse/native; do
                         ${activationHelper} setfacl-on-path \
                           --path "$rdir/$sock" \
                           --acl-spec "u:$uid:rwx" \
@@ -556,7 +603,40 @@ in
                           --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                           2>/dev/null || true
                       done
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/${cfg.site.waylandDisplay}" \
+                        --acl-spec "u:$uid:---" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                    elif [ -z "$wlproxy_wayland_uids" ] && echo "$gpu_session_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                      # Direct graphics path (no wayland-proxy node): GPU gets
+                      # Wayland socket access only, preserving legacy display
+                      # backend behavior while keeping PipeWire/Pulse denied.
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir" \
+                        --acl-spec "u:$uid:rx" \
+                        --require-kind directory \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      ${activationHelper} setfacl-on-path \
+                        --path "$rdir/${cfg.site.waylandDisplay}" \
+                        --acl-spec "u:$uid:rwx" \
+                        --require-kind socket \
+                        --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                        2>/dev/null || true
+                      for sock in pipewire-0 pulse/native; do
+                        ${activationHelper} setfacl-on-path \
+                          --path "$rdir/$sock" \
+                          --acl-spec "u:$uid:---" \
+                          --require-kind socket \
+                          --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                          2>/dev/null || true
+                      done
                     else
+                      # All other roles (gpu behind the filter, video,
+                      # virtiofsd, cloud-hypervisor, etc.): deny all
+                      # session sockets.
                       ${activationHelper} setfacl-on-path \
                         --path "$rdir" \
                         --acl-spec "u:$uid:---" \
@@ -601,6 +681,26 @@ in
                       --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                       2>/dev/null || true
                   done
+                fi
+              fi
+            ''}
+            # Revoke stale direct compositor grants from the GPU principal.
+            # Before this change, gpu/gpu-render-node UIDs had ACLs on the
+            # real host Wayland socket. The new model routes all compositor
+            # access through the wayland-proxy role; revoke any lingering
+            # GPU compositor grants so the old surface is closed fail-closed.
+            ${lib.optionalString (cfg.site.waylandUser != null) ''
+              stale_gpu_uid="${toString (nl.stablePrincipalId "nixling-${name}-gpu")}"
+              wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
+              if [ -n "$wuid" ] && [ -n "$wlproxy_wayland_uids" ]; then
+                rdir="/run/user/$wuid"
+                if [ -d "$rdir" ]; then
+                  ${activationHelper} setfacl-on-path \
+                    --path "$rdir/${cfg.site.waylandDisplay}" \
+                    --acl-spec "u:$stale_gpu_uid:---" \
+                    --require-kind socket \
+                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                    2>/dev/null || true
                 fi
               fi
             ''}
