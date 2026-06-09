@@ -49,8 +49,48 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Security
+
+- Per-VM store isolation: the daemon-native virtiofsd `ro-store` runner
+  served the host's entire `/nix/store` to every guest, so a guest's
+  `/nix/store` exposed all host store paths instead of only the VM's own
+  closure. virtiofsd now serves the per-VM closure-only hardlink farm
+  (`/var/lib/nixling/vms/<vm>/store`), restoring the isolation the legacy
+  `BindReadOnlyPaths /nix/store -> per-VM farm` provided; a guest's
+  `/nix/store` now contains only its own closure.
+
 ### Fixed
 
+- VM start (`nixling up` / `switch`) no longer aborts with
+  `SpawnRunner failed ... broker-error` ("Invalid cross-device link")
+  while building the per-VM store-view hardlink farm on hosts where
+  `/nix/store` is bind-mounted read-only on top of itself (the stock
+  NixOS layout). `link(2)` is rejected across that vfsmount boundary
+  even when both paths share the same underlying filesystem, so the
+  broker's in-process farm build failed with `EXDEV`. The broker now
+  builds the farm inside a private mount namespace where `/nix/store`
+  is lazily detached (mirroring the existing activation-time
+  `nixling-store-sync` workaround), via the `nixling-activation-helper
+  build-store-view-farm` subprocess, and only falls back to that
+  namespace path when an in-process build actually hits the cross-mount
+  case (so same-filesystem hosts and tests stay in-process). A raw
+  `EXDEV` at the `link(2)` site is now classified as a recoverable
+  same-filesystem cross-mount (retried in the namespace) versus a fatal
+  genuinely-different-filesystem error (propagated).
+- VM start no longer fails while building the per-VM store-view farm on
+  a `nix-store --optimise`d store. Deduplicated empty/tiny store files
+  share a single inode that reaches the filesystem hardlink ceiling
+  (ext4 `EXT4_LINK_MAX` = 65000); the farm builder now falls back to a
+  byte copy for those already-saturated (read-only) inodes instead of
+  failing with `EMLINK`.
+- VM start no longer leaves the per-VM state/runtime root
+  (`/var/lib/nixling/vms/<vm>`, `/run/nixling/vms/<vm>`) owned by a
+  transient runner principal with a clipped POSIX ACL mask. The
+  vm-start directory prepares now preserve the ownership + mode that
+  host activation establishes (`nixlingd:users 2770` plus per-runner
+  ACLs) on an existing directory, so runners (virtiofsd, gpu, video)
+  keep write access to their per-VM runtime dir and the ownership-matrix
+  preflight no longer trips.
 - `nixling switch` / `boot` / `test` no longer fail with `broker-error`
   ("no store-view intent in the trusted bundle"). The per-VM closure
   artifact now emits a populated `hostGeneration` (a deterministic,

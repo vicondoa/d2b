@@ -1,0 +1,126 @@
+//! End-to-end test for the `nixling-activation-helper
+//! build-store-view-farm` verb: the privileged broker serialises a
+//! [`BuildStoreViewFarmRequest`] to this binary's stdin (under an
+//! `unshare --mount` + `umount -l /nix/store` wrapper on a real host),
+//! and the verb deserialises it and runs `build_farm`. This test drives
+//! the binary directly (same-filesystem `tempdir`, so no namespace is
+//! needed) to lock the wire contract + the typed-error-on-stdout
+//! protocol the broker relies on.
+
+use std::io::Write;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use nixling_host::hardlink_farm::{BuildStoreViewFarmRequest, GenerationMarker, HardlinkFarmError};
+use tempfile::tempdir;
+
+fn fake_closure(root: &Path, n: usize) -> Vec<PathBuf> {
+    let store = root.join("nix-store-mock");
+    std::fs::create_dir_all(&store).unwrap();
+    let mut out = Vec::new();
+    for i in 0..n {
+        let dir = store.join(format!("aaaaaaaaaaaaaaaa-fake-{i}"));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin").join("payload"), format!("data-{i}")).unwrap();
+        out.push(dir);
+    }
+    out
+}
+
+fn marker(closure_hash: &str) -> GenerationMarker {
+    GenerationMarker {
+        closure_hash: closure_hash.to_owned(),
+        nixling_version: "test".to_owned(),
+        activated_at: "unix-0".to_owned(),
+        vm: "vm-a".to_owned(),
+        generation_number: 1,
+    }
+}
+
+fn run_helper(request: &BuildStoreViewFarmRequest) -> std::process::Output {
+    let payload = serde_json::to_vec(request).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nixling-activation-helper"))
+        .arg("build-store-view-farm")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn helper");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&payload)
+        .expect("write request");
+    child.wait_with_output().expect("await helper")
+}
+
+#[test]
+fn build_store_view_farm_verb_populates_farm_from_stdin_request() {
+    let tmp = tempdir().unwrap();
+    let farm_root = tmp.path().join("vms/vm-a/store-view");
+    std::fs::create_dir_all(&farm_root).unwrap();
+    let closure = fake_closure(tmp.path(), 2);
+
+    let request = BuildStoreViewFarmRequest {
+        farm_root: farm_root.clone(),
+        generation: 1,
+        closure_paths: closure.clone(),
+        marker: marker("closure-xyz"),
+    };
+    let output = run_helper(&request);
+    assert!(
+        output.status.success(),
+        "helper failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let gen_dir = farm_root.join("generations/1");
+    assert!(gen_dir.join("marker.json").exists(), "marker written");
+    let farmed = gen_dir.join("aaaaaaaaaaaaaaaa-fake-0/bin/payload");
+    let src = closure[0].join("bin/payload");
+    assert!(farmed.exists(), "closure file hardlinked into farm");
+    assert_eq!(
+        std::fs::metadata(&farmed).unwrap().ino(),
+        std::fs::metadata(&src).unwrap().ino(),
+        "farm entry shares the source inode (hardlink, not copy)",
+    );
+}
+
+#[test]
+fn build_store_view_farm_verb_emits_typed_error_json_on_collision() {
+    let tmp = tempdir().unwrap();
+    let farm_root = tmp.path().join("vms/vm-a/store-view");
+    std::fs::create_dir_all(&farm_root).unwrap();
+    let closure = fake_closure(tmp.path(), 1);
+
+    // First build at generation 1 with closure hash "first".
+    let first = BuildStoreViewFarmRequest {
+        farm_root: farm_root.clone(),
+        generation: 1,
+        closure_paths: closure.clone(),
+        marker: marker("first"),
+    };
+    assert!(run_helper(&first).status.success());
+
+    // Re-build the SAME generation number with a DIFFERENT closure hash
+    // -> collision. The verb must exit non-zero AND emit the typed
+    // HardlinkFarmError as JSON on stdout so the broker recovers it.
+    let collide = BuildStoreViewFarmRequest {
+        farm_root,
+        generation: 1,
+        closure_paths: closure,
+        marker: marker("second"),
+    };
+    let output = run_helper(&collide);
+    assert!(!output.status.success(), "collision must fail");
+    let line = String::from_utf8_lossy(&output.stdout);
+    let parsed: HardlinkFarmError =
+        serde_json::from_str(line.trim()).expect("stdout carries typed HardlinkFarmError JSON");
+    assert!(
+        matches!(parsed, HardlinkFarmError::GenerationCollision { .. }),
+        "expected GenerationCollision, got {parsed:?}",
+    );
+}
