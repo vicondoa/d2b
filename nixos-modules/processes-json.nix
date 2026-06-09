@@ -553,6 +553,7 @@ EOF
         (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
     in {
       binaryPath = nixlingWaylandFilterBinary;
+      env = [ ];
       argv = [
         "nixling-${vmName}-wlproxy"
         "--listen" filterSock

@@ -70,7 +70,10 @@ pub fn install_client_handlers(
         diag,
     };
     client.display().set_handler(handler);
-    log::debug!("[nixling-wlproxy] vm={} new client connected", policy.vm_name);
+    log::debug!(
+        "[nixling-wlproxy] vm={} new client connected",
+        policy.vm_name
+    );
 }
 
 /// Per-client display handler: intercepts `get_registry`.
