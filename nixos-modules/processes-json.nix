@@ -39,7 +39,7 @@ let
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-eCj59oWFWSdxW3cEibzJMSPW045N6GC2KCxmLzhblg0=";
+      outputHashes."wl-proxy-0.1.2" = "sha256-Dxdrbte075rosB4AM2WJa3QgobLeymtz4KdJDnGwObA=";
     };
     cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
     doCheck = false;
