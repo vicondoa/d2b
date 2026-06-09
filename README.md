@@ -1,25 +1,35 @@
 # nixling
 
-**Nixling is opinionated NixOS desktop microVM workspaces — nixling
-owns its microVM substrate end-to-end.** ("microVM" = a Linux VM
-booted via lightweight VMMs like cloud-hypervisor or crosvm.) Nixling
-owns its per-VM evaluator (`nixos-modules/vm-evaluator.nix` +
-`vm-options.nix`) and spawns every per-VM runner through
-`nixling-priv-broker`'s typed `SpawnRunner` pipeline. Nixling adds:
+**A reasonably isolated NixOS desktop microVM framework: isolated
+networking and stores, mediated TPM/USB/audio/graphics, all on one
+Wayland desktop.**
 
-- A single `nixling` CLI for daily VM ops (`vm start`, `vm stop`,
-  `status`, `switch`, `keys rotate`, `audio …`, `usb …`).
-- Per-VM broker-spawned sidecars (GPU forward, audio mediation,
-  TPM emulation, virtiofsd) running as dedicated system users under
-  the supervisor DAG (per-VM pidfd ownership).
-- Per-environment isolated networks (point-to-point uplink + LAN
-  bridge + auto-declared NAT/DHCP "net VM" + firewall).
-- Per-VM `/nix/store` hardlink farm so each guest sees only its
-  own closure.
-- Nixling-managed Ed25519 SSH keys, generated and rotated per VM
-  at activation time.
-- A documented JSON manifest + bundle contract shared by the Rust
-  CLI and daemon control plane.
+Nixling is for people who want one machine to hold separate workspaces
+— work, personal, risky dev, corporate login — without turning every
+boundary into a hand-built VM project. You declare envs and VMs in
+NixOS; nixling builds the networks, keys, per-VM store views, sidecars,
+and daily CLI around them.
+
+If Qubes OS is about reasonable security through compartments, nixling's
+narrower promise is **reasonable isolation for a single-user NixOS
+Wayland desktop**. It is not a new OS and not a Qubes replacement: it
+composes into your existing NixOS host. Workloads run as Linux microVMs
+with cloud-hypervisor plus crosvm-backed sidecars today, with the runner
+contract shaped so additional VMM backends can fit later.
+
+Nixling gives you:
+
+- **Isolated networking:** per-env bridges, firewalling, and an
+  auto-declared NAT/DHCP "net VM".
+- **Isolated store views:** each guest sees a per-VM `/nix/store`
+  hardlink farm containing only its own closure.
+- **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
+  and virtiofs file sharing are broker-supervised per-VM sidecars
+  instead of ad-hoc host services.
+- **One Wayland desktop:** graphical VMs integrate with the host
+  compositor without asking you to live in a separate desktop.
+- **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
+  and the privileged broker; there is no bash fallback path.
 
 **Quick start** (full walkthroughs under
 [Quick start (Rust CLI / examples)](#quick-start-rust-cli--examples) and
@@ -34,12 +44,30 @@ sudo nixling vm start work-entra --apply
 ```
 
 Every mutating verb dispatches through `nixlingd` →
-`nixling-priv-broker`. There is no bash fallback path.
+`nixling-priv-broker`.
 
 Other entry points: see [Where to start](#where-to-start) below for a
 table of the doc-friendly example aliases (`personal-dev`,
 `graphics-workstation`, `multi-env`, `work-entra`) plus the manual
 integration path.
+
+## Why nixling?
+
+Traditional desktop VMs tend to make you choose between isolation and
+daily usability: either everything is separate and clunky, or everything
+shares the same host session and trust boundary. Nixling tries to make
+the useful middle boring: separate trust zones for workloads, one
+Wayland desktop for the human.
+
+- Put work, personal, and risky-dev environments on the same laptop
+  without sharing their guest OS state or workload LANs.
+- Keep host interaction intentional: graphics, audio, USB, TPM, and
+  filesystem access are mediated by declared sidecars and brokered host
+  operations.
+- Stay Nix-native: VM config, network shape, keys, store closure, and
+  control-plane manifests are derived from the same host flake.
+- Use a daily CLI instead of a pile of per-VM scripts and one-off
+  service templates.
 
 ## Who this is for
 
@@ -70,8 +98,9 @@ look at raw [microvm.nix], NixOS containers, or
   at accept time to classify peers as `launcher`/`admin`/`deny`) —
   see [docs/explanation/design.md] for the full threat model.
 - **Not a server-VM platform.** Use NixOps or raw microvm.nix.
-- **Not a Qubes replacement.** Nixling shares the host kernel; Qubes
-  uses Xen hypervisor isolation.
+- **Not a Qubes replacement.** The "reasonably isolated" framing is a
+  nod to Qubes, not an equivalence claim. Nixling shares the host
+  kernel; Qubes uses Xen hypervisor isolation.
 - **Not OCI / container isolation.** Nixling targets full-VM
   boundaries (cloud-hypervisor / crosvm) for kernel-level
   separation between workloads; containers share the host kernel
