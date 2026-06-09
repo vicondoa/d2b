@@ -37,6 +37,9 @@ in
       lib.nameValuePair "nixling-${name}-video" { gid = stablePrincipalId "nixling-${name}-video"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
   // (lib.mapAttrs' (name: _:
+      lib.nameValuePair "nixling-${name}-wlproxy" { gid = stablePrincipalId "nixling-${name}-wlproxy"; })
+    (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
+  // (lib.mapAttrs' (name: _:
       lib.nameValuePair "nixling-${name}-snd" { gid = stablePrincipalId "nixling-${name}-snd"; })
     (lib.filterAttrs (_: vm: vm.enable && vm.audio.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
@@ -69,6 +72,13 @@ in
       group = "nixling-${name}-video";
       description = "nixling video decode sidecar for VM ${name}";
     }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable && vm.graphics.videoSidecar) cfg.vms))
+  // (lib.mapAttrs' (name: _:
+    lib.nameValuePair "nixling-${name}-wlproxy" {
+      isSystemUser = true;
+      uid = stablePrincipalId "nixling-${name}-wlproxy";
+      group = "nixling-${name}-wlproxy";
+      description = "nixling Wayland filter proxy sidecar for VM ${name}";
+    }) (lib.filterAttrs (_: vm: vm.enable && vm.graphics.enable) cfg.vms))
   // (lib.mapAttrs' (name: _:
     lib.nameValuePair "nixling-${name}-snd" {
       isSystemUser = true;

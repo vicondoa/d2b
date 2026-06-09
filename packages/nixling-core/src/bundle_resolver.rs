@@ -2121,6 +2121,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
         ProcessRole::Usbip => Some("usbip"),
+        ProcessRole::WaylandProxy => Some("wayland-proxy"),
     }
 }
 
@@ -2151,6 +2152,9 @@ fn legacy_runner_spec(
         // daemon-owned SpawnRunner path. The retired socket-activated
         // systemd-socket-proxyd shape is not a safe legacy fallback.
         ProcessRole::Usbip => return None,
+        // WaylandProxy must always carry the nixling-wayland-filter binary
+        // and closed argv from processes.json. No legacy fallback.
+        ProcessRole::WaylandProxy => return None,
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness => return None,
