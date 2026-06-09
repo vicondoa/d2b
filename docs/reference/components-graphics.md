@@ -35,6 +35,11 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `nixling.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
 | `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
+The filter's built-in policy caps `zwp_linux_dmabuf_v1` to version 3 by
+default. Version 3 keeps dmabuf `wl_buffer` creation available while avoiding
+the v4/v5 feedback/modifier path, which must not be advertised through the
+host-side proxy until it has a dedicated compatibility gate.
+
 Site-level dependency:
 
 | Option | Type | Required when | Description |
