@@ -17,7 +17,14 @@ use wl_proxy::{
     client::{Client, ClientHandler},
     object::{Object, ObjectCoreApi, ObjectRcUtils},
     protocols::{
+        stream::{
+            wl_eglstream::WlEglstreamHandleType,
+            wl_eglstream_display::{
+                WlEglstreamDisplay, WlEglstreamDisplayCap, WlEglstreamDisplayHandler,
+            },
+        },
         wayland::{
+            wl_buffer::WlBuffer,
             wl_display::{WlDisplay, WlDisplayHandler},
             wl_registry::{WlRegistry, WlRegistryHandler},
         },
@@ -183,6 +190,10 @@ impl WlRegistryHandler for FilterRegistryHandler {
             wm_base.set_handler(FilterXdgWmBaseHandler {
                 policy: self.policy.clone(),
             });
+        } else if let Some(eglstream_display) = id.try_downcast::<WlEglstreamDisplay>() {
+            eglstream_display.set_handler(FilterEglstreamDisplayHandler {
+                vm: self.policy.vm_name.clone(),
+            });
         }
 
         slf.send_bind(name, id);
@@ -240,6 +251,53 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
         let rewritten = self.policy.rewrite_title(title);
         slf.send_set_title(&rewritten);
     }
+}
+
+/// Handler for `wl_eglstream_display`: keep NVIDIA EGLStream constrained to
+/// fd-backed streams. The protocol also defines inet/socket modes, but those
+/// are network/socket transport surfaces and are outside nixling's intended
+/// guest-to-host Wayland boundary.
+struct FilterEglstreamDisplayHandler {
+    vm: String,
+}
+
+impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
+    fn handle_caps(&mut self, slf: &Rc<WlEglstreamDisplay>, caps: i32) {
+        slf.send_caps(eglstream_fd_caps(caps));
+    }
+
+    fn handle_create_stream(
+        &mut self,
+        slf: &Rc<WlEglstreamDisplay>,
+        id: &Rc<WlBuffer>,
+        width: i32,
+        height: i32,
+        handle: &Rc<std::os::fd::OwnedFd>,
+        r#type: i32,
+        attribs: &[u8],
+    ) {
+        if eglstream_handle_is_fd(r#type) {
+            slf.send_create_stream(id, width, height, handle, r#type, attribs);
+            return;
+        }
+
+        log::warn!(
+            "[nixling-wlproxy] vm={} denied wl_eglstream_display.create_stream with non-fd handle_type={}",
+            self.vm,
+            r#type
+        );
+        if let Some(client) = id.client() {
+            client.disconnect();
+        }
+    }
+}
+
+fn eglstream_fd_caps(caps: i32) -> i32 {
+    caps & WlEglstreamDisplayCap::STREAM_FD.0 as i32
+}
+
+fn eglstream_handle_is_fd(handle_type: i32) -> bool {
+    handle_type == WlEglstreamHandleType::FD.0 as i32
 }
 
 /// Minimal `ClientHandler` that logs disconnections for debugging.
@@ -325,5 +383,32 @@ mod tests {
 
         let suppressed_after_flush = diag.borrow().suppressed_total_for_tests();
         assert_eq!(suppressed_after_flush, 0);
+    }
+
+    #[test]
+    fn eglstream_caps_are_fd_only() {
+        let all_caps = WlEglstreamDisplayCap::STREAM_FD.0
+            | WlEglstreamDisplayCap::STREAM_INET.0
+            | WlEglstreamDisplayCap::STREAM_SOCKET.0;
+
+        assert_eq!(
+            eglstream_fd_caps(all_caps as i32),
+            WlEglstreamDisplayCap::STREAM_FD.0 as i32
+        );
+        assert_eq!(
+            eglstream_fd_caps(WlEglstreamDisplayCap::STREAM_INET.0 as i32),
+            0
+        );
+    }
+
+    #[test]
+    fn eglstream_create_stream_allows_only_fd_handles() {
+        assert!(eglstream_handle_is_fd(WlEglstreamHandleType::FD.0 as i32));
+        assert!(!eglstream_handle_is_fd(
+            WlEglstreamHandleType::INET.0 as i32
+        ));
+        assert!(!eglstream_handle_is_fd(
+            WlEglstreamHandleType::SOCKET.0 as i32
+        ));
     }
 }
