@@ -84,26 +84,6 @@ table of the doc-friendly example aliases (`personal-dev`,
 `graphics-workstation`, `multi-env`, `work-entra`) plus the manual
 integration path.
 
-## Why nixling?
-
-Traditional desktop VMs tend to make you choose between isolation and
-daily usability: either everything is separate and clunky, or everything
-shares the same host session and trust boundary. Nixling tries to make
-the useful middle boring: separate trust zones for workloads, one
-Wayland desktop for the human.
-
-- Put work, personal, and risky-dev environments on the same laptop
-  without sharing their guest OS state or workload LANs.
-- Give each workspace its own Linux kernel while still using the host
-  CPU through KVM-backed VMMs.
-- Keep host interaction intentional: graphics, audio, USB, TPM, and
-  filesystem access are mediated by sandboxed host-side virtualization
-  processes and brokered host operations.
-- Stay Nix-native: VM config, network shape, keys, store closure, and
-  control-plane manifests are derived from the same host flake.
-- Use a daily CLI instead of a pile of per-VM scripts and one-off
-  service templates.
-
 ## Who this is for
 
 Nixling targets the **single-user NixOS desktop** who wants
@@ -114,6 +94,17 @@ forwarding into the guest natively over Wayland. Concretely:
 - One human, one host. Multi-tenant trust boundaries are
   out of scope (see *What nixling is NOT* below).
 - Wayland-native. There is no X11 fallback for graphics VMs.
+- You want VM-grade workload boundaries without turning your daily
+  desktop into a collection of separate VM consoles.
+- You want the boring parts owned together: network topology,
+  firewalling, per-VM store views, SSH keys, sidecar users, and the
+  lifecycle CLI.
+- You like the idea of Qubes-style compartmentalization, but you want a
+  NixOS module that composes into your existing host instead of a new OS
+  and Xen stack.
+- You could build the pieces with raw microVMs, but you would rather
+  declare "work" and "personal" environments and let the framework keep
+  the host/guest boundary consistent.
 - Headless workloads also work — the same `nixling.envs.<env>`
   + `nixling.vms.<vm>` shape covers CI runners or
   background-service VMs without graphics + audio bits.
@@ -132,14 +123,31 @@ look at raw [microvm.nix], NixOS containers, or
   `nixling` system group (the broker uses `SO_PEERCRED`
   at accept time to classify peers as `launcher`/`admin`/`deny`) —
   see [docs/explanation/design.md] for the full threat model.
-- **Not a server-VM platform.** Use NixOps or raw microvm.nix.
+- **Not a server-VM platform.** Use NixOps, raw microvm.nix, or your
+  normal NixOS deployment tooling if the job is headless infrastructure
+  rather than an interactive desktop workspace.
 - **Not a Qubes replacement.** The "reasonably isolated" framing is a
-  nod to Qubes, not an equivalence claim. Nixling shares the host
-  kernel; Qubes uses Xen hypervisor isolation.
-- **Not OCI / container isolation.** Nixling targets full-VM
-  boundaries (cloud-hypervisor / crosvm) for kernel-level
-  separation between workloads; containers share the host kernel
+  nod to Qubes, not an equivalence claim. Nixling composes into a
+  trusted NixOS host and relies on the host Linux/KVM stack; Qubes is a
+  security-oriented OS with Xen-based virtualization, device qubes,
+  disposables, and a much larger security model.
+- **Not a raw microVM toolkit.** microvm.nix is the right layer when you
+  want primitives and are happy to wire networks, keys, store sharing,
+  sidecars, and lifecycle policy yourself. Nixling is for the opinionated
+  desktop workspace shape.
+- **Not [Distrobox] or [Flatpak].** Those are excellent when you want app
+  or distro compatibility tightly integrated with the host. Nixling is
+  for cases where the guest should have its own kernel, network identity,
+  and store/state boundary instead of sharing the host kernel sandbox
   surface.
+- **Not [virt-manager] or [GNOME Boxes].** Those are general-purpose VM
+  frontends. Nixling is declarative NixOS workspace infrastructure with
+  host-side mediation and a narrow daily CLI, not a graphical VM console
+  manager.
+- **Not OCI / NixOS container isolation.** Nixling targets full-VM
+  boundaries (Cloud Hypervisor VMM plus crosvm-backed sidecars today)
+  for kernel-level separation between workloads; containers share the
+  host kernel surface.
 - **Not Spectrum OS or a full OS distribution.** Nixling is a
   framework you compose into an existing NixOS host config; it
   does not replace the host's installer, init, or filesystem
@@ -460,5 +468,9 @@ repo root.
 [microvm.nix]: https://github.com/microvm-nix/microvm.nix
 [Cloud Hypervisor]: https://github.com/cloud-hypervisor/cloud-hypervisor
 [crosvm]: https://github.com/google/crosvm
+[Distrobox]: https://distrobox.it/
+[Flatpak]: https://flatpak.org/
+[virt-manager]: https://virt-manager.org/
+[GNOME Boxes]: https://apps.gnome.org/Boxes/
 [entrablau]: https://github.com/vicondoa/entrablau.nix
 [docs/explanation/design.md]: ./docs/explanation/design.md
