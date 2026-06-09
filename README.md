@@ -35,29 +35,24 @@ Nixling gives you:
 At a high level:
 
 ```mermaid
-flowchart TB
-    human["One Wayland desktop<br/>compositor + nixling CLI"]
-
+flowchart LR
     subgraph host["NixOS host"]
-        daemon["nixlingd<br/>unprivileged supervisor"]
-        broker["nixling-priv-broker<br/>audited host operations"]
-        kvm["/dev/kvm<br/>host CPU virtualization"]
-        vmm["Cloud Hypervisor<br/>per-VM VMM"]
-        sidecars["Sandboxed per-VM sidecars<br/>crosvm GPU, swtpm, USBIP, audio, virtiofsd"]
+        cli["nixling CLI"]
+        desktop["Wayland desktop"]
+        control["nixlingd + privileged broker"]
+        sidecars["mediated sidecars<br/>TPM / USB / audio / graphics / virtiofs"]
+
+        subgraph vm["microVM"]
+            kernel["guest Linux kernel"]
+            apps["workspace apps"]
+            kernel --> apps
+        end
     end
 
-    subgraph guest["Workload microVM"]
-        kernel["guest Linux kernel"]
-        apps["workspace apps"]
-    end
-
-    human --> daemon --> broker
-    broker --> vmm --> kvm
-    broker --> sidecars
-    vmm <--> kernel
-    kernel --> apps
-    sidecars <--> kernel
-    human <--> sidecars
+    cli --> control
+    control --> vm
+    desktop <--> sidecars
+    sidecars <--> vm
 ```
 
 **Quick start** (full walkthroughs under
