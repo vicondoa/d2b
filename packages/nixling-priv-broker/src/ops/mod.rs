@@ -50,6 +50,12 @@ pub mod audit_op;
 // symlink. Replaces the `nixling-<vm>-store-sync.service` bash oneshot.
 pub mod store_sync;
 
+// Out-of-process, mount-namespace-isolated store-view hardlink farm
+// build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
+// so the farm hardlinks succeed even when `/nix/store` is a separate
+// (bind) mount from `/var/lib/nixling`.
+pub mod store_view_farm;
+
 // Per-VM writable store overlay disk-image provisioning. Runs before
 // SpawnRunner when `DiskInit` plan-ops are present.
 pub mod disk_init;
