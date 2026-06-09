@@ -16,14 +16,47 @@ let
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
     else "0";
-  # Host primary compositor socket basename (e.g. wayland-0, or
-  # wayland-1 under niri). Threaded into the GPU sidecar argv + env so
-  # crosvm opens the real host socket. See nixling.site.waylandDisplay.
   waylandDisplay = cfg.site.waylandDisplay;
+  # Real host compositor socket. Used only by the wayland-proxy role;
+  # GPU runners no longer reference this path directly.
   waylandHostSock = "/run/user/${waylandUid}/${waylandDisplay}";
   chVsockConnect = import ./nixling-ch-vsock-connect.nix { inherit pkgs; };
   vhostDeviceSound = import ../pkgs/vhost-device-sound { inherit pkgs; };
   spectrumCH = import ../pkgs/spectrum-ch { inherit pkgs; };
+
+  # nixling-wayland-filter: host-side Wayland filter proxy.
+  # Built from the workspace so the binary path is available for the
+  # wayland-proxy DAG node's binaryPath field.
+  packagesSrc = lib.cleanSourceWith {
+    src = ../packages;
+    filter = path: type:
+      let rel = lib.removePrefix (toString ../packages + "/") (toString path);
+      in !(lib.hasInfix "target" rel || lib.hasInfix ".cargo/registry" rel);
+  };
+  nixlingWaylandFilterPackage = pkgs.rustPlatform.buildRustPackage {
+    pname = "nixling-wayland-filter";
+    version = "0.0.0";
+    src = packagesSrc;
+    cargoLock.lockFile = ../packages/Cargo.lock;
+    cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
+    doCheck = false;
+    postPatch = ''
+      mkdir -p .cargo
+      cat > .cargo/config.toml <<EOF
+[build]
+rustc-wrapper = ""
+EOF
+      rm -f .cargo/rustc-wrapper.sh
+    '';
+    installPhase = ''
+      runHook preInstall
+      install -Dm755 target/x86_64-unknown-linux-gnu/release/nixling-wayland-filter $out/bin/nixling-wayland-filter 2>/dev/null \
+        || install -Dm755 target/release/nixling-wayland-filter $out/bin/nixling-wayland-filter
+      runHook postInstall
+    '';
+  };
+  nixlingWaylandFilterBinary = "${nixlingWaylandFilterPackage}/bin/nixling-wayland-filter";
+
   envPortMap = lib.listToAttrs (
     lib.imap0 (i: envName: {
       name = envName;
@@ -436,6 +469,10 @@ let
     let
       microvm = nl.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
+      # GPU connects to the filter proxy socket, not the real host
+      # compositor. The wayland-proxy DAG node is a readiness
+      # prerequisite so the filter is listening before GPU starts.
+      filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
@@ -445,17 +482,11 @@ let
         "--socket"
         microvm.graphics.socket
         "--wayland-sock"
-        waylandHostSock
+        filterSock
         "--params"
         gpuParams
       ];
-      # (Option B): Wayland + XDG runtime for crosvm
-      # GPU sidecar. The --wayland-sock path is also in argv so
-      # crosvm knows where to bind; XDG_RUNTIME_DIR is for
-      # libwayland's auto-discovery + temporary state.
       env = [
-        "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-        "WAYLAND_DISPLAY=${waylandDisplay}"
         "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib"
       ];
     };
@@ -474,6 +505,7 @@ let
     let
       microvm = nl.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
+      filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
@@ -483,7 +515,7 @@ let
         "--socket"
         microvm.graphics.socket
         "--wayland-sock"
-        waylandHostSock
+        filterSock
         # reference the pre-opened render node fd.
         # The broker dup2'd /dev/dri/renderD128 to fd 10
         # (RENDER_NODE_INHERITED_FD) in the user-NS child before execve.
@@ -493,10 +525,40 @@ let
         gpuParams
       ];
       env = [
-        "XDG_RUNTIME_DIR=/run/user/${waylandUid}"
-        "WAYLAND_DISPLAY=${waylandDisplay}"
         "LD_LIBRARY_PATH=${pkgs.vulkan-loader}/lib"
       ];
+    };
+
+  # wayland-proxy runner: nixling-wayland-filter host-side filter proxy.
+  # Runs as nixling-<vm>-wlproxy, listens on the per-VM filter socket,
+  # and connects upstream to the real host compositor socket (bind-mounted
+  # into the jail by the wayland-proxy minijail profile).
+  waylandProxyRunner = name: vm:
+    let
+      vmName = name;
+      filterSock = "/run/nixling-wlproxy/${vmName}/wayland-0";
+      # The wayland-proxy profile bind-mounts the real compositor at
+      # this fixed in-jail path (see minijail-profiles.nix).
+      upstreamSock = "/run/nixling-wlproxy/${vmName}/upstream";
+      appIdPrefix = "nixling.${vmName}.";
+      titlePrefix = "[${vmName}] ";
+      denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandFilter.denyGlobals;
+      allowArgs = lib.concatMap (g: [ "--allow-global" g ]) vm.graphics.waylandFilter.allowGlobals;
+      maxVersionArgs = lib.concatMap
+        (nameVersion:
+          let parts = lib.splitString "=" nameVersion;
+          in [ "--max-version" nameVersion ])
+        (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
+    in {
+      binaryPath = nixlingWaylandFilterBinary;
+      argv = [
+        "nixling-${vmName}-wlproxy"
+        "--listen" filterSock
+        "--connect" upstreamSock
+        "--vm-name" vmName
+        "--app-id-prefix" appIdPrefix
+        "--title-prefix" titlePrefix
+      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs;
     };
 
   videoBinaryPath = _name:
@@ -722,10 +784,20 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         (unixSocketExists (nl.vmRunner config name).graphics.socket)
       ] ++ lib.optional vm.graphics.virglVideo
         (componentReady "graphics.virglVideo=true");
+      # Whether the host-jailed Wayland filter proxy is emitted for this VM.
+      # Requires graphics.enable, crossDomainTrusted, and waylandFilter.enable.
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      # Resolved GPU node id: gpu-render-node when renderNodeOnly is true.
+      graphicsNodeId = if vm.graphics.renderNodeOnly then "gpu-render-node" else "gpu";
       preVmmNodeIds =
         lib.unique (
           (lib.optionals (vm.graphics.enable && vm.graphics.videoSidecar) [ "video" ])
-          ++ (lib.optionals (vm.graphics.enable && !vm.graphics.videoSidecar) [ "gpu" ])
+          # When the wayland-proxy filter is active, GPU depends on
+          # wayland-proxy (not directly on the gpu/render-node node — gpu
+          # is behind wayland-proxy in the readiness chain). Cloud Hypervisor
+          # waits on gpu/video directly, so preVmmNodeIds still names the
+          # gpu/video node; the wayland-proxy edge is declared separately below.
+          ++ (lib.optionals (vm.graphics.enable && !vm.graphics.videoSidecar) [ graphicsNodeId ])
           ++ (lib.optionals vm.audio.enable [ "audio" ])
           ++ lib.optionals (!vm.graphics.enable && !vm.audio.enable) optionalSidecarBaseNodeIds
         );
@@ -787,6 +859,13 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         role = "video";
         readiness = [ (unixSocketListening "/run/nixling-video/${name}/video.sock") ];
       } // videoRunner name))
+      ++ lib.optional emitWaylandProxy (node name ({
+        id = "wayland-proxy";
+        role = "wayland-proxy";
+        readiness = [
+          (unixSocketListening "/run/nixling-wlproxy/${name}/wayland-0")
+        ];
+      } // waylandProxyRunner name vm))
       ++ lib.optional vm.audio.enable (node name ({
         id = "audio";
         role = "audio";
@@ -862,10 +941,15 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         edgesFromNodes preOptionalNodeIds "vsock-relay" "The vsock relay starts only after runtime/state dirs, taps, cgroup setup, and earlier sidecars are ready."
       )
       ++ lib.optionals vm.graphics.enable (
-        let graphicsNodeId = if vm.graphics.renderNodeOnly then "gpu-render-node" else "gpu"; in
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")
         ++ lib.optional vm.graphics.videoSidecar
           (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
+        # wayland-proxy depends on the GPU sidecar being ready; the GPU
+        # sidecar connects to the filter socket, so wayland-proxy must be
+        # listening before the GPU starts. Emit only when the proxy is
+        # present.
+        ++ lib.optional emitWaylandProxy
+          (edge "wayland-proxy" graphicsNodeId "The GPU sidecar starts only after the Wayland filter proxy is listening on its socket.")
       )
       ++ lib.optionals vm.audio.enable (
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
