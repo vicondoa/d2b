@@ -528,6 +528,57 @@ let
         };
       };
     }
+    // lib.optionalAttrs vm.graphics.enable {
+      # Wayland filter proxy role profile.
+      #
+      # Per ADR 0025: the host-jailed filter proxy sits between the crosvm
+      # GPU sidecar and the real host compositor socket. It runs as a
+      # dedicated `nixling-<vm>-wlproxy` principal with:
+      #   - empty host capabilities (mandatory);
+      #   - mandatory seccompPolicyRef (w1-wayland-proxy) — the proxy
+      #     parses untrusted guest Wayland bytes while holding the host
+      #     compositor socket so a null seccomp policy is rejected fail-closed
+      #     in the broker SpawnRunner handler;
+      #   - no PipeWire/Pulse socket access;
+      #   - dedicated per-VM runtime dir /run/nixling-wlproxy/<vm>;
+      #   - host compositor socket bind-mounted read/write at a fixed
+      #     in-jail upstream path (/run/nixling-wlproxy/<vm>/upstream);
+      #   - no device binds (pure AF_UNIX proxy);
+      #   - explicit RLIMIT_NOFILE headroom for many guest clients and
+      #     fd-bearing Wayland messages (set in argv by Wave 2/Lane A).
+      #
+      # ADR 0021 user namespace pattern is NOT used here: the proxy
+      # binds a listen socket that other processes (including crosvm)
+      # connect to, and user-NS fake-root is unnecessary for AF_UNIX
+      # socket creation. The dedicated non-root host UID with no
+      # capabilities is sufficient (matching the video sidecar posture).
+      "${profileIdFor name "wayland-proxy"}" = mkProfile {
+        profileId = profileIdFor name "wayland-proxy";
+        role = "wayland-proxy";
+        principal = "nixling-${name}-wlproxy";
+        capabilities = [ ];
+        seccompPolicyRef = "w1-wayland-proxy";
+        writablePaths = [
+          (mkWritablePath "/run/nixling-wlproxy/${name}"
+            "Create the per-VM filter listen socket and write runtime state.")
+        ];
+        # Bind-mount the real host compositor socket (read/write) at a
+        # fixed in-jail upstream path so the proxy can connect to it.
+        # The GPU runner's --wayland-sock is repointed to the filter
+        # socket at /run/nixling-wlproxy/<vm>/wayland-0 (Wave 2/Lane C).
+        bindMounts = [
+          { src = waylandHostSock;
+            dst = "/run/nixling-wlproxy/${name}/upstream"; }
+        ];
+        deviceBinds = [ ];
+        cgroupSubtree = "nixling.slice/${name}/wayland-proxy";
+        controllers = serviceControllers;
+        # umask 0o007 so the filter listen socket has mode 0660;
+        # the per-VM runtime dir default ACL then grants crosvm's
+        # named-user entry rw via the cloud-hypervisor UID.
+        umask = 7;
+      };
+    }
     // lib.optionalAttrs vm.audio.enable {
       "${profileIdFor name "audio"}" = mkProfile {
         profileId = profileIdFor name "audio";

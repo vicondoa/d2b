@@ -964,6 +964,13 @@ pub enum RunnerRole {
     /// the role profile. Broker invokes
     /// `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
     OtelHostBridge,
+    /// Host-jailed Wayland filter proxy. Broker invokes
+    /// `nixling_host::wayland_proxy_argv::generate_wayland_proxy_argv`.
+    /// Empty host capabilities; mandatory `seccompPolicyRef`; no
+    /// PipeWire/Pulse socket access. Runs as `nixling-<vm>-wlproxy`
+    /// with the real host compositor socket bound read/write at a
+    /// fixed in-jail upstream path.
+    WaylandProxy,
 }
 
 impl RunnerRole {
@@ -979,6 +986,7 @@ impl RunnerRole {
             Self::VsockRelay => "vsock-relay",
             Self::Usbip => "usbip",
             Self::OtelHostBridge => "otel-host-bridge",
+            Self::WaylandProxy => "wayland-proxy",
         }
     }
 }
@@ -1868,6 +1876,7 @@ mod tests {
             (RunnerRole::VsockRelay, "\"vsock-relay\""),
             (RunnerRole::Usbip, "\"usbip\""),
             (RunnerRole::OtelHostBridge, "\"otel-host-bridge\""),
+            (RunnerRole::WaylandProxy, "\"wayland-proxy\""),
         ];
         for (role, expected) in pairs {
             assert_eq!(serde_json::to_string(&role).unwrap(), expected);

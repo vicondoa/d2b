@@ -142,6 +142,12 @@ pub enum ProcessRole {
     GuestSshReadiness,
     /// USBIP proxy or attach helper.
     Usbip,
+    /// Host-jailed Wayland filter proxy. Runs as `nixling-<vm>-wlproxy`
+    /// with the real host compositor socket bound read/write at a fixed
+    /// in-jail upstream path and the per-VM filter socket at
+    /// `/run/nixling-wlproxy/<vm>`. Empty host capabilities; mandatory
+    /// `seccompPolicyRef`; no PipeWire/Pulse socket access.
+    WaylandProxy,
 }
 
 /// Role-level minijail metadata without kernel-version syscall allowlists.

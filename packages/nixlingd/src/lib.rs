@@ -2607,6 +2607,7 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::Video => VmStartNodeMode::LongLived(RunnerRole::Video),
         ProcessRole::VsockRelay => VmStartNodeMode::LongLived(RunnerRole::VsockRelay),
         ProcessRole::Usbip => VmStartNodeMode::LongLived(RunnerRole::Usbip),
+        ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness => VmStartNodeMode::ReadinessOnly,
@@ -3633,6 +3634,9 @@ fn vm_stop_role_priority(role: Option<RunnerRole>) -> u8 {
         Some(RunnerRole::Gpu) => 1,
         Some(RunnerRole::Audio) => 2,
         Some(RunnerRole::Video) => 3,
+        // WaylandProxy is the upstream for the GPU runner; stop it after
+        // GPU so the GPU runner can close its connection cleanly first.
+        Some(RunnerRole::WaylandProxy) => 3,
         Some(RunnerRole::Usbip) => 4,
         Some(RunnerRole::VsockRelay) => 5,
         // OtelHostBridge is observability infrastructure; stop it before
@@ -7673,6 +7677,7 @@ mod broker_dispatch_tests {
             (ProcessRole::Video, RunnerRole::Video),
             (ProcessRole::VsockRelay, RunnerRole::VsockRelay),
             (ProcessRole::Usbip, RunnerRole::Usbip),
+            (ProcessRole::WaylandProxy, RunnerRole::WaylandProxy),
         ];
         for (role, expected_runner_role) in cases {
             match vm_start_node_mode(&role) {

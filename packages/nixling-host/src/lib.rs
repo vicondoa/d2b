@@ -64,6 +64,9 @@ pub mod usbip_argv;
 // nixling-otel-host-bridge.service with a broker SpawnRunner under
 // RunnerRole::OtelHostBridge.
 pub mod otel_host_bridge_argv;
+// Host-jailed Wayland filter proxy argv generator. Emits argv for the
+// per-VM nixling-<vm>-wlproxy role spawned via RunnerRole::WaylandProxy.
+pub mod wayland_proxy_argv;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.

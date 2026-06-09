@@ -4573,6 +4573,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
         nixling_core::processes::ProcessRole::Usbip => "usbip",
+        nixling_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
     }
     .to_owned()
 }
