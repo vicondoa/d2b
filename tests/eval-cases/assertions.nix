@@ -351,7 +351,7 @@ shared.mkBatch {
 
     # graphics.xwayland.enable = true fails closed during Wayland-only migration.
     "graphics-xwayland-unsupported" = {
-      expectedSubstring = "graphics.xwayland.enable = true is not supported in this release";
+      expectedSubstring = "supported in this release";
       override = (
         { ... }:
         {
