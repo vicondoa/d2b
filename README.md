@@ -14,8 +14,9 @@ If Qubes OS is about reasonable security through compartments, nixling's
 narrower promise is **reasonable isolation for a single-user NixOS
 Wayland desktop**. It is not a new OS and not a Qubes replacement: it
 composes into your existing NixOS host. Workloads run as Linux microVMs
-with cloud-hypervisor plus crosvm-backed sidecars today, with the runner
-contract shaped so additional VMM backends can fit later.
+with their own kernels, accelerated through `/dev/kvm` by
+[Cloud Hypervisor] today. [crosvm] backs GPU/device sidecars today, and
+the runner contract is shaped so additional VMM backends can fit later.
 
 Nixling gives you:
 
@@ -29,7 +30,35 @@ Nixling gives you:
 - **One Wayland desktop:** graphical VMs integrate with the host
   compositor without asking you to live in a separate desktop.
 - **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
-  and the privileged broker; there is no bash fallback path.
+  and the privileged broker for lifecycle, keys, USB, and host prep.
+
+At a high level:
+
+```mermaid
+flowchart TB
+    human["One Wayland desktop<br/>compositor + nixling CLI"]
+
+    subgraph host["NixOS host"]
+        daemon["nixlingd<br/>unprivileged supervisor"]
+        broker["nixling-priv-broker<br/>audited host operations"]
+        kvm["/dev/kvm<br/>host CPU virtualization"]
+        vmm["Cloud Hypervisor<br/>per-VM VMM"]
+        sidecars["Sandboxed per-VM sidecars<br/>crosvm GPU, swtpm, USBIP, audio, virtiofsd"]
+    end
+
+    subgraph guest["Workload microVM"]
+        kernel["guest Linux kernel"]
+        apps["workspace apps"]
+    end
+
+    human --> daemon --> broker
+    broker --> vmm --> kvm
+    broker --> sidecars
+    vmm <--> kernel
+    kernel --> apps
+    sidecars <--> kernel
+    human <--> sidecars
+```
 
 **Quick start** (full walkthroughs under
 [Quick start (Rust CLI / examples)](#quick-start-rust-cli--examples) and
@@ -42,9 +71,6 @@ sudo nixling vm start personal-dev --apply
 # after switching the host config from examples/work-entra
 sudo nixling vm start work-entra --apply
 ```
-
-Every mutating verb dispatches through `nixlingd` →
-`nixling-priv-broker`.
 
 Other entry points: see [Where to start](#where-to-start) below for a
 table of the doc-friendly example aliases (`personal-dev`,
@@ -61,9 +87,11 @@ Wayland desktop for the human.
 
 - Put work, personal, and risky-dev environments on the same laptop
   without sharing their guest OS state or workload LANs.
+- Give each workspace its own Linux kernel while still using the host
+  CPU through KVM-backed VMMs.
 - Keep host interaction intentional: graphics, audio, USB, TPM, and
-  filesystem access are mediated by declared sidecars and brokered host
-  operations.
+  filesystem access are mediated by sandboxed host-side virtualization
+  processes and brokered host operations.
 - Stay Nix-native: VM config, network shape, keys, store closure, and
   control-plane manifests are derived from the same host flake.
 - Use a daily CLI instead of a pile of per-VM scripts and one-off
@@ -423,5 +451,7 @@ the operational manual lives in [`AGENTS.md`](./AGENTS.md) at the
 repo root.
 
 [microvm.nix]: https://github.com/microvm-nix/microvm.nix
+[Cloud Hypervisor]: https://github.com/cloud-hypervisor/cloud-hypervisor
+[crosvm]: https://github.com/google/crosvm
 [entrablau]: https://github.com/vicondoa/entrablau.nix
 [docs/explanation/design.md]: ./docs/explanation/design.md
