@@ -373,38 +373,7 @@ pub mod path_safe {
         let (parent, name) = parent_and_name(&full)?;
         let parent_fd = open_dir_path_safe(&parent)?;
         let (_, result) =
-            ensure_dir_path_safe_inner(&parent_fd, &name, mode, owner_uid, owner_gid, true)?;
-        Ok(result)
-    }
-
-    /// Like [`ensure_dir`] but does NOT re-assert ownership/mode on an
-    /// *existing* directory; it only applies `mode`/owner to a dir it
-    /// freshly CREATES.
-    ///
-    /// Used by the vm-start per-VM root prepares (`PrepareStateDir` /
-    /// `PrepareRuntimeDir`). Host activation establishes the per-VM
-    /// root as `nixlingd:users 2770` plus per-runner POSIX ACLs (see
-    /// `nixos-modules/host-activation.nix`); re-`fchmod`/`fchown`-ing it
-    /// to a single runner principal on every reconcile clobbered that
-    /// posture — clipping the ACL mask to `r-x` (so virtiofsd/gpu/video
-    /// lost write access to their per-VM runtime dir) and flipping the
-    /// owner to an unresolvable runner uid (tripping the daemon's
-    /// ownership-matrix preflight on the next start). The matrix
-    /// preflight is the authoritative correctness gate and fail-closes
-    /// on real drift, so the prepare step only needs to guarantee
-    /// existence, not re-stamp metadata.
-    pub fn ensure_dir_preserve_existing(
-        path: &Path,
-        mode: u32,
-        owner_uid: Option<u32>,
-        owner_gid: Option<u32>,
-    ) -> io::Result<DirCreateResult> {
-        let full = resolve_path(path)?;
-        refuse_world_writable_parent(&full)?;
-        let (parent, name) = parent_and_name(&full)?;
-        let parent_fd = open_dir_path_safe(&parent)?;
-        let (_, result) =
-            ensure_dir_path_safe_inner(&parent_fd, &name, mode, owner_uid, owner_gid, false)?;
+            ensure_dir_path_safe_inner(&parent_fd, &name, mode, owner_uid, owner_gid)?;
         Ok(result)
     }
 
@@ -1017,11 +986,6 @@ pub mod path_safe {
         mode: u32,
         owner_uid: Option<u32>,
         owner_gid: Option<u32>,
-        // When `false`, an EXISTING directory's mode + ownership are
-        // left untouched (only a freshly CREATED dir gets `mode` +
-        // owner). See `ensure_dir_preserve_existing` for why the
-        // vm-start per-VM root prepares must not re-stamp metadata.
-        reassert_metadata: bool,
     ) -> io::Result<(OwnedFd, DirCreateResult)> {
         use rustix::fs::OFlags;
 
@@ -1033,11 +997,9 @@ pub mod path_safe {
             OFlags::RDONLY | OFlags::DIRECTORY,
         ) {
             Ok(fd) => {
-                if reassert_metadata {
-                    fchmod(fd.as_fd(), mode)?;
-                    if owner_uid.is_some() || owner_gid.is_some() {
-                        fchown(fd.as_fd(), owner_uid, owner_gid)?;
-                    }
+                fchmod(fd.as_fd(), mode)?;
+                if owner_uid.is_some() || owner_gid.is_some() {
+                    fchown(fd.as_fd(), owner_uid, owner_gid)?;
                 }
                 return Ok((fd, DirCreateResult::Reused));
             }
@@ -1057,20 +1019,9 @@ pub mod path_safe {
             relative,
             OFlags::RDONLY | OFlags::DIRECTORY,
         )?;
-        // Apply mode + ownership only when WE created the dir, or when
-        // the caller asked to re-assert metadata. The `created == false`
-        // case here is the `mkdirat` EEXIST race: a concurrent actor
-        // (e.g. host activation) created the per-VM root between our
-        // initial open (which returned NotFound) and this `mkdirat`.
-        // Re-stamping it then would defeat `ensure_dir_preserve_existing`
-        // exactly as the always-fchmod path did — clipping the ACL mask
-        // / chowning to a runner principal. Treat that raced dir like
-        // any other pre-existing dir and leave its metadata intact.
-        if created || reassert_metadata {
-            fchmod(fd.as_fd(), mode)?;
-            if owner_uid.is_some() || owner_gid.is_some() {
-                fchown(fd.as_fd(), owner_uid, owner_gid)?;
-            }
+        fchmod(fd.as_fd(), mode)?;
+        if owner_uid.is_some() || owner_gid.is_some() {
+            fchown(fd.as_fd(), owner_uid, owner_gid)?;
         }
         Ok((
             fd,
@@ -1089,7 +1040,7 @@ pub mod path_safe {
         owner_uid: u32,
         owner_gid: u32,
     ) -> io::Result<OwnedFd> {
-        ensure_dir_path_safe_inner(parent_fd, name, mode, Some(owner_uid), Some(owner_gid), true)
+        ensure_dir_path_safe_inner(parent_fd, name, mode, Some(owner_uid), Some(owner_gid))
             .map(|(fd, _)| fd)
     }
 

@@ -144,12 +144,7 @@ pub fn run_store_sync(
         generation_number: resolved_u32,
     };
 
-    // Build the farm hardlinks inside a private mount namespace where
-    // `/nix/store` is lazily detached, so the build succeeds even when
-    // `/nix/store` is a separate (bind) mount from `/var/lib/nixling`.
-    // `swap_current_symlink` below only creates a symlink (no `link(2)`
-    // cross-mount hazard) so it stays in-process.
-    crate::ops::store_view_farm::build_farm_cross_mount_safe(
+    hardlink_farm::build_farm(
         &intent.hardlink_farm_path,
         resolved_generation,
         &intent.closure_paths,

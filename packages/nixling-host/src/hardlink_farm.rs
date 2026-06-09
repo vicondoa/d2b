@@ -34,45 +34,17 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-/// `EXDEV` ("Invalid cross-device link") errno. `link(2)` returns this
-/// when source and destination are on different mounts. Defined locally
-/// so this `#![forbid(unsafe_code)]` crate needs no `libc` dependency
-/// for a single integer constant.
-const EXDEV: i32 = 18;
-
-/// `EMLINK` ("Too many links") errno. `link(2)` returns this when the
-/// source inode is already at the filesystem's maximum hardlink count
-/// (ext4 `EXT4_LINK_MAX` = 65000). Defined locally for the same reason
-/// as [`EXDEV`].
-const EMLINK: i32 = 31;
-
 /// Errors the hardlink-farm primitives can return.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum HardlinkFarmError {
-    /// Two paths live on genuinely different filesystems (distinct
-    /// `st_dev`). Hardlinks across filesystems are impossible; the
-    /// store-view farm cannot be built and this is FATAL — no mount
-    /// namespace can help. Detected up-front by [`assert_same_filesystem`]
-    /// before any `link(2)`.
+    /// Two paths live on different filesystems. Hardlinks across
+    /// filesystems are illegal per POSIX `link(2)` (EXDEV).
     DifferentFilesystem {
         a: String,
         a_dev: u64,
         b: String,
         b_dev: u64,
-    },
-    /// `link(2)` returned `EXDEV` even though source and destination
-    /// share the same `st_dev` — i.e. they are on the same underlying
-    /// filesystem but in different *vfsmounts* (the canonical case is
-    /// NixOS bind-mounting `/nix/store` read-only on top of itself).
-    /// Unlike [`DifferentFilesystem`] this is RECOVERABLE: building the
-    /// farm inside a private mount namespace where `/nix/store` is
-    /// lazily detached makes the two paths share one mount and the
-    /// hardlink succeeds.
-    CrossMountLink {
-        source: String,
-        destination: String,
-        dev: u64,
     },
     /// Generation directory exists but lacks the `marker.json` the
     /// activate path expects. Refuses to activate an
@@ -101,15 +73,6 @@ impl std::fmt::Display for HardlinkFarmError {
             Self::DifferentFilesystem { a, a_dev, b, b_dev } => write!(
                 f,
                 "paths on different filesystems: {a} (dev={a_dev}) vs {b} (dev={b_dev})"
-            ),
-            Self::CrossMountLink {
-                source,
-                destination,
-                dev,
-            } => write!(
-                f,
-                "cross-mount hardlink refused (EXDEV) on same filesystem (dev={dev}): \
-                 {source} -> {destination}"
             ),
             Self::MarkerMissing { generation_dir } => write!(
                 f,
@@ -154,30 +117,6 @@ pub struct GenerationMarker {
     /// Generation number; redundant with the directory name but
     /// pinned in the marker so a rename can be detected.
     pub generation_number: u32,
-}
-
-/// Wire request for an out-of-process store-view farm build.
-///
-/// The privileged broker serialises this to a subprocess that runs
-/// the hardlink farm build inside a private mount namespace where
-/// `/nix/store` is lazily detached (so cross-vfsmount `link(2)` EXDEV
-/// — the NixOS `/nix/store` self-bind-mount — does not block the
-/// hardlinks). The subprocess deserialises it and calls [`build_farm`].
-/// Kept here, next to [`build_farm`] + [`GenerationMarker`], so the
-/// broker (serialiser) and the `nixling-activation-helper` binary
-/// (deserialiser) share one definition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BuildStoreViewFarmRequest {
-    /// Per-VM farm root (`.../store-view`), not the generation dir.
-    pub farm_root: PathBuf,
-    /// Content-derived u32 generation number (carried as u64 to match
-    /// [`build_farm`]'s signature; validated to fit u32 upstream).
-    pub generation: u64,
-    /// Absolute `/nix/store/<...>` closure paths to hardlink in.
-    pub closure_paths: Vec<PathBuf>,
-    /// Marker pinned into `generations/<N>/marker.json`.
-    pub marker: GenerationMarker,
 }
 
 /// Returns `Ok(())` iff `a` and `b` live on the same filesystem
@@ -379,96 +318,16 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                 detail: "existing destination is not a file".to_owned(),
             });
         }
-        if let Err(e) = std::fs::hard_link(source, destination) {
-            let src_dev = std::fs::metadata(source).map(|m| m.dev()).unwrap_or(0);
-            let dst_dev = destination
-                .parent()
-                .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.dev())
-                .unwrap_or(0);
-            match classify_link_failure(e.raw_os_error(), src_dev, dst_dev) {
-                // EXDEV on the SAME `st_dev`: source + destination are on
-                // one underlying filesystem but different vfsmounts (the
-                // NixOS `/nix/store` self-bind-mount). RECOVERABLE — the
-                // broker retries inside a mount namespace where
-                // `/nix/store` is lazily detached.
-                LinkFailure::CrossMount => {
-                    return Err(HardlinkFarmError::CrossMountLink {
-                        source: source.display().to_string(),
-                        destination: destination.display().to_string(),
-                        dev: src_dev,
-                    });
-                }
-                // EXDEV on DIFFERENT `st_dev`: genuinely different
-                // filesystems (should already have been caught by
-                // `assert_same_filesystem`). FATAL — no namespace helps.
-                LinkFailure::DifferentFilesystem => {
-                    return Err(HardlinkFarmError::DifferentFilesystem {
-                        a: source.display().to_string(),
-                        a_dev: src_dev,
-                        b: destination.display().to_string(),
-                        b_dev: dst_dev,
-                    });
-                }
-                // EMLINK: the SOURCE inode is at the filesystem hardlink
-                // ceiling (ext4 `EXT4_LINK_MAX` = 65000). `nix-store
-                // --optimise` dedups every empty/tiny file onto a single
-                // inode, so a long-lived host saturates those inodes —
-                // after which no NEW hardlink to them can be created, in
-                // ANY mount namespace (the limit is per-inode). Fall back
-                // to a byte copy: the store file is read-only so the farm
-                // view is identical, only already-saturated
-                // (overwhelmingly empty) inodes pay the copy, and the copy
-                // does not share the source inode (strictly safer for the
-                // "never mutate a shared store inode" invariant).
-                LinkFailure::CopyFallback => {
-                    std::fs::copy(source, destination).map_err(|ce| HardlinkFarmError::Io {
-                        path: destination.display().to_string(),
-                        detail: format!("copy fallback after EMLINK: {ce}"),
-                    })?;
-                    return Ok(());
-                }
-                LinkFailure::Other => {
-                    return Err(HardlinkFarmError::Io {
-                        path: destination.display().to_string(),
-                        detail: e.to_string(),
-                    });
-                }
-            }
-        }
+        std::fs::hard_link(source, destination).map_err(|e| HardlinkFarmError::Io {
+            path: destination.display().to_string(),
+            detail: e.to_string(),
+        })?;
         return Ok(());
     }
     Err(HardlinkFarmError::Io {
         path: source.display().to_string(),
         detail: "unsupported store path file type".to_owned(),
     })
-}
-
-/// Classification of a `link(2)` failure, used by [`hardlink_tree`] to
-/// route the error. Kept as a pure function of `(errno, src_dev,
-/// dst_dev)` so the EXDEV-vs-EMLINK branching can be unit-tested without
-/// fabricating a cross-mount or a 65000-link inode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LinkFailure {
-    /// EXDEV with matching `st_dev`: cross-vfsmount, retryable in a
-    /// private mount namespace.
-    CrossMount,
-    /// EXDEV with differing `st_dev`: genuinely different filesystems,
-    /// fatal.
-    DifferentFilesystem,
-    /// EMLINK: source inode at the hardlink ceiling, fall back to copy.
-    CopyFallback,
-    /// Any other errno: propagate as a generic I/O error.
-    Other,
-}
-
-fn classify_link_failure(raw_os_error: Option<i32>, src_dev: u64, dst_dev: u64) -> LinkFailure {
-    match raw_os_error {
-        Some(EXDEV) if src_dev == dst_dev => LinkFailure::CrossMount,
-        Some(EXDEV) => LinkFailure::DifferentFilesystem,
-        Some(EMLINK) => LinkFailure::CopyFallback,
-        _ => LinkFailure::Other,
-    }
 }
 
 /// Read + parse the per-generation marker. Refuses to activate any
@@ -585,41 +444,6 @@ pub fn reconcile_stale_swap_tmp(store_root: &Path) -> Result<(), HardlinkFarmErr
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn classify_link_failure_routes_each_errno() {
-        // EXDEV with matching st_dev -> retryable cross-mount.
-        assert_eq!(
-            classify_link_failure(Some(EXDEV), 42, 42),
-            LinkFailure::CrossMount
-        );
-        // EXDEV with differing st_dev -> fatal different-filesystem.
-        assert_eq!(
-            classify_link_failure(Some(EXDEV), 42, 99),
-            LinkFailure::DifferentFilesystem
-        );
-        // EMLINK -> copy fallback regardless of devs.
-        assert_eq!(
-            classify_link_failure(Some(EMLINK), 42, 42),
-            LinkFailure::CopyFallback
-        );
-        assert_eq!(
-            classify_link_failure(Some(EMLINK), 42, 99),
-            LinkFailure::CopyFallback
-        );
-        // Anything else -> generic Other (propagated as Io).
-        assert_eq!(
-            classify_link_failure(Some(libc_eacces()), 42, 42),
-            LinkFailure::Other
-        );
-        assert_eq!(classify_link_failure(None, 42, 42), LinkFailure::Other);
-    }
-
-    // EACCES = 13; a representative "some other errno" without pulling in
-    // libc just for the constant.
-    fn libc_eacces() -> i32 {
-        13
-    }
 
     fn make_marker(gen: u32) -> GenerationMarker {
         GenerationMarker {

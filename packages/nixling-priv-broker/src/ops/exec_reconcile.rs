@@ -544,7 +544,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
             u32::try_from(intent.generation).map_err(|_| ReconcileExecError::InvalidInput {
                 detail: format!("generation {} exceeds u32", intent.generation),
             })?;
-        let generation_dir = crate::ops::store_view_farm::build_farm_cross_mount_safe(
+        let generation_dir = hardlink_farm::build_farm(
             &intent.hardlink_farm_path,
             intent.generation,
             &intent.closure_paths,
@@ -565,15 +565,6 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                 detail: "target store-view path missing after hardlink-farm build".to_owned(),
             });
         }
-        // Publish the freshly-built generation as the active store view
-        // by atomically swapping `store-view/current -> generations/<N>`.
-        // This stable `current` symlink is what virtiofsd-ro-store serves
-        // as the guest's `/nix/store` (closure-only). Without it the
-        // guest would fall back to the host's full `/nix/store`. The swap
-        // only manipulates a symlink (no cross-mount `link(2)` hazard) so
-        // it stays in-process.
-        hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, generation_number)
-            .map_err(map_hardlink_farm_error)?;
         Ok(())
     }
 
@@ -857,22 +848,6 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
         HardlinkFarmError::DifferentFilesystem { a, a_dev, b, b_dev } => {
             ReconcileExecError::DifferentFilesystem { a, a_dev, b, b_dev }
         }
-        // CrossMountLink is normally consumed by
-        // `store_view_farm::build_farm_cross_mount_safe` (which retries
-        // in a mount namespace). If it reaches here it means even the
-        // namespaced build still hit a same-fs cross-mount EXDEV — map
-        // it to DifferentFilesystem so the broker surfaces the typed
-        // store-view filesystem error rather than a generic I/O error.
-        HardlinkFarmError::CrossMountLink {
-            source,
-            destination,
-            dev,
-        } => ReconcileExecError::DifferentFilesystem {
-            a: source,
-            a_dev: dev,
-            b: destination,
-            b_dev: dev,
-        },
         HardlinkFarmError::MarkerMissing { generation_dir } => {
             ReconcileExecError::MarkerMissing { generation_dir }
         }

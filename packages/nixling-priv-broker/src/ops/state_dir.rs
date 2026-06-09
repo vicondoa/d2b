@@ -7,7 +7,7 @@
 
 use crate::ops::exec_reconcile::SystemLiveExec;
 use crate::ops::hosts::stable_hash_str;
-use crate::sys::path_safe::{ensure_dir, ensure_dir_preserve_existing, DirCreateResult};
+use crate::sys::path_safe::{ensure_dir, DirCreateResult};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -62,14 +62,7 @@ pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
     if production_path(&req.base_dir) {
         crate::sys::path_safe::refuse_non_root_parent(&req.base_dir)?;
     }
-    // The per-VM root base dir is created + owned by host activation
-    // (`nixos-modules/host-ssh-host-keys.nix`: `install -d -m 2770 -o
-    // nixlingd -g users`) and carries per-runner POSIX ACLs. Preserve
-    // that posture on an existing dir instead of re-stamping it to a
-    // single runner principal (which clipped the ACL mask + tripped the
-    // ownership-matrix preflight). Created subdirs below still get the
-    // requested metadata.
-    let base_audit = ensure_dir_preserve_existing(
+    let base_audit = ensure_dir(
         &req.base_dir,
         req.mode,
         Some(req.owner_uid),
@@ -147,7 +140,7 @@ pub fn live_prepare_runtime_dir(
             operation: "PrepareRuntimeDir",
             subject: req.vm_id.as_str().to_owned(),
         })?;
-    ensure_dir_preserve_existing(
+    ensure_dir(
         &intent.base_dir,
         intent.mode,
         Some(intent.owner_uid),
@@ -180,7 +173,7 @@ pub fn live_prepare_state_dir(
             operation: "PrepareStateDir",
             subject: req.vm_id.as_str().to_owned(),
         })?;
-    ensure_dir_preserve_existing(
+    ensure_dir(
         &intent.base_dir,
         intent.mode,
         Some(intent.owner_uid),
@@ -258,71 +251,6 @@ mod tests {
             second.replace_or_create_result,
             ReplaceOrCreateResult::Reused
         );
-        fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn preserves_existing_base_dir_mode_instead_of_restamping() {
-        // Regression: vm-start's per-VM root prepare must NOT re-stamp
-        // mode/ownership on an EXISTING dir. Host activation creates the
-        // per-VM root as `nixlingd:users 2770` with per-runner POSIX
-        // ACLs; re-`fchmod`-ing it to the prepare's mode clipped the ACL
-        // mask to the group bits (so virtiofsd/gpu/video lost write
-        // access to their per-VM runtime dir). Owner preservation needs
-        // root to assert (chown), so this checks the MODE axis, which
-        // exercises the same `reassert_metadata = false` reuse branch.
-        let dir = scratch();
-        let base = dir.join("state");
-        // Pre-create the base dir with the activation-shaped 2770 mode.
-        fs::create_dir_all(&base).unwrap();
-        fs::set_permissions(&base, fs::Permissions::from_mode(0o2770)).unwrap();
-        let req = PrepareDirRequest {
-            kind: DirKind::StateDir,
-            base_dir: base.clone(),
-            vm_id_or_scope: "vm-a".into(),
-            // The prepare asks for 0o750 — the mask-clipping value the
-            // regression came from. It MUST be ignored for the existing
-            // dir.
-            mode: 0o750,
-            owner_uid: nix::unistd::geteuid().as_raw(),
-            owner_gid: nix::unistd::getegid().as_raw(),
-            created_paths: vec![],
-        };
-        let audit = prepare_dir(&req).unwrap();
-        assert_eq!(
-            audit.replace_or_create_result,
-            ReplaceOrCreateResult::Reused
-        );
-        let got = fs::metadata(&base).unwrap().permissions().mode() & 0o7777;
-        assert_eq!(
-            got, 0o2770,
-            "existing base dir mode must be preserved, not restamped to 0o750 (got {got:o})"
-        );
-        fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn fresh_base_dir_still_receives_requested_mode() {
-        // The preserve-existing behavior must only apply to EXISTING
-        // dirs; a freshly created base dir still gets the requested mode.
-        let dir = scratch();
-        let base = dir.join("state");
-        let req = PrepareDirRequest {
-            kind: DirKind::StateDir,
-            base_dir: base.clone(),
-            vm_id_or_scope: "vm-a".into(),
-            mode: 0o2770,
-            owner_uid: nix::unistd::geteuid().as_raw(),
-            owner_gid: nix::unistd::getegid().as_raw(),
-            created_paths: vec![],
-        };
-        let audit = prepare_dir(&req).unwrap();
-        assert_eq!(
-            audit.replace_or_create_result,
-            ReplaceOrCreateResult::Created
-        );
-        let got = fs::metadata(&base).unwrap().permissions().mode() & 0o7777;
-        assert_eq!(got, 0o2770, "fresh base dir must get the requested mode");
         fs::remove_dir_all(dir).ok();
     }
 

@@ -369,21 +369,6 @@ let
       # are dropped: /nix/store has no ACLs, and the per-VM shares
       # are nixling-managed (no foreign xattrs to preserve).
       isRoStore = share.source == "/nix/store";
-      # SECURITY (per-VM store isolation): the ro-store share's guest
-      # `/nix/store` must expose ONLY this VM's closure, never the host's
-      # full `/nix/store`. `share.source` stays `/nix/store` as the
-      # eval-time sentinel that the guest-mount + overlay + readiness
-      # logic keys off, but virtiofsd is pointed at the per-VM hardlink
-      # farm `<stateDir>/<vm>/store` — the canonical closure-only per-VM
-      # store (see AGENTS.md "Per-VM /nix/store hardlink farm" +
-      # nixos-modules/store.nix). virtiofsd still execs from the real host
-      # `/nix/store` (kept mounted in its runner namespace) and only
-      # *serves* the farm, so the guest sees a closure-only store. This
-      # replaces the previous `--shared-dir=/nix/store`, which leaked the
-      # host's entire store into every guest. Mirrors the legacy
-      # `BindReadOnlyPaths /nix/store -> per-VM farm` behaviour.
-      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store";
-      sharedDir = if isRoStore then roStoreSharedDir else toString share.source;
     in {
       binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
       argv = [
@@ -392,7 +377,7 @@ let
       ]
       ++ lib.optionals (microvm.virtiofsd.group != null) [ "--socket-group=${microvm.virtiofsd.group}" ]
       ++ [
-        "--shared-dir=${sharedDir}"
+        "--shared-dir=${toString share.source}"
         "--thread-pool-size"
         (resolvedVirtiofsdThreadPoolSize microvm)
         "--sandbox=chroot"
