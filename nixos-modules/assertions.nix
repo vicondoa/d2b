@@ -268,6 +268,25 @@ let
         '';
       }
       {
+        # Xwayland is intentionally unsupported during the Wayland-only
+        # migration to wl-cross-domain-proxy + nixling-wayland-filter.
+        # The previous wayland-proxy-virtwl had --xwayland-binary support;
+        # wl-cross-domain-proxy is a plain cross-domain transport and
+        # carries no Xwayland helper. A standalone host-side Xwayland
+        # proxy is tracked as future work.
+        assertion = !(vm.enable && vm.graphics.xwayland.enable);
+        message = ''
+          nixling.vms.${name}.graphics.xwayland.enable = true is not
+          supported in this release.
+
+          The guest Wayland transport has been replaced with
+          wl-cross-domain-proxy, which does not include an Xwayland
+          helper. X11 support is tracked as future work.
+
+          Remediation: set graphics.xwayland.enable = false (the default).
+        '';
+      }
+      {
         # primary error path (per ADR 0015): the
         # `mkRemovedOptionModule` shim approach is incompatible
         # with `attrsOf submodule` semantics (no `assertions` option

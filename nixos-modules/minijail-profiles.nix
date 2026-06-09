@@ -426,14 +426,7 @@ let
           "/dev/nvidia-uvm"
           "/dev/udmabuf"
         ];
-        # Cross-domain Wayland: broker mounts the host's
-        # `/run/user/<waylandUser-uid>/<waylandDisplay>` socket into the
-        # sidecar's mount namespace at the role-local in-sandbox
-        # path so the sidecar can never traverse `/run/user/<uid>`.
-        bindMounts = [
-          { src = waylandHostSock;
-            dst = "${gpuRuntimeDirOf name}/wayland-0"; }
-        ];
+        bindMounts = [ ];
         cgroupSubtree = "nixling.slice/${name}/gpu";
         controllers = serviceControllers;
       };
@@ -511,11 +504,10 @@ let
         # via fd inheritance (RENDER_NODE_INHERITED_FD = 10 protocol
         # constant in nixling-priv-broker/src/sys.rs). No bind-mount.
         deviceBinds = [ ];
-        # Cross-domain Wayland: same socket bind as the legacy gpu profile.
-        bindMounts = [
-          { src = waylandHostSock;
-            dst = "${gpuRuntimeDirOf name}/wayland-0"; }
-        ];
+        # No real host compositor bind-mount: the GPU runner connects to
+        # the per-VM filter socket at /run/nixling-wlproxy/<vm>/wayland-0.
+        # The wayland-proxy profile holds the real compositor bind-mount.
+        bindMounts = [ ];
         cgroupSubtree = "nixling.slice/${name}/gpu";
         controllers = serviceControllers;
         # (ADR 0021) Broker pre-creates a user NS mapping

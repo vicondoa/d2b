@@ -313,6 +313,7 @@ BATCHED_CASES=(
   platform-gate-graphics-aarch64
   platform-gate-audio-aarch64
   graphics-with-autostart
+  graphics-xwayland-unsupported
   audit-without-observability
   observability-reserved-cid
   principal-uid-collision
