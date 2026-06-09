@@ -15,8 +15,7 @@ use std::{
 };
 use wl_proxy::{
     client::{Client, ClientHandler},
-    global_mapper::GlobalMapper,
-    object::{Object, ObjectRcUtils},
+    object::{Object, ObjectCoreApi, ObjectRcUtils},
     protocols::{
         wayland::{
             wl_display::{WlDisplay, WlDisplayHandler},
@@ -84,48 +83,28 @@ impl WlDisplayHandler for FilterDisplayHandler {
 
 /// Per-registry handler: filters globals and intercepts binds.
 ///
-/// Uses `GlobalMapper` to manage client/server name translation.
-/// Maintains a parallel set of client names we actually advertised so that
-/// bind attempts for unadvertised names can be detected and logged.
+/// Match wl-veil's approach: preserve compositor-provided global names for
+/// forwarded globals, suppress denied globals, and track which names were
+/// advertised to reject binds for hidden/unadvertised names. Avoid remapping
+/// registry names here; wl-proxy's generated object handling already manages
+/// client/server object ID translation for bound objects.
 pub struct FilterRegistryHandler {
     policy: Rc<FilterPolicy>,
-    mapper: GlobalMapper,
     diag: Rc<RefCell<DiagRateLimiter>>,
-    /// Server names we explicitly ignored (mapped to None in the mapper).
-    /// Used to distinguish hidden-global bind attempts from
-    /// completely-unadvertised bind attempts in diagnostic messages.
-    ignored_server_names: HashSet<u32>,
-    /// Client names we actually advertised.
-    advertised_client_names: BTreeSet<u32>,
-    /// Tracks the next client_name the mapper will assign.
-    /// GlobalMapper initialises `client_to_server` with one sentinel element
-    /// (index 0 → None), so the first forwarded global gets name 1.
-    next_mapper_client_name: u32,
+    /// Server global names intentionally hidden from this client.
+    hidden_globals: HashSet<u32>,
+    /// Server global names actually advertised to this client.
+    advertised_globals: BTreeSet<u32>,
 }
 
 impl FilterRegistryHandler {
     pub fn new(policy: Rc<FilterPolicy>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             policy,
-            mapper: GlobalMapper::default(),
             diag,
-            ignored_server_names: HashSet::new(),
-            advertised_client_names: BTreeSet::new(),
-            next_mapper_client_name: 1,
+            hidden_globals: HashSet::new(),
+            advertised_globals: BTreeSet::new(),
         }
-    }
-
-    /// Record the client_name that GlobalMapper will assign to the next
-    /// `forward_global` call, then bump the counter.
-    fn record_forward(&mut self) {
-        self.advertised_client_names
-            .insert(self.next_mapper_client_name);
-        self.next_mapper_client_name += 1;
-    }
-
-    /// Record a server name that we explicitly ignored.
-    fn record_ignore(&mut self, server_name: u32) {
-        self.ignored_server_names.insert(server_name);
     }
 }
 
@@ -144,39 +123,42 @@ impl WlRegistryHandler for FilterRegistryHandler {
             if self.policy.log_filtered_globals {
                 self.diag.borrow_mut().global_filtered(iface_name);
             }
-            self.mapper.ignore_global(name);
-            self.record_ignore(name);
+            self.hidden_globals.insert(name);
             return;
         };
 
         let adv_version = self.policy.advertised_version(iface_name, version);
-        self.record_forward();
-        self.mapper
-            .forward_global(slf, name, interface, adv_version);
+        self.advertised_globals.insert(name);
+        slf.send_global(name, interface, adv_version);
     }
 
     fn handle_global_remove(&mut self, slf: &Rc<WlRegistry>, name: u32) {
-        self.mapper.forward_global_remove(slf, name);
+        if self.hidden_globals.remove(&name) {
+            return;
+        }
+        self.advertised_globals.remove(&name);
+        slf.send_global_remove(name);
     }
 
     fn handle_bind(&mut self, slf: &Rc<WlRegistry>, name: u32, id: Rc<dyn Object>) {
         // Detect and log bind attempts for names that were never advertised
         // to this client or that were explicitly hidden.
-        if !self.advertised_client_names.contains(&name) {
-            let reason = if self.ignored_server_names.contains(&name) {
-                // The server_name is in our ignored set — but wait, `name` here
-                // is a CLIENT name, not a server name.  The ignored set is keyed
-                // by server names.  We cannot distinguish the two cases purely
-                // from the client name without a reverse map into GlobalMapper
-                // internals.  Use "hidden" as a conservative label when the
-                // client_name is out of the advertised range and the mapper
-                // would have assigned it to an ignored server_name.
+        if !self.advertised_globals.contains(&name) {
+            let reason = if self.hidden_globals.contains(&name) {
                 DropReason::BindDeniedHidden
             } else {
                 DropReason::BindDeniedUnadvertised
             };
             self.diag.borrow_mut().bind_denied(reason, name);
-            // Drop `id` without forwarding — fail-closed.
+            // The wl-proxy decoder has already registered the newly requested
+            // client object ID before this handler runs. Since the bind is not
+            // forwarded, keeping the client alive would leak that ID in the
+            // client's object table. Denied binds are protocol violations
+            // against our filtered registry, so fail closed by dropping the
+            // offending client connection.
+            if let Some(client) = id.client() {
+                client.disconnect();
+            }
             drop(id);
             return;
         }
@@ -189,7 +171,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
             });
         }
 
-        self.mapper.forward_bind(slf, name, &id);
+        slf.send_bind(name, id);
     }
 }
 
@@ -285,17 +267,18 @@ mod tests {
     }
 
     #[test]
-    fn ignored_globals_do_not_consume_mapper_client_names() {
+    fn filtered_globals_preserve_original_global_names() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut handler = FilterRegistryHandler::new(policy(), diag);
 
-        handler.record_forward();
-        handler.record_ignore(42);
-        handler.record_forward();
+        handler.advertised_globals.insert(7);
+        handler.hidden_globals.insert(42);
+        handler.advertised_globals.insert(99);
 
-        assert!(handler.advertised_client_names.contains(&1));
-        assert!(handler.advertised_client_names.contains(&2));
-        assert!(!handler.advertised_client_names.contains(&3));
+        assert!(handler.advertised_globals.contains(&7));
+        assert!(handler.advertised_globals.contains(&99));
+        assert!(handler.hidden_globals.contains(&42));
+        assert!(!handler.advertised_globals.contains(&42));
     }
 
     #[test]
