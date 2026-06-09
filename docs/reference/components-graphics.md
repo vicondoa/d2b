@@ -9,15 +9,18 @@
 Exposes a virtio-gpu device to the guest and forwards Wayland clients
 running inside the VM to the host compositor over the virtio-gpu
 cross-domain channel. The guest sees a normal Wayland session
-(`WAYLAND_DISPLAY=wayland-1`, `GDK_BACKEND=wayland`, etc.); a
-`wayland-proxy-virtwl` user service inside the guest relays surfaces
-to the host's `wayland-0` socket via virtio-gpu. The hypervisor is
-forced to the vendored spectrum-os Cloud Hypervisor build. `nixlingd`
-supervises the daemon-owned process DAG and asks `nixling-priv-broker`
-to spawn the GPU sidecar (`crosvm device gpu`) and the
-cloud-hypervisor runner as pidfd-tracked runners. The GPU sidecar runs
-as the dedicated per-VM `nixling-<vm>-gpu` system user, not as the
-operator's Wayland user.
+(`WAYLAND_DISPLAY=wayland-1`, `GDK_BACKEND=wayland`, etc.).
+
+When `graphics.crossDomainTrusted = true` and
+`graphics.waylandFilter.enable = true`, the guest-side
+`wl-cross-domain-proxy` bridges the virtio-gpu cross-domain transport to
+the guest socket, while the host-side `nixling-wayland-filter` runs as a
+broker-spawned `wayland-proxy` role and mediates access to the real host
+compositor. `nixlingd` supervises the daemon-owned process DAG and asks
+`nixling-priv-broker` to spawn the wayland proxy, GPU sidecar
+(`crosvm device gpu`), and cloud-hypervisor runner as pidfd-tracked
+runners. The GPU sidecar runs as the dedicated per-VM
+`nixling-<vm>-gpu` system user, not as the operator's Wayland user.
 
 ## Options (host-side)
 
@@ -25,13 +28,17 @@ operator's Wayland user.
 |---|---|---|---|
 | `nixling.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `nixling.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
+| `nixling.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `nixling-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
+| `nixling.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
+| `nixling.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
+| `nixling.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
 | `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
 Site-level dependency:
 
 | Option | Type | Required when | Description |
 |---|---|---|---|
-| `nixling.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar binds this user's `/run/user/<uid>/wayland-0` into its private mount namespace. Eval fails with a clear message if unset. |
+| `nixling.site.waylandUser` | nullable str | any VM has `graphics.enable = true` | Username of the host's primary Wayland session. The GPU sidecar or the host-side Wayland filter needs this user's `/run/user/<uid>/<waylandDisplay>` socket. Eval fails with a clear message if unset. |
 
 ## Options (guest-side propagation)
 
@@ -58,14 +65,14 @@ The matching guest-visible option lives in the imported
 - **`nixling-<vm>-gpu` system user + group** (declared in
   [`host-users.nix`](../../nixos-modules/host-users.nix)). It is a
   per-VM runner principal and is separate from the host Wayland user.
-- **Daemon process nodes** in `processes.json`: `gpu` (or
-  `gpu-render-node`) and `cloud-hypervisor-runner`. `nixlingd`
-  supervises both through the broker `SpawnRunner` / pidfd path; no
-  per-VM graphics systemd service is emitted.
-- **`/run/nixling-gpu/<vm>/`** for role-local sockets and bind-mount
-  destinations. The broker mounts only the host `wayland-0` socket into
-  the GPU runner namespace; the parent `/run/user/<uid>` tree is not
-  bind-mounted into the runner.
+- **Daemon process nodes** in `processes.json`: `wayland-proxy` when the
+  filter is enabled for a cross-domain VM, `gpu` (or `gpu-render-node`),
+  and `cloud-hypervisor-runner`. `nixlingd` supervises them through the
+  broker `SpawnRunner` / pidfd path; no per-VM graphics systemd service
+  is emitted.
+- **`/run/nixling-wlproxy/<vm>/wayland-0`** for the filtered compositor
+  socket that crosvm connects to when the host filter is active.
+  `/run/nixling-gpu/<vm>/` remains the GPU role-local runtime directory.
 - **Device allowlist** from the minijail profile. Normal GPU runners
   use the closed device set needed by cloud-hypervisor/crosvm; the
   render-node-only profile uses broker-prepared fd passing instead of
@@ -85,8 +92,8 @@ The matching guest-visible option lives in the imported
   google/crosvm @ 299c1e7 (adds `MADV_GUARD_*` to the `madvise`
   allowlist). The `.bpf` files live alongside the crosvm binary under
   a `symlinkJoin`; the C parser fallback is never used.
-- **Patched `wayland-proxy-virtwl`** (`patches/wayland-proxy-virtwl-multimon.patch`)
-  that forwards every host `wl_output` global, not just the first.
+- **`wl-cross-domain-proxy`** packaged under `pkgs/` for the guest-side
+  virtio-gpu cross-domain bridge.
 
 ## Guest-side resources created
 
@@ -98,13 +105,11 @@ The matching guest-visible option lives in the imported
 - `microvm.graphics.crosvmPackage` = either `crosvmPatched`
   (cross-domain trusted) or a shell shim around `crosvmPatched` that
   strips `cross-domain` from `--params`.
-- `systemd.user.services.wayland-proxy` — runs
-  `wayland-proxy-virtwl --virtio-gpu --tag=[<hostname>]\\ --x-display=0
-  --xwayland-binary=<xwayland>`. `--tag` prefixes guest window titles
-  with the VM name in square brackets for at-a-glance host-side
-  identification.
+- `systemd.user.services.wayland-proxy` — when
+  `crossDomainTrusted = true`, runs `wl-cross-domain-proxy` for the
+  guest-side virtio-gpu cross-domain bridge.
 - `environment.sessionVariables` pinning `WAYLAND_DISPLAY`,
-  `DISPLAY`, `QT_QPA_PLATFORM`, `GDK_BACKEND`, `XDG_SESSION_TYPE`,
+  `QT_QPA_PLATFORM`, `GDK_BACKEND`, `XDG_SESSION_TYPE`,
   `SDL_VIDEODRIVER`, `CLUTTER_BACKEND`, `MOZ_ENABLE_WAYLAND`, plus
   Mesa probing knobs (`VK_DRIVER_FILES` pinned to virtio_icd + lvp,
   `MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu`, `LIBGL_KOPPER_DISABLE`,
@@ -114,8 +119,10 @@ The matching guest-visible option lives in the imported
 
 - The CH + crosvm-gpu processes show up as `nixling-<vm>-gpu` in
   `ps -ef`; never as the operator's Wayland user.
-- Only `wayland-0` is reachable from inside the sidecar's mount
-  namespace — the parent `/run/user/<uid>/` is invisible.
+- With the host filter active, the GPU runner connects to
+  `/run/nixling-wlproxy/<vm>/wayland-0` and does not hold the real host
+  compositor socket. The `wayland-proxy` role is the VM-specific process
+  with access to the real compositor socket.
 - The guest cannot reach the host compositor outside of virtio-gpu
   cross-domain (no Wayland socket bind-mount into the guest).
 - With `crossDomainTrusted = false`, every `--params` payload reaching
@@ -196,9 +203,9 @@ nixpkgs rev — defence-in-depth payload waiting on an upstream knob).
   spectrum-ch re-test. Read the vhost-user-gpu wire-protocol notes
   in the module header, re-test, then bump `testedWithCrosvmRev`.
 - **Sidecar permission denied on the Wayland socket.** The host
-  `wayland-0` socket must exist for `nixling.site.waylandUser` before
-  the VM starts. If the socket is absent, the broker cannot bind the
-  session socket into the GPU runner namespace.
+  Wayland socket must exist for `nixling.site.waylandUser` before the VM
+  starts. If the socket is absent, the host-side filter or the direct GPU
+  fallback cannot connect to the compositor.
 - **Cross-domain forwarding silently disabled.** With
   `crossDomainTrusted = false` (the default) GUI apps still work via
   virgl2 + standard virtio-gpu, but advanced cross-domain features

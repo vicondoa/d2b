@@ -89,6 +89,11 @@ let
           ssh.user = "alice";
           graphics.enable = true;
           graphics.crossDomainTrusted = true;
+          graphics.waylandFilter = {
+            denyGlobals = [ "wp_drm_lease_device_v1" ];
+            allowGlobals = [ "zwp_linux_dmabuf_v1" ];
+            maxVersions.xdg_wm_base = 3;
+          };
           config = {
             networking.hostName = lib.mkDefault "demo-cd";
             users.users.alice = {
@@ -116,17 +121,28 @@ let
   # Host DAG node assertions: look for wayland-proxy node in processes bundle
   processes = nixos.config.nixling._bundle.processesJson.data;
   trustedDag = builtins.filter (dag: dag.vm == "demo-cd") processes.vms;
-  trustedNodes = if trustedDag == [] then [] else (builtins.head trustedDag).nodes;
+  trustedDagRecord = if trustedDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head trustedDag;
+  trustedNodes = trustedDagRecord.nodes;
+  trustedEdges = trustedDagRecord.edges;
   trustedWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") trustedNodes;
+  trustedWlproxyArgv = if trustedWlproxyNodes == [] then [] else (builtins.head trustedWlproxyNodes).argv;
 
   defaultDag = builtins.filter (dag: dag.vm == "demo-gfx") processes.vms;
-  defaultNodes = if defaultDag == [] then [] else (builtins.head defaultDag).nodes;
+  defaultDagRecord = if defaultDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head defaultDag;
+  defaultNodes = defaultDagRecord.nodes;
+  defaultEdges = defaultDagRecord.edges;
   defaultWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") defaultNodes;
 
   # GPU argv assertions for the trusted VM
   trustedGpuNodes = builtins.filter (n: n.id == "gpu" || n.id == "gpu-render-node") trustedNodes;
   trustedGpuArgv = if trustedGpuNodes == [] then [] else (builtins.head trustedGpuNodes).argv;
   trustedGpuEnv = if trustedGpuNodes == [] then [] else ((builtins.head trustedGpuNodes).env or []);
+  trustedGraphicsNodeId = if trustedGpuNodes == [] then "" else (builtins.head trustedGpuNodes).id;
+
+  # GPU argv assertions for default VM (crossDomainTrusted=false)
+  defaultGpuNodes = builtins.filter (n: n.id == "gpu" || n.id == "gpu-render-node") defaultNodes;
+  defaultGpuArgv = if defaultGpuNodes == [] then [] else (builtins.head defaultGpuNodes).argv;
+  defaultGpuEnv = if defaultGpuNodes == [] then [] else ((builtins.head defaultGpuNodes).env or []);
 in
   # Guest proxy: default VM should have no wayland-proxy service (crossDomainTrusted=false)
   assert lib.assertMsg (!(guestServices ? wayland-proxy))
@@ -150,16 +166,38 @@ in
   # Host wayland-proxy node: absent for crossDomainTrusted=false
   assert lib.assertMsg (builtins.length defaultWlproxyNodes == 0)
     "crossDomainTrusted=false should not emit a wayland-proxy host DAG node";
+  assert lib.assertMsg (!(builtins.any (e: e.from == "wayland-proxy" || e.to == "wayland-proxy") defaultEdges))
+    "crossDomainTrusted=false should not emit wayland-proxy DAG edges";
+  assert lib.assertMsg (builtins.any (a: lib.hasPrefix "/run/user/1000/" a) defaultGpuArgv)
+    "default GPU runner should use the real host compositor socket when the filter proxy is absent";
+  assert lib.assertMsg (!(builtins.any (a: lib.hasPrefix "/run/nixling-wlproxy/" a) defaultGpuArgv))
+    "default GPU runner should not target the filter socket when no filter proxy node exists";
   # GPU argv: --wayland-sock targets the filter socket, not the real compositor
   assert lib.assertMsg (builtins.any (a: lib.hasPrefix "/run/nixling-wlproxy/" a) trustedGpuArgv)
     "GPU runner --wayland-sock should target /run/nixling-wlproxy/<vm>/wayland-0";
   assert lib.assertMsg (!(builtins.any (a: lib.hasPrefix "/run/user/" a) trustedGpuArgv))
     "GPU runner argv should not contain /run/user/<uid> (real compositor path)";
+  assert lib.assertMsg (builtins.any (e: e.from == "wayland-proxy" && e.to == trustedGraphicsNodeId) trustedEdges)
+    "trusted graphics DAG should contain wayland-proxy -> graphicsNodeId edge";
+  assert lib.assertMsg (builtins.elem "--deny-global" trustedWlproxyArgv && builtins.elem "wp_drm_lease_device_v1" trustedWlproxyArgv)
+    "waylandFilter.denyGlobals should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "--allow-global" trustedWlproxyArgv && builtins.elem "zwp_linux_dmabuf_v1" trustedWlproxyArgv)
+    "waylandFilter.allowGlobals should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "--max-version" trustedWlproxyArgv && builtins.elem "xdg_wm_base=3" trustedWlproxyArgv)
+    "waylandFilter.maxVersions should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "--listen" trustedWlproxyArgv && builtins.elem "/run/nixling-wlproxy/demo-cd/wayland-0" trustedWlproxyArgv)
+    "wayland-proxy argv should listen on the filter socket used by readiness";
+  assert lib.assertMsg (builtins.elem "--connect" trustedWlproxyArgv && builtins.elem "/run/user/1000/wayland-0" trustedWlproxyArgv)
+    "wayland-proxy argv should connect to the real host compositor path";
   # GPU env: no XDG_RUNTIME_DIR or WAYLAND_DISPLAY
   assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "XDG_RUNTIME_DIR=" e) trustedGpuEnv))
     "GPU runner env should not contain XDG_RUNTIME_DIR";
   assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "WAYLAND_DISPLAY=" e) trustedGpuEnv))
     "GPU runner env should not contain WAYLAND_DISPLAY";
+  assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "XDG_RUNTIME_DIR=" e) defaultGpuEnv))
+    "default GPU runner env should not contain XDG_RUNTIME_DIR";
+  assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "WAYLAND_DISPLAY=" e) defaultGpuEnv))
+    "default GPU runner env should not contain WAYLAND_DISPLAY";
   # Force the readOnly path by strictly evaluating the manifest in
   # addition to the toplevel build. `deepSeq` ensures we don't
   # accept a thunk that lazily skips the manifest assignment.

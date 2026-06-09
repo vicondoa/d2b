@@ -35,13 +35,9 @@ compositors that rely on title-based VM disambiguation.
 ### Xwayland must be disabled before the migration
 
 `graphics.xwayland.enable = true` is not supported during the
-Wayland-only migration phase.  Set `graphics.xwayland.enable = false`
-(or remove the option — false is the default) before switching.
-
-The central proxy wiring will add a hard eval assertion that rejects
-`graphics.xwayland.enable = true`.  Until then, treat the option as an
-unsupported legacy path during this migration rather than relying on it to
-work.
+Wayland-only migration phase.  Setting it now fails eval with a clear
+message.  Set `graphics.xwayland.enable = false` (or remove the option —
+false is the default) before switching.
 
 Future work will add a validated Xwayland path.
 
@@ -76,18 +72,17 @@ nixling.vms.work.graphics.crossDomainTrusted = true;
 > inside such a VM could leverage the cross-domain channel to reach
 > the host compositor.
 
-### 3. Enable the Wayland filter (when available)
+### 3. Confirm the Wayland filter is enabled
 
-When `graphics.waylandFilter.enable` is wired by the central module,
-enable it:
+The Wayland filter is enabled by default for graphics VMs with
+`crossDomainTrusted = true`.  You can set it explicitly for clarity:
 
 ```nix
 nixling.vms.work.graphics.waylandFilter.enable = true;
 ```
 
-The filter is enabled by default for graphics VMs with
-`crossDomainTrusted = true` once the module wiring lands; this step
-is included here for clarity.
+Leave it enabled unless you intentionally want the GPU sidecar to use the
+legacy direct compositor socket path.
 
 ### 4. Update niri window rules (niri users)
 
@@ -170,11 +165,10 @@ ls -la /proc/$(pgrep -f "nixling-wayland-filter.*work")/fd 2>/dev/null \
 
 ## Understanding the warning model
 
-The filter proxy's policy engine emits NixOS `warnings` when an
-operator override changes a rule nixling considers required or
-high-risk.  These warnings are advisory: the configuration still
-evaluates and builds.  They are surfaced in `nixos-rebuild switch`
-output and through the `nixling down/up --apply` path.
+The filter proxy's policy engine emits runtime advisory diagnostics when
+an operator override changes a rule nixling considers required or
+high-risk.  These warnings do not block evaluation or builds; they appear
+in the `nixling-wayland-filter` journal stream when the VM starts.
 
 For a full list of warning conditions, see
 [`docs/reference/wayland-filter-warnings.md`](../reference/wayland-filter-warnings.md).
@@ -184,8 +178,7 @@ For a full list of warning conditions, see
 If you encounter a regression and need to roll back before completing
 the migration:
 
-1. Set `graphics.crossDomainTrusted = false`.
-   When the central filter option is available, also set
+1. Set `graphics.crossDomainTrusted = false` and
    `graphics.waylandFilter.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `nixling down <vm> --apply && nixling up <vm> --apply`.
@@ -195,8 +188,7 @@ The guest will revert to the previous proxy path.
 ## Known limitations at migration time
 
 - **Xwayland is not supported.** Set `graphics.xwayland.enable = false`.
-  The central proxy wiring will add a hard eval assertion for this
-  unsupported state.
+  Setting it to true fails eval during the Wayland-only migration phase.
 - **Multi-output enumeration** works through the filter; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
 - **Clipboard and DnD** are forwarded for standard protocols

@@ -210,8 +210,8 @@
             GPU sidecar and the real host compositor. When true (the default),
             crosvm connects to the per-VM filter socket at
             `/run/nixling-wlproxy/<vm>/wayland-0`; when false, the
-            `wayland-proxy` DAG node is not emitted and the GPU runner
-            is not started. Has no effect unless
+            `wayland-proxy` DAG node is not emitted and the GPU runner uses
+            the legacy direct compositor socket path. Has no effect unless
             `graphics.crossDomainTrusted = true`.
           '';
         };
@@ -224,8 +224,8 @@
             Additional Wayland globals to deny beyond the secure defaults.
             Each entry is an interface name (e.g. `wp_drm_lease_device_v1`).
             Repeated `--deny-global` arguments are passed to the filter proxy.
-            Emits a NixOS warning if an entry shadows a nixling-required
-            or high-risk rule.
+            The filter proxy emits runtime advisory diagnostics if an entry
+            shadows a nixling-required or high-risk rule.
           '';
         };
 
@@ -236,8 +236,8 @@
           description = ''
             Wayland globals to explicitly allow even if denied by the secure
             defaults. Each entry is passed as `--allow-global` to the filter
-            proxy. Emits a NixOS warning when used; the operator is explicitly
-            narrowing the security boundary.
+            proxy. The filter proxy emits runtime advisory diagnostics when
+            used; the operator is explicitly narrowing the security boundary.
           '';
         };
 
@@ -248,9 +248,9 @@
           description = ''
             Maximum advertised Wayland protocol versions for specific globals.
             Each entry maps an interface name to a version cap and is passed
-            as `--max-version INTERFACE=VERSION` to the filter proxy. Emits
-            a NixOS warning when a cap is set below the nixling-required
-            minimum for a given interface.
+            as `--max-version INTERFACE=VERSION` to the filter proxy. The
+            filter proxy emits runtime advisory diagnostics when a cap is set
+            below the nixling-required minimum for a given interface.
           '';
         };
 

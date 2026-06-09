@@ -38,7 +38,7 @@ of the store.
 | `outputMode` | `"json"` | `nixling vm start --apply --json` emits the typed envelope so failures are parseable. |
 | `waitForHostCompositor` | `true` | Wrapper waits up to 30 s for the host `$WAYLAND_DISPLAY` socket before invoking the daemon. The GPU sidecar's cross-domain bind-mount target must exist when the runner starts. |
 | `hostCompositorSocketEnv` | `"WAYLAND_DISPLAY"` | The env var the wrapper resolves to find the host compositor's socket under `$XDG_RUNTIME_DIR`. |
-| `waitForGpuSocket` | `"/run/nixling-gpu/<vm>/wayland-0"` | After the daemon reports the VM up, the wrapper waits up to 30 s for the GPU sidecar to expose the bind-mounted host compositor inside the per-VM runtime directory. The in-VM `wayland-proxy-virtwl` client dials this socket. |
+| `waitForGpuSocket` | `"/run/nixling-wlproxy/<vm>/wayland-0"` | After the daemon reports the VM up, the wrapper waits up to 30 s for the host-side Wayland filter socket when the filter is enabled. The guest `wl-cross-domain-proxy` path reaches the host compositor through this filtered socket. |
 | `failureSurfaces` | `[ "notify-send" "log" ]` | Daemon failures surface as a `notify-send` desktop bubble and an appended line in the per-VM launcher log. |
 | `failureLogPath` | `${XDG_STATE_HOME:-$HOME/.local/state}/nixling/launchers/<vm>.log` | Operator-readable forensic trail beyond the transient `notify-send` bubble. The daemon's `--json` stdout/stderr lands here verbatim. |
 | `scriptText` | `string` | Full script body. Tests assert load-bearing substrings. |

@@ -554,20 +554,16 @@ let
           (mkWritablePath "/run/nixling-wlproxy/${name}"
             "Create the per-VM filter listen socket and write runtime state.")
         ];
-        # Bind-mount the real host compositor socket (read/write) at a
-        # fixed in-jail upstream path so the proxy can connect to it.
-        # The GPU runner's --wayland-sock is repointed to the filter
-        # socket at /run/nixling-wlproxy/<vm>/wayland-0 (Wave 2/Lane C).
-        bindMounts = [
-          { src = waylandHostSock;
-            dst = "/run/nixling-wlproxy/${name}/upstream"; }
-        ];
+        # The proxy connects directly to the real host compositor socket path.
+        # Host activation grants this principal access to exactly that socket;
+        # do not bind-mount a second socket path here.
+        bindMounts = [ ];
         deviceBinds = [ ];
         cgroupSubtree = "nixling.slice/${name}/wayland-proxy";
         controllers = serviceControllers;
         # umask 0o007 so the filter listen socket has mode 0660;
         # the per-VM runtime dir default ACL then grants crosvm's
-        # named-user entry rw via the cloud-hypervisor UID.
+        # named-user entry rw via the GPU UID.
         umask = 7;
       };
     }

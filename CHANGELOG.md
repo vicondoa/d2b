@@ -24,6 +24,11 @@ deprecations ship one minor release before removal.
   color override for the generated niri rules, as a six-digit CSS hex
   color (`#rrggbb`). Defaults to `null`, which uses a deterministic
   palette color derived from the VM name.
+- `nixling.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions}`
+  — host-side Wayland filter controls for graphics VMs that opt into
+  cross-domain forwarding. The filter is enabled by default when
+  `graphics.crossDomainTrusted = true`, denies unknown/high-risk globals
+  by default, and exposes explicit allow/deny/version-cap overrides.
 - `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
   include, customizing colors, verifying the setup, and understanding
   the `crossDomainTrusted` requirement for app-id matching.
@@ -72,8 +77,23 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Changed
+
+- Graphics VMs that opt into cross-domain forwarding use
+  `wl-cross-domain-proxy` in the guest and a host-side
+  `nixling-wayland-filter` proxy instead of the former
+  `wayland-proxy-virtwl` guest relay.
+- `nixling.vms.<vm>.graphics.xwayland.enable = true` now fails eval
+  during the Wayland-only migration. X11 application support will return
+  through a separately validated helper path.
+
 ### Security
 
+- Graphics VMs that opt into cross-domain forwarding now route guest
+  Wayland traffic through a host-jailed `nixling-wayland-filter` process
+  before reaching the real host compositor. The GPU sidecar connects to
+  the per-VM filter socket; the dedicated `nixling-<vm>-wlproxy`
+  principal is the VM-specific role with compositor socket access.
 - Per-VM store isolation: the daemon-native virtiofsd `ro-store` runner
   served the host's entire `/nix/store` to every guest, so a guest's
   `/nix/store` exposed all host store paths instead of only the VM's own

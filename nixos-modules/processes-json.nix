@@ -465,14 +465,16 @@ EOF
     ];
   };
 
-  gpuRunner = name:
+  gpuRunner = name: vm:
     let
       microvm = nl.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
-      # GPU connects to the filter proxy socket, not the real host
-      # compositor. The wayland-proxy DAG node is a readiness
-      # prerequisite so the filter is listening before GPU starts.
       filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      # When the filter proxy is emitted, crosvm connects to the filter
+      # socket. Otherwise preserve the legacy display backend by connecting
+      # directly to the real host compositor socket.
+      waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
@@ -482,7 +484,7 @@ EOF
         "--socket"
         microvm.graphics.socket
         "--wayland-sock"
-        filterSock
+        waylandSock
         "--params"
         gpuParams
       ];
@@ -501,11 +503,13 @@ EOF
   # The broker parent opens /dev/dri/renderD128, dup2's it to fd 10 in the
   # child, and the crosvm process accesses it via /proc/self/fd/10 without
   # ever needing host-side DAC access to /dev/dri/.
-  gpuRenderNodeRunner = name:
+  gpuRenderNodeRunner = name: vm:
     let
       microvm = nl.vmRunner config name;
       gpuParams = "{\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}";
       filterSock = "/run/nixling-wlproxy/${name}/wayland-0";
+      emitWaylandProxy = vm.graphics.enable && vm.graphics.crossDomainTrusted && vm.graphics.waylandFilter.enable;
+      waylandSock = if emitWaylandProxy then filterSock else waylandHostSock;
     in {
       binaryPath = "${microvm.graphics.crosvmPackage}/bin/crosvm";
       argv = [
@@ -515,7 +519,7 @@ EOF
         "--socket"
         microvm.graphics.socket
         "--wayland-sock"
-        filterSock
+        waylandSock
         # reference the pre-opened render node fd.
         # The broker dup2'd /dev/dri/renderD128 to fd 10
         # (RENDER_NODE_INHERITED_FD) in the user-NS child before execve.
@@ -531,15 +535,13 @@ EOF
 
   # wayland-proxy runner: nixling-wayland-filter host-side filter proxy.
   # Runs as nixling-<vm>-wlproxy, listens on the per-VM filter socket,
-  # and connects upstream to the real host compositor socket (bind-mounted
-  # into the jail by the wayland-proxy minijail profile).
+  # and connects upstream to the real host compositor socket. The broker
+  # grants the wlproxy principal an ACL on exactly that socket.
   waylandProxyRunner = name: vm:
     let
       vmName = name;
       filterSock = "/run/nixling-wlproxy/${vmName}/wayland-0";
-      # The wayland-proxy profile bind-mounts the real compositor at
-      # this fixed in-jail path (see minijail-profiles.nix).
-      upstreamSock = "/run/nixling-wlproxy/${vmName}/upstream";
+      upstreamSock = waylandHostSock;
       appIdPrefix = "nixling.${vmName}.";
       titlePrefix = "[${vmName}] ";
       denyArgs = lib.concatMap (g: [ "--deny-global" g ]) vm.graphics.waylandFilter.denyGlobals;
@@ -843,7 +845,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       # updating the readiness predicate. Without this fix the DAG
       # times out waiting on a socket that crosvm never creates.
       readiness = graphicsReadiness;
-      } // gpuRunner name))
+      } // gpuRunner name vm))
       # (ADR 0021) render-node-only broker-pre-NS GPU sidecar.
       # Emitted when graphics.renderNodeOnly = true. Uses gpuRenderNodeRunner
       # (argv carries --gpu-device-node /proc/self/fd/10) and the
@@ -853,7 +855,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         role = "gpu-render-node";
         unit = "nixling-${name}-gpu.service";
         readiness = graphicsReadiness;
-      } // gpuRenderNodeRunner name))
+      } // gpuRenderNodeRunner name vm))
       ++ lib.optional (vm.graphics.enable && vm.graphics.videoSidecar) (node name ({
         id = "video";
         role = "video";
@@ -942,10 +944,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")
+        ++ lib.optional emitWaylandProxy
+          (edge "host-reconcile" "wayland-proxy" "The Wayland filter proxy starts only after host reconciliation prepares runtime directories and socket ACLs.")
         ++ lib.optional vm.graphics.videoSidecar
           (edge graphicsNodeId "video" "The optional video decoder sidecar depends on the GPU sidecar.")
-        # wayland-proxy depends on the GPU sidecar being ready; the GPU
-        # sidecar connects to the filter socket, so wayland-proxy must be
+        # GPU connects to the filter socket, so wayland-proxy must be
         # listening before the GPU starts. Emit only when the proxy is
         # present.
         ++ lib.optional emitWaylandProxy
