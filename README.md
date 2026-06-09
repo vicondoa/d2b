@@ -54,7 +54,6 @@ flowchart LR
             direction LR
             kernel["guest Linux kernel"]
             apps["workspace apps"]
-            kernel --> apps
         end
     end
 
