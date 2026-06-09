@@ -50,16 +50,27 @@ impl FilterStateHandler {
 
 impl StateHandler for FilterStateHandler {
     fn new_client(&mut self, client: &Rc<Client>) {
-        let handler = FilterDisplayHandler {
-            policy: self.policy.clone(),
-            diag: self.diag.clone(),
-        };
-        client.display().set_handler(handler);
-        log::debug!(
-            "[nixling-wlproxy] vm={} new client connected",
-            self.policy.vm_name
-        );
+        install_client_handlers(client, self.policy.clone(), self.diag.clone());
     }
+}
+
+/// Install all per-client handlers required by the filter.
+///
+/// `State::add_client` does not invoke `StateHandler::new_client`, so the
+/// manual accept loop in the binary calls this helper directly after adding a
+/// client. The state handler also uses it for clients accepted through
+/// wl-proxy-managed acceptors.
+pub fn install_client_handlers(
+    client: &Rc<Client>,
+    policy: Rc<FilterPolicy>,
+    diag: Rc<RefCell<DiagRateLimiter>>,
+) {
+    let handler = FilterDisplayHandler {
+        policy: policy.clone(),
+        diag,
+    };
+    client.display().set_handler(handler);
+    log::debug!("[nixling-wlproxy] vm={} new client connected", policy.vm_name);
 }
 
 /// Per-client display handler: intercepts `get_registry`.

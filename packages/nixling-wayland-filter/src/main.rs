@@ -22,7 +22,9 @@ use std::{
 
 use clap::Parser;
 use env_logger::Env;
-use nixling_wayland_filter::filter::{build_state, FilterClientHandler, FilterStateHandler};
+use nixling_wayland_filter::filter::{
+    build_state, install_client_handlers, FilterClientHandler, FilterStateHandler,
+};
 use nixling_wayland_filter::{
     diag::DiagRateLimiter,
     policy::{FilterPolicy, PolicyInput},
@@ -170,15 +172,16 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    run_loop(&state, &listener, &policy.vm_name, &diag);
+    run_loop(&state, &listener, &policy, &diag);
 }
 
 fn run_loop(
     state: &Rc<wl_proxy::state::State>,
     listener: &UnixListener,
-    vm: &str,
+    policy: &Rc<FilterPolicy>,
     diag: &Rc<RefCell<DiagRateLimiter>>,
 ) {
+    let vm = &policy.vm_name;
     let mut last_diag_flush = Instant::now();
     loop {
         // Accept all pending new client connections (non-blocking).
@@ -190,6 +193,7 @@ fn run_loop(
                     match state.add_client(&owned_fd) {
                         Ok(client) => {
                             client.set_handler(FilterClientHandler::new(vm.to_owned()));
+                            install_client_handlers(&client, policy.clone(), diag.clone());
                         }
                         Err(e) => {
                             log::warn!("[nixling-wlproxy] vm={vm} failed to add client: {e}");
