@@ -11,7 +11,7 @@ libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
 thiserror = "2"
-wl-proxy = { git = "https://github.com/vicondoa/wl-proxy.git", rev = "7874b189cd3a8fc305d7b2895d1eef4116f792b2", package = "wl-proxy", features = [
+wl-proxy = { git = "https://github.com/vicondoa/wl-proxy.git", rev = "2f4f54a930fcb8a2a75f851ccc0f86798d4cc21c", package = "wl-proxy", features = [
     "suite-wayland-protocols",
     "suite-wlr-protocols",
 ] }
