@@ -293,7 +293,7 @@ isolated even after a workload spoofs a peer-style MAC.
 > `tests/static.sh` iterates every `examples/*/flake.nix` and runs
 > `nix flake check --no-build --all-systems` against each. The
 > `with-entra-id` example reaches a sibling flake
-> (`vicondoa/nixos-entra-id`), so its iteration step is not fully
+> (`vicondoa/entrablau.nix`), so its iteration step is not fully
 > hermetic — it eval-tests through the example's pinned
 > `flake.lock`. That hermeticity gap is the only remaining
 > example-iteration follow-up; see CHANGELOG "Known gaps".

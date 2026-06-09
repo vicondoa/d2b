@@ -694,13 +694,13 @@ patterns, see [the naming conventions reference](../reference/naming-conventions
 | `nixling` group                 | SO_PEERCRED authorisation surface at `nixlingd`'s public.sock (mode 0660, group `nixling`) | host-users.nix |
 | `nixling-<vm>-{gpu,snd,swtpm,usbip}` users | dedicated per-VM runner uids (broker-spawned in v1.0) | host-users.nix |
 
-### Composition with framework-agnostic flakes (`nixos-entra-id`)
+### Composition with framework-agnostic flakes (`entrablau`)
 
 Nixling deliberately does **not** ship per-domain modules (Entra ID
 device-join, corporate VPN clients, vendor identity glue). Those live
 in sibling flakes that are framework-agnostic — they can in principle
 be imported into any NixOS configuration, microVM or bare metal.
-[`vicondoa/nixos-entra-id`](https://github.com/vicondoa/nixos-entra-id)
+[`vicondoa/entrablau.nix`](https://github.com/vicondoa/entrablau.nix)
 is the canonical example.
 
 The split:
@@ -717,11 +717,11 @@ The split:
 
   ```nix
   nixling.vms.work-vm.config.imports = [
-    inputs.nixos-entra-id.nixosModules.default
+    inputs.entrablau.nixosModules.default
   ];
   ```
 
-  Nixling does not depend on `nixos-entra-id`, and `nixos-entra-id`
+  Nixling does not depend on `entrablau`, and `entrablau`
   does not depend on nixling — they meet only in the consumer
   flake's `config.imports`.
 

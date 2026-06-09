@@ -339,7 +339,7 @@
         nixling FLAKE's inputs). Consumer keys take precedence on
         collision — set `inputs = consumerInputs;` here if your
         per-VM modules need `inputs.<your-flake>` visibility (e.g.
-        `inputs.nixos-entra-id`, `inputs.llm-agents`).
+        `inputs.entrablau`, `inputs.llm-agents`).
 
         Use this when:
         - A per-VM module file (e.g. `vms/work.nix`) takes

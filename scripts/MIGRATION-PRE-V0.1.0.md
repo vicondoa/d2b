@@ -278,7 +278,7 @@ The script **does not** run `nixos-rebuild`. That's the user's next step:
    - `flake.nix`: replace `./modules/nixling` import with
      `inputs.nixling.nixosModules.default`
    - Add `modules/nixling-site.nix` with `nixling.site.*` options
-   - Add `modules/nixos-entra-id-site.nix` for the work VM
+   - Add `modules/entrablau-site.nix` for the work VM
    - Move sbctl backup activation out of `host.nix`
    - Delete `/etc/nixos/modules/nixling/`
 2. ```bash

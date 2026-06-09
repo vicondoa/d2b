@@ -55,7 +55,7 @@ forwarding into the guest natively over Wayland. Concretely:
   + `nixling.vms.<vm>` shape covers CI runners or
   background-service VMs without graphics + audio bits.
 - Microsoft Entra ID workspaces are supported via the sibling
-  [`vicondoa/nixos-entra-id`][nixos-entra-id] flake (composed
+  [`vicondoa/entrablau.nix`][entrablau] flake (composed
   per-VM, not auto-imported).
 
 If you're after a multi-tenant or production-grade VM platform,
@@ -336,7 +336,7 @@ For typed exit codes and JSON envelopes, see
 
 ## Companion flakes
 
-- [`vicondoa/nixos-entra-id`][nixos-entra-id] — unofficial, framework-
+- [`vicondoa/entrablau.nix`][entrablau] — unofficial, framework-
   agnostic NixOS module bundle for Microsoft Entra ID auth (via
   Himmelblau) with Intune compliance shimming. Optional. Compose it
   by importing its `nixosModules.default` inside a nixling workload
@@ -394,5 +394,5 @@ the operational manual lives in [`AGENTS.md`](./AGENTS.md) at the
 repo root.
 
 [microvm.nix]: https://github.com/microvm-nix/microvm.nix
-[nixos-entra-id]: https://github.com/vicondoa/nixos-entra-id
+[entrablau]: https://github.com/vicondoa/entrablau.nix
 [docs/explanation/design.md]: ./docs/explanation/design.md

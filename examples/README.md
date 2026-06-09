@@ -33,7 +33,7 @@ construction and `tests/static.sh` regenerates a local lock on first
 eval anyway.
 
 Examples that pull in an external sibling flake (`with-entra-id/`
-consumes `github:vicondoa/nixos-entra-id`) **do** commit their
+consumes `github:vicondoa/entrablau.nix`) **do** commit their
 `flake.lock` for reproducibility — the lock is the only way to ensure
 the example builds bit-identically across machines.
 

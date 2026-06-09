@@ -1,6 +1,6 @@
 # Guest-side NixOS configuration for the `work-entra` Entra workspace.
 # This module is merged into the VM's `config.imports` from
-# `flake.nix` alongside `nixos-entra-id.nixosModules.default`, so
+# `flake.nix` alongside `entrablau.nixosModules.default`, so
 # every option here is set INSIDE the VM, not on the host.
 #
 # The split of responsibility is:
@@ -8,7 +8,7 @@
 #   nixling.vms.work-entra.tpm.enable = true   (in flake.nix)
 #     -> wires swtpm on the host, exposes /dev/tpmrm0 in the guest
 #
-#   nixosEntraId.* (here)
+#   entrablau.* (here)
 #     -> Himmelblau daemon, PAM/NSS, Intune compliance shimming
 #
 # Both halves are needed: Entra Conditional Access requires a
@@ -48,13 +48,13 @@
     extraGroups = [ "wheel" ];
   };
 
-  # The Entra-ID configuration. Everything under `nixosEntraId.*`
-  # is owned by the sibling `vicondoa/nixos-entra-id` flake — see
+  # The Entra-ID configuration. Everything under `entrablau.*`
+  # is owned by the sibling `vicondoa/entrablau.nix` flake — see
   # its README for the full schema and per-option semantics. The
   # generic placeholders below MUST be replaced with your tenant
   # values before this VM will actually authenticate against
   # Entra.
-  nixosEntraId = {
+  entrablau = {
     enable = true;
 
     # TODO: replace with your tenant domain.
@@ -84,11 +84,11 @@
       #
       # GENERIC PLACEHOLDERS. In a real deployment you crib these
       # from a `dmidecode -t system,baseboard` dump on a real
-      # device of a supported make/model. See the nixos-entra-id
+      # device of a supported make/model. See the entrablau
       # README for guidance on what counts as "supported" and the
       # Intune compliance disclaimer below in this example's
       # README for the rules of the road.
-      fakeDmi = {
+      dmiOverride = {
         sys_vendor = "Example Corp";
         product_name = "Example Workstation";
         board_vendor = "Example Corp";

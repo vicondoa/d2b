@@ -12,7 +12,7 @@ A `nixling` addon is a **sibling flake** that exports an ordinary NixOS
 module and gets composed into a specific guest VM. It is not a special
 plugin API.
 
-[`vicondoa/nixos-entra-id`](https://github.com/vicondoa/nixos-entra-id)
+[`vicondoa/entrablau.nix`](https://github.com/vicondoa/entrablau.nix)
 is the canonical example: the Entra-specific module lives outside the
 framework, and the consumer imports it only into the VM that needs it.
 See [`examples/with-entra-id/`](../../examples/with-entra-id/) for the
@@ -76,7 +76,7 @@ nixling.vms.work-vm = {
   ssh.user = "alice";
 
   config.imports = [
-    nixos-entra-id.nixosModules.default
+    entrablau.nixosModules.default
     ./work-vm.nix
   ];
 };

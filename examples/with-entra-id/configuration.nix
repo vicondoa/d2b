@@ -1,8 +1,8 @@
-# Host-side NixOS configuration for the nixling + nixos-entra-id
+# Host-side NixOS configuration for the nixling + entrablau
 # composition example. This file owns everything *outside* the
 # Entra VM: the human user on the host, the nixling site-level
 # knobs, and the env that the VM lives in. The VM's own NixOS
-# config (and its `nixosEntraId.*` settings) live in `work-entra.nix`.
+# config (and its `entrablau.*` settings) live in `work-entra.nix`.
 { lib, ... }:
 
 {
