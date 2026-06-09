@@ -343,13 +343,17 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("wl_data_device_manager", Allow, AppDefault);
 
     // --- accelerated-rendering (enabled, warn if denied) ---
-    entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering);
+    // v4/v5 dmabuf feedback/modifier negotiation is not yet safe through the
+    // host-side proxy on the crosvm cross-domain path; v3 preserves dmabuf
+    // wl_buffer creation without the corrupt feedback path.
+    entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering, max = 3);
     entry!(
         "wp_linux_drm_syncobj_manager_v1",
         Allow,
         AcceleratedRendering
     );
     entry!("wl_eglstream_display", Allow, AcceleratedRendering);
+    entry!("wl_eglstream_controller", Allow, AcceleratedRendering);
     entry!("wp_single_pixel_buffer_v1", Allow, AppDefault);
 
     // --- presentation-and-scaling (enabled, app default) ---
@@ -528,19 +532,37 @@ mod tests {
     }
 
     #[test]
+    fn dmabuf_default_caps_feedback_path_to_v3() {
+        let p = policy_for("work");
+
+        assert!(p.is_allowed("zwp_linux_dmabuf_v1"));
+        assert_eq!(p.advertised_version("zwp_linux_dmabuf_v1", 5), 3);
+        assert_eq!(p.advertised_version("zwp_linux_dmabuf_v1", 2), 2);
+    }
+
+    #[test]
     fn nvidia_eglstream_global_is_accelerated_rendering() {
         let p = policy_for("work");
         assert!(p.is_allowed("wl_eglstream_display"));
+        assert!(p.is_allowed("wl_eglstream_controller"));
 
         let p = FilterPolicy::build(PolicyInput {
             vm_name: "work".to_owned(),
-            deny_globals: vec!["wl_eglstream_display".to_owned()],
+            deny_globals: vec![
+                "wl_eglstream_display".to_owned(),
+                "wl_eglstream_controller".to_owned(),
+            ],
             ..Default::default()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
             PolicyWarning::AcceleratedRenderingDisabled { interface }
             if interface == "wl_eglstream_display"
+        )));
+        assert!(p.warnings.iter().any(|w| matches!(
+            w,
+            PolicyWarning::AcceleratedRenderingDisabled { interface }
+            if interface == "wl_eglstream_controller"
         )));
     }
 

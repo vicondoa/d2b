@@ -13,7 +13,7 @@ let
   };
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-eCj59oWFWSdxW3cEibzJMSPW045N6GC2KCxmLzhblg0=";
+    outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
   };
 
   nixlingdPackage = pkgs.rustPlatform.buildRustPackage {

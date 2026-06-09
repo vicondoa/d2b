@@ -1732,7 +1732,7 @@ dependencies = [
 [[package]]
 name = "wl-proxy"
 version = "0.1.2"
-source = "git+https://github.com/vicondoa/wl-proxy.git?rev=2f4f54a930fcb8a2a75f851ccc0f86798d4cc21c#2f4f54a930fcb8a2a75f851ccc0f86798d4cc21c"
+source = "git+https://github.com/vicondoa/wl-proxy.git?rev=f631210faa877c4c803d3c35c21e9c52d127672e#f631210faa877c4c803d3c35c21e9c52d127672e"
 dependencies = [
  "debug-fn",
  "error_reporter",

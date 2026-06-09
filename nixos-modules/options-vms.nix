@@ -216,6 +216,22 @@
           '';
         };
 
+        graphics.waylandFilter.debugLogging = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Enable verbose wl-proxy protocol tracing for this VM's host-side
+            Wayland filter runner. This sets `WL_PROXY_DEBUG=1` and a
+            VM-specific `WL_PROXY_PREFIX`, causing raw Wayland protocol
+            messages to be emitted to the runner's stderr and therefore the
+            broker/journald log stream.
+
+            This is intended only for short-lived debugging. Protocol traces
+            can include application metadata such as titles, app IDs, registry
+            names, object IDs, and file-descriptor numbers.
+          '';
+        };
+
         graphics.waylandFilter.denyGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];

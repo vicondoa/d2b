@@ -29,10 +29,16 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `nixling.vms.<vm>.graphics.enable` | bool | `false` | Enable virtio-gpu + Wayland cross-domain forward. Implies `hypervisor = cloud-hypervisor`. |
 | `nixling.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
 | `nixling.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `nixling-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
+| `nixling.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
 | `nixling.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
 | `nixling.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
 | `nixling.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
 | `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
+
+The filter's built-in policy caps `zwp_linux_dmabuf_v1` to version 3 by
+default. Version 3 keeps dmabuf `wl_buffer` creation available while avoiding
+the v4/v5 feedback/modifier path, which must not be advertised through the
+host-side proxy until it has a dedicated compatibility gate.
 
 Site-level dependency:
 

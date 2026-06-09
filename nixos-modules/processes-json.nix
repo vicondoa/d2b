@@ -39,7 +39,7 @@ let
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-eCj59oWFWSdxW3cEibzJMSPW045N6GC2KCxmLzhblg0=";
+      outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
     };
     cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
     doCheck = false;
@@ -556,7 +556,10 @@ EOF
         (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
     in {
       binaryPath = nixlingWaylandFilterBinary;
-      env = [ ];
+      env = lib.optionals vm.graphics.waylandFilter.debugLogging [
+        "WL_PROXY_DEBUG=1"
+        "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
+      ];
       argv = [
         "nixling-${vmName}-wlproxy"
         "--listen" filterSock

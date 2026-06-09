@@ -90,6 +90,7 @@ let
           graphics.enable = true;
           graphics.crossDomainTrusted = true;
           graphics.waylandFilter = {
+            debugLogging = true;
             denyGlobals = [ "wp_drm_lease_device_v1" ];
             allowGlobals = [ "zwp_linux_dmabuf_v1" ];
             maxVersions.xdg_wm_base = 3;
@@ -126,6 +127,7 @@ let
   trustedEdges = trustedDagRecord.edges;
   trustedWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") trustedNodes;
   trustedWlproxyArgv = if trustedWlproxyNodes == [] then [] else (builtins.head trustedWlproxyNodes).argv;
+  trustedWlproxyEnv = if trustedWlproxyNodes == [] then [] else ((builtins.head trustedWlproxyNodes).env or []);
 
   defaultDag = builtins.filter (dag: dag.vm == "demo-gfx") processes.vms;
   defaultDagRecord = if defaultDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head defaultDag;
@@ -185,6 +187,8 @@ in
     "waylandFilter.allowGlobals should serialize to wayland-proxy argv";
   assert lib.assertMsg (builtins.elem "--max-version" trustedWlproxyArgv && builtins.elem "xdg_wm_base=3" trustedWlproxyArgv)
     "waylandFilter.maxVersions should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "WL_PROXY_DEBUG=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_PREFIX=nixling-demo-cd-wlproxy" trustedWlproxyEnv)
+    "waylandFilter.debugLogging should serialize WL_PROXY_DEBUG/WL_PROXY_PREFIX to wayland-proxy env";
   assert lib.assertMsg (builtins.elem "--listen" trustedWlproxyArgv && builtins.elem "/run/nixling-wlproxy/demo-cd/wayland-0" trustedWlproxyArgv)
     "wayland-proxy argv should listen on the filter socket used by readiness";
   assert lib.assertMsg (builtins.elem "--connect" trustedWlproxyArgv && builtins.elem "/run/user/1000/wayland-0" trustedWlproxyArgv)
