@@ -558,7 +558,7 @@ in
               #   all other roles    → deny everything (--- on dir and all sockets)
               ${lib.optionalString (cfg.site.waylandUser != null) ''
                 wuid=$(${pkgs.coreutils}/bin/id -u ${cfg.site.waylandUser} 2>/dev/null)
-                if [ -n "$wuid" ] && [ -n "$wlproxy_wayland_uids" ]; then
+                if [ -n "$wuid" ]; then
                   rdir="/run/user/$wuid"
                   if [ -d "$rdir" ]; then
                     if echo "$wlproxy_wayland_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then

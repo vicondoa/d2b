@@ -57,7 +57,7 @@ pub enum PolicyWarning {
 }
 
 impl PolicyWarning {
-    /// Human-readable message for NixOS `config.warnings`.
+    /// Human-readable runtime advisory emitted by nixling-wayland-filter.
     pub fn message(&self) -> String {
         match self {
             Self::RequiredGlobalDenied { interface } => format!(
@@ -126,7 +126,7 @@ pub struct FilterPolicy {
     pub title_prefix: String,
     pub vm_name: String,
     pub log_filtered_globals: bool,
-    /// Warnings that the NixOS eval layer should surface to the operator.
+    /// Runtime advisories emitted by the filter process at startup.
     pub warnings: Vec<PolicyWarning>,
 }
 
