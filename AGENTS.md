@@ -489,6 +489,7 @@ In that implementation, the roster is selected per plan via
 | `tests/smoke-eval-aarch64.nix`        | Headless smoke cross-evaluated on aarch64-linux (multi-arch eval-graph regression gate).     |
 | `tests/assertions-eval.sh`            | Negative assertion cases (CIDR overlap, naming invariants, platform gate, missing `waylandUser`, reserved-path invariants, boot-cleaned `tmpDir`, etc.). Each bad case must fail eval with the expected message. |
 | `tests/usbip-gating-eval.sh`          | Host-side USBIP gating: absent until both host + enabled-VM opt-ins are set, and scoped to opted-in envs only. |
+| `tests/niri-vm-borders-eval.sh`       | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom `outputPath`. |
 | `tests/net-vm-network-eval.sh`        | Net VM networkd + nftables invariants — most importantly the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus per-env MTU/MSS, cross-env drops, and east-west toggles. |
 | `tests/volume-mounts-eval.sh`         | Declared `microvm.volumes` invariant: Cloud Hypervisor disk serials and guest `fileSystems` mounts stay aligned, and duplicate/reserved/overlong serials fail eval. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner` video runner descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |

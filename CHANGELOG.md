@@ -12,6 +12,29 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
+  window-rule include generator. When enabled, installs a KDL file at
+  the configured path (default `/etc/nixling/niri-vm-borders.kdl`)
+  containing a crosvm scanout-window hide rule and one
+  `window-rule` per enabled graphics VM. Rules match the
+  `nixling.<vm>.` app-id prefix that the host Wayland filter proxy
+  writes onto guest windows. Include the file from niri config with
+  `include "/etc/nixling/niri-vm-borders.kdl"`. Requires niri ≥ 0.1.9.
+- `nixling.vms.<vm>.graphics.niriBorderColor` — per-VM active border
+  color override for the generated niri rules, as a six-digit CSS hex
+  color (`#rrggbb`). Defaults to `null`, which uses a deterministic
+  palette color derived from the VM name.
+- `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
+  include, customizing colors, verifying the setup, and understanding
+  the `crossDomainTrusted` requirement for app-id matching.
+- `docs/how-to/migrate-to-wayland-proxy.md` — migration guide covering
+  app-id renaming, Xwayland fail-closed behavior, `crossDomainTrusted`
+  requirement, niri rule updates, and rollback procedure.
+- `docs/reference/wayland-filter-warnings.md` — reference warning
+  catalog for `graphics.waylandFilter` listing every warning condition,
+  the triggering option or global, why the warning exists, and how to
+  override intentionally.
+
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
   in-guest edited file over the existing per-VM SSH key into a

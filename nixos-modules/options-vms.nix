@@ -202,6 +202,30 @@
           '';
         };
 
+        graphics.niriBorderColor = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "^#[0-9a-fA-F]{6}$");
+          default = null;
+          example = "#7fc8ff";
+          description = ''
+            Active border color for this VM's windows in the niri
+            compositor, as a six-digit CSS hex color (`#rrggbb`).
+            Used only when `nixling.site.niriVmBorders.enable = true`.
+
+            Set to `null` (the default) to use the deterministic
+            palette color derived from the VM name — each VM name
+            maps to a stable distinct color so the generated KDL
+            works without any per-VM configuration.
+
+            When set, must be a valid six-digit hex color starting
+            with `#`.  The value is placed verbatim into the
+            generated KDL `active-color` field for this VM.
+
+            The inactive border color is always `#505050` and is not
+            configurable here; configure it directly in your niri
+            config if you need a different inactive color.
+          '';
+        };
+
         tpm.enable = lib.mkEnableOption ''
           swtpm 2.0-backed TPM device exposed to the guest as a TPM
           CRB at /dev/tpm0 + /dev/tpmrm0. Implies hypervisor =

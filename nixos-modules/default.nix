@@ -62,6 +62,7 @@
     (import ./host-broker.nix { inherit inputs; })
     ./components/audio/host.nix
     ./components/observability/default.nix
+    ./niri-vm-borders.nix
   ];
 
   # Entra ID / Himmelblau is NOT auto-imported here — it lives in
