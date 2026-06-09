@@ -350,6 +350,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
         AcceleratedRendering
     );
     entry!("wl_eglstream_display", Allow, AcceleratedRendering);
+    entry!("wl_eglstream_controller", Allow, AcceleratedRendering);
     entry!("wp_single_pixel_buffer_v1", Allow, AppDefault);
 
     // --- presentation-and-scaling (enabled, app default) ---
@@ -531,16 +532,25 @@ mod tests {
     fn nvidia_eglstream_global_is_accelerated_rendering() {
         let p = policy_for("work");
         assert!(p.is_allowed("wl_eglstream_display"));
+        assert!(p.is_allowed("wl_eglstream_controller"));
 
         let p = FilterPolicy::build(PolicyInput {
             vm_name: "work".to_owned(),
-            deny_globals: vec!["wl_eglstream_display".to_owned()],
+            deny_globals: vec![
+                "wl_eglstream_display".to_owned(),
+                "wl_eglstream_controller".to_owned(),
+            ],
             ..Default::default()
         });
         assert!(p.warnings.iter().any(|w| matches!(
             w,
             PolicyWarning::AcceleratedRenderingDisabled { interface }
             if interface == "wl_eglstream_display"
+        )));
+        assert!(p.warnings.iter().any(|w| matches!(
+            w,
+            PolicyWarning::AcceleratedRenderingDisabled { interface }
+            if interface == "wl_eglstream_controller"
         )));
     }
 
