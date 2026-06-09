@@ -17,6 +17,7 @@ use std::{
     os::{fd::OwnedFd, unix::net::UnixListener},
     path::PathBuf,
     rc::Rc,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -115,11 +116,11 @@ fn main() {
         eprintln!("nixling-wayland-filter: warning: {}", w.message());
     }
 
-    let policy = Rc::new(policy);
-
-    // Step 3: connect to upstream compositor.
-    let state = match build_state(&args.connect) {
-        Ok(s) => s,
+    // Step 3: prove the upstream compositor is reachable before exposing a
+    // listen socket. Each accepted client gets its own upstream connection
+    // below, matching wl-proxy's SimpleProxy model.
+    match build_state(&args.connect) {
+        Ok(_) => {}
         Err(e) => {
             eprintln!(
                 "nixling-wayland-filter: failed to connect to upstream compositor `{}`: {e}",
@@ -127,12 +128,7 @@ fn main() {
             );
             std::process::exit(1);
         }
-    };
-
-    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(policy.vm_name.clone())));
-
-    // Install state handler to set up per-client handlers on accept.
-    state.set_handler(FilterStateHandler::new(policy.clone(), diag.clone()));
+    }
 
     // Step 4: create the listen socket AFTER successful upstream connect.
     let listen_path = &args.listen;
@@ -159,11 +155,6 @@ fn main() {
         }
     };
 
-    if let Err(e) = listener.set_nonblocking(true) {
-        eprintln!("nixling-wayland-filter: failed to set listen socket non-blocking: {e}");
-        std::process::exit(1);
-    }
-
     log::info!(
         "[nixling-wlproxy] vm={} listening on {} upstream={}",
         args.vm_name,
@@ -172,52 +163,73 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    run_loop(&state, &listener, &policy, &diag);
+    accept_loop(listener, args.connect, policy);
 }
 
-fn run_loop(
-    state: &Rc<wl_proxy::state::State>,
-    listener: &UnixListener,
-    policy: &Rc<FilterPolicy>,
-    diag: &Rc<RefCell<DiagRateLimiter>>,
-) {
-    let vm = &policy.vm_name;
-    let mut last_diag_flush = Instant::now();
+fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
+    let vm = policy.vm_name.clone();
+    let mut next_client_id: u64 = 1;
     loop {
-        // Accept all pending new client connections (non-blocking).
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let owned_fd: OwnedFd = stream.into();
-                    let owned_fd = Rc::new(owned_fd);
-                    match state.add_client(&owned_fd) {
-                        Ok(client) => {
-                            client.set_handler(FilterClientHandler::new(vm.to_owned()));
-                            install_client_handlers(&client, policy.clone(), diag.clone());
-                        }
-                        Err(e) => {
-                            log::warn!("[nixling-wlproxy] vm={vm} failed to add client: {e}");
-                        }
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if is_recoverable_accept_error(&e) => {
-                    log::warn!("[nixling-wlproxy] vm={vm} recoverable accept error: {e}");
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("nixling-wayland-filter: accept error: {e}");
-                    std::process::exit(1);
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let client_id = next_client_id;
+                next_client_id += 1;
+                let upstream = upstream.clone();
+                let policy = policy.clone();
+                let vm = vm.clone();
+                let name = format!("nixling-wlproxy-{vm}-{client_id}");
+                if let Err(e) = thread::Builder::new().name(name).spawn(move || {
+                    run_client(client_id, stream.into(), &upstream, policy);
+                }) {
+                    log::warn!("[nixling-wlproxy] vm={vm} failed to spawn client thread: {e}");
                 }
             }
+            Err(e) if is_recoverable_accept_error(&e) => {
+                log::warn!("[nixling-wlproxy] vm={vm} recoverable accept error: {e}");
+            }
+            Err(e) => {
+                eprintln!("nixling-wayland-filter: accept error: {e}");
+                std::process::exit(1);
+            }
         }
+    }
+}
 
-        // Dispatch all pending server and client messages, waiting up to 10 ms.
+fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy) {
+    let policy = Rc::new(policy);
+    let vm = policy.vm_name.clone();
+    let diag = Rc::new(RefCell::new(DiagRateLimiter::new(vm.clone())));
+
+    let state = match build_state(upstream) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("[nixling-wlproxy] vm={vm} client={client_id} upstream connect failed: {e}");
+            return;
+        }
+    };
+    state.set_handler(FilterStateHandler::new(policy.clone(), diag.clone()));
+
+    let fd = Rc::new(fd);
+    let client = match state.add_client(&fd) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[nixling-wlproxy] vm={vm} client={client_id} failed to add client: {e}");
+            return;
+        }
+    };
+    client.set_handler(FilterClientHandler::with_destructor(
+        vm.clone(),
+        state.create_destructor(),
+    ));
+    install_client_handlers(&client, policy, diag.clone());
+
+    let mut last_diag_flush = Instant::now();
+    while state.is_not_destroyed() {
         match state.dispatch(Some(Duration::from_millis(10))) {
             Ok(_) => {}
             Err(e) => {
-                eprintln!("nixling-wayland-filter: dispatch error: {e}");
-                std::process::exit(1);
+                log::warn!("[nixling-wlproxy] vm={vm} client={client_id} dispatch error: {e}");
+                break;
             }
         }
 
@@ -226,6 +238,7 @@ fn run_loop(
             last_diag_flush = Instant::now();
         }
     }
+    diag.borrow_mut().flush_suppressed();
 }
 
 fn is_recoverable_accept_error(error: &io::Error) -> bool {

@@ -28,7 +28,7 @@ use wl_proxy::{
         },
         ObjectInterface,
     },
-    state::{State, StateHandler},
+    state::{Destructor, State, StateHandler},
 };
 
 use crate::{
@@ -242,11 +242,22 @@ impl XdgToplevelHandler for FilterXdgToplevelHandler {
 /// Minimal `ClientHandler` that logs disconnections for debugging.
 pub struct FilterClientHandler {
     vm: String,
+    _destructor: Option<Destructor>,
 }
 
 impl FilterClientHandler {
     pub fn new(vm: String) -> Self {
-        Self { vm }
+        Self {
+            vm,
+            _destructor: None,
+        }
+    }
+
+    pub fn with_destructor(vm: String, destructor: Destructor) -> Self {
+        Self {
+            vm,
+            _destructor: Some(destructor),
+        }
     }
 }
 
