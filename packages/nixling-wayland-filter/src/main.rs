@@ -238,6 +238,7 @@ fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy)
             last_diag_flush = Instant::now();
         }
     }
+    state.destroy();
     diag.borrow_mut().flush_suppressed();
 }
 
