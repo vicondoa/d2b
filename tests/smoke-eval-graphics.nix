@@ -82,7 +82,7 @@ let
 
         # A VM with crossDomainTrusted = true to assert that the
         # host-side wayland-proxy DAG node is emitted.
-        nixling.vms.demo-gfx-trusted = {
+        nixling.vms.demo-cd = {
           enable = true;
           env = "work";
           index = 13;
@@ -90,7 +90,7 @@ let
           graphics.enable = true;
           graphics.crossDomainTrusted = true;
           config = {
-            networking.hostName = lib.mkDefault "demo-gfx-trusted";
+            networking.hostName = lib.mkDefault "demo-cd";
             users.users.alice = {
               isNormalUser = true;
               uid = 1000;
@@ -109,13 +109,13 @@ let
 
   # Guest service assertions for trusted VM (crossDomainTrusted=true)
   trustedGuestServices =
-    nixos.config.nixling._computed.demo-gfx-trusted.config.systemd.user.services;
+    nixos.config.nixling._computed.demo-cd.config.systemd.user.services;
   trustedProxyExec =
-    nixos.config.nixling._computed.demo-gfx-trusted.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
+    nixos.config.nixling._computed.demo-cd.config.systemd.user.services.wayland-proxy.serviceConfig.ExecStart;
 
   # Host DAG node assertions: look for wayland-proxy node in processes bundle
   processes = nixos.config.nixling._bundle.processesJson.data;
-  trustedDag = builtins.filter (dag: dag.vm == "demo-gfx-trusted") processes.vms;
+  trustedDag = builtins.filter (dag: dag.vm == "demo-cd") processes.vms;
   trustedNodes = if trustedDag == [] then [] else (builtins.head trustedDag).nodes;
   trustedWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") trustedNodes;
 
