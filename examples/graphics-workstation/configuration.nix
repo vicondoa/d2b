@@ -58,11 +58,12 @@
 
   # ---------------------------------------------------------------
   # The Wayland-session user `nixling.site.waylandUser` references.
-  # Required: the GPU + audio sidecars bind this user's
-  #   /run/user/<uid>/wayland-0
+  # Required: the Wayland filter proxy (`nixling-<vm>-wlproxy`) connects
+  # to this user's compositor socket; the audio sidecar also uses this
+  # user's PipeWire socket.
+  #   /run/user/<uid>/<waylandDisplay>   (filter proxy; not the GPU sidecar)
   #   /run/user/<uid>/pipewire-0
-  # sockets into their private mount namespaces. The framework
-  # does NOT create the user — you do, here.
+  # The framework does NOT create the user — you do, here.
   # ---------------------------------------------------------------
   users.users.alice = {
     isNormalUser = true;

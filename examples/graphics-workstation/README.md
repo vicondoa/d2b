@@ -44,35 +44,48 @@ nixling.site = {
 
 Graphics VMs do **not** ship pixels back to the host as a video
 stream. Instead, the guest's Wayland clients connect through a
-crosvm-side GPU device that speaks the **virtio-gpu cross-domain
-context** protocol to the host. The host runs a per-VM
-`nixling-<vm>-gpu.service` sidecar (a hardened, isolated systemd
-unit running as a dedicated user) that:
+chain that spans the VM boundary:
 
-1. Speaks `crosvm device gpu` on the VM side over vhost-user-gpu.
-2. Translates Wayland surface allocations from the guest into real
-   surfaces on the host's compositor by opening
-   `/run/user/<uid>/wayland-0` — the socket of the user named by
-   `nixling.site.waylandUser`.
-3. Lets the host compositor (Plasma here, but sway / Hyprland /
-   GNOME work identically) own focus, decorations, multi-monitor
-   placement, and HiDPI — the guest sees a single Wayland output
-   pre-mapped per host monitor.
+1. **Guest** — the guest runs `wl-cross-domain-proxy` (a lightweight
+   virtio-gpu cross-domain bridge). Guest apps see a normal Wayland
+   socket (`WAYLAND_DISPLAY=wayland-1`).
+2. **virtio-gpu cross-domain channel** — the cross-domain transport
+   carries Wayland protocol messages and surface allocations from the
+   guest through the KVM boundary to the crosvm GPU sidecar on the
+   host.
+3. **crosvm GPU sidecar** (`crosvm device gpu`, running as
+   `nixling-<vm>-gpu`) — receives the guest Wayland traffic and
+   forwards it to the host-side filter socket at
+   `/run/nixling-wlproxy/<vm>/wayland-0`. The GPU sidecar does NOT
+   connect directly to the host compositor socket.
+4. **`nixling-wayland-filter`** (running as `nixling-<vm>-wlproxy`,
+   listening on `/run/nixling-wlproxy/<vm>/wayland-0`) — mediates
+   between the GPU sidecar and the real host compositor. It hides
+   high-risk Wayland globals (screen capture, virtual input, etc.),
+   rewrites guest app IDs to `nixling.<vm>.<original-app-id>` so the
+   host compositor can identify VM windows, and prefixes window titles
+   with `[<vm>] ` for non-niri compositors. The `wlproxy` role is the
+   **only** VM-specific process that holds the real host compositor socket.
+5. **Host compositor** — receives forwarded surfaces and owns focus,
+   decorations, multi-monitor placement, and HiDPI.
+
+This design means the GPU sidecar is never directly trusted with the
+host compositor socket. A compromised GPU command buffer can at most
+reach the filter socket; the filter proxy enforces the host-compositor
+trust boundary.
 
 Practical implications:
 
 - A graphics VM with `nixling.site.waylandUser = null` is a hard
   eval error — there's no host compositor to forward into.
-- `autostart = true` on a graphics VM is rejected; the systemd
-  unit cannot reach the user's Wayland session at boot. Always
-  bring graphics VMs up interactively from a Plasma (or sway,
-  etc.) terminal: `nixling vm start corp-desktop --apply`.
-- The sidecar is hardened with `MemoryDenyWriteExecute = false`
-  (the crosvm GPU command-buffer JIT needs `PROT_WRITE|PROT_EXEC`
-  — see Spec correction #19) and
-  `RestrictAddressFamilies = [ AF_UNIX AF_NETLINK AF_VSOCK ]`
-  (cloud-hypervisor uses vsock for `sd_notify` — see Spec
-  correction #20).
+- `autostart = true` on a graphics VM is rejected; the daemon cannot
+  reach the user's Wayland session at boot. Always bring graphics VMs
+  up interactively from a compositor terminal:
+  `nixling vm start corp-desktop --apply`.
+- Guest app IDs are prefixed with `nixling.corp-desktop.` by the
+  filter proxy. If you use niri, you can opt into a generated
+  window-rule include file via `nixling.site.niriVmBorders.enable = true`
+  — see [`docs/how-to/niri-vm-borders.md`](../../docs/how-to/niri-vm-borders.md).
 
 ## The audio model
 
@@ -293,9 +306,8 @@ Plasma + PipeWire + nixling closure and takes minutes.
   `nixling.site.waylandUser` either. See `examples/minimal/`.
 - Want a different Wayland compositor on the host? Swap
   `services.desktopManager.plasma6.enable = true` for your
-  compositor of choice; the GPU sidecar talks to whatever owns
-  the `wayland-0` socket of the user named by
-  `nixling.site.waylandUser`.
+  compositor of choice; the host-side Wayland filter proxy connects to
+  whatever socket the user named by `nixling.site.waylandUser` owns.
 
 ## Common gotchas
 

@@ -60,8 +60,9 @@ of the store.
    - `journalctl -u nixlingd.service` (daemon log)
    - the per-VM launcher log
 3. **Wait for the per-VM GPU wayland socket.** Polls
-   `/run/nixling-gpu/<vm>/wayland-0` for up to 30 s. The daemon's
-   `ssh-ready` DAG node only guarantees sshd; the GPU socket can race
+   `/run/nixling-wlproxy/<vm>/wayland-0` for up to 30 s. The daemon's
+   `ssh-ready` DAG node only guarantees sshd; the filter socket (and
+   through it the GPU sidecar's cross-domain channel) can race
    slightly behind on cold starts.
 4. **Wait for SSH.** Probes `<sshUser>@<staticIp>` with the per-VM
    key (copied to a 0600 tempfile because the source is 0640
