@@ -16,9 +16,8 @@ use std::{
 use wl_proxy::{
     client::{Client, ClientHandler},
     global_mapper::GlobalMapper,
-    object::{ObjectRcUtils, Object},
+    object::{Object, ObjectRcUtils},
     protocols::{
-        ObjectInterface,
         wayland::{
             wl_display::{WlDisplay, WlDisplayHandler},
             wl_registry::{WlRegistry, WlRegistryHandler},
@@ -28,6 +27,7 @@ use wl_proxy::{
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler},
             xdg_wm_base::{XdgWmBase, XdgWmBaseHandler},
         },
+        ObjectInterface,
     },
     state::{State, StateHandler},
 };
@@ -221,11 +221,7 @@ struct FilterXdgSurfaceHandler {
 }
 
 impl XdgSurfaceHandler for FilterXdgSurfaceHandler {
-    fn handle_get_toplevel(
-        &mut self,
-        slf: &Rc<XdgSurface>,
-        toplevel: &Rc<XdgToplevel>,
-    ) {
+    fn handle_get_toplevel(&mut self, slf: &Rc<XdgSurface>, toplevel: &Rc<XdgToplevel>) {
         toplevel.set_handler(FilterXdgToplevelHandler {
             policy: self.policy.clone(),
         });
@@ -308,22 +304,18 @@ mod tests {
         let handler = FilterRegistryHandler::new(policy(), diag.clone());
 
         for name in 0..6 {
-            handler.diag.borrow_mut().bind_denied(
-                crate::diag::DropReason::BindDeniedUnadvertised,
-                name,
-            );
+            handler
+                .diag
+                .borrow_mut()
+                .bind_denied(crate::diag::DropReason::BindDeniedUnadvertised, name);
         }
 
-        let suppressed_before_flush = diag
-            .borrow()
-            .suppressed_total_for_tests();
+        let suppressed_before_flush = diag.borrow().suppressed_total_for_tests();
         assert_eq!(suppressed_before_flush, 1);
 
         diag.borrow_mut().flush_suppressed();
 
-        let suppressed_after_flush = diag
-            .borrow()
-            .suppressed_total_for_tests();
+        let suppressed_after_flush = diag.borrow().suppressed_total_for_tests();
         assert_eq!(suppressed_after_flush, 0);
     }
 }

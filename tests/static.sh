@@ -816,6 +816,7 @@ for _d13_gate in \
   minijail-validator-vsock-relay \
   minijail-validator-wayland-proxy \
   net-vm-bundle-gate-eval \
+  niri-vm-borders-eval \
   no-bash-exec-eval \
   otel-acl-migration-eval \
   otel-host-bridge-argv-shape \

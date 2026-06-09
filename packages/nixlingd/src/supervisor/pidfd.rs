@@ -234,12 +234,8 @@ pub fn handle_runner_exit(
     wlproxy_policy: WlproxyWatchdogPolicy,
 ) -> WatchdogOutcome {
     match role {
-        RunnerRole::Virtiofsd => {
-            handle_virtiofsd_exit(vm, role_id, exit, vfsd_policy)
-        }
-        RunnerRole::WaylandProxy => {
-            handle_wlproxy_exit(vm, role_id, exit, wlproxy_policy)
-        }
+        RunnerRole::Virtiofsd => handle_virtiofsd_exit(vm, role_id, exit, vfsd_policy),
+        RunnerRole::WaylandProxy => handle_wlproxy_exit(vm, role_id, exit, wlproxy_policy),
         _ => WatchdogOutcome::default(),
     }
 }
@@ -597,7 +593,10 @@ mod tests {
             },
         );
         assert_eq!(outcome.events.len(), 1);
-        assert!(matches!(outcome.events[0], SupervisorEvent::WlproxyDied { .. }));
+        assert!(matches!(
+            outcome.events[0],
+            SupervisorEvent::WlproxyDied { .. }
+        ));
         let audit = match outcome.audit.expect("audit under policy-off") {
             WatchdogAuditRecord::Wlproxy(r) => r,
             other => panic!("expected Wlproxy audit, got {other:?}"),

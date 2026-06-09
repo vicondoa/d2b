@@ -138,10 +138,7 @@ impl DiagRateLimiter {
 
     #[cfg(test)]
     pub fn suppressed_total_for_tests(&self) -> u64 {
-        self.buckets
-            .values()
-            .map(|bucket| bucket.suppressed)
-            .sum()
+        self.buckets.values().map(|bucket| bucket.suppressed).sum()
     }
 }
 

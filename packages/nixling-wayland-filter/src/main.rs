@@ -14,10 +14,7 @@
 use std::{
     cell::RefCell,
     io,
-    os::{
-        fd::OwnedFd,
-        unix::net::UnixListener,
-    },
+    os::{fd::OwnedFd, unix::net::UnixListener},
     path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
@@ -25,7 +22,7 @@ use std::{
 
 use clap::Parser;
 use env_logger::Env;
-use nixling_wayland_filter::filter::{FilterClientHandler, FilterStateHandler, build_state};
+use nixling_wayland_filter::filter::{build_state, FilterClientHandler, FilterStateHandler};
 use nixling_wayland_filter::{
     diag::DiagRateLimiter,
     policy::{FilterPolicy, PolicyInput},
@@ -161,9 +158,7 @@ fn main() {
     };
 
     if let Err(e) = listener.set_nonblocking(true) {
-        eprintln!(
-            "nixling-wayland-filter: failed to set listen socket non-blocking: {e}"
-        );
+        eprintln!("nixling-wayland-filter: failed to set listen socket non-blocking: {e}");
         std::process::exit(1);
     }
 
@@ -197,9 +192,7 @@ fn run_loop(
                             client.set_handler(FilterClientHandler::new(vm.to_owned()));
                         }
                         Err(e) => {
-                            log::warn!(
-                                "[nixling-wlproxy] vm={vm} failed to add client: {e}"
-                            );
+                            log::warn!("[nixling-wlproxy] vm={vm} failed to add client: {e}");
                         }
                     }
                 }
@@ -236,10 +229,7 @@ fn is_recoverable_accept_error(error: &io::Error) -> bool {
         return true;
     }
 
-    matches!(
-        error.raw_os_error(),
-        Some(libc::ECONNABORTED | libc::EINTR)
-    )
+    matches!(error.raw_os_error(), Some(libc::ECONNABORTED | libc::EINTR))
 }
 
 #[cfg(test)]

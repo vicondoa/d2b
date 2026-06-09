@@ -197,9 +197,7 @@ pub fn regenerate_argv(
         }
         // WaylandProxy: argv regeneration wired in Wave 2 / Lane A when the
         // nixling-wayland-filter binary is added to the workspace.
-        ProcessRole::WaylandProxy => {
-            Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
-        }
+        ProcessRole::WaylandProxy => Err(RegenerateArgvError::NotYetWired(intent.role.clone())),
     }
 }
 

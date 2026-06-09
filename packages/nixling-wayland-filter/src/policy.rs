@@ -138,9 +138,7 @@ impl FilterPolicy {
         let app_id_prefix = input
             .app_id_prefix
             .unwrap_or_else(|| format!("nixling.{vm}."));
-        let title_prefix = input
-            .title_prefix
-            .unwrap_or_else(|| format!("[{vm}] "));
+        let title_prefix = input.title_prefix.unwrap_or_else(|| format!("[{vm}] "));
 
         // Populate the default entries from the classified allowlist.
         let mut entries: HashMap<String, PolicyEntry> = default_classified_entries();
@@ -346,7 +344,11 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
 
     // --- accelerated-rendering (enabled, warn if denied) ---
     entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering);
-    entry!("wp_linux_drm_syncobj_manager_v1", Allow, AcceleratedRendering);
+    entry!(
+        "wp_linux_drm_syncobj_manager_v1",
+        Allow,
+        AcceleratedRendering
+    );
     entry!("wp_single_pixel_buffer_v1", Allow, AppDefault);
 
     // --- presentation-and-scaling (enabled, app default) ---
@@ -381,7 +383,11 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("zwp_tablet_manager_v2", Allow, AppDefault);
     entry!("zwp_text_input_manager_v3", Allow, AppDefault);
     entry!("zwp_input_timestamps_manager_v1", Allow, AppDefault);
-    entry!("zwp_keyboard_shortcuts_inhibit_manager_v1", Allow, AppDefault);
+    entry!(
+        "zwp_keyboard_shortcuts_inhibit_manager_v1",
+        Allow,
+        AppDefault
+    );
     entry!("wp_pointer_warp_v1", Allow, AppDefault);
 
     // wl_drm is legacy but still used by some Mesa paths

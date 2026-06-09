@@ -94,9 +94,7 @@ pub fn generate_wayland_proxy_argv(
     }
     for path in [&input.listen_socket, &input.upstream_socket] {
         if !path.starts_with('/') {
-            return Err(WaylandProxyArgvError::RelativeSocketPath {
-                path: path.clone(),
-            });
+            return Err(WaylandProxyArgvError::RelativeSocketPath { path: path.clone() });
         }
     }
 
@@ -154,7 +152,10 @@ mod tests {
         let mut input = WaylandProxyArgvInput::for_vm("work");
         input.listen_socket = "relative/path".to_owned();
         let err = generate_wayland_proxy_argv(&input).unwrap_err();
-        assert!(matches!(err, WaylandProxyArgvError::RelativeSocketPath { .. }));
+        assert!(matches!(
+            err,
+            WaylandProxyArgvError::RelativeSocketPath { .. }
+        ));
     }
 
     #[test]
