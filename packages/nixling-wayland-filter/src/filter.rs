@@ -10,7 +10,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashSet},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 use wl_proxy::{
@@ -114,8 +114,16 @@ pub struct FilterRegistryHandler {
     diag: Rc<RefCell<DiagRateLimiter>>,
     /// Server global names intentionally hidden from this client.
     hidden_globals: HashSet<u32>,
-    /// Server global names actually advertised to this client.
-    advertised_globals: BTreeSet<u32>,
+    /// Server global names actually advertised to this client, with the
+    /// interface and version we advertised. Bind requests above this version
+    /// are rejected even if the client guessed the original compositor version.
+    advertised_globals: HashMap<u32, AdvertisedGlobal>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AdvertisedGlobal {
+    interface: ObjectInterface,
+    version: u32,
 }
 
 impl FilterRegistryHandler {
@@ -124,7 +132,7 @@ impl FilterRegistryHandler {
             policy,
             diag,
             hidden_globals: HashSet::new(),
-            advertised_globals: BTreeSet::new(),
+            advertised_globals: HashMap::new(),
         }
     }
 }
@@ -149,7 +157,13 @@ impl WlRegistryHandler for FilterRegistryHandler {
         };
 
         let adv_version = self.policy.advertised_version(iface_name, version);
-        self.advertised_globals.insert(name);
+        self.advertised_globals.insert(
+            name,
+            AdvertisedGlobal {
+                interface,
+                version: adv_version,
+            },
+        );
         slf.send_global(name, interface, adv_version);
     }
 
@@ -164,7 +178,7 @@ impl WlRegistryHandler for FilterRegistryHandler {
     fn handle_bind(&mut self, slf: &Rc<WlRegistry>, name: u32, id: Rc<dyn Object>) {
         // Detect and log bind attempts for names that were never advertised
         // to this client or that were explicitly hidden.
-        if !self.advertised_globals.contains(&name) {
+        let Some(advertised) = self.advertised_globals.get(&name).copied() else {
             let reason = if self.hidden_globals.contains(&name) {
                 DropReason::BindDeniedHidden
             } else {
@@ -177,6 +191,22 @@ impl WlRegistryHandler for FilterRegistryHandler {
             // client's object table. Denied binds are protocol violations
             // against our filtered registry, so fail closed by dropping the
             // offending client connection.
+            if let Some(client) = id.client() {
+                client.disconnect();
+            }
+            drop(id);
+            return;
+        };
+
+        if !bind_matches_advertised_cap(advertised, id.interface(), id.version()) {
+            log::warn!(
+                "[nixling-wlproxy] vm={} event=bind-denied reason=version-cap registry-name={} interface={} requested-version={} advertised-version={}",
+                self.policy.vm_name,
+                name,
+                advertised.interface.name(),
+                id.version(),
+                advertised.version,
+            );
             if let Some(client) = id.client() {
                 client.disconnect();
             }
@@ -300,6 +330,14 @@ fn eglstream_handle_is_fd(handle_type: i32) -> bool {
     handle_type == WlEglstreamHandleType::FD.0 as i32
 }
 
+fn bind_matches_advertised_cap(
+    advertised: AdvertisedGlobal,
+    requested_interface: ObjectInterface,
+    requested_version: u32,
+) -> bool {
+    requested_interface == advertised.interface && requested_version <= advertised.version
+}
+
 /// Minimal `ClientHandler` that logs disconnections for debugging.
 pub struct FilterClientHandler {
     vm: String,
@@ -354,14 +392,26 @@ mod tests {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut handler = FilterRegistryHandler::new(policy(), diag);
 
-        handler.advertised_globals.insert(7);
+        handler.advertised_globals.insert(
+            7,
+            AdvertisedGlobal {
+                interface: ObjectInterface::WlCompositor,
+                version: 6,
+            },
+        );
         handler.hidden_globals.insert(42);
-        handler.advertised_globals.insert(99);
+        handler.advertised_globals.insert(
+            99,
+            AdvertisedGlobal {
+                interface: ObjectInterface::WlShm,
+                version: 2,
+            },
+        );
 
-        assert!(handler.advertised_globals.contains(&7));
-        assert!(handler.advertised_globals.contains(&99));
+        assert!(handler.advertised_globals.contains_key(&7));
+        assert!(handler.advertised_globals.contains_key(&99));
         assert!(handler.hidden_globals.contains(&42));
-        assert!(!handler.advertised_globals.contains(&42));
+        assert!(!handler.advertised_globals.contains_key(&42));
     }
 
     #[test]
@@ -409,6 +459,35 @@ mod tests {
         ));
         assert!(!eglstream_handle_is_fd(
             WlEglstreamHandleType::SOCKET.0 as i32
+        ));
+    }
+
+    #[test]
+    fn bind_version_must_not_exceed_advertised_cap() {
+        let advertised = AdvertisedGlobal {
+            interface: ObjectInterface::ZwpLinuxDmabufV1,
+            version: 3,
+        };
+
+        assert!(bind_matches_advertised_cap(
+            advertised,
+            ObjectInterface::ZwpLinuxDmabufV1,
+            3
+        ));
+        assert!(bind_matches_advertised_cap(
+            advertised,
+            ObjectInterface::ZwpLinuxDmabufV1,
+            2
+        ));
+        assert!(!bind_matches_advertised_cap(
+            advertised,
+            ObjectInterface::ZwpLinuxDmabufV1,
+            4
+        ));
+        assert!(!bind_matches_advertised_cap(
+            advertised,
+            ObjectInterface::WlCompositor,
+            3
         ));
     }
 }
