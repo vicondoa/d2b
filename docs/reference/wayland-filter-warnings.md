@@ -5,15 +5,28 @@
 > baseline or touches a rule nixling classifies as required or
 > high-risk.
 
+> **Status:** planned option surface.  The Rust policy engine is present,
+> but the NixOS option namespace
+> `nixling.vms.<vm>.graphics.waylandFilter.*` is wired by the central
+> graphics integration.  Until that wiring lands, the Nix snippets below
+> document the intended surface and will fail if pasted into a host
+> configuration.
+
 Warnings are **advisory**: the NixOS configuration still evaluates
-and builds when a warning condition is met.  They are surfaced in
-`nixos-rebuild switch` output and in the `nixling down/up --apply`
-diagnostic stream.
+and builds when a warning condition is met once the option surface is
+wired.  They are intended to surface in `nixos-rebuild switch` output and
+in the `nixling down/up --apply` diagnostic stream.
 
 Secure defaults emit **zero** `waylandFilter` warnings.  A clean
-configuration with no overrides produces no output from this catalog.
+configuration with no overrides produces no output from this catalog once
+the NixOS option surface is available.
 
 ## Warning conditions
+
+The `W-*` names below are documentation anchors for the planned NixOS
+warning surface.  The Rust policy engine currently emits human-readable
+`PolicyWarning` messages; stable warning codes are added when the NixOS
+option layer is wired.
 
 ### W-DENY-BASELINE
 

@@ -120,8 +120,6 @@ impl FilterRegistryHandler {
     /// Record a server name that we explicitly ignored.
     fn record_ignore(&mut self, server_name: u32) {
         self.ignored_server_names.insert(server_name);
-        // The mapper's internal list still grows by one sentinel slot.
-        self.next_mapper_client_name += 1;
     }
 }
 
@@ -270,4 +268,30 @@ pub fn build_state(upstream_path: &str) -> Result<Rc<State>, wl_proxy::state::St
     State::builder(wl_proxy::baseline::Baseline::ALL_OF_THEM)
         .with_server_display_name(upstream_path)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{FilterPolicy, PolicyInput};
+
+    fn policy() -> Rc<FilterPolicy> {
+        Rc::new(FilterPolicy::build(PolicyInput {
+            vm_name: "work".to_owned(),
+            ..PolicyInput::default()
+        }))
+    }
+
+    #[test]
+    fn ignored_globals_do_not_consume_mapper_client_names() {
+        let mut handler = FilterRegistryHandler::new(policy());
+
+        handler.record_forward();
+        handler.record_ignore(42);
+        handler.record_forward();
+
+        assert!(handler.advertised_client_names.contains(&1));
+        assert!(handler.advertised_client_names.contains(&2));
+        assert!(!handler.advertised_client_names.contains(&3));
+    }
 }

@@ -116,6 +116,25 @@ impl DiagRateLimiter {
             format!("[nixling-wlproxy] vm={vm} event=global-filtered interface={iface}")
         });
     }
+
+    /// Flush suppressed counts for all buckets. Call periodically and before
+    /// shutdown so a terminal burst does not disappear just because no later
+    /// event arrived after the rate-limit window.
+    pub fn flush_suppressed(&mut self) {
+        for (key, bucket) in &mut self.buckets {
+            if bucket.suppressed == 0 {
+                continue;
+            }
+            log::warn!(
+                "[nixling-wlproxy] vm={} event={} label={} suppressed={} in last window",
+                key.vm,
+                key.event,
+                key.label,
+                bucket.suppressed,
+            );
+            bucket.suppressed = 0;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -144,5 +163,22 @@ mod tests {
         // "b" bucket is fresh.
         let emitted = rl.emit("ev", "b", || "msg".to_owned());
         assert!(emitted);
+    }
+
+    #[test]
+    fn flush_suppressed_resets_terminal_burst_counts() {
+        let mut rl = DiagRateLimiter::new("vm".to_owned());
+        for _ in 0..MAX_PER_WINDOW {
+            assert!(rl.emit("ev", "a", || "msg".to_owned()));
+        }
+        assert!(!rl.emit("ev", "a", || "msg".to_owned()));
+
+        let bucket = rl.buckets.values().next().expect("bucket exists");
+        assert_eq!(bucket.suppressed, 1);
+
+        rl.flush_suppressed();
+
+        let bucket = rl.buckets.values().next().expect("bucket exists");
+        assert_eq!(bucket.suppressed, 0);
     }
 }

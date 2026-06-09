@@ -32,12 +32,16 @@ pattern `^nixling\.work\.`.
 The window title prefix `[<vm>] ` behavior is preserved for
 compositors that rely on title-based VM disambiguation.
 
-### Xwayland is temporarily fail-closed
+### Xwayland must be disabled before the migration
 
 `graphics.xwayland.enable = true` is not supported during the
-Wayland-only migration phase.  Setting it fails eval with a clear
-message.  Set `graphics.xwayland.enable = false` (or remove the
-option — false is the default) before switching.
+Wayland-only migration phase.  Set `graphics.xwayland.enable = false`
+(or remove the option — false is the default) before switching.
+
+The central proxy wiring will add a hard eval assertion that rejects
+`graphics.xwayland.enable = true`.  Until then, treat the option as an
+unsupported legacy path during this migration rather than relying on it to
+work.
 
 Future work will add a validated Xwayland path.
 
@@ -74,8 +78,8 @@ nixling.vms.work.graphics.crossDomainTrusted = true;
 
 ### 3. Enable the Wayland filter (when available)
 
-When `graphics.waylandFilter.enable` is wired by the central module
-(Wave 2 integration), enable it:
+When `graphics.waylandFilter.enable` is wired by the central module,
+enable it:
 
 ```nix
 nixling.vms.work.graphics.waylandFilter.enable = true;
@@ -180,7 +184,8 @@ For a full list of warning conditions, see
 If you encounter a regression and need to roll back before completing
 the migration:
 
-1. Set `graphics.crossDomainTrusted = false` and
+1. Set `graphics.crossDomainTrusted = false`.
+   When the central filter option is available, also set
    `graphics.waylandFilter.enable = false`.
 2. Run `sudo nixos-rebuild switch`.
 3. Restart the VM: `nixling down <vm> --apply && nixling up <vm> --apply`.
@@ -190,6 +195,8 @@ The guest will revert to the previous proxy path.
 ## Known limitations at migration time
 
 - **Xwayland is not supported.** Set `graphics.xwayland.enable = false`.
+  The central proxy wiring will add a hard eval assertion for this
+  unsupported state.
 - **Multi-output enumeration** works through the filter; verify with
   `wayland-info` inside the guest if you use a multi-monitor setup.
 - **Clipboard and DnD** are forwarded for standard protocols

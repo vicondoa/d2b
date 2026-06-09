@@ -3614,6 +3614,11 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
         Some(RunnerRole::Audio)
     } else if role_id == RunnerRole::Video.as_str() || role_id.contains("video") {
         Some(RunnerRole::Video)
+    } else if role_id == RunnerRole::WaylandProxy.as_str()
+        || role_id.contains("wayland-proxy")
+        || role_id.contains("wlproxy")
+    {
+        Some(RunnerRole::WaylandProxy)
     } else if role_id == RunnerRole::Usbip.as_str() || role_id.contains("usbip") {
         Some(RunnerRole::Usbip)
     } else if role_id == RunnerRole::VsockRelay.as_str() || role_id.contains("vsock") {

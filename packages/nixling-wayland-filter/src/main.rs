@@ -19,12 +19,16 @@ use std::{
     },
     path::PathBuf,
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use clap::Parser;
+use env_logger::Env;
 use nixling_wayland_filter::filter::{FilterClientHandler, FilterStateHandler, build_state};
-use nixling_wayland_filter::policy::{FilterPolicy, PolicyInput};
+use nixling_wayland_filter::{
+    diag::DiagRateLimiter,
+    policy::{FilterPolicy, PolicyInput},
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "nixling-wayland-filter")]
@@ -78,7 +82,7 @@ fn parse_max_version(s: &str) -> Result<(String, u32), String> {
 }
 
 fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
 
@@ -172,6 +176,8 @@ fn main() {
 }
 
 fn run_loop(state: &Rc<wl_proxy::state::State>, listener: &UnixListener, vm: &str) {
+    let mut diag = DiagRateLimiter::new(vm.to_owned());
+    let mut last_diag_flush = Instant::now();
     loop {
         // Accept all pending new client connections (non-blocking).
         loop {
@@ -191,6 +197,10 @@ fn run_loop(state: &Rc<wl_proxy::state::State>, listener: &UnixListener, vm: &st
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if is_recoverable_accept_error(&e) => {
+                    log::warn!("[nixling-wlproxy] vm={vm} recoverable accept error: {e}");
+                    continue;
+                }
                 Err(e) => {
                     eprintln!("nixling-wayland-filter: accept error: {e}");
                     std::process::exit(1);
@@ -206,5 +216,44 @@ fn run_loop(state: &Rc<wl_proxy::state::State>, listener: &UnixListener, vm: &st
                 std::process::exit(1);
             }
         }
+
+        if last_diag_flush.elapsed() >= Duration::from_secs(60) {
+            diag.flush_suppressed();
+            last_diag_flush = Instant::now();
+        }
+    }
+}
+
+fn is_recoverable_accept_error(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::Interrupted {
+        return true;
+    }
+
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ECONNABORTED | libc::EINTR)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_accept_is_recoverable() {
+        let err = io::Error::from_raw_os_error(libc::EINTR);
+        assert!(is_recoverable_accept_error(&err));
+    }
+
+    #[test]
+    fn aborted_accept_is_recoverable() {
+        let err = io::Error::from_raw_os_error(libc::ECONNABORTED);
+        assert!(is_recoverable_accept_error(&err));
+    }
+
+    #[test]
+    fn permission_denied_accept_is_fatal() {
+        let err = io::Error::from_raw_os_error(libc::EACCES);
+        assert!(!is_recoverable_accept_error(&err));
     }
 }
