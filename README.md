@@ -57,13 +57,9 @@ flowchart TB
         end
     end
 
-    cli --> nixlingd
-    broker --> vm
-    broker --> vhost
-    broker --> wayland
-    wayland --> desktop
-    vhost --> devices
-    vhost <--> vm
+    nixling_box --- vm
+    nixling_box --- devices
+    nixling_box --- desktop
 ```
 
 **Quick start** (full walkthroughs under
