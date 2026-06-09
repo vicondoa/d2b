@@ -81,7 +81,7 @@ flowchart TD
     subgraph host["HOST"]
         direction TD
         wayland["Wayland user (trusted UI principal)<br/>compositor + nixling CLI invocations"]
-        sidecars["nixling per-VM runners (semi-trusted)<br/>broker-spawned via nixling.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>gpu (per-VM uid)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (nixling.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
+        sidecars["nixling per-VM runners (semi-trusted)<br/>broker-spawned via nixling.slice/&lt;vm&gt;/&lt;role&gt; in v1.0:<br/>wlproxy (per-VM uid, Wayland filter; holds real compositor socket)<br/>gpu (per-VM uid; connects to wlproxy filter socket, not compositor)<br/>video (shares gpu uid)<br/>snd (per-VM uid)<br/>swtpm (per-VM uid)<br/>microvm-virtiofsd@&lt;vm&gt; (per-VM uid)<br/>per-env usbipd backend+proxy (nixling.slice/sys-&lt;env&gt;/usbipd-*)<br/>legacy systemd templates retired per ADR 0015"]
     end
     subgraph kvm["KVM boundary"]
         direction TD
@@ -93,7 +93,7 @@ flowchart TD
     end
 
     wayland -->|SO_PEERCRED at public.sock<br/>nixling group<br/>+ ssh via keysDir| sidecars
-    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wayland-0, pipewire-0)| boundary
+    sidecars -->|vsock / virtio-* / ACL'd sockets<br/>(wlproxy→compositor; gpu→wlproxy filter; pipewire-0)| boundary
     boundary --> guest_desc
 ```
 
@@ -113,8 +113,12 @@ flowchart TD
           │                      ▼                                │
           │   ┌──── nixling per-VM runners (semi-trusted, ──┐    │
           │   │      broker-spawned in v1.0 per ADR 0015)   │    │
-          │   │   nixling.slice/<vm>/gpu    (per-VM uid)    │    │
-          │   │   nixling.slice/<vm>/video  (shares gpu uid)│    │
+          │   │   nixling.slice/<vm>/wlproxy (per-VM uid,   │    │
+          │   │       Wayland filter; holds real compositor  │    │
+          │   │       socket for graphics VMs with filter)   │    │
+          │   │   nixling.slice/<vm>/gpu    (per-VM uid;     │    │
+          │   │       connects to wlproxy, not compositor)   │    │
+          │   │   nixling.slice/<vm>/video  (shares gpu uid) │    │
           │   │   nixling.slice/<vm>/snd    (per-VM uid)    │    │
           │   │   nixling.slice/<vm>/swtpm  (per-VM uid)    │    │
           │   │   microvm-virtiofsd@<vm>    (per-VM uid)    │    │
@@ -123,7 +127,8 @@ flowchart TD
           │   │    legacy systemd templates retired)        │    │
           │   └──────────────────┬───────────────────────────┘   │
           │                      │ vsock / virtio-* / ACL'd       │
-          │                      │ sockets (wayland-0, pipewire-0)│
+          │                      │ sockets (wlproxy→compositor;   │
+          │                      │  gpu→wlproxy filter; pipewire) │
           ╞══════════════════════╪═══════════════════════════════ ╡
           │                      │ KVM boundary                   │
           │   ┌──────────────────▼────────────────────────────┐   │
@@ -426,9 +431,21 @@ by pidfd:
   virtiofs shares the consumer adds.
 - `store-virtiofs-preflight` — verifies the per-VM hardlink-farm marker
   before virtiofsd starts; the daemon owns the sync path.
+- `wayland-proxy` — present when
+  `nixling.vms.<vm>.graphics.enable = true`,
+  `graphics.crossDomainTrusted = true`, and
+  `graphics.waylandFilter.enable = true`. Runs the
+  `nixling-wayland-filter` binary as `nixling-<vm>-wlproxy` (per-VM
+  uid). This is the **only** per-VM role that holds the real host
+  compositor socket; it listens on
+  `/run/nixling-wlproxy/<vm>/wayland-0` for the GPU sidecar and
+  enforces the filter policy before forwarding to the compositor.
 - `gpu` / `gpu-render-node` — present when
   `nixling.vms.<vm>.graphics.enable = true`. Runs the patched crosvm
   GPU sidecar and gates Cloud Hypervisor startup on the GPU socket.
+  When the Wayland filter is active the GPU sidecar connects to
+  `/run/nixling-wlproxy/<vm>/wayland-0` (the filter socket), not to
+  the real host compositor socket directly.
 - `video` — present only when
   `nixling.vms.<vm>.graphics.videoSidecar = true`. Runs the patched
   crosvm `device video-decoder --backend vaapi` sidecar as

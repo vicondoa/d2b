@@ -814,6 +814,7 @@ for _d13_gate in \
   minijail-validator-video \
   minijail-validator-virtiofsd \
   minijail-validator-vsock-relay \
+  minijail-validator-wayland-proxy \
   net-vm-bundle-gate-eval \
   no-bash-exec-eval \
   otel-acl-migration-eval \

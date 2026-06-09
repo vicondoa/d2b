@@ -111,6 +111,7 @@ Layer-1 script inventory:
 | `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
 | `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services plus the host, workload-guest, and obs-guest observability relay units. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for `nixling-<vm>-video.service` (`AF_UNIX` only, syscall filter, empty capability sets). |
+| `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access, upstream compositor bind present only for the `wlproxy` role. |
 | `tests/bridge-isolation-runtime.sh` | Hermetic runtime check that Linux bridge port isolation still blocks workload↔workload traffic while preserving workload↔net-VM reachability. |
 | `tests/network-isolation.sh` | Optional live-host datapath checks for same-env east-west and cross-env isolation. |
 | `tests/audit-forwarding.sh` | Optional live-host end-to-end check for auditd -> journald -> Alloy -> Loki delivery. |
