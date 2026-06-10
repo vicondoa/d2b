@@ -158,9 +158,6 @@ pub fn audit_fields_for_result(
     result: &Result<StoreSyncOutcome, StoreSyncError>,
 ) -> StoreSyncAuditFields {
     match result {
-        Ok(outcome) if outcome.fast_path => {
-            StoreSyncAuditFields::ok_fast_path(ctx, outcome.retained_generations.clone())
-        }
         Ok(outcome) if outcome.cleanup_status == CleanupStatus::Failed => {
             StoreSyncAuditFields::ok_cleanup_failed(
                 ctx,
@@ -168,8 +165,16 @@ pub fn audit_fields_for_result(
                 outcome.skipped_count,
                 outcome.retained_generations.clone(),
                 outcome.swept_count,
+                outcome.fast_path,
             )
         }
+        Ok(outcome) if outcome.fast_path => StoreSyncAuditFields::ok_fast_path_with_cleanup(
+            ctx,
+            outcome.retained_generations.clone(),
+            outcome.swept_count,
+            outcome.cleanup_status,
+            outcome.cleanup_reason,
+        ),
         Ok(outcome) => StoreSyncAuditFields::ok_non_fast_path_with_cleanup(
             ctx,
             outcome.linked_count,
@@ -1101,6 +1106,24 @@ mod tests {
         assert_eq!(fields.skipped_count, fields.closure_count);
         assert_eq!(fields.cleanup_status, CleanupStatus::SkippedFastPath);
         assert_eq!(fields.cleanup_reason, CleanupReason::FastPath);
+    }
+
+    #[test]
+    fn audit_fields_for_result_preserves_fast_path_cleanup_completed() {
+        use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus};
+        let mut outcome = outcome_fixture(true, 0, 3);
+        outcome.cleanup_status = CleanupStatus::Completed;
+        outcome.cleanup_reason = CleanupReason::None;
+        outcome.swept_count = 2;
+        let result: Result<StoreSyncOutcome, StoreSyncError> = Ok(outcome);
+        let fields = audit_fields_for_result(audit_ctx_fixture(), &result);
+        fields
+            .validate()
+            .expect("fast cleanup-completed record is valid");
+        assert!(fields.fast_path);
+        assert_eq!(fields.cleanup_status, CleanupStatus::Completed);
+        assert_eq!(fields.cleanup_reason, CleanupReason::None);
+        assert_eq!(fields.swept_count, 2);
     }
 
     #[test]

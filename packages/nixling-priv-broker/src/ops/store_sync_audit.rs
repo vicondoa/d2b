@@ -464,15 +464,31 @@ impl StoreSyncAuditFields {
     /// Pure fast path: a complete, consistent same-generation layout was
     /// already published, so nothing relinked and no sweep ran.
     pub fn ok_fast_path(ctx: StoreSyncAuditContext, retained_generations: Vec<u32>) -> Self {
+        Self::ok_fast_path_with_cleanup(
+            ctx,
+            retained_generations,
+            0,
+            CleanupStatus::SkippedFastPath,
+            CleanupReason::FastPath,
+        )
+    }
+
+    pub fn ok_fast_path_with_cleanup(
+        ctx: StoreSyncAuditContext,
+        retained_generations: Vec<u32>,
+        swept_count: u32,
+        cleanup_status: CleanupStatus,
+        cleanup_reason: CleanupReason,
+    ) -> Self {
         let closure_count = ctx.closure_count;
         Self {
             sync_status: SyncStatus::Ok,
-            cleanup_status: CleanupStatus::SkippedFastPath,
-            cleanup_reason: CleanupReason::FastPath,
+            cleanup_status,
+            cleanup_reason,
             linked_count: 0,
             skipped_count: closure_count,
             retained_generations,
-            swept_count: 0,
+            swept_count,
             fast_path: true,
             ..Self::base(ctx)
         }
@@ -487,6 +503,7 @@ impl StoreSyncAuditFields {
         skipped_count: u32,
         retained_generations: Vec<u32>,
         swept_count: u32,
+        fast_path: bool,
     ) -> Self {
         Self {
             sync_status: SyncStatus::Ok,
@@ -496,7 +513,7 @@ impl StoreSyncAuditFields {
             skipped_count,
             retained_generations,
             swept_count,
-            fast_path: false,
+            fast_path,
             ..Self::base(ctx)
         }
     }
@@ -587,7 +604,7 @@ mod tests {
 
     #[test]
     fn ok_cleanup_failed_keeps_activation_success() {
-        let rec = StoreSyncAuditFields::ok_cleanup_failed(ctx(), 17, 0, vec![42, 41], 0);
+        let rec = StoreSyncAuditFields::ok_cleanup_failed(ctx(), 17, 0, vec![42, 41], 0, false);
         rec.validate()
             .expect("post-activation cleanup failure is valid");
         assert_eq!(rec.sync_status, SyncStatus::Ok);

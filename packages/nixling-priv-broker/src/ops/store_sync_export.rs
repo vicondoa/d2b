@@ -317,7 +317,7 @@ mod tests {
         let records = vec![
             StoreSyncAuditFields::ok_non_fast_path(ctx(), 5, 12, vec![42, 41]),
             StoreSyncAuditFields::ok_fast_path(ctx(), vec![42]),
-            StoreSyncAuditFields::ok_cleanup_failed(ctx(), 17, 0, vec![42, 41], 0),
+            StoreSyncAuditFields::ok_cleanup_failed(ctx(), 17, 0, vec![42, 41], 0, false),
             StoreSyncAuditFields::failed(ctx(), ErrorStage::Probe),
             StoreSyncAuditFields::denied(ctx()),
         ];

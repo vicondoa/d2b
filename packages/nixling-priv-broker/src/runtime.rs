@@ -2299,7 +2299,109 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             let resolver = require_resolver(resolver)?;
             let vm_name = lookup_vm_name(resolver, &req.vm_id);
             let response = if let Some(intent) = resolver.find_store_view_intent(&vm_name) {
-                crate::ops::store_verify::run_store_verify(intent, req.repair)
+                let initial =
+                    crate::ops::store_verify::run_store_verify_read_only(intent, req.repair);
+                if req.repair
+                    && matches!(
+                        initial.status,
+                        nixling_ipc::broker_wire::StoreVerifyStatus::Drift
+                            | nixling_ipc::broker_wire::StoreVerifyStatus::Unknown
+                    )
+                {
+                    let sync_started = std::time::Instant::now();
+                    let sync_result = crate::ops::store_sync::run_store_sync_repair(intent);
+                    let sync_total_ms =
+                        u64::try_from(sync_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
+                    let generation_token = u32::try_from(intent.generation).unwrap_or(u32::MAX);
+                    let closure_count =
+                        u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
+                    let target_env = resolver
+                        .find_manifest_vm(&vm_name)
+                        .and_then(|vm| vm.env.clone());
+                    let timings = match &sync_result {
+                        Ok(outcome) => outcome.timings,
+                        Err(_) => crate::ops::store_sync_audit::StoreSyncTimings {
+                            total_ms: sync_total_ms,
+                            ..Default::default()
+                        },
+                    };
+                    let sync_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
+                        vm: vm_name.clone(),
+                        vm_id: req.vm_id.as_str().to_owned(),
+                        env: target_env,
+                        bundle_closure_ref: intent.intent_id.clone(),
+                        hardlink_farm_path: hardlink_farm_path_str,
+                        generation_id: crate::ops::store_sync::generation_id_for_intent(intent),
+                        generation_token,
+                        caller_principal: Some(format!(
+                            "uid:{caller_uid}/role:{}",
+                            audit_context.peer_role.as_str()
+                        )),
+                        closure_count,
+                        timings,
+                    };
+                    let sync_audit_fields =
+                        crate::ops::store_sync::audit_fields_for_result(sync_ctx, &sync_result);
+                    debug_assert!(
+                        sync_audit_fields.validate().is_ok(),
+                        "StoreSync repair audit record violates signed schema: {:?}",
+                        sync_audit_fields.validate()
+                    );
+                    let export_record = crate::ops::store_sync_export::StoreSyncObservabilityRecord::from_audit_fields(&sync_audit_fields);
+                    if let Err(err) = crate::ops::store_sync_export::append_export_record(
+                        &config.store_sync_export_dir,
+                        &export_record,
+                    ) {
+                        warn!(
+                            target_vm = %export_record.target_vm,
+                            error = %err,
+                            "failed to write StoreSync observability export record for StoreVerify repair"
+                        );
+                    }
+                    match &sync_result {
+                        Ok(outcome) => {
+                            write_success_op_record!(
+                                audit_log,
+                                bundle_metadata,
+                                "StoreSync",
+                                req.vm_id.as_str(),
+                                caller_uid,
+                                caller_gid,
+                                &caller_role,
+                                outcome.vm.as_str(),
+                                outcome.vm.as_str(),
+                                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                                OperationFields::StoreSync(sync_audit_fields),
+                            )?;
+                        }
+                        Err(err) => {
+                            let error_kind = store_sync_error_kind(err.error_stage());
+                            write_decision_op_record!(
+                                audit_log,
+                                bundle_metadata,
+                                "StoreSync",
+                                req.vm_id.as_str(),
+                                caller_uid,
+                                caller_gid,
+                                &caller_role,
+                                vm_name.as_str(),
+                                vm_name.as_str(),
+                                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                                "errored",
+                                Some(error_kind),
+                                OperationFields::StoreSync(sync_audit_fields),
+                            )?;
+                        }
+                    }
+                    crate::ops::store_verify::finish_repair_after_store_sync(
+                        intent,
+                        initial,
+                        sync_result,
+                    )
+                } else {
+                    initial
+                }
             } else {
                 crate::ops::store_verify::not_found(&vm_name)
             };
@@ -7921,8 +8023,8 @@ mod tests {
         fields.validate().expect("signed schema holds");
         assert_eq!(fields.sync_status, SyncStatus::Ok);
         assert!(fields.fast_path);
-        assert_eq!(fields.cleanup_status, CleanupStatus::SkippedFastPath);
-        assert_eq!(fields.cleanup_reason, CleanupReason::FastPath);
+        assert_eq!(fields.cleanup_status, CleanupStatus::Completed);
+        assert_eq!(fields.cleanup_reason, CleanupReason::None);
         assert_eq!(fields.linked_count, 0);
         assert_eq!(fields.skipped_count, fields.closure_count);
         assert_eq!(fields.swept_count, 0);
@@ -7940,8 +8042,8 @@ mod tests {
         assert_export_allow_list(fast_obj);
         assert_eq!(fast_record.sync_status, SyncStatus::Ok);
         assert!(fast_record.fast_path, "second export is the fast path");
-        assert_eq!(fast_record.cleanup_status, CleanupStatus::SkippedFastPath);
-        assert_eq!(fast_record.cleanup_reason, CleanupReason::FastPath);
+        assert_eq!(fast_record.cleanup_status, CleanupStatus::Completed);
+        assert_eq!(fast_record.cleanup_reason, CleanupReason::None);
         assert_eq!(fast_record.linked_count, 0);
         assert_eq!(fast_record.skipped_count, fast_record.closure_count);
 
@@ -8090,6 +8192,122 @@ mod tests {
             read_store_sync_export(&config).len(),
             1,
             "outer error-audit must not duplicate the StoreSync export record"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn store_verify_repair_emits_store_sync_audit_and_export() {
+        use crate::ops::store_sync_audit::SyncStatus;
+        use nixling_ipc::broker_wire::{
+            BrokerCallerRole, BrokerRequest, BrokerResponse, StoreVerifyRequest, StoreVerifyStatus,
+        };
+        use nixling_ipc::types::{TracingSpanId, VmId};
+
+        let root = test_audit_dir("store-verify-repair-audit");
+        let (bundle, farm) = store_sync_dispatch_bundle(&root, 7);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+
+        // First publish a clean generation.
+        let sync_request = store_sync_request(7);
+        let sync_context = DispatchAuditContext::from_request(&sync_request, 4242, &caller_role)
+            .expect("sync audit context");
+        dispatch_request_with_backend(
+            sync_request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &sync_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("initial store sync succeeds");
+
+        // Corrupt one existing top-level basename so --repair must run a
+        // StoreSync republish and then an exchange repair.
+        let live = farm.join("live/aaaaaaaaaaaaaaaa-corp-vm-system");
+        fs::remove_dir_all(&live).expect("remove live top-level");
+        fs::create_dir_all(&live).expect("create drifted live top-level");
+        fs::write(live.join("payload"), b"drifted").expect("write drift");
+
+        let before = capture.lock().expect("capture before verify").len();
+        let verify_request = BrokerRequest::StoreVerify(StoreVerifyRequest {
+            vm_id: VmId::new("corp-vm"),
+            repair: true,
+            tracing_span_id: Some(TracingSpanId::new("span-store-verify-repair")),
+        });
+        let verify_context =
+            DispatchAuditContext::from_request(&verify_request, 4243, &caller_role)
+                .expect("verify audit context");
+        let result = dispatch_request_with_backend(
+            verify_request,
+            1000,
+            caller_gid,
+            caller_role,
+            &verify_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("store verify repair succeeds");
+        match result.response {
+            BrokerResponse::StoreVerify(response) => {
+                assert_eq!(response.status, StoreVerifyStatus::Repaired);
+                assert_eq!(response.repaired, 1);
+            }
+            other => panic!("expected StoreVerify response, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture after verify");
+        let new_records = &records[before..];
+        assert_eq!(
+            new_records.len(),
+            2,
+            "repair writes StoreSync + StoreVerify records"
+        );
+        assert_eq!(new_records[0].operation, "StoreSync");
+        assert_eq!(new_records[1].operation, "StoreVerify");
+        let sync_fields = match OperationFields::from_operation_value(
+            "StoreSync",
+            new_records[0]
+                .operation_fields
+                .clone()
+                .expect("store sync fields"),
+        )
+        .expect("deserialize repair StoreSync fields")
+        {
+            OperationFields::StoreSync(fields) => fields,
+            other => panic!("expected StoreSync fields, got {other:?}"),
+        };
+        assert_eq!(sync_fields.sync_status, SyncStatus::Ok);
+        assert!(
+            !sync_fields.fast_path,
+            "repair StoreSync is forced non-fast-path"
+        );
+        drop(records);
+
+        let exported = read_store_sync_export(&config);
+        assert!(
+            exported
+                .iter()
+                .any(|(record, _)| record.generation_token == 7
+                    && record.sync_status == SyncStatus::Ok),
+            "repair StoreSync should be represented in StoreSync export"
         );
 
         let _ = fs::remove_dir_all(&root);

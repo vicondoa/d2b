@@ -20,7 +20,7 @@ use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::{StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason};
 use serde::{Deserialize, Serialize};
 
-use crate::ops::store_sync::run_store_sync_repair;
+use crate::ops::store_sync::{run_store_sync_repair, StoreSyncError, StoreSyncOutcome};
 use crate::ops::store_view_posture::{posture_host_only_file, posture_store_view_matrix_paths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,7 +144,7 @@ pub fn run_store_verify(intent: &ResolvedStoreViewIntent, repair: bool) -> Store
     initial
 }
 
-fn run_store_verify_read_only(
+pub fn run_store_verify_read_only(
     intent: &ResolvedStoreViewIntent,
     repair: bool,
 ) -> StoreVerifyResponse {
@@ -166,7 +166,32 @@ fn repair_store_view(
     intent: &ResolvedStoreViewIntent,
     initial: StoreVerifyResponse,
 ) -> StoreVerifyResponse {
-    match run_store_sync_repair(intent) {
+    finish_repair_after_store_sync(intent, initial, run_store_sync_repair(intent))
+}
+
+pub fn finish_repair_after_store_sync(
+    intent: &ResolvedStoreViewIntent,
+    initial: StoreVerifyResponse,
+    store_sync_result: Result<StoreSyncOutcome, StoreSyncError>,
+) -> StoreVerifyResponse {
+    match store_sync_result {
+        Ok(outcome)
+            if outcome.cleanup_status == crate::ops::store_sync_audit::CleanupStatus::Failed =>
+        {
+            return StoreVerifyResponse {
+                vm: initial.vm,
+                status: StoreVerifyStatus::Failed,
+                checked: initial.checked,
+                drifted: initial.drifted,
+                repaired: 0,
+                unknown_reason: initial.unknown_reason,
+                audit_ref: initial.audit_ref,
+                remediation: Some(
+                    "repair incomplete; StoreSync cleanup failed; inspect audit_ref and broker logs"
+                        .to_owned(),
+                ),
+            };
+        }
         Ok(_) => {}
         Err(err) => {
             return StoreVerifyResponse {
@@ -183,7 +208,6 @@ fn repair_store_view(
             };
         }
     }
-
     let after = run_store_verify_read_only(intent, false);
     if matches!(after.status, StoreVerifyStatus::Drift) {
         match replace_live_paths_for_repair(intent) {
