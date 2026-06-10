@@ -10,7 +10,7 @@
 #
 #  2. HOST→GUEST (host initiates):
 #     The host program connects to the BASE UDS (`<base>`), sends
-#     `CONNECT <port>\n`, reads back `OK <buffer-size>\n`, then
+#     `CONNECT <port>\n`, reads back `OK <local-port>\n`, then
 #     bidirectional bytes flow. There is NO per-port file for
 #     host-initiated connections — CH does not create
 #     `<base>_<port>` as a LISTENer when the guest does VSOCK-LISTEN.
@@ -34,7 +34,7 @@ pkgs.writeShellApplication {
       Speaks Cloud-Hypervisor's textual vsock protocol:
         - CONNECT to the BASE UDS at sys.argv[1]
         - send "CONNECT <port>\n"
-        - read "OK <buf>\n" reply
+        - read "OK <local-port>\n" reply
         - bidirectional bytes between stdio and the UDS
 
       Plug into socat with:

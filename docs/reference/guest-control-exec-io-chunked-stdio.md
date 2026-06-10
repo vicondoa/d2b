@@ -112,12 +112,13 @@ with the new start offset rather than silently serving newer bytes.
 Terminal status has two forms:
 
 - `recorded_terminal_status`: the child exit/signal/cancel result guestd
-  has observed.
+  has observed internally. This is not returned to host callers until it
+  becomes visible.
 - `visible_terminal_status`: populated only after guestd has appended all
   output bytes it read before terminal observation and the retained output
-  cursors make that output available. Until then, `ExecInspect` reports
-  the recorded status plus `visible_terminal_status = null` and the stream
-  end offsets needed to drain the output first.
+  cursors make that output available. Until then, `ExecInspect` and
+  `ExecWait` report a non-terminal state with `visible_terminal_status =
+  null` and the stream end offsets needed to discover the output first.
 
 Detached execs may record terminal status before a client reads retained
 logs, but `visible_terminal_status` still requires retained-log cursor
@@ -135,7 +136,6 @@ Request fields:
 Response fields:
 
 - current terminal/non-terminal state;
-- recorded exit status or signal when known;
 - `visible_terminal_status`, populated only after preceding output is
   available through the returned stdout/stderr offset window;
 - `state_generation`;
@@ -657,7 +657,7 @@ locks.
 | initial geometry and resize ordering | Geometry is part of create; later resizes use `control_seq`. |
 | PTY leadership / foreground process group | Not solved by wire format; implementation must use the safe-PTY proof path: session leader, controlling terminal, `tcgetpgrp` foreground owner, and child job handoff are required. |
 | Ctrl-C/signal delivery | `ExecSignal` targets the current `tcgetpgrp` foreground process group for TTY, including after a shell hands the terminal to a child job. |
-| exit code/signal propagation | `ExecWait` and `Inspect` report recorded terminal state separately from I/O EOF, and expose `visible_terminal_status` only after output preceding terminal observation is available through stream/log cursors. |
+| exit code/signal propagation | `ExecWait` and `Inspect` hide recorded terminal state until output preceding terminal observation is available through stream/log cursors, then expose `visible_terminal_status`. |
 | bounded memory / backpressure | Bounded logs, one stdin chunk, limited waiters, and slow-consumer cancellation. |
 | concurrent sessions/fairness | Per-exec caps and short polling prevent one stalled exec from owning global queues. |
 | cancellation/disconnect cleanup | `ExecCancel` plus attached/detached disconnect policy. |

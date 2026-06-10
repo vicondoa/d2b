@@ -169,6 +169,13 @@ struct AcceptedControl {
     event: ControlEvent,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TerminalSnapshot {
+    status: ExitStatus,
+    stdout_end: u64,
+    stderr_end: u64,
+}
+
 #[derive(Clone, Debug)]
 struct StdinQueue {
     base_offset: u64,
@@ -219,6 +226,10 @@ impl OutputLog {
         let drain = (clamped - self.base_offset) as usize;
         self.bytes.drain(0..drain);
         self.base_offset = clamped;
+    }
+
+    fn covers_from_start_through(&self, offset: u64) -> bool {
+        self.base_offset == 0 && self.next_offset() >= offset
     }
 }
 
@@ -296,7 +307,6 @@ pub struct ChunkedSession {
     stdin_cap: usize,
     stdout: OutputLog,
     stderr: OutputLog,
-    pre_terminal_output_available: bool,
     stdin: StdinQueue,
     stdin_endpoint: StdinEndpoint,
     stdin_closed: bool,
@@ -308,7 +318,7 @@ pub struct ChunkedSession {
     controls: HashMap<u64, AcceptedControl>,
     next_control_seq: u64,
     events: Vec<OrderedControlEvent>,
-    terminal_status: Option<ExitStatus>,
+    terminal_status: Option<TerminalSnapshot>,
 }
 
 impl ChunkedSession {
@@ -339,7 +349,6 @@ impl ChunkedSession {
             stdin_cap,
             stdout: OutputLog::new(),
             stderr: OutputLog::new(),
-            pre_terminal_output_available: false,
             stdin: StdinQueue::new(),
             stdin_endpoint,
             stdin_closed: false,
@@ -717,30 +726,39 @@ impl ChunkedSession {
         token: SessionToken,
         status: ExitStatus,
     ) -> Result<(), ProtocolError> {
-        self.check_token(token)?;
-        self.terminal_status = Some(status);
-        Ok(())
+        self.set_terminal_status_with_required_output(
+            token,
+            status,
+            self.stdout.next_offset(),
+            self.stderr.next_offset(),
+        )
     }
 
-    pub fn terminal_status(&self) -> Option<ExitStatus> {
-        self.terminal_status
+    pub fn set_terminal_status_with_required_output(
+        &mut self,
+        token: SessionToken,
+        status: ExitStatus,
+        stdout_end: u64,
+        stderr_end: u64,
+    ) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.terminal_status = Some(TerminalSnapshot {
+            status,
+            stdout_end,
+            stderr_end,
+        });
+        Ok(())
     }
 
     pub fn visible_terminal_status_after_output_available(&self) -> Option<ExitStatus> {
-        if self.pre_terminal_output_available {
-            self.terminal_status
+        let snapshot = self.terminal_status?;
+        if self.stdout.covers_from_start_through(snapshot.stdout_end)
+            && self.stderr.covers_from_start_through(snapshot.stderr_end)
+        {
+            Some(snapshot.status)
         } else {
             None
         }
-    }
-
-    pub fn mark_pre_terminal_output_available(
-        &mut self,
-        token: SessionToken,
-    ) -> Result<(), ProtocolError> {
-        self.check_token(token)?;
-        self.pre_terminal_output_available = true;
-        Ok(())
     }
 
     fn check_token(&self, token: SessionToken) -> Result<(), ProtocolError> {
@@ -1601,12 +1619,17 @@ mod tests {
             .append_output(token, Stream::Stdout, b"tail")
             .unwrap();
         session
-            .set_terminal_status(token, ExitStatus::from_signal(Signal::Int))
+            .set_terminal_status_with_required_output(
+                token,
+                ExitStatus::from_signal(Signal::Int),
+                8,
+                0,
+            )
             .unwrap();
         assert_eq!(
             session.visible_terminal_status_after_output_available(),
             None,
-            "terminal status must not be visible before preceding output is available"
+            "terminal status must not be visible while preceding output is missing"
         );
         assert_eq!(
             session.push_control(
@@ -1640,16 +1663,9 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(
-            session.terminal_status(),
-            Some(ExitStatus::Signal {
-                signal: Signal::Int,
-                status_code: 130,
-            })
-        );
         session
-            .mark_pre_terminal_output_available(token)
-            .expect("mark preceding output available");
+            .append_output(token, Stream::Stdout, b"more")
+            .unwrap();
         assert_eq!(
             session.visible_terminal_status_after_output_available(),
             Some(ExitStatus::Signal {
@@ -1657,6 +1673,23 @@ mod tests {
                 status_code: 130,
             })
         );
-        assert_eq!(session.retained_output_bytes(), 4);
+        assert_eq!(session.retained_output_bytes(), 8);
+
+        let mut evicted = ChunkedSession::new(7, MIB, MIB, 64 * KIB);
+        let evicted_token = evicted.token();
+        evicted
+            .append_output(evicted_token, Stream::Stdout, b"tail")
+            .unwrap();
+        evicted
+            .set_terminal_status(evicted_token, ExitStatus::Code(0))
+            .unwrap();
+        evicted
+            .ack_output(evicted_token, Stream::Stdout, 1)
+            .unwrap();
+        assert_eq!(
+            evicted.visible_terminal_status_after_output_available(),
+            None,
+            "terminal status must stay hidden if pre-terminal output was evicted"
+        );
     }
 }
