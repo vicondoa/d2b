@@ -1,3 +1,5 @@
+USBIP attach / detach / probe
+
 Usage: nixling usb <COMMAND>
 
 Commands:

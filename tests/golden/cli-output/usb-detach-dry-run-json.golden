@@ -3,7 +3,7 @@
   "busId": "1-2",
   "command": "usb detach",
   "mode": "dry-run",
-  "notes": "W6 USBIP dry-run reports the daemon → broker bind/unbind + reconcile plan without mutating host state.",
+  "notes": "USBIP dry-run reports the daemon → broker unbind and reconcile plan without mutating host state.",
   "planned": [
     "UsbipUnbind",
     "UsbipProxyReconcile"
