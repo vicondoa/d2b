@@ -182,7 +182,7 @@ pub struct ChunkedSession {
     stdin_history: Vec<u8>,
     stdin_delivered_offset: u64,
     stdin_closed: bool,
-    close_stdin_offset: Option<u64>,
+    close_stdin_request: Option<(u64, u64)>,
     writes: HashMap<u64, AcceptedWrite>,
     next_control_seq: u64,
     events: Vec<OrderedControlEvent>,
@@ -203,7 +203,7 @@ impl ChunkedSession {
             stdin_history: Vec::new(),
             stdin_delivered_offset: 0,
             stdin_closed: false,
-            close_stdin_offset: None,
+            close_stdin_request: None,
             writes: HashMap::new(),
             // ExecCreate reports control_seq=0. The first post-create
             // mutation must therefore use control_seq=1.
@@ -367,16 +367,23 @@ impl ChunkedSession {
     pub fn close_stdin(
         &mut self,
         token: SessionToken,
+        request_id: u64,
         offset: u64,
     ) -> Result<WriteStdinResponse, ProtocolError> {
         self.check_token(token)?;
         let expected = self.stdin_next_offset();
         if self.stdin_closed {
-            if self.close_stdin_offset == Some(offset) {
+            if self.close_stdin_request == Some((request_id, offset)) {
                 return Ok(WriteStdinResponse {
                     next_offset: expected,
                     disposition: WriteDisposition::Duplicate,
                 });
+            }
+            if self
+                .close_stdin_request
+                .is_some_and(|(id, _)| id == request_id)
+            {
+                return Err(ProtocolError::RequestIdConflict);
             }
             return Err(ProtocolError::StdinClosed);
         }
@@ -387,7 +394,7 @@ impl ChunkedSession {
             });
         }
         self.stdin_closed = true;
-        self.close_stdin_offset = Some(offset);
+        self.close_stdin_request = Some((request_id, offset));
         Ok(WriteStdinResponse {
             next_offset: expected,
             disposition: WriteDisposition::Accepted,
@@ -605,23 +612,36 @@ mod tests {
         let token = session.token();
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut offset = 0_u64;
+        let mut stderr_offset = 0_u64;
         let mut max_retained = 0_usize;
+        let mut slow_consumer_errors = 0_usize;
 
-        while session.retained_output_bytes() < cap {
-            let chunk = pattern_chunk(Stream::Stdout, offset, 64 * KIB);
-            let start = session
-                .append_output(token, Stream::Stdout, &chunk)
-                .expect("fill stdout within cap");
-            assert_eq!(start, offset);
-            offset += chunk.len() as u64;
+        while Instant::now() < deadline {
+            let (stream, cursor) = if offset <= stderr_offset {
+                (Stream::Stdout, &mut offset)
+            } else {
+                (Stream::Stderr, &mut stderr_offset)
+            };
+            let chunk = pattern_chunk(stream, *cursor, 64 * KIB);
+            match session.append_output(token, stream, &chunk) {
+                Ok(start) => {
+                    assert_eq!(start, *cursor);
+                    *cursor += chunk.len() as u64;
+                }
+                Err(ProtocolError::SlowConsumer { retained, cap }) => {
+                    slow_consumer_errors += 1;
+                    assert!(retained <= cap);
+                }
+                Err(err) => panic!("unexpected append_output error: {err:?}"),
+            }
             max_retained = max_retained.max(session.retained_output_bytes());
+            assert!(max_retained <= cap);
+            thread::sleep(Duration::from_millis(25));
         }
-        thread::sleep(deadline.saturating_duration_since(Instant::now()));
-        assert!(matches!(
-            session.append_output(token, Stream::Stdout, b"x"),
-            Err(ProtocolError::SlowConsumer { .. })
-        ));
-        assert!(max_retained <= cap);
+        assert!(
+            slow_consumer_errors > 0,
+            "active producer must observe bounded slow-consumer pressure"
+        );
         assert!(max_retained <= cap);
     }
 
@@ -725,13 +745,16 @@ mod tests {
             MIB,
             64 * KIB,
         )));
+        let scheduler = Arc::new(Mutex::new(()));
 
         let slow_handle = {
             let slow_output = Arc::clone(&slow_output);
+            let scheduler = Arc::clone(&scheduler);
             thread::spawn(move || {
                 let token = slow_output.lock().unwrap().token();
                 let mut offset = 0;
                 while offset < 2 * MIB as u64 {
+                    let _turn = scheduler.lock().unwrap();
                     let response = slow_output
                         .lock()
                         .unwrap()
@@ -746,12 +769,14 @@ mod tests {
 
         let blocked_handle = {
             let blocked_stdin = Arc::clone(&blocked_stdin);
+            let scheduler = Arc::clone(&scheduler);
             thread::spawn(move || {
                 let token = blocked_stdin.lock().unwrap().token();
                 let mut offset = 0;
                 let mut slow = 0;
                 for write_id in 1..=64 {
                     let chunk = stdin_pattern(offset, 16 * KIB);
+                    let _turn = scheduler.lock().unwrap();
                     let result = blocked_stdin
                         .lock()
                         .unwrap()
@@ -769,12 +794,14 @@ mod tests {
 
         let interactive_handle = {
             let interactive = Arc::clone(&interactive);
+            let scheduler = Arc::clone(&scheduler);
             thread::spawn(move || {
                 let token = interactive.lock().unwrap().token();
                 let mut latencies = Vec::new();
                 for idx in 0..240_u64 {
                     let byte = [idx as u8];
                     let start = Instant::now();
+                    let _turn = scheduler.lock().unwrap();
                     interactive
                         .lock()
                         .unwrap()
@@ -801,16 +828,20 @@ mod tests {
             })
         };
 
-        let health_handle = thread::spawn(move || {
+        let health_handle = {
+            let scheduler = Arc::clone(&scheduler);
+            thread::spawn(move || {
             let mut latencies = Vec::new();
             for _ in 0..240 {
                 let start = Instant::now();
+                let _turn = scheduler.lock().unwrap();
                 std::hint::black_box(());
                 latencies.push(start.elapsed().as_micros());
                 thread::yield_now();
             }
             latencies.into_iter().max().unwrap_or(0)
-        });
+            })
+        };
 
         assert_eq!(slow_handle.join().unwrap(), 2 * MIB as u64);
         assert!(blocked_handle.join().unwrap() > 0);
@@ -871,12 +902,20 @@ mod tests {
         );
         assert_eq!(session.consume_stdin(token, 1).unwrap(), vec![0x04]);
         assert_eq!(
-            session.close_stdin(token, 1).unwrap().disposition,
+            session.close_stdin(token, 99, 1).unwrap().disposition,
             WriteDisposition::Accepted
         );
         assert_eq!(
-            session.close_stdin(token, 1).unwrap().disposition,
+            session.close_stdin(token, 99, 1).unwrap().disposition,
             WriteDisposition::Duplicate
+        );
+        assert_eq!(
+            session.close_stdin(token, 99, 2),
+            Err(ProtocolError::RequestIdConflict)
+        );
+        assert_eq!(
+            session.close_stdin(token, 100, 1),
+            Err(ProtocolError::StdinClosed)
         );
         assert_eq!(
             session.write_stdin(token, 2, 1, b"after-eof"),

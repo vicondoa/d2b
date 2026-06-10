@@ -41,7 +41,7 @@ bridge-health table.
 
 The top-level keys and service-subkeys are frozen within this schema
 revision. Guest-control rollout will add a negotiated guest-control status
-field in the implementation wave; until that schema revision lands,
+field in the release that implements guest-control; until that schema revision lands,
 operators discover old-generation guest-control state through the ADR 0026
 compatibility surfaces rather than an ad hoc extra key.
 

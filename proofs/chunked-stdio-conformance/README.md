@@ -18,11 +18,13 @@ The tests prove:
   exact-offset append, same-request duplicate replay acceptance,
   different-request stale replay rejection, offset-gap rejection,
   stale-data rejection, and bounded stdin backpressure.
-- A 30 second slow-consumer run keeps retained output below the configured
-  cap and returns an explicit `SlowConsumer` error instead of allocating
-  without bound.
-- Four concurrent attached sessions meet the proof's p95/max read-latency
-  thresholds and finish with bounded byte-skew fairness.
+- A 30 second active slow-consumer run keeps retained output below the
+  configured cap while producers continue attempting stdout/stderr writes
+  and receive explicit `SlowConsumer` errors instead of allocating without
+  bound.
+- Four concurrent attached sessions, including a mixed shared-scheduler
+  slow-output, blocked-stdin, interactive echo, and unary-health load, meet
+  the proof's p95/max latency thresholds and finish with bounded fairness.
 - Restarted sessions reject stale generation tokens.
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.

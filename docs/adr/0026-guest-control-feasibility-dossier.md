@@ -48,7 +48,7 @@ W0 protocol.
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
 | Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
-| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s slow-consumer bounds, four-session attached fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
+| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` + consolidated fixes | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s active slow-consumer bounds, mixed four-session shared-scheduler fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
 
 ## Evidence details
 
@@ -438,13 +438,16 @@ It validates:
 - 64 MiB stdout and 64 MiB stderr byte-exact delivery through
   independent `ReadStdout`/`ReadStderr` offset cursors;
 - 16 MiB slow stdin through `WriteStdin`, including exact-offset
-  appends, duplicate replay acceptance, offset-gap rejection, stale-data
-  rejection, and bounded stdin backpressure;
-- a 30 second slow-consumer run that keeps retained output under the
-  configured cap and reports typed `SlowConsumer` pressure rather than
-  growing unbounded buffers;
-- four concurrent attached sessions with p95 read latency <= 25 ms, max
-  read latency <= 100 ms, and <= 128 KiB byte-skew fairness;
+  appends, same-request duplicate replay acceptance, different-request
+  stale replay rejection, offset-gap rejection, stale-data rejection, and
+  bounded stdin backpressure;
+- a 30 second active slow-consumer run that keeps retained output under
+  the configured cap while producers continue attempting stdout/stderr
+  writes and receive typed `SlowConsumer` pressure rather than growing
+  unbounded buffers;
+- four concurrent attached sessions, including a mixed shared-scheduler
+  slow-output, blocked-stdin, interactive echo, and unary-health load,
+  with p95/max latency within thresholds and bounded fairness;
 - stale-generation rejection after restart;
 - EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
   (`0x04` data through `WriteStdin`);

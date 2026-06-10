@@ -175,6 +175,7 @@ Rules:
 
 Request fields:
 
+- `request_id`: idempotency key for the close operation.
 - `offset`: the caller's final stdin offset.
 
 Response fields:
@@ -185,7 +186,10 @@ Rules:
 
 - The close is accepted only when `offset` equals the next expected stdin
   offset.
-- Close is idempotent for the same final offset.
+- Close is idempotent only for the same retained `request_id` and final
+  offset. Reusing the same `request_id` with a different offset returns
+  `request-id-conflict`; a different `request_id` after stdin is already
+  closed returns `stdin-closed`.
 - For pipe-backed non-TTY execs, the server closes the child's stdin fd.
 - For TTY execs, close means host input is closed; it does not synthesize
   Ctrl-D. If the CLI wants Ctrl-D semantics it sends the terminal byte
@@ -716,7 +720,9 @@ Before implementation exits design hardening, add at least:
    mismatched duplicate payloads;
 4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior,
    plus TTY protocol-side close proving the PTY master/writer stays open
-   and output after close is not lost;
+   and output after close is not lost; duplicate close is accepted only
+   for the same `request_id` and final offset, while mismatched or
+   different-request duplicates fail typed;
 5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
 6. stdin 16 MiB slow-reader test with bounded RSS;
 6a. malicious concurrent `WriteStdin` fan-in test: four hard-maximum-sized
