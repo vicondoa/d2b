@@ -434,6 +434,28 @@ in
               # via its own pivot_root + CAP_SYS_ADMIN; other
               # sidecars need explicit ACL.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+              if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${activationHelper} setfacl-on-path \
+                  --path "/var/lib/nixling/guest-control-${name}" \
+                  --acl-spec "u:$uid:rx" \
+                  --also-spec "mask:r-x" \
+                  --require-kind directory \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
+                ${activationHelper} setfacl-on-path \
+                  --path "/var/lib/nixling/guest-control-${name}/token" \
+                  --acl-spec "u:$uid:r" \
+                  --also-spec "mask:r--" \
+                  --require-kind regular \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
+                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+                continue
+              fi
               # panel-security R2 must-fix B: /dev/kvm
               # + /dev/vhost-net only for Hypervisor/Gpu UIDs.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
@@ -513,22 +535,6 @@ in
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
               done
-              if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/guest-control-${name}" \
-                  --acl-spec "u:$uid:rx" \
-                  --also-spec "mask:r-x" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/guest-control-${name}/token" \
-                  --acl-spec "u:$uid:r" \
-                  --also-spec "mask:r--" \
-                  --require-kind regular \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
-              fi
               ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true

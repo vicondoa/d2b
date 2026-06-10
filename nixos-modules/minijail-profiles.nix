@@ -208,10 +208,13 @@ let
             seccompPolicyRef = "w1-virtiofsd";
             readOnlyPaths = [ "/nix/store" ]
               ++ lib.optional (shareTag == "nl-gctl") share.source;
-            writablePaths = [
-              (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
-              (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
-            ];
+            writablePaths =
+              if shareTag == "nl-gctl" then [
+                (mkWritablePath (runtimeDirOf name) "Expose the guest-control token virtiofs socket.")
+              ] else [
+                (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
+                (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
+              ];
             cgroupSubtree = "nixling.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
             # (ADR 0021): broker pre-creates a user NS

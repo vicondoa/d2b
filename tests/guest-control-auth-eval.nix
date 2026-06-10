@@ -88,6 +88,8 @@ assert tokenVirtiofsd != null;
 assert cloudHypervisor != null;
 assert builtins.elem "--readonly" tokenVirtiofsd.argv;
 assert tokenVirtiofsd.profile.uid != cloudHypervisor.profile.uid;
+assert !(lib.hasInfix "/var/lib/nixling/vms/corp-vm"
+  (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths));
 builtins.toJSON {
   inherit (tokenShare) source mountPoint readOnly;
   loadCredential = service.serviceConfig.LoadCredential;
