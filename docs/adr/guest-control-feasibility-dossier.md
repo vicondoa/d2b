@@ -39,7 +39,7 @@ W0 protocol.
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
 | ADR gate | `guest-control-ttRPC` | `c3bd668` | ADR 0026 added, then accepted after feasibility evidence and panel review. |
-| CH CONNECT transport | `guest-control-w0-ch` | `36619d1` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy. |
+| CH CONNECT transport | integrated W0 decision branch | `19dd688` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque/local-port ACK and not used as a buffer limit. |
 | Static guest build | `guest-control-w0-static` | `a085e68` | PASS with implementation constraints: Nix static-musl derivation works for x86_64 and aarch64; ELF has no interpreter/NEEDED; generated-code unsafe allowance must be handled. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf88` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
 | HMAC auth | `guest-control-w0-auth` | `7a97d09` | PASS: transcript-bound proof-of-possession prototype with redaction and replay tests. |
@@ -48,7 +48,7 @@ W0 protocol.
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
 | Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
-| Chunked stdio conformance | `guest-control-w0-conf` through `53897dd` | `4f0a8e1` + consolidated fixes through `53897dd` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, TTY stdout-only/stderr-unavailable behavior, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, four-attached-session byte-skew fairness, mixed three-exec plus unary-Health scheduler fairness with capacity saturation, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
+| Chunked stdio conformance | integrated W0 decision branch | `19dd688` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, TTY stdout-only/stderr-unavailable behavior, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, four-attached-session byte-skew fairness, mixed three-exec plus unary-Health scheduler fairness with capacity saturation, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
 
 ## Evidence details
 
