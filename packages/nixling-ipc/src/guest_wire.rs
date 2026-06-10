@@ -6,7 +6,6 @@
 //! bindings from the matching `.proto` surface and keep these DTOs aligned
 //! through the schema drift gate.
 
-use crate::types::VmId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +16,10 @@ pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
 
-macro_rules! guest_id {
-    ($(#[$meta:meta])* $name:ident) => {
+macro_rules! bounded_string {
+    ($(#[$meta:meta])* $name:ident, $max:literal) => {
         $(#[$meta])*
         #[derive(
-            Debug,
             Clone,
             PartialEq,
             Eq,
@@ -33,7 +31,7 @@ macro_rules! guest_id {
             JsonSchema,
         )]
         #[serde(transparent)]
-        pub struct $name(pub String);
+        pub struct $name(#[schemars(length(min = 1, max = $max))] pub String);
 
         impl $name {
             pub fn new(value: impl Into<String>) -> Self {
@@ -47,27 +45,106 @@ macro_rules! guest_id {
     };
 }
 
-guest_id! {
+bounded_string! {
+    /// VM identity bound into guest-control auth transcripts.
+    GuestVmId, 128
+}
+
+bounded_string! {
     /// Guest-control request idempotency key.
-    RequestId
+    RequestId, 128
 }
 
-guest_id! {
+bounded_string! {
     /// Guest-control exec session id.
-    ExecId
+    ExecId, 128
 }
 
-guest_id! {
-    /// Bounded guest capability name.
-    GuestCapabilityName
+bounded_string! {
+    /// Challenge nonce encoded outside protobuf bytes for schema readability.
+    GuestNonce, 128
 }
 
-guest_id! {
-    /// Bounded guest health subsystem name.
-    GuestSubsystemName
+bounded_string! {
+    /// Guest boot identity for stale-session detection.
+    GuestBootId, 128
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+bounded_string! {
+    /// Hash of the negotiated bounded capability set.
+    CapabilitiesHash, 128
+}
+
+bounded_string! {
+    /// One command argument.
+    GuestArg, 4096
+}
+
+bounded_string! {
+    /// Guest user selector.
+    GuestUser, 128
+}
+
+bounded_string! {
+    /// Guest working directory.
+    GuestCwd, 4096
+}
+
+bounded_string! {
+    /// Guest environment variable name.
+    EnvKey, 128
+}
+
+bounded_string! {
+    /// Guest environment variable value.
+    EnvValue, 8192
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestCapability {
+    Health,
+    Capabilities,
+    ReadGuestConfig,
+    ExecAttached,
+    ExecDetached,
+    ExecTty,
+    ExecLogs,
+    TtyResize,
+    Signals,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestSubsystem {
+    Guestd,
+    Userd,
+    Exec,
+    LogStorage,
+    Token,
+    Vsock,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HealthOrigin {
+    GuestReported,
+    HostSynthesized,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestVsockDirection {
+    HostToGuest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestIdentityBinding {
+    VmIdCidSocketAndTokenTranscript,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestControlSchema {
     pub schema_version: String,
@@ -76,7 +153,9 @@ pub struct GuestControlSchema {
     pub limits: GuestEffectiveLimits,
     pub hello: HelloRequest,
     pub hello_ok: HelloResponse,
+    pub health_request: HealthRequest,
     pub health: HealthResponse,
+    pub capabilities_request: CapabilitiesRequest,
     pub capabilities: CapabilitiesResponse,
     pub exec_create: ExecCreateRequest,
     pub exec_created: ExecCreateResponse,
@@ -95,16 +174,22 @@ pub struct GuestControlSchema {
     pub tty_win_resize: TtyWinResizeRequest,
     pub exec_signal: ExecSignalRequest,
     pub exec_cancel: ExecCancelRequest,
+    pub control_ack: ControlAck,
     pub error: GuestControlError,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestTransportSchema {
     pub transport: GuestTransportKind,
-    pub vsock_port: u32,
+    pub direction: GuestVsockDirection,
+    pub guest_control_vsock_port: u32,
+    pub guest_to_host_observability_port: u32,
+    pub reserved_side_channel_port: u32,
+    pub identity_binding: GuestIdentityBinding,
     pub ttrpc_frame_cap_bytes: u64,
     pub host_connect: GuestHostConnectShape,
+    pub readiness: GuestReadinessContract,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -113,7 +198,7 @@ pub enum GuestTransportKind {
     VirtioVsockTtrpc,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestHostConnectShape {
     pub request_line: String,
@@ -127,56 +212,80 @@ pub enum GuestConnectAckValue {
     OpaqueLocalPort,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestReadinessContract {
+    pub socket_existence_is_readiness: bool,
+    pub requires_connect_hello_auth_and_health: bool,
+    pub pre_ttrpc_failures_are_host_synthesized: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestRequestMetadata {
-    pub vm_id: VmId,
+    pub vm_id: GuestVmId,
     pub request_id: RequestId,
     pub protocol_version: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestExecRequestMetadata {
     pub common: GuestRequestMetadata,
     pub exec_id: ExecId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelloRequest {
     pub metadata: GuestRequestMetadata,
-    pub host_nonce: String,
+    pub host_nonce: GuestNonce,
     pub transcript_version: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HelloResponse {
-    pub guest_nonce: String,
-    pub guest_boot_id: String,
+    pub guest_nonce: GuestNonce,
+    pub guest_boot_id: GuestBootId,
     pub protocol_version: u32,
-    pub capabilities_hash: String,
+    pub capabilities_hash: CapabilitiesHash,
     pub health: HealthResponse,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilitiesRequest {
+    pub metadata: GuestRequestMetadata,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilitiesResponse {
     pub protocol_version: u32,
-    pub capabilities: Vec<GuestCapabilityName>,
+    #[schemars(length(max = 32))]
+    pub capabilities: Vec<GuestCapability>,
     pub limits: GuestEffectiveLimits,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HealthRequest {
+    pub metadata: GuestRequestMetadata,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthResponse {
+    pub origin: HealthOrigin,
     pub state: HealthState,
     pub reason: HealthReason,
     pub remediation: HealthRemediation,
     pub protocol_version: u32,
-    pub capabilities: Vec<GuestCapabilityName>,
-    pub degraded_subsystems: Vec<GuestSubsystemName>,
+    #[schemars(length(max = 32))]
+    pub capabilities: Vec<GuestCapability>,
+    #[schemars(length(max = 16))]
+    pub degraded_subsystems: Vec<GuestSubsystem>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -287,7 +396,7 @@ impl HealthResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestEffectiveLimits {
     pub max_chunk_bytes: u64,
@@ -305,13 +414,15 @@ pub struct GuestEffectiveLimits {
     pub attached_sessions_per_vm: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCreateRequest {
     pub metadata: GuestRequestMetadata,
-    pub argv: Vec<String>,
-    pub user: Option<String>,
-    pub cwd: Option<String>,
+    #[schemars(length(min = 1, max = 128))]
+    pub argv: Vec<GuestArg>,
+    pub user: Option<GuestUser>,
+    pub cwd: Option<GuestCwd>,
+    #[schemars(length(max = 256))]
     pub env: Vec<EnvVar>,
     pub tty: bool,
     pub stdin_open: bool,
@@ -320,11 +431,11 @@ pub struct ExecCreateRequest {
     pub output_policy: OutputPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EnvVar {
-    pub key: String,
-    pub value: String,
+    pub key: EnvKey,
+    pub value: EnvValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -334,7 +445,7 @@ pub struct TerminalSize {
     pub cols: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutputPolicy {
     pub max_chunk_bytes: u64,
@@ -344,7 +455,7 @@ pub struct OutputPolicy {
     pub wait_timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCreateResponse {
     pub exec_id: Option<ExecId>,
@@ -357,13 +468,13 @@ pub struct ExecCreateResponse {
     pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecInspectRequest {
     pub metadata: GuestExecRequestMetadata,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecInspectResponse {
     pub state: ExecState,
@@ -375,13 +486,14 @@ pub struct ExecInspectResponse {
     pub stderr_end_offset: u64,
     pub stdout_dropped_bytes: u64,
     pub stderr_dropped_bytes: u64,
-    pub truncated_for_retention: bool,
+    pub stdout_truncated_for_retention: bool,
+    pub stderr_truncated_for_retention: bool,
     pub last_control_seq: u64,
     pub state_generation: u64,
     pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecWaitRequest {
     pub metadata: GuestExecRequestMetadata,
@@ -389,7 +501,7 @@ pub struct ExecWaitRequest {
     pub known_state_generation: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecWaitResponse {
     pub state: ExecState,
@@ -403,7 +515,7 @@ pub struct ExecWaitResponse {
     pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecLogsRequest {
     pub metadata: GuestExecRequestMetadata,
@@ -412,30 +524,34 @@ pub struct ExecLogsRequest {
     pub max_len: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecLogsResponse {
     pub stream: OutputStream,
     pub offset: u64,
+    pub end_offset: u64,
+    #[schemars(length(max = 65536))]
     pub data: Vec<u8>,
     pub next_offset: u64,
     pub eof: bool,
     pub start_offset: u64,
     pub dropped_bytes: u64,
     pub truncated: bool,
+    pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WriteStdinRequest {
     pub metadata: GuestExecRequestMetadata,
     pub offset: u64,
+    #[schemars(length(min = 1, max = 65536))]
     pub data: Vec<u8>,
     pub close_after: bool,
     pub client_deadline_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WriteStdinResponse {
     pub accepted_offset: u64,
@@ -444,9 +560,10 @@ pub struct WriteStdinResponse {
     pub stdin_state: StdinState,
     pub blocked_ms: u64,
     pub disposition: WriteDisposition,
+    pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadOutputRequest {
     pub metadata: GuestExecRequestMetadata,
@@ -457,34 +574,40 @@ pub struct ReadOutputRequest {
     pub timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadOutputResponse {
     pub stream: OutputStream,
     pub offset: u64,
+    pub end_offset: u64,
+    #[schemars(length(max = 65536))]
     pub data: Vec<u8>,
     pub next_offset: u64,
     pub eof: bool,
     pub start_offset: u64,
     pub dropped_bytes: u64,
+    pub truncated: bool,
+    pub timed_out: bool,
+    pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloseStdinRequest {
     pub metadata: GuestExecRequestMetadata,
     pub offset: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloseStdinResponse {
     pub stdin_state: StdinState,
     pub final_offset: u64,
     pub disposition: WriteDisposition,
+    pub error: Option<GuestControlError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TtyWinResizeRequest {
     pub metadata: GuestExecRequestMetadata,
@@ -493,7 +616,7 @@ pub struct TtyWinResizeRequest {
     pub cols: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecSignalRequest {
     pub metadata: GuestExecRequestMetadata,
@@ -502,12 +625,20 @@ pub struct ExecSignalRequest {
     pub target: SignalTarget,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCancelRequest {
     pub metadata: GuestExecRequestMetadata,
     pub control_seq: u64,
     pub reason: ExecCancelReason,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ControlAck {
+    pub control_seq: u64,
+    pub duplicate: bool,
+    pub error: Option<GuestControlError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -548,13 +679,13 @@ pub enum StdinState {
     RejectedNotInteractive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TerminalStatus {
-    pub exit_code: Option<i32>,
-    pub signal: Option<u32>,
-    pub status_code: Option<i32>,
-    pub error: Option<GuestControlErrorKind>,
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case", tag = "outcome", deny_unknown_fields)]
+pub enum TerminalStatus {
+    ExitCode { exit_code: i32 },
+    Signal { signal: u32 },
+    StatusCode { status_code: i32 },
+    Error { error: GuestControlErrorKind },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -562,7 +693,6 @@ pub struct TerminalStatus {
 pub enum SignalTarget {
     ForegroundProcessGroup,
     ProcessTree,
-    RootProcess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -574,7 +704,7 @@ pub enum ExecCancelReason {
     ProtocolError,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestControlError {
     pub kind: GuestControlErrorKind,
@@ -591,14 +721,28 @@ pub enum GuestControlErrorKind {
     StdinClosed,
     StdinNotOpen,
     StdinClosedByProcess,
+    StdinOffsetMismatch,
+    StdinByteBudgetExhausted,
     OffsetExpired,
+    OffsetInFuture,
+    OffsetExhausted,
     OutputLost,
     TtyStderrUnavailable,
+    TtyRequired,
     ExecCapacityExceeded,
     ExecAttachCapacityExceeded,
+    ExecNotFound,
+    ExecAlreadyExited,
+    GuestExecDisabled,
+    GuestExecRootDenied,
+    GuestExecUserDenied,
     ReadWaitCapacityExceeded,
     WaitCapacityExceeded,
+    SupersededReadWait,
     RateLimited,
+    RequestIdConflict,
+    ControlSeqMismatch,
+    SlowConsumerCancelled,
     StaleSession,
     GuestControlUnavailableOldGeneration,
     AuthFailed,
@@ -612,6 +756,7 @@ mod tests {
     #[test]
     fn health_mappings_are_closed() {
         let valid = HealthResponse {
+            origin: HealthOrigin::HostSynthesized,
             state: HealthState::TransportUnreachable,
             reason: HealthReason::MalformedAck,
             remediation: HealthRemediation::Retry,
@@ -622,6 +767,7 @@ mod tests {
         assert!(valid.is_valid_mapping());
 
         let invalid = HealthResponse {
+            origin: HealthOrigin::GuestReported,
             state: HealthState::Healthy,
             reason: HealthReason::AuthTokenRejected,
             remediation: HealthRemediation::CheckAuthToken,
@@ -641,6 +787,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GuestControlErrorKind::TtyStderrUnavailable).unwrap(),
             "\"tty-stderr-unavailable\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TerminalStatus::Signal { signal: 2 }).unwrap(),
+            "{\"outcome\":\"signal\",\"signal\":2}"
         );
     }
 }

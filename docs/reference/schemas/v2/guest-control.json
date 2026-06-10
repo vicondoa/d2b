@@ -4,8 +4,10 @@
   "type": "object",
   "required": [
     "capabilities",
+    "capabilitiesRequest",
     "closeStdin",
     "closeStdinResult",
+    "controlAck",
     "error",
     "execCancel",
     "execCreate",
@@ -18,6 +20,7 @@
     "execWait",
     "execWaited",
     "health",
+    "healthRequest",
     "hello",
     "helloOk",
     "limits",
@@ -34,11 +37,17 @@
     "capabilities": {
       "$ref": "#/definitions/CapabilitiesResponse"
     },
+    "capabilitiesRequest": {
+      "$ref": "#/definitions/CapabilitiesRequest"
+    },
     "closeStdin": {
       "$ref": "#/definitions/CloseStdinRequest"
     },
     "closeStdinResult": {
       "$ref": "#/definitions/CloseStdinResponse"
+    },
+    "controlAck": {
+      "$ref": "#/definitions/ControlAck"
     },
     "error": {
       "$ref": "#/definitions/GuestControlError"
@@ -75,6 +84,9 @@
     },
     "health": {
       "$ref": "#/definitions/HealthResponse"
+    },
+    "healthRequest": {
+      "$ref": "#/definitions/HealthRequest"
     },
     "hello": {
       "$ref": "#/definitions/HelloRequest"
@@ -114,6 +126,18 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "CapabilitiesRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
     "CapabilitiesResponse": {
       "type": "object",
       "required": [
@@ -125,8 +149,9 @@
         "capabilities": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "$ref": "#/definitions/GuestCapability"
+          },
+          "maxItems": 32
         },
         "limits": {
           "$ref": "#/definitions/GuestEffectiveLimits"
@@ -168,6 +193,16 @@
         "disposition": {
           "$ref": "#/definitions/WriteDisposition"
         },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "finalOffset": {
           "type": "integer",
           "format": "uint64",
@@ -175,6 +210,34 @@
         },
         "stdinState": {
           "$ref": "#/definitions/StdinState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ControlAck": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "duplicate"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -242,7 +305,9 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "maxItems": 128,
+          "minItems": 1
         },
         "cwd": {
           "type": [
@@ -257,7 +322,8 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/EnvVar"
-          }
+          },
+          "maxItems": 256
         },
         "initialTerminalSize": {
           "anyOf": [
@@ -367,11 +433,12 @@
         "stderrDroppedBytes",
         "stderrEndOffset",
         "stderrStartOffset",
+        "stderrTruncatedForRetention",
         "stdinState",
         "stdoutDroppedBytes",
         "stdoutEndOffset",
         "stdoutStartOffset",
-        "truncatedForRetention"
+        "stdoutTruncatedForRetention"
       ],
       "properties": {
         "error": {
@@ -412,6 +479,9 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "stderrTruncatedForRetention": {
+          "type": "boolean"
+        },
         "stdinState": {
           "$ref": "#/definitions/StdinState"
         },
@@ -430,7 +500,7 @@
           "format": "uint64",
           "minimum": 0.0
         },
-        "truncatedForRetention": {
+        "stdoutTruncatedForRetention": {
           "type": "boolean"
         },
         "visibleTerminalStatus": {
@@ -479,6 +549,7 @@
       "required": [
         "data",
         "droppedBytes",
+        "endOffset",
         "eof",
         "nextOffset",
         "offset",
@@ -493,15 +564,31 @@
             "type": "integer",
             "format": "uint8",
             "minimum": 0.0
-          }
+          },
+          "maxItems": 65536
         },
         "droppedBytes": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "eof": {
           "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "nextOffset": {
           "type": "integer",
@@ -661,6 +748,20 @@
       },
       "additionalProperties": false
     },
+    "GuestCapability": {
+      "type": "string",
+      "enum": [
+        "health",
+        "capabilities",
+        "read-guest-config",
+        "exec-attached",
+        "exec-detached",
+        "exec-tty",
+        "exec-logs",
+        "tty-resize",
+        "signals"
+      ]
+    },
     "GuestConnectAckValue": {
       "type": "string",
       "enum": [
@@ -700,14 +801,28 @@
         "stdin-closed",
         "stdin-not-open",
         "stdin-closed-by-process",
+        "stdin-offset-mismatch",
+        "stdin-byte-budget-exhausted",
         "offset-expired",
+        "offset-in-future",
+        "offset-exhausted",
         "output-lost",
         "tty-stderr-unavailable",
+        "tty-required",
         "exec-capacity-exceeded",
         "exec-attach-capacity-exceeded",
+        "exec-not-found",
+        "exec-already-exited",
+        "guest-exec-disabled",
+        "guest-exec-root-denied",
+        "guest-exec-user-denied",
         "read-wait-capacity-exceeded",
         "wait-capacity-exceeded",
+        "superseded-read-wait",
         "rate-limited",
+        "request-id-conflict",
+        "control-seq-mismatch",
+        "slow-consumer-cancelled",
         "stale-session",
         "guest-control-unavailable-old-generation",
         "auth-failed",
@@ -836,6 +951,32 @@
       },
       "additionalProperties": false
     },
+    "GuestIdentityBinding": {
+      "type": "string",
+      "enum": [
+        "vm-id-cid-socket-and-token-transcript"
+      ]
+    },
+    "GuestReadinessContract": {
+      "type": "object",
+      "required": [
+        "preTtrpcFailuresAreHostSynthesized",
+        "requiresConnectHelloAuthAndHealth",
+        "socketExistenceIsReadiness"
+      ],
+      "properties": {
+        "preTtrpcFailuresAreHostSynthesized": {
+          "type": "boolean"
+        },
+        "requiresConnectHelloAuthAndHealth": {
+          "type": "boolean"
+        },
+        "socketExistenceIsReadiness": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "GuestRequestMetadata": {
       "type": "object",
       "required": [
@@ -858,6 +999,17 @@
       },
       "additionalProperties": false
     },
+    "GuestSubsystem": {
+      "type": "string",
+      "enum": [
+        "guestd",
+        "userd",
+        "exec",
+        "log-storage",
+        "token",
+        "vsock"
+      ]
+    },
     "GuestTransportKind": {
       "type": "string",
       "enum": [
@@ -867,14 +1019,43 @@
     "GuestTransportSchema": {
       "type": "object",
       "required": [
+        "direction",
+        "guestControlVsockPort",
+        "guestToHostObservabilityPort",
         "hostConnect",
+        "identityBinding",
+        "readiness",
+        "reservedSideChannelPort",
         "transport",
-        "ttrpcFrameCapBytes",
-        "vsockPort"
+        "ttrpcFrameCapBytes"
       ],
       "properties": {
+        "direction": {
+          "$ref": "#/definitions/GuestVsockDirection"
+        },
+        "guestControlVsockPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "guestToHostObservabilityPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "hostConnect": {
           "$ref": "#/definitions/GuestHostConnectShape"
+        },
+        "identityBinding": {
+          "$ref": "#/definitions/GuestIdentityBinding"
+        },
+        "readiness": {
+          "$ref": "#/definitions/GuestReadinessContract"
+        },
+        "reservedSideChannelPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
         "transport": {
           "$ref": "#/definitions/GuestTransportKind"
@@ -883,14 +1064,22 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        },
-        "vsockPort": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         }
       },
       "additionalProperties": false
+    },
+    "GuestVsockDirection": {
+      "type": "string",
+      "enum": [
+        "host-to-guest"
+      ]
+    },
+    "HealthOrigin": {
+      "type": "string",
+      "enum": [
+        "guest-reported",
+        "host-synthesized"
+      ]
     },
     "HealthReason": {
       "type": "string",
@@ -927,11 +1116,24 @@
         "inspect-guest-logs"
       ]
     },
+    "HealthRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
     "HealthResponse": {
       "type": "object",
       "required": [
         "capabilities",
         "degradedSubsystems",
+        "origin",
         "protocolVersion",
         "reason",
         "remediation",
@@ -941,14 +1143,19 @@
         "capabilities": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "$ref": "#/definitions/GuestCapability"
+          },
+          "maxItems": 32
         },
         "degradedSubsystems": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "$ref": "#/definitions/GuestSubsystem"
+          },
+          "maxItems": 16
+        },
+        "origin": {
+          "$ref": "#/definitions/HealthOrigin"
         },
         "protocolVersion": {
           "type": "integer",
@@ -1120,11 +1327,14 @@
       "required": [
         "data",
         "droppedBytes",
+        "endOffset",
         "eof",
         "nextOffset",
         "offset",
         "startOffset",
-        "stream"
+        "stream",
+        "timedOut",
+        "truncated"
       ],
       "properties": {
         "data": {
@@ -1133,15 +1343,31 @@
             "type": "integer",
             "format": "uint8",
             "minimum": 0.0
-          }
+          },
+          "maxItems": 65536
         },
         "droppedBytes": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "eof": {
           "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "nextOffset": {
           "type": "integer",
@@ -1160,6 +1386,12 @@
         },
         "stream": {
           "$ref": "#/definitions/OutputStream"
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -1168,8 +1400,7 @@
       "type": "string",
       "enum": [
         "foreground-process-group",
-        "process-tree",
-        "root-process"
+        "process-tree"
       ]
     },
     "StdinState": {
@@ -1203,42 +1434,88 @@
       "additionalProperties": false
     },
     "TerminalStatus": {
-      "type": "object",
-      "properties": {
-        "error": {
-          "anyOf": [
-            {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "exit_code",
+            "outcome"
+          ],
+          "properties": {
+            "exit_code": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "exit-code"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "outcome",
+            "signal"
+          ],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "signal"
+              ]
+            },
+            "signal": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "outcome",
+            "status_code"
+          ],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "status-code"
+              ]
+            },
+            "status_code": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "error",
+            "outcome"
+          ],
+          "properties": {
+            "error": {
               "$ref": "#/definitions/GuestControlErrorKind"
             },
-            {
-              "type": "null"
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
             }
-          ]
-        },
-        "exitCode": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "signal": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0.0
-        },
-        "statusCode": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
+          },
+          "additionalProperties": false
         }
-      },
-      "additionalProperties": false
+      ]
     },
     "TtyWinResizeRequest": {
       "type": "object",
@@ -1303,7 +1580,9 @@
             "type": "integer",
             "format": "uint8",
             "minimum": 0.0
-          }
+          },
+          "maxItems": 65536,
+          "minItems": 1
         },
         "metadata": {
           "$ref": "#/definitions/GuestExecRequestMetadata"
@@ -1344,6 +1623,16 @@
         },
         "disposition": {
           "$ref": "#/definitions/WriteDisposition"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "nextOffset": {
           "type": "integer",

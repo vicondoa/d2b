@@ -14,7 +14,7 @@ all unary ttRPC calls. Stdio is not represented as raw ttRPC streams.
 Instead, each caller transfers bounded chunks with explicit cursors:
 
 - `WriteStdin` appends one bounded stdin chunk if the guest has capacity.
-- `ReadStdout` and `ReadStderr` return bounded chunks at requested byte
+- `ReadOutput` returns bounded stdout or stderr chunks at requested byte
   offsets from server-owned append-only per-exec logs.
 - `CloseStdin` half-closes stdin exactly once.
 - `TtyWinResize` and `Signal` are ordered control events on the exec's
@@ -30,31 +30,35 @@ slow-consumer cancellation.
 
 ## Service surface
 
-The protobuf names below are design-level names. Field numbers are not
-assigned here; schema generation owns that when implementation starts.
-All requests carry `vm_id`, `exec_id`, `request_id`, and the negotiated
-`protocol_version` through the common ttRPC metadata/auth envelope.
+The committed protobuf service source is
+[`packages/nixling-ipc/proto/guest_control.proto`](../../packages/nixling-ipc/proto/guest_control.proto).
+Lifecycle requests carry `vm_id`, `request_id`, and negotiated
+`protocol_version` in `RequestMetadata`; exec-specific requests also carry
+`exec_id` in `ExecRequestMetadata`.
 
 ```protobuf
-service GuestExec {
+service GuestControl {
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+
   rpc ExecCreate(ExecCreateRequest) returns (ExecCreateResponse);
   rpc ExecInspect(ExecInspectRequest) returns (ExecInspectResponse);
   rpc ExecWait(ExecWaitRequest) returns (ExecWaitResponse);
   rpc ExecLogs(ExecLogsRequest) returns (ExecLogsResponse);
 
   rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
-  rpc ReadStdout(ReadOutputRequest) returns (ReadOutputResponse);
-  rpc ReadStderr(ReadOutputRequest) returns (ReadOutputResponse);
+  rpc ReadOutput(ReadOutputRequest) returns (ReadOutputResponse);
   rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
-  rpc TtyWinResize(TtyWinResizeRequest) returns (TtyWinResizeResponse);
-  rpc ExecSignal(ExecSignalRequest) returns (ExecSignalResponse);
-  rpc ExecCancel(ExecCancelRequest) returns (ExecCancelResponse);
+  rpc TtyWinResize(TtyWinResizeRequest) returns (ControlAck);
+  rpc ExecSignal(ExecSignalRequest) returns (ControlAck);
+  rpc ExecCancel(ExecCancelRequest) returns (ControlAck);
 }
 ```
 
 `ExecLogs` is a convenience wrapper for old/detached execs. Attached
-clients use `ReadStdout`/`ReadStderr` directly so polling state, cursors,
-and backpressure are identical for attached and detached sessions.
+clients use `ReadOutput(stream=stdout|stderr)` directly so polling state,
+cursors, and backpressure are identical for attached and detached sessions.
 
 ## Exec lifecycle messages
 
@@ -67,7 +71,7 @@ Request fields:
 - `cwd`: optional absolute path.
 - `env`: repeated key/value entries after host-side policy filtering.
 - `tty`: bool. When true, stdout and stderr are PTY-merged into stdout;
-  `ReadStderr` returns `tty-stderr-unavailable`.
+  `ReadOutput(stream=stderr)` returns `tty-stderr-unavailable`.
 - `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
 - `detached`: bool. Detached execs persist bounded logs after caller
   disconnect.
@@ -100,8 +104,9 @@ Returns non-consuming state:
   `rejected-not-interactive`;
 - `stdout_start_offset`, `stdout_end_offset`, `stderr_start_offset`,
   `stderr_end_offset`;
-- `stdout_dropped_bytes`, `stderr_dropped_bytes`, and
-  `truncated_for_retention` booleans;
+- `stdout_dropped_bytes`, `stderr_dropped_bytes`,
+  `stdout_truncated_for_retention`, and
+  `stderr_truncated_for_retention`;
 - `last_control_seq`, `created_at`, `started_at`, `exited_at`, and
   bounded counters for bytes/chunks/errors.
 
@@ -176,7 +181,10 @@ Response fields:
 - `accepted_offset` and `accepted_len`;
 - `next_offset`;
 - `stdin_state`;
-- `blocked_ms`.
+- `blocked_ms`;
+- `error`, populated for typed retryable failures such as
+  `stdin-offset-mismatch`, `stdin-backpressure`, `request-id-conflict`, and
+  `stdin-byte-budget-exhausted`.
 
 Rules:
 
@@ -224,6 +232,8 @@ Request fields:
 Response fields:
 
 - `stdin_state` and `final_offset`.
+- `error`, populated for typed failures such as `stdin-closed`,
+  `request-id-conflict`, or `stdin-offset-mismatch`.
 
 Rules:
 
@@ -247,11 +257,13 @@ Rules:
 - A child closing its read side transitions to `closed-by-process`; later
   writes get `stdin-closed-by-process`.
 
-### `ReadStdout` / `ReadStderr`
+### `ReadOutput`
 
 Request fields:
 
 - `offset`: absolute byte offset in the stream log.
+- `stream`: `stdout` or `stderr`; TTY execs reject `stderr` with
+  `tty-stderr-unavailable`.
 - `max_len`: requested maximum bytes, `1..max_chunk_bytes`; larger or
   zero-length requests fail with a typed protocol error.
 - `wait`: bool.
@@ -267,7 +279,9 @@ Response fields:
 - `eof`: true only when process output for that stream is complete and
   `next_offset == end_offset`;
 - `truncated`: true if any older bytes were dropped by retention;
-- `timed_out`: true for long-poll timeout with no bytes.
+- `timed_out`: true for long-poll timeout with no bytes;
+- `error`, populated for typed failures such as `offset-expired`,
+  `offset-in-future`, `output-lost`, or `tty-stderr-unavailable`.
 
 Rules:
 
@@ -288,7 +302,7 @@ Rules:
 7. For PTY output, Linux may surface slave closure as `EIO` on master
    reads and readiness APIs may report hangup. Guestd treats those as the
    PTY-output EOF edge only after the output reader has appended every
-   byte returned before the `EIO`/hangup. `ReadStdout` must therefore
+   byte returned before the `EIO`/hangup. `ReadOutput(stdout)` must therefore
    report `eof: true` only when `next_offset == end_offset` after that
    drain; it must not translate the first hangup into premature EOF or
    discard buffered tail bytes.
@@ -331,8 +345,8 @@ Default design limits:
 | slow-consumer grace | 30 s | 5 min | Must satisfy the slow-consumer proof. |
 | concurrent exec sessions per VM | 32 | 256 | New sessions fail before spawn with `exec-capacity-exceeded`. |
 | attached exec sessions per VM | 8 | 64 | New attaches fail without affecting detached execs. |
-| pending `ReadStdout` waits | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
-| pending `ReadStderr` waits | 1 per exec/connection, 64 per VM | 512 per VM | TTY mode always returns `tty-stderr-unavailable`. |
+| pending `ReadOutput(stdout)` waits | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
+| pending `ReadOutput(stderr)` waits | 1 per exec/connection, 64 per VM | 512 per VM | TTY mode always returns `tty-stderr-unavailable`. |
 | pending `ExecWait` calls | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
 | RPC rate budget | 200/s per connection, 1000/s per VM burst | policy-defined | Excess calls return `rate-limited` with bounded retry-after. |
 
@@ -421,8 +435,8 @@ identity no longer matches.
 
 Retained stdout/stderr bytes are **guest-local state**. The host may
 receive them only as the explicit response body of
-`ReadStdout`/`ReadStderr`/`ExecLogs`, and the CLI may write them only to
-the operator-requested terminal, stdout/stderr, or output file. They must
+`ReadOutput`/`ExecLogs`, and the CLI may write them only to the
+operator-requested terminal, stdout/stderr, or output file. They must
 not be copied into host daemon state, broker audit records, host metrics,
 host spans, host health JSON, bundle manifests, or any host-visible
 sidecar directory.
@@ -431,9 +445,9 @@ sidecar directory.
 
 Guest-control audit records are allowlist-only. They may contain:
 
-- bounded operation kind from this closed W0 enum: `hello`,
+- bounded operation kind from the closed guest-control operation enum: `hello`,
   `capabilities`, `health`, `exec-create`, `exec-inspect`, `exec-wait`,
-  `exec-logs`, `write-stdin`, `read-stdout`, `read-stderr`,
+  `exec-logs`, `write-stdin`, `read-output`,
   `close-stdin`, `tty-win-resize`, `exec-signal`, `exec-cancel`, and
   `framework-guest-op`;
 - VM/environment identifiers, caller role/uid where already authorized,
@@ -521,8 +535,8 @@ Long-polling is deliberately short. It hides idle polling latency without
 allowing one stalled unary call to monopolize resources indefinitely.
 Recommended CLI loop:
 
-1. Issue parallel `ReadStdout(wait=true)` and, for non-TTY,
-   `ReadStderr(wait=true)` from current cursors.
+1. Issue parallel `ReadOutput(stream=stdout, wait=true)` and, for non-TTY,
+   `ReadOutput(stream=stderr, wait=true)` from current cursors.
 2. Issue `ExecWait(timeout_ms=long_poll_timeout)` concurrently or after a
    read timeout.
 3. Write local terminal/stdout/stderr bytes immediately as chunks arrive.
@@ -792,7 +806,7 @@ separate compatibility window.
 
 ### Logs UX
 
-`ExecLogs` uses the same offset model as `ReadStdout`/`ReadStderr` but
+`ExecLogs` uses the same offset model as `ReadOutput(stream=...)` but
 packages stream records for CLI display or JSON. Human logs default to
 available retained bytes and warn when `dropped_bytes > 0`. JSON includes
 `startOffset`, `endOffset`, `nextOffset`, `droppedBytes`, `eof`, and
@@ -817,6 +831,8 @@ Required typed error kinds:
 - `stdin-byte-budget-exhausted`
 - `offset-expired`
 - `offset-in-future`
+- `offset-exhausted`
+- `output-lost`
 - `max-chunk-exceeded`
 - `control-seq-mismatch`
 - `request-id-conflict`
@@ -825,8 +841,14 @@ Required typed error kinds:
 - `wait-capacity-exceeded`
 - `exec-capacity-exceeded`
 - `exec-attach-capacity-exceeded`
+- `guest-exec-disabled`
+- `guest-exec-root-denied`
+- `guest-exec-user-denied`
 - `rate-limited`
 - `slow-consumer-cancelled`
+- `guest-control-unavailable-old-generation`
+- `auth-failed`
+- `transport-unreachable`
 - `protocol-error`
 
 Each error response carries only bounded fields: expected offsets,
@@ -945,7 +967,7 @@ so a failure names the leaking class.
 | CH/vsock/socket paths | stale or refused CONNECT using a path canary | logs, audit records, metrics, spans, health, CLI JSON errors | never; report bounded transport kind |
 | session / exec / request IDs in telemetry | successful and failed calls with ID canaries | logs, audit records, metrics labels, span attrs/events, health | CLI JSON fields whose contract explicitly returns `execId`/cursor state |
 | guest-derived free-form errors | child exits after writing `ERR_CANARY` to stderr; guestd returns malformed free-form text in a fake transport | daemon logs, guestd structured logs, audit records, metrics, spans, health, CLI JSON error object | stderr stream only when requested as command output/logs |
-| stdout/stderr payloads | child writes `STDOUT_CANARY` and `STDERR_CANARY` | logs, audit records, metrics, spans, health, CLI JSON errors, inspect/wait JSON | `ReadStdout`/`ReadStderr`/`ExecLogs` payloads and attached CLI stdout/stderr |
+| stdout/stderr payloads | child writes `STDOUT_CANARY` and `STDERR_CANARY` | logs, audit records, metrics, spans, health, CLI JSON errors, inspect/wait JSON | `ReadOutput`/`ExecLogs` payloads and attached CLI stdout/stderr |
 | socket paths / transcripts in debug formatting | force `Debug`/`Display` on transport/auth errors | all structured logs, audit records, spans, health, CLI JSON errors | never |
 
 Required assertions:

@@ -83,15 +83,64 @@ def synth(s):
         for name in s.get("required", []):
             obj[name] = synth(props.get(name, {"type": "string"}))
         return obj
-    if typ == "array":
-        return []
     if typ == "integer":
         return 0
     if typ == "number":
         return 0
     if typ == "boolean":
         return False
+    if typ == "array":
+        item = synth(s.get("items", {"type": "string"}))
+        return [item] if int(s.get("minItems", 0) or 0) > 0 else []
     return "fixture"
+
+
+def iter_object_schemas(s, path, seen):
+    s = resolve(s)
+    marker = id(s)
+    if marker in seen:
+        return
+    seen.add(marker)
+
+    if s.get("type") == "object" or "properties" in s:
+        yield path, s
+
+    for name, sub in s.get("definitions", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/definitions/{name}", seen)
+    for name, sub in s.get("$defs", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/$defs/{name}", seen)
+    for name, sub in s.get("properties", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/properties/{name}", seen)
+    items = s.get("items")
+    if isinstance(items, dict):
+        yield from iter_object_schemas(items, f"{path}/items", seen)
+    for key in ("oneOf", "anyOf", "allOf"):
+        for idx, sub in enumerate(s.get(key, [])):
+            yield from iter_object_schemas(sub, f"{path}/{key}/{idx}", seen)
+
+
+def assert_nested_unknowns_rejected():
+    if schema_path.name != "guest-control.json":
+        return
+
+    for path, sub_schema in iter_object_schemas(schema, "#", set()):
+        instance = synth(sub_schema)
+        if not isinstance(instance, dict):
+            continue
+        invalid = copy.deepcopy(instance)
+        invalid["__nixling_unknown_field__"] = True
+        subvalidator = validator.evolve(schema=sub_schema)
+        errors = list(subvalidator.iter_errors(invalid))
+        if not errors:
+            print(f"unknown field accepted at {path}", file=sys.stderr)
+            sys.exit(6)
+        if not any(
+            "Additional properties" in err.message or "Unevaluated properties" in err.message
+            for err in errors
+        ):
+            for err in errors[:5]:
+                print(f"unexpected nested validation error at {path}: {err.message}", file=sys.stderr)
+            sys.exit(7)
 
 
 if valid_path is None:
@@ -121,6 +170,8 @@ if not any("Additional properties" in err.message or "Unevaluated properties" in
     for err in unknown_errors[:5]:
         print(f"unexpected validation error: {err.message}", file=sys.stderr)
     sys.exit(5)
+
+assert_nested_unknowns_rejected()
 PY
 )
 
