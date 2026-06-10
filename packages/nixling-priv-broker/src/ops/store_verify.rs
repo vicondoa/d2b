@@ -7,8 +7,10 @@
 //! deep recursive package verification and real repair are later waves.
 
 use std::fs::{File, OpenOptions};
+use std::io::Read as _;
 use std::io::Write as _;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{flock, FlockArg};
@@ -349,7 +351,12 @@ fn verify_locked(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyR
             drift.push(format!("manifest:{line}"));
             continue;
         };
-        if std::fs::symlink_metadata(live.join(name)).is_err() {
+        let live_path = live.join(name);
+        if std::fs::symlink_metadata(&live_path).is_err() {
+            drift.push(name.to_owned());
+            continue;
+        }
+        if verify_tree(source_path_for_line(line), &live_path).is_err() {
             drift.push(name.to_owned());
         }
     }
@@ -358,6 +365,83 @@ fn verify_locked(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyR
         drift.sort();
         drift.dedup();
         return write_drift(vm, store_root, &generation_id, checked, drift, repair);
+    }
+
+    fn source_path_for_line(line: &str) -> &Path {
+        Path::new(line)
+    }
+
+    fn verify_tree(source: &Path, live: &Path) -> Result<(), ()> {
+        let source_meta = std::fs::symlink_metadata(source).map_err(|_| ())?;
+        let live_meta = std::fs::symlink_metadata(live).map_err(|_| ())?;
+        if source_meta.file_type().is_symlink() {
+            if !live_meta.file_type().is_symlink() {
+                return Err(());
+            }
+            return (std::fs::read_link(source).map_err(|_| ())?
+                == std::fs::read_link(live).map_err(|_| ())?)
+            .then_some(())
+            .ok_or(());
+        }
+        if source_meta.is_dir() {
+            if !live_meta.is_dir() {
+                return Err(());
+            }
+            let mut source_entries = std::collections::BTreeSet::new();
+            for entry in std::fs::read_dir(source).map_err(|_| ())? {
+                let entry = entry.map_err(|_| ())?;
+                source_entries.insert(entry.file_name());
+                verify_tree(&entry.path(), &live.join(entry.file_name()))?;
+            }
+            for entry in std::fs::read_dir(live).map_err(|_| ())? {
+                let entry = entry.map_err(|_| ())?;
+                if !source_entries.contains(&entry.file_name()) {
+                    return Err(());
+                }
+            }
+            return Ok(());
+        }
+        if source_meta.is_file() {
+            if !live_meta.is_file() {
+                return Err(());
+            }
+            if (source_meta.mode() & 0o111) != (live_meta.mode() & 0o111) {
+                return Err(());
+            }
+            if source_meta.dev() == live_meta.dev() && source_meta.ino() == live_meta.ino() {
+                return Ok(());
+            }
+            return files_equal(source, live).then_some(()).ok_or(());
+        }
+        Err(())
+    }
+
+    fn files_equal(a: &Path, b: &Path) -> bool {
+        let (Ok(a_meta), Ok(b_meta)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+            return false;
+        };
+        if a_meta.len() != b_meta.len() {
+            return false;
+        }
+        let (Ok(mut a_file), Ok(mut b_file)) = (File::open(a), File::open(b)) else {
+            return false;
+        };
+        let mut a_buf = [0u8; 8192];
+        let mut b_buf = [0u8; 8192];
+        loop {
+            let Ok(a_n) = a_file.read(&mut a_buf) else {
+                return false;
+            };
+            let Ok(b_n) = b_file.read(&mut b_buf) else {
+                return false;
+            };
+            if a_n != b_n || a_buf[..a_n] != b_buf[..b_n] {
+                return false;
+            }
+            if a_n == 0 {
+                return true;
+            }
+        }
     }
 
     let record = IntegrityRecord::ok(&generation_id);
@@ -686,6 +770,59 @@ mod tests {
         ))
         .unwrap();
         assert!(raw.contains("\"state\": \"ok\""));
+    }
+
+    #[test]
+    fn internal_live_tree_drift_returns_drift() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let live_alpha =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join("aaaaaaaaaaaaaaaa-alpha");
+        std::fs::remove_dir_all(&live_alpha).unwrap();
+        std::fs::create_dir_all(&live_alpha).unwrap();
+        std::fs::write(live_alpha.join("payload"), b"drifted").unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.checked, 2);
+        assert_eq!(response.drifted, 1);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("aaaaaaaaaaaaaaaa-alpha"));
+    }
+
+    #[test]
+    fn repair_internal_live_tree_drift_stays_drift_until_replace_wave() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        publish(&intent);
+        let live_alpha =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join("aaaaaaaaaaaaaaaa-alpha");
+        std::fs::remove_dir_all(&live_alpha).unwrap();
+        std::fs::create_dir_all(&live_alpha).unwrap();
+        std::fs::write(live_alpha.join("payload"), b"drifted").unwrap();
+
+        let response = run_store_verify(&intent, true);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.drifted, 1);
+        assert_eq!(response.repaired, 0);
+        assert!(response
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("repair incomplete"));
     }
 
     #[test]

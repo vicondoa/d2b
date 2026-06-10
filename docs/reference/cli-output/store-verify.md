@@ -14,7 +14,7 @@ Schema: [`store-verify.schema.json`](./store-verify.schema.json).
 | --- | --- | --- |
 | `vm` | string | VM name being verified. |
 | `status` | enum | `ok`, `drift`, `unknown`, `repaired`, `failed`, or `not_found`. |
-| `checked` | integer | Number of manifest top-level store basenames checked. |
+| `checked` | integer | Number of manifest top-level store basenames checked; each existing top-level tree is verified recursively. |
 | `drifted` | integer | Number of top-level basenames or readiness markers that drifted. |
 | `repaired` | integer | Number of drifted top-level entries repaired. Metadata-only repairs may report `0`. |
 | `unknown_reason` | string or null | Present for `unknown`: `marker_or_manifest_missing`, `marker_or_manifest_unreadable`, `older_host_generation`, or `generation_identity_unavailable`. |

@@ -80,6 +80,12 @@ deprecations ship one minor release before removal.
   StoreSync as a forced non-fast-path republish, then verifies again before
   returning `repaired`; incomplete repairs remain exit-4 `drift`/`unknown`
   instead of a success-shaped result.
+- `nixling store verify` now performs deep recursive live-pool verification
+  against trusted source closure paths (file type, executable bit, symlink
+  target, and hardlink identity or byte equality for copied fallback files).
+  Existing top-level packages with internal drift are detected but not replaced
+  yet; that repair remains deferred to the same-filesystem `RENAME_EXCHANGE`
+  wave.
 - StoreSync success audit/export records now populate available phase timings
   (`lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`,
   `metadata_ms`) in addition to `total_ms`; cleanup/sweep timings remain zero

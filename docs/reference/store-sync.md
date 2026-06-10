@@ -278,7 +278,7 @@ live-pool integrity surface. The CLI is thin: it sends `storeVerify` to
 privileged broker. The CLI never reads `store-view/live` or
 `store-view/state` directly.
 
-W6 implements read-only top-level verification and host-only integrity
+StoreVerify implements read-only live-pool verification and host-only integrity
 records:
 
 - resolves generation identity from `store-view/state/current`;
@@ -286,6 +286,9 @@ records:
 - validates the host marker and zero-length live readiness marker;
 - reads `meta/generations/<id>/store-paths`;
 - checks every manifest top-level basename exists under `live/`;
+- recursively compares each live package tree against the trusted source
+  closure path (file type, executable bit, symlink target, hardlink identity
+  or byte equality for copied fallback files);
 - writes `state/generations/<id>/integrity.json` for `ok` or `suspect`;
 - writes `state/integrity-unknown.json` only when generation identity is
   unavailable.
@@ -300,8 +303,9 @@ verify lock: verify first, run a forced non-fast-path StoreSync republish
 when drift/unknown is repairable, then verify again before returning
 `repaired`. If the second verify still reports `drift` or `unknown`, the
 command returns exit `4` with an incomplete-repair remediation instead of a
-success-shaped result. Deep recursive package verification/repair remains a
-follow-up wave.
+success-shaped result. Replacing an already-present internally drifted
+top-level path remains a follow-up wave because it needs the signed
+same-filesystem `RENAME_EXCHANGE` repair path.
 
 ## Refusal modes
 
