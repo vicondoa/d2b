@@ -170,12 +170,13 @@ Response fields:
 
 Rules:
 
-1. The ttRPC receiver enforces `max_recv_message_bytes` before protobuf
-   decode, and `data.len()` must not exceed
-   `effective_limits.max_chunk_bytes` after decode. Because protobuf
-   `bytes` fields may allocate during decode, the decoded request is
-   admitted only while holding the per-connection decoded-byte budget and
-   the per-exec stdin write permit described in
+1. The ttRPC receiver enforces its fixed 4 MiB frame limit before
+   protobuf decode, and `data.len()` must not exceed
+   `effective_limits.max_chunk_bytes` after decode. Because
+   `ttrpc-rust` 0.9.x allocates frames up to that fixed transport limit
+   before handler admission, the decoded request is admitted only while
+   holding the per-connection decoded-byte budget and the per-exec stdin
+   write permit described in
    [Receive limits and concurrency proof](#receive-limits-and-concurrency-proof).
 2. `offset` must equal the server's next expected stdin offset, unless it
    exactly repeats the previous accepted chunk and `request_id` matches a
@@ -306,10 +307,10 @@ Default design limits:
 | Limit | Default | Hard maximum | Notes |
 | --- | ---: | ---: | --- |
 | `max_chunk_bytes` | 64 KiB | 1 MiB | Application chunk limit; larger decoded chunks are rejected before session-buffer copy. |
-| `max_recv_message_bytes` | 1 MiB + 16 KiB | 1 MiB + 16 KiB | ttRPC receive cap for chunked-stdio methods, enforced before protobuf decode. |
+| ttRPC frame cap | 4 MiB | 4 MiB | Fixed by `ttrpc-rust` 0.9.x before handler/protobuf admission; lowering it requires a wrapper or patch and a new proof. |
 | chunked-stdio connections per VM | 4 | 4 | Bounds cross-connection decoded stdin pressure. |
 | stdin in-flight/queue per exec | 1 chunk | 1 MiB | One decoded request may feed one bounded guestd stdin queue; pipe/PTY partial writes are tracked behind that queue. |
-| decoded WriteStdin bytes per connection | 4 MiB | 4 MiB | Weighted semaphore across concurrent decoded requests. |
+| decoded WriteStdin bytes per connection | 16 MiB | 16 MiB | Four concurrent ttRPC frames at the fixed 4 MiB cap; effective chunks above 1 MiB are rejected before session-buffer copy. |
 | concurrent WriteStdin handlers per connection | 4 | 4 | Bounds protobuf `bytes` allocations even for malicious fan-in. |
 | stdout live buffer per stream | 1 MiB | 8 MiB | Attached sessions; producer blocks before exceeding it. |
 | stderr live buffer per stream | 1 MiB | 8 MiB | Not used for TTY execs. |
@@ -337,18 +338,18 @@ examines `data.len()`, so the design does not claim that every
 `max_chunk_bytes + 1` request is rejected before all allocation. Instead,
 the receiver enforces these gates, in order:
 
-1. Configure the chunked-stdio ttRPC service with
-   `max_recv_message_bytes = hard_max_chunk_bytes + 16 KiB`
-   (`1 MiB + 16 KiB` initially). Messages larger than that are rejected
-   by transport framing before protobuf decode and before handler entry.
-   The 16 KiB allowance covers fixed protobuf fields, auth metadata, and
-   ttRPC framing; tests must fail if the generated schema needs more.
+1. Use `ttrpc-rust` 0.9.x's fixed `MESSAGE_LENGTH_MAX = 4 MiB` as the
+   selected transport pre-decode bound. Messages larger than that are
+   rejected by ttRPC framing; messages at or below that bound may allocate
+   a ttRPC payload buffer before handler/protobuf admission. Lowering this
+   bound requires a pre-ttRPC frame limiter, patched/configurable ttRPC
+   transport, and a new proof.
 2. Limit chunked-stdio decode/handler concurrency per connection to four
-   `WriteStdin` calls. With the receive cap above, a malicious client can
-   force at most roughly `4 * (1 MiB + 16 KiB)` decoded request bytes per
+   `WriteStdin` calls. With the transport cap above, a malicious client
+   can force at most `4 * 4 MiB = 16 MiB` decoded request bytes per
    connection before application admission runs.
 3. At handler entry, charge `data.len()` against a per-connection
-   weighted semaphore with a 4 MiB budget. The permit is acquired before
+   weighted semaphore with a 16 MiB budget. The permit is acquired before
    hashing for idempotency, copying into any session buffer, or waiting on
    bounded stdin-queue capacity, and is released when the response is sent.
    Exhaustion returns typed `stdin-byte-budget-exhausted` without
@@ -361,7 +362,7 @@ the receiver enforces these gates, in order:
    same-exec fan-in from building more than the single bounded stdin queue.
 5. After both permits are held, validate `data.len() <=
    effective_limits.max_chunk_bytes`. An effective-limit `max + 1`
-   request that is still below the service receive cap is rejected with
+   request that is still below the ttRPC frame cap is rejected with
    `max-chunk-exceeded`; it may have incurred one bounded decoded bytes
    allocation, but it is never copied into session storage or queued
    behind another stdin write.
@@ -370,16 +371,17 @@ Therefore, for `N` active connections, malicious concurrent
 `WriteStdin` fan-in is bounded by:
 
 ```text
-decoded request bytes <= N * 4 * (1 MiB + 16 KiB)
-admitted payload bytes <= N * 4 MiB
+decoded request bytes <= N * 4 * 4 MiB
+session-copied payload bytes <= N * 4 * 1 MiB
 per-exec guestd-retained stdin <= 1 decoded in-flight chunk + 1 bounded queued chunk
 ```
 
 The per-VM connection cap from the guest-control transport budget bounds
-`N`; with the initial four-connection cap, decoded stdin pressure is
-below 16.25 MiB per VM before ordinary Rust allocator overhead. This
-budget is separate from output log retention and must be included in RSS
-evidence.
+`N`; with the initial four-connection cap, worst-case decoded stdin
+pressure is 64 MiB per VM before ordinary Rust allocator overhead, while
+session-copied stdin is bounded to 16 MiB per VM before per-exec queue
+limits. This budget is separate from output log retention and must be
+included in RSS evidence.
 
 Overload behavior is fail-closed and non-spawning: capacity failures
 return typed errors before creating a process, allocating a retained log,
@@ -413,6 +415,27 @@ the operator-requested terminal, stdout/stderr, or output file. They must
 not be copied into host daemon state, broker audit records, host metrics,
 host spans, host health JSON, bundle manifests, or any host-visible
 sidecar directory.
+
+### Guest-control audit contract
+
+Guest-control audit records are allowlist-only. They may contain:
+
+- bounded operation kind (`exec-create`, `exec-wait`, `exec-signal`,
+  `exec-cancel`, `read-stdout`, `write-stdin`, `health`, and similar);
+- VM/environment identifiers, caller role/uid where already authorized,
+  target uid/user kind, and bounded capability names;
+- bounded outcome/error/remediation enums;
+- numeric counters and limits such as byte counts, offsets, chunk counts,
+  durations, retry-after, and truncation booleans;
+- timestamps and monotonic state-generation numbers.
+
+They must not contain argv, cwd, environment values, stdout/stderr/stdin
+payload bytes, retained log paths, tokens, MACs, transcripts, CH/vsock
+socket paths, guest-derived free-form errors, or unbounded request/session
+IDs unless a later ADR explicitly approves a specific bounded identifier
+shape. Tests must seed canaries for every denied class and fail if any
+daemon, broker, guestd, userd, metric, span, health, or JSON error surface
+contains them outside the explicit stdio/log payload APIs.
 
 If retained logs are file-backed, they live below guestd-owned guest
 paths, never below `/nix/store`, a host-shared mount, or a virtiofs export:
@@ -592,8 +615,8 @@ moves flow control into the application protocol:
 3. Detached output uses bounded ring retention. Dropping old detached log
    bytes is explicit through `start_offset`, `dropped_bytes`, and
    `truncated` fields, never silent for attached readers.
-4. ttRPC rejects messages above `max_recv_message_bytes` before protobuf
-   decode. Effective `max_chunk_bytes` violations that fit under that
+4. ttRPC rejects messages above its fixed 4 MiB frame cap before handler
+   entry. Effective `max_chunk_bytes` violations that fit under that
    transport cap may allocate one decoded protobuf `bytes` field, but
    per-connection decoded-byte semaphores and per-exec stdin permits bound
    the allocation and reject before session-buffer copy.
@@ -635,9 +658,33 @@ locks.
 | half-close behavior | `CloseStdin` is independent of output reads and wait. |
 | guestd restart / VM reboot | Session identity, inspect state, and stale-session errors reject unsafe reattach. |
 | raw-mode restoration | CLI owns local raw mode and restores on terminal state or protocol error. |
-| max message size | ttRPC receive cap plus bounded post-decode `max_chunk_bytes` check. |
+| max message size | ttRPC fixed 4 MiB frame cap plus bounded post-decode `max_chunk_bytes` check. |
 | malformed messages | Typed `protocol-error` codes with bounded fields only. |
 | no data leakage | Logs/metrics carry counters, offsets, outcomes, and booleans, not payloads. |
+
+## Health status model
+
+Guest-control health is bounded and schema-versioned. `Health` returns a
+state enum plus bounded reason/remediation enums:
+
+- `healthy`
+- `degraded`
+- `unavailable-old-generation`
+- `listener-absent`
+- `transport-unreachable`
+- `auth-failed`
+- `protocol-mismatch`
+- `stale-session`
+
+`healthy` requires CH `CONNECT`, Hello/auth, and Health to succeed on the
+same post-CONNECT stream. `degraded` means guestd is authenticated and
+serving Health but one bounded subsystem check failed; callers may proceed
+only with operations whose capability bit remains healthy. Every other
+state is unavailable for new exec work. Health, status JSON, logs,
+metrics, spans, and audit records must carry only the bounded state,
+reason, remediation, protocol version, and capability names; they must not
+include socket paths, token/MAC material, transcripts, argv/env/cwd,
+payload bytes, or guest free-form error text.
 
 ## CLI behavior
 
@@ -754,9 +801,10 @@ health JSON, and error JSON must not duplicate those payloads or IDs.
 Before implementation exits design hardening, add at least:
 
 1. protobuf/schema drift tests for every message above;
-2. receive-limit tests: service `max_recv_message_bytes + 1` fails before
-   protobuf decode/handler entry; effective `max_chunk_bytes + 1` fails
-   with one bounded decoded allocation and no session-buffer copy;
+2. receive-limit tests: ttRPC's fixed 4 MiB frame cap rejects cap+1
+   messages before handler entry; effective `max_chunk_bytes + 1` below
+   that transport cap fails with one bounded decoded allocation and no
+   session-buffer copy;
 3. stdin offset/idempotency tests, including duplicate request IDs and
    mismatched duplicate payloads;
 4. close-stdin and `WriteStdin.close_after` tests for non-TTY pipe and
@@ -801,8 +849,10 @@ Before implementation exits design hardening, add at least:
     per-exec/per-user/VM quota enforcement, TTL/startup cleanup, and the
     absence of retained stdout/stderr bytes from host-visible state other
     than explicit `ExecLogs` responses;
-16. observability redaction tests proving stdout/stderr/env/token/socket
-    material never enters logs, metrics, spans, health, or JSON errors.
+16. observability and audit redaction tests proving stdout/stderr/env/
+    argv/cwd/token/socket/transcript material never enters logs, broker
+    or guest-control audit records, metrics, spans, health, or JSON
+    errors.
 17. PTY close/drain tests proving Linux `EIO` or `POLLHUP` after slave
     close becomes stdout EOF only after all buffered output has advanced
     the stream cursor.
@@ -817,22 +867,22 @@ so a failure names the leaking class.
 
 | Canary class | Seed location | Must be absent from | Allowed location |
 | --- | --- | --- | --- |
-| argv / command line | `ExecCreate argv = ["true", "ARG_CANARY"]` | daemon logs, guestd logs except bounded kind, metrics labels/samples, spans, health, error JSON | never; CLI human dry-run is out of scope for guestd telemetry |
-| cwd | `--workdir /home/alice/CWD_CANARY` | logs, metrics, spans, health, error JSON | never; use bounded `cwd-invalid`/`cwd-denied` kinds |
-| env / tokens | `--env TOKEN_CANARY=...`, env-file path | logs, metrics, spans, health, error JSON, retained-log metadata | child stdout/stderr only if the command itself prints it and user requested logs |
-| credential path | guestd `LoadCredential` path and token-file validation errors | logs, metrics, spans, health, CLI JSON errors | never; report bounded credential error kind |
-| HMAC/MAC/transcript | failed auth proof with known MAC and transcript canaries | logs, metrics, spans, health, CLI JSON errors | never; report bounded auth failure kind |
-| CH/vsock/socket paths | stale or refused CONNECT using a path canary | logs, metrics, spans, health, CLI JSON errors | never; report bounded transport kind |
-| session / exec / request IDs in telemetry | successful and failed calls with ID canaries | logs, metrics labels, span attrs/events, health | CLI JSON fields whose contract explicitly returns `execId`/cursor state |
-| guest-derived free-form errors | child exits after writing `ERR_CANARY` to stderr; guestd returns malformed free-form text in a fake transport | daemon logs, guestd structured logs, metrics, spans, health, CLI JSON error object | stderr stream only when requested as command output/logs |
-| stdout/stderr payloads | child writes `STDOUT_CANARY` and `STDERR_CANARY` | logs, metrics, spans, health, CLI JSON errors, inspect/wait JSON | `ReadStdout`/`ReadStderr`/`ExecLogs` payloads and attached CLI stdout/stderr |
-| socket paths / transcripts in debug formatting | force `Debug`/`Display` on transport/auth errors | all structured logs, spans, health, CLI JSON errors | never |
+| argv / command line | `ExecCreate argv = ["true", "ARG_CANARY"]` | daemon logs, guestd logs except bounded kind, audit records, metrics labels/samples, spans, health, error JSON | never; CLI human dry-run is out of scope for guestd telemetry |
+| cwd | `--workdir /home/alice/CWD_CANARY` | logs, audit records, metrics, spans, health, error JSON | never; use bounded `cwd-invalid`/`cwd-denied` kinds |
+| env / tokens | `--env TOKEN_CANARY=...`, env-file path | logs, audit records, metrics, spans, health, error JSON, retained-log metadata | child stdout/stderr only if the command itself prints it and user requested logs |
+| credential path | guestd `LoadCredential` path and token-file validation errors | logs, audit records, metrics, spans, health, CLI JSON errors | never; report bounded credential error kind |
+| HMAC/MAC/transcript | failed auth proof with known MAC and transcript canaries | logs, audit records, metrics, spans, health, CLI JSON errors | never; report bounded auth failure kind |
+| CH/vsock/socket paths | stale or refused CONNECT using a path canary | logs, audit records, metrics, spans, health, CLI JSON errors | never; report bounded transport kind |
+| session / exec / request IDs in telemetry | successful and failed calls with ID canaries | logs, audit records, metrics labels, span attrs/events, health | CLI JSON fields whose contract explicitly returns `execId`/cursor state |
+| guest-derived free-form errors | child exits after writing `ERR_CANARY` to stderr; guestd returns malformed free-form text in a fake transport | daemon logs, guestd structured logs, audit records, metrics, spans, health, CLI JSON error object | stderr stream only when requested as command output/logs |
+| stdout/stderr payloads | child writes `STDOUT_CANARY` and `STDERR_CANARY` | logs, audit records, metrics, spans, health, CLI JSON errors, inspect/wait JSON | `ReadStdout`/`ReadStderr`/`ExecLogs` payloads and attached CLI stdout/stderr |
+| socket paths / transcripts in debug formatting | force `Debug`/`Display` on transport/auth errors | all structured logs, audit records, spans, health, CLI JSON errors | never |
 
 Required assertions:
 
-1. Capture daemon, guestd, and userd structured logs during the test and
-   grep for every canary; matches are allowed only in the explicit payload
-   stream under test.
+1. Capture daemon, guestd, and userd structured logs plus host broker and
+   guest-control audit records during the test and grep for every canary;
+   matches are allowed only in the explicit payload stream under test.
 2. Scrape Prometheus/OpenTelemetry metric output and assert canaries are
    absent from metric names, labels, exemplars, and sample values except
    numeric byte counts.

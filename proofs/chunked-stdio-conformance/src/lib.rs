@@ -13,6 +13,7 @@ use std::collections::HashMap;
 pub const KIB: usize = 1024;
 pub const MIB: usize = 1024 * KIB;
 pub const DEFAULT_CHUNK: usize = 256 * KIB;
+pub const TTRPC_MESSAGE_CAP: usize = 4 * MIB;
 pub const MAX_DEDUPE_ENTRIES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -1320,7 +1321,7 @@ mod tests {
 
     #[test]
     fn receive_cap_and_effective_chunk_limit_are_distinct() {
-        let max_recv = MIB + 16 * KIB;
+        let max_recv = TTRPC_MESSAGE_CAP;
         assert_eq!(
             ChunkedSession::receive_message(max_recv, max_recv)
                 .unwrap()
@@ -1352,7 +1353,7 @@ mod tests {
 
     #[test]
     fn decoded_byte_budget_and_stdin_permit_bound_concurrent_write_fan_in() {
-        let max_recv = MIB;
+        let max_recv = TTRPC_MESSAGE_CAP;
         let mut budget = DecodedByteBudget::new(4 * max_recv);
         for _ in 0..4 {
             budget.try_acquire(max_recv).unwrap();

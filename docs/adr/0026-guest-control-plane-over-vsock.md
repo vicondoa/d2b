@@ -222,8 +222,8 @@ Every terminal transport candidate must pass the same matrix:
 - guestd restart and daemon restart behavior;
 - VM reboot and stale-session rejection;
 - terminal raw-mode restoration in the CLI;
-- max message/frame size enforcement before protobuf decode where the
-  transport exposes a receive cap, and otherwise bounded post-decode
+- max message/frame size enforcement before handler/protobuf admission
+  at the selected transport's available cap, and bounded post-decode
   allocation with explicit semaphore budgets;
 - typed protocol errors for malformed messages;
 - no token, environment, stdout, or stderr leakage into logs, metrics,
@@ -254,9 +254,9 @@ Initial pass/fail thresholds are:
   variant, but the default W0 proof must not depend on wall-clock timing;
 - frame/message limit test: send one message at the configured maximum,
   one byte above the effective application chunk limit, and one byte
-  above the ttRPC receive cap. The receive-cap violation is rejected
-  before protobuf decode; the effective-limit violation may allocate one
-  bounded decoded protobuf `bytes` field but must be rejected before
+  above the ttRPC frame cap. The frame-cap violation is rejected before
+  handler/protobuf admission; the effective-limit violation may allocate
+  one bounded decoded protobuf `bytes` field but must be rejected before
   session-buffer copy while holding the documented byte-budget permits;
 - fake-scheduler fairness test: under four concurrent exec sessions
   (one slow-output, one blocked-stdin, one interactive TTY, one unary
@@ -299,6 +299,18 @@ for failing a must-pass row.
   guest-to-host direction, and must not carry guest-control RPCs.
 - Guest-control readiness requires CONNECT, Hello/auth, and Health.
   Socket existence alone is never readiness.
+- Health returns a bounded state enum plus bounded reason/remediation
+  enums, never guest-derived free-form text or transport/socket paths.
+  W0 reserves these states for the implementing schema: `healthy`,
+  `degraded`, `unavailable-old-generation`, `listener-absent`,
+  `transport-unreachable`, `auth-failed`, `protocol-mismatch`, and
+  `stale-session`. `healthy` requires CONNECT + Hello/auth + Health to
+  complete on the same post-CONNECT stream. `degraded` means guestd is
+  authenticated and serving Health but one bounded subsystem check
+  failed; callers may continue only operations whose capability bit is
+  still healthy. The other states are unavailable and map to bounded
+  remediation enums such as `restart-vm`, `retry`, `upgrade-guest`, or
+  `check-auth-token`.
 - No host proxy daemon or per-VM host systemd unit may be introduced
   for guest control.
 - Host CONNECT setup is part of the transport contract: connect to the

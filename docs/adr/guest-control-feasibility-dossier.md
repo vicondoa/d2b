@@ -376,14 +376,17 @@ requirements by themselves.
 Panel follow-up corrected the message-size invariant for protobuf
 `bytes`: generated decoders may allocate the field before a
 `WriteStdin` handler can compare it with `max_chunk_bytes`. The selected
-chunked-stdio design therefore requires a ttRPC receive cap
-(`1 MiB + 16 KiB`) for pre-decode rejection of truly oversized messages,
-plus bounded post-decode allocation for effective-limit violations:
-four concurrent `WriteStdin` handlers per connection, a 4 MiB
-per-connection decoded-byte semaphore, and one per-exec stdin in-flight
-permit. An effective `max_chunk_bytes + 1` request may allocate one
-bounded decoded protobuf value, but it is rejected before session-buffer
-copy or stdin queueing.
+chunked-stdio design therefore treats `ttrpc-rust` 0.9.x's fixed 4 MiB
+frame limit as the selected pre-handler allocation bound. Messages above
+4 MiB are rejected by ttRPC framing; messages at or below 4 MiB may
+allocate one transport/protobuf payload before application admission.
+The bounded post-decode design then limits fan-in to four concurrent
+`WriteStdin` handlers per connection, a 16 MiB per-connection
+decoded-byte semaphore, and one per-exec stdin in-flight permit. An
+effective `max_chunk_bytes + 1` request may allocate one bounded decoded
+protobuf value, but it is rejected before session-buffer copy or stdin
+queueing. Lowering the pre-handler bound requires a pre-ttRPC frame
+limiter or patched/configurable ttRPC transport and a new proof.
 
 ## Port registry
 
