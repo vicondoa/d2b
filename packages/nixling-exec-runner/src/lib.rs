@@ -24,8 +24,11 @@ pub struct RunnerEnv {
 pub enum ValidationError {
     EmptyArgv,
     TooManyArgs,
+    ArgEmpty,
     ArgTooLong,
     ArgContainsNul,
+    CwdEmpty,
+    CwdRelative,
     CwdTooLong,
     CwdContainsNul,
     TooManyEnv,
@@ -53,6 +56,9 @@ pub fn validate_argv(argv: &[String]) -> Result<(), ValidationError> {
         return Err(ValidationError::TooManyArgs);
     }
     for arg in argv {
+        if arg.is_empty() {
+            return Err(ValidationError::ArgEmpty);
+        }
         if arg.len() > MAX_ARG_LEN {
             return Err(ValidationError::ArgTooLong);
         }
@@ -67,11 +73,17 @@ pub fn validate_cwd(cwd: Option<&str>) -> Result<(), ValidationError> {
     let Some(cwd) = cwd else {
         return Ok(());
     };
-    if cwd.len() > MAX_CWD_LEN {
-        return Err(ValidationError::CwdTooLong);
+    if cwd.is_empty() {
+        return Err(ValidationError::CwdEmpty);
     }
     if contains_nul(cwd) {
         return Err(ValidationError::CwdContainsNul);
+    }
+    if !cwd.starts_with('/') {
+        return Err(ValidationError::CwdRelative);
+    }
+    if cwd.len() > MAX_CWD_LEN {
+        return Err(ValidationError::CwdTooLong);
     }
     Ok(())
 }
@@ -125,6 +137,13 @@ mod tests {
     #[test]
     fn accepts_bounded_command() {
         assert!(valid_command().validate().is_ok());
+        assert!(validate_argv(&["x".repeat(MAX_ARG_LEN)]).is_ok());
+        assert!(validate_cwd(Some(&format!("/{}", "x".repeat(MAX_CWD_LEN - 1)))).is_ok());
+        assert!(validate_env(&[RunnerEnv {
+            key: "K".repeat(MAX_ENV_KEY_LEN),
+            value: "V".repeat(MAX_ENV_VALUE_LEN),
+        }])
+        .is_ok());
     }
 
     #[test]
@@ -151,8 +170,52 @@ mod tests {
             Err(ValidationError::ArgTooLong)
         );
         assert_eq!(
+            validate_argv(&["".to_owned()]),
+            Err(ValidationError::ArgEmpty)
+        );
+        assert_eq!(
             validate_cwd(Some("a\0b")),
             Err(ValidationError::CwdContainsNul)
+        );
+        assert_eq!(validate_cwd(Some("")), Err(ValidationError::CwdEmpty));
+        assert_eq!(
+            validate_cwd(Some("relative")),
+            Err(ValidationError::CwdRelative)
+        );
+        assert_eq!(
+            validate_cwd(Some(&format!("/{}", "x".repeat(MAX_CWD_LEN)))),
+            Err(ValidationError::CwdTooLong)
+        );
+        assert_eq!(
+            validate_env(&vec![
+                RunnerEnv {
+                    key: "K".to_owned(),
+                    value: "V".to_owned(),
+                };
+                MAX_ENV + 1
+            ]),
+            Err(ValidationError::TooManyEnv)
+        );
+        assert_eq!(
+            validate_env(&[RunnerEnv {
+                key: "".to_owned(),
+                value: "value".to_owned(),
+            }]),
+            Err(ValidationError::EnvKeyEmpty)
+        );
+        assert_eq!(
+            validate_env(&[RunnerEnv {
+                key: "K".repeat(MAX_ENV_KEY_LEN + 1),
+                value: "value".to_owned(),
+            }]),
+            Err(ValidationError::EnvKeyTooLong)
+        );
+        assert_eq!(
+            validate_env(&[RunnerEnv {
+                key: "BAD\0KEY".to_owned(),
+                value: "value".to_owned(),
+            }]),
+            Err(ValidationError::EnvKeyContainsNul)
         );
         assert_eq!(
             validate_env(&[RunnerEnv {
@@ -167,6 +230,13 @@ mod tests {
                 value: "x".repeat(MAX_ENV_VALUE_LEN + 1),
             }]),
             Err(ValidationError::EnvValueTooLong)
+        );
+        assert_eq!(
+            validate_env(&[RunnerEnv {
+                key: "TOKEN".to_owned(),
+                value: "bad\0value".to_owned(),
+            }]),
+            Err(ValidationError::EnvValueContainsNul)
         );
     }
 }

@@ -7,14 +7,20 @@ use nixling_ipc::guest_wire::{
     GUEST_CONTROL_PROTOCOL_VERSION,
 };
 
+pub const MAX_HEALTH_CAPABILITIES: usize = 32;
+pub const MAX_DEGRADED_SUBSYSTEMS: usize = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuestHealthError {
     EmptyDegradedSubsystems,
+    TooManyCapabilities,
+    TooManyDegradedSubsystems,
+    HostSynthesizedHealth,
     InvalidGuestReportedMapping,
 }
 
-pub fn healthy(capabilities: Vec<GuestCapability>) -> HealthResponse {
-    HealthResponse {
+pub fn healthy(capabilities: Vec<GuestCapability>) -> Result<HealthResponse, GuestHealthError> {
+    guest_reported(HealthResponse {
         origin: HealthOrigin::GuestReported,
         state: HealthState::Healthy,
         reason: HealthReason::None,
@@ -22,7 +28,7 @@ pub fn healthy(capabilities: Vec<GuestCapability>) -> HealthResponse {
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
         capabilities,
         degraded_subsystems: Vec::new(),
-    }
+    })
 }
 
 pub fn degraded(
@@ -34,7 +40,7 @@ pub fn degraded(
     if degraded_subsystems.is_empty() {
         return Err(GuestHealthError::EmptyDegradedSubsystems);
     }
-    let response = HealthResponse {
+    guest_reported(HealthResponse {
         origin: HealthOrigin::GuestReported,
         state: HealthState::Degraded,
         reason,
@@ -42,11 +48,23 @@ pub fn degraded(
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
         capabilities,
         degraded_subsystems,
-    };
-    if response.is_valid_mapping() {
-        Ok(response)
-    } else {
+    })
+}
+
+pub fn guest_reported(response: HealthResponse) -> Result<HealthResponse, GuestHealthError> {
+    if response.origin != HealthOrigin::GuestReported {
+        return Err(GuestHealthError::HostSynthesizedHealth);
+    }
+    if response.capabilities.len() > MAX_HEALTH_CAPABILITIES {
+        return Err(GuestHealthError::TooManyCapabilities);
+    }
+    if response.degraded_subsystems.len() > MAX_DEGRADED_SUBSYSTEMS {
+        return Err(GuestHealthError::TooManyDegradedSubsystems);
+    }
+    if !response.is_valid_mapping() {
         Err(GuestHealthError::InvalidGuestReportedMapping)
+    } else {
+        Ok(response)
     }
 }
 
@@ -102,13 +120,13 @@ impl<H> GuestDaemon<H>
 where
     H: GuestHealthProbe,
 {
-    pub fn health(&self) -> HealthResponse {
-        self.health.health()
+    pub fn health(&self) -> Result<HealthResponse, GuestHealthError> {
+        guest_reported(self.health.health()?)
     }
 }
 
 pub trait GuestHealthProbe {
-    fn health(&self) -> HealthResponse;
+    fn health(&self) -> Result<HealthResponse, GuestHealthError>;
 }
 
 pub struct StaticHealthy {
@@ -116,7 +134,7 @@ pub struct StaticHealthy {
 }
 
 impl GuestHealthProbe for StaticHealthy {
-    fn health(&self) -> HealthResponse {
+    fn health(&self) -> Result<HealthResponse, GuestHealthError> {
         healthy(self.capabilities.clone())
     }
 }
@@ -133,7 +151,7 @@ mod tests {
 
     #[test]
     fn guestd_health_is_guest_reported_only_for_healthy() {
-        let response = healthy(vec![GuestCapability::Health]);
+        let response = healthy(vec![GuestCapability::Health]).unwrap();
         assert_eq!(response.origin, HealthOrigin::GuestReported);
         assert_eq!(response.state, HealthState::Healthy);
         assert!(response.is_valid_mapping());
@@ -172,5 +190,35 @@ mod tests {
         .unwrap();
         assert_eq!(response.origin, HealthOrigin::GuestReported);
         assert_eq!(response.state, HealthState::Degraded);
+    }
+
+    #[test]
+    fn guestd_health_rejects_unbounded_or_host_synthesized_probe_output() {
+        assert!(matches!(
+            healthy(vec![GuestCapability::Health; MAX_HEALTH_CAPABILITIES + 1]),
+            Err(GuestHealthError::TooManyCapabilities)
+        ));
+        assert!(matches!(
+            degraded(
+                HealthReason::ExecSubsystemUnavailable,
+                HealthRemediation::Retry,
+                vec![GuestCapability::Health],
+                vec![GuestSubsystem::Exec; MAX_DEGRADED_SUBSYSTEMS + 1],
+            ),
+            Err(GuestHealthError::TooManyDegradedSubsystems)
+        ));
+        let host_synthesized = HealthResponse {
+            origin: HealthOrigin::HostSynthesized,
+            state: HealthState::ListenerAbsent,
+            reason: HealthReason::ListenerAbsent,
+            remediation: HealthRemediation::CheckGuestdService,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            capabilities: Vec::new(),
+            degraded_subsystems: Vec::new(),
+        };
+        assert!(matches!(
+            guest_reported(host_synthesized),
+            Err(GuestHealthError::HostSynthesizedHealth)
+        ));
     }
 }
