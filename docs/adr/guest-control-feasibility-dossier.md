@@ -86,9 +86,12 @@ the implementation harness before guest-control ships:
   CID, socket identity, and HMAC transcript returns a typed
   `stale-guest-control-socket`/`stale-session` error and remediation to
   restart or refresh the VM state.
-- **guest listener absent:** a missing guestd capability or explicit
-  listener-missing health result maps to bounded Health state
-  `listener-absent` with reason `listener-absent`.
+- **old-generation capability absent:** an old running VM without the
+  `guest-control` capability maps to bounded Health state
+  `unavailable-old-generation` with reason `old-generation`.
+- **guest listener absent:** a guest-control-capable VM whose guestd
+  listener is absent or reports listener missing maps to bounded Health
+  state `listener-absent` with reason `listener-absent`.
 - **transport unavailable during CONNECT:** CH refusal, EOF,
   malformed/overlong ACK, transport I/O error, or timeout during
   `CONNECT 14318` maps to bounded Health state `transport-unreachable`

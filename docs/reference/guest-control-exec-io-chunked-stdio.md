@@ -908,6 +908,12 @@ Before implementation exits design hardening, add at least:
 13. guestd restart and VM reboot stale-session rejection tests;
 14. CLI raw-mode restoration tests for success, signal, protocol error,
     and disconnect;
+14a. Health state/reason/remediation matrix tests enumerating every W0
+     Health state, reason, and remediation, rejecting invalid combinations
+     such as `healthy` plus an error reason, and proving CONNECT,
+     Hello/auth, and Health failures map to the documented bounded states
+     without leaking socket paths, tokens, transcripts, guest text, or
+     unbounded IDs;
 15. retained-log storage security tests covering guest-local path roots,
     ownership/mode, symlink and hard-link rejection, per-user isolation,
     per-exec/per-user/VM quota enforcement, TTL/startup cleanup, and the
