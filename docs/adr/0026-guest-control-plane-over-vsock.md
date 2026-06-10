@@ -258,9 +258,10 @@ Initial pass/fail thresholds are:
   handler/protobuf admission; the effective-limit violation may allocate
   one bounded decoded protobuf `bytes` field but must be rejected before
   session-buffer copy while holding the documented byte-budget permits;
-- fake-scheduler fairness test: under four concurrent exec sessions
-  (one slow-output, one blocked-stdin, one interactive TTY, one unary
-  health loop), the scheduler trace must show bounded service-turn gaps
+- fake-scheduler fairness tests: one test covers four concurrent attached
+  exec sessions with bounded byte-skew; a separate mixed workload covers
+  slow-output exec, blocked-stdin exec, interactive TTY exec, and a unary
+  Health RPC loop sharing the scheduler, with bounded service-turn gaps
   for interactive and health work and no byte-skew starvation;
 - memory high-water mark: the dossier records idle RSS and test RSS; any
   candidate whose RSS grows without bound or exceeds the recorded
@@ -273,9 +274,9 @@ process status hidden until output preceding terminal observation is
 retained, delivered/acknowledged, or explicitly dropped with cursor
 accounting. Real-transport implementation tests must record p50/p95/max
 latency; deterministic W0 proofs record service-turn gaps. Concurrent
-proof must run slow-output, blocked-stdin, interactive, and unary-health
-work together and show no head-of-line blocking, no starvation, and
-bounded memory.
+proof must run slow-output exec, blocked-stdin exec, interactive TTY exec,
+and unary Health work together and show no head-of-line blocking, no
+starvation, and bounded memory.
 
 Nice-to-have properties such as lower latency, lower dependency
 footprint, and simpler docs can break ties, but they cannot compensate

@@ -984,9 +984,11 @@ mod tests {
         capacity: usize,
         in_flight: usize,
         max_in_flight: usize,
+        started: u64,
         completed: u64,
         last_turn: Option<u64>,
         max_gap: u64,
+        saturation_errors: usize,
     }
 
     impl HealthRpcModel {
@@ -995,14 +997,17 @@ mod tests {
                 capacity,
                 in_flight: 0,
                 max_in_flight: 0,
+                started: 0,
                 completed: 0,
                 last_turn: None,
                 max_gap: 0,
+                saturation_errors: 0,
             }
         }
 
-        fn handle(&mut self, turn: u64) -> Result<(), ProtocolError> {
+        fn start(&mut self) -> Result<(), ProtocolError> {
             if self.in_flight >= self.capacity {
+                self.saturation_errors += 1;
                 return Err(ProtocolError::SlowConsumer {
                     retained: self.in_flight,
                     cap: self.capacity,
@@ -1010,6 +1015,17 @@ mod tests {
             }
             self.in_flight += 1;
             self.max_in_flight = self.max_in_flight.max(self.in_flight);
+            self.started += 1;
+            Ok(())
+        }
+
+        fn finish(&mut self, turn: u64) -> Result<(), ProtocolError> {
+            if self.in_flight == 0 {
+                return Err(ProtocolError::SlowConsumer {
+                    retained: 0,
+                    cap: self.capacity,
+                });
+            }
             if let Some(last) = self.last_turn {
                 self.max_gap = self.max_gap.max(turn - last);
             }
@@ -1441,7 +1457,7 @@ mod tests {
 
     #[test]
     fn mixed_attached_load_has_bounded_deterministic_service_gaps() {
-        const MAX_TURN_GAP: u64 = 4;
+        const MAX_TURN_GAP: u64 = 5;
         const INTERACTIVE_OPS: u64 = 240;
         const HEALTH_OPS: u64 = 240;
 
@@ -1468,10 +1484,19 @@ mod tests {
             || blocked_write_id <= 64
             || interactive_ops < INTERACTIVE_OPS
             || health.completed < HEALTH_OPS
+            || health.in_flight > 0
         {
             turn += 1;
-            if health.completed < HEALTH_OPS {
-                health.handle(turn).unwrap();
+            if health.completed < HEALTH_OPS && health.in_flight == 0 {
+                health.start().unwrap();
+                assert_eq!(
+                    health.start(),
+                    Err(ProtocolError::SlowConsumer {
+                        retained: 1,
+                        cap: 1,
+                    }),
+                    "concurrent health RPC must observe bounded capacity"
+                );
             }
 
             turn += 1;
@@ -1532,13 +1557,20 @@ mod tests {
                 }
                 blocked_write_id += 1;
             }
+
+            turn += 1;
+            if health.in_flight > 0 {
+                health.finish(turn).unwrap();
+            }
         }
 
         assert_eq!(slow_offset, 2 * MIB as u64);
         assert!(blocked_slow > 0);
         assert_eq!(interactive_ops, INTERACTIVE_OPS);
+        assert_eq!(health.started, HEALTH_OPS);
         assert_eq!(health.completed, HEALTH_OPS);
         assert_eq!(health.max_in_flight, 1);
+        assert!(health.saturation_errors > 0);
         assert!(max_interactive_gap <= MAX_TURN_GAP);
         assert!(health.max_gap <= MAX_TURN_GAP);
     }

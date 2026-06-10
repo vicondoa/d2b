@@ -48,7 +48,7 @@ W0 protocol.
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
 | Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
-| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` + consolidated fixes | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, mixed four-session shared-scheduler fairness with modeled unary-health capacity, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
+| Chunked stdio conformance | `guest-control-w0-conf` through `a6fe32e` | `4f0a8e1` + consolidated fixes through `a6fe32e` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, four-attached-session byte-skew fairness, mixed three-exec plus unary-Health scheduler fairness with capacity saturation, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
 
 ## Evidence details
 
@@ -461,10 +461,10 @@ It validates:
   under the configured cap while producers continue attempting
   stdout/stderr writes and receive typed `SlowConsumer` pressure rather
   than growing unbounded buffers;
-- four concurrent attached sessions, including a mixed deterministic
-  scheduler with slow-output, blocked-stdin, interactive echo, and
-  unary-health load, with bounded service-turn gaps and no byte-skew
-  starvation;
+- four concurrent attached sessions with bounded byte-skew fairness;
+- a mixed deterministic scheduler with slow-output exec, blocked-stdin
+  exec, interactive echo exec, and unary Health RPC capacity saturation,
+  with bounded service-turn gaps for health and interactive work;
 - stale-generation rejection after restart;
 - EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
   (`0x04` data through `WriteStdin`);

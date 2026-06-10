@@ -32,10 +32,11 @@ The tests prove:
   the configured cap while producers continue attempting stdout/stderr
   writes and receive explicit `SlowConsumer` errors instead of allocating
   without bound.
-- Four concurrent attached sessions, including a mixed deterministic
-  scheduler with slow-output, blocked-stdin, interactive echo, and
-  modeled unary-health RPC capacity, meet bounded service-turn and
-  fairness thresholds without relying on wall-clock timing.
+- Four concurrent attached sessions meet deterministic byte-skew fairness
+  thresholds without relying on wall-clock timing.
+- A separate mixed deterministic scheduler with slow-output,
+  blocked-stdin, interactive echo, and modeled unary Health RPC capacity
+  meets bounded service-turn thresholds while exercising Health saturation.
 - Restarted sessions reject stale generation tokens.
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.
