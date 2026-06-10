@@ -2180,13 +2180,21 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // resolved intent (NOT the run_store_sync outcome), so a
             // failure that aborts before any link accounting still emits a
             // fully-attributed record. `generation_id` is the
-            // collision-free on-disk key. `env` attribution and per-phase
-            // timings beyond `total_ms` are follow-up enrichments.
+            // collision-free on-disk key. Successful attempts use the
+            // StoreSync handler's per-phase timings; pre-handler failures
+            // still carry the dispatch-level total only.
             let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
             let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
             let target_env = resolver
                 .find_manifest_vm(&vm_name)
                 .and_then(|vm| vm.env.clone());
+            let timings = match &result {
+                Ok(outcome) => outcome.timings,
+                Err(_) => crate::ops::store_sync_audit::StoreSyncTimings {
+                    total_ms,
+                    ..Default::default()
+                },
+            };
             let audit_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
                 vm: vm_name.clone(),
                 vm_id: req.vm_id.as_str().to_owned(),
@@ -2200,10 +2208,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     audit_context.peer_role.as_str()
                 )),
                 closure_count,
-                timings: crate::ops::store_sync_audit::StoreSyncTimings {
-                    total_ms,
-                    ..Default::default()
-                },
+                timings,
             };
             let audit_fields = crate::ops::store_sync::audit_fields_for_result(audit_ctx, &result);
             debug_assert!(

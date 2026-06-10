@@ -20,8 +20,9 @@
 //! `denied` awaits a per-VM/per-caller StoreSync authorization policy
 //! (the only kernel-trusted identity at this layer is the global
 //! peer-uid gate applied before dispatch), and `ok_cleanup_failed` awaits
-//! the post-activation sweep/cleanup wave. `env` attribution and
-//! per-phase timings beyond `total_ms` are likewise follow-up enrichment.
+//! the post-activation sweep/cleanup wave. Successful StoreSync attempts
+//! populate available per-phase timings; failure paths still carry the
+//! dispatch-level `total_ms`.
 //! See `docs/reference/store-sync.md`.
 //!
 //! Redaction contract: this is the **host-confidential** audit record

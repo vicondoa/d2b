@@ -197,8 +197,9 @@ The `decision` field follows the broker default
 > at this layer (the only kernel-trusted identity is the global peer-uid
 > gate applied before dispatch), so a real authz-deny trigger awaits that
 > policy. `ok_cleanup_failed` likewise awaits the post-activation
-> sweep/cleanup wave. Per-phase timings beyond `total_ms` remain follow-up
-> enrichment.
+> sweep/cleanup wave. Successful StoreSync attempts populate available
+> per-phase timings; pre-handler/failure paths still carry only the
+> dispatch-level `total_ms`.
 
 ## Observability export (W5)
 

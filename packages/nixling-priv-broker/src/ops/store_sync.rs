@@ -34,12 +34,15 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use nix::fcntl::{flock, FlockArg};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
-use crate::ops::store_sync_audit::{ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields};
+use crate::ops::store_sync_audit::{
+    ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields, StoreSyncTimings,
+};
 use crate::ops::store_view_posture::{posture_store_view_matrix_paths, PostureError};
 
 /// Typed errors for the `StoreSync` handler. Each value classifies the
@@ -192,6 +195,7 @@ pub struct StoreSyncOutcome {
     pub swept_count: u32,
     pub fast_path: bool,
     pub cleanup_deferred: bool,
+    pub timings: StoreSyncTimings,
 }
 
 /// Drive the per-VM hardlink-farm sync for one bundle-resolved
@@ -242,6 +246,7 @@ fn run_store_sync_inner(
     wire_generation: u32,
     force_republish: bool,
 ) -> Result<StoreSyncOutcome, StoreSyncError> {
+    let total_started = Instant::now();
     if intent.vm != wire_vm {
         return Err(StoreSyncError::VmMismatch {
             wire: wire_vm.to_owned(),
@@ -262,7 +267,15 @@ fn run_store_sync_inner(
         });
     }
 
+    let lock_wait_started = Instant::now();
     let _lock = acquire_sync_lock(&intent.hardlink_farm_path)?;
+    let mut timings = StoreSyncTimings {
+        lock_wait_ms: elapsed_ms(lock_wait_started),
+        ..Default::default()
+    };
+    let lock_hold_started = Instant::now();
+
+    let probe_started = Instant::now();
     posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
         .map_err(|err| posture_error(ErrorStage::Lock, err))?;
 
@@ -291,11 +304,13 @@ fn run_store_sync_inner(
         vm: intent.vm.clone(),
         generation_number: resolved_u32,
     };
+    timings.probe_ms = elapsed_ms(probe_started);
 
     // Fast path: a complete, consistent same-generation split layout is
     // already published (state/current == meta/current == generation_id,
     // host marker matches, live marker + all top-level basenames
     // present). Skip relinking and republishing; preserve old behaviour.
+    let verify_started = Instant::now();
     let fast_path = !force_republish
         && hardlink_farm::split_fast_path_ready(
             &intent.hardlink_farm_path,
@@ -303,10 +318,12 @@ fn run_store_sync_inner(
             &intent.vm,
             &intent.closure_paths,
         );
+    timings.verify_ms = elapsed_ms(verify_started);
 
     let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
 
     let link_counts = if !fast_path {
+        let stage_started = Instant::now();
         // Materialise the new generation inside a private mount namespace
         // where `/nix/store` is lazily detached, so the build succeeds
         // even when `/nix/store` is a separate (bind) mount from
@@ -320,6 +337,9 @@ fn run_store_sync_inner(
             &marker,
         )
         .map_err(|e| StoreSyncError::at(build_error_stage(&e), e))?;
+        timings.stage_ms = elapsed_ms(stage_started);
+
+        let metadata_started = Instant::now();
         posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
             .map_err(|err| posture_error(ErrorStage::Metadata, err))?;
         hardlink_farm::write_meta_db_dump(
@@ -339,6 +359,7 @@ fn run_store_sync_inner(
             .map_err(|e| StoreSyncError::at(ErrorStage::Marker, e))?;
         posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
             .map_err(|err| posture_error(ErrorStage::Marker, err))?;
+        timings.metadata_ms = elapsed_ms(metadata_started);
         (counts.linked, counts.skipped)
     } else {
         // Pure fast path: nothing relinked, every top-level basename is
@@ -363,6 +384,8 @@ fn run_store_sync_inner(
         force_republish,
         "store-sync cleanup deferred until running-generation retention is available"
     );
+    timings.lock_hold_ms = elapsed_ms(lock_hold_started);
+    timings.total_ms = elapsed_ms(total_started);
 
     Ok(StoreSyncOutcome {
         vm: intent.vm.clone(),
@@ -376,7 +399,12 @@ fn run_store_sync_inner(
         swept_count,
         fast_path,
         cleanup_deferred,
+        timings,
     })
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn posture_error(stage: ErrorStage, err: PostureError) -> StoreSyncError {
@@ -797,6 +825,17 @@ mod tests {
             swept_count: 0,
             fast_path,
             cleanup_deferred: true,
+            timings: StoreSyncTimings {
+                total_ms: 10,
+                lock_wait_ms: 1,
+                lock_hold_ms: 9,
+                probe_ms: 2,
+                verify_ms: 3,
+                stage_ms: if fast_path { 0 } else { 4 },
+                metadata_ms: if fast_path { 0 } else { 5 },
+                sweep_ms: 0,
+                cleanup_ms: 0,
+            },
         }
     }
 
