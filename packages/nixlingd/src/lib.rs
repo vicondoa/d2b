@@ -2653,7 +2653,7 @@ impl VmStartRunner<'_> {
             BrokerRequest::StoreSync(nixling_ipc::broker_wire::StoreSyncRequest {
                 vm_id: VmId::new(vm),
                 bundle_closure_ref: BundleClosureRef::new(intent.intent_id.clone()),
-                generation: u32::try_from(intent.generation)
+                generation_token: u32::try_from(intent.generation)
                     .map_err(|_| "store-view-generation-overflow".to_owned())?,
                 tracing_span_id: None,
             }),

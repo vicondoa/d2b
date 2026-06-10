@@ -97,7 +97,7 @@ Request (`BrokerRequest::StoreSync(StoreSyncRequest)`):
 | ---------------------- | ------------------- | -------------------------------------------------- |
 | `vm_id`                | `VmId`              | Opaque per-VM scope id.                            |
 | `bundle_closure_ref`   | `BundleClosureRef`  | Opaque ref at the `store-view` intent row.         |
-| `generation`           | `u32`               | The generation the daemon expects to activate.     |
+| `generation_token`     | `u32`               | Display/wire equality token the daemon expects to activate. Never used as the on-disk key. |
 | `tracing_span_id`      | `Option<TracingSpanId>` | Audit correlation only.                        |
 
 The daemon never names raw closure paths or generation
@@ -110,7 +110,8 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 | Field                  | Type     | Notes                                                |
 | ---------------------- | -------- | ---------------------------------------------------- |
 | `vm`                   | `String` | Echoed VM name from the resolved intent.             |
-| `generation`           | `u32`    | Activated generation **token** (display/wire; the on-disk key is the `generation_id`). |
+| `generation_id`        | `String` | Activated generation **id** — the collision-free on-disk layout key (SHA-256 over the full ordered closure identity, [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). |
+| `generation_token`     | `u32`    | Activated generation **token** — truncated u32 display/wire value carried for backcompat; never the on-disk key. |
 | `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/nixling/vms/<vm>/store-view`). |
 | `closure_count`        | `u32`    | Number of top-level closure paths linked in.         |
 | `retained_generations` | `Vec<u32>` | Generations retained for cleanup safety.           |
@@ -119,20 +120,78 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 
 ## Audit fields
 
-The `StoreSync` operation emits an `OperationFields::StoreSync`
-record carrying:
+Every StoreSync attempt emits exactly **one terminal structured
+broker audit record** (`OperationFields::StoreSync`), serialized from
+the allow-list `StoreSyncAuditFields` schema
+(`store_sync_audit.rs`, `schema_version = 1`). The schema and its
+invariants are signed off in
+[ADR 0027](../adr/0027-store-view-hardlink-live-pool.md).
 
-- `vm_id`
-- `bundle_closure_ref`
-- `generation`
-- `closure_count`
-- `hardlink_farm_path`
-- `retained_generations`
-- `swept_count`
-- `cleanup_deferred`
+Fields:
+
+| Field                  | Type            | Notes                                                                 |
+| ---------------------- | --------------- | --------------------------------------------------------------------- |
+| `schema_version`       | `u32`           | Audit schema version (`1`).                                           |
+| `vm`                   | `String`        | Resolved VM name.                                                     |
+| `vm_id`                | `String`        | Canonical VM id (`store-view:vm:<vm>`).                               |
+| `env`                  | `Option<String>`| Host-audit env attribution. Never in guest metadata.                 |
+| `generation_id`        | `String`        | Collision-free on-disk layout key. Audit/guest-meta only.            |
+| `generation_token`     | `u32`           | Truncated display/wire token. Audit/guest-meta only.                 |
+| `sync_status`          | enum            | `ok` \| `failed` \| `in_progress`.                                   |
+| `error_stage`          | enum            | `none` \| `authz` \| `lock` \| `probe` \| `verify` \| `stage` \| `rename` \| `metadata` \| `integrity` \| `current_swap` \| `marker`. |
+| `cleanup_status`       | enum            | `not_attempted` \| `completed` \| `deferred_online` \| `deferred_ambiguous` \| `deferred_metadata` \| `skipped_fast_path` \| `failed`. |
+| `cleanup_reason`       | enum            | `none` \| `vm_running` \| `running_generation_ambiguous` \| `missing_retained_metadata` \| `io_error` \| `fast_path`. |
+| `caller_principal`     | `Option<String>`| Audit only — **never** a metric label and never in guest metadata.  |
+| `authz_outcome`        | enum            | `allow` \| `deny`.                                                   |
+| `closure_count`        | `u32`           | Enumerated top-level closure size.                                   |
+| `linked_count`         | `u32`           | Top-level paths newly hardlinked this attempt.                       |
+| `skipped_count`        | `u32`           | Top-level paths already present (fast-path / reuse).                 |
+| `retained_generations` | `Vec<u32>`      | Audit only — never a metric label and never in guest metadata.      |
+| `swept_count`          | `u32`           | Top-level live entries removed by cleanup.                           |
+| `fast_path`            | `bool`          | Whether the closure was already fully materialised.                  |
+| `timings`              | object          | `total_ms`, `lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`, `metadata_ms`, `sweep_ms`, `cleanup_ms`. |
+
+Constructors (`ok_non_fast_path`, `ok_fast_path`,
+`ok_cleanup_failed`, `failed`, `denied`) build records that satisfy the
+schema invariants; `validate()` enforces them and is asserted in the
+dispatch path. The invariants are:
+
+- `sync_status = ok` implies `error_stage = none`.
+- A cleanup failure after a successful activation is
+  `sync_status = ok` + `error_stage = none` +
+  `cleanup_status = failed` + `cleanup_reason = io_error`.
+- A failure before cleanup is `sync_status = failed` +
+  `cleanup_status = not_attempted` + `cleanup_reason = none` with a
+  concrete `error_stage`.
+- `error_stage = authz` ⟺ `authz_outcome = deny`.
+- For `ok` records (except the post-activation cleanup-failure case),
+  `linked_count + skipped_count == closure_count`.
+- Pure fast path: `fast_path = true`, `linked_count = 0`,
+  `skipped_count = closure_count`, `swept_count = 0`,
+  `cleanup_status = skipped_fast_path`.
+- Valid `cleanup_status` + `cleanup_reason` pairs are exactly:
+  `completed`+`none`, `not_attempted`+`none`,
+  `deferred_online`+`vm_running`,
+  `deferred_ambiguous`+`running_generation_ambiguous`,
+  `deferred_metadata`+`missing_retained_metadata`,
+  `skipped_fast_path`+`fast_path`, `failed`+`io_error`.
+
+The record never carries store paths, host paths, marker payloads,
+`db.dump` contents, or basenames. `caller_principal` and
+`retained_generations` are audit-only and are excluded from any guest
+metadata and (per the signed plan) from future metric labels.
 
 The `decision` field follows the broker default
 (`allowed` / `denied-refused` / `errored`).
+
+> **Current wiring (W3):** only the success path emits the signed
+> terminal record (`ok_fast_path` / `ok_non_fast_path`). Failure and
+> deny paths still fall back to the generic `BrokerError` audit record;
+> the `failed`/`denied`/`ok_cleanup_failed` constructors are
+> implemented and unit-tested but not yet wired, pending the staged
+> StoreSync state machine that tracks a precise `error_stage`. `env`
+> attribution and per-phase timings beyond `total_ms` are likewise
+> follow-up enrichment.
 
 ## Refusal modes
 
@@ -142,11 +201,11 @@ The handler is fail-closed and maps each refusal to a typed
 - `BundleIntentMissing { kind: "store-sync-closure" }` — the wire
   `bundle_closure_ref` does not match the bundle-resolved intent
   (or no store-view intent exists for the VM).
-- `GenerationMismatch` — the wire `generation` does not match the
+- `GenerationMismatch` — the wire `generation_token` does not match the
   bundle-resolved generation. Generations are monotonic; a stale
   daemon must not race the activator.
 - `GenerationOverflow` — bundle resolver carries `u64` generations;
-  refuse if the wire's `u32` cannot represent the resolved value
+  refuse if the wire's `u32` token cannot represent the resolved value
   (would otherwise silently truncate).
 - `VmMismatch` — bundle resolver returned an intent keyed at a
   different VM than the wire `vm_id`.
@@ -211,13 +270,17 @@ asserts `len() == 0`.
 - `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
 - `packages/nixling-ipc/src/broker_wire.rs` — typed request/
-  response structs + enum variants. The wire still carries the u32
-  `generation` token; exposing `generation_id` on the wire/audit is a
-  deferred follow-up wave.
+  response structs + enum variants. The wire carries both the
+  collision-free `generation_id` (response) and the u32
+  `generation_token` (request + response); the token is display/wire
+  only and is never the on-disk key.
 - `packages/nixling-ipc/src/types.rs` — `BundleClosureRef`
   opaque newtype.
 - `packages/nixling-priv-broker/src/ops/audit_op.rs` —
-  `OperationFields::StoreSync` audit shape.
+  `OperationFields::StoreSync` newtype over `StoreSyncAuditFields`.
+- `packages/nixling-priv-broker/src/ops/store_sync_audit.rs` —
+  the signed `StoreSyncAuditFields` terminal audit schema, its enums,
+  invariant-enforcing constructors, and `validate()`.
 
 ## Migration: deleting the per-VM systemd oneshot
 

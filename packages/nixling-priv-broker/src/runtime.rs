@@ -2141,9 +2141,55 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     intent_id: req.bundle_closure_ref.as_str().to_owned(),
                 });
             }
-            let outcome = crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation)
-                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let started = std::time::Instant::now();
+            let outcome =
+                crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token)
+                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let hardlink_farm_path_str = outcome.hardlink_farm_path.display().to_string();
+
+            // Build the signed ADR 0027 terminal audit record. Only the
+            // shapes the current `run_store_sync` path reaches are wired
+            // (pure fast path / deferred-cleanup success); the `failed`,
+            // `denied`, and `ok_cleanup_failed` shapes await the staged
+            // StoreSync state machine. `env` attribution and per-phase
+            // timings beyond `total_ms` are follow-up enrichments.
+            let audit_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
+                vm: outcome.vm.clone(),
+                vm_id: req.vm_id.as_str().to_owned(),
+                env: None,
+                bundle_closure_ref: req.bundle_closure_ref.as_str().to_owned(),
+                hardlink_farm_path: hardlink_farm_path_str.clone(),
+                generation_id: outcome.generation_id.clone(),
+                generation_token: outcome.generation_token,
+                caller_principal: Some(format!(
+                    "uid:{caller_uid}/role:{}",
+                    audit_context.peer_role.as_str()
+                )),
+                closure_count: outcome.closure_count,
+                timings: crate::ops::store_sync_audit::StoreSyncTimings {
+                    total_ms,
+                    ..Default::default()
+                },
+            };
+            let audit_fields = if outcome.fast_path {
+                crate::ops::store_sync_audit::StoreSyncAuditFields::ok_fast_path(
+                    audit_ctx,
+                    outcome.retained_generations.clone(),
+                )
+            } else {
+                crate::ops::store_sync_audit::StoreSyncAuditFields::ok_non_fast_path(
+                    audit_ctx,
+                    outcome.linked_count,
+                    outcome.skipped_count,
+                    outcome.retained_generations.clone(),
+                )
+            };
+            debug_assert!(
+                audit_fields.validate().is_ok(),
+                "StoreSync terminal audit record violates the signed schema: {:?}",
+                audit_fields.validate()
+            );
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -2155,21 +2201,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 outcome.vm.as_str(),
                 outcome.vm.as_str(),
                 tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::StoreSync {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    bundle_closure_ref: req.bundle_closure_ref.as_str().to_owned(),
-                    generation: outcome.generation,
-                    closure_count: outcome.closure_count,
-                    hardlink_farm_path: hardlink_farm_path_str.clone(),
-                    retained_generations: outcome.retained_generations.clone(),
-                    swept_count: outcome.swept_count,
-                    cleanup_deferred: outcome.cleanup_deferred,
-                },
+                OperationFields::StoreSync(audit_fields),
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::StoreSync(
                 nixling_ipc::broker_wire::StoreSyncResponse {
                     vm: outcome.vm,
-                    generation: outcome.generation,
+                    generation_id: outcome.generation_id,
+                    generation_token: outcome.generation_token,
                     hardlink_farm_path: hardlink_farm_path_str,
                     closure_count: outcome.closure_count,
                     retained_generations: outcome.retained_generations,

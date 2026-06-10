@@ -50,6 +50,10 @@ pub mod audit_op;
 // symlink. Replaces the `nixling-<vm>-store-sync.service` bash oneshot.
 pub mod store_sync;
 
+// Signed ADR 0027 terminal audit schema for `StoreSync` (enums +
+// invariant-enforcing constructors + validation).
+pub mod store_sync_audit;
+
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
 // so the farm hardlinks succeed even when `/nix/store` is a separate

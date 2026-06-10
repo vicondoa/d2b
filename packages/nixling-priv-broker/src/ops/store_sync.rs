@@ -22,9 +22,12 @@
 //!    `link(2)` + `symlinkat`/`renameat`, never recursive mode or
 //!    owner mutation. This module never invokes `chown`, `chmod`,
 //!    or `setfacl` either.
-//! 3. The op is audited with `OperationFields::StoreSync` carrying
-//!    `vm_id`, `bundle_closure_ref`, `generation`, `closure_count`,
-//!    and the resolved farm root path.
+//! 3. The op is audited with a single terminal `OperationFields::StoreSync`
+//!    record carrying the signed ADR 0027 audit schema (see
+//!    [`crate::ops::store_sync_audit`]): `generation_id`,
+//!    `generation_token`, `sync_status`, `error_stage`, `cleanup_status`,
+//!    `cleanup_reason`, `authz_outcome`, link/skip/sweep counts, and the
+//!    resolved farm root path.
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -82,23 +85,28 @@ impl From<HardlinkFarmError> for StoreSyncError {
 
 /// Outcome of a successful `StoreSync` op: the activated generation
 /// token + the collision-free on-disk generation id + the per-VM
-/// hardlink-farm root path + the count of top-level closure paths the
-/// broker linked in. Consumed by the dispatch layer to build the wire
-/// `StoreSyncResponse` + the `OperationFields::StoreSync` audit record.
+/// hardlink-farm root path + top-level link accounting. Consumed by the
+/// dispatch layer to build the wire `StoreSyncResponse` + the signed
+/// `StoreSync` terminal audit record.
 ///
-/// `generation` is the u32 wire/display token; `generation_id` is the
-/// ADR 0027 on-disk key (full-closure SHA-256). The wire currently only
-/// carries the token; exposing `generation_id` on the wire/audit is a
-/// deferred follow-up wave.
+/// `generation_token` is the u32 wire/display token; `generation_id` is
+/// the ADR 0027 on-disk key (full-closure SHA-256). `linked_count` /
+/// `skipped_count` are the top-level basenames newly hardlinked into
+/// `live/` vs already present (`linked + skipped == closure_count` on a
+/// complete sync). `fast_path` records whether a complete, consistent
+/// same-generation layout already existed so no relink/republish ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreSyncOutcome {
     pub vm: String,
-    pub generation: u32,
+    pub generation_token: u32,
     pub generation_id: String,
     pub hardlink_farm_path: PathBuf,
     pub closure_count: u32,
+    pub linked_count: u32,
+    pub skipped_count: u32,
     pub retained_generations: Vec<u32>,
     pub swept_count: u32,
+    pub fast_path: bool,
     pub cleanup_deferred: bool,
 }
 
@@ -189,14 +197,16 @@ pub fn run_store_sync(
         &intent.closure_paths,
     );
 
-    if !fast_path {
+    let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
+
+    let link_counts = if !fast_path {
         // Materialise the new generation inside a private mount namespace
         // where `/nix/store` is lazily detached, so the build succeeds
         // even when `/nix/store` is a separate (bind) mount from
         // `/var/lib/nixling`. The publish steps below only touch symlinks
         // / byte copies on the root fs (no `link(2)` cross-mount hazard),
         // so they stay in-process.
-        crate::ops::store_view_farm::build_store_view_cross_mount_safe(
+        let counts = crate::ops::store_view_farm::build_store_view_cross_mount_safe(
             &intent.hardlink_farm_path,
             &generation_id,
             &intent.closure_paths,
@@ -213,7 +223,13 @@ pub fn run_store_sync(
         hardlink_farm::swap_state_current(&intent.hardlink_farm_path, &generation_id)?;
         hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, &generation_id)?;
         hardlink_farm::plant_live_marker(&intent.hardlink_farm_path, &intent.vm)?;
-    }
+        (counts.linked, counts.skipped)
+    } else {
+        // Pure fast path: nothing relinked, every top-level basename is
+        // already present in `live/` (ADR 0027 audit-schema shape).
+        (0, closure_count)
+    };
+    let (linked_count, skipped_count) = link_counts;
 
     // Retention is expressed in u32 wire tokens for now; the on-disk key
     // moved to generation_id but the wire/audit still speak the token.
@@ -231,16 +247,17 @@ pub fn run_store_sync(
         "store-sync cleanup deferred until running-generation retention is available"
     );
 
-    let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
-
     Ok(StoreSyncOutcome {
         vm: intent.vm.clone(),
-        generation: resolved_u32,
+        generation_token: resolved_u32,
         generation_id,
         hardlink_farm_path: intent.hardlink_farm_path.clone(),
         closure_count,
+        linked_count,
+        skipped_count,
         retained_generations: retained,
         swept_count,
+        fast_path,
         cleanup_deferred,
     })
 }
@@ -328,8 +345,16 @@ mod tests {
         let outcome = run_store_sync(&intent, "alpha", 7).expect("happy path succeeds");
 
         assert_eq!(outcome.vm, "alpha");
-        assert_eq!(outcome.generation, 7);
+        assert_eq!(outcome.generation_token, 7);
         assert_eq!(outcome.closure_count, 2);
+        // First sync of a fresh farm links every top-level basename.
+        assert!(!outcome.fast_path);
+        assert_eq!(outcome.linked_count, 2);
+        assert_eq!(outcome.skipped_count, 0);
+        assert_eq!(
+            outcome.linked_count + outcome.skipped_count,
+            outcome.closure_count
+        );
 
         let farm = &intent.hardlink_farm_path;
         let gid = hardlink_farm::generation_id(
@@ -433,6 +458,11 @@ mod tests {
             hardlink_farm::system_store_path(&intent.closure_paths),
         );
         assert_eq!(outcome.generation_id, gid);
+        // Pure fast path: nothing relinked, every basename already present.
+        assert!(outcome.fast_path);
+        assert_eq!(outcome.linked_count, 0);
+        assert_eq!(outcome.skipped_count, outcome.closure_count);
+        assert_eq!(outcome.swept_count, 0);
         let state_current =
             std::fs::read_link(intent.hardlink_farm_path.join("state/current")).unwrap();
         assert_eq!(state_current, PathBuf::from("generations").join(&gid));

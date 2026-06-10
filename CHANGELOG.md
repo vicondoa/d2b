@@ -89,7 +89,14 @@ deprecations ship one minor release before removal.
   generation publishes a guest-safe `meta.json` authored by an
   independent allow-list serializer (`schema_version`, `generation_id`,
   `generation_token`, `sync_status`, `closure_count`) that never
-  receives the full host audit record.
+  receives the full host audit record. The broker `StoreSync` wire
+  response now carries the collision-free `generation_id` alongside the
+  u32 `generation_token` (request + response renamed `generation` →
+  `generation_token`); the token is display/wire only and is never used
+  as the on-disk layout key. Each StoreSync success emits one terminal
+  structured broker audit record under the signed `StoreSyncAuditFields`
+  schema (`schema_version = 1`) with invariant-enforcing constructors
+  and `validate()`.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former
