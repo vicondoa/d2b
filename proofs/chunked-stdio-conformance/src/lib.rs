@@ -823,14 +823,14 @@ impl ChunkedSession {
         event: ControlEvent,
     ) -> Result<WriteDisposition, ProtocolError> {
         self.check_token(token)?;
-        if self.terminal_status.is_some() {
-            return Err(ProtocolError::TerminalState);
-        }
         if let Some(previous) = self.controls.get(&request_id) {
             if previous.seq == seq && previous.event == event {
                 return Ok(WriteDisposition::Duplicate);
             }
             return Err(ProtocolError::RequestIdConflict);
+        }
+        if self.terminal_status.is_some() {
+            return Err(ProtocolError::TerminalState);
         }
         if seq != self.next_control_seq {
             return Err(ProtocolError::ControlSequenceGap {
@@ -874,11 +874,14 @@ impl ChunkedSession {
         stderr_end: u64,
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
-        if self
-            .terminal_status
-            .is_some_and(|snapshot| snapshot.status == ExitStatus::ProtocolError)
-        {
-            return Ok(());
+        if let Some(snapshot) = self.terminal_status {
+            if snapshot.status == status
+                && snapshot.stdout_end == stdout_end
+                && snapshot.stderr_end == stderr_end
+            {
+                return Ok(());
+            }
+            return Err(ProtocolError::TerminalState);
         }
         if stdout_end > self.stdout.next_offset() {
             self.terminal_status = Some(TerminalSnapshot {
@@ -1938,8 +1941,28 @@ mod tests {
             Err(ProtocolError::TerminalState)
         );
         assert_eq!(
+            session.push_control(token, 12, 3, ControlEvent::Cancel),
+            Ok(WriteDisposition::Duplicate),
+            "retained control request ids must still replay after terminal state"
+        );
+        assert_eq!(
             session.append_output(token, Stream::Stdout, b"late"),
             Err(ProtocolError::TerminalState)
+        );
+        assert_eq!(
+            session.set_terminal_status(token, ExitStatus::Code(0)),
+            Err(ProtocolError::TerminalState),
+            "terminal status must be immutable once recorded"
+        );
+        assert_eq!(
+            session.set_terminal_status_with_required_output(
+                token,
+                ExitStatus::from_signal(Signal::Int),
+                4,
+                0,
+            ),
+            Ok(()),
+            "exact terminal snapshot replay is idempotent"
         );
         assert_eq!(
             session.events(),
