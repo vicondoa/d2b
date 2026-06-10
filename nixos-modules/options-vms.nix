@@ -574,6 +574,32 @@
           };
         };
 
+        guest.control = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable the guest-control credential/share surface for this VM.
+              The static guest-control binaries are installed for every VM,
+              but the credential share and guestd service wiring stay opt-in
+              until the guest-control service loop lands.
+            '';
+          };
+          auth.tokenFile = lib.mkOption {
+            type = lib.types.nullOr (lib.types.addCheck lib.types.str
+              (s: lib.hasPrefix "/" s && !(lib.hasPrefix "/nix/store/" s)));
+            default = null;
+            example = "/run/secrets/nixling/work/guest-control-token";
+            description = ''
+              Absolute runtime path to an operator-managed guest-control token
+              file. Do not use Nix path literals such as `./token`; those can
+              copy secret material into `/nix/store`. When null, nixling
+              generates a stable per-VM fallback token under
+              `nixling.site.stateDir`.
+            '';
+          };
+        };
+
         # REMOVED. The submodule path is kept ONLY so that
         # legacy consumer assignments produce a readable assertion
         # error rather than the cryptic "option does not exist"

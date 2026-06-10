@@ -140,6 +140,7 @@ run_gate "tests/legacy-group-name-denylist.sh" "bash '$ROOT/tests/legacy-group-n
 run_gate "tests/group-rename-semantic-eval.sh" "bash '$ROOT/tests/group-rename-semantic-eval.sh'"
 run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-migration-fresh-install-eval.sh'"
 run_gate "tests/guest-control-proto.sh" "bash '$ROOT/tests/guest-control-proto.sh'"
+run_gate "tests/guest-control-auth-eval.sh" "bash '$ROOT/tests/guest-control-auth-eval.sh'"
 run_gate "tests/guest-static-elf.sh" "bash '$ROOT/tests/guest-static-elf.sh'"
 run_gate "tests/guest-static-consumption-eval.sh" "bash '$ROOT/tests/guest-static-consumption-eval.sh'"
 

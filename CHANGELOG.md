@@ -42,6 +42,10 @@ deprecations ship one minor release before removal.
   Guest VM evals now consume these static outputs through the guest-control
   module, with a static-fast eval gate proving the package references.
 
+- Opt-in guest-control auth token delivery wiring: per-VM runtime token path
+  option, framework-owned materialized token file, read-only guest credential
+  share, and guestd `LoadCredential` wiring with eval coverage.
+
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.

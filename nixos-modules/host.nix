@@ -238,6 +238,13 @@ in
           tag = "nl-obs-sec";
           proto = "virtiofs";
         };
+        guestControlShare = lib.optional vm'.guest.control.enable {
+          source = "${cfg.site.stateDir}/vms/${name}/guest-control";
+          mountPoint = "/run/nixling-guest-control-host";
+          tag = "nl-gctl";
+          proto = "virtiofs";
+          readOnly = true;
+        };
         composedModules = [
           # Framework guest baseline + nixling-managed sshd host keys.
           ./base.nix
@@ -309,6 +316,7 @@ in
             {
               nixling.sshUser = vm'.ssh.user;
               nixling.sudo = vm'.sudo;
+              nixling.guestControl.enable = vm'.guest.control.enable;
             }
             # Per-VM framework-managed shares moved from store.nix to
             # break the module-system infinite
@@ -345,7 +353,7 @@ in
                   tag = "nl-ssh-host";
                   proto = "virtiofs";
                 }
-              ] ++ obsSecretsShare);
+              ] ++ obsSecretsShare ++ guestControlShare);
             }
           ];
       in (composeVm name composedModules) // {

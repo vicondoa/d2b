@@ -149,6 +149,7 @@ in
             default = "virtiofs";
           };
           socket = mkOption { type = types.nullOr types.str; default = null; };
+          readOnly = mkOption { type = types.bool; default = false; };
         };
       });
       default = [ ];
