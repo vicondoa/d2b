@@ -24,8 +24,9 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- `docs/reference/schemas/v2/guest-control.json` — generated guest-control
-  schema for the ADR 0026 ttRPC/protobuf contract, covering health, Hello,
+- `docs/reference/schemas/v2/guest-control.json` and
+  `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
+  protobuf source for the ADR 0026 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, and chunked stdio RPC shapes.
 
 - Guest-control retained-log security requirements and canary-based

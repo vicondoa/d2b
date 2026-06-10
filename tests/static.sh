@@ -1230,6 +1230,7 @@ if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests
 # pass the Rust looks_nixling_owned format gate.
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
+if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script "tests/static-invariant-broad-caps.sh" "$HERE/static-invariant-broad-caps.sh"; fi
 if [ -x "$HERE/static-invariant-writable-paths.sh" ]; then nl_static_parallel_script "tests/static-invariant-writable-paths.sh" "$HERE/static-invariant-writable-paths.sh"; fi

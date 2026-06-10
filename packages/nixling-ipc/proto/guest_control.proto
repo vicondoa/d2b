@@ -1,0 +1,390 @@
+syntax = "proto3";
+
+package nixling.guest.v1;
+
+// Guest-control ttRPC service. All exec I/O methods are unary chunked RPCs:
+// callers use offsets, request ids, and bounded chunks instead of ttRPC
+// streaming for stdin/stdout/stderr.
+service GuestControl {
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+
+  rpc ExecCreate(ExecCreateRequest) returns (ExecCreateResponse);
+  rpc ExecInspect(ExecInspectRequest) returns (ExecInspectResponse);
+  rpc ExecWait(ExecWaitRequest) returns (ExecWaitResponse);
+  rpc ExecLogs(ExecLogsRequest) returns (ExecLogsResponse);
+
+  rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
+  rpc ReadOutput(ReadOutputRequest) returns (ReadOutputResponse);
+  rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
+  rpc TtyWinResize(TtyWinResizeRequest) returns (ControlAck);
+  rpc ExecSignal(ExecSignalRequest) returns (ControlAck);
+  rpc ExecCancel(ExecCancelRequest) returns (ControlAck);
+}
+
+message RequestMetadata {
+  string vm_id = 1;
+  string request_id = 2;
+  uint32 protocol_version = 3;
+}
+
+message ExecRequestMetadata {
+  RequestMetadata common = 1;
+  string exec_id = 2;
+}
+
+message HelloRequest {
+  RequestMetadata metadata = 1;
+  string host_nonce = 2;
+  uint32 transcript_version = 3;
+}
+
+message HelloResponse {
+  string guest_nonce = 1;
+  string guest_boot_id = 2;
+  uint32 protocol_version = 3;
+  string capabilities_hash = 4;
+  HealthResponse health = 5;
+}
+
+message CapabilitiesRequest {
+  RequestMetadata metadata = 1;
+}
+
+message CapabilitiesResponse {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  GuestEffectiveLimits limits = 3;
+}
+
+message HealthRequest {
+  RequestMetadata metadata = 1;
+}
+
+message HealthResponse {
+  HealthState state = 1;
+  HealthReason reason = 2;
+  HealthRemediation remediation = 3;
+  uint32 protocol_version = 4;
+  repeated string capabilities = 5;
+  repeated string degraded_subsystems = 6;
+}
+
+message GuestEffectiveLimits {
+  uint64 max_chunk_bytes = 1;
+  uint64 max_recv_message_bytes = 2;
+  uint64 decoded_write_stdin_bytes_per_connection = 3;
+  uint32 write_stdin_handlers_per_connection = 4;
+  uint32 stdin_queue_chunks_per_exec = 5;
+  uint64 stdout_live_buffer_bytes = 6;
+  uint64 stderr_live_buffer_bytes = 7;
+  uint64 detached_stdout_log_bytes = 8;
+  uint64 detached_stderr_log_bytes = 9;
+  uint64 long_poll_timeout_ms = 10;
+  uint64 slow_consumer_grace_ms = 11;
+  uint32 exec_sessions_per_vm = 12;
+  uint32 attached_sessions_per_vm = 13;
+}
+
+message ExecCreateRequest {
+  RequestMetadata metadata = 1;
+  repeated string argv = 2;
+  string user = 3;
+  string cwd = 4;
+  repeated EnvVar env = 5;
+  bool tty = 6;
+  bool stdin_open = 7;
+  bool detached = 8;
+  TerminalSize initial_terminal_size = 9;
+  OutputPolicy output_policy = 10;
+}
+
+message EnvVar {
+  string key = 1;
+  string value = 2;
+}
+
+message TerminalSize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message OutputPolicy {
+  uint64 max_chunk_bytes = 1;
+  uint64 max_stdout_log_bytes = 2;
+  uint64 max_stderr_log_bytes = 3;
+  uint64 slow_consumer_timeout_ms = 4;
+  uint64 wait_timeout_ms = 5;
+}
+
+message ExecCreateResponse {
+  string exec_id = 1;
+  uint64 created_at_monotonic_ns = 2;
+  uint64 control_seq = 3;
+  uint64 stdout_cursor = 4;
+  uint64 stderr_cursor = 5;
+  GuestEffectiveLimits effective_limits = 6;
+  ExecState state = 7;
+  GuestControlError error = 8;
+}
+
+message ExecInspectRequest {
+  ExecRequestMetadata metadata = 1;
+}
+
+message ExecInspectResponse {
+  ExecState state = 1;
+  TerminalStatus visible_terminal_status = 2;
+  StdinState stdin_state = 3;
+  uint64 stdout_start_offset = 4;
+  uint64 stdout_end_offset = 5;
+  uint64 stderr_start_offset = 6;
+  uint64 stderr_end_offset = 7;
+  uint64 stdout_dropped_bytes = 8;
+  uint64 stderr_dropped_bytes = 9;
+  bool truncated_for_retention = 10;
+  uint64 last_control_seq = 11;
+  uint64 state_generation = 12;
+  GuestControlError error = 13;
+}
+
+message ExecWaitRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 timeout_ms = 2;
+  uint64 known_state_generation = 3;
+}
+
+message ExecWaitResponse {
+  ExecState state = 1;
+  TerminalStatus visible_terminal_status = 2;
+  uint64 state_generation = 3;
+  uint64 stdout_start_offset = 4;
+  uint64 stdout_end_offset = 5;
+  uint64 stderr_start_offset = 6;
+  uint64 stderr_end_offset = 7;
+  bool timed_out = 8;
+  GuestControlError error = 9;
+}
+
+message ExecLogsRequest {
+  ExecRequestMetadata metadata = 1;
+  OutputStream stream = 2;
+  uint64 offset = 3;
+  uint64 max_len = 4;
+}
+
+message ExecLogsResponse {
+  OutputStream stream = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+  uint64 next_offset = 4;
+  bool eof = 5;
+  uint64 start_offset = 6;
+  uint64 dropped_bytes = 7;
+  bool truncated = 8;
+}
+
+message WriteStdinRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+  bool close_after = 4;
+  uint64 client_deadline_ms = 5;
+}
+
+message WriteStdinResponse {
+  uint64 accepted_offset = 1;
+  uint64 accepted_len = 2;
+  uint64 next_offset = 3;
+  StdinState stdin_state = 4;
+  uint64 blocked_ms = 5;
+  WriteDisposition disposition = 6;
+}
+
+message ReadOutputRequest {
+  ExecRequestMetadata metadata = 1;
+  OutputStream stream = 2;
+  uint64 offset = 3;
+  uint64 max_len = 4;
+  bool wait = 5;
+  uint64 timeout_ms = 6;
+}
+
+message ReadOutputResponse {
+  OutputStream stream = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+  uint64 next_offset = 4;
+  bool eof = 5;
+  uint64 start_offset = 6;
+  uint64 dropped_bytes = 7;
+}
+
+message CloseStdinRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 offset = 2;
+}
+
+message CloseStdinResponse {
+  StdinState stdin_state = 1;
+  uint64 final_offset = 2;
+  WriteDisposition disposition = 3;
+}
+
+message TtyWinResizeRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 control_seq = 2;
+  uint32 rows = 3;
+  uint32 cols = 4;
+}
+
+message ExecSignalRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 control_seq = 2;
+  uint32 signal = 3;
+  SignalTarget target = 4;
+}
+
+message ExecCancelRequest {
+  ExecRequestMetadata metadata = 1;
+  uint64 control_seq = 2;
+  ExecCancelReason reason = 3;
+}
+
+message ControlAck {
+  uint64 control_seq = 1;
+  bool duplicate = 2;
+  GuestControlError error = 3;
+}
+
+message TerminalStatus {
+  oneof outcome {
+    int32 exit_code = 1;
+    uint32 signal = 2;
+    int32 status_code = 3;
+    GuestControlErrorKind error = 4;
+  }
+}
+
+message GuestControlError {
+  GuestControlErrorKind kind = 1;
+  HealthRemediation remediation = 2;
+  uint64 retry_after_ms = 3;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_UNAVAILABLE_OLD_GENERATION = 3;
+  HEALTH_STATE_LISTENER_ABSENT = 4;
+  HEALTH_STATE_TRANSPORT_UNREACHABLE = 5;
+  HEALTH_STATE_AUTH_FAILED = 6;
+  HEALTH_STATE_PROTOCOL_MISMATCH = 7;
+  HEALTH_STATE_STALE_SESSION = 8;
+}
+
+enum HealthReason {
+  HEALTH_REASON_UNSPECIFIED = 0;
+  HEALTH_REASON_NONE = 1;
+  HEALTH_REASON_OLD_GENERATION = 2;
+  HEALTH_REASON_LISTENER_ABSENT = 3;
+  HEALTH_REASON_CONNECT_REFUSED = 4;
+  HEALTH_REASON_CONNECT_TIMEOUT = 5;
+  HEALTH_REASON_EOF_BEFORE_ACK = 6;
+  HEALTH_REASON_MALFORMED_ACK = 7;
+  HEALTH_REASON_ACK_TOO_LONG = 8;
+  HEALTH_REASON_TRANSPORT_IO = 9;
+  HEALTH_REASON_AUTH_TOKEN_REJECTED = 10;
+  HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED = 11;
+  HEALTH_REASON_SESSION_GENERATION_MISMATCH = 12;
+  HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE = 13;
+  HEALTH_REASON_LOG_STORAGE_UNAVAILABLE = 14;
+  HEALTH_REASON_QUOTA_EXCEEDED = 15;
+  HEALTH_REASON_RATE_LIMITED = 16;
+  HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED = 17;
+}
+
+enum HealthRemediation {
+  HEALTH_REMEDIATION_UNSPECIFIED = 0;
+  HEALTH_REMEDIATION_NONE = 1;
+  HEALTH_REMEDIATION_RETRY = 2;
+  HEALTH_REMEDIATION_RESTART_VM = 3;
+  HEALTH_REMEDIATION_UPGRADE_GUEST = 4;
+  HEALTH_REMEDIATION_CHECK_AUTH_TOKEN = 5;
+  HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE = 6;
+  HEALTH_REMEDIATION_REDUCE_LOAD = 7;
+  HEALTH_REMEDIATION_INSPECT_GUEST_LOGS = 8;
+}
+
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDOUT = 1;
+  OUTPUT_STREAM_STDERR = 2;
+}
+
+enum WriteDisposition {
+  WRITE_DISPOSITION_UNSPECIFIED = 0;
+  WRITE_DISPOSITION_ACCEPTED = 1;
+  WRITE_DISPOSITION_DUPLICATE = 2;
+}
+
+enum ExecState {
+  EXEC_STATE_UNSPECIFIED = 0;
+  EXEC_STATE_CREATED = 1;
+  EXEC_STATE_RUNNING = 2;
+  EXEC_STATE_EXITED = 3;
+  EXEC_STATE_SIGNALED = 4;
+  EXEC_STATE_CANCELLED = 5;
+  EXEC_STATE_SLOW_CONSUMER_CANCELLED = 6;
+  EXEC_STATE_PROTOCOL_ERROR = 7;
+  EXEC_STATE_LOST_GUESTD = 8;
+  EXEC_STATE_REAPED = 9;
+}
+
+enum StdinState {
+  STDIN_STATE_UNSPECIFIED = 0;
+  STDIN_STATE_OPEN = 1;
+  STDIN_STATE_CLOSING = 2;
+  STDIN_STATE_CLOSED = 3;
+  STDIN_STATE_CLOSED_BY_PROCESS = 4;
+  STDIN_STATE_REJECTED_NOT_INTERACTIVE = 5;
+}
+
+enum SignalTarget {
+  SIGNAL_TARGET_UNSPECIFIED = 0;
+  SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP = 1;
+  SIGNAL_TARGET_PROCESS_TREE = 2;
+  SIGNAL_TARGET_ROOT_PROCESS = 3;
+}
+
+enum ExecCancelReason {
+  EXEC_CANCEL_REASON_UNSPECIFIED = 0;
+  EXEC_CANCEL_REASON_CLIENT_DISCONNECT = 1;
+  EXEC_CANCEL_REASON_USER_REQUESTED = 2;
+  EXEC_CANCEL_REASON_SLOW_CONSUMER = 3;
+  EXEC_CANCEL_REASON_PROTOCOL_ERROR = 4;
+}
+
+enum GuestControlErrorKind {
+  GUEST_CONTROL_ERROR_KIND_UNSPECIFIED = 0;
+  GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR = 1;
+  GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED = 2;
+  GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE = 3;
+  GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED = 4;
+  GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN = 5;
+  GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS = 6;
+  GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED = 7;
+  GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST = 8;
+  GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE = 9;
+  GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED = 10;
+  GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED = 11;
+  GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED = 12;
+  GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED = 13;
+  GUEST_CONTROL_ERROR_KIND_RATE_LIMITED = 14;
+  GUEST_CONTROL_ERROR_KIND_STALE_SESSION = 15;
+  GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION = 16;
+  GUEST_CONTROL_ERROR_KIND_AUTH_FAILED = 17;
+  GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE = 18;
+}

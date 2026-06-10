@@ -5,7 +5,9 @@ Schema: [`guest-control.json`](./guest-control.json)
 `guest-control.json` is the typed guest-control contract for ADR 0026's
 ttRPC/protobuf surface. It snapshots the guest daemon control messages, health
 states, exec lifecycle messages, and chunked stdio RPC shapes that host
-`nixlingd` and guest `nixling-guestd` must keep aligned.
+`nixlingd` and guest `nixling-guestd` must keep aligned. The protobuf service
+source lives at
+[`packages/nixling-ipc/proto/guest_control.proto`](../../../../packages/nixling-ipc/proto/guest_control.proto).
 
 ## Top-level sections
 
