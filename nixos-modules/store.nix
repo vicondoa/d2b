@@ -758,9 +758,9 @@ in
   };
 
   config = lib.mkIf cfg.store.enable {
-    # Expose the helper on the host so it can be invoked manually or
-    # from the nixling CLI without going through systemd.
-    environment.systemPackages = [ nixlingStoreSync spectrumCh ];
+    # StoreSync is the sole canonical store-view writer. Do not expose the
+    # retired bash store writer in the host profile.
+    environment.systemPackages = [ spectrumCh ];
 
     # Force every VM's nix-store share to point at its per-VM hardlink
     # farm instead of the host's full /nix/store. microvm.nix's
