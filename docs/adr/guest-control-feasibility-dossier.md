@@ -101,11 +101,15 @@ default Layer-1 gate. The committed compile proof
 `packages/nixling-host/tests/guest_vsock_ttrpc_compile.rs` type-checks
 the safe guest-side shape instead:
 
-1. build a ttRPC async listener with `Listener::bind("vsock://-1:14318")`;
+1. build a guest-side ttRPC async listener with
+   `Listener::bind("vsock://-1:14318")`;
 2. attach that listener to `ttrpc::r#async::Server::new()`;
-3. type-check host client construction with
-   `Socket::connect("vsock://<cid>:14318")`;
+3. type-check wrapping an already-connected post-CH-CONNECT Unix stream
+   with `Socket::new(stream)`;
 4. keep the proof crate under `#![forbid(unsafe_code)]`.
+
+The host-side transport proof is the CH base-UDS `CONNECT <port>` proof
+above, not direct host `Socket::connect("vsock://<cid>:14318")`.
 
 `ttrpc-rust`'s Linux vsock transport is implemented with
 `tokio-vsock`; Nixling does not call `from_raw_vsock_listener_fd` or any

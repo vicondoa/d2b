@@ -102,15 +102,12 @@ async fn connect_ch(base_socket: &Path, port: u32, timeout: Duration) -> io::Res
             if n == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    "Cloud Hypervisor CONNECT closed before OK",
+                    "eof-before-ack",
                 ));
             }
             line.push(byte[0]);
             if line.len() > 128 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Cloud Hypervisor CONNECT response too long",
-                ));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "ack-too-long"));
             }
             if byte[0] == b'\n' {
                 break;
@@ -125,7 +122,7 @@ async fn connect_ch(base_socket: &Path, port: u32, timeout: Duration) -> io::Res
         else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("unexpected CONNECT response {line:?}, expected OK <local-port>"),
+                "connect-refused",
             ));
         };
         if local_port.is_empty()
@@ -134,10 +131,7 @@ async fn connect_ch(base_socket: &Path, port: u32, timeout: Duration) -> io::Res
                 .parse::<u32>()
                 .map_or(true, |port| port > u16::MAX.into())
         {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("malformed CONNECT OK local port {line:?}"),
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed-ack"));
         }
         Ok(stream)
     })
@@ -295,7 +289,7 @@ async fn wrong_port_is_refused_before_ttrpc_starts() {
         .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    assert!(err.to_string().contains("ERR no such guest port"));
+    assert_eq!(err.to_string(), "connect-refused");
     shutdown(server.as_mut(), task).await;
     let _ = tokio::fs::remove_file(socket_path).await;
 }
@@ -308,7 +302,7 @@ async fn malformed_ok_is_rejected_before_ttrpc_starts() {
         .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    assert!(err.to_string().contains("OK not-a-local-port"));
+    assert_eq!(err.to_string(), "malformed-ack");
     shutdown(server.as_mut(), task).await;
     let _ = tokio::fs::remove_file(socket_path).await;
 }
@@ -321,7 +315,7 @@ async fn ok_prefix_without_space_is_rejected_before_ttrpc_starts() {
         .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    assert!(err.to_string().contains("OKAY"));
+    assert_eq!(err.to_string(), "connect-refused");
     shutdown(server.as_mut(), task).await;
     let _ = tokio::fs::remove_file(socket_path).await;
 }

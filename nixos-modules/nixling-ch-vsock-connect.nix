@@ -45,6 +45,14 @@ pkgs.writeShellApplication {
       import sys
       import threading
 
+      def write_all(fd, data):
+          view = memoryview(data)
+          while view:
+              written = os.write(fd, view)
+              if written == 0:
+                  raise OSError("short write")
+              view = view[written:]
+
       def fwd(src, dst):
           while True:
               try:
@@ -54,7 +62,7 @@ pkgs.writeShellApplication {
               if not data:
                   break
               try:
-                  os.write(dst, data)
+                  write_all(dst, data)
               except OSError:
                   break
 
@@ -66,8 +74,8 @@ pkgs.writeShellApplication {
           try:
               sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
               sock.connect(base)
-          except OSError as e:
-              sys.stderr.write(f"nixling-ch-vsock-connect: cannot connect {base}: {e}\n")
+          except OSError:
+              sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
               sys.exit(1)
           sock.sendall(f"CONNECT {port}\n".encode())
           # Read CH's OK line byte-by-byte so we don't slurp payload bytes.
@@ -82,11 +90,11 @@ pkgs.writeShellApplication {
                   sys.stderr.write("nixling-ch-vsock-connect: CH CONNECT reply too long\n")
                   sys.exit(1)
           if not reply.startswith(b"OK ") or not reply.endswith(b"\n"):
-              sys.stderr.write(f"nixling-ch-vsock-connect: CH refused: {reply.decode(errors='replace').strip()}\n")
+              sys.stderr.write("nixling-ch-vsock-connect: connect-refused\n")
               sys.exit(1)
           local_port = reply[3:-1]
           if not local_port.isdigit() or int(local_port) > 65535:
-              sys.stderr.write(f"nixling-ch-vsock-connect: malformed CH OK: {reply.decode(errors='replace').strip()}\n")
+              sys.stderr.write("nixling-ch-vsock-connect: malformed-ack\n")
               sys.exit(1)
           # The ACK value is CH's local-port acknowledgement, not a buffer
           # size or flow-control input. Forward the post-OK stream as-is.
