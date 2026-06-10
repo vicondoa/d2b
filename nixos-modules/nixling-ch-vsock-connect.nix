@@ -78,9 +78,18 @@ pkgs.writeShellApplication {
                   sys.stderr.write("nixling-ch-vsock-connect: EOF before OK from CH\n")
                   sys.exit(1)
               reply += chunk
-          if not reply.startswith(b"OK"):
+              if len(reply) > 128:
+                  sys.stderr.write("nixling-ch-vsock-connect: CH CONNECT reply too long\n")
+                  sys.exit(1)
+          if not reply.startswith(b"OK ") or not reply.endswith(b"\n"):
               sys.stderr.write(f"nixling-ch-vsock-connect: CH refused: {reply.decode(errors='replace').strip()}\n")
               sys.exit(1)
+          local_port = reply[3:-1]
+          if not local_port.isdigit() or int(local_port) > 65535:
+              sys.stderr.write(f"nixling-ch-vsock-connect: malformed CH OK: {reply.decode(errors='replace').strip()}\n")
+              sys.exit(1)
+          # The ACK value is CH's local-port acknowledgement, not a buffer
+          # size or flow-control input. Forward the post-OK stream as-is.
           # Two-way pipe between stdio and the UDS.
           sock_fd = sock.fileno()
           t = threading.Thread(target=fwd, args=(0, sock_fd), daemon=True)

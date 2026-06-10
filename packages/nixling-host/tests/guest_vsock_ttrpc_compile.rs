@@ -6,6 +6,7 @@ mod linux_vsock_ttrpc {
         transport::{Listener, Socket},
         Server,
     };
+    use tokio::net::UnixStream;
 
     const GUEST_CONTROL_PORT: u32 = 14318;
 
@@ -18,14 +19,14 @@ mod linux_vsock_ttrpc {
         Ok(Server::new().add_listener(listener))
     }
 
-    async fn connect_host_client(cid: u32, port: u32) -> std::io::Result<Socket> {
-        Socket::connect(format!("vsock://{cid}:{port}")).await
+    fn wrap_post_connect_stream(stream: UnixStream) -> Socket {
+        Socket::new(stream)
     }
 
     #[test]
     fn compiles_safe_ttrpc_af_vsock_server_shape() {
         let _bind: fn(u32) -> std::io::Result<Server> = bind_guest_vsock_server;
-        let _connect = connect_host_client;
+        let _wrap: fn(UnixStream) -> Socket = wrap_post_connect_stream;
 
         assert_eq!(guest_listener_addr(GUEST_CONTROL_PORT), "vsock://-1:14318");
     }

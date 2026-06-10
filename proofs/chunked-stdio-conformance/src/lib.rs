@@ -62,6 +62,7 @@ pub enum ProtocolError {
         next: u64,
         got: u64,
     },
+    TtyStderrUnavailable,
     DecodeBudgetExhausted {
         used: usize,
         requested: usize,
@@ -367,6 +368,7 @@ pub struct ChunkedSession {
     max_chunk: usize,
     output_cap: usize,
     stdin_cap: usize,
+    tty: bool,
     stdout: OutputLog,
     stderr: OutputLog,
     stdin: StdinQueue,
@@ -394,6 +396,18 @@ impl ChunkedSession {
         )
     }
 
+    pub fn tty(session_id: u64, output_cap: usize, stdin_cap: usize, max_chunk: usize) -> Self {
+        let mut session = Self::with_stdin_endpoint(
+            session_id,
+            output_cap,
+            stdin_cap,
+            max_chunk,
+            StdinEndpoint::Pty,
+        );
+        session.tty = true;
+        session
+    }
+
     pub fn with_stdin_endpoint(
         session_id: u64,
         output_cap: usize,
@@ -407,6 +421,7 @@ impl ChunkedSession {
                 generation: 0,
             },
             max_chunk,
+            tty: false,
             output_cap,
             stdin_cap,
             stdout: OutputLog::new(),
@@ -465,6 +480,9 @@ impl ChunkedSession {
         data: &[u8],
     ) -> Result<u64, ProtocolError> {
         self.check_token(token)?;
+        if self.tty && stream == Stream::Stderr {
+            return Err(ProtocolError::TtyStderrUnavailable);
+        }
         if data.len() > self.max_chunk {
             return Err(ProtocolError::ChunkTooLarge);
         }
@@ -501,6 +519,9 @@ impl ChunkedSession {
         max_len: usize,
     ) -> Result<ReadOutputResponse, ProtocolError> {
         self.check_token(token)?;
+        if self.tty && stream == Stream::Stderr {
+            return Err(ProtocolError::TtyStderrUnavailable);
+        }
         if max_len > self.max_chunk {
             return Err(ProtocolError::ChunkTooLarge);
         }
@@ -1083,6 +1104,28 @@ mod tests {
         assert_eq!(session.retained_output_bytes(), 128 * MIB);
         assert_read_exact(&session, Stream::Stdout, total);
         assert_read_exact(&session, Stream::Stderr, total);
+    }
+
+    #[test]
+    fn tty_output_is_stdout_only_and_stderr_is_unavailable() {
+        let mut session = ChunkedSession::tty(13, MIB, MIB, 64 * KIB);
+        let token = session.token();
+        assert_eq!(
+            session.append_output(token, Stream::Stdout, b"pty merged output"),
+            Ok(0)
+        );
+        assert_eq!(
+            session.read_stdout(token, 0, 64 * KIB).unwrap().data,
+            b"pty merged output"
+        );
+        assert_eq!(
+            session.read_stderr(token, 0, 64 * KIB),
+            Err(ProtocolError::TtyStderrUnavailable)
+        );
+        assert_eq!(
+            session.append_output(token, Stream::Stderr, b"stderr invalid in tty"),
+            Err(ProtocolError::TtyStderrUnavailable)
+        );
     }
 
     #[test]

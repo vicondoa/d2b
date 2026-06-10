@@ -405,7 +405,6 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
   "current": null,
   "booted": null,
   "pendingRestart": false,
-  "apiReady": null,
   "runtime": "unknown",
   "declaredRoles": [
     "host-reconcile",

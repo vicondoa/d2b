@@ -15,6 +15,8 @@ The tests prove:
 - 64 MiB stdout plus 64 MiB stderr are byte-exact through
   `ReadStdout`/`ReadStderr` offset reads; zero-length reads and appends
   after output EOF are rejected.
+- TTY output is exposed through stdout only; `ReadStderr` and stderr
+  appends in TTY mode return typed unavailable errors.
 - 16 MiB slow stdin is delivered byte-exact through `WriteStdin`, with
   exact-offset append, same-request duplicate replay acceptance,
   different-request stale replay rejection, offset-gap rejection,
