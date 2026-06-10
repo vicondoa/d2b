@@ -385,6 +385,32 @@ in
     if [ -r "$bundle_json" ]; then
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
+          guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+          for uid in $guest_control_virtiofsd_uids; do
+            [ "$uid" = "0" ] && continue
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+            ${activationHelper} setfacl-on-path \
+              --path "/var/lib/nixling/guest-control-${name}" \
+              --acl-spec "u:$uid:rx" \
+              --also-spec "mask:r-x" \
+              --require-kind directory \
+              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+              2>/dev/null || true
+            ${activationHelper} setfacl-on-path \
+              --path "/var/lib/nixling/guest-control-${name}/token" \
+              --acl-spec "u:$uid:r" \
+              --also-spec "mask:r--" \
+              --require-kind regular \
+              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+              2>/dev/null || true
+            ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+          done
           if [ -d /var/lib/nixling/vms/${name} ]; then
             # panel-kernel + panel-virt R3 must-fix
             # narrow /dev/kvm ACL to only KVM-consuming role UIDs.
@@ -449,11 +475,12 @@ in
                   --require-kind regular \
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
-                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
                 continue
               fi
               # panel-security R2 must-fix B: /dev/kvm

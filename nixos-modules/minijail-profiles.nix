@@ -210,7 +210,7 @@ let
               ++ lib.optional (shareTag == "nl-gctl") share.source;
             writablePaths =
               if shareTag == "nl-gctl" then [
-                (mkWritablePath (runtimeDirOf name) "Expose the guest-control token virtiofs socket.")
+                (mkWritablePath "${audioRuntimeDirOf name}/guest-control" "Expose the guest-control token virtiofs socket.")
               ] else [
                 (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
                 (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")

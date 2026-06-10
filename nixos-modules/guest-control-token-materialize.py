@@ -129,6 +129,23 @@ def generate_token(target):
 
 def prepare_target_directory(directory):
     reject_symlink_components(directory, require_existing_file=False, check_parent_permissions=False)
+    parent = os.path.dirname(directory)
+    try:
+        os.mkdir(parent, mode=0o750)
+    except FileExistsError:
+        pass
+    try:
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        fail("target-parent-open-failed")
+    try:
+        st = os.fstat(parent_fd)
+        if not stat.S_ISDIR(st.st_mode):
+            fail("target-parent-not-directory")
+        os.fchown(parent_fd, 0, 0)
+        os.fchmod(parent_fd, 0o750)
+    finally:
+        os.close(parent_fd)
     try:
         os.mkdir(directory, mode=0o700)
     except FileExistsError:

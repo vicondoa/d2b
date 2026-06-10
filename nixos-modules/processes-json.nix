@@ -79,7 +79,10 @@ EOF
   profileFor = name: nodeId: cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
-  shareSocketPath = name: share: "/run/nixling/vms/${name}/${clean share.tag}.sock";
+  shareSocketPath = name: share:
+    if share.tag == "nl-gctl"
+    then "/run/nixling/vms/${name}/guest-control/${clean share.tag}.sock"
+    else "/run/nixling/vms/${name}/${clean share.tag}.sock";
   volumeHostPath = name: volume: nl.volumeHostPath cfg.store.stateDir name volume;
 
   componentReady = value: { kind = "component-specific"; inherit value; };
