@@ -6,9 +6,11 @@ alpha daemon supervises. The shape is anchored by the
 [`virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
 generator emits matching argv.
 
-## The four alpha shares
+## Framework-managed shares
 
-For the audited headless `corp-vm`:
+For a headless `corp-vm`, nixling emits these baseline shares. The
+guest-control token share is present only when
+`nixling.vms.corp-vm.guest.control.enable = true`.
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
@@ -16,6 +18,7 @@ For the audited headless `corp-vm`:
 | `nl-meta`     | `corp-vm-virtiofs-nl-meta.sock`          | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
 | `nl-hkeys`    | `corp-vm-virtiofs-nl-hkeys.sock`         | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
 | `nl-ssh-host` | `corp-vm-virtiofs-nl-ssh-host.sock`      | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`         | RW   |
+| `nl-gctl`     | `corp-vm/guest-control/nl-gctl.sock`     | `/var/lib/nixling/guest-control-corp-vm`              | RO   |
 
 CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
 flag (see `ChArgvInput.fs_shares` in
@@ -23,19 +26,17 @@ flag (see `ChArgvInput.fs_shares` in
 
 ## virtiofsd argv shape
 
-Each share renders to one virtiofsd process whose argv matches the
-audit:
+Each share renders to one virtiofsd process:
 
 ```text
 virtiofsd \
-  --socket-path=<vm>-virtiofs-<tag>.sock \
+  --socket-path=/run/nixling/vms/<vm>/<tag>.sock \
   --socket-group=kvm \
   --shared-dir=<host-path> \
   --thread-pool-size=<N> \
-  --posix-acl \
-  --xattr \
+  --sandbox=chroot \
+  --inode-file-handles=never \
   --cache=auto \
-  --inode-file-handles=prefer \
   [--readonly]
 ```
 
@@ -52,27 +53,29 @@ Flag semantics:
 - `--shared-dir` — host path the guest sees through the tag.
 - `--thread-pool-size` — integer. The daemon caller resolves
   `nproc` at spawn time.
-- `--posix-acl`, `--xattr` — both on by default to match the audit
-  shape (matters for the `ro-store` share so the guest sees the
-  same xattrs the host store has).
+- `--sandbox=chroot`, `--inode-file-handles=never` — ADR 0021
+  broker-pre-established user namespace shape. Reintroducing
+  `--sandbox=namespace` or file handles requires a new ADR/update.
 - `--cache=auto` — auto-cache (kernel decides per inode). `always`
   is unsafe for the `ro-store` share because hardlink farm churn
   could expose stale store-paths; `never` makes virtiofs latency
-  visible. `auto` matches the audit.
-- `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
-  when the underlying filesystem supports it. Reduces the per-share
-  fd budget; matches the audit shape.
+  visible.
 - `--readonly` — emitted for every share whose schema marks it
   `readOnly`, including `ro-store` and the guest-control token share
   (`nl-gctl`). Other framework shares remain RW.
 
 ## Daemon-owned uid/gid
 
-Per ADR 0003 each virtiofsd instance runs under a per-role
-`nixling-virtiofs` uid/gid the broker provisions at host-prepare
-time. The CH runner's `--fs socket=<path>` line trusts the broker
-to have set the socket's group ownership to `kvm` (or the migrated
-`nixling-virtiofs` group post-ADR-0003).
+Per ADR 0021 each virtiofsd instance runs fake-root inside a
+broker-pre-established single-entry user namespace and has zero host
+capabilities. Normal VM shares map namespace UID/GID 0 to the
+`nixling-<vm>-runner` stable principal. The guest-control token share
+(`nl-gctl`) maps to the narrower `nixling-<vm>-gctlfs` stable
+principal and receives only the token directory/file ACLs plus its
+dedicated runtime socket directory.
+
+The CH runner's `--fs socket=<path>` line trusts the broker to have set
+the socket's group ownership/ACLs so Cloud Hypervisor can connect.
 
 The daemon never names the uid/gid on the wire; the broker resolves
 the per-role uid from the trusted bundle when it serves the
@@ -81,11 +84,13 @@ the per-role uid from the trusted bundle when it serves the
 ## Cross-references
 
 - [`nixling_host::virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
-  — the pure argv generator + 19 unit tests.
+  — the pure argv generator.
 - [Runner-shape audit](runner-shape-audit.md) — the parity oracle for
   the share set + virtiofsd flags.
 - [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md)
   — per-role minijail uid/cap split.
+- [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md)
+  — broker-pre-established user namespace model for virtiofsd.
 - [ADR 0004](../adr/0004-cloud-hypervisor-runner-shape.md) — CH
   runner-shape decision including the virtiofs share contract.
 - [Daemon lifecycle](../explanation/daemon-lifecycle.md) — where
