@@ -9,6 +9,8 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
+scratch=$(nl_mktemp .guest-control-auth.XXXXXX)
+
 NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
   nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { }" >/dev/null
 
@@ -27,9 +29,14 @@ if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
   fail "guest-control-auth-eval: relative tokenFile unexpectedly passed"
 fi
 
+disabled_stderr=$scratch/disabled.stderr
 if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
-  nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { guestControlEnable = false; }" >/dev/null 2>&1; then
+  nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { guestControlEnable = false; }" >/dev/null 2>"$disabled_stderr"; then
   fail "guest-control-auth-eval: tokenFile without guest.control.enable unexpectedly passed"
+fi
+if ! grep -q "guest.control.auth.tokenFile is set" "$disabled_stderr"; then
+  sed -n '1,40p' "$disabled_stderr" >&2 || true
+  fail "guest-control-auth-eval: disabled tokenFile failure did not hit production assertion"
 fi
 
 ok "guest-control-auth-eval: token share and LoadCredential invariants hold"

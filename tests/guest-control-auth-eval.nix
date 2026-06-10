@@ -73,24 +73,28 @@ let
   processNodes = processVm.nodes;
   tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-nl-gctl") null processNodes;
   cloudHypervisor = lib.findFirst (node: node.id == "cloud-hypervisor") null processNodes;
+  positive =
+    assert tokenShare != null;
+    assert configuredTokenFile == tokenFile;
+    assert tokenShare.source == "/var/lib/nixling/guest-control-corp-vm";
+    assert tokenShare.mountPoint == "/run/nixling-guest-control-host";
+    assert tokenShare.readOnly == true;
+    assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
+      service.serviceConfig.LoadCredential;
+    assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
+    assert !(lib.hasInfix tokenFile serviceJson);
+    assert processVm != null;
+    assert tokenVirtiofsd != null;
+    assert cloudHypervisor != null;
+    assert builtins.elem "--readonly" tokenVirtiofsd.argv;
+    assert tokenVirtiofsd.profile.uid != cloudHypervisor.profile.uid;
+    assert !(lib.hasInfix "/var/lib/nixling/vms/corp-vm"
+      (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths));
+    builtins.toJSON {
+      inherit (tokenShare) source mountPoint readOnly;
+      loadCredential = service.serviceConfig.LoadCredential;
+    };
 in
-assert tokenShare != null;
-assert configuredTokenFile == tokenFile;
-assert tokenShare.source == "/var/lib/nixling/guest-control-corp-vm";
-assert tokenShare.mountPoint == "/run/nixling-guest-control-host";
-assert tokenShare.readOnly == true;
-assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
-  service.serviceConfig.LoadCredential;
-assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
-assert !(lib.hasInfix tokenFile serviceJson);
-assert processVm != null;
-assert tokenVirtiofsd != null;
-assert cloudHypervisor != null;
-assert builtins.elem "--readonly" tokenVirtiofsd.argv;
-assert tokenVirtiofsd.profile.uid != cloudHypervisor.profile.uid;
-assert !(lib.hasInfix "/var/lib/nixling/vms/corp-vm"
-  (builtins.toJSON tokenVirtiofsd.profile.mountPolicy.writablePaths));
-builtins.toJSON {
-  inherit (tokenShare) source mountPoint readOnly;
-  loadCredential = service.serviceConfig.LoadCredential;
-}
+if guestControlEnable
+then positive
+else builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath
