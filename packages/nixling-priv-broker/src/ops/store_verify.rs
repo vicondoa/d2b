@@ -3,8 +3,9 @@
 //! The CLI reaches this only through nixlingd -> broker. Verification reads
 //! the broker-owned split layout (`state/`, `meta/`, `live/`) under the same
 //! `sync.lock` file used by StoreSync and writes host-only integrity records.
-//! It deliberately performs only the W6 top-level readiness/manifest check:
-//! deep recursive package verification and real repair are later waves.
+//! It verifies both top-level readiness and recursive package contents against
+//! the trusted closure, and `--repair` delegates mutation to StoreSync plus
+//! same-filesystem live-path exchange before verifying again.
 
 use std::fs::{File, OpenOptions};
 use std::io::Read as _;

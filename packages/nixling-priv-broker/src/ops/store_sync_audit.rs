@@ -13,16 +13,13 @@
 //! failure path ([`failed`](StoreSyncAuditFields::failed)) are wired into
 //! dispatch: every `run_store_sync` attempt that reaches the handler now
 //! emits exactly one terminal record, success or failure, with a
-//! classified `error_stage`. The remaining shapes
-//! ([`denied`](StoreSyncAuditFields::denied),
-//! [`ok_cleanup_failed`](StoreSyncAuditFields::ok_cleanup_failed)) are
-//! implemented and validated here but not yet reachable from dispatch:
-//! `denied` awaits a per-VM/per-caller StoreSync authorization policy
-//! (the only kernel-trusted identity at this layer is the global
-//! peer-uid gate applied before dispatch), and `ok_cleanup_failed` awaits
-//! the post-activation sweep/cleanup wave. Successful StoreSync attempts
-//! populate available per-phase timings; failure paths still carry the
-//! dispatch-level `total_ms`.
+//! classified `error_stage`. The `ok_cleanup_failed` shape is reachable
+//! from the post-activation cleanup path. The remaining deferred shape is
+//! [`denied`](StoreSyncAuditFields::denied): it awaits a per-VM/per-caller
+//! StoreSync authorization policy (the only kernel-trusted identity at this
+//! layer is the global peer-uid gate applied before dispatch). Successful
+//! StoreSync attempts populate available per-phase timings; failure paths
+//! still carry the dispatch-level `total_ms`.
 //! See `docs/reference/store-sync.md`.
 //!
 //! Redaction contract: this is the **host-confidential** audit record
