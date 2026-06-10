@@ -79,7 +79,8 @@ fn build_store_view_farm_verb_populates_farm_from_stdin_request() {
 
     let gen_dir = farm_root.join("generations/1");
     assert!(gen_dir.join("marker.json").exists(), "marker written");
-    let farmed = gen_dir.join("aaaaaaaaaaaaaaaa-fake-0/bin/payload");
+    assert!(gen_dir.join("store-paths").exists(), "store-paths written");
+    let farmed = farm_root.join("live/aaaaaaaaaaaaaaaa-fake-0/bin/payload");
     let src = closure[0].join("bin/payload");
     assert!(farmed.exists(), "closure file hardlinked into farm");
     assert_eq!(

@@ -159,6 +159,35 @@ pub struct GenerationMarker {
     pub generation_number: u32,
 }
 
+/// Schema version for the guest-served generation metadata document
+/// (`meta.json`). Bump when the guest-safe allow-list changes.
+pub const GUEST_META_SCHEMA_VERSION: u32 = 1;
+
+/// Guest-served, host-authored generation metadata.
+///
+/// ADR 0027: produced by an **independent** serializer with an exact
+/// positive allow-list. The guest serializer never receives the full
+/// host audit struct, so it cannot leak `live/`, `state/`, `gcroots/`,
+/// marker payloads, caller/authz fields, retained generations, swept
+/// counts, timings, cleanup fields, error details, host-only paths, or
+/// host-absolute symlinks. The key set is exactly:
+/// `schema_version`, `generation_id`, `generation_token`,
+/// `sync_status`, `closure_count`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuestGenerationMeta {
+    pub schema_version: u32,
+    /// Collision-free generation identity (full closure identity); the
+    /// canonical key, distinct from the truncated u32 display token.
+    pub generation_id: String,
+    /// Display/wire u32 token. Never the on-disk generation key.
+    pub generation_token: u32,
+    /// Only `ok` ever reaches the guest: `meta.json` is written after
+    /// the generation has materialised successfully.
+    pub sync_status: String,
+    pub closure_count: u32,
+}
+
 /// Wire request for an out-of-process store-view farm build.
 ///
 /// The privileged broker serialises this to a subprocess that runs
@@ -400,6 +429,7 @@ pub fn build_farm(
     assert_same_filesystem(store_root, &generation_dir)?;
     write_store_paths(&generation_dir, closure_paths)?;
     write_system_symlink(&generation_dir, closure_paths)?;
+    write_guest_meta(&generation_dir, marker, closure_paths.len())?;
     write_generation_marker(&generation_dir, marker)?;
     write_live_marker(&live_dir, &marker.vm)?;
     Ok(generation_dir)
@@ -433,6 +463,56 @@ fn write_store_paths(
     })
 }
 
+/// Write the guest-served generation metadata (`meta.json`).
+///
+/// ADR 0027: an independent allow-list serializer. This function is the
+/// only path that authors the guest-visible `meta.json`; it builds the
+/// document from primitives ([`GuestGenerationMeta`]) and never from the
+/// full host audit record, so host-only fields cannot leak to the guest
+/// even if a future field is added to the audit struct. tmp+rename+fsync
+/// for crash safety.
+fn write_guest_meta(
+    generation_dir: &Path,
+    marker: &GenerationMarker,
+    closure_count: usize,
+) -> Result<(), HardlinkFarmError> {
+    let meta = GuestGenerationMeta {
+        schema_version: GUEST_META_SCHEMA_VERSION,
+        generation_id: marker.closure_hash.clone(),
+        generation_token: marker.generation_number,
+        sync_status: "ok".to_owned(),
+        closure_count: u32::try_from(closure_count).unwrap_or(u32::MAX),
+    };
+    let path = generation_dir.join("meta.json");
+    let tmp = generation_dir.join("meta.json.tmp");
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("serialize: {e}"),
+    })?;
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        file.write_all(&bytes).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        file.sync_all().map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if let Ok(dir) = std::fs::File::open(generation_dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
 fn write_system_symlink(
     generation_dir: &Path,
     closure_paths: &[PathBuf],
@@ -462,18 +542,28 @@ fn write_system_symlink(
     })
 }
 
+/// Plant the per-VM live readiness marker.
+///
+/// ADR 0027: the marker is a **zero-length** file. It is the
+/// cold-start readiness signal and lives under the guest-served
+/// `live/` pool, so it must carry no host paths, generation metadata,
+/// counts, caller principal, or any other payload — its existence
+/// alone is the signal and the readiness probe is a `test -e`.
+///
+/// Written via tmp+rename+fsync so a crash mid-plant leaves either the
+/// old marker or no marker, never a torn file. The (empty) inode is
+/// fsynced before the rename publishes it, and the `live/` directory is
+/// fsynced after rename so the dirent is durable on ext4/xfs/btrfs.
 fn write_live_marker(live_dir: &Path, vm: &str) -> Result<(), HardlinkFarmError> {
     let marker = live_dir.join(format!(".nixling-marker-{vm}"));
     let tmp = live_dir.join(format!(".nixling-marker-{vm}.tmp"));
     {
-        let mut file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
+        let file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
             path: tmp.display().to_string(),
             detail: e.to_string(),
         })?;
-        writeln!(file, "{vm}").map_err(|e| HardlinkFarmError::Io {
-            path: tmp.display().to_string(),
-            detail: e.to_string(),
-        })?;
+        // Zero-length: write nothing. fsync the empty file so the
+        // inode is durable before the rename makes it visible.
         file.sync_all().map_err(|e| HardlinkFarmError::Io {
             path: tmp.display().to_string(),
             detail: e.to_string(),
@@ -482,7 +572,11 @@ fn write_live_marker(live_dir: &Path, vm: &str) -> Result<(), HardlinkFarmError>
     std::fs::rename(&tmp, &marker).map_err(|e| HardlinkFarmError::Io {
         path: marker.display().to_string(),
         detail: e.to_string(),
-    })
+    })?;
+    if let Ok(dir) = std::fs::File::open(live_dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmError> {
@@ -952,6 +1046,77 @@ mod tests {
         assert_eq!(marker.vm, "corp-vm");
         assert!(generation_dir.join("store-paths").exists());
         assert!(generation_dir.join("system").exists());
+    }
+
+    #[test]
+    fn live_marker_is_zero_length() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        let pkg = source_root.join("abc-pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("payload"), b"data").unwrap();
+
+        build_farm(&farm_root, 3, std::slice::from_ref(&pkg), &make_marker(3)).unwrap();
+
+        // ADR 0027: the guest-served readiness marker carries no payload.
+        let marker = live_dir(&farm_root).join(".nixling-marker-corp-vm");
+        let meta = std::fs::metadata(&marker).expect("live marker planted");
+        assert!(meta.is_file(), "marker is a regular file");
+        assert_eq!(meta.len(), 0, "live readiness marker must be zero-length");
+    }
+
+    #[test]
+    fn guest_meta_json_has_exact_allow_list() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        let a = source_root.join("aaa-pkg");
+        let b = source_root.join("bbb-pkg");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("payload"), b"a").unwrap();
+        std::fs::write(b.join("payload"), b"b").unwrap();
+
+        let marker = GenerationMarker {
+            closure_hash: "sha256:deadbeef".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-06-09T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 9,
+        };
+        let generation_dir =
+            build_farm(&farm_root, 9, &[a.clone(), b.clone()], &marker).unwrap();
+
+        let raw = std::fs::read_to_string(generation_dir.join("meta.json"))
+            .expect("guest meta.json written");
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let obj = value.as_object().expect("meta.json is a JSON object");
+
+        // ADR 0027: the key set must equal exactly the guest allow-list.
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "closure_count",
+                "generation_id",
+                "generation_token",
+                "schema_version",
+                "sync_status",
+            ],
+            "guest meta.json must expose exactly the allow-listed keys"
+        );
+        assert_eq!(obj["schema_version"], serde_json::json!(GUEST_META_SCHEMA_VERSION));
+        assert_eq!(obj["generation_id"], serde_json::json!("sha256:deadbeef"));
+        assert_eq!(obj["generation_token"], serde_json::json!(9));
+        assert_eq!(obj["sync_status"], serde_json::json!("ok"));
+        assert_eq!(obj["closure_count"], serde_json::json!(2));
+
+        // Round-trips through the typed independent serializer.
+        let typed: GuestGenerationMeta = serde_json::from_str(&raw).unwrap();
+        assert_eq!(typed.generation_id, "sha256:deadbeef");
+        assert_eq!(typed.closure_count, 2);
     }
 
     #[test]
