@@ -44,20 +44,52 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
-        rustPackagesSrc = pkgs.runCommand "nixling-rust-src" { } ''
+        guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
           mkdir -p $out/packages
-          cp -r ${./packages}/. $out/packages/
+          cp -r ${./packages/nixling-core} $out/packages/nixling-core
+          cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
+          cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
+          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
+          cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
+          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
+          cat > $out/packages/Cargo.toml <<'EOF'
+          [workspace]
+          resolver = "2"
+          members = [
+            "nixling-core",
+            "nixling-ipc",
+            "nixling-guestd",
+            "nixling-userd",
+            "nixling-exec-runner",
+          ]
+
+          [workspace.package]
+          license = "Apache-2.0"
+
+          [workspace.lints.clippy]
+          all = "warn"
+
+          [workspace.lints.rust]
+          unsafe_code = "forbid"
+          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+          [workspace.dependencies]
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          schemars = { version = "0.8", features = ["derive"] }
+          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system"] }
+          sha2 = "0.10"
+          EOF
         '';
         cargoLock = {
-          lockFile = ./packages/Cargo.lock;
-          outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+          lockFile = ./packages/Cargo.guest.lock;
         };
         guestStaticPackage = packageName: binName:
           pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "${binName}-static";
             version = "0.0.0-bootstrap";
-            src = rustPackagesSrc;
-            sourceRoot = "nixling-rust-src/packages";
+            src = guestRustPackagesSrc;
+            sourceRoot = "nixling-guest-rust-src/packages";
             inherit cargoLock;
             cargoBuildFlags = [ "--package" packageName "--bin" binName ];
             doCheck = false;
@@ -67,14 +99,22 @@
             postInstall = ''
               bin="$out/bin/${binName}"
               test -x "$bin"
-              if readelf -l "$bin" | grep -q 'Requesting program interpreter'; then
+              readelf -h "$bin" >/dev/null
+              readelf -l "$bin" > "$TMPDIR/${binName}.program-headers"
+              if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
                 echo "${binName}: unexpected ELF interpreter" >&2
-                readelf -l "$bin" >&2
+                cat "$TMPDIR/${binName}.program-headers" >&2
                 exit 1
               fi
-              if readelf -d "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
-                echo "${binName}: unexpected dynamic dependency" >&2
-                readelf -d "$bin" >&2
+              if readelf -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
+                if grep -q '(NEEDED)' "$TMPDIR/${binName}.dynamic"; then
+                  echo "${binName}: unexpected dynamic dependency" >&2
+                  cat "$TMPDIR/${binName}.dynamic" >&2
+                  exit 1
+                fi
+              elif ! grep -qi 'no dynamic section' "$TMPDIR/${binName}.dynamic.err"; then
+                echo "${binName}: readelf -d failed unexpectedly" >&2
+                cat "$TMPDIR/${binName}.dynamic.err" >&2
                 exit 1
               fi
             '';
@@ -266,14 +306,23 @@
             ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
           do
             test -x "$bin"
-            if readelf -l "$bin" | grep -q 'Requesting program interpreter'; then
+            name="$(basename "$bin")"
+            readelf -h "$bin" >/dev/null
+            readelf -l "$bin" > "$TMPDIR/$name.program-headers"
+            if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
               echo "$bin: unexpected ELF interpreter" >&2
-              readelf -l "$bin" >&2
+              cat "$TMPDIR/$name.program-headers" >&2
               exit 1
             fi
-            if readelf -d "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
-              echo "$bin: unexpected dynamic dependency" >&2
-              readelf -d "$bin" >&2
+            if readelf -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
+              if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
+                echo "$bin: unexpected dynamic dependency" >&2
+                cat "$TMPDIR/$name.dynamic" >&2
+                exit 1
+              fi
+            elif ! grep -qi 'no dynamic section' "$TMPDIR/$name.dynamic.err"; then
+              echo "$bin: readelf -d failed unexpectedly" >&2
+              cat "$TMPDIR/$name.dynamic.err" >&2
               exit 1
             fi
           done

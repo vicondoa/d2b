@@ -36,7 +36,7 @@ deprecations ship one minor release before removal.
   fail-closed binaries, fakeable daemon/user/session traits, and bounded
   runner input validation.
 
-- Guest-static package outputs `nixling-guestd-static`,
+- Bootstrap/fail-closed guest-static package outputs `nixling-guestd-static`,
   `nixling-userd-static`, and `nixling-exec-runner-static`, plus an ELF check
   proving the guest binaries have no interpreter or dynamic dependencies.
 
