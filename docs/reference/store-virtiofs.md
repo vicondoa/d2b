@@ -42,9 +42,9 @@ virtiofsd \
 Flag semantics:
 
 - `--socket-path` — UDS the CH runner connects to. Daemon-owned;
-  the broker places it under `/run/nixling/vms/<vm>/`. The
-  audit uses runner-cwd-relative paths; either shape is honoured
-  by the argv generator.
+  the broker places normal share sockets under
+  `/run/nixling/vms/<vm>/<tag>.sock`; `nl-gctl` uses the isolated
+  `/run/nixling/vms/<vm>/guest-control/nl-gctl.sock` path.
 - `--socket-group=kvm` — UDS group ownership. The daemon-owned
   broker may move this to a dedicated `nixling-virtiofs` group as
   part of the ADR-0003 minijail split; the generator accepts any
@@ -82,10 +82,10 @@ the per-role uid from the trusted bundle when it serves the
 
 ## Cross-references
 
-- [`nixling_host::virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
-  — the pure argv generator.
-- [Runner-shape audit](runner-shape-audit.md) — the parity oracle for
-  the share set + virtiofsd flags.
+- `nixos-modules/processes-json.nix` — current daemon-owned virtiofsd argv
+  emitter.
+- [Runner-shape audit](runner-shape-audit.md) — historical microvm.nix
+  runner evidence, not the current daemon parity oracle.
 - [ADR 0003](../adr/0003-minijail-provisioning-and-sandbox-interface.md)
   — per-role minijail uid/cap split.
 - [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md)

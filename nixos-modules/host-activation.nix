@@ -489,8 +489,8 @@ in
               # sidecars need explicit ACL.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
               if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
-                ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}" 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}/token" 2>/dev/null || true
+                ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
+                ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
                 ${activationHelper} setfacl-on-path \
                   --path "/var/lib/nixling/guest-control-${name}" \
                   --acl-spec "u:$uid:rx" \
