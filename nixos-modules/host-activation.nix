@@ -387,8 +387,8 @@ in
         (name: _: ''
           guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
-          ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}" 2>/dev/null || true
-          ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}/token" 2>/dev/null || true
+          ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}" --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
+          ${activationHelper} clear-acl-on-path --path "/var/lib/nixling/guest-control-${name}/token" --require-kind regular --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
           for uid in $guest_control_virtiofsd_uids; do
             [ "$uid" = "0" ] && continue
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
@@ -414,7 +414,7 @@ in
               ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
               ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
             fi
-            ${pkgs.acl}/bin/setfacl -b /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            ${activationHelper} clear-acl-on-path --path /run/nixling/vms/${name}/guest-control --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
             ${activationHelper} setfacl-on-path \
               --path "/run/nixling/vms/${name}" \
               --acl-spec "u:$uid:--x" \
@@ -512,7 +512,7 @@ in
                   ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
                   ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
                 fi
-                ${pkgs.acl}/bin/setfacl -b /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                ${activationHelper} clear-acl-on-path --path /run/nixling/vms/${name}/guest-control --require-kind directory --setfacl-bin "${pkgs.acl}/bin/setfacl" 2>/dev/null || true
                 ${activationHelper} setfacl-on-path \
                   --path "/run/nixling/vms/${name}" \
                   --acl-spec "u:$uid:--x" \
