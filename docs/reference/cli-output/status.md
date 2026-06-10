@@ -24,6 +24,7 @@ bridge-health table.
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
+| `livePoolIntegrity` | object or omitted | Host-side integrity state for the ADR 0027 `store-view/live` pool: `status` is `ok`, `suspect`, or `unknown`; `unknownReason`, `auditRef`, `repairAttempted`, and `remediation` provide operator guidance when present. | Stable additive field. |
 
 ## Ordering and null handling
 
@@ -82,6 +83,10 @@ declared roles: host-reconcile, store-virtiofs-preflight, gpu
     "store-virtiofs-preflight",
     "gpu"
   ],
-  "readiness": []
+  "readiness": [],
+  "livePoolIntegrity": {
+    "status": "ok",
+    "repairAttempted": false
+  }
 }
 ```
