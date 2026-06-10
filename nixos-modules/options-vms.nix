@@ -587,7 +587,7 @@
           };
           auth.tokenFile = lib.mkOption {
             type = lib.types.nullOr (lib.types.addCheck lib.types.str
-              (s: lib.hasPrefix "/" s && !(lib.hasPrefix "/nix/store/" s)));
+              (s: lib.hasPrefix "/" s && s != "/nix/store" && !(lib.hasPrefix "/nix/store/" s)));
             default = null;
             example = "/run/secrets/nixling/work/guest-control-token";
             description = ''
@@ -596,6 +596,11 @@
               copy secret material into `/nix/store`. When null, nixling
               generates a stable per-VM fallback token under
               `nixling.site.stateDir`.
+
+              Runtime validation requires the source and its parent
+              directories to be symlink-free, the file to be regular,
+              root-owned, outside `/nix/store`, and inaccessible to
+              group/world permission bits.
             '';
           };
         };

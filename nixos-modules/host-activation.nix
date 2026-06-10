@@ -379,7 +379,7 @@ in
   # entries produces the same ACL state. Runs after every
   # `nixos-rebuild switch` so a bundle update with new role
   # UIDs is automatically reflected.
-  system.activationScripts.nixlingRoleUidAcls = lib.stringAfter [ "users" ] ''
+  system.activationScripts.nixlingRoleUidAcls = lib.stringAfter [ "users" "nixlingGuestControlTokens" ] ''
     set +u
     bundle_json=/etc/nixling/processes.json
     if [ -r "$bundle_json" ]; then
@@ -408,6 +408,7 @@ in
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
+            guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             if [ -n "$overlay_uid" ] && [ "$overlay_uid" != "null" ] && \
                [ -n "$overlay_gid" ] && [ "$overlay_gid" != "null" ] && \
                [ -n "$overlay_size_mib" ] && [ "$overlay_size_mib" != "null" ]; then
@@ -512,6 +513,22 @@ in
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
               done
+              if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${activationHelper} setfacl-on-path \
+                  --path "/var/lib/nixling/vms/${name}/guest-control" \
+                  --acl-spec "u:$uid:rx" \
+                  --also-spec "mask:r-x" \
+                  --require-kind directory \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
+                ${activationHelper} setfacl-on-path \
+                  --path "/var/lib/nixling/vms/${name}/guest-control/token" \
+                  --acl-spec "u:$uid:r" \
+                  --also-spec "mask:r--" \
+                  --require-kind regular \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
+              fi
               ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} 2>/dev/null || true
               ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} 2>/dev/null || true
