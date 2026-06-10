@@ -386,6 +386,7 @@ in
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList
         (name: _: ''
           guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+          guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           for uid in $guest_control_virtiofsd_uids; do
             [ "$uid" = "0" ] && continue
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
@@ -410,6 +411,11 @@ in
             ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            for ch_uid in $guest_control_ch_uids; do
+              [ "$ch_uid" = "0" ] && continue
+              ${pkgs.acl}/bin/setfacl -m "u:$ch_uid:--x" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+              ${pkgs.acl}/bin/setfacl -d -m "u:$ch_uid:rwX" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            done
           done
           if [ -d /var/lib/nixling/vms/${name} ]; then
             # panel-kernel + panel-virt R3 must-fix
@@ -481,6 +487,11 @@ in
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
                 ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                for ch_uid in $guest_control_ch_uids; do
+                  [ "$ch_uid" = "0" ] && continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$ch_uid:--x" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -d -m "u:$ch_uid:rwX" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                done
                 continue
               fi
               # panel-security R2 must-fix B: /dev/kvm

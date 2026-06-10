@@ -9,8 +9,6 @@ let
     source = vm.guest.control.auth.tokenFile;
     target = "${cfg.site.stateDir}/guest-control-${name}/token";
   }) enabledGuestControlVms;
-  tokenSpecsFile = pkgs.writeText "nixling-guest-control-token-specs.json"
-    (builtins.toJSON tokenSpecs);
   tokenMaterializer = ./guest-control-token-materialize.py;
 in
 {
@@ -25,6 +23,7 @@ in
 
   system.activationScripts.nixlingGuestControlTokens =
     lib.stringAfter [ "users" ] ''
-      ${pkgs.python3}/bin/python3 ${tokenMaterializer} ${tokenSpecsFile}
+      ${pkgs.coreutils}/bin/printf '%s\n' ${lib.escapeShellArg (builtins.toJSON tokenSpecs)} \
+        | ${pkgs.python3}/bin/python3 ${tokenMaterializer} -
     '';
 }

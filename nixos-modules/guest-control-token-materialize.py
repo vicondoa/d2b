@@ -4,7 +4,10 @@ import secrets
 import stat
 import sys
 
-specs = json.load(open(sys.argv[1], encoding="utf-8"))
+if sys.argv[1] == "-":
+    specs = json.load(sys.stdin)
+else:
+    specs = json.load(open(sys.argv[1], encoding="utf-8"))
 current_vm = "<unknown>"
 
 
@@ -130,8 +133,10 @@ def generate_token(target):
 def prepare_target_directory(directory):
     reject_symlink_components(directory, require_existing_file=False, check_parent_permissions=False)
     parent = os.path.dirname(directory)
+    created_parent = False
     try:
         os.mkdir(parent, mode=0o750)
+        created_parent = True
     except FileExistsError:
         pass
     try:
@@ -142,8 +147,9 @@ def prepare_target_directory(directory):
         st = os.fstat(parent_fd)
         if not stat.S_ISDIR(st.st_mode):
             fail("target-parent-not-directory")
-        os.fchown(parent_fd, 0, 0)
-        os.fchmod(parent_fd, 0o750)
+        if created_parent:
+            os.fchown(parent_fd, 0, 0)
+            os.fchmod(parent_fd, 0o750)
     finally:
         os.close(parent_fd)
     try:
