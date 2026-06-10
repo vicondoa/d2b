@@ -705,8 +705,11 @@ locks.
 
 ## Health status model
 
-Guest-control health is bounded and schema-versioned. `Health` returns a
-state enum plus bounded reason/remediation enums:
+Guest-control health is bounded and schema-versioned. Guest-returned
+`Health` payloads carry `origin = guest-reported`; host-synthesized readiness
+failures that happen before a guest `Health` RPC can complete carry
+`origin = host-synthesized`. Every health status then includes a state enum
+plus bounded reason/remediation enums:
 
 - `healthy`
 - `degraded`
@@ -760,6 +763,11 @@ Allowed state mappings:
 | `auth-failed` | `auth-token-rejected` | `check-auth-token` |
 | `protocol-mismatch` | `protocol-version-unsupported` | `upgrade-guest` |
 | `stale-session` | `session-generation-mismatch` | `retry`, `restart-vm` |
+
+The matrix is also origin-constrained: `healthy` and `degraded` are
+guest-reported, while `unavailable-old-generation`, `listener-absent`,
+`transport-unreachable`, `auth-failed`, `protocol-mismatch`, and
+`stale-session` are host-synthesized readiness/status results.
 
 `healthy` requires CH `CONNECT`, Hello/auth, and Health to succeed on the
 same post-CONNECT stream. `degraded` means guestd is authenticated and

@@ -125,20 +125,20 @@ def blocks(kind):
 
 
 message_fields = {}
-optional_fields = {}
 for name, body in blocks("message"):
     fields = []
-    optional = set()
     for line in body.splitlines():
         line = line.strip()
-        match = re.match(r"(optional\s+)?(?:repeated\s+)?[.\w]+\s+(\w+)\s*=\s*\d+\s*;", line)
+        match = re.match(r"(optional\s+)?(repeated\s+)?([.\w]+)\s+(\w+)\s*=\s*\d+\s*;", line)
         if match:
-            field = match.group(2)
+            field = {
+                "name": match.group(4),
+                "type": match.group(3),
+                "optional": bool(match.group(1)),
+                "repeated": bool(match.group(2)),
+            }
             fields.append(field)
-            if match.group(1):
-                optional.add(field)
     message_fields[name] = fields
-    optional_fields[name] = optional
 
 
 enum_values = {}
@@ -162,6 +162,77 @@ message_map = {
     "ExecRequestMetadata": "GuestExecRequestMetadata",
 }
 
+scalar_types = {
+    "string": ("string", None),
+    "bool": ("boolean", None),
+    "uint32": ("integer", "uint32"),
+    "uint64": ("integer", "uint64"),
+    "int32": ("integer", "int32"),
+}
+
+
+def schema_core(prop):
+    if "anyOf" in prop:
+        variants = [variant for variant in prop["anyOf"] if variant.get("type") != "null"]
+        if len(variants) == 1:
+            return variants[0]
+    typ = prop.get("type")
+    if isinstance(typ, list):
+        non_null = [entry for entry in typ if entry != "null"]
+        if len(non_null) == 1:
+            copy = dict(prop)
+            copy["type"] = non_null[0]
+            return copy
+    return prop
+
+
+def ref_name(prop):
+    ref = prop.get("$ref")
+    if ref and ref.startswith("#/definitions/"):
+        return ref.rsplit("/", 1)[-1]
+    return None
+
+
+def assert_scalar_shape(proto_name, field, prop):
+    core = schema_core(prop)
+    proto_type = field["type"]
+
+    if field["repeated"]:
+        if core.get("type") != "array":
+            raise SystemExit(f"{proto_name}.{field['name']} is repeated in proto but not array in schema")
+        item = schema_core(core.get("items", {}))
+        if proto_type == "bytes":
+            raise SystemExit(f"{proto_name}.{field['name']} cannot be repeated bytes")
+        assert_scalar_shape(proto_name, {**field, "repeated": False}, item)
+        return
+
+    if proto_type == "bytes":
+        if core.get("type") != "array" or schema_core(core.get("items", {})).get("type") != "integer":
+            raise SystemExit(f"{proto_name}.{field['name']} bytes field is not byte-array shaped in schema")
+        return
+
+    if proto_type in scalar_types:
+        expected_type, expected_format = scalar_types[proto_type]
+        if core.get("type") == expected_type and (
+            expected_format is None or core.get("format") == expected_format
+        ):
+            return
+        if proto_type == "string":
+            referenced = ref_name(core)
+            if referenced and schema_core(defs.get(referenced, {})).get("type") == "string":
+                return
+        raise SystemExit(
+            f"{proto_name}.{field['name']} type drift: proto {proto_type}, schema {core}"
+        )
+
+    schema_ref = ref_name(core)
+    expected_ref = message_map.get(proto_type, proto_type)
+    if schema_ref != expected_ref:
+        raise SystemExit(
+            f"{proto_name}.{field['name']} ref drift: proto {proto_type}, schema {schema_ref}"
+        )
+
+
 skip_messages = {"TerminalStatus"}
 for proto_name, fields in sorted(message_fields.items()):
     if proto_name in skip_messages:
@@ -171,22 +242,26 @@ for proto_name, fields in sorted(message_fields.items()):
     if node is None:
         raise SystemExit(f"schema missing definition for proto message {proto_name}")
     props = set(node.get("properties", {}).keys())
-    wanted = {camel(field) for field in fields}
+    wanted = {camel(field["name"]) for field in fields}
     if props != wanted:
         raise SystemExit(
             f"{proto_name}/{schema_name} field drift: schema={sorted(props)} proto={sorted(wanted)}"
         )
     required = set(node.get("required", []))
-    for field in optional_fields.get(proto_name, set()):
-        schema_field = camel(field)
-        if schema_field in required:
-            raise SystemExit(f"{schema_name}.{schema_field} is optional in proto but required in schema")
+    for field in fields:
+        schema_field = camel(field["name"])
         prop = node.get("properties", {}).get(schema_field, {})
-        variants = prop.get("anyOf", [])
-        typ = prop.get("type")
-        has_null_type = typ == "null" or (isinstance(typ, list) and "null" in typ)
-        if not has_null_type and not any(variant.get("type") == "null" for variant in variants):
-            raise SystemExit(f"{schema_name}.{schema_field} lacks nullable schema branch")
+        assert_scalar_shape(proto_name, field, prop)
+        if field["optional"]:
+            if schema_field in required:
+                raise SystemExit(f"{schema_name}.{schema_field} is optional in proto but required in schema")
+            variants = prop.get("anyOf", [])
+            typ = prop.get("type")
+            has_null_type = typ == "null" or (isinstance(typ, list) and "null" in typ)
+            if not has_null_type and not any(variant.get("type") == "null" for variant in variants):
+                raise SystemExit(f"{schema_name}.{schema_field} lacks nullable schema branch")
+        elif not field["repeated"] and field["type"] in scalar_types and schema_field not in required:
+            raise SystemExit(f"{schema_name}.{schema_field} is non-optional scalar in proto but optional in schema")
 
 
 def enum_prefix(name):
@@ -214,15 +289,22 @@ terminal = defs.get("TerminalStatus", {})
 variants = terminal.get("oneOf", [])
 if len(variants) != 4:
     raise SystemExit("TerminalStatus schema does not expose exactly four oneOf variants")
+expected_terminal = {
+    "exit-code": {"name": "exit_code", "type": "int32", "optional": False, "repeated": False},
+    "signal": {"name": "signal", "type": "uint32", "optional": False, "repeated": False},
+    "status-code": {"name": "status_code", "type": "int32", "optional": False, "repeated": False},
+    "error": {"name": "error", "type": "GuestControlErrorKind", "optional": False, "repeated": False},
+}
 for variant in variants:
     props = variant.get("properties", {})
-    if props.get("outcome", {}).get("enum", [None])[0] not in {
-        "exit-code",
-        "signal",
-        "status-code",
-        "error",
-    }:
+    outcome = props.get("outcome", {}).get("enum", [None])[0]
+    if outcome not in expected_terminal:
         raise SystemExit("TerminalStatus variant has unexpected outcome discriminator")
+    payload = expected_terminal[outcome]
+    payload_field = camel(payload["name"])
+    if set(props) != {"outcome", payload_field}:
+        raise SystemExit(f"TerminalStatus {outcome} variant payload drift: {sorted(props)}")
+    assert_scalar_shape("TerminalStatus", payload, props[payload_field])
 PY
 
 ok "guest-control-proto: guest_control.proto descriptor compiles and matches required shape"

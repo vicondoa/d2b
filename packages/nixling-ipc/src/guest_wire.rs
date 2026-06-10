@@ -727,12 +727,27 @@ pub enum StdinState {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case", tag = "outcome", deny_unknown_fields)]
+#[serde(
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    tag = "outcome",
+    deny_unknown_fields
+)]
 pub enum TerminalStatus {
-    ExitCode { exit_code: i32 },
-    Signal { signal: u32 },
-    StatusCode { status_code: i32 },
-    Error { error: GuestControlErrorKind },
+    ExitCode {
+        #[serde(rename = "exitCode")]
+        exit_code: i32,
+    },
+    Signal {
+        signal: u32,
+    },
+    StatusCode {
+        #[serde(rename = "statusCode")]
+        status_code: i32,
+    },
+    Error {
+        error: GuestControlErrorKind,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

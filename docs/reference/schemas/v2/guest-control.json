@@ -1551,11 +1551,11 @@
         {
           "type": "object",
           "required": [
-            "exit_code",
+            "exitCode",
             "outcome"
           ],
           "properties": {
-            "exit_code": {
+            "exitCode": {
               "type": "integer",
               "format": "int32"
             },
@@ -1593,7 +1593,7 @@
           "type": "object",
           "required": [
             "outcome",
-            "status_code"
+            "statusCode"
           ],
           "properties": {
             "outcome": {
@@ -1602,7 +1602,7 @@
                 "status-code"
               ]
             },
-            "status_code": {
+            "statusCode": {
               "type": "integer",
               "format": "int32"
             }
