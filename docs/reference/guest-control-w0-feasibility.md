@@ -44,6 +44,7 @@ W0 protocol.
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf88` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
 | HMAC auth | `guest-control-w0-auth` | `7a97d09` | PASS: transcript-bound proof-of-possession prototype with redaction and replay tests. |
 | Safe PTY | `guest-control-w0-pty` | `72ddbe3` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
+| Strengthened PTY/job-control | `guest-control-w0-pty2` | `eb4fedb` | PASS: session leadership, controlling-terminal foreground ownership, SIGINT after shell job handoff, TIOCSWINSZ/SIGWINCH, PTY EIO/POLLHUP drain, and TTY protocol-side CloseStdin semantics. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
 | Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | this commit | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
@@ -297,13 +298,27 @@ Result: **pass for W0**.
 The proof crate uses:
 
 - `portable-pty` for PTY open/spawn/resize/I/O;
-- safe `nix::sys::signal::killpg` for foreground process-group
-  signaling;
 - `#![forbid(unsafe_code)]`.
 
 Tests prove a spawned shell can receive input, report the resized
-terminal geometry, exit cleanly, and receive SIGINT via the foreground
-process group.
+terminal geometry, exit cleanly, and expose the kernel job-control
+state needed by the implementation:
+
+- the spawned interactive shell is the session leader and process-group
+  leader for its controlling terminal;
+- the PTY master reports a foreground process group via `tcgetpgrp`
+  once the shell hands the terminal to a foreground child group;
+- a terminal `^C` byte is delivered by the kernel as SIGINT to that
+  foreground child group, after which the shell regains the terminal and
+  reports the child status as `130`;
+- a single `TIOCSWINSZ` resize delivers one SIGWINCH with the new size,
+  and unchanged sizes are deduplicated before issuing another resize;
+- slave close is treated as output EOF only after buffered PTY output has
+  been drained, including Linux `EIO`-on-master-read behavior after the
+  slave closes;
+- TTY `CloseStdin` is protocol-side input closure only: the proof keeps
+  the PTY master/writer open and verifies output produced after the
+  protocol close marker is still delivered.
 
 Remaining implementation work: user switching and supplementary group
 initialization need a safe supported API or a design that delegates

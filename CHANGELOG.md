@@ -34,6 +34,11 @@ deprecations ship one minor release before removal.
   concurrent attached fairness, stale sessions, EOF, resize, and signal
   exit mapping.
 
+- Strengthened PTY/job-control proof coverage for guest-control exec,
+  including session leadership, controlling-terminal foreground process
+  groups, PTY close/drain behavior, SIGWINCH resize semantics, and
+  protocol-side TTY `CloseStdin`.
+
 - `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
   duplex-stream exec I/O design using nixling `TerminalFrame` messages,
   explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI

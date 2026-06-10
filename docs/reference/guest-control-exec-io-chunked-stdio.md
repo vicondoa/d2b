@@ -190,6 +190,11 @@ Rules:
 - For TTY execs, close means host input is closed; it does not synthesize
   Ctrl-D. If the CLI wants Ctrl-D semantics it sends the terminal byte
   through `WriteStdin` before close.
+- TTY close is protocol-side only: guestd marks future host input writes
+  rejected, but it does not close the PTY master, drop the writer handle,
+  send SIGHUP, or stop the output reader. Output already buffered or
+  produced later by the foreground program remains readable until PTY
+  output EOF.
 - A child closing its read side transitions to `closed-by-process`; later
   writes get `stdin-closed-by-process`.
 
@@ -230,6 +235,13 @@ Rules:
    `timed_out: true`.
 6. EOF is sticky and idempotent. Reads at `end_offset` after EOF return
    empty data with `eof: true`.
+7. For PTY output, Linux may surface slave closure as `EIO` on master
+   reads and readiness APIs may report hangup. Guestd treats those as the
+   PTY-output EOF edge only after the output reader has appended every
+   byte returned before the `EIO`/hangup. `ReadStdout` must therefore
+   report `eof: true` only when `next_offset == end_offset` after that
+   drain; it must not translate the first hangup into premature EOF or
+   discard buffered tail bytes.
 
 ## Cursors, offsets, and idempotency
 
@@ -472,8 +484,14 @@ silently dropping bytes for attached sessions.
 `TtyWinResize` is valid only for TTY execs and includes `{rows, cols}`.
 The first resize after create must have `control_seq = 1` only if the CLI
 observes a size change after `ExecCreate`; otherwise the create-time
-geometry is authoritative. Guestd applies the PTY resize and sends
-SIGWINCH to the foreground process group before acknowledging success.
+geometry is authoritative. Guestd applies the PTY resize with the PTY
+backend's `TIOCSWINSZ` equivalent and relies on the kernel to deliver
+SIGWINCH to the current foreground process group. Guestd must not also
+call `killpg(SIGWINCH)` for the ordinary resize path, because that would
+duplicate the kernel notification. If the requested rows/cols equal the
+last applied size, guestd acknowledges the idempotent request without
+issuing another `TIOCSWINSZ`; intentional duplicate SIGWINCH would
+require a future explicit API flag.
 
 ### Signal
 
@@ -484,6 +502,13 @@ CLI termination behavior maps to foreground process group in TTY and
 process tree in non-TTY. A signal accepted after process exit is
 idempotent no-op only for duplicate `request_id`; otherwise it returns
 `exec-already-exited`.
+
+For TTY execs, guestd resolves `foreground_process_group` from the PTY
+foreground owner (`tcgetpgrp` semantics), not from the root shell PID.
+This matters after an interactive shell transfers the controlling
+terminal to a foreground child job: Ctrl-C and `ExecSignal(INT)` must
+hit that child process group, then allow the shell to regain the terminal
+and report the child's signal-derived status.
 
 ### Cancel
 
@@ -501,6 +526,9 @@ small grace period unless another authorized attach takes ownership.
 - Child exit never implies stdin close succeeded; inspect reports both.
 - Output EOF is per stream. In non-TTY mode stdout may EOF before stderr.
 - In TTY mode stderr is absent; all PTY output is stdout.
+- PTY EOF is a drained state, not the first kernel hangup indication:
+  bytes returned before Linux `EIO` or `POLLHUP` remain part of stdout
+  and advance `stdout_end_offset` before EOF becomes visible.
 - Ctrl-D is data in TTY mode, not a protocol close. The CLI sends byte
   `0x04` through `WriteStdin` when the local terminal produces it.
 - EOF responses are replayable forever while the exec record exists.
@@ -555,8 +583,8 @@ locks.
 | stdout/stderr separation | Separate logs and read RPCs in non-TTY mode. |
 | TTY merge | PTY output maps to stdout; stderr read is typed unavailable. |
 | initial geometry and resize ordering | Geometry is part of create; later resizes use `control_seq`. |
-| PTY leadership / foreground process group | Not solved by wire format; implementation must use the W0 safe-PTY proof path. |
-| Ctrl-C/signal delivery | `ExecSignal` targets foreground process group for TTY. |
+| PTY leadership / foreground process group | Not solved by wire format; implementation must use the W0 safe-PTY proof path: session leader, controlling terminal, `tcgetpgrp` foreground owner, and child job handoff are required. |
+| Ctrl-C/signal delivery | `ExecSignal` targets the current `tcgetpgrp` foreground process group for TTY, including after a shell hands the terminal to a child job. |
 | exit code/signal propagation | `ExecWait` and `Inspect` report terminal state separately from I/O EOF. |
 | bounded memory / backpressure | Bounded logs, one stdin chunk, limited waiters, and slow-consumer cancellation. |
 | concurrent sessions/fairness | Per-exec caps and short polling prevent one stalled exec from owning global queues. |
@@ -686,7 +714,9 @@ Before implementation exits design hardening, add at least:
    with one bounded decoded allocation and no session-buffer copy;
 3. stdin offset/idempotency tests, including duplicate request IDs and
    mismatched duplicate payloads;
-4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior;
+4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior,
+   plus TTY protocol-side close proving the PTY master/writer stays open
+   and output after close is not lost;
 5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
 6. stdin 16 MiB slow-reader test with bounded RSS;
 6a. malicious concurrent `WriteStdin` fan-in test: four hard-maximum-sized
@@ -700,8 +730,13 @@ Before implementation exits design hardening, add at least:
 8. detached retention tests proving dropped-byte accounting and
    `offset-expired` behavior;
 9. long-poll timeout and waiter-cap tests;
-10. resize ordering tests that fail on reordered `control_seq`;
-11. signal ordering and foreground process-group delivery tests;
+10. resize ordering tests that fail on reordered `control_seq`, prove a
+    single `TIOCSWINSZ` yields a single SIGWINCH, and prove unchanged
+    sizes are deduplicated before `TIOCSWINSZ`;
+11. signal ordering and foreground process-group delivery tests covering
+    session leadership, controlling-terminal setup, `tcgetpgrp`
+    ownership, and SIGINT after a shell hands the terminal to a
+    foreground child group;
 12. concurrent-session fake-transport test with slow-output,
     blocked-stdin, interactive TTY, and unary health loop, requiring p95
     interactive latency <= 250 ms and max <= 1 s;
@@ -715,6 +750,9 @@ Before implementation exits design hardening, add at least:
     than explicit `ExecLogs` responses;
 16. observability redaction tests proving stdout/stderr/env/token/socket
     material never enters logs, metrics, spans, health, or JSON errors.
+17. PTY close/drain tests proving Linux `EIO` or `POLLHUP` after slave
+    close becomes stdout EOF only after all buffered output has advanced
+    the stream cursor.
 
 ### Redaction test matrix
 
