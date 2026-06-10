@@ -405,6 +405,7 @@ EOF
       # are dropped: /nix/store has no ACLs, and the per-VM shares
       # are nixling-managed (no foreign xattrs to preserve).
       isRoStore = share.source == "/nix/store";
+      isStoreMeta = share.tag == "nl-meta";
       # SECURITY (per-VM store isolation): the ro-store share's guest
       # `/nix/store` must expose ONLY this VM's closure, never the host's
       # full `/nix/store`. `share.source` stays `/nix/store` as the
@@ -435,7 +436,7 @@ EOF
         "--cache=${share.cache or "auto"}"
       ]
       ++ lib.optionals (microvm.hypervisor == "crosvm") [ "--tag=${share.tag}" ]
-      ++ lib.optionals (isRoStore || (share.readOnly or false)) [ "--readonly" ]
+      ++ lib.optionals (isRoStore || isStoreMeta || (share.readOnly or false)) [ "--readonly" ]
       ++ microvm.virtiofsd.extraArgs;
     };
 

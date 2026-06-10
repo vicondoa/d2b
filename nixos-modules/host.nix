@@ -332,7 +332,6 @@ in
                   mountPoint = "/run/nixling-store-meta";
                   tag = "nl-meta";
                   proto = "virtiofs";
-                  readOnly = true;
                 }
                 {
                   source = "${cfg.site.stateDir}/vms/${name}/host-keys";
