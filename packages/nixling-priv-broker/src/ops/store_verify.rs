@@ -602,6 +602,193 @@ mod tests {
     }
 
     #[test]
+    fn meta_current_divergence_returns_drift() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let other_id = "g-other";
+        std::fs::create_dir_all(hardlink_farm::meta_generation_dir(
+            &intent.hardlink_farm_path,
+            other_id,
+        ))
+        .unwrap();
+        hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, other_id).unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.drifted, 1);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("\"state\": \"suspect\""));
+        assert!(raw.contains("meta/current"));
+    }
+
+    #[test]
+    fn marker_vm_mismatch_returns_drift() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let state_gen =
+            hardlink_farm::state_generation_dir(&intent.hardlink_farm_path, &generation_id);
+        let mut marker = hardlink_farm::read_generation_marker(&state_gen).unwrap();
+        marker.vm = "other-vm".to_owned();
+        hardlink_farm::write_generation_marker(&state_gen, &marker).unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.drifted, 1);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("marker.json"));
+    }
+
+    #[test]
+    fn missing_marker_returns_generation_scoped_unknown() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        std::fs::remove_file(
+            hardlink_farm::state_generation_dir(&intent.hardlink_farm_path, &generation_id)
+                .join("marker.json"),
+        )
+        .unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Unknown);
+        assert_eq!(
+            response.unknown_reason,
+            Some(StoreVerifyUnknownReason::MarkerOrManifestMissing)
+        );
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("\"state\": \"unknown\""));
+        assert!(raw.contains("marker_or_manifest_missing"));
+    }
+
+    #[test]
+    fn unreadable_marker_returns_generation_scoped_unknown() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        std::fs::write(
+            hardlink_farm::state_generation_dir(&intent.hardlink_farm_path, &generation_id)
+                .join("marker.json"),
+            b"not-json",
+        )
+        .unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Unknown);
+        assert_eq!(
+            response.unknown_reason,
+            Some(StoreVerifyUnknownReason::MarkerOrManifestUnreadable)
+        );
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("marker_or_manifest_unreadable"));
+    }
+
+    #[test]
+    fn nonzero_live_marker_returns_drift() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        std::fs::write(
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join(".nixling-marker-vm-a"),
+            b"payload-is-drift",
+        )
+        .unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.drifted, 1);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains(".nixling-marker-vm-a"));
+    }
+
+    #[test]
+    fn missing_store_paths_returns_unknown() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        std::fs::remove_file(
+            hardlink_farm::meta_generation_dir(&intent.hardlink_farm_path, &generation_id)
+                .join("store-paths"),
+        )
+        .unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Unknown);
+        assert_eq!(
+            response.unknown_reason,
+            Some(StoreVerifyUnknownReason::MarkerOrManifestMissing)
+        );
+    }
+
+    #[test]
+    fn unreadable_store_paths_returns_unknown() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let store_paths =
+            hardlink_farm::meta_generation_dir(&intent.hardlink_farm_path, &generation_id)
+                .join("store-paths");
+        std::fs::remove_file(&store_paths).unwrap();
+        std::fs::create_dir(&store_paths).unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Unknown);
+        assert_eq!(
+            response.unknown_reason,
+            Some(StoreVerifyUnknownReason::MarkerOrManifestUnreadable)
+        );
+    }
+
+    #[test]
     fn not_found_response_has_signed_remediation() {
         let response = not_found("missing-vm");
         assert_eq!(response.status, StoreVerifyStatus::NotFound);
