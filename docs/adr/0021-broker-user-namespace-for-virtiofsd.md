@@ -45,16 +45,16 @@ We needed a model where:
 - The HOST attack surface is minimal (no `CAP_DAC_*`, no
   `CAP_SYS_ADMIN`, no `CAP_SETUID` on the broker-spawned process
   visible to the host)
-- The model is uniformly applied to all four virtiofsd shares
-  (ro-store + nl-meta + nl-hkeys + nl-ssh-host) without ad-hoc
-  per-share carve-outs
+- The model is uniformly applied to framework virtiofsd shares, with
+  only the declared per-share principal changing (for example `nl-gctl`
+  uses `nixling-<vm>-gctlfs` instead of the general runner principal)
 - The implementation does not require `/etc/subuid` /
   `/etc/subgid` allocations (which are operator-visible state
   and a per-host migration burden)
 
 ## Decision
 
-The broker pre-establishes a per-runner user namespace before
+The broker pre-establishes a per-share user namespace before
 exec'ing virtiofsd. Concretely:
 
 1. The role profile (`minijail-profiles.nix`) declares

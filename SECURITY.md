@@ -95,7 +95,7 @@ will introduce are:
   > `nixling-<vm>-gctlfs` principal. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
-  > per-runner user NS. This is strictly stronger than v1.1.1: a
+  > per-share user NS. This is strictly stronger than v1.1.1: a
   > compromised virtiofsd cannot access host resources outside its
   > bind-mounted share, even with kernel exploits that bypass the
   > sandbox, because the host kernel sees its credentials as the

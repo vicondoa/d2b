@@ -406,15 +406,34 @@ in
               --setfacl-bin "${pkgs.acl}/bin/setfacl" \
               2>/dev/null || true
             ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-            ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+            nixlingd_uid=$(${pkgs.getent}/bin/getent passwd nixlingd | ${pkgs.coreutils}/bin/cut -d: -f3)
+            nixling_gid=$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)
+            if [ -n "$nixlingd_uid" ] && [ -n "$nixling_gid" ]; then
+              ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
+              ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
+            fi
+            ${activationHelper} setfacl-on-path \
+              --path "/run/nixling/vms/${name}" \
+              --acl-spec "u:$uid:--x" \
+              --require-kind directory \
+              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+              2>/dev/null || true
+            ${activationHelper} setfacl-on-path \
+              --path "/run/nixling/vms/${name}/guest-control" \
+              --acl-spec "u:$uid:rwx" \
+              --also-spec "default:u:$uid:rwx" \
+              --require-kind directory \
+              --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+              2>/dev/null || true
             for ch_uid in $guest_control_ch_uids; do
               [ "$ch_uid" = "0" ] && continue
-              ${pkgs.acl}/bin/setfacl -m "u:$ch_uid:--x" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-              ${pkgs.acl}/bin/setfacl -d -m "u:$ch_uid:rwX" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+              ${activationHelper} setfacl-on-path \
+                --path "/run/nixling/vms/${name}/guest-control" \
+                --acl-spec "u:$ch_uid:--x" \
+                --also-spec "default:u:$ch_uid:rwX" \
+                --require-kind directory \
+                --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                2>/dev/null || true
             done
           done
           if [ -d /var/lib/nixling/vms/${name} ]; then
@@ -482,15 +501,34 @@ in
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
                 ${pkgs.coreutils}/bin/mkdir -p /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/vms/${name} /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -m "u:$uid:--x" /run/nixling/vms/${name} 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                nixlingd_uid=$(${pkgs.getent}/bin/getent passwd nixlingd | ${pkgs.coreutils}/bin/cut -d: -f3)
+                nixling_gid=$(${pkgs.getent}/bin/getent group nixling | ${pkgs.coreutils}/bin/cut -d: -f3)
+                if [ -n "$nixlingd_uid" ] && [ -n "$nixling_gid" ]; then
+                  ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
+                  ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
+                fi
+                ${activationHelper} setfacl-on-path \
+                  --path "/run/nixling/vms/${name}" \
+                  --acl-spec "u:$uid:--x" \
+                  --require-kind directory \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
+                ${activationHelper} setfacl-on-path \
+                  --path "/run/nixling/vms/${name}/guest-control" \
+                  --acl-spec "u:$uid:rwx" \
+                  --also-spec "default:u:$uid:rwx" \
+                  --require-kind directory \
+                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                  2>/dev/null || true
                 for ch_uid in $guest_control_ch_uids; do
                   [ "$ch_uid" = "0" ] && continue
-                  ${pkgs.acl}/bin/setfacl -m "u:$ch_uid:--x" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
-                  ${pkgs.acl}/bin/setfacl -d -m "u:$ch_uid:rwX" /run/nixling/vms/${name}/guest-control 2>/dev/null || true
+                  ${activationHelper} setfacl-on-path \
+                    --path "/run/nixling/vms/${name}/guest-control" \
+                    --acl-spec "u:$ch_uid:--x" \
+                    --also-spec "default:u:$ch_uid:rwX" \
+                    --require-kind directory \
+                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                    2>/dev/null || true
                 done
                 continue
               fi
