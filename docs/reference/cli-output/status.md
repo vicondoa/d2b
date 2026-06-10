@@ -21,7 +21,7 @@ bridge-health table.
 | `current` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/current`. | Stable wire contract. |
 | `booted` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/booted`. | Stable wire contract. |
 | `pendingRestart` | boolean | True when the VM is running and `booted != current`. | Stable wire contract. |
-| `apiReady` | string, object, or `null` | Last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; object form is `{ "error": "<bounded kind>" }`. `null` means no readiness result is known. | Stable wire contract. |
+| `apiReady` | string, object, or `null` | Last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; the legacy object form is `{ "error": "<readiness error text>" }`. `null` means no readiness result is known. Guest-control rollout must use a separate negotiated bounded status field rather than extending this free-form error string. | Stable wire contract. |
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |

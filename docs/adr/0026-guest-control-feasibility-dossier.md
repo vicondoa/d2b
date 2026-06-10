@@ -12,7 +12,7 @@ Use **ttRPC/protobuf for guest-control unary APIs**:
 - `Health`
 - `Capabilities`
 - exec lifecycle metadata (`ExecCreate`, `ExecInspect`, `ExecLogs`,
-  `ExecSignal`, `ExecKill`)
+  `ExecSignal`, `ExecCancel`)
 - typed framework guest operations
 
 Do **not** use raw `ttrpc-rust` async streams alone for Docker-like exec
@@ -440,14 +440,19 @@ It validates:
 - 16 MiB slow stdin through `WriteStdin`, including exact-offset
   appends, same-request duplicate replay acceptance, different-request
   stale replay rejection, offset-gap rejection, stale-data rejection, and
-  bounded stdin backpressure;
+  drainable bounded stdin retention/backpressure;
+- simulated pipe and PTY partial child writes draining from the bounded
+  stdin queue without duplicate or lost bytes at the RPC offset boundary;
+- per-connection decoded-byte budget and per-exec stdin permit tests
+  bounding malicious concurrent `WriteStdin` fan-in;
 - a 30 second active slow-consumer run that keeps retained output under
   the configured cap while producers continue attempting stdout/stderr
   writes and receive typed `SlowConsumer` pressure rather than growing
   unbounded buffers;
-- four concurrent attached sessions, including a mixed shared-scheduler
-  slow-output, blocked-stdin, interactive echo, and unary-health load,
-  with p95/max latency within thresholds and bounded fairness;
+- four concurrent attached sessions, including a mixed deterministic
+  scheduler with slow-output, blocked-stdin, interactive echo, and
+  unary-health load, with bounded service-turn gaps and no byte-skew
+  starvation;
 - stale-generation rejection after restart;
 - EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
   (`0x04` data through `WriteStdin`);
@@ -500,12 +505,12 @@ exec, avoids a second stream state machine, isolates conformance failures
 to individual RPCs, and follows Kata prior art.
 
 The tradeoff is attached UX latency: chunked stdio must keep reads
-concurrent and use short long-poll timeouts to meet the ADR latency
-threshold. That is acceptable because the required p95/max latency gates
-remain part of the implementation test plan. The credit-window overlay is
-not selected because its lower-latency duplex UX comes with higher
-protocol complexity, more subtle half-close/fairness interactions, and
-more implementation risk around ttRPC stream buffering.
+concurrent and use short long-poll timeouts. That is acceptable because
+the W0 proof now locks deterministic fairness/service-gap invariants, and
+runtime p95/max latency gates remain part of the implementation test plan.
+The credit-window overlay is not selected because its lower-latency duplex
+UX comes with higher protocol complexity, more subtle half-close/fairness
+interactions, and more implementation risk around ttRPC stream buffering.
 
 ## Required follow-up gates
 

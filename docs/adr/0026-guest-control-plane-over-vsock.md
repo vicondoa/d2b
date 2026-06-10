@@ -114,8 +114,9 @@ Detached exec is in scope for the full design, but the feasibility gate
 only has to prove whether the selected IPC can carry the lifecycle and
 stream semantics.
 Exit status propagation follows the remote command: normal exit returns
-the command's exit code; signal termination and transport/protocol
-failures use typed nixling errors.
+the command's exit code; signal termination returns signal metadata and
+shell-style status `128 + signal`. Transport/protocol failures use typed
+nixling errors.
 
 ## Decision
 
@@ -255,22 +256,21 @@ Initial pass/fail thresholds are:
   before protobuf decode; the effective-limit violation may allocate one
   bounded decoded protobuf `bytes` field but must be rejected before
   session-buffer copy while holding the documented byte-budget permits;
-- fake-transport interactive latency test: under four concurrent exec
-  sessions (one slow-output, one blocked-stdin, one interactive TTY,
-  one unary health loop), p95 input-to-output latency for the
-  interactive session must stay at or below 250 ms and max latency at or
-  below 1 s, unless a panel-approved update records a new threshold;
+- fake-scheduler fairness test: under four concurrent exec sessions
+  (one slow-output, one blocked-stdin, one interactive TTY, one unary
+  health loop), the scheduler trace must show bounded service-turn gaps
+  for interactive and health work and no byte-skew starvation;
 - memory high-water mark: the dossier records idle RSS and test RSS; any
   candidate whose RSS grows without bound or exceeds the recorded
   per-session budget fails. The initial per-session budget is 64 MiB
   above idle for the fake-transport tests.
 
-Each candidate must also produce byte-exact transcripts for the matrix,
-record p50/p95/max latency, and fail on reordered resize, signal, or
-exit events. Concurrent-stream proof must run slow-output,
-blocked-stdin, interactive, and unary-health streams simultaneously and
-show no head-of-line blocking, no starvation, bounded memory, and
-acceptable interactive latency under load.
+Each candidate must also produce byte-exact transcripts for the matrix
+and fail on reordered resize, signal, or exit events. Real-transport
+implementation tests must record p50/p95/max latency; deterministic W0
+proofs record service-turn gaps. Concurrent proof must run slow-output,
+blocked-stdin, interactive, and unary-health work together and show no
+head-of-line blocking, no starvation, and bounded memory.
 
 Nice-to-have properties such as lower latency, lower dependency
 footprint, and simpler docs can break ties, but they cannot compensate

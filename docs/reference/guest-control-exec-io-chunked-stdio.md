@@ -134,11 +134,12 @@ RPC cancellation cancels only that wait call, not the exec.
 
 Request fields:
 
+- `request_id`: idempotency key for this stdin write.
 - `offset`: caller's stdin byte offset for idempotency.
 - `data`: bytes, length `1..max_chunk_bytes`.
 - `close_after`: optional bool for atomic final chunk plus half-close.
-- `client_deadline_ms`: optional deadline for waiting on guest pipe
-  capacity.
+- `client_deadline_ms`: optional deadline for waiting on bounded guestd
+  stdin-queue capacity.
 
 Response fields:
 
@@ -160,16 +161,24 @@ Rules:
    exactly repeats the previous accepted chunk and `request_id` matches a
    dedupe entry. Otherwise the server returns `stdin-offset-mismatch`
    with the expected offset.
-3. If the child pipe/PTY cannot accept data, the server waits only until
-   `min(client_deadline_ms, stdin_write_deadline_ms)`. On expiry it
-   returns `stdin-backpressure` without buffering the chunk beyond the
-   one in-flight RPC payload.
-4. If stdin is already closed, the call returns `stdin-closed` and the
+3. `WriteStdin` is all-or-nothing at the RPC boundary. Guestd either
+   copies the entire chunk into its bounded stdin queue and returns
+   `accepted_len = data.len()`, or returns `stdin-backpressure` with
+   `accepted_len = 0` and leaves `next_offset` unchanged.
+4. Guestd's child-stdin writer drains that queue into the Linux pipe or
+   PTY and tracks partial kernel writes internally. A partial pipe/PTY
+   write is never exposed as a retryable offset-stable failure, so a
+   retry cannot duplicate bytes already delivered to the child.
+5. If the bounded queue cannot accept the whole chunk, the server waits
+   only until `min(client_deadline_ms, stdin_write_deadline_ms)`. On
+   expiry it returns `stdin-backpressure` before accepting any bytes.
+6. If stdin is already closed, the call returns `stdin-closed` and the
    expected offset.
-5. In non-interactive execs, all writes return `stdin-not-open`.
-6. `close_after` commits after the bytes have been written. If the bytes
-   cannot be written, stdin remains open and the caller retries or calls
-   `CloseStdin`.
+7. In non-interactive execs, all writes return `stdin-not-open`.
+8. `close_after` commits after the bytes have been accepted into the
+   bounded queue. The writer drains the accepted bytes first, then
+   half-closes child stdin in order. If the chunk cannot be accepted,
+   stdin remains open and the caller retries or calls `CloseStdin`.
 
 ### `CloseStdin`
 
@@ -274,7 +283,7 @@ Default design limits:
 | `max_chunk_bytes` | 64 KiB | 1 MiB | Application chunk limit; larger decoded chunks are rejected before session-buffer copy. |
 | `max_recv_message_bytes` | 1 MiB + 16 KiB | 1 MiB + 16 KiB | ttRPC receive cap for chunked-stdio methods, enforced before protobuf decode. |
 | chunked-stdio connections per VM | 4 | 4 | Bounds cross-connection decoded stdin pressure. |
-| stdin in-flight per exec | 1 chunk | 1 MiB | No guest-side stdin queue beyond current RPC plus OS pipe/PTY capacity. |
+| stdin in-flight/queue per exec | 1 chunk | 1 MiB | One decoded request may feed one bounded guestd stdin queue; pipe/PTY partial writes are tracked behind that queue. |
 | decoded WriteStdin bytes per connection | 4 MiB | 4 MiB | Weighted semaphore across concurrent decoded requests. |
 | concurrent WriteStdin handlers per connection | 4 | 4 | Bounds protobuf `bytes` allocations even for malicious fan-in. |
 | stdout live buffer per stream | 1 MiB | 8 MiB | Attached sessions; producer blocks before exceeding it. |
@@ -316,7 +325,7 @@ the receiver enforces these gates, in order:
 3. At handler entry, charge `data.len()` against a per-connection
    weighted semaphore with a 4 MiB budget. The permit is acquired before
    hashing for idempotency, copying into any session buffer, or waiting on
-   child pipe/PTY capacity, and is released when the response is sent.
+   bounded stdin-queue capacity, and is released when the response is sent.
    Exhaustion returns typed `stdin-byte-budget-exhausted` without
    retaining the payload.
 4. Acquire the per-exec `stdin_inflight` semaphore, exactly one permit,
@@ -324,7 +333,7 @@ the receiver enforces these gates, in order:
    `WriteStdin` for the same exec either waits until its
    `client_deadline_ms`/`stdin_write_deadline_ms` expires or returns
    `stdin-backpressure`. This serializes offset advancement and prevents
-   same-exec fan-in from building a guest-side stdin queue.
+   same-exec fan-in from building more than the single bounded stdin queue.
 5. After both permits are held, validate `data.len() <=
    effective_limits.max_chunk_bytes`. An effective-limit `max + 1`
    request that is still below the service receive cap is rejected with
@@ -338,7 +347,7 @@ Therefore, for `N` active connections, malicious concurrent
 ```text
 decoded request bytes <= N * 4 * (1 MiB + 16 KiB)
 admitted payload bytes <= N * 4 MiB
-per-exec retained stdin <= 1 in-flight chunk + kernel pipe/PTY capacity
+per-exec guestd-retained stdin <= 1 decoded in-flight chunk + 1 bounded queued chunk
 ```
 
 The per-VM connection cap from the guest-control transport budget bounds
@@ -543,9 +552,11 @@ Raw ttRPC streams failed the feasibility gate because application receivers coul
 while payloads accumulated behind stream delivery tasks. This design
 moves flow control into the application protocol:
 
-1. The server never accepts more than one stdin chunk per exec beyond the
-   OS pipe/PTY capacity. A blocked child therefore blocks or rejects the
-   next `WriteStdin`; guestd does not build an unbounded stdin queue.
+1. The server never accepts more than one bounded stdin chunk per exec
+   beyond the decoded in-flight request. A blocked child therefore fills
+   that bounded queue and blocks or rejects the next `WriteStdin`; guestd
+   does not build an unbounded stdin queue. Partial Linux pipe/PTY writes
+   are completed from that queue before any later stdin offset is admitted.
 2. Output is copied from child fds only into bounded logs. If an attached
    reader stops, output log capacity fills, guestd stops reading, and the
    kernel pipe/PTY blocks the child. If the condition lasts past the
@@ -607,8 +618,10 @@ locks.
 `nixling exec <vm> -- <argv...>` creates a non-TTY exec with stdin
 closed. The CLI reads stdout/stderr through offsets until both streams
 EOF and `ExecWait` returns terminal. The CLI exits with the remote exit
-code for normal command exit; signal termination and protocol failures
-map to typed nixling errors.
+code for normal command exit. Remote signal termination is reported as the
+command result with signal metadata and shell-style status `128 + signal`.
+Typed nixling errors are reserved for transport, protocol, authorization,
+and pre-exec failures.
 
 `--interactive` opens stdin. The CLI forwards local stdin in
 `max_chunk_bytes` chunks with increasing offsets and sends `CloseStdin`
@@ -730,7 +743,9 @@ Before implementation exits design hardening, add at least:
     a fifth concurrent request receives `stdin-byte-budget-exhausted` or
     waits for a permit, and concurrent effective-limit `max + 1` writes to
     one exec preserve offset order and never queue more than one chunk
-    behind the single per-exec stdin permit;
+    behind the single per-exec stdin permit; include pipe and PTY partial
+    child-write cases proving the bounded queue drains without duplicate or
+    lost stdin bytes before `CloseStdin` is observed;
 7. 30-second slow stdout/stderr consumer test proving block or
    `slow-consumer-cancelled` with bounded RSS;
 8. detached retention tests proving dropped-byte accounting and
@@ -743,9 +758,9 @@ Before implementation exits design hardening, add at least:
     session leadership, controlling-terminal setup, `tcgetpgrp`
     ownership, and SIGINT after a shell hands the terminal to a
     foreground child group;
-12. concurrent-session fake-transport test with slow-output,
-    blocked-stdin, interactive TTY, and unary health loop, requiring p95
-    interactive latency <= 250 ms and max <= 1 s;
+12. concurrent-session fake-scheduler test with slow-output,
+    blocked-stdin, interactive TTY, and unary health loop, requiring
+    bounded service-turn gaps and no byte-skew starvation;
 13. guestd restart and VM reboot stale-session rejection tests;
 14. CLI raw-mode restoration tests for success, signal, protocol error,
     and disconnect;
@@ -770,7 +785,7 @@ so a failure names the leaking class.
 
 | Canary class | Seed location | Must be absent from | Allowed location |
 | --- | --- | --- | --- |
-| argv / command line | `ExecCreate argv = ["sh", "-c", "echo ARG_CANARY"]` | daemon logs, guestd logs except bounded kind, metrics labels/samples, spans, health, error JSON | never; CLI human dry-run is out of scope for guestd telemetry |
+| argv / command line | `ExecCreate argv = ["true", "ARG_CANARY"]` | daemon logs, guestd logs except bounded kind, metrics labels/samples, spans, health, error JSON | never; CLI human dry-run is out of scope for guestd telemetry |
 | cwd | `--workdir /home/alice/CWD_CANARY` | logs, metrics, spans, health, error JSON | never; use bounded `cwd-invalid`/`cwd-denied` kinds |
 | env / tokens | `--env TOKEN_CANARY=...`, env-file path | logs, metrics, spans, health, error JSON, retained-log metadata | child stdout/stderr only if the command itself prints it and user requested logs |
 | credential path | guestd `LoadCredential` path and token-file validation errors | logs, metrics, spans, health, CLI JSON errors | never; report bounded credential error kind |

@@ -20,7 +20,7 @@ semantics, and typed failure when either endpoint stops consuming.
 
 ## Stream model
 
-`ExecCreate`, `ExecInspect`, `ExecLogs`, `ExecSignal`, and `ExecKill`
+`ExecCreate`, `ExecInspect`, `ExecLogs`, `ExecSignal`, and `ExecCancel`
 are unary control RPCs. `ExecAttach` is the only duplex streaming RPC.
 A host may attach when creating an exec, or attach later to a detached
 exec that is still running or has retained logs.

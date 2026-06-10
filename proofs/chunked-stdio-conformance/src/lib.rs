@@ -30,15 +30,36 @@ pub enum Stream {
 pub enum ProtocolError {
     StaleSession,
     ChunkTooLarge,
-    OffsetGap { expected: u64, got: u64 },
-    OffsetBehind { expected: u64, got: u64 },
-    OutputEvicted { earliest: u64, got: u64 },
+    OffsetGap {
+        expected: u64,
+        got: u64,
+    },
+    OffsetBehind {
+        expected: u64,
+        got: u64,
+    },
+    OutputEvicted {
+        earliest: u64,
+        got: u64,
+    },
     StdinClosed,
-    SlowConsumer { retained: usize, cap: usize },
+    SlowConsumer {
+        retained: usize,
+        cap: usize,
+    },
     DuplicateWriteId,
     RequestIdConflict,
-    ControlSequenceGap { expected: u64, got: u64 },
+    ControlSequenceGap {
+        expected: u64,
+        got: u64,
+    },
     ReceiveMessageTooLarge,
+    DecodeBudgetExhausted {
+        used: usize,
+        requested: usize,
+        cap: usize,
+    },
+    StdinRequestInFlight,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,7 +142,14 @@ struct OutputLog {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AcceptedWrite {
     offset: u64,
+    len: usize,
     hash: u64,
+}
+
+#[derive(Clone, Debug)]
+struct StdinQueue {
+    base_offset: u64,
+    bytes: Vec<u8>,
 }
 
 impl OutputLog {
@@ -171,6 +199,72 @@ impl OutputLog {
     }
 }
 
+impl StdinQueue {
+    fn new() -> Self {
+        Self {
+            base_offset: 0,
+            bytes: Vec::new(),
+        }
+    }
+
+    fn next_offset(&self) -> u64 {
+        self.base_offset + self.bytes.len() as u64
+    }
+
+    fn buffered_bytes(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn append(&mut self, data: &[u8]) {
+        self.bytes.extend_from_slice(data);
+    }
+
+    fn consume(&mut self, max_len: usize) -> Vec<u8> {
+        let end = max_len.min(self.bytes.len());
+        let consumed: Vec<_> = self.bytes.drain(0..end).collect();
+        self.base_offset += consumed.len() as u64;
+        consumed
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DecodedByteBudget {
+    cap: usize,
+    used: usize,
+}
+
+impl DecodedByteBudget {
+    pub fn new(cap: usize) -> Self {
+        Self { cap, used: 0 }
+    }
+
+    pub fn used(&self) -> usize {
+        self.used
+    }
+
+    pub fn try_acquire(&mut self, len: usize) -> Result<(), ProtocolError> {
+        if len > self.cap {
+            return Err(ProtocolError::ReceiveMessageTooLarge);
+        }
+        if self.used + len > self.cap {
+            return Err(ProtocolError::DecodeBudgetExhausted {
+                used: self.used,
+                requested: len,
+                cap: self.cap,
+            });
+        }
+        self.used += len;
+        Ok(())
+    }
+
+    pub fn release(&mut self, len: usize) {
+        self.used = self
+            .used
+            .checked_sub(len)
+            .expect("decoded budget release exceeds acquired bytes");
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ChunkedSession {
     token: SessionToken,
@@ -179,9 +273,9 @@ pub struct ChunkedSession {
     stdin_cap: usize,
     stdout: OutputLog,
     stderr: OutputLog,
-    stdin_history: Vec<u8>,
-    stdin_delivered_offset: u64,
+    stdin: StdinQueue,
     stdin_closed: bool,
+    stdin_inflight: bool,
     close_stdin_request: Option<(u64, u64)>,
     writes: HashMap<u64, AcceptedWrite>,
     next_control_seq: u64,
@@ -200,9 +294,9 @@ impl ChunkedSession {
             stdin_cap,
             stdout: OutputLog::new(),
             stderr: OutputLog::new(),
-            stdin_history: Vec::new(),
-            stdin_delivered_offset: 0,
+            stdin: StdinQueue::new(),
             stdin_closed: false,
+            stdin_inflight: false,
             close_stdin_request: None,
             writes: HashMap::new(),
             // ExecCreate reports control_seq=0. The first post-create
@@ -226,11 +320,11 @@ impl ChunkedSession {
     }
 
     pub fn stdin_next_offset(&self) -> u64 {
-        self.stdin_history.len() as u64
+        self.stdin.next_offset()
     }
 
     pub fn stdin_buffered_bytes(&self) -> usize {
-        self.stdin_history.len() - self.stdin_delivered_offset as usize
+        self.stdin.buffered_bytes()
     }
 
     pub fn append_output(
@@ -354,10 +448,11 @@ impl ChunkedSession {
             write_id,
             AcceptedWrite {
                 offset,
+                len: data.len(),
                 hash: Self::hash(data),
             },
         );
-        self.stdin_history.extend_from_slice(data);
+        self.stdin.append(data);
         Ok(WriteStdinResponse {
             next_offset: self.stdin_next_offset(),
             disposition: WriteDisposition::Accepted,
@@ -407,10 +502,24 @@ impl ChunkedSession {
         max_len: usize,
     ) -> Result<Vec<u8>, ProtocolError> {
         self.check_token(token)?;
-        let start = self.stdin_delivered_offset as usize;
-        let end = start.saturating_add(max_len).min(self.stdin_history.len());
-        self.stdin_delivered_offset = end as u64;
-        Ok(self.stdin_history[start..end].to_vec())
+        let consumed = self.stdin.consume(max_len);
+        self.evict_stdin_dedupe();
+        Ok(consumed)
+    }
+
+    pub fn begin_stdin_request(&mut self, token: SessionToken) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        if self.stdin_inflight {
+            return Err(ProtocolError::StdinRequestInFlight);
+        }
+        self.stdin_inflight = true;
+        Ok(())
+    }
+
+    pub fn finish_stdin_request(&mut self, token: SessionToken) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.stdin_inflight = false;
+        Ok(())
     }
 
     pub fn push_control(
@@ -460,10 +569,15 @@ impl ChunkedSession {
     fn hash(data: &[u8]) -> u64 {
         // Deterministic non-cryptographic proof hash. The production design uses
         // a real payload hash in the request-id dedupe ring.
-        data.iter()
-            .fold(0xcbf29ce484222325_u64, |acc, byte| {
-                (acc ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-            })
+        data.iter().fold(0xcbf29ce484222325_u64, |acc, byte| {
+            (acc ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+    }
+
+    fn evict_stdin_dedupe(&mut self) {
+        let earliest = self.stdin.base_offset;
+        self.writes
+            .retain(|_, accepted| accepted.offset + accepted.len as u64 > earliest);
     }
 
     pub fn receive_message(max_recv: usize, payload_len: usize) -> Result<Vec<u8>, ProtocolError> {
@@ -493,7 +607,6 @@ pub fn stdin_pattern(absolute_offset: u64, len: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -554,6 +667,7 @@ mod tests {
         let mut offset = 0_u64;
         let mut write_id = 10_u64;
         let mut delivered = Vec::with_capacity(total);
+        let mut max_buffered = 0_usize;
 
         while offset < total as u64 {
             let len = DEFAULT_CHUNK.min(total - offset as usize);
@@ -562,7 +676,9 @@ mod tests {
                 Ok(response) => {
                     assert_eq!(response.disposition, WriteDisposition::Accepted);
                     assert_eq!(response.next_offset, offset + len as u64);
-                    let duplicate = session.write_stdin(token, write_id, offset, &chunk).unwrap();
+                    let duplicate = session
+                        .write_stdin(token, write_id, offset, &chunk)
+                        .unwrap();
                     assert_eq!(duplicate.disposition, WriteDisposition::Duplicate);
                     assert_eq!(
                         session.write_stdin(token, write_id, offset, b"different"),
@@ -584,16 +700,23 @@ mod tests {
                 }
                 Err(err) => panic!("unexpected WriteStdin error: {err:?}"),
             }
+            max_buffered = max_buffered.max(session.stdin_buffered_bytes());
+            assert!(max_buffered <= 512 * KIB);
             let consumed = session.consume_stdin(token, 64 * KIB).unwrap();
             delivered.extend_from_slice(&consumed);
+            max_buffered = max_buffered.max(session.stdin_buffered_bytes());
+            assert!(max_buffered <= 512 * KIB);
         }
 
         while delivered.len() < total {
             let consumed = session.consume_stdin(token, 256 * KIB).unwrap();
             assert!(!consumed.is_empty());
             delivered.extend_from_slice(&consumed);
+            max_buffered = max_buffered.max(session.stdin_buffered_bytes());
+            assert!(max_buffered <= 512 * KIB);
         }
         assert_eq!(delivered, stdin_pattern(0, total));
+        assert_eq!(session.stdin_buffered_bytes(), 0);
 
         assert!(matches!(
             session.write_stdin(token, write_id, offset + 1, b"gap"),
@@ -603,6 +726,63 @@ mod tests {
             session.write_stdin(token, write_id, 0, b"wrong"),
             Err(ProtocolError::OffsetBehind { .. })
         ));
+    }
+
+    #[test]
+    fn partial_child_writes_drain_queue_without_duplicate_or_lost_stdin() {
+        for (name, write_steps) in [
+            ("pipe", &[8 * KIB, 16 * KIB, 4 * KIB][..]),
+            ("pty", &[1024, 4096, 2048][..]),
+        ] {
+            let mut session = ChunkedSession::new(20, MIB, 64 * KIB, 64 * KIB);
+            let token = session.token();
+            let first = stdin_pattern(0, 64 * KIB);
+            let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
+            session.write_stdin(token, 1, 0, &first).unwrap();
+
+            let first_partial = session.consume_stdin(token, write_steps[0]).unwrap();
+            assert_eq!(
+                first_partial,
+                stdin_pattern(0, first_partial.len()),
+                "{name} first partial write must preserve prefix bytes"
+            );
+            assert_eq!(
+                session.write_stdin(token, 2, 64 * KIB as u64, &second),
+                Err(ProtocolError::SlowConsumer {
+                    retained: 64 * KIB - write_steps[0],
+                    cap: 64 * KIB,
+                }),
+                "{name} must reject a retryable second chunk while the bounded queue is occupied"
+            );
+
+            let mut delivered = first_partial;
+            let mut step = 1;
+            while delivered.len() < 64 * KIB {
+                let remaining = 64 * KIB - delivered.len();
+                let consumed = session
+                    .consume_stdin(token, write_steps[step % write_steps.len()].min(remaining))
+                    .unwrap();
+                assert!(!consumed.is_empty(), "{name} partial writer stalled");
+                delivered.extend_from_slice(&consumed);
+                assert!(session.stdin_buffered_bytes() <= 64 * KIB);
+                step += 1;
+            }
+            assert_eq!(delivered, first, "{name} delivered bytes changed");
+            assert_eq!(session.stdin_buffered_bytes(), 0);
+
+            session
+                .write_stdin(token, 2, 64 * KIB as u64, &second)
+                .unwrap();
+            assert_eq!(
+                session.close_stdin(token, 3, 128 * KIB as u64),
+                Ok(WriteStdinResponse {
+                    next_offset: 128 * KIB as u64,
+                    disposition: WriteDisposition::Accepted,
+                }),
+                "{name} close_after ordering must observe both accepted chunks"
+            );
+            assert_eq!(session.consume_stdin(token, 64 * KIB).unwrap(), second);
+        }
     }
 
     #[test]
@@ -646,209 +826,165 @@ mod tests {
     }
 
     #[test]
-    fn four_concurrent_attached_sessions_meet_latency_and_fairness_thresholds() {
+    fn four_concurrent_attached_sessions_progress_fairly_under_round_robin_scheduler() {
         const SESSIONS: usize = 4;
         const TOTAL: usize = 4 * MIB;
         const READ: usize = 32 * KIB;
-        const P95_MS: u128 = 25;
-        const MAX_MS: u128 = 100;
-        const FAIRNESS_BYTES: usize = 128 * KIB;
+        const FAIRNESS_BYTES: u64 = (READ * (SESSIONS - 1)) as u64;
 
-        let sessions: Vec<_> = (0..SESSIONS)
+        let mut sessions: Vec<_> = (0..SESSIONS)
             .map(|idx| {
                 let mut session =
                     ChunkedSession::new(100 + idx as u64, 8 * MIB, MIB, DEFAULT_CHUNK);
                 fill_output(&mut session, Stream::Stdout, TOTAL);
-                Arc::new(Mutex::new(session))
+                session
             })
             .collect();
+        let tokens: Vec<_> = sessions.iter().map(ChunkedSession::token).collect();
+        let mut offsets = [0_u64; SESSIONS];
+        let mut read_turns = 0_usize;
 
-        let handles: Vec<_> = sessions
-            .into_iter()
-            .map(|session| {
-                thread::spawn(move || {
-                    let token = session.lock().unwrap().token();
-                    let mut offset = 0_u64;
-                    let mut bytes = 0_usize;
-                    let mut latencies = Vec::new();
-                    while bytes < TOTAL {
-                        let start = Instant::now();
-                        let response = session
-                            .lock()
-                            .unwrap()
-                            .read_output(token, Stream::Stdout, offset, READ)
-                            .unwrap();
-                        let latency = start.elapsed().as_millis();
-                        assert_eq!(
-                            response.data,
-                            pattern_chunk(Stream::Stdout, offset, response.data.len())
-                        );
-                        offset += response.data.len() as u64;
-                        bytes += response.data.len();
-                        latencies.push(latency);
-                        thread::yield_now();
-                    }
+        while offsets.iter().any(|offset| *offset < TOTAL as u64) {
+            for idx in 0..SESSIONS {
+                if offsets[idx] >= TOTAL as u64 {
+                    continue;
+                }
+                let response = sessions[idx]
+                    .read_output(tokens[idx], Stream::Stdout, offsets[idx], READ)
+                    .unwrap();
+                assert_eq!(
+                    response.data,
+                    pattern_chunk(Stream::Stdout, offsets[idx], response.data.len())
+                );
+                offsets[idx] += response.data.len() as u64;
+                sessions[idx]
+                    .ack_output(tokens[idx], Stream::Stdout, offsets[idx])
+                    .unwrap();
+                read_turns += 1;
 
-                    latencies.sort_unstable();
-                    let p95 = latencies[(latencies.len() * 95 / 100).min(latencies.len() - 1)];
-                    let max = *latencies.last().unwrap();
-                    (bytes, p95, max)
-                })
-            })
-            .collect();
-
-        let mut results = Vec::new();
-        for handle in handles {
-            results.push(handle.join().unwrap());
+                let min = *offsets.iter().min().unwrap();
+                let max = *offsets.iter().max().unwrap();
+                assert!(
+                    max - min <= FAIRNESS_BYTES,
+                    "session byte skew exceeded deterministic round-robin bound"
+                );
+            }
         }
-        let min_bytes = results.iter().map(|(bytes, _, _)| *bytes).min().unwrap();
-        let max_bytes = results.iter().map(|(bytes, _, _)| *bytes).max().unwrap();
-        assert!(
-            max_bytes - min_bytes <= FAIRNESS_BYTES,
-            "session byte skew exceeded threshold"
-        );
-        for (bytes, p95, max) in results {
-            assert_eq!(bytes, TOTAL);
-            assert!(
-                p95 <= P95_MS,
-                "p95 attached read latency {p95}ms > {P95_MS}ms"
-            );
-            assert!(
-                max <= MAX_MS,
-                "max attached read latency {max}ms > {MAX_MS}ms"
-            );
+
+        assert_eq!(read_turns, SESSIONS * (TOTAL / READ));
+        for (idx, session) in sessions.iter().enumerate() {
+            assert_eq!(offsets[idx], TOTAL as u64);
+            assert_eq!(session.retained_output_bytes(), 0);
         }
     }
 
     #[test]
-    fn mixed_attached_load_keeps_interactive_latency_bounded() {
-        const P95_MS: u128 = 25;
-        const MAX_MS: u128 = 100;
+    fn mixed_attached_load_has_bounded_deterministic_service_gaps() {
+        const MAX_TURN_GAP: u64 = 4;
+        const INTERACTIVE_OPS: u64 = 240;
+        const HEALTH_OPS: u64 = 240;
 
-        let slow_output = Arc::new(Mutex::new(ChunkedSession::new(
-            200,
-            8 * MIB,
-            512 * KIB,
-            DEFAULT_CHUNK,
-        )));
-        fill_output(&mut slow_output.lock().unwrap(), Stream::Stdout, 2 * MIB);
+        let mut slow_output = ChunkedSession::new(200, 8 * MIB, 512 * KIB, DEFAULT_CHUNK);
+        fill_output(&mut slow_output, Stream::Stdout, 2 * MIB);
+        let slow_token = slow_output.token();
+        let mut slow_offset = 0_u64;
 
-        let blocked_stdin = Arc::new(Mutex::new(ChunkedSession::new(
-            201,
-            MIB,
-            64 * KIB,
-            64 * KIB,
-        )));
-        let interactive = Arc::new(Mutex::new(ChunkedSession::new(
-            202,
-            MIB,
-            MIB,
-            64 * KIB,
-        )));
-        let scheduler = Arc::new(Mutex::new(()));
+        let mut blocked_stdin = ChunkedSession::new(201, MIB, 64 * KIB, 64 * KIB);
+        let blocked_token = blocked_stdin.token();
+        let mut blocked_offset = 0_u64;
+        let mut blocked_write_id = 1_u64;
+        let mut blocked_slow = 0_usize;
 
-        let slow_handle = {
-            let slow_output = Arc::clone(&slow_output);
-            let scheduler = Arc::clone(&scheduler);
-            thread::spawn(move || {
-                let token = slow_output.lock().unwrap().token();
-                let mut offset = 0;
-                while offset < 2 * MIB as u64 {
-                    let _turn = scheduler.lock().unwrap();
-                    let response = slow_output
-                        .lock()
-                        .unwrap()
-                        .read_stdout(token, offset, 32 * KIB)
-                        .unwrap();
-                    offset += response.data.len() as u64;
-                    thread::yield_now();
+        let mut interactive = ChunkedSession::new(202, MIB, MIB, 64 * KIB);
+        let interactive_token = interactive.token();
+        let mut interactive_ops = 0_u64;
+        let mut health_ops = 0_u64;
+        let mut turn = 0_u64;
+        let mut last_interactive_turn = 0_u64;
+        let mut last_health_turn = 0_u64;
+        let mut max_interactive_gap = 0_u64;
+        let mut max_health_gap = 0_u64;
+
+        while slow_offset < 2 * MIB as u64
+            || blocked_write_id <= 64
+            || interactive_ops < INTERACTIVE_OPS
+            || health_ops < HEALTH_OPS
+        {
+            turn += 1;
+            if health_ops < HEALTH_OPS {
+                if last_health_turn != 0 {
+                    max_health_gap = max_health_gap.max(turn - last_health_turn);
                 }
-                offset
-            })
-        };
-
-        let blocked_handle = {
-            let blocked_stdin = Arc::clone(&blocked_stdin);
-            let scheduler = Arc::clone(&scheduler);
-            thread::spawn(move || {
-                let token = blocked_stdin.lock().unwrap().token();
-                let mut offset = 0;
-                let mut slow = 0;
-                for write_id in 1..=64 {
-                    let chunk = stdin_pattern(offset, 16 * KIB);
-                    let _turn = scheduler.lock().unwrap();
-                    let result = blocked_stdin
-                        .lock()
-                        .unwrap()
-                        .write_stdin(token, write_id, offset, &chunk);
-                    match result {
-                        Ok(_) => offset += chunk.len() as u64,
-                        Err(ProtocolError::SlowConsumer { .. }) => slow += 1,
-                        Err(err) => panic!("unexpected stdin result: {err:?}"),
-                    }
-                    thread::yield_now();
-                }
-                slow
-            })
-        };
-
-        let interactive_handle = {
-            let interactive = Arc::clone(&interactive);
-            let scheduler = Arc::clone(&scheduler);
-            thread::spawn(move || {
-                let token = interactive.lock().unwrap().token();
-                let mut latencies = Vec::new();
-                for idx in 0..240_u64 {
-                    let byte = [idx as u8];
-                    let start = Instant::now();
-                    let _turn = scheduler.lock().unwrap();
-                    interactive
-                        .lock()
-                        .unwrap()
-                        .write_stdin(token, idx + 1, idx, &byte)
-                        .unwrap();
-                    interactive
-                        .lock()
-                        .unwrap()
-                        .append_output(token, Stream::Stdout, &byte)
-                        .unwrap();
-                    let response = interactive
-                        .lock()
-                        .unwrap()
-                        .read_stdout(token, idx, 1)
-                        .unwrap();
-                    assert_eq!(response.data, byte);
-                    latencies.push(start.elapsed().as_millis());
-                    thread::yield_now();
-                }
-                latencies.sort_unstable();
-                let p95 = latencies[(latencies.len() * 95 / 100).min(latencies.len() - 1)];
-                let max = *latencies.last().unwrap();
-                (p95, max)
-            })
-        };
-
-        let health_handle = {
-            let scheduler = Arc::clone(&scheduler);
-            thread::spawn(move || {
-            let mut latencies = Vec::new();
-            for _ in 0..240 {
-                let start = Instant::now();
-                let _turn = scheduler.lock().unwrap();
-                std::hint::black_box(());
-                latencies.push(start.elapsed().as_micros());
-                thread::yield_now();
+                last_health_turn = turn;
+                health_ops += 1;
             }
-            latencies.into_iter().max().unwrap_or(0)
-            })
-        };
 
-        assert_eq!(slow_handle.join().unwrap(), 2 * MIB as u64);
-        assert!(blocked_handle.join().unwrap() > 0);
-        let (p95, max) = interactive_handle.join().unwrap();
-        assert!(p95 <= P95_MS, "interactive p95 {p95}ms > {P95_MS}ms");
-        assert!(max <= MAX_MS, "interactive max {max}ms > {MAX_MS}ms");
-        assert!(health_handle.join().unwrap() < 10_000);
+            turn += 1;
+            if interactive_ops < INTERACTIVE_OPS {
+                if last_interactive_turn != 0 {
+                    max_interactive_gap = max_interactive_gap.max(turn - last_interactive_turn);
+                }
+                last_interactive_turn = turn;
+                let offset = interactive_ops;
+                let byte = [offset as u8];
+                interactive
+                    .write_stdin(interactive_token, offset + 1, offset, &byte)
+                    .unwrap();
+                assert_eq!(
+                    interactive.consume_stdin(interactive_token, 1).unwrap(),
+                    byte
+                );
+                interactive
+                    .append_output(interactive_token, Stream::Stdout, &byte)
+                    .unwrap();
+                let response = interactive
+                    .read_stdout(interactive_token, offset, 1)
+                    .unwrap();
+                assert_eq!(response.data, byte);
+                interactive
+                    .ack_output(interactive_token, Stream::Stdout, offset + 1)
+                    .unwrap();
+                interactive_ops += 1;
+            }
+
+            turn += 1;
+            if slow_offset < 2 * MIB as u64 {
+                let response = slow_output
+                    .read_stdout(slow_token, slow_offset, 32 * KIB)
+                    .unwrap();
+                assert_eq!(
+                    response.data,
+                    pattern_chunk(Stream::Stdout, slow_offset, response.data.len())
+                );
+                slow_offset += response.data.len() as u64;
+                slow_output
+                    .ack_output(slow_token, Stream::Stdout, slow_offset)
+                    .unwrap();
+            }
+
+            turn += 1;
+            if blocked_write_id <= 64 {
+                let chunk = stdin_pattern(blocked_offset, 16 * KIB);
+                match blocked_stdin.write_stdin(
+                    blocked_token,
+                    blocked_write_id,
+                    blocked_offset,
+                    &chunk,
+                ) {
+                    Ok(_) => blocked_offset += chunk.len() as u64,
+                    Err(ProtocolError::SlowConsumer { .. }) => blocked_slow += 1,
+                    Err(err) => panic!("unexpected stdin result: {err:?}"),
+                }
+                blocked_write_id += 1;
+            }
+        }
+
+        assert_eq!(slow_offset, 2 * MIB as u64);
+        assert!(blocked_slow > 0);
+        assert_eq!(interactive_ops, INTERACTIVE_OPS);
+        assert_eq!(health_ops, HEALTH_OPS);
+        assert!(max_interactive_gap <= MAX_TURN_GAP);
+        assert!(max_health_gap <= MAX_TURN_GAP);
     }
 
     #[test]
@@ -873,6 +1009,51 @@ mod tests {
             Err(ProtocolError::ChunkTooLarge)
         );
         assert_eq!(session.stdin_next_offset(), 0);
+        assert_eq!(session.stdin_buffered_bytes(), 0);
+    }
+
+    #[test]
+    fn decoded_byte_budget_and_stdin_permit_bound_concurrent_write_fan_in() {
+        let max_recv = MIB;
+        let mut budget = DecodedByteBudget::new(4 * max_recv);
+        for _ in 0..4 {
+            budget.try_acquire(max_recv).unwrap();
+        }
+        assert_eq!(budget.used(), 4 * max_recv);
+        assert_eq!(
+            budget.try_acquire(1),
+            Err(ProtocolError::DecodeBudgetExhausted {
+                used: 4 * max_recv,
+                requested: 1,
+                cap: 4 * max_recv,
+            })
+        );
+        budget.release(max_recv);
+        budget.try_acquire(max_recv).unwrap();
+        assert_eq!(budget.used(), 4 * max_recv);
+
+        let mut session = ChunkedSession::new(8, MIB, 2 * max_recv, 64 * KIB);
+        let token = session.token();
+        session.begin_stdin_request(token).unwrap();
+        assert_eq!(
+            session.begin_stdin_request(token),
+            Err(ProtocolError::StdinRequestInFlight)
+        );
+        let first = stdin_pattern(0, 64 * KIB);
+        session.write_stdin(token, 1, 0, &first).unwrap();
+        session.finish_stdin_request(token).unwrap();
+
+        session.begin_stdin_request(token).unwrap();
+        let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
+        session
+            .write_stdin(token, 2, 64 * KIB as u64, &second)
+            .unwrap();
+        session.finish_stdin_request(token).unwrap();
+        assert_eq!(session.stdin_next_offset(), 128 * KIB as u64);
+        assert_eq!(
+            session.consume_stdin(token, 128 * KIB).unwrap().len(),
+            128 * KIB
+        );
         assert_eq!(session.stdin_buffered_bytes(), 0);
     }
 

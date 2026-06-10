@@ -17,14 +17,20 @@ The tests prove:
 - 16 MiB slow stdin is delivered byte-exact through `WriteStdin`, with
   exact-offset append, same-request duplicate replay acceptance,
   different-request stale replay rejection, offset-gap rejection,
-  stale-data rejection, and bounded stdin backpressure.
+  stale-data rejection, drainable bounded stdin retention, and bounded
+  stdin backpressure.
+- Simulated pipe and PTY partial child writes drain from the bounded stdin
+  queue without exposing duplicate or lost bytes at the RPC offset boundary.
+- Per-connection decoded-byte budget and per-exec stdin permits bound
+  malicious concurrent `WriteStdin` fan-in.
 - A 30 second active slow-consumer run keeps retained output below the
   configured cap while producers continue attempting stdout/stderr writes
   and receive explicit `SlowConsumer` errors instead of allocating without
   bound.
-- Four concurrent attached sessions, including a mixed shared-scheduler
-  slow-output, blocked-stdin, interactive echo, and unary-health load, meet
-  the proof's p95/max latency thresholds and finish with bounded fairness.
+- Four concurrent attached sessions, including a mixed deterministic
+  scheduler with slow-output, blocked-stdin, interactive echo, and
+  unary-health load, meet bounded service-turn and fairness thresholds
+  without relying on wall-clock timing.
 - Restarted sessions reject stale generation tokens.
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.

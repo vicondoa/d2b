@@ -392,18 +392,26 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```json
 {
   "name": "corp-vm",
+  "env": "work",
   "services": {
     "nixling": "inactive",
     "microvm": "inactive",
     "virtiofsd": "inactive",
     "gpu": null,
+    "video": null,
     "snd": null,
     "swtpm": null
   },
   "current": null,
   "booted": null,
   "pendingRestart": false,
-  "apiReady": null
+  "apiReady": null,
+  "runtime": "unknown",
+  "declaredRoles": [
+    "host-reconcile",
+    "store-virtiofs-preflight"
+  ],
+  "readiness": []
 }
 ```
 
