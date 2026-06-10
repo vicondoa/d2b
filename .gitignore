@@ -63,6 +63,7 @@ result-*
 .nl-cleanups.*
 .nl-scratch-registry
 .nl-smoke-cache.*/
+.nixling-broker-layer1-target.*/
 .nixling-rust-gate.*/
 .nixling-stub-smoke.*/
 .nixling-test.log

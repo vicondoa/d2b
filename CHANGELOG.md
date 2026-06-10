@@ -80,9 +80,16 @@ deprecations ship one minor release before removal.
 ### Changed
 
 - Per-VM store isolation is moving to the Rust-owned `store-view/live`
-  hardlink pool. The broker `StoreSync` path is the canonical writer for
-  store-view metadata and live pool updates; host activation no longer
-  builds/sweeps store-view closures.
+  hardlink pool
+  ([ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md)). The
+  broker `StoreSync` path is the canonical writer for store-view
+  metadata and live pool updates; host activation no longer
+  builds/sweeps store-view closures. The guest readiness marker
+  `store-view/live/.nixling-marker-<vm>` is a zero-length file, and each
+  generation publishes a guest-safe `meta.json` authored by an
+  independent allow-list serializer (`schema_version`, `generation_id`,
+  `generation_token`, `sync_status`, `closure_count`) that never
+  receives the full host audit record.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former

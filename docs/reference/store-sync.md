@@ -125,12 +125,44 @@ All map onto `BrokerError::LiveHandler(_)` (or
 `BrokerError::BundleIntentMissing`) for the wire-level error
 envelope.
 
+## Guest-visible generation metadata
+
+Each generation directory carries a guest-safe `meta.json` written by
+an **independent allow-list serializer**
+([ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). The
+serializer (`GuestGenerationMeta` in `hardlink_farm.rs`) is constructed
+from primitives and never receives the full host audit record, so a
+field added to the host audit struct cannot leak to the guest. Its key
+set is exactly:
+
+- `schema_version`
+- `generation_id` (collision-free closure identity; the canonical key)
+- `generation_token` (u32 display/wire token; never the on-disk key)
+- `sync_status` (only `ok` reaches the guest — `meta.json` is written
+  after the generation materialised)
+- `closure_count`
+
+It exposes no `live/`, host-only paths, host-absolute symlinks, marker
+payloads, caller/authz fields, retained generations, swept counts,
+timings, cleanup fields, or error details.
+
+## Live readiness marker
+
+`store-view/live/.nixling-marker-<vm>` is the cold-start readiness
+signal, planted last via tmp+rename+fsync after `live/` contains every
+required basename. Per ADR 0027 it is a **zero-length** file: its
+existence alone is the signal (the readiness probe is a `test -e`), and
+because it is served to the guest through the read-only `live/` share it
+must carry no payload. The inline test `live_marker_is_zero_length`
+asserts `len() == 0`.
+
 ## Implementation file map
 
 - `packages/nixling-priv-broker/src/ops/store_sync.rs` — pure
   handler (`run_store_sync`) + typed `StoreSyncError`.
 - `packages/nixling-host/src/hardlink_farm.rs` — underlying
-  same-filesystem-checked atomic-swap primitive (unchanged).
+  same-filesystem-checked atomic-swap primitive; authors the
+  zero-length live marker and the guest-safe `meta.json`.
 - `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
 - `packages/nixling-ipc/src/broker_wire.rs` — typed request/

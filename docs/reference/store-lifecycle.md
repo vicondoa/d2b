@@ -64,12 +64,19 @@ building an unusable tree.
 
 nixling uses two marker styles:
 
-- **Farm marker**: `store-view/live/.nixling-marker-<vm>` is planted by the sync helper.
-  The virtiofsd preflight checks both the real tree and the bind-mounted view
-  visible to the service. A hand-made directory without the marker is refused.
+- **Farm marker**: `store-view/live/.nixling-marker-<vm>` is planted by the
+  broker `StoreSync` writer as the cold-start readiness signal. Per
+  [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md) it is a
+  **zero-length** file — existence alone is the signal (the readiness probe is
+  a `test -e`), and it carries no host paths, generation metadata, or counts
+  because it lives under the guest-served `live/` pool. The virtiofsd preflight
+  checks both the real tree and the bind-mounted view visible to the service.
+  A hand-made directory without the marker is refused.
 - **Generation marker**: the Rust primitive layer writes `generations/<N>/marker.json`
   and refuses to activate a generation if the marker is missing, malformed, or
-  mismatched.
+  mismatched. Alongside it the primitive writes a guest-safe `meta.json`
+  (an independent allow-list serializer: `schema_version`, `generation_id`,
+  `generation_token`, `sync_status`, `closure_count`).
 
 Together, those checks stop both stale bind-mount views and partially created
 activations from being mistaken for a valid store generation.
