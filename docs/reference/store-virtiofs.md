@@ -62,8 +62,9 @@ Flag semantics:
 - `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` — only the `ro-store` share has this in the alpha
-  shape. The other three shares are RW.
+- `--readonly` — emitted for every share whose schema marks it
+  `readOnly`, including `ro-store` and the guest-control token share
+  (`nl-gctl`). Other framework shares remain RW.
 
 ## Daemon-owned uid/gid
 
