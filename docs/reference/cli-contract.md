@@ -1086,7 +1086,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--repair` | boolean | `false` | Request repair. W6 fails closed with explicit remediation; real repair is a later wave. |
+| `--repair` | boolean | `false` | Request repair through a forced StoreSync republish, followed by a second verify before reporting success. |
 | `--json` | boolean | `false` | Emit the signed store-verify JSON envelope. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1127,8 +1127,8 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 - Routes through `nixlingd` → broker `StoreVerify`.
 - W6 verifies the current marker/manifest and top-level `live/` basenames
   and writes host-only integrity records.
-- `--repair` does not claim success until the later non-fast-path repair
-  wave lands.
+- `--repair` never claims success from the StoreSync attempt alone; it
+  returns `repaired` only after the post-repair verification is clean.
 
 **Human example**
 

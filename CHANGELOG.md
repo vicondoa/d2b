@@ -76,9 +76,10 @@ deprecations ship one minor release before removal.
   `store-view/state/generations/<generation-id>/integrity.json` (or
   `state/integrity-unknown.json` when generation identity is unavailable)
   and returns the signed JSON envelope documented in
-  `docs/reference/cli-output/store-verify.md`. W6 deliberately keeps
-  `--repair` fail-closed until the non-fast-path repair path can preserve
-  StoreSync audit and lock semantics.
+  `docs/reference/cli-output/store-verify.md`. `--repair` now delegates to
+  StoreSync as a forced non-fast-path republish, then verifies again before
+  returning `repaired`; incomplete repairs remain exit-4 `drift`/`unknown`
+  instead of a success-shaped result.
 
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the

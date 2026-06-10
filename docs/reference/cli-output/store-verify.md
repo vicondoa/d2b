@@ -16,7 +16,7 @@ Schema: [`store-verify.schema.json`](./store-verify.schema.json).
 | `status` | enum | `ok`, `drift`, `unknown`, `repaired`, `failed`, or `not_found`. |
 | `checked` | integer | Number of manifest top-level store basenames checked. |
 | `drifted` | integer | Number of top-level basenames or readiness markers that drifted. |
-| `repaired` | integer | Number of paths repaired. W6 reports `0`; real repair is deferred. |
+| `repaired` | integer | Number of drifted top-level entries repaired. Metadata-only repairs may report `0`. |
 | `unknown_reason` | string or null | Present for `unknown`: `marker_or_manifest_missing`, `marker_or_manifest_unreadable`, `older_host_generation`, or `generation_identity_unavailable`. |
 | `audit_ref` | string or null | Audit reference for the latest verify/repair attempt when available. |
 | `remediation` | string or null | Operator remediation for non-`ok` statuses. |

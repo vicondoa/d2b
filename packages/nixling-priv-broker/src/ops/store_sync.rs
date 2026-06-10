@@ -222,6 +222,26 @@ pub fn run_store_sync(
     wire_vm: &str,
     wire_generation: u32,
 ) -> Result<StoreSyncOutcome, StoreSyncError> {
+    run_store_sync_inner(intent, wire_vm, wire_generation, false)
+}
+
+pub fn run_store_sync_repair(
+    intent: &ResolvedStoreViewIntent,
+) -> Result<StoreSyncOutcome, StoreSyncError> {
+    let generation =
+        u32::try_from(intent.generation).map_err(|_| StoreSyncError::GenerationOverflow {
+            wire: u32::MAX,
+            resolved: intent.generation,
+        })?;
+    run_store_sync_inner(intent, &intent.vm, generation, true)
+}
+
+fn run_store_sync_inner(
+    intent: &ResolvedStoreViewIntent,
+    wire_vm: &str,
+    wire_generation: u32,
+    force_republish: bool,
+) -> Result<StoreSyncOutcome, StoreSyncError> {
     if intent.vm != wire_vm {
         return Err(StoreSyncError::VmMismatch {
             wire: wire_vm.to_owned(),
@@ -276,12 +296,13 @@ pub fn run_store_sync(
     // already published (state/current == meta/current == generation_id,
     // host marker matches, live marker + all top-level basenames
     // present). Skip relinking and republishing; preserve old behaviour.
-    let fast_path = hardlink_farm::split_fast_path_ready(
-        &intent.hardlink_farm_path,
-        &generation_id,
-        &intent.vm,
-        &intent.closure_paths,
-    );
+    let fast_path = !force_republish
+        && hardlink_farm::split_fast_path_ready(
+            &intent.hardlink_farm_path,
+            &generation_id,
+            &intent.vm,
+            &intent.closure_paths,
+        );
 
     let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
 
@@ -339,6 +360,7 @@ pub fn run_store_sync(
         generation = resolved_generation,
         generation_id = %generation_id,
         fast_path,
+        force_republish,
         "store-sync cleanup deferred until running-generation retention is available"
     );
 

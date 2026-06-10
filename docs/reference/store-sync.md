@@ -294,10 +294,13 @@ The JSON envelope is documented in
 `0` for `ok`/`repaired`, `4` for `drift`/`unknown`, `70` for
 `not_found`, and `78` for `failed`.
 
-`--repair` is fail-closed in W6: the broker reports drift/unknown with an
-explicit remediation rather than claiming a repair, because a safe
-non-fast-path repair path that preserves StoreSync audit/locking semantics
-is still a follow-up wave.
+`--repair` delegates mutation to StoreSync without holding the read-only
+verify lock: verify first, run a forced non-fast-path StoreSync republish
+when drift/unknown is repairable, then verify again before returning
+`repaired`. If the second verify still reports `drift` or `unknown`, the
+command returns exit `4` with an incomplete-repair remediation instead of a
+success-shaped result. Deep recursive package verification/repair remains a
+follow-up wave.
 
 ## Refusal modes
 

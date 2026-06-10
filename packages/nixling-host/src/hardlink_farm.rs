@@ -1546,7 +1546,12 @@ pub fn split_fast_path_ready(
         return false;
     }
     let live = live_dir(store_root);
-    if !live.join(format!(".nixling-marker-{vm}")).exists() {
+    match std::fs::symlink_metadata(live.join(format!(".nixling-marker-{vm}"))) {
+        Ok(meta) if meta.is_file() && meta.len() == 0 => {}
+        _ => return false,
+    }
+    let meta_gen = meta_generation_dir(store_root, generation_id);
+    if !meta_gen.join("store-paths").is_file() || !meta_gen.join("db.dump").is_file() {
         return false;
     }
     closure_paths.iter().all(|p| {
@@ -2286,6 +2291,9 @@ mod tests {
         // Not ready until both currents + the live marker are published.
         assert!(!split_fast_path_ready(&farm, &gid, "corp-vm", &closure));
 
+        let db_dump = dir.path().join("db.dump");
+        std::fs::write(&db_dump, b"db").unwrap();
+        write_meta_db_dump(&farm, &gid, &db_dump).unwrap();
         swap_state_current(&farm, &gid).unwrap();
         swap_meta_current(&farm, &gid).unwrap();
         plant_live_marker(&farm, "corp-vm").unwrap();

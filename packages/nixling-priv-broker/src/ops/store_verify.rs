@@ -17,6 +17,7 @@ use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::{StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason};
 use serde::{Deserialize, Serialize};
 
+use crate::ops::store_sync::run_store_sync_repair;
 use crate::ops::store_view_posture::{posture_host_only_file, posture_store_view_matrix_paths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +129,22 @@ impl IntegrityRecord {
 }
 
 pub fn run_store_verify(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyResponse {
+    let initial = run_store_verify_read_only(intent, repair);
+    if repair
+        && matches!(
+            initial.status,
+            StoreVerifyStatus::Drift | StoreVerifyStatus::Unknown
+        )
+    {
+        return repair_store_view(intent, initial);
+    }
+    initial
+}
+
+fn run_store_verify_read_only(
+    intent: &ResolvedStoreViewIntent,
+    repair: bool,
+) -> StoreVerifyResponse {
     let lock = match acquire_verify_lock(&intent.hardlink_farm_path) {
         Ok(lock) => lock,
         Err(detail) => {
@@ -140,6 +157,57 @@ pub fn run_store_verify(intent: &ResolvedStoreViewIntent, repair: bool) -> Store
     }
     drop(lock);
     response
+}
+
+fn repair_store_view(
+    intent: &ResolvedStoreViewIntent,
+    initial: StoreVerifyResponse,
+) -> StoreVerifyResponse {
+    match run_store_sync_repair(intent) {
+        Ok(_) => {}
+        Err(err) => {
+            return StoreVerifyResponse {
+                vm: initial.vm,
+                status: StoreVerifyStatus::Failed,
+                checked: initial.checked,
+                drifted: initial.drifted,
+                repaired: 0,
+                unknown_reason: initial.unknown_reason,
+                audit_ref: initial.audit_ref,
+                remediation: Some(format!(
+                    "repair incomplete; inspect audit_ref and broker logs ({err})"
+                )),
+            };
+        }
+    }
+
+    let after = run_store_verify_read_only(intent, false);
+    match after.status {
+        StoreVerifyStatus::Ok => StoreVerifyResponse {
+            vm: after.vm,
+            status: StoreVerifyStatus::Repaired,
+            checked: after.checked,
+            drifted: 0,
+            repaired: initial.drifted,
+            unknown_reason: None,
+            audit_ref: after.audit_ref,
+            remediation: None,
+        },
+        StoreVerifyStatus::Drift => StoreVerifyResponse {
+            remediation: Some("repair incomplete; inspect audit_ref and broker logs".to_owned()),
+            ..after
+        },
+        StoreVerifyStatus::Unknown => {
+            let remediation = after.remediation.clone().unwrap_or_else(|| {
+                "repair incomplete; inspect audit_ref and broker logs".to_owned()
+            });
+            StoreVerifyResponse {
+                remediation: Some(remediation),
+                ..after
+            }
+        }
+        _ => after,
+    }
 }
 
 fn verify_locked(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyResponse {
@@ -559,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_live_basename_returns_drift_without_repair_success_shape() {
+    fn missing_live_basename_returns_drift_without_repair() {
         let tmp = tempdir().unwrap();
         let closure = fake_closure(
             tmp.path(),
@@ -572,7 +640,7 @@ mod tests {
         )
         .unwrap();
 
-        let response = run_store_verify(&intent, true);
+        let response = run_store_verify(&intent, false);
         assert_eq!(response.status, StoreVerifyStatus::Drift);
         assert_eq!(response.drifted, 1);
         assert_eq!(response.repaired, 0);
@@ -580,7 +648,7 @@ mod tests {
             .remediation
             .as_deref()
             .unwrap()
-            .contains("repair path not available yet"));
+            .contains("rerun with --repair"));
         let raw = std::fs::read_to_string(generation_integrity_path(
             &intent.hardlink_farm_path,
             &generation_id,
@@ -588,6 +656,36 @@ mod tests {
         .unwrap();
         assert!(raw.contains("\"state\": \"suspect\""));
         assert!(raw.contains("aaaaaaaaaaaaaaaa-alpha"));
+    }
+
+    #[test]
+    fn repair_missing_live_basename_returns_repaired_after_second_verify() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let missing =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join("aaaaaaaaaaaaaaaa-alpha");
+        std::fs::remove_dir_all(&missing).unwrap();
+
+        let response = run_store_verify(&intent, true);
+        assert_eq!(response.status, StoreVerifyStatus::Repaired);
+        assert_eq!(response.checked, 2);
+        assert_eq!(response.drifted, 0);
+        assert_eq!(response.repaired, 1);
+        assert!(
+            missing.exists(),
+            "repair should re-materialize missing top-level basename"
+        );
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("\"state\": \"ok\""));
     }
 
     #[test]
@@ -754,6 +852,24 @@ mod tests {
     }
 
     #[test]
+    fn repair_nonzero_live_marker_replants_zero_length_marker() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        publish(&intent);
+        let marker =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join(".nixling-marker-vm-a");
+        std::fs::write(&marker, b"payload-is-drift").unwrap();
+
+        let response = run_store_verify(&intent, true);
+        assert_eq!(response.status, StoreVerifyStatus::Repaired);
+        assert_eq!(std::fs::metadata(&marker).unwrap().len(), 0);
+    }
+
+    #[test]
     fn missing_store_paths_returns_unknown() {
         let tmp = tempdir().unwrap();
         let closure = fake_closure(
@@ -773,6 +889,28 @@ mod tests {
         assert_eq!(
             response.unknown_reason,
             Some(StoreVerifyUnknownReason::MarkerOrManifestMissing)
+        );
+    }
+
+    #[test]
+    fn repair_missing_store_paths_recreates_manifest() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let store_paths =
+            hardlink_farm::meta_generation_dir(&intent.hardlink_farm_path, &generation_id)
+                .join("store-paths");
+        std::fs::remove_file(&store_paths).unwrap();
+
+        let response = run_store_verify(&intent, true);
+        assert_eq!(response.status, StoreVerifyStatus::Repaired);
+        assert!(
+            store_paths.is_file(),
+            "repair should rewrite guest manifest"
         );
     }
 
