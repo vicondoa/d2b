@@ -453,7 +453,7 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | `false` | Print the daemon → broker USBIP attach plan without mutating host state. |
-| `--apply` | boolean | `false` | Ask `nixlingd` to run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, then run `UsbipProxyReconcile` for the selected VM/busid pair. |
+| `--apply` | boolean | `false` | Ask `nixlingd` to run `UsbipBind` (acquiring the per-busid lock and validating ownership), apply the USBIP firewall carve-out, ensure the per-env USBIP backend/proxy runners are ready, run `UsbipProxyReconcile` for the selected VM/busid pair, then SSH into the guest and run `sudo -n usbip attach -r <usbipdHostIp> -b <busid>`. |
 | `--json` | boolean | `false` | Emit the dry-run summary as structured JSON. |
 | `--human` | boolean | `false` | Force the human dry-run summary on stdout. |
 
@@ -480,7 +480,7 @@ $ nixling usb attach corp-vm 1-2 --dry-run
 nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
 ```
 
-**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly.
+**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly, then performs the guest-side `usbip attach` over the framework-managed SSH key.
 
 ### `usb detach`
 

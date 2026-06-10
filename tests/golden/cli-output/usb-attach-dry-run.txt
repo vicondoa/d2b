@@ -1,1 +1,1 @@
-nixling usb attach --dry-run: would bind busid '1-2' for vm 'corp-vm' and reconcile the USBIP proxy
+nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy

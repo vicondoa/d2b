@@ -1193,6 +1193,7 @@ struct ManifestVm {
     audio: bool,
     usbip_yubikey: bool,
     static_ip: Option<String>,
+    usbipd_host_ip: Option<String>,
     is_net_vm: bool,
     state_dir: String,
     bridge: String,
@@ -3784,7 +3785,7 @@ fn usb_mutating_verb(
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
     if flags.apply {
-        return dispatch_mutating_verb(
+        let rc = dispatch_mutating_verb(
             context,
             request_type,
             serde_json::json!({
@@ -3794,7 +3795,11 @@ fn usb_mutating_verb(
             flags.dry_run,
             flags.apply,
             json_mode,
-        );
+        )?;
+        if rc == 0 && verb == "usb attach" {
+            usb_guest_attach(context, vm, bus_id, json_mode)?;
+        }
+        return Ok(rc);
     }
     let planned: Vec<&str> = if verb == "usb attach" {
         vec![
@@ -3831,6 +3836,93 @@ fn usb_mutating_verb(
         ));
     }
     Ok(0)
+}
+
+fn usb_guest_attach_ssh_argv(
+    key_path: &Path,
+    known_hosts: &Path,
+    remote: &str,
+    usbip_host: &str,
+    bus_id: &str,
+) -> Vec<String> {
+    vec![
+        "ssh".to_owned(),
+        "-i".to_owned(),
+        key_path.display().to_string(),
+        "-o".to_owned(),
+        format!("UserKnownHostsFile={}", known_hosts.display()),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        "-o".to_owned(),
+        "ConnectTimeout=8".to_owned(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=accept-new".to_owned(),
+        remote.to_owned(),
+        "sudo".to_owned(),
+        "-n".to_owned(),
+        "usbip".to_owned(),
+        "attach".to_owned(),
+        "-r".to_owned(),
+        usbip_host.to_owned(),
+        "-b".to_owned(),
+        bus_id.to_owned(),
+    ]
+}
+
+fn usb_guest_attach(
+    context: &Context,
+    vm_name: &str,
+    bus_id: &str,
+    is_json: bool,
+) -> Result<(), CliFailure> {
+    let manifest = context.load_manifest()?;
+    let vm = manifest.entries.get(vm_name).ok_or_else(|| {
+        CliFailure::new(1, format!("usb attach: unknown vm '{vm_name}' in manifest"))
+    })?;
+    let host = vm.static_ip.clone().ok_or_else(|| {
+        CliFailure::new(
+            1,
+            format!("usb attach: vm '{vm_name}' has no static_ip in manifest"),
+        )
+    })?;
+    let user = vm.ssh_user.clone().ok_or_else(|| {
+        CliFailure::new(
+            1,
+            format!("usb attach: vm '{vm_name}' has no ssh_user in manifest"),
+        )
+    })?;
+    let usbip_host = vm.usbipd_host_ip.clone().ok_or_else(|| {
+        CliFailure::new(
+            1,
+            format!("usb attach: vm '{vm_name}' has no usbipdHostIp in manifest"),
+        )
+    })?;
+    let key_path = konsole_resolve_bundle_key_path(&context.bundle_path, vm_name, is_json)?
+        .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{vm_name}_ed25519")));
+    konsole_validate_key_exists(&key_path, is_json)?;
+
+    let remote = format!("{user}@{host}");
+    let known_hosts = PathBuf::from("/var/lib/nixling/known_hosts.nixling");
+    let argv = usb_guest_attach_ssh_argv(&key_path, &known_hosts, &remote, &usbip_host, bus_id);
+    let status = Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .map_err(|err| CliFailure::new(1, format!("usb attach: ssh guest import failed: {err}")))?;
+    if !status.success() {
+        return Err(CliFailure::new(
+            1,
+            format!(
+                "usb attach: guest import in vm '{vm_name}' exited {}",
+                status.code().unwrap_or(-1)
+            ),
+        ));
+    }
+    if !is_json {
+        print_stdout(&format!(
+            "nixling usb attach --apply: imported busid '{bus_id}' inside vm '{vm_name}'\n"
+        ));
+    }
+    Ok(())
 }
 
 fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailure> {
@@ -6593,6 +6685,7 @@ mod host_install_dispatch_tests {
             audio: false,
             usbip_yubikey: false,
             static_ip: Some("10.20.0.10".to_owned()),
+            usbipd_host_ip: Some("192.0.2.1".to_owned()),
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -6675,6 +6768,7 @@ mod host_install_dispatch_tests {
             audio: true,
             usbip_yubikey: false,
             static_ip: None,
+            usbipd_host_ip: None,
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -7542,6 +7636,44 @@ mod config_cmd_tests {
         assert_eq!(
             &argv[target + 1..],
             &["cat", "/var/lib/nixling-guest/guest-config.nix"]
+        );
+    }
+
+    #[test]
+    fn usb_guest_attach_ssh_argv_runs_guest_import_after_destination() {
+        let argv = super::usb_guest_attach_ssh_argv(
+            &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
+            &PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
+            "alice@10.20.0.10",
+            "192.0.2.1",
+            "1-2",
+        );
+
+        assert_eq!(argv[0], "ssh");
+        let key_pos = argv.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(argv[key_pos + 1], "/var/lib/nixling/keys/work-aad_ed25519");
+        assert!(argv
+            .iter()
+            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
+        assert!(argv.iter().any(|a| a == "BatchMode=yes"));
+        assert!(argv.iter().any(|a| a == "ConnectTimeout=8"));
+        assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
+        assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
+
+        let remote_pos = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
+        assert_eq!(
+            &argv[remote_pos + 1..],
+            &[
+                "sudo",
+                "-n",
+                "usbip",
+                "attach",
+                "-r",
+                "192.0.2.1",
+                "-b",
+                "1-2"
+            ]
         );
     }
 }

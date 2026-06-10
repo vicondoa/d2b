@@ -13,6 +13,32 @@
     }
   ],
   "definitions": {
+    "ApiReadySimple": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "pending",
+        "timeout"
+      ]
+    },
+    "ApiReadyStatusV1": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ApiReadySimple"
+        },
+        {
+          "type": "object",
+          "required": [
+            "error"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
     "RunnerParityOutputV2": {
       "type": "object",
       "required": [
@@ -96,12 +122,6 @@
         "nixling": {
           "type": "string"
         },
-        "video": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "snd": {
           "type": [
             "string",
@@ -109,6 +129,12 @@
           ]
         },
         "swtpm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "video": {
           "type": [
             "string",
             "null"
@@ -131,6 +157,17 @@
         "services"
       ],
       "properties": {
+        "apiReady": {
+          "description": "api-ready state from the last vm start in split mode.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApiReadyStatusV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "booted": {
           "type": [
             "string",
