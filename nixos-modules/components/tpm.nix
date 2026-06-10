@@ -41,6 +41,44 @@
   #   sudo tpm2_getrandom 16 | xxd            -> non-zero bytes
   environment.systemPackages = [ pkgs.tpm2-tools ];
 
+  # swtpm can retain saved sessions across guest reboots while keeping
+  # persistent handles and NVRAM intact. systemd-creds/libtss then fails
+  # with TPM_RC_SESSION_HANDLES once the active session table fills. Clear
+  # session handles only; never clear transient objects, NV indices, or the
+  # persistent SRK.
+  systemd.services.tpm2-flush-sessions = {
+    description = "Flush stale TPM2 saved sessions";
+    wantedBy = [ "sysinit.target" ];
+    before = [
+      "sysinit.target"
+      "tpm2-srk-provision.service"
+    ];
+    after = [ "systemd-modules-load.service" ];
+    path = with pkgs; [ coreutils tpm2-tools ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    environment.TPM2TOOLS_TCTI = "device:/dev/tpmrm0";
+    script = ''
+      set -e
+
+      for _ in $(seq 1 50); do
+        [ -e /dev/tpmrm0 ] && break
+        sleep 0.1
+      done
+
+      if [ ! -e /dev/tpmrm0 ]; then
+        echo "TPM resource manager device /dev/tpmrm0 is unavailable; skipping stale-session flush."
+        exit 0
+      fi
+
+      tpm2_flushcontext --loaded-session || true
+      tpm2_flushcontext --saved-session || true
+    '';
+  };
+
   # Provision the TPM2 Storage Root Key (SRK) at the standard
   # persistent handle 0x81000001 before any service that wants to
   # bind keys tries to use it. ECC P-256 first (matches
@@ -52,7 +90,10 @@
   systemd.services.tpm2-srk-provision = {
     description = "Provision TPM2 SRK at 0x81000001";
     wantedBy = [ "multi-user.target" ];
-    after = [ "systemd-modules-load.service" ];
+    after = [
+      "systemd-modules-load.service"
+      "tpm2-flush-sessions.service"
+    ];
     path = with pkgs; [ tpm2-tools coreutils ];
     serviceConfig = {
       Type = "oneshot";

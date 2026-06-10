@@ -114,6 +114,16 @@ let
   hasMigrationScript =
     builtins.hasAttr "nixlingMigrateOwnership"
       nixos.config.system.activationScripts;
+  tpmGuest = nixos.config.nixling._computed."tpm-vm".config;
+  plainGuest = nixos.config.nixling._computed."plain-vm".config;
+  hasTpmFlushService =
+    builtins.hasAttr "tpm2-flush-sessions"
+      tpmGuest.systemd.services;
+  plainHasTpmFlushService =
+    builtins.hasAttr "tpm2-flush-sessions"
+      plainGuest.systemd.services;
+  tpmFlushService = tpmGuest.systemd.services."tpm2-flush-sessions";
+  tpmSrkService = tpmGuest.systemd.services.tpm2-srk-provision;
 
   # The per-VM
   # `nixling-<vm>-swtpm.service` units were deleted along with
@@ -140,6 +150,20 @@ let
       throw "smoke-eval-tpm: system.activationScripts.nixlingTpmStatePerms is missing")
     (if hasMigrationScript then null else
       throw "smoke-eval-tpm: system.activationScripts.nixlingMigrateOwnership is missing")
+    (if hasTpmFlushService then null else
+      throw "smoke-eval-tpm: TPM guest is missing tpm2-flush-sessions.service")
+    (if ! plainHasTpmFlushService then null else
+      throw "smoke-eval-tpm: non-TPM guest unexpectedly has tpm2-flush-sessions.service")
+    (if tpmFlushService.environment.TPM2TOOLS_TCTI == "device:/dev/tpmrm0" then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must pin TPM2TOOLS_TCTI to /dev/tpmrm0")
+    (if lib.elem "sysinit.target" tpmFlushService.wantedBy then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must be wanted by sysinit.target")
+    (if (tpmFlushService.unitConfig.DefaultDependencies or null) == false then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must disable default dependencies")
+    (if lib.elem "tpm2-srk-provision.service" tpmFlushService.before then null else
+      throw "smoke-eval-tpm: tpm2-flush-sessions must run before SRK provisioning")
+    (if lib.elem "tpm2-flush-sessions.service" tpmSrkService.after then null else
+      throw "smoke-eval-tpm: tpm2-srk-provision must order after tpm2-flush-sessions")
   ];
 in
   builtins.deepSeq checks

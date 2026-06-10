@@ -103,11 +103,17 @@ together so the TPM socket survives the round-trip). See
   `fed40000-fed40fff`.
 - `environment.systemPackages = [ pkgs.tpm2-tools ]` for in-guest
   diagnostics (`tpm2_getcap properties-fixed`, `tpm2_getrandom 16`).
+- `systemd.services.tpm2-flush-sessions` — early oneshot, wanted by
+  `sysinit.target`, that flushes only loaded/saved TPM sessions via
+  `/dev/tpmrm0`. This prevents stale swtpm saved sessions from filling
+  the TPM active-session table after guest reboots while preserving NV
+  indices and persistent handles.
 - `systemd.services.tpm2-srk-provision` — oneshot, `RemainAfterExit`,
   `wantedBy = [ "multi-user.target" ]`. Idempotently provisions the
   SRK at `0x81000001`. Pins `TPM2TOOLS_TCTI = "device:/dev/tpmrm0"`
-  to skip the tabrmd D-Bus probe. Services that need the SRK in
-  place should add `after = [ "tpm2-srk-provision.service" ]`.
+  to skip the tabrmd D-Bus probe and orders after
+  `tpm2-flush-sessions.service`. Services that need the SRK in place
+  should add `after = [ "tpm2-srk-provision.service" ]`.
 
 ## Runtime invariants
 
