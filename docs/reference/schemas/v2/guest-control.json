@@ -126,6 +126,11 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "CapabilitiesHash": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
     "CapabilitiesRequest": {
       "type": "object",
       "required": [
@@ -242,6 +247,16 @@
       },
       "additionalProperties": false
     },
+    "EnvKey": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "EnvValue": {
+      "type": "string",
+      "maxLength": 8192,
+      "minLength": 1
+    },
     "EnvVar": {
       "type": "object",
       "required": [
@@ -250,10 +265,10 @@
       ],
       "properties": {
         "key": {
-          "type": "string"
+          "$ref": "#/definitions/EnvKey"
         },
         "value": {
-          "type": "string"
+          "$ref": "#/definitions/EnvValue"
         }
       },
       "additionalProperties": false
@@ -304,15 +319,19 @@
         "argv": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/GuestArg"
           },
           "maxItems": 128,
           "minItems": 1
         },
         "cwd": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestCwd"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "detached": {
@@ -348,9 +367,13 @@
           "type": "boolean"
         },
         "user": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestUser"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -391,9 +414,13 @@
           ]
         },
         "execId": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecId"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "state": {
@@ -411,6 +438,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "ExecId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
     },
     "ExecInspectRequest": {
       "type": "object",
@@ -748,12 +780,21 @@
       },
       "additionalProperties": false
     },
+    "GuestArg": {
+      "type": "string",
+      "maxLength": 4096,
+      "minLength": 1
+    },
+    "GuestBootId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
     "GuestCapability": {
       "type": "string",
       "enum": [
         "health",
         "capabilities",
-        "read-guest-config",
         "exec-attached",
         "exec-detached",
         "exec-tty",
@@ -816,6 +857,10 @@
         "guest-exec-disabled",
         "guest-exec-root-denied",
         "guest-exec-user-denied",
+        "cwd-invalid",
+        "cwd-denied",
+        "retained-log-path-unsafe",
+        "retained-log-quota-exceeded",
         "read-wait-capacity-exceeded",
         "wait-capacity-exceeded",
         "superseded-read-wait",
@@ -829,6 +874,11 @@
         "transport-unreachable"
       ]
     },
+    "GuestCwd": {
+      "type": "string",
+      "maxLength": 4096,
+      "minLength": 1
+    },
     "GuestEffectiveLimits": {
       "type": "object",
       "required": [
@@ -840,6 +890,10 @@
         "longPollTimeoutMs",
         "maxChunkBytes",
         "maxRecvMessageBytes",
+        "pendingExecWaitsPerVm",
+        "pendingReadOutputWaitsPerStream",
+        "rpcRatePerConnectionPerSecond",
+        "rpcRatePerVmBurst",
         "slowConsumerGraceMs",
         "stderrLiveBufferBytes",
         "stdinQueueChunksPerExec",
@@ -887,6 +941,26 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "pendingExecWaitsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "pendingReadOutputWaitsPerStream": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rpcRatePerConnectionPerSecond": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rpcRatePerVmBurst": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "slowConsumerGraceMs": {
           "type": "integer",
           "format": "uint64",
@@ -919,14 +993,18 @@
       "type": "object",
       "required": [
         "common",
-        "execId"
+        "execId",
+        "guestBootId"
       ],
       "properties": {
         "common": {
           "$ref": "#/definitions/GuestRequestMetadata"
         },
         "execId": {
-          "type": "string"
+          "$ref": "#/definitions/ExecId"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
         }
       },
       "additionalProperties": false
@@ -956,6 +1034,11 @@
       "enum": [
         "vm-id-cid-socket-and-token-transcript"
       ]
+    },
+    "GuestNonce": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
     },
     "GuestReadinessContract": {
       "type": "object",
@@ -991,10 +1074,10 @@
           "minimum": 0.0
         },
         "requestId": {
-          "type": "string"
+          "$ref": "#/definitions/RequestId"
         },
         "vmId": {
-          "type": "string"
+          "$ref": "#/definitions/GuestVmId"
         }
       },
       "additionalProperties": false
@@ -1067,6 +1150,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "GuestUser": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestVmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
     },
     "GuestVsockDirection": {
       "type": "string",
@@ -1196,7 +1289,7 @@
       ],
       "properties": {
         "hostNonce": {
-          "type": "string"
+          "$ref": "#/definitions/GuestNonce"
         },
         "metadata": {
           "$ref": "#/definitions/GuestRequestMetadata"
@@ -1220,13 +1313,13 @@
       ],
       "properties": {
         "capabilitiesHash": {
-          "type": "string"
+          "$ref": "#/definitions/CapabilitiesHash"
         },
         "guestBootId": {
-          "type": "string"
+          "$ref": "#/definitions/GuestBootId"
         },
         "guestNonce": {
-          "type": "string"
+          "$ref": "#/definitions/GuestNonce"
         },
         "health": {
           "$ref": "#/definitions/HealthResponse"
@@ -1396,6 +1489,11 @@
       },
       "additionalProperties": false
     },
+    "RequestId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
     "SignalTarget": {
       "type": "string",
       "enum": [
@@ -1551,7 +1649,8 @@
       "type": "string",
       "enum": [
         "accepted",
-        "duplicate"
+        "duplicate",
+        "rejected"
       ]
     },
     "WriteStdinRequest": {

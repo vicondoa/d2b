@@ -143,6 +143,38 @@ def assert_nested_unknowns_rejected():
             sys.exit(7)
 
 
+def assert_guest_control_string_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    expected = {
+        "GuestVmId": 128,
+        "RequestId": 128,
+        "ExecId": 128,
+        "GuestNonce": 128,
+        "GuestBootId": 128,
+        "CapabilitiesHash": 128,
+        "GuestArg": 4096,
+        "GuestUser": 128,
+        "GuestCwd": 4096,
+        "EnvKey": 128,
+        "EnvValue": 8192,
+    }
+
+    definitions = schema.get("definitions", {})
+    for name, max_length in expected.items():
+        node = resolve(definitions.get(name, {}))
+        if node.get("type") != "string":
+            print(f"{name} is not emitted as a string schema", file=sys.stderr)
+            sys.exit(8)
+        if node.get("minLength") != 1 or node.get("maxLength") != max_length:
+            print(
+                f"{name} lost bounds: minLength={node.get('minLength')} maxLength={node.get('maxLength')}",
+                file=sys.stderr,
+            )
+            sys.exit(9)
+
+
 if valid_path is None:
     instance = synth(schema)
     if not isinstance(instance, dict):
@@ -172,6 +204,7 @@ if not any("Additional properties" in err.message or "Unevaluated properties" in
     sys.exit(5)
 
 assert_nested_unknowns_rejected()
+assert_guest_control_string_bounds()
 PY
 )
 

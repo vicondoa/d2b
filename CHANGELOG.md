@@ -28,7 +28,8 @@ deprecations ship one minor release before removal.
   `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
   protobuf source for the ADR 0026 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health
-  labels, oneof-style terminal status, and structured stdio error results.
+  labels, bounded string identifiers/payload metadata, oneof-style terminal
+  status, structured stdio error results, and descriptor-shape drift checks.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and

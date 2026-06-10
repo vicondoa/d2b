@@ -36,5 +36,9 @@ source lives at
   sensitivity-bearing payload fields. Implementations must project only
   bounded enum/counter fields into logs, audit records, metrics, spans, health,
   and user-facing errors.
+- Optional protobuf scalar/string fields are optional because absence changes
+  behavior: `user`, `cwd`, `execId`, `knownStateGeneration`,
+  `clientDeadlineMs`, and `retryAfterMs` must not be collapsed into default
+  zero or empty-string sentinels.
 - Any wire-breaking change belongs in a new schema version and matching ADR /
   reference documentation update.

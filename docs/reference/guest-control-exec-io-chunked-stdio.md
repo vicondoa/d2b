@@ -34,7 +34,9 @@ The committed protobuf service source is
 [`packages/nixling-ipc/proto/guest_control.proto`](../../packages/nixling-ipc/proto/guest_control.proto).
 Lifecycle requests carry `vm_id`, `request_id`, and negotiated
 `protocol_version` in `RequestMetadata`; exec-specific requests also carry
-`exec_id` in `ExecRequestMetadata`.
+`exec_id` and the Hello-returned `guest_boot_id` in `ExecRequestMetadata` so
+VM reboot or guestd restart changes reject stale sessions instead of
+reattaching to an unrelated reused exec id.
 
 ```protobuf
 service GuestControl {
@@ -107,8 +109,7 @@ Returns non-consuming state:
 - `stdout_dropped_bytes`, `stderr_dropped_bytes`,
   `stdout_truncated_for_retention`, and
   `stderr_truncated_for_retention`;
-- `last_control_seq`, `created_at`, `started_at`, `exited_at`, and
-  bounded counters for bytes/chunks/errors.
+- `last_control_seq`, `state_generation`, and any bounded `error`.
 
 The start/end offsets define the valid read window. If a caller asks for
 an offset below `*_start_offset`, the server returns `offset-expired`
@@ -172,7 +173,8 @@ Request fields:
 - `request_id`: idempotency key for this stdin write.
 - `offset`: caller's stdin byte offset for idempotency.
 - `data`: bytes, length `1..max_chunk_bytes`.
-- `close_after`: optional bool for atomic final chunk plus half-close.
+- `close_after`: required bool for atomic final chunk plus half-close; callers
+  send `false` when they only want to write bytes.
 - `client_deadline_ms`: optional deadline for waiting on bounded guestd
   stdin-queue capacity.
 
@@ -353,6 +355,14 @@ Default design limits:
 The hard maximums are capability values negotiated at `Hello` time and
 may be lowered by VM policy. Raising them requires updating tests and
 memory-budget documentation.
+
+Proto3 presence is explicit where absence changes semantics:
+`ExecCreateRequest.user`, `ExecCreateRequest.cwd`,
+`ExecCreateResponse.exec_id`, `ExecWaitRequest.known_state_generation`,
+`WriteStdinRequest.client_deadline_ms`, and
+`GuestControlError.retry_after_ms` are `optional` in the protobuf source and
+nullable in the generated JSON schema. Plain scalar zero/empty values are not
+used as implicit absence sentinels for those fields.
 
 ## Receive limits and concurrency proof
 
@@ -707,7 +717,7 @@ state enum plus bounded reason/remediation enums:
 - `protocol-mismatch`
 - `stale-session`
 
-The bounded reason enum is closed in W0:
+The bounded reason enum is closed for this protocol:
 
 - `none`
 - `old-generation`
@@ -844,6 +854,10 @@ Required typed error kinds:
 - `guest-exec-disabled`
 - `guest-exec-root-denied`
 - `guest-exec-user-denied`
+- `cwd-invalid`
+- `cwd-denied`
+- `retained-log-path-unsafe`
+- `retained-log-quota-exceeded`
 - `rate-limited`
 - `slow-consumer-cancelled`
 - `guest-control-unavailable-old-generation`
@@ -930,7 +944,7 @@ Before implementation exits design hardening, add at least:
 13. guestd restart and VM reboot stale-session rejection tests;
 14. CLI raw-mode restoration tests for success, signal, protocol error,
     and disconnect;
-14a. Health state/reason/remediation matrix tests enumerating every W0
+14a. Health state/reason/remediation matrix tests enumerating every
      Health state, reason, and remediation, rejecting invalid combinations
      such as `healthy` plus an error reason, and proving CONNECT,
      Hello/auth, and Health failures map to the documented bounded states
@@ -1023,8 +1037,9 @@ incorrect CLI retry behavior around `stdin-backpressure` or
 
 ## Implementation gates
 
-- PTY output backpressure is kernel- and workload-sensitive. W0 proves the
-  wire/protocol model for TTY stdout-only reads and bounded output logs;
+- PTY output backpressure is kernel- and workload-sensitive. The feasibility
+  proof covers the wire/protocol model for TTY stdout-only reads and bounded
+  output logs;
   the implementation must add runtime tests proving the selected PTY crate
   and guest kernel block writers instead of dropping data before
   guest-control ships.

@@ -28,10 +28,9 @@ macro_rules! bounded_string {
             Hash,
             Serialize,
             Deserialize,
-            JsonSchema,
         )]
         #[serde(transparent)]
-        pub struct $name(#[schemars(length(min = 1, max = $max))] pub String);
+        pub struct $name(pub String);
 
         impl $name {
             pub fn new(value: impl Into<String>) -> Self {
@@ -40,6 +39,28 @@ macro_rules! bounded_string {
 
             pub fn as_str(&self) -> &str {
                 &self.0
+            }
+        }
+
+        impl JsonSchema for $name {
+            fn schema_name() -> String {
+                stringify!($name).to_owned()
+            }
+
+            fn json_schema(
+                _gen: &mut schemars::gen::SchemaGenerator,
+            ) -> schemars::schema::Schema {
+                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        schemars::schema::InstanceType::String,
+                    ))),
+                    string: Some(Box::new(schemars::schema::StringValidation {
+                        min_length: Some(1),
+                        max_length: Some($max),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
             }
         }
     };
@@ -105,7 +126,6 @@ bounded_string! {
 pub enum GuestCapability {
     Health,
     Capabilities,
-    ReadGuestConfig,
     ExecAttached,
     ExecDetached,
     ExecTty,
@@ -233,6 +253,7 @@ pub struct GuestRequestMetadata {
 pub struct GuestExecRequestMetadata {
     pub common: GuestRequestMetadata,
     pub exec_id: ExecId,
+    pub guest_boot_id: GuestBootId,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -338,60 +359,66 @@ pub enum HealthRemediation {
 
 impl HealthResponse {
     pub fn is_valid_mapping(&self) -> bool {
+        use HealthOrigin as Origin;
         use HealthReason as Reason;
         use HealthRemediation as Remediation;
         use HealthState as State;
 
         matches!(
-            (self.state, self.reason, self.remediation),
-            (State::Healthy, Reason::None, Remediation::None)
-                | (
-                    State::Degraded,
-                    Reason::ExecSubsystemUnavailable
-                        | Reason::LogStorageUnavailable
-                        | Reason::QuotaExceeded
-                        | Reason::RateLimited
-                        | Reason::InternalHealthCheckFailed,
-                    Remediation::Retry
-                        | Remediation::ReduceLoad
-                        | Remediation::InspectGuestLogs
-                        | Remediation::RestartVm,
-                )
-                | (
-                    State::UnavailableOldGeneration,
-                    Reason::OldGeneration,
-                    Remediation::UpgradeGuest | Remediation::RestartVm,
-                )
-                | (
-                    State::ListenerAbsent,
-                    Reason::ListenerAbsent,
-                    Remediation::CheckGuestdService | Remediation::RestartVm,
-                )
-                | (
-                    State::TransportUnreachable,
-                    Reason::ConnectRefused
-                        | Reason::ConnectTimeout
-                        | Reason::EofBeforeAck
-                        | Reason::MalformedAck
-                        | Reason::AckTooLong
-                        | Reason::TransportIo,
-                    Remediation::Retry | Remediation::RestartVm | Remediation::CheckGuestdService,
-                )
-                | (
-                    State::AuthFailed,
-                    Reason::AuthTokenRejected,
-                    Remediation::CheckAuthToken
-                )
-                | (
-                    State::ProtocolMismatch,
-                    Reason::ProtocolVersionUnsupported,
-                    Remediation::UpgradeGuest,
-                )
-                | (
-                    State::StaleSession,
-                    Reason::SessionGenerationMismatch,
-                    Remediation::Retry | Remediation::RestartVm,
-                )
+            (self.origin, self.state, self.reason, self.remediation),
+            (
+                Origin::GuestReported,
+                State::Healthy,
+                Reason::None,
+                Remediation::None
+            ) | (
+                Origin::GuestReported,
+                State::Degraded,
+                Reason::ExecSubsystemUnavailable
+                    | Reason::LogStorageUnavailable
+                    | Reason::QuotaExceeded
+                    | Reason::RateLimited
+                    | Reason::InternalHealthCheckFailed,
+                Remediation::Retry
+                    | Remediation::ReduceLoad
+                    | Remediation::InspectGuestLogs
+                    | Remediation::RestartVm,
+            ) | (
+                Origin::HostSynthesized,
+                State::UnavailableOldGeneration,
+                Reason::OldGeneration,
+                Remediation::UpgradeGuest | Remediation::RestartVm,
+            ) | (
+                Origin::HostSynthesized,
+                State::ListenerAbsent,
+                Reason::ListenerAbsent,
+                Remediation::CheckGuestdService | Remediation::RestartVm,
+            ) | (
+                Origin::HostSynthesized,
+                State::TransportUnreachable,
+                Reason::ConnectRefused
+                    | Reason::ConnectTimeout
+                    | Reason::EofBeforeAck
+                    | Reason::MalformedAck
+                    | Reason::AckTooLong
+                    | Reason::TransportIo,
+                Remediation::Retry | Remediation::RestartVm | Remediation::CheckGuestdService,
+            ) | (
+                Origin::HostSynthesized,
+                State::AuthFailed,
+                Reason::AuthTokenRejected,
+                Remediation::CheckAuthToken
+            ) | (
+                Origin::HostSynthesized,
+                State::ProtocolMismatch,
+                Reason::ProtocolVersionUnsupported,
+                Remediation::UpgradeGuest,
+            ) | (
+                Origin::HostSynthesized,
+                State::StaleSession,
+                Reason::SessionGenerationMismatch,
+                Remediation::Retry | Remediation::RestartVm,
+            )
         )
     }
 }
@@ -412,6 +439,10 @@ pub struct GuestEffectiveLimits {
     pub slow_consumer_grace_ms: u64,
     pub exec_sessions_per_vm: u32,
     pub attached_sessions_per_vm: u32,
+    pub pending_read_output_waits_per_stream: u32,
+    pub pending_exec_waits_per_vm: u32,
+    pub rpc_rate_per_connection_per_second: u32,
+    pub rpc_rate_per_vm_burst: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -653,6 +684,7 @@ pub enum OutputStream {
 pub enum WriteDisposition {
     Accepted,
     Duplicate,
+    Rejected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -736,6 +768,10 @@ pub enum GuestControlErrorKind {
     GuestExecDisabled,
     GuestExecRootDenied,
     GuestExecUserDenied,
+    CwdInvalid,
+    CwdDenied,
+    RetainedLogPathUnsafe,
+    RetainedLogQuotaExceeded,
     ReadWaitCapacityExceeded,
     WaitCapacityExceeded,
     SupersededReadWait,
