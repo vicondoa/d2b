@@ -19,6 +19,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
+  duplex-stream exec I/O design using nixling `TerminalFrame` messages,
+  explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
+  behavior, conformance matrix, risks, and required tests.
+
 - `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
   window-rule include generator. When enabled, installs a KDL file at
   the configured path (default `/etc/nixling/niri-vm-borders.kdl`)
