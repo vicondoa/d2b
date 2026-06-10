@@ -72,6 +72,7 @@ let
     nixos.config.nixling._bundle.processesJson.data.vms;
   processNodes = processVm.nodes;
   tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-nl-gctl") null processNodes;
+  cloudHypervisor = lib.findFirst (node: node.id == "cloud-hypervisor") null processNodes;
 in
 assert tokenShare != null;
 assert configuredTokenFile == tokenFile;
@@ -84,7 +85,9 @@ assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.Requir
 assert !(lib.hasInfix tokenFile serviceJson);
 assert processVm != null;
 assert tokenVirtiofsd != null;
+assert cloudHypervisor != null;
 assert builtins.elem "--readonly" tokenVirtiofsd.argv;
+assert tokenVirtiofsd.profile.uid != cloudHypervisor.profile.uid;
 builtins.toJSON {
   inherit (tokenShare) source mountPoint readOnly;
   loadCredential = service.serviceConfig.LoadCredential;

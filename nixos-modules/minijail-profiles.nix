@@ -188,12 +188,16 @@ let
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;
           shareNodeId = "virtiofsd-${shareTag}";
+          principal =
+            if shareTag == "nl-gctl"
+            then "nixling-${name}-gctlfs"
+            else "nixling-${name}-runner";
         in {
           name = profileIdFor name shareNodeId;
           value = mkProfile {
             profileId = profileIdFor name shareNodeId;
             role = "virtiofsd";
-            principal = "nixling-${name}-runner";
+            inherit principal;
             # (ADR 0021): with broker-pre-NS, virtiofsd
             # runs fake-root INSIDE its own user namespace. All
             # caps within the NS scope are available implicitly;
@@ -202,7 +206,8 @@ let
             # no CAP_SETUID, no CAP_SYS_ADMIN on the host.
             capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
-            readOnlyPaths = [ "/nix/store" ];
+            readOnlyPaths = [ "/nix/store" ]
+              ++ lib.optional (shareTag == "nl-gctl") share.source;
             writablePaths = [
               (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
               (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
@@ -216,8 +221,8 @@ let
             # with correct mode/UID semantics and `--sandbox=chroot`
             # works without host CAP_SYS_ADMIN.
             userNamespace = {
-              hostUidForZero = stablePrincipalId "nixling-${name}-runner";
-              hostGidForZero = stablePrincipalId "nixling-${name}-runner";
+              hostUidForZero = stablePrincipalId principal;
+              hostGidForZero = stablePrincipalId principal;
             };
             requiresStartRoot = false;
             exceptionRef = virtiofsdRootException;
