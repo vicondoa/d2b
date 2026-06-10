@@ -46,7 +46,7 @@ W0 protocol.
 | Safe PTY | `guest-control-w0-pty` | `72ddbe3` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
-| Chunked stdio conformance | `guest-control-w0-conf` | this commit | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s slow-consumer bounds, four-session attached fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
+| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s slow-consumer bounds, four-session attached fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
 
 ## Evidence details
 
