@@ -16,6 +16,19 @@ let
   hostOtlpSocket = "${alloyRuntimeDir}/host-otlp.sock";
   hostEgressSocket = "${alloyRuntimeDir}/host-egress.sock";
 
+  # StoreSync-only observability export (see
+  # docs/reference/store-sync.md § "Observability export" and ADR
+  # 0027). The broker writes a positive-allow-list JSONL projection
+  # here — host-confidential fields (caller_principal, host/store
+  # paths, db.dump, marker payloads, retained generations) are
+  # redacted by construction in the broker, NOT here. Alloy is
+  # granted focused read/traverse access to THIS directory only; it
+  # never reads the unified broker audit log under
+  # `${config.nixling.site.stateDir}/audit/broker-*.jsonl`, the
+  # daemon socket, or nixlingd state.
+  storeSyncExportDir = "${config.nixling.site.stateDir}/observability/store-sync";
+  storeSyncExportGlob = "${storeSyncExportDir}/store-sync-*.jsonl";
+
   chVsockConnect = import ../../nixling-ch-vsock-connect.nix { inherit pkgs; };
 
   enabledVms = lib.filterAttrs (_: vm: vm.enable) config.nixling.vms;
@@ -237,6 +250,30 @@ let
               }
             }
           ''
+
+          # StoreSync-only audit export tail. `local.file_match`
+          # follows rotation + newly-created daily files under the
+          # export dir (doublestar-free literal glob); the label set
+          # is the host singleton contract (vm/env/role/source) — the
+          # TARGET vm/env stay in JSON content as target_vm/target_env
+          # and are deliberately NOT promoted to Loki stream labels.
+          ''
+            local.file_match "store_sync_audit" {
+              path_targets = [{
+                "__path__" = ${quote storeSyncExportGlob},
+                "vm"       = "host",
+                "env"      = "host",
+                "role"     = "host",
+                "source"   = "store-sync-audit",
+              }]
+              sync_period = "15s"
+            }
+
+            loki.source.file "store_sync_audit" {
+              targets    = local.file_match.store_sync_audit.targets
+              forward_to = [otelcol.receiver.loki.journal.receiver]
+            }
+          ''
         ]
         ++ [ journalSources ]
       )
@@ -304,4 +341,40 @@ lib.mkIf cfg.enable {
     "L+ /run/nixling/host-otlp.sock - - - - ${hostOtlpSocket}"
     "L+ /run/nixling/host-egress.sock - - - - ${hostEgressSocket}"
   ];
+
+  # Focused ACL grant so the static `alloy` account can read the
+  # StoreSync observability export — and nothing else under
+  # `${config.nixling.site.stateDir}`. Mirrors the per-sidecar-user
+  # traversal idiom in host-activation.nix's `nixlingStateDirAcl`:
+  #
+  #   * `u:alloy:--x` (chdir-only) on the state-dir parent and on
+  #     `observability/` — alloy can traverse INTO the export dir but
+  #     cannot list either parent, so the 0400 grafana secret files
+  #     under `observability/` stay unreadable.
+  #   * `u:alloy:r-x` on the export leaf + a `default:u:alloy:r--`
+  #     ACL so each rotated 0640 `store-sync-*.jsonl` file the broker
+  #     creates inherits alloy read access.
+  #
+  # NO read/traverse grant is added for the unified broker audit log
+  # (`audit/broker-*.jsonl`, 0750 root:nixlingd) or the daemon socket
+  # — alloy is never in the nixlingd group and gets no ACL there.
+  system.activationScripts.nixlingObservabilityStoreSyncExportAcl =
+    lib.stringAfter [ "users" ] ''
+      set -u
+      state_dir=${lib.escapeShellArg config.nixling.site.stateDir}
+      obs_dir="$state_dir/observability"
+      export_dir="$obs_dir/store-sync"
+      [ -d "$state_dir" ] || exit 0
+      # The grafana-secret module owns observability/ at 0700
+      # root:root; mirror that mode if we have to create it (both
+      # grafana secret overrides set -> that module's dir-creator is
+      # absent). The export leaf is 0750 root:root so inherited file
+      # ACLs keep `other` with no access.
+      [ -d "$obs_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root "$obs_dir"
+      [ -d "$export_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g root "$export_dir"
+      ${pkgs.acl}/bin/setfacl -m "u:alloy:--x" "$state_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -m "u:alloy:--x" "$obs_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -m "u:alloy:r-x" "$export_dir" 2>/dev/null || true
+      ${pkgs.acl}/bin/setfacl -d -m "u:alloy:r--" "$export_dir" 2>/dev/null || true
+    '';
 }

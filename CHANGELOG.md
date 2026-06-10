@@ -40,6 +40,30 @@ deprecations ship one minor release before removal.
   the triggering option or global, why the warning exists, and how to
   override intentionally.
 
+- StoreSync-only observability JSONL export. The privileged broker now
+  writes a positive-allow-list projection of each terminal StoreSync
+  attempt to `<stateDir>/observability/store-sync/store-sync-<utc-date>.jsonl`
+  (`0640`, daily-rotated, best-effort). The export carries exactly the
+  allow-listed fields (`schema_version`, `target_vm`, `vm_id`,
+  `target_env`, `generation_id`, `generation_token`, `sync_status`,
+  `error_stage`, `cleanup_status`, `cleanup_reason`, `authz_outcome`,
+  closure/linked/skipped/swept counts, `fast_path`, and the flattened
+  `*_ms` timings) via a dedicated `StoreSyncObservabilityRecord` struct
+  so no serializer ever receives the full host audit record; host-only
+  fields (`caller_principal`, `retained_generations`, host/store paths,
+  `db.dump`, marker payloads) are redacted by construction. Host Alloy
+  tails only this export glob (`local.file_match` + `loki.source.file`,
+  following rotation) and the `alloy` identity receives focused
+  read/traverse ACLs to the export directory only — never the unified
+  broker audit log, the privileged daemon socket, or nixlingd state. The
+  Loki stream stays a host singleton (`vm="host"`, `env="host"`,
+  `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
+  remain JSON content. New gate `tests/store-sync-export-eval.sh`;
+  `tests/loki-label-cardinality-eval.sh` now also parses
+  `local.file_match` `path_targets` label maps. See
+  [ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md) and
+  `docs/reference/store-sync.md` § "Observability export".
+
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
   in-guest edited file over the existing per-VM SSH key into a
@@ -126,6 +150,16 @@ deprecations ship one minor release before removal.
   (`/var/lib/nixling/vms/<vm>/store`), restoring the isolation the legacy
   `BindReadOnlyPaths /nix/store -> per-VM farm` provided; a guest's
   `/nix/store` now contains only its own closure.
+- StoreSync observability export confinement: Grafana Alloy is granted
+  focused POSIX ACLs (`u:alloy:--x` traverse on `<stateDir>` and
+  `<stateDir>/observability`, `u:alloy:r-x` + a `default:u:alloy:r--`
+  ACL on the export dir) to read the StoreSync export and nothing else
+  under the broker state dir. Alloy is never added to the `nixlingd`
+  group and gets no read access to the unified broker audit log
+  (`<stateDir>/audit/broker-*.jsonl`) or the privileged daemon socket.
+  The export itself is a redacted projection, so a host-Alloy compromise
+  exposes only the allow-listed StoreSync fields already destined for
+  Loki, not the host-confidential audit stream.
 
 ### Fixed
 

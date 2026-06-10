@@ -129,6 +129,36 @@ When audit forwarding is enabled, the guest path is:
 4. The existing reverse OTLP/vsock transport carries that stream into
    the observability stack VM and on to Loki.
 
+### Host StoreSync observability export
+
+The privileged broker (`nixling-priv-broker`) emits a host-side,
+StoreSync-only telemetry export that host Alloy tails as a file source.
+This is independent of the per-VM guest journald/audit path above.
+
+1. On every terminal StoreSync attempt the broker writes one JSON line
+   to `<stateDir>/observability/store-sync/store-sync-<utc-date>.jsonl`
+   (`0640`, daily-rotated). The line is a positive-allow-list projection
+   of the terminal audit record — host-only fields (`caller_principal`,
+   `retained_generations`, host/store paths, `db.dump`, marker payloads)
+   are redacted **by construction** in the broker. The target VM/env are
+   carried as JSON content (`target_vm`/`target_env`), never as labels.
+   See [`store-sync.md`](./store-sync.md) § "Observability export".
+2. Host Alloy tails the daily-rotated glob with a `local.file_match` +
+   `loki.source.file` pair (following rotation and newly-created files)
+   and forwards it through the same host→stack OTLP/Loki receiver as the
+   journal sources.
+3. The Loki stream labels are host singletons: `vm="host"`,
+   `env="host"`, `role="host"`, `source="store-sync-audit"`.
+4. The `alloy` identity is granted **focused** read/traverse ACLs to the
+   export directory only (`u:alloy:--x` traverse on `<stateDir>` and
+   `<stateDir>/observability`, `u:alloy:r-x` + a `default:u:alloy:r--`
+   ACL on the export dir so rotated files inherit read). Alloy is **not**
+   added to the `nixlingd` group and gets **no** access to the unified
+   broker audit log (`<stateDir>/audit/broker-*.jsonl`), the privileged
+   daemon socket, or any other broker state. Static gates:
+   [`tests/store-sync-export-eval.sh`](../../tests/store-sync-export-eval.sh)
+   and [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh).
+
 ## Port and CID allocation
 
 The observability transport has its own CID/port/path contract. Host-side vsock backend sockets follow the live manifest layout under `/var/lib/nixling/vms/<vm>/...`.
@@ -220,6 +250,18 @@ The auto-declared `obs` env (lanSubnet `10.40.0.0/24`, uplinkSubnet `203.0.113.0
 ### Attribute hygiene
 
 Telemetry labels and attributes are an explicit allowlist. Permitted examples are `vm.name`, `vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`, `bridge`, `static_ip`, and `generation`. Forbidden payload includes SSH key paths, command output, Nix derivation paths, and any Entra-, TPM-, or audio-user-specific data.
+
+### StoreSync export confinement
+
+The host StoreSync export (above) is the only path by which broker
+audit-adjacent data reaches the observability plane, and it is a
+redacted projection, not the audit record itself. `alloy` is scoped by
+POSIX ACL to read the export directory and nothing else under
+`<stateDir>`: it cannot read the unified broker audit log, cannot reach
+the privileged daemon socket, and is never a member of the `nixlingd`
+group. Compromise of host Alloy therefore exposes only the allow-listed
+StoreSync fields already destined for Loki, not the host-confidential
+audit stream.
 
 ## Label conventions
 

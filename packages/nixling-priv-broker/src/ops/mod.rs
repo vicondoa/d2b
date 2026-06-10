@@ -54,6 +54,12 @@ pub mod store_sync;
 // invariant-enforcing constructors + validation).
 pub mod store_sync_audit;
 
+// StoreSync-only observability JSONL export: a positive-allow-list
+// projection of the host-confidential `StoreSync` terminal audit record
+// (ADR 0027). Written to the alloy-readable export directory; never
+// carries caller identity, retained generations, or any host path.
+pub mod store_sync_export;
+
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
 // so the farm hardlinks succeed even when `/nix/store` is a separate

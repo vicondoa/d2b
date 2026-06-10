@@ -77,6 +77,14 @@ pub struct ServerConfig {
     pub bundle_path: PathBuf,
     pub nixlingd_uid: u32,
     pub nixlingd_gid: u32,
+    /// Directory for the StoreSync-only observability JSONL export
+    /// (ADR 0027). The broker appends a positive-allow-list projection of
+    /// every terminal StoreSync audit record here; the host Nix/Alloy
+    /// wiring grants the `alloy` identity focused read/traverse on this
+    /// directory only. Defaults to
+    /// `/var/lib/nixling/observability/store-sync`; override via
+    /// `--store-sync-export-dir`.
+    pub store_sync_export_dir: PathBuf,
     pub test_mode: bool,
 }
 
@@ -251,6 +259,8 @@ where
             let mut audit_dir = PathBuf::from(DEFAULT_AUDIT_DIR);
             let mut audit_retention_days = DEFAULT_AUDIT_RETENTION_DAYS;
             let mut bundle_path = PathBuf::from(DEFAULT_BUNDLE_PATH);
+            let mut store_sync_export_dir =
+                PathBuf::from(crate::ops::store_sync_export::DEFAULT_STORE_SYNC_EXPORT_DIR);
             let mut nixlingd_uid = None;
             let mut nixlingd_gid = None;
             let mut test_mode = false;
@@ -284,6 +294,11 @@ where
                         // names a bundle path on the wire.
                         index += 1;
                         bundle_path = PathBuf::from(expect_arg(&rest, index, "--bundle-path")?);
+                    }
+                    "--store-sync-export-dir" => {
+                        index += 1;
+                        store_sync_export_dir =
+                            PathBuf::from(expect_arg(&rest, index, "--store-sync-export-dir")?);
                     }
                     "--nixlingd-uid" => {
                         index += 1;
@@ -356,6 +371,7 @@ where
                 bundle_path,
                 nixlingd_uid: nixlingd_uid.unwrap_or(fallback_uid),
                 nixlingd_gid: nixlingd_gid.unwrap_or(fallback_gid),
+                store_sync_export_dir,
                 test_mode,
             }))
         }
@@ -2192,6 +2208,28 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 "StoreSync terminal audit record violates the signed schema: {:?}",
                 audit_fields.validate()
             );
+
+            // ADR 0027 observability export: project the host-confidential
+            // terminal record down to the signed positive-allow-list and
+            // append it to the alloy-readable export directory. Emitted
+            // exactly once per terminal attempt (before the success/failure
+            // match consumes `audit_fields`). Best-effort: the broker audit
+            // record is the source of truth, so a failed export write must
+            // never fail the StoreSync operation.
+            let export_record =
+                crate::ops::store_sync_export::StoreSyncObservabilityRecord::from_audit_fields(
+                    &audit_fields,
+                );
+            if let Err(err) = crate::ops::store_sync_export::append_export_record(
+                &config.store_sync_export_dir,
+                &export_record,
+            ) {
+                warn!(
+                    target_vm = %export_record.target_vm,
+                    error = %err,
+                    "failed to write StoreSync observability export record"
+                );
+            }
 
             match result {
                 Ok(outcome) => {
@@ -6363,7 +6401,65 @@ mod tests {
             bundle_path: manifest_path.to_path_buf(),
             nixlingd_uid: 1000,
             nixlingd_gid: Gid::current().as_raw(),
+            store_sync_export_dir: root.join("observability").join("store-sync"),
             test_mode: true,
+        }
+    }
+
+    /// Read the StoreSync observability export lines the dispatch arm
+    /// appended for `config` (today's rotated file). Returns the parsed
+    /// records plus the raw JSON objects so tests can assert both the
+    /// typed shape and the exact serialized key-set.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn read_store_sync_export(
+        config: &ServerConfig,
+    ) -> Vec<(
+        crate::ops::store_sync_export::StoreSyncObservabilityRecord,
+        serde_json::Map<String, serde_json::Value>,
+    )> {
+        let date = crate::audit::utc_date_string();
+        let path = config
+            .store_sync_export_dir
+            .join(format!("store-sync-{date}.jsonl"));
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) => panic!("read store-sync export {}: {err}", path.display()),
+        };
+        contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let record: crate::ops::store_sync_export::StoreSyncObservabilityRecord =
+                    serde_json::from_str(line).expect("parse export record");
+                let obj = serde_json::from_str::<serde_json::Value>(line)
+                    .expect("parse export json")
+                    .as_object()
+                    .expect("export record is a json object")
+                    .clone();
+                (record, obj)
+            })
+            .collect()
+    }
+
+    /// Assert the exported JSON object's key-set equals the signed
+    /// allow-list and that no redaction field leaked.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn assert_export_allow_list(obj: &serde_json::Map<String, serde_json::Value>) {
+        use crate::ops::store_sync_export::{EXPORTED_KEYS, REDACTED_KEYS};
+        let mut actual: Vec<&str> = obj.keys().map(String::as_str).collect();
+        actual.sort_unstable();
+        let mut expected: Vec<&str> = EXPORTED_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            actual, expected,
+            "export key-set must equal the signed allow-list"
+        );
+        for redacted in REDACTED_KEYS {
+            assert!(
+                !obj.contains_key(*redacted),
+                "redacted key {redacted:?} leaked into export surface"
+            );
         }
     }
 
@@ -7693,6 +7789,26 @@ mod tests {
             fields.closure_count
         );
 
+        // ADR 0027 observability export: exactly one StoreSync-only
+        // record, projected to the signed allow-list (redaction fields
+        // absent), carrying the terminal success shape with the target
+        // VM in JSON content (not a Loki label).
+        let exported = read_store_sync_export(&config);
+        assert_eq!(exported.len(), 1, "exactly one exported record on success");
+        let (export_record, export_obj) = &exported[0];
+        assert_export_allow_list(export_obj);
+        assert_eq!(export_record.target_vm, "corp-vm");
+        assert_eq!(export_record.vm_id, "corp-vm");
+        assert_eq!(export_record.generation_token, 7);
+        assert_eq!(export_record.sync_status, SyncStatus::Ok);
+        assert_eq!(export_record.error_stage, ErrorStage::None);
+        assert_eq!(
+            export_record.cleanup_status,
+            CleanupStatus::DeferredAmbiguous
+        );
+        assert_eq!(export_record.authz_outcome, AuthzOutcome::Allow);
+        assert!(!export_record.fast_path);
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7770,6 +7886,24 @@ mod tests {
         assert_eq!(fields.linked_count, 0);
         assert_eq!(fields.skipped_count, fields.closure_count);
         assert_eq!(fields.swept_count, 0);
+
+        // ADR 0027 observability export: each terminal attempt exports
+        // exactly one record, so the publish + fast-path re-sync produce
+        // two lines; the second carries the pure fast-path shape.
+        let exported = read_store_sync_export(&config);
+        assert_eq!(
+            exported.len(),
+            2,
+            "publish + fast-path re-sync export one record each"
+        );
+        let (fast_record, fast_obj) = &exported[1];
+        assert_export_allow_list(fast_obj);
+        assert_eq!(fast_record.sync_status, SyncStatus::Ok);
+        assert!(fast_record.fast_path, "second export is the fast path");
+        assert_eq!(fast_record.cleanup_status, CleanupStatus::SkippedFastPath);
+        assert_eq!(fast_record.cleanup_reason, CleanupReason::FastPath);
+        assert_eq!(fast_record.linked_count, 0);
+        assert_eq!(fast_record.skipped_count, fast_record.closure_count);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -7873,6 +8007,22 @@ mod tests {
         assert!(!farm.join("live").exists());
         assert!(!farm.join("state").exists());
 
+        // ADR 0027 observability export: a failed terminal attempt also
+        // exports EXACTLY ONE allow-list record (failed shape, classified
+        // error_stage, no host-only fields). The export sink is separate
+        // from the broker audit log, so the duplicate-suppression on the
+        // outer error path does not touch it.
+        let exported = read_store_sync_export(&config);
+        assert_eq!(exported.len(), 1, "exactly one exported record on failure");
+        let (export_record, export_obj) = &exported[0];
+        assert_export_allow_list(export_obj);
+        assert_eq!(export_record.target_vm, "corp-vm");
+        assert_eq!(export_record.sync_status, SyncStatus::Failed);
+        assert_eq!(export_record.error_stage, ErrorStage::Probe);
+        assert_eq!(export_record.cleanup_status, CleanupStatus::NotAttempted);
+        assert_eq!(export_record.cleanup_reason, CleanupReason::None);
+        assert_eq!(export_record.authz_outcome, AuthzOutcome::Allow);
+
         // The outer error-audit path must NOT write a second (duplicate)
         // record: BrokerError::StoreSyncFailed.audit() is a no-op because
         // the terminal record was already emitted in the dispatch arm.
@@ -7893,6 +8043,13 @@ mod tests {
             after_outer,
             before + 1,
             "outer error-audit must not duplicate the terminal StoreSync record"
+        );
+        // The export is likewise emitted exactly once across the whole
+        // failure path (the outer audit no-op cannot re-export).
+        assert_eq!(
+            read_store_sync_export(&config).len(),
+            1,
+            "outer error-audit must not duplicate the StoreSync export record"
         );
 
         let _ = fs::remove_dir_all(&root);

@@ -50,6 +50,7 @@ New role values require a CHANGELOG entry and a budget review. The
 | --------- | --------------------------------------------------------------- |
 | `journal` | Default: log line came from a `loki.source.journal` stage.      |
 | `audit`   | Audit subsystem stream (`audisp-syslog`).                       |
+| `store-sync-audit` | Host StoreSync observability export tail (`loki.source.file` over `<stateDir>/observability/store-sync/store-sync-*.jsonl`). Always paired with `vm="host"`, `env="host"`, `role="host"`. |
 
 ### `severity` values (closed set, optional)
 
@@ -72,6 +73,7 @@ mistakes:
 | `service_name`   | OpenTelemetry resource attribute that should remain a resource attribute on traces/metrics, not a Loki label.                                                                     | OTel resource attribute (preserved end-to-end through otelcol).      |
 | `trace_id` / `span_id` | Unbounded by construction (one new value per request). Promoting either to a Loki label is the canonical "blow up the index" mistake.                                       | Parsed as a structured **field** on the log line via a pipeline stage; correlated with Tempo by the `traceID` derived field in Grafana datasource provisioning. |
 | Path-like labels (anything containing `/`, or an absolute path) | Filesystem paths are operator-controlled and unbounded; promoting them to labels also leaks deployment topology into the index. | Path stays in the log content.                                       |
+| `target_vm` / `target_env` | The VM/env a host-side StoreSync record is *about*. Promoting these would re-introduce per-VM/per-env cardinality on a stream that is deliberately a host singleton (`vm="host"`). | StoreSync export JSON **content** (`target_vm`/`target_env` fields). |
 
 ## Hard rules enforced by the gate
 
@@ -93,6 +95,15 @@ and asserts:
    `${quote …}` interpolations of `vmName` / `envName` / `cfg.env` /
    `hostName` — never bare strings outside the documented literals
    (`"host"`, `"obs"`).
+
+File sources (`loki.source.file`) carry their stream labels in the
+companion `local.file_match` `path_targets = [{ … }]` map rather than a
+`labels = { … }` block. The gate parses those maps too (skipping the
+Alloy meta key `__path__`, which holds the glob, not a label), so a
+StoreSync export label like `target_vm` smuggled into `path_targets`
+fails the allowlist exactly as it would in a `labels` block. The
+StoreSync export's `store-sync-*.jsonl` glob is a `__path__`, never a
+label.
 
 The `vm ≤ 20` and `env ≤ 5` budgets are **operator-enforced** at site
 config time (a host with 21 workload VMs blows the budget regardless

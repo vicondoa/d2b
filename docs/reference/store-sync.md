@@ -200,6 +200,74 @@ The `decision` field follows the broker default
 > sweep/cleanup wave. `env` attribution and per-phase timings beyond
 > `total_ms` are follow-up enrichment.
 
+## Observability export (W5)
+
+The terminal audit record above is **host-confidential** (`0640
+root:nixlingd` under `<stateDir>/audit/broker-*.jsonl`) and carries
+context the observability plane must never see. Grafana Alloy is **not**
+granted read access to that record or to the unified broker audit log.
+
+Instead, every terminal StoreSync attempt *also* emits a narrow,
+positive-allow-list projection to a dedicated export file:
+
+```text
+<stateDir>/observability/store-sync/store-sync-<utc-date>.jsonl
+```
+
+written `0640`, `O_APPEND`, one JSON object per line, daily-rotated by
+UTC date. The projection is a dedicated
+`StoreSyncObservabilityRecord` struct
+(`packages/nixling-priv-broker/src/ops/store_sync_export.rs`) built by
+`from_audit_fields()`, which reads **only** the allow-listed fields — so
+no serializer ever receives the full audit struct and host-only fields
+cannot leak by construction (`#[serde(deny_unknown_fields)]` + an
+`EXPORTED_KEYS` key-set test pin the contract).
+
+Exported keys (exactly):
+
+```text
+schema_version, target_vm, vm_id, target_env, generation_id,
+generation_token, sync_status, error_stage, cleanup_status,
+cleanup_reason, authz_outcome, closure_count, linked_count,
+skipped_count, swept_count, fast_path,
+total_ms, lock_wait_ms, lock_hold_ms, probe_ms, verify_ms,
+stage_ms, metadata_ms, sweep_ms, cleanup_ms
+```
+
+Notes:
+
+- The audit `vm`/`env` fields are renamed to **`target_vm`/`target_env`**
+  so the observability plane treats them as JSON *content*, never as Loki
+  stream labels. `target_env` is always serialized (`null` until env
+  attribution is threaded) so the key-set stays stable.
+- The nested `timings` object is **flattened** to top-level `*_ms` keys.
+- Redacted by construction (never exported): `caller_principal`,
+  `retained_generations`, `bundle_closure_ref`, `hardlink_farm_path`, the
+  nested `timings` object, the raw `vm`/`env` keys, host/store paths and
+  basenames, `db.dump` contents, and marker payloads.
+- The export is **best-effort**: a failed export write logs a
+  `tracing::warn!` but never fails the StoreSync attempt — the
+  host-confidential audit record remains the source of truth.
+
+The host Nix/Alloy wiring
+(`nixos-modules/components/observability/host.nix`) tails only the
+`store-sync-*.jsonl` glob (via `local.file_match` + `loki.source.file`,
+following rotation and new files) and grants the `alloy` identity
+focused read/traverse ACLs to the export directory **only** — never to
+the broker audit log, the privileged daemon socket, or nixlingd state.
+The Loki stream labels stay host singletons (`vm="host"`, `env="host"`,
+`role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
+remain in JSON content. See
+[`components-observability.md`](./components-observability.md) and
+[`loki-label-contract.md`](./loki-label-contract.md).
+
+> **Not in this wave (W5):** there is no log-derived alert *metric*. The
+> current obs stack has no `loki.process`/`stage.metrics` log→metric
+> path, and the signed scope forbids adding a Loki ruler, Alertmanager,
+> host Alloy self-scrape, a broker `/metrics` endpoint, or a new exposed
+> port — so the existing systemd-unit-failed `NixlingStoreSyncFailure`
+> alert (Prometheus, `stack.nix`) is left unchanged.
+
 ## Refusal modes
 
 The handler is fail-closed and maps each refusal to a typed
