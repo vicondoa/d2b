@@ -83,9 +83,9 @@ deprecations ship one minor release before removal.
 - `nixling store verify` now performs deep recursive live-pool verification
   against trusted source closure paths (file type, executable bit, symlink
   target, and hardlink identity or byte equality for copied fallback files).
-  Existing top-level packages with internal drift are detected but not replaced
-  yet; that repair remains deferred to the same-filesystem `RENAME_EXCHANGE`
-  wave.
+  Existing top-level packages with internal drift are repaired by staging clean
+  replacements and swapping them into `live/` with same-filesystem
+  `RENAME_EXCHANGE`, so the served basename is never absent.
 - StoreSync success audit/export records now populate available phase timings
   (`lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`,
   `metadata_ms`) in addition to `total_ms`; cleanup/sweep timings remain zero

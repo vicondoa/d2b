@@ -300,12 +300,13 @@ The JSON envelope is documented in
 
 `--repair` delegates mutation to StoreSync without holding the read-only
 verify lock: verify first, run a forced non-fast-path StoreSync republish
-when drift/unknown is repairable, then verify again before returning
-`repaired`. If the second verify still reports `drift` or `unknown`, the
-command returns exit `4` with an incomplete-repair remediation instead of a
-success-shaped result. Replacing an already-present internally drifted
-top-level path remains a follow-up wave because it needs the signed
-same-filesystem `RENAME_EXCHANGE` repair path.
+when drift/unknown is repairable, then verify again. If existing top-level
+paths still have internal drift, the broker stages clean replacements from
+the trusted source closure and swaps them into `live/` with
+`renameat2(RENAME_EXCHANGE)` so the served basename is never absent. A final
+verify must pass before the command returns `repaired`; otherwise it returns
+exit `4` with an incomplete-repair remediation instead of a success-shaped
+result.
 
 ## Refusal modes
 

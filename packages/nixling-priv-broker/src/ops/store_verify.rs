@@ -184,6 +184,39 @@ fn repair_store_view(
     }
 
     let after = run_store_verify_read_only(intent, false);
+    if matches!(after.status, StoreVerifyStatus::Drift) {
+        match replace_live_paths_for_repair(intent) {
+            Ok(_) => {
+                let final_verify = run_store_verify_read_only(intent, false);
+                if final_verify.status == StoreVerifyStatus::Ok {
+                    return StoreVerifyResponse {
+                        vm: final_verify.vm,
+                        status: StoreVerifyStatus::Repaired,
+                        checked: final_verify.checked,
+                        drifted: 0,
+                        repaired: initial.drifted.max(after.drifted),
+                        unknown_reason: None,
+                        audit_ref: final_verify.audit_ref,
+                        remediation: None,
+                    };
+                }
+                return StoreVerifyResponse {
+                    remediation: Some(
+                        "repair incomplete; inspect audit_ref and broker logs".to_owned(),
+                    ),
+                    ..final_verify
+                };
+            }
+            Err(err) => {
+                return StoreVerifyResponse {
+                    remediation: Some(format!(
+                        "repair incomplete; inspect audit_ref and broker logs ({err})"
+                    )),
+                    ..after
+                };
+            }
+        }
+    }
     match after.status {
         StoreVerifyStatus::Ok => StoreVerifyResponse {
             vm: after.vm,
@@ -210,6 +243,21 @@ fn repair_store_view(
         }
         _ => after,
     }
+}
+
+fn replace_live_paths_for_repair(intent: &ResolvedStoreViewIntent) -> Result<(), String> {
+    let lock = acquire_verify_lock(&intent.hardlink_farm_path)?;
+    let generation_id = crate::ops::store_sync::generation_id_for_intent(intent);
+    crate::ops::store_view_farm::replace_live_paths_cross_mount_safe(
+        &intent.hardlink_farm_path,
+        &format!("repair-{generation_id}"),
+        &intent.closure_paths,
+    )
+    .map_err(|err| err.to_string())?;
+    posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+        .map_err(|err| err.to_string())?;
+    drop(lock);
+    Ok(())
 }
 
 fn verify_locked(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyResponse {
@@ -800,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_internal_live_tree_drift_stays_drift_until_replace_wave() {
+    fn repair_internal_live_tree_drift_replaces_served_basename() {
         let tmp = tempdir().unwrap();
         let closure = fake_closure(
             tmp.path(),
@@ -815,14 +863,13 @@ mod tests {
         std::fs::write(live_alpha.join("payload"), b"drifted").unwrap();
 
         let response = run_store_verify(&intent, true);
-        assert_eq!(response.status, StoreVerifyStatus::Drift);
-        assert_eq!(response.drifted, 1);
-        assert_eq!(response.repaired, 0);
-        assert!(response
-            .remediation
-            .as_deref()
-            .unwrap()
-            .contains("repair incomplete"));
+        assert_eq!(response.status, StoreVerifyStatus::Repaired);
+        assert_eq!(response.drifted, 0);
+        assert_eq!(response.repaired, 1);
+        assert_eq!(
+            std::fs::read_to_string(live_alpha.join("payload")).unwrap(),
+            "aaaaaaaaaaaaaaaa-alpha"
+        );
     }
 
     #[test]

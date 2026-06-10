@@ -46,7 +46,8 @@ use nix::unistd::{fchown, ftruncate, Gid, Uid};
 use rustix::fs::{Mode as RxMode, OFlags, ResolveFlags, CWD};
 
 use nixling_host::hardlink_farm::{
-    build_farm, build_store_view, BuildStoreViewFarmRequest, BuildStoreViewRequest,
+    build_farm, build_store_view, replace_live_top_level_paths, BuildStoreViewFarmRequest,
+    BuildStoreViewRequest, ReplaceLivePathsRequest,
 };
 
 /// v1.1.2fu24 panel-security R5 critical must-fix: open `path`
@@ -700,6 +701,38 @@ fn cmd_build_store_view() -> ExitCode {
             ExitCode::from(1)
         }
     }
+
+    fn cmd_replace_store_view_live() -> ExitCode {
+        use std::io::Read;
+
+        let mut buf = Vec::new();
+        if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+            eprintln!("replace-store-view-live: read stdin: {e}");
+            return ExitCode::from(1);
+        }
+        let req: ReplaceLivePathsRequest = match serde_json::from_slice(&buf) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("replace-store-view-live: parse request: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        match replace_live_top_level_paths(&req.farm_root, &req.stage_tag, &req.closure_paths) {
+            Ok(counts) => {
+                if let Ok(j) = serde_json::to_string(&counts) {
+                    println!("{j}");
+                }
+                ExitCode::from(0)
+            }
+            Err(e) => {
+                if let Ok(j) = serde_json::to_string(&e) {
+                    println!("{j}");
+                }
+                eprintln!("replace-store-view-live: {e}");
+                ExitCode::from(1)
+            }
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -714,6 +747,9 @@ fn main() -> ExitCode {
     // stdin-JSON contract, same private-namespace invocation.
     if std::env::args().nth(1).as_deref() == Some("build-store-view") {
         return cmd_build_store_view();
+    }
+    if std::env::args().nth(1).as_deref() == Some("replace-store-view-live") {
+        return cmd_replace_store_view_live();
     }
     let args = match parse_args() {
         Ok(a) => a,

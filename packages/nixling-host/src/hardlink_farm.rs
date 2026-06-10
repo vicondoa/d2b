@@ -61,6 +61,7 @@
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
+use rustix::fs::{renameat_with, RenameFlags, CWD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -300,6 +301,18 @@ pub struct BuildStoreViewRequest {
     pub closure_paths: Vec<PathBuf>,
     /// Marker pinned into `state/generations/<id>/marker.json`.
     pub marker: GenerationMarker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplaceLivePathsRequest {
+    /// Per-VM farm root (`.../store-view`), not the `live/` dir.
+    pub farm_root: PathBuf,
+    /// Stage tag for crash-identifiable repair directories.
+    pub stage_tag: String,
+    /// Absolute `/nix/store/<...>` closure paths to rebuild and exchange
+    /// into `live/`.
+    pub closure_paths: Vec<PathBuf>,
 }
 
 /// Return the flat live hardlink pool served by virtiofsd.
@@ -597,6 +610,7 @@ fn link_closures_into_live(
             detail: e.to_string(),
         })?;
     }
+
     std::fs::create_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
         path: stage_dir.display().to_string(),
         detail: e.to_string(),
@@ -647,6 +661,93 @@ fn link_closures_into_live(
     }
     let _ = std::fs::remove_dir_all(&stage_dir);
     Ok(counts)
+}
+
+pub fn replace_live_top_level_paths(
+    store_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let live_dir = live_dir(store_root);
+    std::fs::create_dir_all(&live_dir).map_err(|e| HardlinkFarmError::Io {
+        path: live_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &live_dir)?;
+    let stage_dir = store_root.join(format!(
+        "live.repair.stage.{}.{}",
+        stage_tag,
+        std::process::id()
+    ));
+    if stage_dir.exists() {
+        std::fs::remove_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
+            path: stage_dir.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::create_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
+        path: stage_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+
+    let mut counts = StoreViewLinkCounts::default();
+    let result = (|| {
+        for source in closure_paths {
+            assert_same_filesystem(source, store_root)?;
+            let file_name = source.file_name().ok_or_else(|| HardlinkFarmError::Io {
+                path: source.display().to_string(),
+                detail: "source path has no basename".to_owned(),
+            })?;
+            let staged_path = stage_dir.join(file_name);
+            let live_path = live_dir.join(file_name);
+            hardlink_tree(source, &staged_path)?;
+            fsync_tree_bottom_up(&staged_path)?;
+            fsync_dir(&stage_dir)?;
+            if std::fs::symlink_metadata(&live_path).is_ok() {
+                renameat_with(CWD, &staged_path, CWD, &live_path, RenameFlags::EXCHANGE).map_err(
+                    |e| HardlinkFarmError::Io {
+                        path: live_path.display().to_string(),
+                        detail: format!("renameat2(RENAME_EXCHANGE): {e}"),
+                    },
+                )?;
+                fsync_dir(&live_dir)?;
+                remove_path_any(&staged_path)?;
+                fsync_dir(&stage_dir)?;
+            } else {
+                std::fs::rename(&staged_path, &live_path).map_err(|e| HardlinkFarmError::Io {
+                    path: live_path.display().to_string(),
+                    detail: e.to_string(),
+                })?;
+                fsync_dir(&live_dir)?;
+            }
+            counts.linked = counts.linked.saturating_add(1);
+        }
+        Ok(())
+    })();
+    if let Err(err) = result {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Err(err);
+    }
+    let _ = std::fs::remove_dir_all(&stage_dir);
+    Ok(counts)
+}
+
+fn remove_path_any(path: &Path) -> Result<(), HardlinkFarmError> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("stat before remove: {e}"),
+    })?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| HardlinkFarmError::Io {
+            path: path.display().to_string(),
+            detail: format!("remove dir: {e}"),
+        })
+    } else {
+        std::fs::remove_file(path).map_err(|e| HardlinkFarmError::Io {
+            path: path.display().to_string(),
+            detail: format!("remove file: {e}"),
+        })
+    }
 }
 
 fn fsync_dir(path: &Path) -> Result<(), HardlinkFarmError> {
@@ -2338,5 +2439,41 @@ mod tests {
 
         // Same id + same closure identity stays idempotent.
         build_store_view(&farm, &gid, &closure, &marker_a).expect("idempotent rebuild");
+    }
+
+    #[test]
+    fn replace_live_top_level_paths_exchanges_existing_tree() {
+        let dir = tempdir().unwrap();
+        let farm = dir.path().join("farm");
+        let closure = split_closure(dir.path());
+        let system = system_store_path(&closure).map(Path::to_path_buf);
+        let gid = generation_id(&closure, system.as_deref());
+        let marker = GenerationMarker {
+            closure_hash: "sha256:split".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-06-09T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 11,
+        };
+        build_store_view(&farm, &gid, &closure, &marker).unwrap();
+        let live_pkg = live_dir(&farm).join("zzz-nixos-system-host");
+        std::fs::remove_dir_all(&live_pkg).unwrap();
+        std::fs::create_dir_all(&live_pkg).unwrap();
+        std::fs::write(live_pkg.join("bin"), "drifted").unwrap();
+
+        let counts = replace_live_top_level_paths(&farm, "repair-test", &closure).unwrap();
+        assert_eq!(counts.linked, 2);
+        assert_eq!(
+            std::fs::read_to_string(live_pkg.join("bin/switch-to-configuration")).unwrap(),
+            "#!/bin/sh\n"
+        );
+        assert!(
+            !std::fs::read_dir(&farm).unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("live.repair.stage.")),
+            "repair stage dir should be cleaned"
+        );
     }
 }

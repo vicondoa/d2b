@@ -41,7 +41,7 @@ use std::process::{Command, Stdio};
 
 use nixling_host::hardlink_farm::{
     self, BuildStoreViewFarmRequest, BuildStoreViewRequest, GenerationMarker, HardlinkFarmError,
-    StoreViewLinkCounts,
+    ReplaceLivePathsRequest, StoreViewLinkCounts,
 };
 
 /// `unshare(1)` — already assumed present by the activation path in
@@ -63,6 +63,8 @@ const NS_SHELL_SCRIPT: &str =
 /// (`build-store-view`) instead of the legacy `build-store-view-farm`.
 const STORE_VIEW_NS_SHELL_SCRIPT: &str =
     "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view";
+const REPLACE_STORE_VIEW_NS_SHELL_SCRIPT: &str =
+    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" replace-store-view-live";
 
 /// Build (or idempotently reconcile) one generation of the per-VM
 /// store-view hardlink farm, transparently handling the NixOS
@@ -254,6 +256,19 @@ fn store_view_build_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> V
     ]
 }
 
+fn replace_store_view_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
+    vec![
+        unshare_bin.to_owned(),
+        "--mount".to_owned(),
+        "--propagation".to_owned(),
+        "private".to_owned(),
+        sh_bin.to_owned(),
+        "-ceu".to_owned(),
+        REPLACE_STORE_VIEW_NS_SHELL_SCRIPT.to_owned(),
+        helper_bin.to_owned(),
+    ]
+}
+
 /// Run the split-layout store-view build inside a private mount namespace
 /// where `/nix/store` is lazily detached. On success the helper prints
 /// the [`StoreViewLinkCounts`] as one JSON line on stdout; on failure it
@@ -321,6 +336,85 @@ fn build_store_view_via_namespace(
         path: farm_root.display().to_string(),
         detail: format!(
             "store-view build helper failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    })
+}
+
+pub fn replace_live_paths_cross_mount_safe(
+    farm_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    match hardlink_farm::replace_live_top_level_paths(farm_root, stage_tag, closure_paths) {
+        Ok(counts) => Ok(counts),
+        Err(HardlinkFarmError::CrossMountLink { .. }) => {
+            replace_live_paths_via_namespace(farm_root, stage_tag, closure_paths)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+fn replace_live_paths_via_namespace(
+    farm_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let request = ReplaceLivePathsRequest {
+        farm_root: farm_root.to_path_buf(),
+        stage_tag: stage_tag.to_owned(),
+        closure_paths: closure_paths.to_vec(),
+    };
+    let payload = serde_json::to_vec(&request).map_err(|e| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!("serialise store-view replace request: {e}"),
+    })?;
+    let argv = replace_store_view_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: argv[0].clone(),
+            detail: format!("spawn unshare for store-view replace: {e}"),
+        })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "child stdin unavailable for store-view replace".to_owned(),
+    })?;
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+    });
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view replace: {e}"),
+        })?;
+    let _ = writer.join();
+    if output.status.success() {
+        return parse_store_view_counts(&output.stdout, farm_root);
+    }
+    if let Some(line) = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
+            return Err(typed);
+        }
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!(
+            "store-view replace helper failed (exit {}): {}",
             output
                 .status
                 .code()
@@ -408,6 +502,24 @@ mod tests {
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("|| true"));
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view"));
+    }
+
+    #[test]
+    fn replace_store_view_argv_wires_private_namespace_and_replace_verb() {
+        let argv = replace_store_view_argv("/u/unshare", "/bin/sh", "/h/helper");
+        assert_eq!(
+            argv,
+            vec![
+                "/u/unshare",
+                "--mount",
+                "--propagation",
+                "private",
+                "/bin/sh",
+                "-ceu",
+                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" replace-store-view-live",
+                "/h/helper",
+            ]
+        );
     }
 
     #[test]
