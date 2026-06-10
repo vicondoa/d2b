@@ -1,4 +1,4 @@
-# Guest control W0 feasibility dossier
+# Guest control feasibility dossier
 
 This dossier records the W0 evidence required by
 [ADR 0026](../adr/0026-guest-control-plane-over-vsock.md). It is the
@@ -38,7 +38,7 @@ W0 protocol.
 
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
-| ADR gate | `guest-control-ttRPC` | `c3bd668` | ADR 0026 added and panel-signed after R3 fixes. |
+| ADR gate | `guest-control-ttRPC` | `c3bd668` | ADR 0026 added, then accepted after feasibility evidence and panel review. |
 | CH CONNECT transport | `guest-control-w0-ch` | `36619d1` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy. |
 | Static guest build | `guest-control-w0-static` | `a085e68` | PASS with implementation constraints: Nix static-musl derivation works for x86_64 and aarch64; ELF has no interpreter/NEEDED; generated-code unsafe allowance must be handled. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf88` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
@@ -47,7 +47,7 @@ W0 protocol.
 | Strengthened PTY/job-control | `guest-control-w0-pty2` | `eb4fedb` | PASS: session leadership, controlling-terminal foreground ownership, SIGINT after shell job handoff, TIOCSWINSZ/SIGWINCH, PTY EIO/POLLHUP drain, and TTY protocol-side CloseStdin semantics. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
-| Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | this commit | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
+| Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
 | Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s slow-consumer bounds, four-session attached fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
 
 ## Evidence details
@@ -456,7 +456,8 @@ prototype:
 
 | VM state | CLI behavior | Compatibility result |
 | --- | --- | --- |
-| Old running VM without `guest-control` capability | Keep using the existing SSH lifecycle/exec path. | Compatible; no forced restart. |
+| Old running VM without `guest-control` capability and existing SSH-backed command (`config sync`, `vm konsole`) | Keep using that command's current SSH path with `transport: "ssh-compat"` and remediation. | Compatible; no forced restart. |
+| Old running VM without `guest-control` capability and new generic exec (`nixling exec`, `nixling vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
 | New or restarted VM advertising `guest-control` capability | Use chunked stdio RPCs for exec I/O. | New protocol active. |
 | VM restarts while a client holds an old generation token | Reject the next RPC as stale. | Fail closed; client must reconnect/rediscover. |
 | Guest-control unavailable but SSH still configured | Fall back only through the documented SSH compatibility path. | Operator-visible old-generation behavior. |

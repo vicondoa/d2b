@@ -21,6 +21,7 @@ bridge-health table.
 | `current` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/current`. | Stable wire contract. |
 | `booted` | string or `null` | Target of `/var/lib/nixling/vms/<vm>/booted`. | Stable wire contract. |
 | `pendingRestart` | boolean | True when the VM is running and `booted != current`. | Stable wire contract. |
+| `apiReady` | string, object, or `null` | Last daemon-observed Cloud Hypervisor API readiness state. Simple values are `yes`, `pending`, or `timeout`; object form is `{ "error": "<bounded kind>" }`. `null` means no readiness result is known. | Stable wire contract. |
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
@@ -33,12 +34,16 @@ bridge-health table.
   `null`.
 - Disabled optional components are omitted or rendered as `null`; they are not
   readiness failures.
+- `apiReady` is optional in older status payloads and `null` when no
+  daemon-observed readiness result exists.
 
 ## Stability promise
 
-The top-level keys and service-subkeys are frozen. New runtime
-observability belongs in later negotiated protocol/schema revisions, not
-as ad hoc extra keys on this object.
+The top-level keys and service-subkeys are frozen within this schema
+revision. Guest-control rollout will add a negotiated guest-control status
+field in the implementation wave; until that schema revision lands,
+operators discover old-generation guest-control state through the ADR 0026
+compatibility surfaces rather than an ad hoc extra key.
 
 ## Human example
 
@@ -76,6 +81,7 @@ declared roles: host-reconcile, store-virtiofs-preflight, gpu
   "current": null,
   "booted": null,
   "pendingRestart": false,
+  "apiReady": null,
   "runtime": "unknown",
   "declaredRoles": [
     "host-reconcile",

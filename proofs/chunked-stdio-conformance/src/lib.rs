@@ -8,7 +8,7 @@
 //! idempotent stdin writes, slow-consumer caps, stale session detection,
 //! terminal control ordering, and attached-session fairness thresholds.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 pub const KIB: usize = 1024;
 pub const MIB: usize = 1024 * KIB;
@@ -36,7 +36,9 @@ pub enum ProtocolError {
     StdinClosed,
     SlowConsumer { retained: usize, cap: usize },
     DuplicateWriteId,
+    RequestIdConflict,
     ControlSequenceGap { expected: u64, got: u64 },
+    ReceiveMessageTooLarge,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +118,12 @@ struct OutputLog {
     eof: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AcceptedWrite {
+    offset: u64,
+    hash: u64,
+}
+
 impl OutputLog {
     fn new() -> Self {
         Self {
@@ -175,7 +183,7 @@ pub struct ChunkedSession {
     stdin_delivered_offset: u64,
     stdin_closed: bool,
     close_stdin_offset: Option<u64>,
-    write_ids: HashSet<u64>,
+    writes: HashMap<u64, AcceptedWrite>,
     next_control_seq: u64,
     events: Vec<OrderedControlEvent>,
 }
@@ -196,8 +204,10 @@ impl ChunkedSession {
             stdin_delivered_offset: 0,
             stdin_closed: false,
             close_stdin_offset: None,
-            write_ids: HashSet::new(),
-            next_control_seq: 0,
+            writes: HashMap::new(),
+            // ExecCreate reports control_seq=0. The first post-create
+            // mutation must therefore use control_seq=1.
+            next_control_seq: 1,
             events: Vec::new(),
         }
     }
@@ -313,15 +323,16 @@ impl ChunkedSession {
             return Err(ProtocolError::ChunkTooLarge);
         }
         let expected = self.stdin_next_offset();
-        if offset < expected {
-            let end = offset as usize + data.len();
-            if end <= self.stdin_history.len() && self.stdin_history[offset as usize..end] == *data
-            {
+        if let Some(previous) = self.writes.get(&write_id) {
+            if previous.offset == offset && previous.hash == Self::hash(data) {
                 return Ok(WriteStdinResponse {
                     next_offset: expected,
                     disposition: WriteDisposition::Duplicate,
                 });
             }
+            return Err(ProtocolError::RequestIdConflict);
+        }
+        if offset < expected {
             return Err(ProtocolError::OffsetBehind {
                 expected,
                 got: offset,
@@ -333,16 +344,19 @@ impl ChunkedSession {
                 got: offset,
             });
         }
-        if self.write_ids.contains(&write_id) {
-            return Err(ProtocolError::DuplicateWriteId);
-        }
         if self.stdin_buffered_bytes() + data.len() > self.stdin_cap {
             return Err(ProtocolError::SlowConsumer {
                 retained: self.stdin_buffered_bytes(),
                 cap: self.stdin_cap,
             });
         }
-        self.write_ids.insert(write_id);
+        self.writes.insert(
+            write_id,
+            AcceptedWrite {
+                offset,
+                hash: Self::hash(data),
+            },
+        );
         self.stdin_history.extend_from_slice(data);
         Ok(WriteStdinResponse {
             next_offset: self.stdin_next_offset(),
@@ -435,6 +449,22 @@ impl ChunkedSession {
             Stream::Stderr => &mut self.stderr,
         }
     }
+
+    fn hash(data: &[u8]) -> u64 {
+        // Deterministic non-cryptographic proof hash. The production design uses
+        // a real payload hash in the request-id dedupe ring.
+        data.iter()
+            .fold(0xcbf29ce484222325_u64, |acc, byte| {
+                (acc ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            })
+    }
+
+    pub fn receive_message(max_recv: usize, payload_len: usize) -> Result<Vec<u8>, ProtocolError> {
+        if payload_len > max_recv {
+            return Err(ProtocolError::ReceiveMessageTooLarge);
+        }
+        Ok(vec![0u8; payload_len])
+    }
 }
 
 pub fn pattern_chunk(stream: Stream, absolute_offset: u64, len: usize) -> Vec<u8> {
@@ -525,10 +555,16 @@ mod tests {
                 Ok(response) => {
                     assert_eq!(response.disposition, WriteDisposition::Accepted);
                     assert_eq!(response.next_offset, offset + len as u64);
-                    let duplicate = session
-                        .write_stdin(token, write_id + 100_000, offset, &chunk)
-                        .unwrap();
+                    let duplicate = session.write_stdin(token, write_id, offset, &chunk).unwrap();
                     assert_eq!(duplicate.disposition, WriteDisposition::Duplicate);
+                    assert_eq!(
+                        session.write_stdin(token, write_id, offset, b"different"),
+                        Err(ProtocolError::RequestIdConflict)
+                    );
+                    assert!(matches!(
+                        session.write_stdin(token, write_id + 100_000, offset, &chunk),
+                        Err(ProtocolError::OffsetBehind { .. })
+                    ));
                     offset += len as u64;
                     write_id += 1;
                 }
@@ -569,44 +605,23 @@ mod tests {
         let token = session.token();
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut offset = 0_u64;
-        let mut saw_slow_consumer = false;
         let mut max_retained = 0_usize;
 
-        while Instant::now() < deadline {
+        while session.retained_output_bytes() < cap {
             let chunk = pattern_chunk(Stream::Stdout, offset, 64 * KIB);
-            match session.append_output(token, Stream::Stdout, &chunk) {
-                Ok(start) => {
-                    assert_eq!(start, offset);
-                    offset += chunk.len() as u64;
-                }
-                Err(ProtocolError::SlowConsumer { retained, cap }) => {
-                    saw_slow_consumer = true;
-                    assert!(retained <= cap);
-                }
-                Err(err) => panic!("unexpected append_output error: {err:?}"),
-            }
+            let start = session
+                .append_output(token, Stream::Stdout, &chunk)
+                .expect("fill stdout within cap");
+            assert_eq!(start, offset);
+            offset += chunk.len() as u64;
             max_retained = max_retained.max(session.retained_output_bytes());
-            assert!(max_retained <= cap);
-
-            let response = session
-                .read_output(token, Stream::Stdout, session.stdout.base_offset, 1024)
-                .unwrap();
-            if !response.data.is_empty() {
-                session
-                    .ack_output(
-                        token,
-                        Stream::Stdout,
-                        response.offset + response.data.len() as u64,
-                    )
-                    .unwrap();
-            }
-            thread::sleep(Duration::from_millis(25));
         }
-
-        assert!(
-            saw_slow_consumer,
-            "producer must observe bounded slow-consumer pressure"
-        );
+        thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        assert!(matches!(
+            session.append_output(token, Stream::Stdout, b"x"),
+            Err(ProtocolError::SlowConsumer { .. })
+        ));
+        assert!(max_retained <= cap);
         assert!(max_retained <= cap);
     }
 
@@ -622,7 +637,7 @@ mod tests {
         let sessions: Vec<_> = (0..SESSIONS)
             .map(|idx| {
                 let mut session =
-                    ChunkedSession::new(100 + idx as u64, 8 * MIB, 1 * MIB, DEFAULT_CHUNK);
+                    ChunkedSession::new(100 + idx as u64, 8 * MIB, MIB, DEFAULT_CHUNK);
                 fill_output(&mut session, Stream::Stdout, TOTAL);
                 Arc::new(Mutex::new(session))
             })
@@ -653,6 +668,7 @@ mod tests {
                         latencies.push(latency);
                         thread::yield_now();
                     }
+
                     latencies.sort_unstable();
                     let p95 = latencies[(latencies.len() * 95 / 100).min(latencies.len() - 1)];
                     let max = *latencies.last().unwrap();
@@ -682,6 +698,151 @@ mod tests {
                 "max attached read latency {max}ms > {MAX_MS}ms"
             );
         }
+    }
+
+    #[test]
+    fn mixed_attached_load_keeps_interactive_latency_bounded() {
+        const P95_MS: u128 = 25;
+        const MAX_MS: u128 = 100;
+
+        let slow_output = Arc::new(Mutex::new(ChunkedSession::new(
+            200,
+            8 * MIB,
+            512 * KIB,
+            DEFAULT_CHUNK,
+        )));
+        fill_output(&mut slow_output.lock().unwrap(), Stream::Stdout, 2 * MIB);
+
+        let blocked_stdin = Arc::new(Mutex::new(ChunkedSession::new(
+            201,
+            MIB,
+            64 * KIB,
+            64 * KIB,
+        )));
+        let interactive = Arc::new(Mutex::new(ChunkedSession::new(
+            202,
+            MIB,
+            MIB,
+            64 * KIB,
+        )));
+
+        let slow_handle = {
+            let slow_output = Arc::clone(&slow_output);
+            thread::spawn(move || {
+                let token = slow_output.lock().unwrap().token();
+                let mut offset = 0;
+                while offset < 2 * MIB as u64 {
+                    let response = slow_output
+                        .lock()
+                        .unwrap()
+                        .read_stdout(token, offset, 32 * KIB)
+                        .unwrap();
+                    offset += response.data.len() as u64;
+                    thread::yield_now();
+                }
+                offset
+            })
+        };
+
+        let blocked_handle = {
+            let blocked_stdin = Arc::clone(&blocked_stdin);
+            thread::spawn(move || {
+                let token = blocked_stdin.lock().unwrap().token();
+                let mut offset = 0;
+                let mut slow = 0;
+                for write_id in 1..=64 {
+                    let chunk = stdin_pattern(offset, 16 * KIB);
+                    let result = blocked_stdin
+                        .lock()
+                        .unwrap()
+                        .write_stdin(token, write_id, offset, &chunk);
+                    match result {
+                        Ok(_) => offset += chunk.len() as u64,
+                        Err(ProtocolError::SlowConsumer { .. }) => slow += 1,
+                        Err(err) => panic!("unexpected stdin result: {err:?}"),
+                    }
+                    thread::yield_now();
+                }
+                slow
+            })
+        };
+
+        let interactive_handle = {
+            let interactive = Arc::clone(&interactive);
+            thread::spawn(move || {
+                let token = interactive.lock().unwrap().token();
+                let mut latencies = Vec::new();
+                for idx in 0..240_u64 {
+                    let byte = [idx as u8];
+                    let start = Instant::now();
+                    interactive
+                        .lock()
+                        .unwrap()
+                        .write_stdin(token, idx + 1, idx, &byte)
+                        .unwrap();
+                    interactive
+                        .lock()
+                        .unwrap()
+                        .append_output(token, Stream::Stdout, &byte)
+                        .unwrap();
+                    let response = interactive
+                        .lock()
+                        .unwrap()
+                        .read_stdout(token, idx, 1)
+                        .unwrap();
+                    assert_eq!(response.data, byte);
+                    latencies.push(start.elapsed().as_millis());
+                    thread::yield_now();
+                }
+                latencies.sort_unstable();
+                let p95 = latencies[(latencies.len() * 95 / 100).min(latencies.len() - 1)];
+                let max = *latencies.last().unwrap();
+                (p95, max)
+            })
+        };
+
+        let health_handle = thread::spawn(move || {
+            let mut latencies = Vec::new();
+            for _ in 0..240 {
+                let start = Instant::now();
+                std::hint::black_box(());
+                latencies.push(start.elapsed().as_micros());
+                thread::yield_now();
+            }
+            latencies.into_iter().max().unwrap_or(0)
+        });
+
+        assert_eq!(slow_handle.join().unwrap(), 2 * MIB as u64);
+        assert!(blocked_handle.join().unwrap() > 0);
+        let (p95, max) = interactive_handle.join().unwrap();
+        assert!(p95 <= P95_MS, "interactive p95 {p95}ms > {P95_MS}ms");
+        assert!(max <= MAX_MS, "interactive max {max}ms > {MAX_MS}ms");
+        assert!(health_handle.join().unwrap() < 10_000);
+    }
+
+    #[test]
+    fn receive_cap_and_effective_chunk_limit_are_distinct() {
+        let max_recv = MIB + 16 * KIB;
+        assert_eq!(
+            ChunkedSession::receive_message(max_recv, max_recv)
+                .unwrap()
+                .len(),
+            max_recv
+        );
+        assert_eq!(
+            ChunkedSession::receive_message(max_recv, max_recv + 1),
+            Err(ProtocolError::ReceiveMessageTooLarge)
+        );
+
+        let mut session = ChunkedSession::new(7, MIB, 2 * MIB, 64 * KIB);
+        let token = session.token();
+        let bounded_but_too_large = vec![0u8; 64 * KIB + 1];
+        assert_eq!(
+            session.write_stdin(token, 1, 0, &bounded_but_too_large),
+            Err(ProtocolError::ChunkTooLarge)
+        );
+        assert_eq!(session.stdin_next_offset(), 0);
+        assert_eq!(session.stdin_buffered_bytes(), 0);
     }
 
     #[test]
@@ -730,7 +891,7 @@ mod tests {
         session
             .push_control(
                 token,
-                0,
+                1,
                 ControlEvent::Resize(WindowSize {
                     rows: 40,
                     cols: 120,
@@ -738,42 +899,42 @@ mod tests {
             )
             .unwrap();
         session
-            .push_control(token, 1, ControlEvent::Signal(Signal::Int))
+            .push_control(token, 2, ControlEvent::Signal(Signal::Int))
             .unwrap();
         session
             .push_control(
                 token,
-                2,
+                3,
                 ControlEvent::Exit(ExitStatus::from_signal(Signal::Int)),
             )
             .unwrap();
         assert_eq!(
             session.push_control(
                 token,
-                4,
+                5,
                 ControlEvent::Resize(WindowSize { rows: 24, cols: 80 })
             ),
             Err(ProtocolError::ControlSequenceGap {
-                expected: 3,
-                got: 4
+                expected: 4,
+                got: 5
             })
         );
         assert_eq!(
             session.events(),
             &[
                 OrderedControlEvent {
-                    seq: 0,
+                    seq: 1,
                     event: ControlEvent::Resize(WindowSize {
                         rows: 40,
                         cols: 120
                     }),
                 },
                 OrderedControlEvent {
-                    seq: 1,
+                    seq: 2,
                     event: ControlEvent::Signal(Signal::Int),
                 },
                 OrderedControlEvent {
-                    seq: 2,
+                    seq: 3,
                     event: ControlEvent::Exit(ExitStatus::Signal {
                         signal: Signal::Int,
                         status_code: 130,

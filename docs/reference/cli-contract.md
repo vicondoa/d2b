@@ -402,11 +402,15 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
   },
   "current": null,
   "booted": null,
-  "pendingRestart": false
+  "pendingRestart": false,
+  "apiReady": null
 }
 ```
 
-**Disposition:** `rust-native` — Status is a read-only daemon RPC, including the frozen per-VM JSON shape.
+**Disposition:** `rust-native` — Status is a read-only daemon RPC,
+including the frozen per-VM JSON shape. Guest-control rollout will add a
+negotiated guest-control state field in the implementation wave; it must
+not appear as an ad hoc unversioned key.
 
 ### `status --check-bridges`
 

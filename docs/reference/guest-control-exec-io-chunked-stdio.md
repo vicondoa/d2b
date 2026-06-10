@@ -1,10 +1,10 @@
 # Guest control exec I/O: chunked stdio ttRPC design
 
 This document specifies the bounded exec I/O protocol selected for the
-post-W0 guest-control design: ttRPC unary calls for lifecycle and
+guest-control design: ttRPC unary calls for lifecycle and
 Kata-style chunked stdio RPCs for stdin/stdout/stderr. It is the design
 follow-up to [ADR 0026](../adr/0026-guest-control-plane-over-vsock.md)
-and the [W0 feasibility dossier](./guest-control-w0-feasibility.md).
+and the [guest-control feasibility dossier](../adr/0026-guest-control-feasibility-dossier.md).
 
 ## Decision summary
 
@@ -278,7 +278,7 @@ Default design limits:
 | detached stdout log | 16 MiB | 128 MiB | Ring-retained by offset with truncation accounting. |
 | detached stderr log | 16 MiB | 128 MiB | Separate in non-TTY mode. |
 | long-poll read timeout | 100 ms | 1 s | CLI can immediately re-poll for interactive use. |
-| slow-consumer grace | 30 s | 5 min | Must satisfy the W0 slow-consumer proof. |
+| slow-consumer grace | 30 s | 5 min | Must satisfy the slow-consumer proof. |
 | concurrent exec sessions per VM | 32 | 256 | New sessions fail before spawn with `exec-capacity-exceeded`. |
 | attached exec sessions per VM | 8 | 64 | New attaches fail without affecting detached execs. |
 | pending `ReadStdout` waits | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
@@ -535,7 +535,7 @@ small grace period unless another authorized attach takes ownership.
 
 ## Bounded memory and backpressure proof
 
-Raw ttRPC streams failed W0 because application receivers could stall
+Raw ttRPC streams failed the feasibility gate because application receivers could stall
 while payloads accumulated behind stream delivery tasks. This design
 moves flow control into the application protocol:
 
@@ -570,7 +570,7 @@ metadata/dedupe/events <= implementation budget, target < 1 MiB
 ```
 
 Detached execs add configured retained log storage but remain bounded by
-`detached stdout log + detached stderr log`. The W0 conformance budget of
+`detached stdout log + detached stderr log`. The conformance budget of
 64 MiB above idle for four concurrent sessions is therefore achievable
 with the defaults and must be proven by tests before implementation
 locks.
@@ -583,7 +583,7 @@ locks.
 | stdout/stderr separation | Separate logs and read RPCs in non-TTY mode. |
 | TTY merge | PTY output maps to stdout; stderr read is typed unavailable. |
 | initial geometry and resize ordering | Geometry is part of create; later resizes use `control_seq`. |
-| PTY leadership / foreground process group | Not solved by wire format; implementation must use the W0 safe-PTY proof path: session leader, controlling terminal, `tcgetpgrp` foreground owner, and child job handoff are required. |
+| PTY leadership / foreground process group | Not solved by wire format; implementation must use the safe-PTY proof path: session leader, controlling terminal, `tcgetpgrp` foreground owner, and child job handoff are required. |
 | Ctrl-C/signal delivery | `ExecSignal` targets the current `tcgetpgrp` foreground process group for TTY, including after a shell hands the terminal to a child job. |
 | exit code/signal propagation | `ExecWait` and `Inspect` report terminal state separately from I/O EOF. |
 | bounded memory / backpressure | Bounded logs, one stdin chunk, limited waiters, and slow-consumer cancellation. |
@@ -848,6 +848,6 @@ incorrect CLI retry behavior around `stdin-backpressure` or
 ## References
 
 - [ADR 0026: Guest control plane over virtio-vsock](../adr/0026-guest-control-plane-over-vsock.md)
-- [Guest control W0 feasibility dossier](./guest-control-w0-feasibility.md)
+- [Guest control feasibility dossier](../adr/0026-guest-control-feasibility-dossier.md)
 - [Kata Agent protocol stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)
 - [Kata Agent stream message shapes](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L211-L227)

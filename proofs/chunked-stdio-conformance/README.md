@@ -15,7 +15,8 @@ The tests prove:
 - 64 MiB stdout plus 64 MiB stderr are byte-exact through
   `ReadStdout`/`ReadStderr` offset reads.
 - 16 MiB slow stdin is delivered byte-exact through `WriteStdin`, with
-  exact-offset append, duplicate replay acceptance, offset-gap rejection,
+  exact-offset append, same-request duplicate replay acceptance,
+  different-request stale replay rejection, offset-gap rejection,
   stale-data rejection, and bounded stdin backpressure.
 - A 30 second slow-consumer run keeps retained output below the configured
   cap and returns an explicit `SlowConsumer` error instead of allocating
@@ -28,16 +29,19 @@ The tests prove:
 - Resize, signal, and exit events share an ordered control sequence, and
   signal exits map to shell-style `128 + signal` status codes.
 
-SSH compatibility is intentionally design-level: existing running VMs that
-lack guest-control capability must continue using the SSH lifecycle path
-until replacement/restart. The executable proof models the new protocol's
-stale-session/restart behavior, not the legacy SSH transport itself.
+SSH compatibility is intentionally design-level: existing SSH-backed commands
+such as `config sync` and `vm konsole` continue using their current SSH path
+for old running VMs until replacement/restart. The new `nixling exec` and
+`nixling vm exec run` commands never fall back to SSH. The executable proof
+models the new protocol's stale-session/restart behavior, not the legacy SSH
+transport itself.
 
 ## SSH compatibility matrix
 
 | VM state | CLI behavior | Compatibility result |
 | --- | --- | --- |
-| Old running VM without `guest-control` capability | Keep using the existing SSH lifecycle/exec path. | Compatible; no forced restart. |
+| Old running VM without `guest-control` capability and existing SSH-backed command (`config sync`, `vm konsole`) | Keep using that command's current SSH path with `transport: "ssh-compat"` and remediation. | Compatible; no forced restart. |
+| Old running VM without `guest-control` capability and new generic exec (`nixling exec`, `nixling vm exec run`) | Return typed `guest-control-unavailable-old-generation`; do not use SSH. | Fail closed; no new generic SSH exec surface. |
 | New or restarted VM advertising `guest-control` capability | Use chunked stdio RPCs for exec I/O. | New protocol active. |
 | VM restarts while a client holds an old generation token | Reject the next RPC as stale. | Fail closed; client must reconnect/rediscover. |
 | Guest-control unavailable but SSH still configured | Fall back only through the documented SSH compatibility path. | Operator-visible old-generation behavior. |

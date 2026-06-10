@@ -114,7 +114,7 @@ This ADR covers the role contract, identity, isolation, and process
 lifecycle. The following are deferred to Wave 2:
 
 - Lane A: `nixling-wayland-filter` binary crate; filtering policy;
-  app-id and title rewriting; ADR 0026 (filtering policy invariants).
+  app-id and title rewriting; a future filtering-policy ADR.
 - Lane C: `processes-json.nix` and `host-activation.nix` integration —
   removing the real compositor socket from GPU runner bind-mounts,
   repointing `--wayland-sock`, and declaring the DAG edge.
@@ -144,7 +144,8 @@ lifecycle. The following are deferred to Wave 2:
 ## Non-decisions
 
 - The filtering policy (which globals are allowed/denied, seccomp
-  allowlist, RLIMIT_NOFILE value) is ADR 0026 territory.
+  allowlist, RLIMIT_NOFILE value) belongs in a future filtering-policy
+  ADR.
 - The broker-pre-NS (ADR 0021) pattern was considered and rejected for
   this role: the proxy binds an AF_UNIX listen socket and has no need
   for fake-root semantics.

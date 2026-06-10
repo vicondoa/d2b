@@ -1,6 +1,6 @@
 # ADR 0026: Guest control plane over virtio-vsock
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-08
 - Related: ADR 0010 (wire protocol and typed errors), ADR 0015
   (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018
@@ -26,7 +26,7 @@ allowlisted `nixling-userd` instances.
 
 The hard part is the wire protocol. We do not want to invest in a
 bespoke protocol if an existing microVM agent practice meets the need.
-The W0 design gate therefore targets ttRPC first and requires evidence
+The feasibility gate therefore targets ttRPC first and requires evidence
 before locking the implementation path.
 
 ## Prior art
@@ -90,7 +90,8 @@ Docker's internal stream format and Kubernetes remotecommand channels
 are useful references, but nixling does not promise Docker or Kubernetes
 wire compatibility.
 
-The concrete user-facing exec surface to preserve through W0 is:
+The concrete user-facing exec surface to preserve through the feasibility
+gate is:
 
 ```text
 nixling exec <vm> [--interactive|-i] [--tty|-t] [--detach|-d]
@@ -109,20 +110,22 @@ Plain `exec` is attached, non-TTY, and has stdin closed unless
 `--interactive` is set. `--tty` allocates a PTY and implies merged
 stdout/stderr; `--interactive --tty` is the Docker-style shell case.
 Arguments after `--` are an argv array, not an implicit shell string.
-Detached exec is in scope for the full design, but W0 only has to prove
-whether the selected IPC can carry the lifecycle and stream semantics.
+Detached exec is in scope for the full design, but the feasibility gate
+only has to prove whether the selected IPC can carry the lifecycle and
+stream semantics.
 Exit status propagation follows the remote command: normal exit returns
 the command's exit code; signal termination and transport/protocol
 failures use typed nixling errors.
 
 ## Decision
 
-W0 targets ttRPC/protobuf for guest-control APIs. Unary ttRPC calls carry
+The feasibility gate targets ttRPC/protobuf for guest-control APIs. Unary
+ttRPC calls carry
 health, capabilities, lifecycle, inspection, wait, signal, resize, and
 log metadata.
 
 Raw `ttrpc-rust` async streams are not selected for Docker-like exec I/O:
-the W0 backpressure proof showed unbounded-enough buffering and
+the feasibility backpressure proof showed unbounded-enough buffering and
 non-byte-exact output when an application receiver stalled.
 
 The selected bounded exec I/O protocol is **Kata-style chunked stdio
@@ -147,9 +150,9 @@ candidate if chunked stdio fails later implementation evidence. A custom
 binary stream or custom JSON control remains a last resort and requires a
 new panel-approved decision.
 
-## W0 feasibility gate
+## Feasibility gate
 
-The W0 dossier must include:
+The feasibility dossier must include:
 
 - static guest builds for `x86_64-linux` and `aarch64-linux`;
 - static guest builds must target `x86_64-unknown-linux-musl` and
@@ -162,7 +165,7 @@ The W0 dossier must include:
 - proof that no guest binary has an ELF interpreter or `DT_NEEDED`
   dynamic dependencies;
 - exact commands or Nix derivations used for static evidence. At
-  minimum the W0 check shape is:
+  minimum the check shape is:
 
   ```text
   cargo build --manifest-path packages/Cargo.toml \
@@ -191,7 +194,7 @@ The W0 dossier must include:
 - generated API documentation/schema integration plan;
 - terminal transport conformance results for each candidate.
 
-If any must-pass item fails, W0 records the concrete failure and the
+If any must-pass item fails, the dossier records the concrete failure and the
 next candidate is evaluated. A fallback cannot be selected by
 preference alone.
 
@@ -229,14 +232,14 @@ Every terminal transport candidate must pass the same matrix:
   symlink-safe traversal, isolated between guest users, and cleaned by TTL
   or explicit removal.
 
-W0 must quantify the stress cases it runs. The exact numbers may be
+The dossier must quantify the stress cases it runs. The exact numbers may be
 adjusted during implementation, but the dossier must record payload
 sizes, stall durations, frame/message limits, maximum resident memory
 observed, and expected typed error behavior for oversized input,
 distinguishing transport receive-cap rejection before protobuf decode
 from bounded post-decode application-limit rejection.
 
-Initial W0 pass/fail thresholds are:
+Initial pass/fail thresholds are:
 
 - non-TTY large-output test: at least 64 MiB stdout and 64 MiB stderr
   from one process, with byte-exact demultiplexed output;
@@ -256,8 +259,8 @@ Initial W0 pass/fail thresholds are:
   sessions (one slow-output, one blocked-stdin, one interactive TTY,
   one unary health loop), p95 input-to-output latency for the
   interactive session must stay at or below 250 ms and max latency at or
-  below 1 s, unless W0 records a new panel-approved threshold;
-- memory high-water mark: W0 records idle RSS and test RSS; any
+  below 1 s, unless a panel-approved update records a new threshold;
+- memory high-water mark: the dossier records idle RSS and test RSS; any
   candidate whose RSS grows without bound or exceeds the recorded
   per-session budget fails. The initial per-session budget is 64 MiB
   above idle for the fake-transport tests.
@@ -287,7 +290,7 @@ for failing a must-pass row.
   guestd control port and, only if needed, a separate exec stream port:
   `14318` is the host-to-guest `nixling-guestd` ttRPC control port and
   `14319` is reserved for any future panel-approved guest-control
-  stream side channel. The selected W0 chunked-stdio design does not use
+  stream side channel. The selected chunked-stdio design does not use
   `14319`. Existing guest-to-host observability port `14317` remains
   separate: it is owned by OTLP/Alloy relay traffic, uses the
   guest-to-host direction, and must not carry guest-control RPCs.
@@ -298,17 +301,20 @@ for failing a must-pass row.
 - Host CONNECT setup is part of the transport contract: connect to the
   CH base UDS, send exactly `CONNECT <port>\n`, read and validate the
   full `OK <buffer-size>\n` line without consuming payload bytes, and
-  only then hand the raw post-OK byte stream to ttRPC. W0 must test
-  success, refusal, malformed reply, timeout, half-close, stale socket
-  after VM restart, and guest listener absence. Half-close means EOF on
-  one side is propagated without treating the opposite direction as
-  already closed; stale sockets and absent listeners fail readiness with
-  typed transport errors and never degrade to socket-existence success.
+  only then hand the raw post-OK byte stream to ttRPC. The feasibility
+  proof covers success, refusal, malformed reply, timeout, and EOF
+  before OK. The implementation harness before guest-control ships must
+  also cover half-close, stale socket after VM restart, and guest
+  listener absence. Half-close means EOF on one side is propagated
+  without treating the opposite direction as already closed; stale
+  sockets and absent listeners fail readiness with typed transport errors
+  and never degrade to socket-existence success.
 - The CH CONNECT harness must reject wrong ports and then wrap the same
   accepted stream as the ttRPC client/server transport so the test
   proves the real handoff shape, not just the textual prelude.
 - Guest-side ttRPC serving uses `ttrpc-rust`'s safe async listener API
-  on `vsock://-1:14318`, which is backed by `tokio-vsock` on Linux. W0
+  on `vsock://-1:14318`, which is backed by `tokio-vsock` on Linux. The
+  feasibility gate
   carries a compile-only proof for this shape because routine CI hosts
   do not expose a guest AF_VSOCK device. Runtime vsock tests remain
   cfg-gated to hosts or microVMs that provide virtio-vsock.
@@ -474,7 +480,8 @@ Positive:
 
 Negative:
 
-- W0 must complete before most guest-control implementation can be
+- The feasibility gate must complete before most guest-control
+  implementation can be
   parallelized safely.
 - ttRPC/protobuf introduces a second generated-contract toolchain if
   selected.
@@ -489,8 +496,8 @@ Negative:
 - **Use gRPC/tonic by default:** rejected as the first target because
   it is heavier than needed for a small VM agent and brings HTTP/2
   complexity.
-- **Start with a bespoke JSON protocol:** rejected as premature until
-  W0 proves ttRPC cannot meet the requirements.
+- **Start with a bespoke JSON protocol:** rejected as premature unless
+  feasibility evidence proves ttRPC cannot meet the requirements.
 - **Use a host proxy daemon:** rejected because it would add another
   persistent host surface and complicate the daemon-only model.
 - **Fallback to SSH for generic `nixling exec`:** rejected because it

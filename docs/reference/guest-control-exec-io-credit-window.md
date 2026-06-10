@@ -1,7 +1,7 @@
 # Guest-control exec I/O credit-window protocol
 
 This document records the bounded credit-window ttRPC stream candidate
-for nixling guest-control exec I/O. The W0 decision selected
+for nixling guest-control exec I/O. The feasibility decision selected
 [chunked stdio RPCs](./guest-control-exec-io-chunked-stdio.md) instead
 because raw ttRPC stream buffering was the observed failure mode and the
 unary chunked model is simpler to bound and test. This credit-window
