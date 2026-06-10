@@ -414,6 +414,7 @@ in
               ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
               ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
             fi
+            ${pkgs.acl}/bin/setfacl -b /run/nixling/vms/${name}/guest-control 2>/dev/null || true
             ${activationHelper} setfacl-on-path \
               --path "/run/nixling/vms/${name}" \
               --acl-spec "u:$uid:--x" \
@@ -511,6 +512,7 @@ in
                   ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name} --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
                   ${activationHelper} enforce-dir-posture --path /run/nixling/vms/${name}/guest-control --uid "$nixlingd_uid" --gid "$nixling_gid" --mode 0750 2>/dev/null || true
                 fi
+                ${pkgs.acl}/bin/setfacl -b /run/nixling/vms/${name}/guest-control 2>/dev/null || true
                 ${activationHelper} setfacl-on-path \
                   --path "/run/nixling/vms/${name}" \
                   --acl-spec "u:$uid:--x" \
