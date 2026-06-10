@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- Guest-control chunked stdio docs now account for protobuf `bytes`
+  allocation before handler entry by specifying ttRPC receive caps,
+  bounded post-decode byte semaphores, and per-exec stdin permits for
+  malicious concurrent `WriteStdin` fan-in.
+
 - TPM-enabled guests now flush stale loaded/saved TPM sessions during
   early boot before SRK provisioning. This prevents swtpm session-handle
   exhaustion from breaking TPM-bound credentials while preserving NVRAM

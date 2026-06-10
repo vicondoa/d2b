@@ -336,7 +336,7 @@ environment, command arguments, HMAC material, or raw session tokens.
 | half-close | per-channel close state machine | stdin close does not imply stdout/stderr close. |
 | stale sessions | `generation` in `ExecSessionId` | Old session rejected after guestd restart/reboot. |
 | raw-mode cleanup | CLI cleanup around stream lifecycle | Terminal restored on success, error, and cancel. |
-| max frame size | `max_frame_bytes` before allocation | max passes; max+1 fails with typed error. |
+| max frame size | ttRPC receive cap before protobuf decode plus bounded post-decode frame validation | max passes; receive-cap + 1 fails before handler entry; effective max + 1 fails with typed error and no session-buffer copy. |
 | malformed messages | sequence/channel/window validation | Redacted `ERROR_CODE_PROTOCOL`; no panic. |
 | log hygiene | bounded aggregate telemetry only | No command/output/env/token leaks in logs or metrics. |
 
@@ -365,9 +365,11 @@ Implementation must add protocol-level tests before production enablement:
 
 ## Risks and open decisions
 
-- ttRPC implementations may still buffer whole protobuf messages before
-  the application sees them. Keeping `max_frame_bytes` small and rejecting
-  oversized frames before allocation is mandatory.
+- ttRPC implementations may still buffer or decode whole protobuf messages
+  before the application sees them. Keeping `max_frame_bytes` small is
+  mandatory, but the enforceable invariant is a receive cap before
+  protobuf decode plus bounded post-decode allocation under explicit
+  per-connection byte budgets.
 - Credit logic is more complex than chunked request/response stdio. The
   benefit is one full-duplex attach stream with explicit half-close and
   interactive latency; the cost is a larger state machine.

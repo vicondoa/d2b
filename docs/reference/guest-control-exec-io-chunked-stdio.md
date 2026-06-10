@@ -149,8 +149,13 @@ Response fields:
 
 Rules:
 
-1. `data.len()` is checked before allocation and must not exceed
-   `effective_limits.max_chunk_bytes`.
+1. The ttRPC receiver enforces `max_recv_message_bytes` before protobuf
+   decode, and `data.len()` must not exceed
+   `effective_limits.max_chunk_bytes` after decode. Because protobuf
+   `bytes` fields may allocate during decode, the decoded request is
+   admitted only while holding the per-connection decoded-byte budget and
+   the per-exec stdin write permit described in
+   [Receive limits and concurrency proof](#receive-limits-and-concurrency-proof).
 2. `offset` must equal the server's next expected stdin offset, unless it
    exactly repeats the previous accepted chunk and `request_id` matches a
    dedupe entry. Otherwise the server returns `stdin-offset-mismatch`
@@ -250,8 +255,12 @@ Default design limits:
 
 | Limit | Default | Hard maximum | Notes |
 | --- | ---: | ---: | --- |
-| `max_chunk_bytes` | 64 KiB | 1 MiB | Below ttRPC's observed 4 MiB rejection point; checked before allocation. |
+| `max_chunk_bytes` | 64 KiB | 1 MiB | Application chunk limit; larger decoded chunks are rejected before session-buffer copy. |
+| `max_recv_message_bytes` | 1 MiB + 16 KiB | 1 MiB + 16 KiB | ttRPC receive cap for chunked-stdio methods, enforced before protobuf decode. |
+| chunked-stdio connections per VM | 4 | 4 | Bounds cross-connection decoded stdin pressure. |
 | stdin in-flight per exec | 1 chunk | 1 MiB | No guest-side stdin queue beyond current RPC plus OS pipe/PTY capacity. |
+| decoded WriteStdin bytes per connection | 4 MiB | 4 MiB | Weighted semaphore across concurrent decoded requests. |
+| concurrent WriteStdin handlers per connection | 4 | 4 | Bounds protobuf `bytes` allocations even for malicious fan-in. |
 | stdout live buffer per stream | 1 MiB | 8 MiB | Attached sessions; producer blocks before exceeding it. |
 | stderr live buffer per stream | 1 MiB | 8 MiB | Not used for TTY execs. |
 | detached stdout log | 16 MiB | 128 MiB | Ring-retained by offset with truncation accounting. |
@@ -262,6 +271,59 @@ Default design limits:
 The hard maximums are capability values negotiated at `Hello` time and
 may be lowered by VM policy. Raising them requires updating tests and
 memory-budget documentation.
+
+## Receive limits and concurrency proof
+
+The selected invariant is **bounded post-decode allocation**, with a
+transport prefilter where ttRPC exposes one. A protobuf `bytes` field can
+be allocated by the generated decoder before the `WriteStdin` handler
+examines `data.len()`, so the design does not claim that every
+`max_chunk_bytes + 1` request is rejected before all allocation. Instead,
+the receiver enforces these gates, in order:
+
+1. Configure the chunked-stdio ttRPC service with
+   `max_recv_message_bytes = hard_max_chunk_bytes + 16 KiB`
+   (`1 MiB + 16 KiB` initially). Messages larger than that are rejected
+   by transport framing before protobuf decode and before handler entry.
+   The 16 KiB allowance covers fixed protobuf fields, auth metadata, and
+   ttRPC framing; tests must fail if the generated schema needs more.
+2. Limit chunked-stdio decode/handler concurrency per connection to four
+   `WriteStdin` calls. With the receive cap above, a malicious client can
+   force at most roughly `4 * (1 MiB + 16 KiB)` decoded request bytes per
+   connection before application admission runs.
+3. At handler entry, charge `data.len()` against a per-connection
+   weighted semaphore with a 4 MiB budget. The permit is acquired before
+   hashing for idempotency, copying into any session buffer, or waiting on
+   child pipe/PTY capacity, and is released when the response is sent.
+   Exhaustion returns typed `stdin-byte-budget-exhausted` without
+   retaining the payload.
+4. Acquire the per-exec `stdin_inflight` semaphore, exactly one permit,
+   before comparing or writing a non-empty chunk. A second concurrent
+   `WriteStdin` for the same exec either waits until its
+   `client_deadline_ms`/`stdin_write_deadline_ms` expires or returns
+   `stdin-backpressure`. This serializes offset advancement and prevents
+   same-exec fan-in from building a guest-side stdin queue.
+5. After both permits are held, validate `data.len() <=
+   effective_limits.max_chunk_bytes`. An effective-limit `max + 1`
+   request that is still below the service receive cap is rejected with
+   `max-chunk-exceeded`; it may have incurred one bounded decoded bytes
+   allocation, but it is never copied into session storage or queued
+   behind another stdin write.
+
+Therefore, for `N` active connections, malicious concurrent
+`WriteStdin` fan-in is bounded by:
+
+```text
+decoded request bytes <= N * 4 * (1 MiB + 16 KiB)
+admitted payload bytes <= N * 4 MiB
+per-exec retained stdin <= 1 in-flight chunk + kernel pipe/PTY capacity
+```
+
+The per-VM connection cap from the guest-control transport budget bounds
+`N`; with the initial four-connection cap, decoded stdin pressure is
+below 16.25 MiB per VM before ordinary Rust allocator overhead. This
+budget is separate from output log retention and must be included in RSS
+evidence.
 
 ## Server-side storage model
 
@@ -389,8 +451,11 @@ moves flow control into the application protocol:
 3. Detached output uses bounded ring retention. Dropping old detached log
    bytes is explicit through `start_offset`, `dropped_bytes`, and
    `truncated` fields, never silent for attached readers.
-4. Each ttRPC request/response has a preallocation size check. The server
-   rejects over-limit chunks before copying payloads into session buffers.
+4. ttRPC rejects messages above `max_recv_message_bytes` before protobuf
+   decode. Effective `max_chunk_bytes` violations that fit under that
+   transport cap may allocate one decoded protobuf `bytes` field, but
+   per-connection decoded-byte semaphores and per-exec stdin permits bound
+   the allocation and reject before session-buffer copy.
 5. Pending waits are bounded per exec and timeout quickly.
 6. Per-connection and per-VM caps limit concurrent exec count, pending RPC
    count, total retained log bytes, and total live buffer bytes.
@@ -399,6 +464,7 @@ With default limits, a non-TTY attached exec consumes at most roughly:
 
 ```text
 stdin_rpc_chunk        <= 64 KiB
+decoded_stdin_budget   <= 4 MiB per connection, shared across execs
 stdout_live_buffer     <= 1 MiB
 stderr_live_buffer     <= 1 MiB
 read_response_chunks   <= 2 * 64 KiB
@@ -428,7 +494,7 @@ locks.
 | half-close behavior | `CloseStdin` is independent of output reads and wait. |
 | guestd restart / VM reboot | Session identity, inspect state, and stale-session errors reject unsafe reattach. |
 | raw-mode restoration | CLI owns local raw mode and restores on terminal state or protocol error. |
-| max message size | `max_chunk_bytes` checked before allocation and below ttRPC's max. |
+| max message size | ttRPC receive cap plus bounded post-decode `max_chunk_bytes` check. |
 | malformed messages | Typed `protocol-error` codes with bounded fields only. |
 | no data leakage | Logs/metrics carry counters, offsets, outcomes, and booleans, not payloads. |
 
@@ -497,6 +563,7 @@ Required typed error kinds:
 - `stdin-closed-by-process`
 - `stdin-offset-mismatch`
 - `stdin-backpressure`
+- `stdin-byte-budget-exhausted`
 - `offset-expired`
 - `offset-in-future`
 - `max-chunk-exceeded`
@@ -533,12 +600,20 @@ material, or guest free-form errors.
 Before implementation exits design hardening, add at least:
 
 1. protobuf/schema drift tests for every message above;
-2. max-chunk tests: exactly max succeeds, max+1 fails before allocation;
+2. receive-limit tests: service `max_recv_message_bytes + 1` fails before
+   protobuf decode/handler entry; effective `max_chunk_bytes + 1` fails
+   with one bounded decoded allocation and no session-buffer copy;
 3. stdin offset/idempotency tests, including duplicate request IDs and
    mismatched duplicate payloads;
 4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior;
 5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
 6. stdin 16 MiB slow-reader test with bounded RSS;
+6a. malicious concurrent `WriteStdin` fan-in test: four hard-maximum-sized
+    requests on one connection consume only the 4 MiB decoded-byte budget,
+    a fifth concurrent request receives `stdin-byte-budget-exhausted` or
+    waits for a permit, and concurrent effective-limit `max + 1` writes to
+    one exec preserve offset order and never queue more than one chunk
+    behind the single per-exec stdin permit;
 7. 30-second slow stdout/stderr consumer test proving block or
    `slow-consumer-cancelled` with bounded RSS;
 8. detached retention tests proving dropped-byte accounting and
