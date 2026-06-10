@@ -64,6 +64,10 @@ pub mod store_sync_export;
 // verification + host-only integrity state.
 pub mod store_verify;
 
+// Single-inode ownership/mode posture for broker-created store-view
+// metadata paths. Never recursive into the hardlinked live pool.
+pub mod store_view_posture;
+
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
 // so the farm hardlinks succeed even when `/nix/store` is a separate

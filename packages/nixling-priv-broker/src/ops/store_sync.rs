@@ -16,12 +16,13 @@
 //!    wrapper that resolves the closure paths from the trusted
 //!    bundle and delegates to the primitive.
 //! 2. CRITICAL INVARIANT: NEVER `chown -R`, `chmod -R`, or
-//!    `setfacl -R` on the per-VM store-view path. Mutations there
-//!    propagate INTO `/nix/store` via the shared inodes and break
-//!    ssh's `safe_path()` check. The primitive only issues
-//!    `link(2)` + `symlinkat`/`renameat`, never recursive mode or
-//!    owner mutation. This module never invokes `chown`, `chmod`,
-//!    or `setfacl` either.
+//!    `setfacl -R` on the per-VM store-view path. Recursive mutations
+//!    under `live/` propagate INTO `/nix/store` via the shared inodes and
+//!    break ssh's `safe_path()` check. The primitive only issues
+//!    `link(2)` + `symlinkat`/`renameat` for live-pool content. This
+//!    module may posture broker-created metadata/lock inodes with
+//!    single-inode, no-recursion owner/mode updates so daemon preflight sees
+//!    the documented matrix.
 //! 3. The op is audited with a single terminal `OperationFields::StoreSync`
 //!    record carrying the signed ADR 0027 audit schema (see
 //!    [`crate::ops::store_sync_audit`]): `generation_id`,
@@ -31,6 +32,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::{flock, FlockArg};
@@ -38,6 +40,7 @@ use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
 use crate::ops::store_sync_audit::{ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields};
+use crate::ops::store_view_posture::{posture_store_view_matrix_paths, PostureError};
 
 /// Typed errors for the `StoreSync` handler. Each value classifies the
 /// signed ADR 0027 [`ErrorStage`] the attempt failed at (see
@@ -240,6 +243,8 @@ pub fn run_store_sync(
     }
 
     let _lock = acquire_sync_lock(&intent.hardlink_farm_path)?;
+    posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+        .map_err(|err| posture_error(ErrorStage::Lock, err))?;
 
     // Reconcile possible stale `state/current.tmp` / `meta/current.tmp`
     // left over by a previous crashed publish BEFORE building the new
@@ -294,6 +299,8 @@ pub fn run_store_sync(
             &marker,
         )
         .map_err(|e| StoreSyncError::at(build_error_stage(&e), e))?;
+        posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+            .map_err(|err| posture_error(ErrorStage::Metadata, err))?;
         hardlink_farm::write_meta_db_dump(
             &intent.hardlink_farm_path,
             &generation_id,
@@ -309,6 +316,8 @@ pub fn run_store_sync(
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
         hardlink_farm::plant_live_marker(&intent.hardlink_farm_path, &intent.vm)
             .map_err(|e| StoreSyncError::at(ErrorStage::Marker, e))?;
+        posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+            .map_err(|err| posture_error(ErrorStage::Marker, err))?;
         (counts.linked, counts.skipped)
     } else {
         // Pure fast path: nothing relinked, every top-level basename is
@@ -348,6 +357,16 @@ pub fn run_store_sync(
     })
 }
 
+fn posture_error(stage: ErrorStage, err: PostureError) -> StoreSyncError {
+    StoreSyncError::at(
+        stage,
+        HardlinkFarmError::Io {
+            path: err.path,
+            detail: err.detail,
+        },
+    )
+}
+
 fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
     std::fs::create_dir_all(farm_root).map_err(|err| {
         StoreSyncError::at(
@@ -362,6 +381,7 @@ fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
+        .mode(0o600)
         .write(true)
         .open(&path)
         .map_err(|err| {
@@ -435,6 +455,8 @@ mod tests {
 
     #[test]
     fn happy_path_populates_split_layout_and_swaps_currents() {
+        use std::os::unix::fs::MetadataExt;
+
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 2);
         let outcome = run_store_sync(&intent, "alpha", 7).expect("happy path succeeds");
@@ -504,6 +526,30 @@ mod tests {
         // Host-only roots must NOT appear under the guest-served meta/.
         assert!(!farm.join("meta/state").exists());
         assert!(!farm.join("meta/gcroots").exists());
+
+        // StoreSync must posture the single inodes it creates to match
+        // daemon ownership preflight. Under cfg(test), the symbolic
+        // nixlingd/nixling/users principals resolve to the current uid/gid.
+        let expected_uid = nix::unistd::Uid::current().as_raw();
+        let expected_gid = nix::unistd::Gid::current().as_raw();
+        for (path, mode) in [
+            (farm.to_path_buf(), 0o755),
+            (farm.join("live"), 0o755),
+            (farm.join("meta"), 0o755),
+            (farm.join("meta/generations"), 0o755),
+            (farm.join("state"), 0o750),
+            (farm.join("state/generations"), 0o750),
+            (farm.join("gcroots"), 0o750),
+            (farm.join("sync.lock"), 0o600),
+            (farm.join("live/.nixling-marker-alpha"), 0o644),
+        ] {
+            let meta = std::fs::symlink_metadata(&path).unwrap_or_else(|err| {
+                panic!("stat {}: {err}", path.display());
+            });
+            assert_eq!(meta.uid(), expected_uid, "{} owner uid", path.display());
+            assert_eq!(meta.gid(), expected_gid, "{} owner gid", path.display());
+            assert_eq!(meta.mode() & 0o777, mode, "{} mode", path.display());
+        }
     }
 
     #[test]

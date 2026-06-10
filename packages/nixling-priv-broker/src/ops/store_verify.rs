@@ -17,6 +17,8 @@ use nixling_host::hardlink_farm;
 use nixling_ipc::broker_wire::{StoreVerifyResponse, StoreVerifyStatus, StoreVerifyUnknownReason};
 use serde::{Deserialize, Serialize};
 
+use crate::ops::store_view_posture::{posture_host_only_file, posture_store_view_matrix_paths};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum IntegrityState {
@@ -133,6 +135,9 @@ pub fn run_store_verify(intent: &ResolvedStoreViewIntent, repair: bool) -> Store
         }
     };
     let response = verify_locked(intent, repair);
+    if let Err(err) = posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm) {
+        return failed(&intent.vm, format!("posture store-view metadata: {err}"));
+    }
     drop(lock);
     response
 }
@@ -448,6 +453,12 @@ fn write_integrity_record(path: &Path, record: &IntegrityRecord) -> std::io::Res
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
+    posture_host_only_file(path).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("posture integrity record: {err}"),
+        )
+    })?;
     if let Some(parent) = path.parent() {
         if let Ok(dir) = File::open(parent) {
             let _ = dir.sync_all();
