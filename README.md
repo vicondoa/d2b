@@ -1,25 +1,71 @@
 # nixling
 
-**Nixling is opinionated NixOS desktop microVM workspaces — nixling
-owns its microVM substrate end-to-end.** ("microVM" = a Linux VM
-booted via lightweight VMMs like cloud-hypervisor or crosvm.) Nixling
-owns its per-VM evaluator (`nixos-modules/vm-evaluator.nix` +
-`vm-options.nix`) and spawns every per-VM runner through
-`nixling-priv-broker`'s typed `SpawnRunner` pipeline. Nixling adds:
+**A reasonably isolated NixOS desktop microVM framework: isolated
+networking and stores, mediated TPM/USB/audio/graphics, all on one
+Wayland desktop.**
 
-- A single `nixling` CLI for daily VM ops (`vm start`, `vm stop`,
-  `status`, `switch`, `keys rotate`, `audio …`, `usb …`).
-- Per-VM broker-spawned sidecars (GPU forward, audio mediation,
-  TPM emulation, virtiofsd) running as dedicated system users under
-  the supervisor DAG (per-VM pidfd ownership).
-- Per-environment isolated networks (point-to-point uplink + LAN
-  bridge + auto-declared NAT/DHCP "net VM" + firewall).
-- Per-VM `/nix/store` hardlink farm so each guest sees only its
-  own closure.
-- Nixling-managed Ed25519 SSH keys, generated and rotated per VM
-  at activation time.
-- A documented JSON manifest + bundle contract shared by the Rust
-  CLI and daemon control plane.
+Nixling is for people who want one machine to hold separate workspaces
+— work, personal, risky dev, corporate login — without turning every
+boundary into a hand-built VM project. You declare envs and VMs in
+NixOS; nixling builds the networks, keys, per-VM store views, sidecars,
+and daily CLI around them.
+
+If Qubes OS is about reasonable security through compartments, nixling's
+narrower promise is **reasonable isolation for a single-user NixOS
+Wayland desktop**. It is not a new OS and not a Qubes replacement: it
+composes into your existing NixOS host. Workloads run as Linux microVMs
+with their own kernels, accelerated through `/dev/kvm` by
+[Cloud Hypervisor] today. [crosvm] backs GPU/device sidecars today, and
+the runner contract is shaped so additional VMM backends can fit later.
+
+Nixling gives you:
+
+- **Isolated networking:** per-env bridges, firewalling, and an
+  auto-declared NAT/DHCP "net VM".
+- **Isolated store views:** each guest sees a per-VM `/nix/store`
+  hardlink farm containing only its own closure.
+- **Mediated I/O:** software TPM, USB passthrough, audio, graphics,
+  and virtiofs file sharing are broker-supervised per-VM sidecars
+  instead of ad-hoc host services.
+- **One Wayland desktop:** graphical VMs integrate with the host
+  compositor without asking you to live in a separate desktop.
+- **One operator surface:** the Rust `nixling` CLI talks to `nixlingd`
+  and the privileged broker for lifecycle, keys, USB, and host prep.
+
+At a high level:
+
+```mermaid
+flowchart TB
+    subgraph host["NixOS host"]
+        direction TB
+        subgraph human["human-facing host session"]
+            direction LR
+            cli["nixling CLI"]
+            desktop["Wayland desktop"]
+        end
+
+        devices["devices<br/>TPM / USB / audio / graphics / files"]
+
+        subgraph nixling_box["nixling"]
+            direction TB
+            nixlingd["nixlingd"]
+            broker["privileged broker"]
+            vhost["vhost-user sidecars"]
+            wayland["Wayland mediation"]
+        end
+
+        subgraph vm["microVM"]
+            direction TB
+            kernel["guest Linux kernel"]
+            apps["workspace apps"]
+        end
+    end
+
+    cli --> nixlingd
+    desktop --> wayland
+    vhost --> devices
+    nixling_box --- vm
+```
 
 **Quick start** (full walkthroughs under
 [Quick start (Rust CLI / examples)](#quick-start-rust-cli--examples) and
@@ -28,58 +74,62 @@ owns its per-VM evaluator (`nixos-modules/vm-evaluator.nix` +
 ```bash
 # after switching the host config from examples/personal-dev
 sudo nixling vm start personal-dev --apply
-
-# after switching the host config from examples/work-entra
-sudo nixling vm start work-entra --apply
 ```
-
-Every mutating verb dispatches through `nixlingd` →
-`nixling-priv-broker`. There is no bash fallback path.
 
 Other entry points: see [Where to start](#where-to-start) below for a
 table of the doc-friendly example aliases (`personal-dev`,
-`graphics-workstation`, `multi-env`, `work-entra`) plus the manual
-integration path.
+`graphics-workstation`, `multi-env`) plus the manual integration path.
 
 ## Who this is for
 
-Nixling targets the **single-user NixOS desktop** who wants
-isolated workspaces — work / personal / risky-dev — on the
-same machine, each in its own microVM, with the host compositor
-forwarding into the guest natively over Wayland. Concretely:
+Nixling targets the **single-user NixOS desktop** where the host is
+trusted, but some workloads are not. It is for people who want to run
+things on their computer that they do not completely trust — AI agents,
+large dependency trees, risky browsing/dev environments, or work-required
+software such as Intune — while keeping those workloads away from the
+host OS and from each other.
 
-- One human, one host. Multi-tenant trust boundaries are
-  out of scope (see *What nixling is NOT* below).
+Concretely:
+
+- You want VM-grade workload boundaries without turning your daily
+  desktop into a collection of separate VM consoles.
+- You want to use untrusted or employer-required software on the same
+  Wayland desktop while keeping the host OS as the trusted place where
+  your real credentials, SSH keys, browser profile, and personal files
+  live.
+- You want the boring parts owned together: network topology,
+  firewalling, per-VM store views, SSH keys, sidecar users, and the
+  lifecycle CLI.
+- You like the idea of Qubes-style compartmentalization, but you want a
+  NixOS module that composes into your existing host instead of a new OS
+  and Xen stack.
+- You could build the pieces with raw microVMs, but you would rather
+  declare "work" and "personal" environments and let the framework keep
+  the host/guest boundary consistent.
+- One human, one host. Multi-tenant trust boundaries are out of scope.
 - Wayland-native. There is no X11 fallback for graphics VMs.
 - Headless workloads also work — the same `nixling.envs.<env>`
   + `nixling.vms.<vm>` shape covers CI runners or
   background-service VMs without graphics + audio bits.
-- Microsoft Entra ID workspaces are supported via the sibling
-  [`vicondoa/entrablau.nix`][entrablau] flake (composed
-  per-VM, not auto-imported).
-
-If you're after a multi-tenant or production-grade VM platform,
-look at raw [microvm.nix], NixOS containers, or
-[Qubes OS](https://www.qubes-os.org/).
 
 ## What nixling is NOT
 
-- **Not a multi-tenant trust boundary** against a malicious local
-  launcher user. SSH keys are readable by anyone in the
-  `nixling` system group (the broker uses `SO_PEERCRED`
-  at accept time to classify peers as `launcher`/`admin`/`deny`) —
-  see [docs/explanation/design.md] for the full threat model.
-- **Not a server-VM platform.** Use NixOps or raw microvm.nix.
-- **Not a Qubes replacement.** Nixling shares the host kernel; Qubes
-  uses Xen hypervisor isolation.
-- **Not OCI / container isolation.** Nixling targets full-VM
-  boundaries (cloud-hypervisor / crosvm) for kernel-level
-  separation between workloads; containers share the host kernel
-  surface.
-- **Not Spectrum OS or a full OS distribution.** Nixling is a
-  framework you compose into an existing NixOS host config; it
-  does not replace the host's installer, init, or filesystem
-  layout.
+- **Not magic security for an insecure host.** Nixling is only as secure
+  as the host OS it composes into. If the host kernel, compositor, user
+  session, or `nixling` launcher account is compromised, the VM boundary
+  is no longer the main thing protecting you.
+- **Not a multi-tenant trust boundary.** Nixling assumes one human on one
+  trusted host. It is not designed to isolate mutually suspicious local
+  users from each other.
+- **Not a Qubes replacement.** The "reasonably isolated" framing is a
+  nod to Qubes, not an equivalence claim. Qubes is a security-oriented OS
+  with Xen-based virtualization and a much larger security model; nixling
+  is a NixOS module for trusted-host desktop compartmentalization.
+- **Not a general VM, container, or app-sandbox manager.** Use
+  [microvm.nix], [virt-manager], [GNOME Boxes], [Distrobox], [Flatpak],
+  or NixOS containers when you want those shapes. Nixling is the
+  opinionated path for desktop workspaces with per-env networking,
+  per-VM stores, mediated I/O, and one CLI.
 - **Not officially supported.** Best-effort hobby project, one
   maintainer, no SLA. Pin to tagged releases.
 
@@ -108,7 +158,6 @@ nixling into an existing host config.
 | [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
 | [`examples/multi-env`](./examples/multi-env) | Two isolated envs (work + personal) | Demonstrates per-env isolation and route preflight. |
-| [`examples/work-entra`](./examples/work-entra) | Entra-ID-joined work VM via the sibling flake | Alias of the checked [`examples/with-entra-id`](./examples/with-entra-id) flake; VM name `work-entra`. |
 | [`examples/with-observability`](./examples/with-observability) | Single-host telemetry sink + monitored workload VM | Auto-declares the `sys-obs-stack` VM (Grafana/Prometheus/Loki/Tempo) and wires per-VM Alloy agents over virtio-vsock. |
 
 ## Quick start (Rust CLI / examples)
@@ -121,14 +170,11 @@ path:
 ```bash
 # headless personal workspace (examples/personal-dev → examples/minimal)
 sudo nixling vm start personal-dev --apply
-
-# Entra workspace (examples/work-entra → examples/with-entra-id)
-sudo nixling vm start work-entra --apply
 ```
 
-Those alias directories exist so the README, examples index, and
-migration notes can use stable VM names while CI keeps the checked
-flakes in `examples/minimal` and `examples/with-entra-id`.
+The alias directory exists so the README, examples index, and migration
+notes can use a stable VM name while CI keeps the checked flake in
+`examples/minimal`.
 
 ## Quick start (template path)
 
@@ -333,17 +379,6 @@ processes JSON files consumed by `nixlingd` / `nixling-priv-broker`).
 For typed exit codes and JSON envelopes, see
 [`docs/reference/cli-contract.md`](docs/reference/cli-contract.md).
 
-
-## Companion flakes
-
-- [`vicondoa/entrablau.nix`][entrablau] — unofficial, framework-
-  agnostic NixOS module bundle for Microsoft Entra ID auth (via
-  Himmelblau) with Intune compliance shimming. Optional. Compose it
-  by importing its `nixosModules.default` inside a nixling workload
-  VM's `nixling.vms.<name>.config.imports`. The two flakes know
-  nothing about each other — composition happens in your consumer
-  flake.
-
 ## Documentation
 
 Organised as a [Diataxis] tree under [`docs/`](docs/):
@@ -379,6 +414,11 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 
 [Diataxis]: https://diataxis.fr
 
+## Acknowledgements
+
+Nixling's desktop-compartmentalization framing owes a debt to
+[Spectrum OS], and to its lead Alyssa Ross, @alyssais.
+
 ## License
 
 [Apache-2.0](./LICENSE).
@@ -394,5 +434,11 @@ the operational manual lives in [`AGENTS.md`](./AGENTS.md) at the
 repo root.
 
 [microvm.nix]: https://github.com/microvm-nix/microvm.nix
-[entrablau]: https://github.com/vicondoa/entrablau.nix
+[Cloud Hypervisor]: https://github.com/cloud-hypervisor/cloud-hypervisor
+[crosvm]: https://github.com/google/crosvm
+[Distrobox]: https://distrobox.it/
+[Flatpak]: https://flatpak.org/
+[virt-manager]: https://virt-manager.org/
+[GNOME Boxes]: https://apps.gnome.org/Boxes/
+[Spectrum OS]: https://spectrum-os.org/
 [docs/explanation/design.md]: ./docs/explanation/design.md
