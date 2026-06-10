@@ -627,6 +627,9 @@ impl ChunkedSession {
             }
             return Err(ProtocolError::StdinClosed);
         }
+        if self.writes.contains_key(&request_id) {
+            return Err(ProtocolError::RequestIdConflict);
+        }
         if offset != expected {
             return Err(ProtocolError::OffsetGap {
                 expected,
@@ -1441,6 +1444,24 @@ mod tests {
             Err(ProtocolError::StaleSession)
         );
         assert_eq!(session.append_output(new, Stream::Stdout, b"fresh"), Ok(0));
+    }
+
+    #[test]
+    fn close_stdin_rejects_retained_write_request_id_reuse() {
+        let mut session = ChunkedSession::new(11, MIB, MIB, 64 * KIB);
+        let token = session.token();
+        session.write_stdin(token, 42, 0, b"abc").unwrap();
+        assert_eq!(
+            session.close_stdin(token, 42, 3),
+            Err(ProtocolError::RequestIdConflict)
+        );
+        assert_eq!(
+            session.close_stdin(token, 43, 3),
+            Ok(WriteStdinResponse {
+                next_offset: 3,
+                disposition: WriteDisposition::Accepted,
+            })
+        );
     }
 
     #[test]

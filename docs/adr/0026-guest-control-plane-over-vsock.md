@@ -301,6 +301,9 @@ for failing a must-pass row.
   Socket existence alone is never readiness.
 - Health returns a bounded state enum plus bounded reason/remediation
   enums, never guest-derived free-form text or transport/socket paths.
+  The closed W0 enum set and allowed state/reason/remediation mappings
+  live in
+  [the chunked stdio reference](../reference/guest-control-exec-io-chunked-stdio.md#health-status-model).
   W0 reserves these states for the implementing schema: `healthy`,
   `degraded`, `unavailable-old-generation`, `listener-absent`,
   `transport-unreachable`, `auth-failed`, `protocol-mismatch`, and

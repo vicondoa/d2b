@@ -420,14 +420,20 @@ sidecar directory.
 
 Guest-control audit records are allowlist-only. They may contain:
 
-- bounded operation kind (`exec-create`, `exec-wait`, `exec-signal`,
-  `exec-cancel`, `read-stdout`, `write-stdin`, `health`, and similar);
+- bounded operation kind from this closed W0 enum: `hello`,
+  `capabilities`, `health`, `exec-create`, `exec-inspect`, `exec-wait`,
+  `exec-logs`, `write-stdin`, `read-stdout`, `read-stderr`,
+  `close-stdin`, `tty-win-resize`, `exec-signal`, `exec-cancel`, and
+  `framework-guest-op`;
 - VM/environment identifiers, caller role/uid where already authorized,
   target uid/user kind, and bounded capability names;
 - bounded outcome/error/remediation enums;
 - numeric counters and limits such as byte counts, offsets, chunk counts,
   durations, retry-after, and truncation booleans;
 - timestamps and monotonic state-generation numbers.
+
+No other audit operation kind is valid until a schema update and panel
+review add it to the closed enum.
 
 They must not contain argv, cwd, environment values, stdout/stderr/stdin
 payload bytes, retained log paths, tokens, MACs, transcripts, CH/vsock
@@ -628,7 +634,7 @@ With default limits, a non-TTY attached exec consumes at most roughly:
 
 ```text
 stdin_rpc_chunk        <= 64 KiB
-decoded_stdin_budget   <= 4 MiB per connection, shared across execs
+decoded_stdin_budget   <= 16 MiB per connection, shared across execs
 stdout_live_buffer     <= 1 MiB
 stderr_live_buffer     <= 1 MiB
 read_response_chunks   <= 2 * 64 KiB
@@ -675,6 +681,46 @@ state enum plus bounded reason/remediation enums:
 - `auth-failed`
 - `protocol-mismatch`
 - `stale-session`
+
+The bounded reason enum is closed in W0:
+
+- `none`
+- `old-generation`
+- `listener-absent`
+- `connect-refused`
+- `connect-timeout`
+- `auth-token-rejected`
+- `protocol-version-unsupported`
+- `session-generation-mismatch`
+- `exec-subsystem-unavailable`
+- `log-storage-unavailable`
+- `quota-exceeded`
+- `rate-limited`
+- `internal-health-check-failed`
+
+The bounded remediation enum is also closed:
+
+- `none`
+- `retry`
+- `restart-vm`
+- `upgrade-guest`
+- `check-auth-token`
+- `check-guestd-service`
+- `reduce-load`
+- `inspect-guest-logs`
+
+Allowed state mappings:
+
+| State | Allowed reasons | Allowed remediations |
+| --- | --- | --- |
+| `healthy` | `none` | `none` |
+| `degraded` | `exec-subsystem-unavailable`, `log-storage-unavailable`, `quota-exceeded`, `rate-limited`, `internal-health-check-failed` | `retry`, `reduce-load`, `inspect-guest-logs`, `restart-vm` |
+| `unavailable-old-generation` | `old-generation` | `upgrade-guest`, `restart-vm` |
+| `listener-absent` | `listener-absent` | `check-guestd-service`, `restart-vm` |
+| `transport-unreachable` | `connect-refused`, `connect-timeout` | `retry`, `restart-vm` |
+| `auth-failed` | `auth-token-rejected` | `check-auth-token` |
+| `protocol-mismatch` | `protocol-version-unsupported` | `upgrade-guest` |
+| `stale-session` | `session-generation-mismatch` | `retry`, `restart-vm` |
 
 `healthy` requires CH `CONNECT`, Hello/auth, and Health to succeed on the
 same post-CONNECT stream. `degraded` means guestd is authenticated and
@@ -816,13 +862,14 @@ Before implementation exits design hardening, add at least:
 5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
 6. stdin 16 MiB slow-reader test with bounded RSS;
 6a. malicious concurrent `WriteStdin` fan-in test: four hard-maximum-sized
-    requests on one connection consume only the 4 MiB decoded-byte budget,
-    a fifth concurrent request receives `stdin-byte-budget-exhausted` or
-    waits for a permit, and concurrent effective-limit `max + 1` writes to
-    one exec preserve offset order and never queue more than one chunk
-    behind the single per-exec stdin permit; include pipe and PTY partial
-    child-write cases proving the bounded queue drains without duplicate or
-    lost stdin bytes before `CloseStdin` is observed;
+    ttRPC-frame requests on one connection consume the 16 MiB decoded-byte
+    budget, a fifth concurrent request receives
+    `stdin-byte-budget-exhausted` or waits for a permit, and concurrent
+    effective-limit `max + 1` writes to one exec preserve offset order and
+    never queue more than one chunk behind the single per-exec stdin
+    permit; include pipe and PTY partial child-write cases proving the
+    bounded queue drains without duplicate or lost stdin bytes before
+    `CloseStdin` is observed;
 7. deterministic slow stdout/stderr consumer stress proving block or
    `slow-consumer-cancelled` with bounded retained bytes; a separate
    non-default runtime soak may cover 30-second wall-clock behavior;
