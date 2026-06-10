@@ -47,6 +47,7 @@ pub enum Request {
     UsbipBind(public_wire::UsbipBindCliRequest),
     UsbipUnbind(public_wire::UsbipUnbindCliRequest),
     UsbipProbe,
+    StoreVerify(public_wire::StoreVerifyRequest),
     Migrate(public_wire::MigrateRequest),
     HostPrepare(public_wire::HostPrepareRequest),
     HostDestroy(public_wire::HostDestroyRequest),
@@ -78,6 +79,7 @@ impl Request {
             Self::UsbipBind(_) => "usbipBind",
             Self::UsbipUnbind(_) => "usbipUnbind",
             Self::UsbipProbe => "usbipProbe",
+            Self::StoreVerify(_) => "storeVerify",
             Self::Migrate(_) => "migrate",
             Self::HostPrepare(_) => "hostPrepare",
             Self::HostDestroy(_) => "hostDestroy",
@@ -257,6 +259,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 })
             }
         }
+        "storeVerify" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::StoreVerify)
+            .map_err(map_parse_error),
         "migrate" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::Migrate)
             .map_err(map_parse_error),
@@ -391,6 +396,17 @@ pub fn usbip_probe_response(payload: public_wire::UsbipProbeResponse) -> Value {
         obj.insert(
             "type".to_owned(),
             Value::String("usbipProbeResponse".to_owned()),
+        );
+    }
+    value
+}
+
+pub fn store_verify_response(payload: public_wire::StoreVerifyResponse) -> Value {
+    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("storeVerifyResponse".to_owned()),
         );
     }
     value

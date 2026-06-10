@@ -986,6 +986,25 @@
           }
         },
         {
+          "description": "Operator-facing live-pool verification. The daemon names only the VM id; the broker resolves the trusted store-view intent and reads host-only `store-view/state` itself. The CLI never reads the store-view directly.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreVerify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyRequest2"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -1838,6 +1857,25 @@
             },
             "payload": {
               "$ref": "#/definitions/StoreSyncResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of an explicit live-pool verification request.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreVerify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyResponse"
             }
           }
         },
@@ -3539,6 +3577,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "store verify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "migrate"
               ]
             },
@@ -3783,6 +3839,24 @@
             },
             "payload": {
               "$ref": "#/definitions/UsbipProbeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "store verify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyResponse"
             }
           }
         },
@@ -4787,6 +4861,126 @@
         }
       },
       "additionalProperties": false
+    },
+    "StoreVerifyRequest": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "repair": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyRequest2": {
+      "description": "Store-verify request. `repair=true` requests the broker's explicit repair path; builds without that path must fail closed instead of returning a success-shaped repair.",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "repair": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyResponse": {
+      "description": "Store-verify response. Field names intentionally match the public CLI JSON envelope after serde's camelCase conversion on the private wire; the CLI re-renders the signed snake_case envelope.",
+      "type": "object",
+      "required": [
+        "checked",
+        "drifted",
+        "repaired",
+        "status",
+        "vm"
+      ],
+      "properties": {
+        "auditRef": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "drifted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "remediation": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repaired": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "status": {
+          "$ref": "#/definitions/StoreVerifyStatus"
+        },
+        "unknownReason": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StoreVerifyUnknownReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "drift",
+        "unknown",
+        "repaired",
+        "failed",
+        "not_found"
+      ]
+    },
+    "StoreVerifyUnknownReason": {
+      "type": "string",
+      "enum": [
+        "marker_or_manifest_missing",
+        "marker_or_manifest_unreadable",
+        "older_host_generation",
+        "generation_identity_unavailable"
+      ]
     },
     "TapReadyResponse": {
       "type": "object",

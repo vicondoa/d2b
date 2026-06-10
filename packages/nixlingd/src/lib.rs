@@ -53,6 +53,7 @@ use nixling_ipc::{
         RunMigrateRequest as BrokerRunMigrateRequest,
         RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
         SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
+        StoreVerifyRequest as BrokerStoreVerifyRequest,
         UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
         UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
         UsbipBindRequest as BrokerUsbipBindRequest,
@@ -1716,6 +1717,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "rotateKnownHost"
             | "usbipBind"
             | "usbipUnbind"
+            | "storeVerify"
             | "migrate"
             | "hostPrepare"
             | "hostDestroy"
@@ -1770,6 +1772,7 @@ fn dispatch_request(
         wire::Request::UsbipBind(req) => dispatch_broker_usbip_bind(state, req),
         wire::Request::UsbipUnbind(req) => dispatch_broker_usbip_unbind(state, req),
         wire::Request::UsbipProbe => dispatch_broker_usbip_probe(state),
+        wire::Request::StoreVerify(req) => dispatch_broker_store_verify(state, req),
         wire::Request::Migrate(req) => dispatch_broker_run_migrate(state, req),
         wire::Request::HostPrepare(req) => dispatch_broker_host_prepare(state, req),
         wire::Request::HostDestroy(req) => dispatch_broker_host_destroy(state, req),
@@ -5824,6 +5827,62 @@ fn dispatch_broker_gc(
             Ok(broker_failure_response(VERB, summary, remediation, None))
         }
     }
+}
+
+fn dispatch_broker_store_verify(
+    state: &ServerState,
+    request: public_wire::StoreVerifyRequest,
+) -> Result<Value, TypedError> {
+    let response = match dispatch_broker_request(
+        state,
+        BrokerRequest::StoreVerify(BrokerStoreVerifyRequest {
+            vm_id: VmId::new(&request.vm),
+            repair: request.repair,
+            tracing_span_id: None,
+        }),
+    ) {
+        Ok(BrokerResponse::StoreVerify(response)) => response,
+        Ok(BrokerResponse::Error(error)) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry ({}: {})",
+                error.kind, error.message
+            )),
+        },
+        Ok(other) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry (unexpected broker response {})",
+                broker_response_kind(&other)
+            )),
+        },
+        Err(error) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry ({})",
+                error.message()
+            )),
+        },
+    };
+    Ok(wire::store_verify_response(response))
 }
 
 fn dispatch_broker_keys_rotate(

@@ -64,6 +64,20 @@ deprecations ship one minor release before removal.
   [ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md) and
   `docs/reference/store-sync.md` § "Observability export".
 
+- `nixling store verify <vm> [--repair] [--json]` — explicit
+  broker-backed live-pool integrity verification for the ADR 0027 split
+  store-view. The CLI is thin and never reads `store-view` directly;
+  `nixlingd` sends a typed `BrokerRequest::StoreVerify` to the privileged
+  broker, which verifies `state/current`, `meta/current`, the host marker,
+  zero-length live marker, and every manifest top-level basename in
+  `live/`. It writes host-only integrity state under
+  `store-view/state/generations/<generation-id>/integrity.json` (or
+  `state/integrity-unknown.json` when generation identity is unavailable)
+  and returns the signed JSON envelope documented in
+  `docs/reference/cli-output/store-verify.md`. W6 deliberately keeps
+  `--repair` fail-closed until the non-fast-path repair path can preserve
+  StoreSync audit and lock semantics.
+
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
   in-guest edited file over the existing per-VM SSH key into a

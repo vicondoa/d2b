@@ -2287,6 +2287,42 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 }
             }
         }
+        RealBrokerRequest::StoreVerify(req) => {
+            let resolver = require_resolver(resolver)?;
+            let vm_name = lookup_vm_name(resolver, &req.vm_id);
+            let response = if let Some(intent) = resolver.find_store_view_intent(&vm_name) {
+                crate::ops::store_verify::run_store_verify(intent, req.repair)
+            } else {
+                crate::ops::store_verify::not_found(&vm_name)
+            };
+            let verify_status = serde_json::to_value(response.status)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "failed".to_owned());
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "StoreVerify",
+                req.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                vm_name.as_str(),
+                vm_name.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::StoreVerify {
+                    vm: response.vm.clone(),
+                    status: verify_status,
+                    checked: response.checked,
+                    drifted: response.drifted,
+                    repaired: response.repaired,
+                    repair_requested: req.repair,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::StoreVerify(
+                response,
+            )))
+        }
         RealBrokerRequest::ReadSecretById(_) => Err(BrokerError::Unimplemented {
             operation: "ReadSecretById",
             target_wave: "W8",

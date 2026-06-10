@@ -268,6 +268,36 @@ remain in JSON content. See
 > port — so the existing systemd-unit-failed `NixlingStoreSyncFailure`
 > alert (Prometheus, `stack.nix`) is left unchanged.
 
+## Explicit verify surface (W6)
+
+`nixling store verify <vm> [--repair] [--json]` is the operator-facing
+live-pool integrity surface. The CLI is thin: it sends `storeVerify` to
+`nixlingd`, and the daemon sends `BrokerRequest::StoreVerify` to the
+privileged broker. The CLI never reads `store-view/live` or
+`store-view/state` directly.
+
+W6 implements read-only top-level verification and host-only integrity
+records:
+
+- resolves generation identity from `store-view/state/current`;
+- checks `store-view/meta/current` points at the same generation;
+- validates the host marker and zero-length live readiness marker;
+- reads `meta/generations/<id>/store-paths`;
+- checks every manifest top-level basename exists under `live/`;
+- writes `state/generations/<id>/integrity.json` for `ok` or `suspect`;
+- writes `state/integrity-unknown.json` only when generation identity is
+  unavailable.
+
+The JSON envelope is documented in
+[`cli-output/store-verify.md`](./cli-output/store-verify.md). Exit codes:
+`0` for `ok`/`repaired`, `4` for `drift`/`unknown`, `70` for
+`not_found`, and `78` for `failed`.
+
+`--repair` is fail-closed in W6: the broker reports drift/unknown with an
+explicit remediation rather than claiming a repair, because a safe
+non-fast-path repair path that preserves StoreSync audit/locking semantics
+is still a follow-up wave.
+
 ## Refusal modes
 
 The handler is fail-closed and maps each refusal to a typed
@@ -365,6 +395,9 @@ asserts `len() == 0`.
 - `packages/nixling-priv-broker/src/ops/store_sync_audit.rs` —
   the signed `StoreSyncAuditFields` terminal audit schema, its enums,
   invariant-enforcing constructors, and `validate()`.
+- `packages/nixling-priv-broker/src/ops/store_verify.rs` — explicit
+  StoreVerify broker op, top-level live-pool verifier, and host-only
+  integrity record writer.
 
 ## Migration: deleting the per-VM systemd oneshot
 

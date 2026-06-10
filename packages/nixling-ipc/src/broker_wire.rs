@@ -66,6 +66,11 @@ pub enum BrokerRequest {
     /// its trusted bundle copy and derives the collision-free on-disk
     /// `generation_id` itself.
     StoreSync(StoreSyncRequest),
+    /// Operator-facing live-pool verification. The daemon names only the
+    /// VM id; the broker resolves the trusted store-view intent and reads
+    /// host-only `store-view/state` itself. The CLI never reads the
+    /// store-view directly.
+    StoreVerify(StoreVerifyRequest),
     ReadSecretById(SecretByIdRequest),
     ResumeBroker,
     RotateSecretById(SecretByIdRequest),
@@ -171,6 +176,7 @@ impl BrokerRequest {
             Self::PrepareStateDir(_) => "PrepareStateDir",
             Self::PrepareStoreView(_) => "PrepareStoreView",
             Self::StoreSync(_) => "StoreSync",
+            Self::StoreVerify(_) => "StoreVerify",
             Self::ReadSecretById(_) => "ReadSecretById",
             Self::ResumeBroker => "ResumeBroker",
             Self::RotateSecretById(_) => "RotateSecretById",
@@ -418,6 +424,8 @@ pub enum BrokerResponse {
     /// populated. Used by the daemon to surface the swap result in audit
     /// + start traces.
     StoreSync(StoreSyncResponse),
+    /// Result of an explicit live-pool verification request.
+    StoreVerify(StoreVerifyResponse),
     ValidateBundle(ValidateBundleResponse),
 }
 
@@ -762,6 +770,58 @@ pub struct StoreSyncResponse {
     pub retained_generations: Vec<u32>,
     pub swept_count: u32,
     pub cleanup_deferred: bool,
+}
+
+/// Store-verify request. `repair=true` requests the broker's explicit
+/// repair path; builds without that path must fail closed instead of
+/// returning a success-shaped repair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreVerifyRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub repair: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreVerifyStatus {
+    Ok,
+    Drift,
+    Unknown,
+    Repaired,
+    Failed,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreVerifyUnknownReason {
+    MarkerOrManifestMissing,
+    MarkerOrManifestUnreadable,
+    OlderHostGeneration,
+    GenerationIdentityUnavailable,
+}
+
+/// Store-verify response. Field names intentionally match the public CLI
+/// JSON envelope after serde's camelCase conversion on the private wire;
+/// the CLI re-renders the signed snake_case envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreVerifyResponse {
+    pub vm: String,
+    pub status: StoreVerifyStatus,
+    pub checked: u32,
+    pub drifted: u32,
+    pub repaired: u32,
+    #[serde(default)]
+    pub unknown_reason: Option<StoreVerifyUnknownReason>,
+    #[serde(default)]
+    pub audit_ref: Option<String>,
+    #[serde(default)]
+    pub remediation: Option<String>,
 }
 
 /// The broker derives the bridge, port,

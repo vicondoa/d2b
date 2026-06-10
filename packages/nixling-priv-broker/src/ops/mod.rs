@@ -60,6 +60,10 @@ pub mod store_sync_audit;
 // carries caller identity, retained generations, or any host path.
 pub mod store_sync_export;
 
+// Explicit StoreVerify operator surface for top-level live-pool
+// verification + host-only integrity state.
+pub mod store_verify;
+
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
 // so the farm hardlinks succeed even when `/nix/store` is a separate

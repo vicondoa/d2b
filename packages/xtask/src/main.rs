@@ -8,7 +8,10 @@ use clap_complete::{
     shells::{Bash, Fish, Zsh},
 };
 use clap_mangen::Man;
-use nixling::{AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, StatusOutputV2};
+use nixling::{
+    AuditOutputV2, AuthStatusOutputV2, HostCheckOutputV2, ListOutputV2, StatusOutputV2,
+    StoreVerifyOutputV2,
+};
 use nixling_core::{
     bundle::Bundle, closures::ClosureMetadata, error::Error, host::HostJson,
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
@@ -127,7 +130,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("docs/reference/cli-output");
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 5] = [
+    let schemas: [(&str, RootSchema); 6] = [
         ("list.schema.json", schemars::schema_for!(ListOutputV2)),
         ("status.schema.json", schemars::schema_for!(StatusOutputV2)),
         ("audit.schema.json", schemars::schema_for!(AuditOutputV2)),
@@ -138,6 +141,10 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         (
             "auth-status.schema.json",
             schemars::schema_for!(AuthStatusOutputV2),
+        ),
+        (
+            "store-verify.schema.json",
+            schemars::schema_for!(StoreVerifyOutputV2),
         ),
     ];
 

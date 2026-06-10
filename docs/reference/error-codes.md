@@ -20,11 +20,13 @@ These anchors document common process exits that are **not** emitted as
 | <a id="readiness-timeout"></a>`#readiness-timeout` | `4` | `up` timed out while waiting for the VM to reach its documented ready state. |
 | <a id="net-vm-busy"></a>`#net-vm-busy` | `4` | `down` or `restart` refused to stop a net VM while dependent workload VMs were still active. |
 | <a id="bridge-unhealthy"></a>`#bridge-unhealthy` | `4` | `status --check-bridges` found a missing, administratively down, or carrier-missing bridge. |
+| <a id="drift"></a>`#drift` | `4` | `store verify` found live-pool drift or could not establish integrity (`unknown`). |
 | <a id="peer-unreachable"></a>`#peer-unreachable` | `3` | An SSH-backed legacy command could not reach the VM at its declared endpoint. |
 | <a id="lock-conflict"></a>`#lock-conflict` | `5` | A legacy-bash exclusive host lock was already held by another session. |
 | <a id="strict-deviation"></a>`#strict-deviation` | `1` | A strict-mode command reported at least one deviation and converted that summary into a non-zero exit. |
 | <a id="host-check-warning"></a>`#host-check-warning` | `1` | `host check` reported at least one advisory warning but no required failures. |
 | <a id="host-check-failure"></a>`#host-check-failure` | `2` | `host check` reported at least one required failure in its summary output. |
+| <a id="not-found"></a>`#not-found` | `70` | Named VM is not declared in the active manifest or the caller is not authorized to know it exists. |
 
 ## Typed error catalog
 

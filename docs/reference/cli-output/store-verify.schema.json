@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StoreVerifyOutputV2",
+  "type": "object",
+  "required": [
+    "checked",
+    "drifted",
+    "repaired",
+    "status",
+    "vm"
+  ],
+  "properties": {
+    "audit_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "checked": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "drifted": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "remediation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repaired": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "status": {
+      "$ref": "#/definitions/StoreVerifyStatus"
+    },
+    "unknown_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "StoreVerifyStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "drift",
+        "unknown",
+        "repaired",
+        "failed",
+        "not_found"
+      ]
+    }
+  }
+}

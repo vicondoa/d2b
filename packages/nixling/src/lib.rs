@@ -20,7 +20,10 @@ use nixling_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use nixling_ipc::{
-    broker_wire::ExportBrokerAuditResponse,
+    broker_wire::{
+        ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
+        StoreVerifyStatus as IpcStoreVerifyStatus,
+    },
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
@@ -407,6 +410,8 @@ enum NativeCommand {
     Rollback(RollbackArgs),
     /// Garbage-collect the per-VM /nix/store hardlink farm.
     Gc(GcArgs),
+    /// Store-view maintenance and verification.
+    Store(StoreArgs),
     /// Managed-key lifecycle (list / show / rotate).
     Keys(KeysArgs),
     /// Trust a VM's host key on first use (TOFU).
@@ -878,6 +883,29 @@ struct GcArgs {
     human: bool,
 }
 
+#[derive(Debug, Args)]
+struct StoreArgs {
+    #[command(subcommand)]
+    command: StoreCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum StoreCommand {
+    /// Verify a VM's hardlink-backed live store-view.
+    Verify(StoreVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct StoreVerifyArgs {
+    vm: String,
+    #[arg(long)]
+    repair: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
 // ---- keys + trust verbs ----
 
 #[derive(Debug, Args)]
@@ -1310,6 +1338,28 @@ struct UsbipProbeResponseFrame {
     entries: Vec<IpcUsbipProbeEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreVerifyResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: IpcStoreVerifyResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreVerifyOutputV2 {
+    pub vm: String,
+    pub status: IpcStoreVerifyStatus,
+    pub checked: u32,
+    pub drifted: u32,
+    pub repaired: u32,
+    pub unknown_reason: Option<String>,
+    pub audit_ref: Option<String>,
+    pub remediation: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 enum AuditSocketOutcome {
     Unreachable,
@@ -1327,6 +1377,12 @@ enum KeysSocketOutcome {
 enum UsbProbeSocketOutcome {
     Unavailable,
     Entries(Vec<IpcUsbipProbeEntry>),
+}
+
+#[derive(Debug, Clone)]
+enum StoreVerifySocketOutcome {
+    Unavailable,
+    Response(IpcStoreVerifyResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -1584,6 +1640,9 @@ fn dispatch(
         NativeCommand::Test(args) => cmd_test(context, args, original_args),
         NativeCommand::Rollback(args) => cmd_rollback(context, args, original_args),
         NativeCommand::Gc(args) => cmd_gc(context, args, original_args),
+        NativeCommand::Store(args) => match &args.command {
+            StoreCommand::Verify(args) => cmd_store_verify(context, args),
+        },
         NativeCommand::Keys(args) => match &args.command {
             KeysCommand::List(args) => cmd_keys_list(context, args, original_args),
             KeysCommand::Show(args) => cmd_keys_show(context, args, original_args),
@@ -3060,12 +3119,12 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
     let exit_code = emit_host_error(
         &host_error_envelope(
             &format!("vm '{vm}' is not declared in the loaded manifest"),
-            "not-yet-implemented",
+            "not-found",
             70,
             "Whether the VM name appears in `nixling.vms.<name>` in the active manifest.",
             "VM name unknown",
             "Run `nixling list` to see declared VMs, then re-run with a name from that list.",
-            "docs/reference/error-codes.md#not-yet-implemented",
+            "docs/reference/error-codes.md#not-found",
         ),
         json,
     )?;
@@ -3728,6 +3787,90 @@ fn cmd_gc(
         print_stdout("nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n");
     }
     Ok(0)
+}
+
+fn cmd_store_verify(context: &Context, args: &StoreVerifyArgs) -> Result<i32, CliFailure> {
+    let json_mode = if args.human { false } else { args.json };
+    let manifest = context.load_manifest()?;
+    if !manifest.vms().iter().any(|vm| vm.name == args.vm) {
+        let response = IpcStoreVerifyResponse {
+            vm: args.vm.clone(),
+            status: IpcStoreVerifyStatus::NotFound,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some("check the VM name, declaration, and authorization".to_owned()),
+        };
+        if json_mode {
+            let envelope = store_verify_cli_envelope(&response);
+            print_json(&envelope)?;
+        } else {
+            print_stdout(&render_store_verify_human(&response));
+        }
+        return Ok(70);
+    }
+    let response = match try_store_verify_via_socket(context, &args.vm, args.repair)? {
+        StoreVerifySocketOutcome::Response(response) => response,
+        StoreVerifySocketOutcome::Unavailable => {
+            return emit_host_error(&daemon_down_envelope("store verify"), json_mode);
+        }
+    };
+    if json_mode {
+        let envelope = store_verify_cli_envelope(&response);
+        print_json(&envelope)?;
+    } else {
+        print_stdout(&render_store_verify_human(&response));
+    }
+    Ok(store_verify_exit_code(response.status))
+}
+
+fn store_verify_exit_code(status: IpcStoreVerifyStatus) -> i32 {
+    match status {
+        IpcStoreVerifyStatus::Ok | IpcStoreVerifyStatus::Repaired => 0,
+        IpcStoreVerifyStatus::Drift | IpcStoreVerifyStatus::Unknown => 4,
+        IpcStoreVerifyStatus::NotFound => 70,
+        IpcStoreVerifyStatus::Failed => 78,
+    }
+}
+
+fn store_verify_cli_envelope(response: &IpcStoreVerifyResponse) -> StoreVerifyOutputV2 {
+    StoreVerifyOutputV2 {
+        vm: response.vm.clone(),
+        status: response.status,
+        checked: response.checked,
+        drifted: response.drifted,
+        repaired: response.repaired,
+        unknown_reason: response
+            .unknown_reason
+            .map(|reason| serde_json::to_value(reason).unwrap_or(Value::Null))
+            .and_then(|value| value.as_str().map(str::to_owned)),
+        audit_ref: response.audit_ref.clone(),
+        remediation: response.remediation.clone(),
+    }
+}
+
+fn render_store_verify_human(response: &IpcStoreVerifyResponse) -> String {
+    let status = serde_json::to_value(response.status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "failed".to_owned());
+    let mut out = format!(
+        "store verify {}: status={status} checked={} drifted={} repaired={}\n",
+        response.vm, response.checked, response.drifted, response.repaired
+    );
+    if let Some(reason) = response.unknown_reason {
+        let reason = serde_json::to_value(reason)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned());
+        let _ = writeln!(out, "unknown_reason={reason}");
+    }
+    if let Some(remediation) = &response.remediation {
+        let _ = writeln!(out, "remediation={remediation}");
+    }
+    out
 }
 
 // ---- native usb CLI ----
@@ -5698,6 +5841,29 @@ fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, 
     }
 }
 
+fn try_store_verify_via_socket(
+    context: &Context,
+    vm: &str,
+    repair: bool,
+) -> Result<StoreVerifySocketOutcome, CliFailure> {
+    let request = encode_type_tagged_message(
+        "storeVerify",
+        &nixling_ipc::public_wire::StoreVerifyRequest {
+            vm: vm.to_owned(),
+            repair,
+        },
+        "storeVerify request",
+    )?;
+    match try_public_socket_request(context, &request, "storeVerify")? {
+        PublicSocketOutcome::Reply(response) => {
+            parse_store_verify_reply(&response).map(StoreVerifySocketOutcome::Response)
+        }
+        PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
+            Ok(StoreVerifySocketOutcome::Unavailable)
+        }
+    }
+}
+
 fn try_public_socket_request(
     context: &Context,
     request: &[u8],
@@ -5807,6 +5973,22 @@ fn parse_usb_probe_reply(bytes: &[u8]) -> Result<Vec<IpcUsbipProbeEntry>, CliFai
         _ => Err(CliFailure::new(
             1,
             "daemon returned an unexpected reply to usbipProbe".to_owned(),
+        )),
+    }
+}
+
+fn parse_store_verify_reply(bytes: &[u8]) -> Result<IpcStoreVerifyResponse, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse storeVerify reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("storeVerifyResponse") => serde_json::from_value::<StoreVerifyResponseFrame>(value)
+            .map(|frame| frame.payload)
+            .map_err(|err| {
+                CliFailure::new(1, format!("failed to decode storeVerify reply: {err}"))
+            }),
+        _ => Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to storeVerify".to_owned(),
         )),
     }
 }

@@ -106,6 +106,14 @@ pub enum OperationFields {
     /// and host-only context (`bundle_closure_ref`, `hardlink_farm_path`)
     /// but never store-path basenames, `db.dump`, or marker payloads.
     StoreSync(StoreSyncAuditFields),
+    StoreVerify {
+        vm: String,
+        status: String,
+        checked: u32,
+        drifted: u32,
+        repaired: u32,
+        repair_requested: bool,
+    },
     SetBridgePortFlags {
         vm: String,
         role: String,
@@ -343,6 +351,14 @@ impl OperationFields {
                 view_root: String,
             }),
             "StoreSync" => Ok(Self::StoreSync(serde_json::from_value(value)?)),
+            "StoreVerify" => parse_fields!(value => StoreVerify {
+                vm: String,
+                status: String,
+                checked: u32,
+                drifted: u32,
+                repaired: u32,
+                repair_requested: bool,
+            }),
             "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
                 vm: String,
                 role: String,
