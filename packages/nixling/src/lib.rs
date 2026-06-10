@@ -4669,7 +4669,11 @@ fn read_live_pool_integrity(
         },
         Some("suspect") => {
             let remediation = if repair_attempted {
-                "repair already attempted; inspect audit_ref and broker logs".to_owned()
+                if audit_ref.is_some() {
+                    "repair already attempted; inspect audit_ref and broker logs".to_owned()
+                } else {
+                    "repair already attempted; inspect broker logs".to_owned()
+                }
             } else {
                 format!("run `nixling store verify {} --repair`", vm.name)
             };

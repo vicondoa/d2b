@@ -573,13 +573,30 @@ fn write_drift(
     repair: bool,
 ) -> StoreVerifyResponse {
     let drifted = u32::try_from(drift.len()).unwrap_or(u32::MAX);
-    let record = IntegrityRecord::suspect(generation_id, drift);
-    if let Err(err) = write_integrity_record(
-        &generation_integrity_path(store_root, generation_id),
-        &record,
-    ) {
+    let path = generation_integrity_path(store_root, generation_id);
+    let mut record = IntegrityRecord::suspect(generation_id, drift);
+    if let Some(existing) = read_integrity_record(&path) {
+        if existing.state == IntegrityState::Suspect
+            && existing.generation_id.as_deref() == Some(generation_id)
+            && existing.drift_signature == record.drift_signature
+        {
+            record.repair_attempted = existing.repair_attempted;
+            record.audit_ref = existing.audit_ref;
+        }
+    }
+    if let Err(err) = write_integrity_record(&path, &record) {
         return failed(vm, format!("write suspect integrity: {err}"));
     }
+    let remediation = if repair {
+        "repair incomplete; inspect audit_ref and broker logs".to_owned()
+    } else if record.repair_attempted {
+        match record.audit_ref.as_deref() {
+            Some(_) => "repair already attempted; inspect audit_ref and broker logs".to_owned(),
+            None => "repair already attempted; inspect broker logs".to_owned(),
+        }
+    } else {
+        "rerun with --repair to repair live-pool drift".to_owned()
+    };
     StoreVerifyResponse {
         vm: vm.to_owned(),
         status: StoreVerifyStatus::Drift,
@@ -587,12 +604,8 @@ fn write_drift(
         drifted,
         repaired: 0,
         unknown_reason: None,
-        audit_ref: None,
-        remediation: Some(if repair {
-            "repair path not available yet; inspect audit_ref and broker logs".to_owned()
-        } else {
-            "rerun with --repair to repair live-pool drift".to_owned()
-        }),
+        audit_ref: record.audit_ref,
+        remediation: Some(remediation),
     }
 }
 
@@ -718,6 +731,11 @@ fn write_integrity_record(path: &Path, record: &IntegrityRecord) -> std::io::Res
         }
     }
     Ok(())
+}
+
+fn read_integrity_record(path: &Path) -> Option<IntegrityRecord> {
+    let raw = std::fs::read(path).ok()?;
+    serde_json::from_slice(&raw).ok()
 }
 
 #[cfg(test)]
@@ -949,6 +967,20 @@ mod tests {
             }),
         );
         assert_eq!(response.status, StoreVerifyStatus::Failed);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("\"repair_attempted\": true"));
+
+        let follow_up = run_store_verify(&intent, false);
+        assert_eq!(follow_up.status, StoreVerifyStatus::Drift);
+        assert!(follow_up
+            .remediation
+            .as_deref()
+            .unwrap()
+            .contains("repair already attempted"));
         let raw = std::fs::read_to_string(generation_integrity_path(
             &intent.hardlink_farm_path,
             &generation_id,
