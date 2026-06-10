@@ -267,6 +267,12 @@ Default design limits:
 | detached stderr log | 16 MiB | 128 MiB | Separate in non-TTY mode. |
 | long-poll read timeout | 100 ms | 1 s | CLI can immediately re-poll for interactive use. |
 | slow-consumer grace | 30 s | 5 min | Must satisfy the W0 slow-consumer proof. |
+| concurrent exec sessions per VM | 32 | 256 | New sessions fail before spawn with `exec-capacity-exceeded`. |
+| attached exec sessions per VM | 8 | 64 | New attaches fail without affecting detached execs. |
+| pending `ReadStdout` waits | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
+| pending `ReadStderr` waits | 1 per exec/connection, 64 per VM | 512 per VM | TTY mode always returns `tty-stderr-unavailable`. |
+| pending `ExecWait` calls | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
+| RPC rate budget | 200/s per connection, 1000/s per VM burst | policy-defined | Excess calls return `rate-limited` with bounded retry-after. |
 
 The hard maximums are capability values negotiated at `Hello` time and
 may be lowered by VM policy. Raising them requires updating tests and
@@ -325,6 +331,12 @@ below 16.25 MiB per VM before ordinary Rust allocator overhead. This
 budget is separate from output log retention and must be included in RSS
 evidence.
 
+Overload behavior is fail-closed and non-spawning: capacity failures
+return typed errors before creating a process, allocating a retained log,
+or accepting another long-poll waiter. Error payloads carry only bounded
+limit metadata and never include argv, environment, output bytes, socket
+paths, token material, MACs, or guest free-form strings.
+
 ## Server-side storage model
 
 Each exec owns two output log objects, or one stdout log for TTY mode.
@@ -372,9 +384,11 @@ Recommended CLI loop:
    terminal state.
 
 The server enforces a per-exec cap on simultaneous pending read waits per
-stream, normally one. A second wait at the same cursor replaces or rejects
-the older one with `superseded-read-wait`; this prevents abandoned
-clients from accumulating waiters.
+stream, normally one per connection, plus the per-VM caps above. A second
+wait at the same cursor replaces or rejects the older one with
+`superseded-read-wait`; per-VM exhaustion returns
+`read-wait-capacity-exceeded`. This prevents abandoned clients from
+accumulating waiters.
 
 ## Ordering of resize, signal, cancel, and exit
 
@@ -570,6 +584,11 @@ Required typed error kinds:
 - `control-seq-mismatch`
 - `request-id-conflict`
 - `superseded-read-wait`
+- `read-wait-capacity-exceeded`
+- `wait-capacity-exceeded`
+- `exec-capacity-exceeded`
+- `exec-attach-capacity-exceeded`
+- `rate-limited`
 - `slow-consumer-cancelled`
 - `protocol-error`
 

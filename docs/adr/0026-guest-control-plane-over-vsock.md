@@ -280,8 +280,13 @@ for failing a must-pass row.
 - Cross-VM reuse is rejected by VM ID, socket path, CID, and HMAC VM
   binding.
 - The port registry owns all guest-control ports. Reserve at least a
-  guestd control port and, only if needed, a separate exec stream port.
-  Existing guest-to-host observability port `14317` remains separate.
+  guestd control port and, only if needed, a separate exec stream port:
+  `14318` is the host-to-guest `nixling-guestd` ttRPC control port and
+  `14319` is reserved for any future panel-approved guest-control
+  stream side channel. The selected W0 chunked-stdio design does not use
+  `14319`. Existing guest-to-host observability port `14317` remains
+  separate: it is owned by OTLP/Alloy relay traffic, uses the
+  guest-to-host direction, and must not carry guest-control RPCs.
 - Guest-control readiness requires CONNECT, Hello/auth, and Health.
   Socket existence alone is never readiness.
 - No host proxy daemon or per-VM host systemd unit may be introduced
@@ -291,10 +296,18 @@ for failing a must-pass row.
   full `OK <buffer-size>\n` line without consuming payload bytes, and
   only then hand the raw post-OK byte stream to ttRPC. W0 must test
   success, refusal, malformed reply, timeout, half-close, stale socket
-  after VM restart, and guest listener absence.
+  after VM restart, and guest listener absence. Half-close means EOF on
+  one side is propagated without treating the opposite direction as
+  already closed; stale sockets and absent listeners fail readiness with
+  typed transport errors and never degrade to socket-existence success.
 - The CH CONNECT harness must reject wrong ports and then wrap the same
   accepted stream as the ttRPC client/server transport so the test
   proves the real handoff shape, not just the textual prelude.
+- Guest-side ttRPC serving uses `ttrpc-rust`'s safe async listener API
+  on `vsock://-1:14318`, which is backed by `tokio-vsock` on Linux. W0
+  carries a compile-only proof for this shape because routine CI hosts
+  do not expose a guest AF_VSOCK device. Runtime vsock tests remain
+  cfg-gated to hosts or microVMs that provide virtio-vsock.
 
 ## Security invariants
 
