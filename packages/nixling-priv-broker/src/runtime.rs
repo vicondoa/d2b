@@ -2184,10 +2184,13 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             // timings beyond `total_ms` are follow-up enrichments.
             let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
             let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
+            let target_env = resolver
+                .find_manifest_vm(&vm_name)
+                .and_then(|vm| vm.env.clone());
             let audit_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
                 vm: vm_name.clone(),
                 vm_id: req.vm_id.as_str().to_owned(),
-                env: None,
+                env: target_env,
                 bundle_closure_ref: req.bundle_closure_ref.as_str().to_owned(),
                 hardlink_farm_path: hardlink_farm_path_str.clone(),
                 generation_id: crate::ops::store_sync::generation_id_for_intent(intent),
@@ -7812,6 +7815,7 @@ mod tests {
         };
         fields.validate().expect("signed schema holds");
         assert_eq!(fields.sync_status, SyncStatus::Ok);
+        assert_eq!(fields.env.as_deref(), Some("work"));
         assert_eq!(fields.error_stage, ErrorStage::None);
         assert_eq!(fields.cleanup_status, CleanupStatus::DeferredAmbiguous);
         assert_eq!(
@@ -7834,6 +7838,7 @@ mod tests {
         let (export_record, export_obj) = &exported[0];
         assert_export_allow_list(export_obj);
         assert_eq!(export_record.target_vm, "corp-vm");
+        assert_eq!(export_record.target_env.as_deref(), Some("work"));
         assert_eq!(export_record.vm_id, "corp-vm");
         assert_eq!(export_record.generation_token, 7);
         assert_eq!(export_record.sync_status, SyncStatus::Ok);

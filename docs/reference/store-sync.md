@@ -197,8 +197,8 @@ The `decision` field follows the broker default
 > at this layer (the only kernel-trusted identity is the global peer-uid
 > gate applied before dispatch), so a real authz-deny trigger awaits that
 > policy. `ok_cleanup_failed` likewise awaits the post-activation
-> sweep/cleanup wave. `env` attribution and per-phase timings beyond
-> `total_ms` are follow-up enrichment.
+> sweep/cleanup wave. Per-phase timings beyond `total_ms` remain follow-up
+> enrichment.
 
 ## Observability export (W5)
 
@@ -238,8 +238,9 @@ Notes:
 
 - The audit `vm`/`env` fields are renamed to **`target_vm`/`target_env`**
   so the observability plane treats them as JSON *content*, never as Loki
-  stream labels. `target_env` is always serialized (`null` until env
-  attribution is threaded) so the key-set stays stable.
+  stream labels. `target_env` is resolved from the trusted manifest when
+  present and is always serialized (`null` only when a VM has no env) so the
+  key-set stays stable.
 - The nested `timings` object is **flattened** to top-level `*_ms` keys.
 - Redacted by construction (never exported): `caller_principal`,
   `retained_generations`, `bundle_closure_ref`, `hardlink_farm_path`, the

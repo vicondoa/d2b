@@ -58,7 +58,9 @@ deprecations ship one minor release before removal.
   broker audit log, the privileged daemon socket, or nixlingd state. The
   Loki stream stays a host singleton (`vm="host"`, `env="host"`,
   `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
-  remain JSON content. New gate `tests/store-sync-export-eval.sh`;
+  remain JSON content. `target_env` is resolved from the trusted manifest
+  when present (and remains a JSON field, not a stream label). New gate
+  `tests/store-sync-export-eval.sh`;
   `tests/loki-label-cardinality-eval.sh` now also parses
   `local.file_match` `path_targets` label maps. See
   [ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md) and

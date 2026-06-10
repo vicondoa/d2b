@@ -104,8 +104,8 @@ pub struct StoreSyncObservabilityRecord {
     pub target_vm: String,
     pub vm_id: String,
     /// Target env of the synced VM. Stays in JSON content (never a Loki
-    /// label) and is always serialized — `null` until env attribution is
-    /// threaded — so the exported key-set is stable.
+    /// label) and is always serialized — `null` only for env-less VMs — so
+    /// the exported key-set is stable.
     pub target_env: Option<String>,
     pub generation_id: String,
     pub generation_token: u32,

@@ -122,8 +122,7 @@ pub struct StoreSyncAuditContext {
     pub vm: String,
     pub vm_id: String,
     /// Host-audit field; never exposed to guest metadata. Optional because
-    /// the resolved store-view intent does not currently carry the env;
-    /// populated once env attribution is threaded through.
+    /// env-less/system VMs may not have a manifest env.
     pub env: Option<String>,
     /// Opaque bundle intent ref (host-only context, not a store path).
     pub bundle_closure_ref: String,
