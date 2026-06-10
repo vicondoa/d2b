@@ -146,9 +146,9 @@ The entire `components/usbip.nix` is two lines of payload:
   as `/dev/hidraw<N>` (or a raw USB node) inside the guest kernel.
 - The `usbip` CLI is needed in-guest so the host-side `nixling usb
   attach|detach` Rust CLI can SSH in and issue `usbip attach` / `usbip
-  detach`. The same in-guest SSH calls are dispatched through the
-  daemon → broker `SpawnRunner` path for the host-side
-  `usbip bind/unbind` step.
+  detach`. Host-side `usbip bind/unbind`, firewall, and proxy
+  reconciliation still dispatch through the daemon → broker path; the
+  guest import uses the framework-managed SSH key and known-hosts file.
 
 ## Runtime invariants
 
