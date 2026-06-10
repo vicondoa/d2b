@@ -13,7 +13,7 @@ FIXTURE_DIR=${FIXTURE_DIR:-$ROOT/tests/fixtures/deny-unknown}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-schemas=(privileges.json processes.json minijail-profile.json bundle.json host.json closures.json)
+schemas=(privileges.json processes.json minijail-profile.json bundle.json host.json closures.json guest-control.json)
 for schema in "${schemas[@]}"; do
   if [ ! -f "$SCHEMA_DIR/$schema" ]; then
     log "schemas absent — skipping static-invariant-deny-unknown-fields"

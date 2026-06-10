@@ -14,7 +14,7 @@ use nixling_core::{
     manifest_v04::ManifestV04, minijail_profile::MinijailProfile, privileges::PrivilegesJson,
     processes::ProcessesJson,
 };
-use nixling_ipc::WireProtocolSchema;
+use nixling_ipc::{guest_wire::GuestControlSchema, WireProtocolSchema};
 use schemars::schema::RootSchema;
 
 const SCHEMA_VERSION: &str = "v2";
@@ -102,7 +102,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
 
-    let schemas: [(&str, RootSchema); 8] = [
+    let schemas: [(&str, RootSchema); 9] = [
         ("bundle.json", schemars::schema_for!(Bundle)),
         ("host.json", schemars::schema_for!(HostJson)),
         ("processes.json", schemars::schema_for!(ProcessesJson)),
@@ -115,6 +115,10 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         (
             "wire-protocol.json",
             schemars::schema_for!(WireProtocolSchema),
+        ),
+        (
+            "guest-control.json",
+            schemars::schema_for!(GuestControlSchema),
         ),
         ("manifest_v04.json", schemars::schema_for!(ManifestV04)),
     ];

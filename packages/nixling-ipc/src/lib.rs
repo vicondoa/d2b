@@ -5,6 +5,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub mod broker_wire;
+pub mod guest_wire;
 pub mod public_wire;
 pub mod types;
 

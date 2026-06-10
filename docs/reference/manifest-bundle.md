@@ -41,14 +41,14 @@ bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 4`
 for the additive USBIP `busIds` wiring). Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
-`schemas/v2/` from the Rust DTOs in `nixling-core`; keep the
-markdown companions in sync in the same commit whenever the schema
-changes.
+`schemas/v2/` from the Rust DTOs in `nixling-core` and
+`nixling-ipc`; keep the markdown companions in sync in the same
+commit whenever the schema changes.
 
 ## Drift policy
 
-The committed schema files are derived from Rust DTOs in `nixling-core`.
-The drift gate is:
+The committed schema files are derived from Rust DTOs in `nixling-core`
+and `nixling-ipc`. The drift gate is:
 
 ```bash
 cargo xtask gen-schemas
@@ -78,7 +78,7 @@ Consumers that only need the compatibility manifest must read
 implementations consume this bundle reference and the per-artifact schema
 references below.
 
-## Per-artifact references
+## Per-artifact and wire references
 
 | Artifact | Prose reference | JSON Schema (current `v2` baseline) |
 | --- | --- | --- |
@@ -90,3 +90,4 @@ references below.
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
+| guest-control protocol | [`schemas/v2/guest-control.md`](./schemas/v2/guest-control.md) | `schemas/v2/guest-control.json` |

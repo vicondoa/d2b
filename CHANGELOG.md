@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `docs/reference/schemas/v2/guest-control.json` — generated guest-control
+  schema for the ADR 0026 ttRPC/protobuf contract, covering health, Hello,
+  capabilities, exec lifecycle, and chunked stdio RPC shapes.
+
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.
