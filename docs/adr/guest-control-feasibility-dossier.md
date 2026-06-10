@@ -445,10 +445,10 @@ It validates:
   stdin queue without duplicate or lost bytes at the RPC offset boundary;
 - per-connection decoded-byte budget and per-exec stdin permit tests
   bounding malicious concurrent `WriteStdin` fan-in;
-- a 30 second active slow-consumer run that keeps retained output under
-  the configured cap while producers continue attempting stdout/stderr
-  writes and receive typed `SlowConsumer` pressure rather than growing
-  unbounded buffers;
+- a deterministic active slow-consumer stress that keeps retained output
+  under the configured cap while producers continue attempting
+  stdout/stderr writes and receive typed `SlowConsumer` pressure rather
+  than growing unbounded buffers;
 - four concurrent attached sessions, including a mixed deterministic
   scheduler with slow-output, blocked-stdin, interactive echo, and
   unary-health load, with bounded service-turn gaps and no byte-skew

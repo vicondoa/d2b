@@ -13,6 +13,7 @@ use std::collections::HashMap;
 pub const KIB: usize = 1024;
 pub const MIB: usize = 1024 * KIB;
 pub const DEFAULT_CHUNK: usize = 256 * KIB;
+pub const MAX_DEDUPE_ENTRIES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct SessionToken {
@@ -59,6 +60,7 @@ pub enum ProtocolError {
         requested: usize,
         cap: usize,
     },
+    EmptyStdinData,
     StdinRequestInFlight,
 }
 
@@ -275,6 +277,7 @@ pub struct ChunkedSession {
     stderr: OutputLog,
     stdin: StdinQueue,
     stdin_closed: bool,
+    child_stdin_closed: bool,
     stdin_inflight: bool,
     close_stdin_request: Option<(u64, u64)>,
     writes: HashMap<u64, AcceptedWrite>,
@@ -296,6 +299,7 @@ impl ChunkedSession {
             stderr: OutputLog::new(),
             stdin: StdinQueue::new(),
             stdin_closed: false,
+            child_stdin_closed: false,
             stdin_inflight: false,
             close_stdin_request: None,
             writes: HashMap::new(),
@@ -325,6 +329,14 @@ impl ChunkedSession {
 
     pub fn stdin_buffered_bytes(&self) -> usize {
         self.stdin.buffered_bytes()
+    }
+
+    pub fn stdin_dedupe_entries(&self) -> usize {
+        self.writes.len()
+    }
+
+    pub fn child_stdin_closed(&self) -> bool {
+        self.child_stdin_closed
     }
 
     pub fn append_output(
@@ -410,6 +422,26 @@ impl ChunkedSession {
         data: &[u8],
     ) -> Result<WriteStdinResponse, ProtocolError> {
         self.check_token(token)?;
+        if self.stdin_inflight {
+            return Err(ProtocolError::StdinRequestInFlight);
+        }
+        if data.is_empty() {
+            return Err(ProtocolError::EmptyStdinData);
+        }
+        self.stdin_inflight = true;
+        let result = self.write_stdin_admitted(token, write_id, offset, data);
+        self.stdin_inflight = false;
+        result
+    }
+
+    fn write_stdin_admitted(
+        &mut self,
+        token: SessionToken,
+        write_id: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<WriteStdinResponse, ProtocolError> {
+        self.check_token(token)?;
         if self.stdin_closed {
             return Err(ProtocolError::StdinClosed);
         }
@@ -452,6 +484,7 @@ impl ChunkedSession {
                 hash: Self::hash(data),
             },
         );
+        self.evict_stdin_dedupe_to_limit();
         self.stdin.append(data);
         Ok(WriteStdinResponse {
             next_offset: self.stdin_next_offset(),
@@ -489,6 +522,7 @@ impl ChunkedSession {
             });
         }
         self.stdin_closed = true;
+        self.child_stdin_closed = self.stdin_buffered_bytes() == 0;
         self.close_stdin_request = Some((request_id, offset));
         Ok(WriteStdinResponse {
             next_offset: expected,
@@ -504,6 +538,9 @@ impl ChunkedSession {
         self.check_token(token)?;
         let consumed = self.stdin.consume(max_len);
         self.evict_stdin_dedupe();
+        if self.stdin_closed && self.stdin_buffered_bytes() == 0 {
+            self.child_stdin_closed = true;
+        }
         Ok(consumed)
     }
 
@@ -578,6 +615,21 @@ impl ChunkedSession {
         let earliest = self.stdin.base_offset;
         self.writes
             .retain(|_, accepted| accepted.offset + accepted.len as u64 > earliest);
+        self.evict_stdin_dedupe_to_limit();
+    }
+
+    fn evict_stdin_dedupe_to_limit(&mut self) {
+        while self.writes.len() > MAX_DEDUPE_ENTRIES {
+            let Some(oldest_id) = self
+                .writes
+                .iter()
+                .min_by_key(|(_, accepted)| accepted.offset)
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
+            self.writes.remove(&oldest_id);
+        }
     }
 
     pub fn receive_message(max_recv: usize, payload_len: usize) -> Result<Vec<u8>, ProtocolError> {
@@ -607,8 +659,6 @@ pub fn stdin_pattern(absolute_offset: u64, len: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
-    use std::time::{Duration, Instant};
 
     fn fill_output(session: &mut ChunkedSession, stream: Stream, total: usize) {
         let token = session.token();
@@ -781,22 +831,29 @@ mod tests {
                 }),
                 "{name} close_after ordering must observe both accepted chunks"
             );
+            assert!(
+                !session.child_stdin_closed(),
+                "{name} child stdin must stay open until queued bytes drain"
+            );
             assert_eq!(session.consume_stdin(token, 64 * KIB).unwrap(), second);
+            assert!(
+                session.child_stdin_closed(),
+                "{name} child stdin must close only after queued bytes drain"
+            );
         }
     }
 
     #[test]
-    fn thirty_second_slow_consumer_is_bounded_and_reports_backpressure() {
+    fn deterministic_slow_consumer_stress_is_bounded_and_reports_backpressure() {
         let cap = 2 * MIB;
         let mut session = ChunkedSession::new(3, cap, 2 * MIB, 64 * KIB);
         let token = session.token();
-        let deadline = Instant::now() + Duration::from_secs(30);
         let mut offset = 0_u64;
         let mut stderr_offset = 0_u64;
         let mut max_retained = 0_usize;
         let mut slow_consumer_errors = 0_usize;
 
-        while Instant::now() < deadline {
+        for _ in 0..1200 {
             let (stream, cursor) = if offset <= stderr_offset {
                 (Stream::Stdout, &mut offset)
             } else {
@@ -816,7 +873,6 @@ mod tests {
             }
             max_retained = max_retained.max(session.retained_output_bytes());
             assert!(max_retained <= cap);
-            thread::sleep(Duration::from_millis(25));
         }
         assert!(
             slow_consumer_errors > 0,
@@ -1003,6 +1059,13 @@ mod tests {
 
         let mut session = ChunkedSession::new(7, MIB, 2 * MIB, 64 * KIB);
         let token = session.token();
+        assert_eq!(
+            session.write_stdin(token, 1, 0, b""),
+            Err(ProtocolError::EmptyStdinData)
+        );
+        assert_eq!(session.stdin_next_offset(), 0);
+        assert_eq!(session.stdin_dedupe_entries(), 0);
+
         let bounded_but_too_large = vec![0u8; 64 * KIB + 1];
         assert_eq!(
             session.write_stdin(token, 1, 0, &bounded_but_too_large),
@@ -1040,21 +1103,51 @@ mod tests {
             Err(ProtocolError::StdinRequestInFlight)
         );
         let first = stdin_pattern(0, 64 * KIB);
-        session.write_stdin(token, 1, 0, &first).unwrap();
+        assert_eq!(
+            session.write_stdin(token, 1, 0, &first),
+            Err(ProtocolError::StdinRequestInFlight)
+        );
+        assert_eq!(session.stdin_next_offset(), 0);
+        assert_eq!(session.stdin_buffered_bytes(), 0);
+        assert_eq!(session.stdin_dedupe_entries(), 0);
         session.finish_stdin_request(token).unwrap();
 
+        session.write_stdin(token, 1, 0, &first).unwrap();
+
         session.begin_stdin_request(token).unwrap();
+        assert_eq!(
+            session.write_stdin(token, 2, 64 * KIB as u64, &first),
+            Err(ProtocolError::StdinRequestInFlight)
+        );
+        session.finish_stdin_request(token).unwrap();
         let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
         session
             .write_stdin(token, 2, 64 * KIB as u64, &second)
             .unwrap();
-        session.finish_stdin_request(token).unwrap();
         assert_eq!(session.stdin_next_offset(), 128 * KIB as u64);
         assert_eq!(
             session.consume_stdin(token, 128 * KIB).unwrap().len(),
             128 * KIB
         );
         assert_eq!(session.stdin_buffered_bytes(), 0);
+    }
+
+    #[test]
+    fn stdin_dedupe_metadata_is_bounded() {
+        let mut session = ChunkedSession::new(9, MIB, 2 * MAX_DEDUPE_ENTRIES, 1);
+        let token = session.token();
+        for idx in 0..(MAX_DEDUPE_ENTRIES + 128) {
+            let data = [(idx % 251) as u8];
+            session
+                .write_stdin(token, idx as u64 + 1, idx as u64, &data)
+                .unwrap();
+            assert!(session.stdin_dedupe_entries() <= MAX_DEDUPE_ENTRIES);
+        }
+        assert_eq!(
+            session.stdin_next_offset(),
+            (MAX_DEDUPE_ENTRIES + 128) as u64
+        );
+        assert!(session.stdin_dedupe_entries() <= MAX_DEDUPE_ENTRIES);
     }
 
     #[test]

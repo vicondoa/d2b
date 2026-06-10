@@ -93,7 +93,13 @@ pub struct StatusInventoryOutputV2 {
 #[serde(untagged)]
 pub enum ApiReadyStatusV1 {
     Simple(ApiReadySimple),
-    WithError { error: String },
+    WithError(ApiReadyErrorV1),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApiReadyErrorV1 {
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -4451,13 +4457,11 @@ fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyS
             "timeout" => Some(ApiReadyStatusV1::Simple(ApiReadySimple::Timeout)),
             _ => None,
         },
-        serde_json::Value::Object(map) => {
-            map.get("error")
-                .and_then(|v| v.as_str())
-                .map(|e| ApiReadyStatusV1::WithError {
-                    error: e.to_owned(),
-                })
-        }
+        serde_json::Value::Object(map) => map.get("error").and_then(|v| v.as_str()).map(|e| {
+            ApiReadyStatusV1::WithError(ApiReadyErrorV1 {
+                error: e.to_owned(),
+            })
+        }),
         _ => None,
     }
 }

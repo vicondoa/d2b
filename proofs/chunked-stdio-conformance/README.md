@@ -23,10 +23,10 @@ The tests prove:
   queue without exposing duplicate or lost bytes at the RPC offset boundary.
 - Per-connection decoded-byte budget and per-exec stdin permits bound
   malicious concurrent `WriteStdin` fan-in.
-- A 30 second active slow-consumer run keeps retained output below the
-  configured cap while producers continue attempting stdout/stderr writes
-  and receive explicit `SlowConsumer` errors instead of allocating without
-  bound.
+- A deterministic active slow-consumer stress keeps retained output below
+  the configured cap while producers continue attempting stdout/stderr
+  writes and receive explicit `SlowConsumer` errors instead of allocating
+  without bound.
 - Four concurrent attached sessions, including a mixed deterministic
   scheduler with slow-output, blocked-stdin, interactive echo, and
   unary-health load, meet bounded service-turn and fairness thresholds

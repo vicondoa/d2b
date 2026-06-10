@@ -246,10 +246,12 @@ Initial pass/fail thresholds are:
   from one process, with byte-exact demultiplexed output;
 - stdin pressure test: at least 16 MiB stdin into a process that reads
   slowly, with bounded buffering and correct close-stdin behavior;
-- slow-consumer test: pause each host-side stdout/stderr consumer for
-  at least 30 seconds while the guest process continues writing; memory
-  must remain bounded and the remote writer must block or receive a
-  typed slow-consumer cancellation rather than unbounded buffering;
+- slow-consumer test: deterministically pause each host-side
+  stdout/stderr consumer while the guest process continues writing;
+  memory must remain bounded and the remote writer must block or receive
+  a typed slow-consumer cancellation rather than unbounded buffering.
+  Real implementation soak gates may add a separate 30-second runtime
+  variant, but the default W0 proof must not depend on wall-clock timing;
 - frame/message limit test: send one message at the configured maximum,
   one byte above the effective application chunk limit, and one byte
   above the ttRPC receive cap. The receive-cap violation is rejected
@@ -423,14 +425,22 @@ release after the first guestd-capable release:
 - `nixling vm konsole`;
 - current SSH-key/known-host convenience paths.
 
-These commands prefer guestd when it is healthy. If guestd is absent
-because the running VM is old and SSH metadata exists, they use the
-existing SSH path, emit `transport: "ssh-compat"` in JSON, and print
-human remediation to restart/switch the VM. Human remediation names the
-VM and the exact command, for example `nixling vm restart <vm>` or
+Framework guest operations such as `config sync` prefer guestd when it
+is healthy. If guestd is absent because the running VM is old and SSH
+metadata exists, they use the existing SSH path, emit
+`transport: "ssh-compat"` in JSON, and print human remediation to
+restart/switch the VM. Human remediation names the VM and the exact
+command, for example `nixling vm restart <vm>` or
 `nixling switch <vm> --apply`, depending on the command context. JSON
 uses a stable typed error/remediation shape with fields for `kind`,
 `vm`, `transport`, and `remediation`.
+
+`nixling vm konsole` is an explicit compatibility exception because it
+is a user-facing SSH convenience rather than a framework guest
+operation. It may keep the SSH path for guestd-capable VMs until a
+documented conversion gate turns it into a guest-control wrapper. That
+gate must update this ADR's follow-up docs and tests so implementers do
+not silently change terminal behavior mid-window.
 
 The new `nixling vm exec` / `nixling exec` command does not fall back
 to SSH. On old running VMs it returns a typed

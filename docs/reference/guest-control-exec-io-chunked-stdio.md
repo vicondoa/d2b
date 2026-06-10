@@ -4,7 +4,7 @@ This document specifies the bounded exec I/O protocol selected for the
 guest-control design: ttRPC unary calls for lifecycle and
 Kata-style chunked stdio RPCs for stdin/stdout/stderr. It is the design
 follow-up to [ADR 0026](../adr/0026-guest-control-plane-over-vsock.md)
-and the [guest-control feasibility dossier](../adr/0026-guest-control-feasibility-dossier.md).
+and the [guest-control feasibility dossier](../adr/guest-control-feasibility-dossier.md).
 
 ## Decision summary
 
@@ -746,8 +746,9 @@ Before implementation exits design hardening, add at least:
     behind the single per-exec stdin permit; include pipe and PTY partial
     child-write cases proving the bounded queue drains without duplicate or
     lost stdin bytes before `CloseStdin` is observed;
-7. 30-second slow stdout/stderr consumer test proving block or
-   `slow-consumer-cancelled` with bounded RSS;
+7. deterministic slow stdout/stderr consumer stress proving block or
+   `slow-consumer-cancelled` with bounded retained bytes; a separate
+   non-default runtime soak may cover 30-second wall-clock behavior;
 8. detached retention tests proving dropped-byte accounting and
    `offset-expired` behavior;
 9. long-poll timeout and waiter-cap tests;
@@ -869,6 +870,6 @@ incorrect CLI retry behavior around `stdin-backpressure` or
 ## References
 
 - [ADR 0026: Guest control plane over virtio-vsock](../adr/0026-guest-control-plane-over-vsock.md)
-- [Guest control feasibility dossier](../adr/0026-guest-control-feasibility-dossier.md)
+- [Guest control feasibility dossier](../adr/guest-control-feasibility-dossier.md)
 - [Kata Agent protocol stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)
 - [Kata Agent stream message shapes](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L211-L227)
