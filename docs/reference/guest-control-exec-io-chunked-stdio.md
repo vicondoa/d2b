@@ -471,10 +471,10 @@ sequence covers:
 
 - `TtyWinResize`;
 - `ExecSignal`;
-- `ExecCancel`;
-- `CloseStdin` when it changes stdin state.
+- `ExecCancel`.
 
-`WriteStdin` is ordered by stdin byte offset, not by `control_seq`.
+`WriteStdin` and `CloseStdin` are ordered by stdin byte offset and
+`request_id`, not by `control_seq`.
 Output chunks are ordered by stream offset. Terminal state is ordered
 after all output bytes guestd read before observing process exit. If a
 process exits while unread bytes remain in OS pipes, guestd drains those
