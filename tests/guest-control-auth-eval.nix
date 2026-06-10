@@ -61,6 +61,8 @@ let
     ];
   };
   guestConfig = nixos.config.nixling._computed.corp-vm.config;
+  configuredTokenFile =
+    nixos.config.nixling.vms.corp-vm.guest.control.auth.tokenFile;
   tokenShare = lib.findFirst (share: share.tag == "nl-gctl") null guestConfig.microvm.shares;
   service = guestConfig.systemd.services.nixling-guestd;
   serviceJson = builtins.toJSON {
@@ -72,7 +74,8 @@ let
   tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-nl-gctl") null processNodes;
 in
 assert tokenShare != null;
-assert tokenShare.source == "/var/lib/nixling/vms/corp-vm/guest-control";
+assert configuredTokenFile == tokenFile;
+assert tokenShare.source == "/var/lib/nixling/guest-control-corp-vm";
 assert tokenShare.mountPoint == "/run/nixling-guest-control-host";
 assert tokenShare.readOnly == true;
 assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"

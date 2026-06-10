@@ -239,7 +239,7 @@ in
           proto = "virtiofs";
         };
         guestControlShare = lib.optional vm'.guest.control.enable {
-          source = "${cfg.site.stateDir}/vms/${name}/guest-control";
+          source = "${cfg.site.stateDir}/guest-control-${name}";
           mountPoint = "/run/nixling-guest-control-host";
           tag = "nl-gctl";
           proto = "virtiofs";

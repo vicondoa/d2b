@@ -515,14 +515,14 @@ in
               done
               if echo "$guest_control_virtiofsd_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
                 ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/vms/${name}/guest-control" \
+                  --path "/var/lib/nixling/guest-control-${name}" \
                   --acl-spec "u:$uid:rx" \
                   --also-spec "mask:r-x" \
                   --require-kind directory \
                   --setfacl-bin "${pkgs.acl}/bin/setfacl" \
                   2>/dev/null || true
                 ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/vms/${name}/guest-control/token" \
+                  --path "/var/lib/nixling/guest-control-${name}/token" \
                   --acl-spec "u:$uid:r" \
                   --also-spec "mask:r--" \
                   --require-kind regular \

@@ -18,6 +18,16 @@ if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
 fi
 
 if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
+  nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { tokenFile = \"/nix/store/not-a-token\"; }" >/dev/null 2>&1; then
+  fail "guest-control-auth-eval: /nix/store/... tokenFile unexpectedly passed"
+fi
+
+if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
+  nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { tokenFile = \"relative-token\"; }" >/dev/null 2>&1; then
+  fail "guest-control-auth-eval: relative tokenFile unexpectedly passed"
+fi
+
+if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
   nix eval --raw --impure --expr "import $ROOT/tests/guest-control-auth-eval.nix { guestControlEnable = false; }" >/dev/null 2>&1; then
   fail "guest-control-auth-eval: tokenFile without guest.control.enable unexpectedly passed"
 fi

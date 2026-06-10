@@ -595,7 +595,8 @@
               file. Do not use Nix path literals such as `./token`; those can
               copy secret material into `/nix/store`. When null, nixling
               generates a stable per-VM fallback token under
-              `nixling.site.stateDir`.
+              `nixling.site.stateDir` outside the runner-writable per-VM
+              state root.
 
               Runtime validation requires the source and its parent
               directories to be symlink-free, the file to be regular,

@@ -7,7 +7,7 @@ let
   tokenSpecs = lib.mapAttrsToList (name: vm: {
     inherit name;
     source = vm.guest.control.auth.tokenFile;
-    target = "${cfg.site.stateDir}/vms/${name}/guest-control/token";
+    target = "${cfg.site.stateDir}/guest-control-${name}/token";
   }) enabledGuestControlVms;
   tokenSpecsFile = pkgs.writeText "nixling-guest-control-token-specs.json"
     (builtins.toJSON tokenSpecs);
