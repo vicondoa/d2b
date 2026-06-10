@@ -44,6 +44,7 @@ pkgs.writeShellApplication {
       import socket
       import sys
       import threading
+      HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
       def write_all(fd, data):
           view = memoryview(data)
@@ -53,18 +54,22 @@ pkgs.writeShellApplication {
                   raise OSError("short write")
               view = view[written:]
 
-      def fwd(src, dst):
-          while True:
-              try:
-                  data = os.read(src, 65536)
-              except OSError:
-                  break
-              if not data:
-                  break
-              try:
-                  write_all(dst, data)
-              except OSError:
-                  break
+      def fwd(src, dst, on_done=None):
+          try:
+              while True:
+                  try:
+                      data = os.read(src, 65536)
+                  except OSError:
+                      break
+                  if not data:
+                      break
+                  try:
+                      write_all(dst, data)
+                  except OSError:
+                      break
+          finally:
+              if on_done is not None:
+                  on_done()
 
       def main():
           if len(sys.argv) != 3:
@@ -73,34 +78,49 @@ pkgs.writeShellApplication {
           base, port = sys.argv[1], sys.argv[2]
           try:
               sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              sock.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
               sock.connect(base)
+          except TimeoutError:
+              sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
+              sys.exit(1)
           except OSError:
               sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
               sys.exit(1)
           sock.sendall(f"CONNECT {port}\n".encode())
           # Read CH's OK line byte-by-byte so we don't slurp payload bytes.
           reply = b""
-          while not reply.endswith(b"\n"):
-              chunk = sock.recv(1)
-              if not chunk:
-                  sys.stderr.write("nixling-ch-vsock-connect: EOF before OK from CH\n")
-                  sys.exit(1)
-              reply += chunk
-              if len(reply) > 128:
-                  sys.stderr.write("nixling-ch-vsock-connect: CH CONNECT reply too long\n")
-                  sys.exit(1)
+          try:
+              while not reply.endswith(b"\n"):
+                  chunk = sock.recv(1)
+                  if not chunk:
+                      sys.stderr.write("nixling-ch-vsock-connect: eof-before-ack\n")
+                      sys.exit(1)
+                  reply += chunk
+                  if len(reply) > 128:
+                      sys.stderr.write("nixling-ch-vsock-connect: ack-too-long\n")
+                      sys.exit(1)
+          except TimeoutError:
+              sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
+              sys.exit(1)
           if not reply.startswith(b"OK ") or not reply.endswith(b"\n"):
               sys.stderr.write("nixling-ch-vsock-connect: connect-refused\n")
               sys.exit(1)
           local_port = reply[3:-1]
-          if not local_port.isdigit() or int(local_port) > 65535:
+          if not local_port.isdigit() or int(local_port) > 0xffffffff:
               sys.stderr.write("nixling-ch-vsock-connect: malformed-ack\n")
               sys.exit(1)
           # The ACK value is CH's local-port acknowledgement, not a buffer
           # size or flow-control input. Forward the post-OK stream as-is.
+          sock.settimeout(None)
           # Two-way pipe between stdio and the UDS.
           sock_fd = sock.fileno()
-          t = threading.Thread(target=fwd, args=(0, sock_fd), daemon=True)
+          def shutdown_write():
+              try:
+                  sock.shutdown(socket.SHUT_WR)
+              except OSError:
+                  pass
+
+          t = threading.Thread(target=fwd, args=(0, sock_fd, shutdown_write), daemon=True)
           t.start()
           fwd(sock_fd, 1)
           try:

@@ -96,7 +96,7 @@ gate is:
 ```text
 nixling exec <vm> [--interactive|-i] [--tty|-t] [--detach|-d]
   [--user <user>] [--workdir <path>] [--env KEY=VALUE]...
-  [--env-file <path>] [--timeout <duration>] [--json]
+  [--env-file <path>] [--timeout <duration>]
   -- <argv...>
 
 nixling vm exec run <vm> [same flags] -- <argv...>
@@ -110,6 +110,9 @@ Plain `exec` is attached, non-TTY, and has stdin closed unless
 `--interactive` is set. `--tty` allocates a PTY and implies merged
 stdout/stderr; `--interactive --tty` is the Docker-style shell case.
 Arguments after `--` are an argv array, not an implicit shell string.
+Attached `exec`/`vm exec run` never mixes metadata JSON with remote
+stdout. `--json` is valid only for detached `run` (where no command output
+is streamed and stdout contains exec metadata), and for `inspect`/`logs`.
 Detached exec is in scope for the full design, but the feasibility gate
 only has to prove whether the selected IPC can carry the lifecycle and
 stream semantics.

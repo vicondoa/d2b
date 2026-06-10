@@ -86,8 +86,9 @@ the implementation harness before guest-control ships:
   `stale-guest-control-socket`/`stale-session` error and remediation to
   restart or refresh the VM state.
 - **guest listener absent:** CH refusal, EOF, or timeout during
-  `CONNECT 14318` is `guest-control-listener-absent`, not fallback to
-  SSH for generic exec and not a successful readiness result.
+  `CONNECT 14318` maps to the bounded Health state `listener-absent`,
+  not fallback to SSH for generic exec and not a successful readiness
+  result.
 
 No host proxy daemon or per-VM host unit is required.
 

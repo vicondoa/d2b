@@ -21,7 +21,7 @@ use ttrpc::{get_status, Result as TtrpcResult};
 const SERVICE: &str = "proof.Echo";
 const METHOD: &str = "Ping";
 const PORT: u32 = 1024;
-const LOCAL_PORT: u32 = 49_152;
+const LOCAL_PORT: u32 = 1 << 30;
 const SMALL_LOCAL_PORT: u32 = 7;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -32,6 +32,7 @@ enum FakeChMode {
     Ttrpc,
     TtrpcSmallLocalPort,
     MalformedOk,
+    TooLargeLocalPort,
     OkPrefixJunk,
     CloseBeforeOk,
     NeverReply,
@@ -127,9 +128,7 @@ async fn connect_ch(base_socket: &Path, port: u32, timeout: Duration) -> io::Res
         };
         if local_port.is_empty()
             || !local_port.bytes().all(|byte| byte.is_ascii_digit())
-            || local_port
-                .parse::<u32>()
-                .map_or(true, |port| port > u16::MAX.into())
+            || local_port.parse::<u32>().is_err()
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "malformed-ack"));
         }
@@ -212,6 +211,10 @@ async fn spawn_fake_ch(
                 stream.write_all(b"OK not-a-local-port\n").await?;
                 stream.shutdown().await?;
             }
+            FakeChMode::TooLargeLocalPort => {
+                stream.write_all(b"OK 4294967296\n").await?;
+                stream.shutdown().await?;
+            }
             FakeChMode::OkPrefixJunk => {
                 stream.write_all(b"OKAY\n").await?;
                 stream.shutdown().await?;
@@ -282,6 +285,61 @@ async fn ok_local_port_is_not_used_as_a_buffer_limit() {
 }
 
 #[tokio::test]
+async fn post_ok_host_write_eof_still_allows_guest_output() {
+    let socket_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/proof-sockets");
+    tokio::fs::create_dir_all(&socket_dir).await.unwrap();
+    let socket_path = socket_dir.join(format!(
+        "h-{}-{}.sock",
+        std::process::id(),
+        NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = tokio::fs::remove_file(&socket_path).await;
+
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut line = Vec::new();
+        loop {
+            let mut byte = [0u8; 1];
+            let n = stream.read(&mut byte).await?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "client closed before CONNECT",
+                ));
+            }
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        assert_eq!(line, format!("CONNECT {PORT}\n").as_bytes());
+        stream
+            .write_all(format!("OK {LOCAL_PORT}\n").as_bytes())
+            .await?;
+        stream.flush().await?;
+
+        let mut stdin = Vec::new();
+        stream.read_to_end(&mut stdin).await?;
+        assert_eq!(stdin, b"host stdin");
+        stream.write_all(b"guest output after stdin eof").await?;
+        stream.shutdown().await?;
+        Ok::<_, io::Error>(())
+    });
+
+    let mut stream = connect_ch(&socket_path, PORT, HANDSHAKE_TIMEOUT)
+        .await
+        .unwrap();
+    stream.write_all(b"host stdin").await.unwrap();
+    stream.shutdown().await.unwrap();
+    let mut output = Vec::new();
+    stream.read_to_end(&mut output).await.unwrap();
+    assert_eq!(output, b"guest output after stdin eof");
+    server.await.unwrap().unwrap();
+    let _ = tokio::fs::remove_file(socket_path).await;
+}
+
+#[tokio::test]
 async fn wrong_port_is_refused_before_ttrpc_starts() {
     let (socket_path, mut server, task) = spawn_fake_ch(FakeChMode::Ttrpc).await.unwrap();
     let err = connect_ch(&socket_path, PORT + 1, HANDSHAKE_TIMEOUT)
@@ -297,6 +355,20 @@ async fn wrong_port_is_refused_before_ttrpc_starts() {
 #[tokio::test]
 async fn malformed_ok_is_rejected_before_ttrpc_starts() {
     let (socket_path, mut server, task) = spawn_fake_ch(FakeChMode::MalformedOk).await.unwrap();
+    let err = connect_ch(&socket_path, PORT, HANDSHAKE_TIMEOUT)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(err.to_string(), "malformed-ack");
+    shutdown(server.as_mut(), task).await;
+    let _ = tokio::fs::remove_file(socket_path).await;
+}
+
+#[tokio::test]
+async fn too_large_local_port_is_rejected_before_ttrpc_starts() {
+    let (socket_path, mut server, task) =
+        spawn_fake_ch(FakeChMode::TooLargeLocalPort).await.unwrap();
     let err = connect_ch(&socket_path, PORT, HANDSHAKE_TIMEOUT)
         .await
         .unwrap_err();
