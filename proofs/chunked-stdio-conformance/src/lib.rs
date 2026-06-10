@@ -56,6 +56,12 @@ pub enum ProtocolError {
         got: u64,
     },
     ReceiveMessageTooLarge,
+    EmptyRead,
+    OutputClosed,
+    OutputCursorAhead {
+        next: u64,
+        got: u64,
+    },
     DecodeBudgetExhausted {
         used: usize,
         requested: usize,
@@ -204,6 +210,9 @@ impl OutputLog {
     }
 
     fn read(&self, offset: u64, max_len: usize) -> Result<ReadOutputResponse, ProtocolError> {
+        if max_len == 0 {
+            return Err(ProtocolError::EmptyRead);
+        }
         if offset < self.base_offset {
             return Err(ProtocolError::OutputEvicted {
                 earliest: self.base_offset,
@@ -232,23 +241,50 @@ impl OutputLog {
         self.base_offset = clamped;
     }
 
-    fn mark_delivered_through(&mut self, offset: u64) {
+    fn mark_delivered_through(&mut self, offset: u64) -> Result<(), ProtocolError> {
+        if offset > self.next_offset() {
+            return Err(ProtocolError::OutputCursorAhead {
+                next: self.next_offset(),
+                got: offset,
+            });
+        }
         self.delivered_through = self.delivered_through.max(offset);
+        Ok(())
     }
 
     fn makes_available_through(&self, offset: u64) -> bool {
-        self.delivered_through >= offset
-            || self.accounted_through >= offset
-            || (self.base_offset == 0 && self.next_offset() >= offset)
+        if offset > self.next_offset()
+            || self.delivered_through > self.next_offset()
+            || self.accounted_through > self.next_offset()
+        {
+            return false;
+        }
+        let covered_prefix = self.delivered_through.max(self.accounted_through);
+        offset <= covered_prefix
+            || (self.base_offset <= covered_prefix && self.next_offset() >= offset)
     }
 
-    fn evict_undelivered_through(&mut self, offset: u64) {
+    fn evict_undelivered_through(&mut self, offset: u64) -> Result<(), ProtocolError> {
+        if offset > self.next_offset() {
+            return Err(ProtocolError::OutputCursorAhead {
+                next: self.next_offset(),
+                got: offset,
+            });
+        }
         self.evict_through(offset);
+        Ok(())
     }
 
-    fn evict_accounted_through(&mut self, offset: u64) {
+    fn evict_accounted_through(&mut self, offset: u64) -> Result<(), ProtocolError> {
+        if offset > self.next_offset() {
+            return Err(ProtocolError::OutputCursorAhead {
+                next: self.next_offset(),
+                got: offset,
+            });
+        }
         self.accounted_through = self.accounted_through.max(offset);
         self.evict_through(offset);
+        Ok(())
     }
 }
 
@@ -432,6 +468,9 @@ impl ChunkedSession {
             });
         }
         let log = self.log_mut(stream);
+        if log.eof {
+            return Err(ProtocolError::OutputClosed);
+        }
         let offset = log.next_offset();
         log.append(data);
         Ok(offset)
@@ -487,7 +526,7 @@ impl ChunkedSession {
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
         let log = self.log_mut(stream);
-        log.mark_delivered_through(through_offset);
+        log.mark_delivered_through(through_offset)?;
         log.evict_through(through_offset);
         Ok(())
     }
@@ -500,8 +539,7 @@ impl ChunkedSession {
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
         self.log_mut(stream)
-            .evict_undelivered_through(through_offset);
-        Ok(())
+            .evict_undelivered_through(through_offset)
     }
 
     pub fn evict_accounted_output(
@@ -511,8 +549,7 @@ impl ChunkedSession {
         through_offset: u64,
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
-        self.log_mut(stream).evict_accounted_through(through_offset);
-        Ok(())
+        self.log_mut(stream).evict_accounted_through(through_offset)
     }
 
     pub fn write_stdin(
@@ -945,6 +982,27 @@ mod tests {
         assert_eq!(session.retained_output_bytes(), 128 * MIB);
         assert_read_exact(&session, Stream::Stdout, total);
         assert_read_exact(&session, Stream::Stderr, total);
+    }
+
+    #[test]
+    fn zero_length_reads_and_append_after_eof_are_rejected() {
+        let mut session = ChunkedSession::new(12, MIB, MIB, 64 * KIB);
+        let token = session.token();
+        assert_eq!(
+            session.read_stdout(token, 0, 0),
+            Err(ProtocolError::EmptyRead)
+        );
+        session
+            .append_output(token, Stream::Stdout, b"done")
+            .unwrap();
+        session.finish_output(token, Stream::Stdout).unwrap();
+        let eof = session.read_stdout(token, 4, 64 * KIB).unwrap();
+        assert!(eof.data.is_empty());
+        assert!(eof.eof);
+        assert_eq!(
+            session.append_output(token, Stream::Stdout, b"late"),
+            Err(ProtocolError::OutputClosed)
+        );
     }
 
     #[test]
@@ -1746,10 +1804,10 @@ mod tests {
         let mut accounted = ChunkedSession::new(8, MIB, MIB, 64 * KIB);
         let accounted_token = accounted.token();
         accounted
-            .append_output(accounted_token, Stream::Stdout, b"tail")
+            .append_output(accounted_token, Stream::Stdout, b"tailmore")
             .unwrap();
         accounted
-            .set_terminal_status(accounted_token, ExitStatus::Code(0))
+            .set_terminal_status_with_required_output(accounted_token, ExitStatus::Code(0), 8, 0)
             .unwrap();
         accounted
             .evict_accounted_output(accounted_token, Stream::Stdout, 4)
@@ -1757,10 +1815,32 @@ mod tests {
         assert_eq!(
             accounted.visible_terminal_status_after_output_available(),
             Some(ExitStatus::Code(0)),
-            "terminal status must be visible after detached dropped-byte accounting covers pre-terminal output"
+            "terminal status must be visible when accounted prefix plus retained tail cover pre-terminal output"
         );
 
-        let mut evicted = ChunkedSession::new(9, MIB, MIB, 64 * KIB);
+        let mut future_ack = ChunkedSession::new(9, MIB, MIB, 64 * KIB);
+        let future_token = future_ack.token();
+        future_ack
+            .append_output(future_token, Stream::Stdout, b"tail")
+            .unwrap();
+        future_ack
+            .set_terminal_status_with_required_output(future_token, ExitStatus::Code(0), 8, 0)
+            .unwrap();
+        assert_eq!(
+            future_ack.ack_output(future_token, Stream::Stdout, 8),
+            Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
+        );
+        assert_eq!(
+            future_ack.evict_accounted_output(future_token, Stream::Stdout, 8),
+            Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
+        );
+        assert_eq!(
+            future_ack.visible_terminal_status_after_output_available(),
+            None,
+            "future cursor claims must not reveal terminal status"
+        );
+
+        let mut evicted = ChunkedSession::new(10, MIB, MIB, 64 * KIB);
         let evicted_token = evicted.token();
         evicted
             .append_output(evicted_token, Stream::Stdout, b"tail")
