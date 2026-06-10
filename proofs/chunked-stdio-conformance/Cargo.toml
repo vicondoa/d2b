@@ -1,0 +1,11 @@
+[package]
+name = "nixling-chunked-stdio-conformance"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]

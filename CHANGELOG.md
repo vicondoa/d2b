@@ -28,6 +28,12 @@ deprecations ship one minor release before removal.
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.
 
+- `proofs/chunked-stdio-conformance` — executable safe-Rust proof for
+  the selected Kata-style chunked stdio exec I/O protocol, covering
+  byte-exact offset reads, idempotent stdin writes, slow-consumer bounds,
+  concurrent attached fairness, stale sessions, EOF, resize, and signal
+  exit mapping.
+
 - `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
   duplex-stream exec I/O design using nixling `TerminalFrame` messages,
   explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
