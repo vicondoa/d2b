@@ -1085,8 +1085,7 @@ mod tests {
             vm: "corp-vm".to_owned(),
             generation_number: 9,
         };
-        let generation_dir =
-            build_farm(&farm_root, 9, &[a.clone(), b.clone()], &marker).unwrap();
+        let generation_dir = build_farm(&farm_root, 9, &[a.clone(), b.clone()], &marker).unwrap();
 
         let raw = std::fs::read_to_string(generation_dir.join("meta.json"))
             .expect("guest meta.json written");
@@ -1107,7 +1106,10 @@ mod tests {
             ],
             "guest meta.json must expose exactly the allow-listed keys"
         );
-        assert_eq!(obj["schema_version"], serde_json::json!(GUEST_META_SCHEMA_VERSION));
+        assert_eq!(
+            obj["schema_version"],
+            serde_json::json!(GUEST_META_SCHEMA_VERSION)
+        );
         assert_eq!(obj["generation_id"], serde_json::json!("sha256:deadbeef"));
         assert_eq!(obj["generation_token"], serde_json::json!(9));
         assert_eq!(obj["sync_status"], serde_json::json!("ok"));
