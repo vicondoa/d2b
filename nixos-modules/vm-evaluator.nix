@@ -56,7 +56,10 @@ let
         { nixpkgs.config = config.nixpkgs.config; }
         { _module.args.name = name; }
       ] ++ composedModules;
-      specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;
+      specialArgs =
+        { inherit inputs; }
+        // cfg.site.extraSpecialArgs
+        // { nixlingInputs = inputs; };
       inherit (pkgs.stdenv.hostPlatform) system;
     };
 

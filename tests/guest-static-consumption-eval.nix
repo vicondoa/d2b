@@ -1,10 +1,10 @@
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
+, flake ? builtins.getFlake ("git+file://" + toString ./..)
 }:
 
 let
   inherit (pkgs) lib;
-  flake = builtins.getFlake (toString ./..);
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   expected = [
     flake.packages.${system}.nixling-guestd-static
@@ -35,6 +35,7 @@ let
           waylandUser = "alice";
           launcherUsers = [ "alice" ];
           yubikey.enable = false;
+          extraSpecialArgs.inputs = { };
         };
 
         nixling.envs.work = {
@@ -63,4 +64,3 @@ let
 in
 assert lib.all (pkg: builtins.elem pkg guestSystemPackages) expected;
 builtins.toJSON (map toString expected)
-

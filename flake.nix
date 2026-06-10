@@ -422,6 +422,16 @@
           echo ok > "$out/guest-static-elf"
         '';
 
+        guest-static-consumption = let
+          evidence = import ./tests/guest-static-consumption-eval.nix {
+            inherit system pkgs;
+            flake = self;
+          };
+        in pkgs.runCommand "nixling-guest-static-consumption" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-static-consumption.json"
+        '';
+
         # Real cargo-deny gate: bans, licenses, and sources for both
         # the main workspace and the broker workspace.  Advisory
         # checks are handled by rust-audit below (cargo-deny requires

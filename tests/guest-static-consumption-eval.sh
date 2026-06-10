@@ -9,7 +9,8 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
+system=$(nix eval --raw --impure --expr builtins.currentSystem)
 NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
-  nix eval --raw --impure --expr "import $ROOT/tests/guest-static-consumption-eval.nix { }" >/dev/null
+  nix build "git+file://$ROOT#checks.$system.guest-static-consumption" --no-link
 
 ok "guest-static-consumption-eval: VM guest eval consumes static guest outputs"

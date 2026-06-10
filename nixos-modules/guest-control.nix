@@ -1,7 +1,7 @@
-{ inputs, pkgs, ... }:
+{ nixlingInputs, pkgs, ... }:
 
 let
-  guestPackages = inputs.self.packages.${pkgs.stdenv.hostPlatform.system};
+  guestPackages = nixlingInputs.self.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
   environment.systemPackages = [
