@@ -83,9 +83,9 @@ the implementation harness before guest-control ships:
 - **stale socket after VM restart:** socket existence is not readiness.
   The host must run `CONNECT`, Hello/auth, and Health on every use. A
   stale base UDS or old listener that no longer matches the VM boot ID,
-  CID, socket identity, and HMAC transcript returns a typed
-  `stale-guest-control-socket`/`stale-session` error and remediation to
-  restart or refresh the VM state.
+  CID, socket identity, and HMAC transcript returns bounded
+  `stale-session` status/error and remediation to restart or refresh the
+  VM state.
 - **old-generation capability absent:** an old running VM without the
   `guest-control` capability maps to bounded Health state
   `unavailable-old-generation` with reason `old-generation`.

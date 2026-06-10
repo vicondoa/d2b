@@ -567,6 +567,7 @@ pub struct ExecLogsRequest {
     pub metadata: GuestExecRequestMetadata,
     pub stream: OutputStream,
     pub offset: u64,
+    #[schemars(range(min = 1, max = 1048576))]
     pub max_len: u64,
 }
 
@@ -576,7 +577,7 @@ pub struct ExecLogsResponse {
     pub stream: OutputStream,
     pub offset: u64,
     pub end_offset: u64,
-    #[schemars(length(max = 65536))]
+    #[schemars(length(max = 1048576))]
     pub data: Vec<u8>,
     pub next_offset: u64,
     pub eof: bool,
@@ -591,7 +592,7 @@ pub struct ExecLogsResponse {
 pub struct WriteStdinRequest {
     pub metadata: GuestExecRequestMetadata,
     pub offset: u64,
-    #[schemars(length(min = 1, max = 65536))]
+    #[schemars(length(min = 1, max = 1048576))]
     pub data: Vec<u8>,
     pub close_after: bool,
     pub client_deadline_ms: Option<u64>,
@@ -615,6 +616,7 @@ pub struct ReadOutputRequest {
     pub metadata: GuestExecRequestMetadata,
     pub stream: OutputStream,
     pub offset: u64,
+    #[schemars(range(min = 1, max = 1048576))]
     pub max_len: u64,
     pub wait: bool,
     pub timeout_ms: u64,
@@ -626,7 +628,7 @@ pub struct ReadOutputResponse {
     pub stream: OutputStream,
     pub offset: u64,
     pub end_offset: u64,
-    #[schemars(length(max = 65536))]
+    #[schemars(length(max = 1048576))]
     pub data: Vec<u8>,
     pub next_offset: u64,
     pub eof: bool,

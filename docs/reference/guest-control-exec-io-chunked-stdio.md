@@ -101,7 +101,10 @@ Returns non-consuming state:
 
 - state enum: `created`, `running`, `exited`, `signaled`, `cancelled`,
   `slow-consumer-cancelled`, `protocol-error`, `lost-guestd`, `reaped`;
-- `exit_code` or `signal` when terminal;
+- `visible_terminal_status` when terminal. It is a oneof-style outcome:
+  `{outcome = "exit-code", exitCode}`, `{outcome = "signal", signal}`,
+  `{outcome = "status-code", statusCode}`, or
+  `{outcome = "error", error}`;
 - `stdin_state`: `open`, `closing`, `closed`, `closed-by-process`,
   `rejected-not-interactive`;
 - `stdout_start_offset`, `stdout_end_offset`, `stderr_start_offset`,

@@ -560,7 +560,8 @@
         "maxLen": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "maximum": 1048576.0,
+          "minimum": 1.0
         },
         "metadata": {
           "$ref": "#/definitions/GuestExecRequestMetadata"
@@ -597,7 +598,7 @@
             "format": "uint8",
             "minimum": 0.0
           },
-          "maxItems": 65536
+          "maxItems": 1048576
         },
         "droppedBytes": {
           "type": "integer",
@@ -1406,7 +1407,8 @@
         "maxLen": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "maximum": 1048576.0,
+          "minimum": 1.0
         },
         "metadata": {
           "$ref": "#/definitions/GuestExecRequestMetadata"
@@ -1452,7 +1454,7 @@
             "format": "uint8",
             "minimum": 0.0
           },
-          "maxItems": 65536
+          "maxItems": 1048576
         },
         "droppedBytes": {
           "type": "integer",
@@ -1695,7 +1697,7 @@
             "format": "uint8",
             "minimum": 0.0
           },
-          "maxItems": 65536,
+          "maxItems": 1048576,
           "minItems": 1
         },
         "metadata": {

@@ -84,9 +84,9 @@ def synth(s):
             obj[name] = synth(props.get(name, {"type": "string"}))
         return obj
     if typ == "integer":
-        return 0
+        return int(s.get("minimum", 0) or 0)
     if typ == "number":
-        return 0
+        return s.get("minimum", 0) or 0
     if typ == "boolean":
         return False
     if typ == "array":
@@ -178,6 +178,30 @@ def assert_guest_control_string_bounds():
             sys.exit(9)
 
 
+def assert_guest_control_chunk_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    checks = {
+        ("WriteStdinRequest", "data"): {"minItems": 1, "maxItems": 1048576},
+        ("ReadOutputResponse", "data"): {"maxItems": 1048576},
+        ("ExecLogsResponse", "data"): {"maxItems": 1048576},
+        ("ReadOutputRequest", "maxLen"): {"minimum": 1.0, "maximum": 1048576.0},
+        ("ExecLogsRequest", "maxLen"): {"minimum": 1.0, "maximum": 1048576.0},
+    }
+
+    for (definition, field), expected in checks.items():
+        node = resolve(schema.get("definitions", {}).get(definition, {}))
+        prop = resolve(node.get("properties", {}).get(field, {}))
+        for key, value in expected.items():
+            if prop.get(key) != value:
+                print(
+                    f"{definition}.{field} lost {key}: got {prop.get(key)!r}, want {value!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(10)
+
+
 if valid_path is None:
     instance = synth(schema)
     if not isinstance(instance, dict):
@@ -208,6 +232,7 @@ if not any("Additional properties" in err.message or "Unevaluated properties" in
 
 assert_nested_unknowns_rejected()
 assert_guest_control_string_bounds()
+assert_guest_control_chunk_bounds()
 PY
 )
 
