@@ -1,6 +1,8 @@
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
 , flake ? builtins.getFlake ("git+file://" + toString ./..)
+, guestControlEnable ? true
+, tokenFile ? "/run/secrets/nixling/corp-vm-token"
 }:
 
 let
@@ -44,8 +46,8 @@ let
           index = 10;
           ssh.user = "alice";
           guest.control = {
-            enable = true;
-            auth.tokenFile = "/run/secrets/nixling/corp-vm-token";
+            enable = guestControlEnable;
+            auth.tokenFile = tokenFile;
           };
           config = {
             networking.hostName = lib.mkDefault "corp-vm";
@@ -76,7 +78,7 @@ assert tokenShare.readOnly == true;
 assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
   service.serviceConfig.LoadCredential;
 assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
-assert !(lib.hasInfix "/run/secrets/nixling/corp-vm-token" serviceJson);
+assert !(lib.hasInfix tokenFile serviceJson);
 assert processVm != null;
 assert tokenVirtiofsd != null;
 assert builtins.elem "--readonly" tokenVirtiofsd.argv;
