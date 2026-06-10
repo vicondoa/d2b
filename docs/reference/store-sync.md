@@ -386,14 +386,17 @@ asserts `len() == 0`.
   and publishes (`state/current`, `meta/current`, live marker).
 - `packages/nixling-priv-broker/src/ops/store_view_farm.rs` —
   cross-mount-safe wrappers (`build_store_view_cross_mount_safe`) that
-  retry the build in a private mount namespace when `/nix/store` is a
-  separate vfsmount.
+  retry the build/replace in a private mount namespace when `/nix/store` is a
+  separate vfsmount. The broker execs the activation helper directly; no shell
+  wrapper is used.
 - `packages/nixling-host/src/hardlink_farm.rs` — underlying
   same-filesystem-checked split-layout primitive (`build_store_view`,
   the `generation_id` derivation, the publish/read helpers); authors the
   zero-length live marker and the guest-safe + host-only `meta.json`.
 - `packages/nixling-host/src/bin/nixling-activation-helper.rs` —
-  the `build-store-view` verb run inside the private mount namespace.
+  the `private-store <verb>` entrypoint that unshares the mount namespace,
+  makes propagation private, lazily detaches `/nix/store`, and runs
+  `build-store-view` / `replace-store-view-live` from stdin JSON.
 - `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
 - `packages/nixling-ipc/src/broker_wire.rs` — typed request/

@@ -91,6 +91,22 @@ fn build_store_view_farm_verb_populates_farm_from_stdin_request() {
 }
 
 #[test]
+fn private_store_requires_nested_verb_before_unshare() {
+    let output = Command::new(env!("CARGO_BIN_EXE_nixling-activation-helper"))
+        .arg("private-store")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn helper");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("missing verb"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn build_store_view_farm_verb_emits_typed_error_json_on_collision() {
     let tmp = tempdir().unwrap();
     let farm_root = tmp.path().join("vms/vm-a/store-view");

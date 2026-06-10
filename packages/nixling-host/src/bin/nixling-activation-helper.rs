@@ -44,6 +44,8 @@ use std::process::{Command, ExitCode};
 use nix::sys::stat::{fchmod, Mode};
 use nix::unistd::{fchown, ftruncate, Gid, Uid};
 use rustix::fs::{Mode as RxMode, OFlags, ResolveFlags, CWD};
+use rustix::mount::{mount_change, unmount, MountPropagationFlags, UnmountFlags};
+use rustix::thread::{unshare, UnshareFlags};
 
 use nixling_host::hardlink_farm::{
     build_farm, build_store_view, replace_live_top_level_paths, BuildStoreViewFarmRequest,
@@ -701,36 +703,63 @@ fn cmd_build_store_view() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
 
-    fn cmd_replace_store_view_live() -> ExitCode {
-        use std::io::Read;
+fn cmd_replace_store_view_live() -> ExitCode {
+    use std::io::Read;
 
-        let mut buf = Vec::new();
-        if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
-            eprintln!("replace-store-view-live: read stdin: {e}");
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+        eprintln!("replace-store-view-live: read stdin: {e}");
+        return ExitCode::from(1);
+    }
+    let req: ReplaceLivePathsRequest = match serde_json::from_slice(&buf) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("replace-store-view-live: parse request: {e}");
             return ExitCode::from(1);
         }
-        let req: ReplaceLivePathsRequest = match serde_json::from_slice(&buf) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("replace-store-view-live: parse request: {e}");
-                return ExitCode::from(1);
+    };
+    match replace_live_top_level_paths(&req.farm_root, &req.stage_tag, &req.closure_paths) {
+        Ok(counts) => {
+            if let Ok(j) = serde_json::to_string(&counts) {
+                println!("{j}");
             }
-        };
-        match replace_live_top_level_paths(&req.farm_root, &req.stage_tag, &req.closure_paths) {
-            Ok(counts) => {
-                if let Ok(j) = serde_json::to_string(&counts) {
-                    println!("{j}");
-                }
-                ExitCode::from(0)
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            if let Ok(j) = serde_json::to_string(&e) {
+                println!("{j}");
             }
-            Err(e) => {
-                if let Ok(j) = serde_json::to_string(&e) {
-                    println!("{j}");
-                }
-                eprintln!("replace-store-view-live: {e}");
-                ExitCode::from(1)
-            }
+            eprintln!("replace-store-view-live: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn prepare_private_store_namespace() -> Result<(), String> {
+    unshare(UnshareFlags::NEWNS).map_err(|e| format!("unshare mount namespace: {e}"))?;
+    mount_change(
+        "/",
+        MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+    )
+    .map_err(|e| format!("make mount propagation private: {e}"))?;
+    let _ = unmount("/nix/store", UnmountFlags::DETACH);
+    Ok(())
+}
+
+fn run_private_store_verb(verb: &str) -> ExitCode {
+    if let Err(err) = prepare_private_store_namespace() {
+        eprintln!("private-store: {err}");
+        return ExitCode::from(1);
+    }
+    match verb {
+        "build-store-view-farm" => cmd_build_store_view_farm(),
+        "build-store-view" => cmd_build_store_view(),
+        "replace-store-view-live" => cmd_replace_store_view_live(),
+        other => {
+            eprintln!("private-store: unsupported verb {other}");
+            ExitCode::from(1)
         }
     }
 }
@@ -740,15 +769,23 @@ fn main() -> ExitCode {
     // JSON on stdin, not `--flag value` argv, so it bypasses the
     // generic flag parser. The broker invokes it under
     // `unshare --mount --propagation private` + `umount -l /nix/store`.
-    if std::env::args().nth(1).as_deref() == Some("build-store-view-farm") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("private-store") {
+        let Some(verb) = args.get(2).map(String::as_str) else {
+            eprintln!("private-store: missing verb");
+            return ExitCode::from(1);
+        };
+        return run_private_store_verb(verb);
+    }
+    if args.get(1).map(String::as_str) == Some("build-store-view-farm") {
         return cmd_build_store_view_farm();
     }
     // `build-store-view` is the ADR 0027 split-layout build, same
     // stdin-JSON contract, same private-namespace invocation.
-    if std::env::args().nth(1).as_deref() == Some("build-store-view") {
+    if args.get(1).map(String::as_str) == Some("build-store-view") {
         return cmd_build_store_view();
     }
-    if std::env::args().nth(1).as_deref() == Some("replace-store-view-live") {
+    if args.get(1).map(String::as_str) == Some("replace-store-view-live") {
         return cmd_replace_store_view_live();
     }
     let args = match parse_args() {

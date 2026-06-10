@@ -93,6 +93,11 @@ deprecations ship one minor release before removal.
   process appears to be serving the VM's `store-view/live` path. Offline-safe
   cleanup removes unretained live basenames, stale meta/state generation dirs,
   and stale gcroots; online or uncertain serving state defers cleanup.
+- Cross-mount store-view materialisation no longer shells through
+  `unshare ... /bin/sh -ceu ...`. The broker now execs
+  `nixling-activation-helper private-store <verb>` directly; the helper
+  unshares its own mount namespace, makes propagation private, lazily detaches
+  `/nix/store`, then runs the selected build/replace verb from stdin JSON.
 
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the

@@ -20,20 +20,16 @@
 //! `unshare(CLONE_NEWNS)` in the broker process itself (which would
 //! corrupt the mount view of a long-lived, multi-request daemon) and
 //! WITHOUT fork-then-run-Rust (async-signal-unsafe in a multithreaded
-//! process). Instead it execs a dedicated subprocess:
+//! process) and without a shell. Instead it execs a dedicated helper
+//! subprocess that performs namespace setup itself:
 //!
 //! ```text
-//! unshare --mount --propagation private \
-//!   /bin/sh -ceu 'umount -l /nix/store 2>/dev/null || true; \
-//!                  exec "$0" build-store-view-farm' \
-//!   /run/current-system/sw/bin/nixling-activation-helper
+//! /run/current-system/sw/bin/nixling-activation-helper private-store build-store-view
 //! ```
 //!
-//! `--propagation private` ensures the lazy unmount stays inside the
-//! child namespace and never detaches the host's real `/nix/store`.
-//! The `nixling-activation-helper build-store-view-farm` verb reads the
-//! [`BuildStoreViewFarmRequest`] as JSON on stdin and calls
-//! `nixling_host::hardlink_farm::build_farm`.
+//! The helper unshares its mount namespace, sets recursive private
+//! propagation, lazily detaches `/nix/store`, then reads the JSON request on
+//! stdin and calls the selected `nixling_host::hardlink_farm` primitive.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,27 +40,9 @@ use nixling_host::hardlink_farm::{
     ReplaceLivePathsRequest, StoreViewLinkCounts,
 };
 
-/// `unshare(1)` — already assumed present by the activation path in
-/// `exec_reconcile::run_activation_script`.
-const UNSHARE_BIN: &str = "/run/current-system/sw/bin/unshare";
-/// POSIX shell — same path the activation bind-mount step uses.
-const SH_BIN: &str = "/bin/sh";
 /// The fd-safe activation helper, installed into the system profile by
 /// `nixos-modules/host-daemon.nix`.
 const HELPER_BIN: &str = "/run/current-system/sw/bin/nixling-activation-helper";
-
-/// The shell run inside the new mount namespace: drop `/nix/store`
-/// (ignored on hosts where it is not a separate mount) then exec the
-/// helper verb. `$0` is the helper path passed as the first positional.
-const NS_SHELL_SCRIPT: &str =
-    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view-farm";
-
-/// As [`NS_SHELL_SCRIPT`] but execs the ADR 0027 split-layout verb
-/// (`build-store-view`) instead of the legacy `build-store-view-farm`.
-const STORE_VIEW_NS_SHELL_SCRIPT: &str =
-    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view";
-const REPLACE_STORE_VIEW_NS_SHELL_SCRIPT: &str =
-    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" replace-store-view-live";
 
 /// Build (or idempotently reconcile) one generation of the per-VM
 /// store-view hardlink farm, transparently handling the NixOS
@@ -110,19 +88,8 @@ pub fn build_farm_cross_mount_safe(
     }
 }
 
-/// Build the `unshare … sh -ceu … helper` argv (binary + args). Split
-/// out so the wiring can be asserted in a unit test without spawning.
-fn farm_build_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
-    vec![
-        unshare_bin.to_owned(),
-        "--mount".to_owned(),
-        "--propagation".to_owned(),
-        "private".to_owned(),
-        sh_bin.to_owned(),
-        "-ceu".to_owned(),
-        NS_SHELL_SCRIPT.to_owned(),
-        helper_bin.to_owned(),
-    ]
+fn farm_build_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "build-store-view-farm")
 }
 
 /// Run the hardlink-farm build inside a private mount namespace where
@@ -150,7 +117,7 @@ fn build_farm_via_namespace(
         detail: format!("serialise store-view farm request: {e}"),
     })?;
 
-    let argv = farm_build_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let argv = farm_build_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::piped())
@@ -243,30 +210,20 @@ pub fn build_store_view_cross_mount_safe(
 
 /// Build the `unshare … sh -ceu … helper build-store-view` argv. Split
 /// out so the wiring can be asserted without spawning.
-fn store_view_build_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
+fn private_store_argv(helper_bin: &str, verb: &str) -> Vec<String> {
     vec![
-        unshare_bin.to_owned(),
-        "--mount".to_owned(),
-        "--propagation".to_owned(),
-        "private".to_owned(),
-        sh_bin.to_owned(),
-        "-ceu".to_owned(),
-        STORE_VIEW_NS_SHELL_SCRIPT.to_owned(),
         helper_bin.to_owned(),
+        "private-store".to_owned(),
+        verb.to_owned(),
     ]
 }
 
-fn replace_store_view_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
-    vec![
-        unshare_bin.to_owned(),
-        "--mount".to_owned(),
-        "--propagation".to_owned(),
-        "private".to_owned(),
-        sh_bin.to_owned(),
-        "-ceu".to_owned(),
-        REPLACE_STORE_VIEW_NS_SHELL_SCRIPT.to_owned(),
-        helper_bin.to_owned(),
-    ]
+fn store_view_build_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "build-store-view")
+}
+
+fn replace_store_view_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "replace-store-view-live")
 }
 
 /// Run the split-layout store-view build inside a private mount namespace
@@ -291,7 +248,7 @@ fn build_store_view_via_namespace(
         detail: format!("serialise store-view request: {e}"),
     })?;
 
-    let argv = store_view_build_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let argv = store_view_build_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::piped())
@@ -374,7 +331,7 @@ fn replace_live_paths_via_namespace(
         path: farm_root.display().to_string(),
         detail: format!("serialise store-view replace request: {e}"),
     })?;
-    let argv = replace_store_view_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let argv = replace_store_view_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::piped())
@@ -453,72 +410,33 @@ mod tests {
 
     #[test]
     fn farm_build_argv_wires_private_namespace_and_helper_verb() {
-        let argv = farm_build_argv("/u/unshare", "/bin/sh", "/h/helper");
+        let argv = private_store_argv("/h/helper", "build-store-view-farm");
         assert_eq!(
             argv,
-            vec![
-                "/u/unshare",
-                "--mount",
-                "--propagation",
-                "private",
-                "/bin/sh",
-                "-ceu",
-                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view-farm",
-                "/h/helper",
-            ]
+            vec!["/h/helper", "private-store", "build-store-view-farm"]
         );
     }
 
     #[test]
-    fn ns_shell_script_lazy_unmounts_then_execs_helper() {
-        // Lazy unmount (so a busy /nix/store still detaches), tolerant
-        // of hosts where /nix/store is not a separate mount, then
-        // exec (no lingering shell) into the helper verb.
-        assert!(NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
-        assert!(NS_SHELL_SCRIPT.contains("|| true"));
-        assert!(NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view-farm"));
+    fn private_store_argv_has_no_shell_or_unshare_binary() {
+        let argv = private_store_argv("/h/helper", "build-store-view");
+        assert_eq!(argv[0], "/h/helper");
+        assert!(!argv.iter().any(|arg| arg == "/bin/sh" || arg == "unshare"));
+        assert!(!argv.iter().any(|arg| arg.contains("umount")));
     }
 
     #[test]
     fn store_view_build_argv_wires_private_namespace_and_split_verb() {
-        let argv = store_view_build_argv("/u/unshare", "/bin/sh", "/h/helper");
-        assert_eq!(
-            argv,
-            vec![
-                "/u/unshare",
-                "--mount",
-                "--propagation",
-                "private",
-                "/bin/sh",
-                "-ceu",
-                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view",
-                "/h/helper",
-            ]
-        );
-    }
-
-    #[test]
-    fn store_view_ns_shell_script_execs_split_verb() {
-        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
-        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("|| true"));
-        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view"));
+        let argv = store_view_build_argv("/h/helper");
+        assert_eq!(argv, vec!["/h/helper", "private-store", "build-store-view"]);
     }
 
     #[test]
     fn replace_store_view_argv_wires_private_namespace_and_replace_verb() {
-        let argv = replace_store_view_argv("/u/unshare", "/bin/sh", "/h/helper");
+        let argv = replace_store_view_argv("/h/helper");
         assert_eq!(
             argv,
-            vec![
-                "/u/unshare",
-                "--mount",
-                "--propagation",
-                "private",
-                "/bin/sh",
-                "-ceu",
-                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" replace-store-view-live",
-                "/h/helper",
-            ]
+            vec!["/h/helper", "private-store", "replace-store-view-live"]
         );
     }
 
