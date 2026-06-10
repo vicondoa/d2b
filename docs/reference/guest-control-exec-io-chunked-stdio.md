@@ -245,7 +245,8 @@ Rules:
 Request fields:
 
 - `offset`: absolute byte offset in the stream log.
-- `max_len`: requested maximum bytes, clamped to `max_chunk_bytes`.
+- `max_len`: requested maximum bytes, `1..max_chunk_bytes`; larger or
+  zero-length requests fail with a typed protocol error.
 - `wait`: bool.
 - `timeout_ms`: long-poll duration if `wait` is true.
 

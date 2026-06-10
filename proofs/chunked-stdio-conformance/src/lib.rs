@@ -153,6 +153,7 @@ struct OutputLog {
     bytes: Vec<u8>,
     delivered_through: u64,
     accounted_through: u64,
+    unaccounted_loss_through: u64,
     eof: bool,
 }
 
@@ -197,6 +198,7 @@ impl OutputLog {
             bytes: Vec::new(),
             delivered_through: 0,
             accounted_through: 0,
+            unaccounted_loss_through: 0,
             eof: false,
         }
     }
@@ -259,6 +261,9 @@ impl OutputLog {
         {
             return false;
         }
+        if self.unaccounted_loss_through > 0 && offset > 0 {
+            return false;
+        }
         let covered_prefix = self.delivered_through.max(self.accounted_through);
         offset <= covered_prefix
             || (self.base_offset <= covered_prefix && self.next_offset() >= offset)
@@ -271,6 +276,7 @@ impl OutputLog {
                 got: offset,
             });
         }
+        self.unaccounted_loss_through = self.unaccounted_loss_through.max(offset);
         self.evict_through(offset);
         Ok(())
     }

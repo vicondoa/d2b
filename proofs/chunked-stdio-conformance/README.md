@@ -13,7 +13,8 @@ cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml
 The tests prove:
 
 - 64 MiB stdout plus 64 MiB stderr are byte-exact through
-  `ReadStdout`/`ReadStderr` offset reads.
+  `ReadStdout`/`ReadStderr` offset reads; zero-length reads and appends
+  after output EOF are rejected.
 - 16 MiB slow stdin is delivered byte-exact through `WriteStdin`, with
   exact-offset append, same-request duplicate replay acceptance,
   different-request stale replay rejection, offset-gap rejection,
@@ -43,8 +44,9 @@ The tests prove:
   typed rejection for mismatched duplicate IDs.
 - Process exit status is recorded separately from client controls, is
   visible only after preceding output is retained, delivered/acknowledged,
-  or explicitly dropped with cursor accounting, and maps signal exits to
-  shell-style `128 + signal` status codes.
+  or explicitly dropped with cursor accounting, rejects future
+  ACK/accounting cursors, stays hidden after unaccounted loss, and maps
+  signal exits to shell-style `128 + signal` status codes.
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path
