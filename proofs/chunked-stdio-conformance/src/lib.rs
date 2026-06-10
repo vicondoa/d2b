@@ -661,6 +661,12 @@ impl ChunkedSession {
                 got: offset,
             });
         }
+        if self.stdin_buffered_bytes() > 0 {
+            return Err(ProtocolError::SlowConsumer {
+                retained: self.stdin_buffered_bytes(),
+                cap: self.stdin_cap,
+            });
+        }
         if self.stdin_buffered_bytes() + data.len() > self.stdin_cap {
             return Err(ProtocolError::SlowConsumer {
                 retained: self.stdin_buffered_bytes(),
@@ -836,6 +842,34 @@ impl ChunkedSession {
         stderr_end: u64,
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
+        if self
+            .terminal_status
+            .is_some_and(|snapshot| snapshot.status == ExitStatus::ProtocolError)
+        {
+            return Ok(());
+        }
+        if stdout_end > self.stdout.next_offset() {
+            self.terminal_status = Some(TerminalSnapshot {
+                status: ExitStatus::ProtocolError,
+                stdout_end: 0,
+                stderr_end: 0,
+            });
+            return Err(ProtocolError::OutputCursorAhead {
+                next: self.stdout.next_offset(),
+                got: stdout_end,
+            });
+        }
+        if stderr_end > self.stderr.next_offset() {
+            self.terminal_status = Some(TerminalSnapshot {
+                status: ExitStatus::ProtocolError,
+                stdout_end: 0,
+                stderr_end: 0,
+            });
+            return Err(ProtocolError::OutputCursorAhead {
+                next: self.stderr.next_offset(),
+                got: stderr_end,
+            });
+        }
         self.terminal_status = Some(TerminalSnapshot {
             status,
             stdout_end,
@@ -1555,14 +1589,19 @@ mod tests {
         );
         session.finish_stdin_request(token).unwrap();
         let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
+        assert_eq!(
+            session.write_stdin(token, 2, 64 * KIB as u64, &second),
+            Err(ProtocolError::SlowConsumer {
+                retained: 64 * KIB,
+                cap: 2 * max_recv,
+            })
+        );
+        assert_eq!(session.consume_stdin(token, 64 * KIB).unwrap(), first);
         session
             .write_stdin(token, 2, 64 * KIB as u64, &second)
             .unwrap();
         assert_eq!(session.stdin_next_offset(), 128 * KIB as u64);
-        assert_eq!(
-            session.consume_stdin(token, 128 * KIB).unwrap().len(),
-            128 * KIB
-        );
+        assert_eq!(session.consume_stdin(token, 64 * KIB).unwrap(), second);
         assert_eq!(session.stdin_buffered_bytes(), 0);
     }
 
@@ -1575,6 +1614,7 @@ mod tests {
             session
                 .write_stdin(token, idx as u64 + 1, idx as u64, &data)
                 .unwrap();
+            assert_eq!(session.consume_stdin(token, 1).unwrap(), data);
             assert!(session.stdin_dedupe_entries() <= MAX_DEDUPE_ENTRIES);
         }
         assert_eq!(
@@ -1744,14 +1784,16 @@ mod tests {
             .set_terminal_status_with_required_output(
                 token,
                 ExitStatus::from_signal(Signal::Int),
-                8,
+                4,
                 0,
             )
             .unwrap();
         assert_eq!(
             session.visible_terminal_status_after_output_available(),
-            None,
-            "terminal status must not be visible while preceding output is missing"
+            Some(ExitStatus::Signal {
+                signal: Signal::Int,
+                status_code: 130,
+            })
         );
         assert_eq!(
             session.push_control(
@@ -1785,17 +1827,30 @@ mod tests {
                 },
             ]
         );
-        session
-            .append_output(token, Stream::Stdout, b"more")
+        assert_eq!(session.retained_output_bytes(), 4);
+
+        let mut future_status = ChunkedSession::new(13, MIB, MIB, 64 * KIB);
+        let future_status_token = future_status.token();
+        future_status
+            .append_output(future_status_token, Stream::Stdout, b"tail")
             .unwrap();
         assert_eq!(
-            session.visible_terminal_status_after_output_available(),
-            Some(ExitStatus::Signal {
-                signal: Signal::Int,
-                status_code: 130,
-            })
+            future_status.set_terminal_status_with_required_output(
+                future_status_token,
+                ExitStatus::Code(0),
+                8,
+                0,
+            ),
+            Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
         );
-        assert_eq!(session.retained_output_bytes(), 8);
+        future_status
+            .append_output(future_status_token, Stream::Stdout, b"more")
+            .unwrap();
+        assert_eq!(
+            future_status.visible_terminal_status_after_output_available(),
+            Some(ExitStatus::ProtocolError),
+            "future terminal cursor claims must become sticky protocol errors"
+        );
 
         let mut delivered = ChunkedSession::new(7, MIB, MIB, 64 * KIB);
         let delivered_token = delivered.token();
@@ -1843,9 +1898,15 @@ mod tests {
         future_ack
             .append_output(future_token, Stream::Stdout, b"tail")
             .unwrap();
-        future_ack
-            .set_terminal_status_with_required_output(future_token, ExitStatus::Code(0), 8, 0)
-            .unwrap();
+        assert_eq!(
+            future_ack.set_terminal_status_with_required_output(
+                future_token,
+                ExitStatus::Code(0),
+                8,
+                0
+            ),
+            Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
+        );
         assert_eq!(
             future_ack.ack_output(future_token, Stream::Stdout, 8),
             Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
@@ -1856,8 +1917,8 @@ mod tests {
         );
         assert_eq!(
             future_ack.visible_terminal_status_after_output_available(),
-            None,
-            "future cursor claims must not reveal terminal status"
+            Some(ExitStatus::ProtocolError),
+            "future terminal cursor claims must become protocol errors"
         );
 
         let mut evicted = ChunkedSession::new(10, MIB, MIB, 64 * KIB);
