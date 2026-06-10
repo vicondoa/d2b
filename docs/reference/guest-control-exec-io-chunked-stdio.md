@@ -175,10 +175,13 @@ Rules:
 6. If stdin is already closed, the call returns `stdin-closed` and the
    expected offset.
 7. In non-interactive execs, all writes return `stdin-not-open`.
-8. `close_after` commits after the bytes have been accepted into the
-   bounded queue. The writer drains the accepted bytes first, then
-   half-closes child stdin in order. If the chunk cannot be accepted,
-   stdin remains open and the caller retries or calls `CloseStdin`.
+8. `close_after` commits atomically with the accepted bytes. The writer
+   drains the accepted bytes first, then applies the same endpoint-specific
+   close semantics as `CloseStdin`: pipe-backed execs close child stdin
+   after the queue drains, while TTY execs mark protocol input closed
+   without closing the PTY master/writer or stopping output reads. If the
+   chunk cannot be accepted, stdin remains open and the caller retries or
+   calls `CloseStdin`.
 
 ### `CloseStdin`
 
@@ -473,10 +476,13 @@ accumulating waiters.
 
 ## Ordering of resize, signal, cancel, and exit
 
-Every control mutation carries a `control_seq` supplied by the client and
-accepted by the server when it equals `last_control_seq + 1`. The server
-returns `control-seq-mismatch` with the expected value otherwise. This
-sequence covers:
+Every control mutation carries a `request_id` and a `control_seq`
+supplied by the client. A new control request is accepted when
+`control_seq` equals `last_control_seq + 1`; otherwise the server returns
+`control-seq-mismatch` with the expected value. Accepted controls are
+idempotent only for the same retained `request_id`, `control_seq`, and
+payload. Reusing a retained `request_id` with a different sequence or
+payload returns `request-id-conflict`. This sequence covers:
 
 - `TtyWinResize`;
 - `ExecSignal`;
@@ -731,10 +737,11 @@ Before implementation exits design hardening, add at least:
    with one bounded decoded allocation and no session-buffer copy;
 3. stdin offset/idempotency tests, including duplicate request IDs and
    mismatched duplicate payloads;
-4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior,
-   plus TTY protocol-side close proving the PTY master/writer stays open
-   and output after close is not lost; duplicate close is accepted only
-   for the same `request_id` and final offset, while mismatched or
+4. close-stdin and `WriteStdin.close_after` tests for non-TTY pipe and
+   TTY Ctrl-D-as-data behavior, plus TTY protocol-side close proving the
+   PTY master/writer stays open and output after close is not lost;
+   duplicate close/final-write is accepted only for the same retained
+   `request_id` and payload/final offset, while mismatched or
    different-request duplicates fail typed;
 5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
 6. stdin 16 MiB slow-reader test with bounded RSS;
@@ -754,7 +761,9 @@ Before implementation exits design hardening, add at least:
 9. long-poll timeout and waiter-cap tests;
 10. resize ordering tests that fail on reordered `control_seq`, prove a
     single `TIOCSWINSZ` yields a single SIGWINCH, and prove unchanged
-    sizes are deduplicated before `TIOCSWINSZ`;
+    sizes are deduplicated before `TIOCSWINSZ`; control tests must also
+    cover `request_id` idempotent replay for resize, signal, and cancel,
+    and reject mismatched duplicate control payloads;
 11. signal ordering and foreground process-group delivery tests covering
     session leadership, controlling-terminal setup, `tcgetpgrp`
     ownership, and SIGINT after a shell hands the terminal to a

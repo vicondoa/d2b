@@ -443,6 +443,9 @@ It validates:
   drainable bounded stdin retention/backpressure;
 - simulated pipe and PTY partial child writes draining from the bounded
   stdin queue without duplicate or lost bytes at the RPC offset boundary;
+- atomic `WriteStdin.close_after` success, backpressure failure, duplicate
+  replay, mismatched-duplicate rejection, and endpoint-specific close
+  behavior for pipe and PTY stdin;
 - per-connection decoded-byte budget and per-exec stdin permit tests
   bounding malicious concurrent `WriteStdin` fan-in;
 - a deterministic active slow-consumer stress that keeps retained output
@@ -457,8 +460,11 @@ It validates:
 - EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
   (`0x04` data through `WriteStdin`);
 - resize, signal, and cancel events ordered by one client control
-  sequence, with process exit status recorded separately and signal exits
-  mapped to shell-style `128 + signal` status codes.
+  sequence with `request_id` replay for identical retained requests and
+  typed rejection for mismatched duplicate IDs;
+- process exit status recorded separately from client controls, visible
+  only after retained output drains, with signal exits mapped to
+  shell-style `128 + signal` status codes.
 
 SSH compatibility remains design-level rather than a broad executable
 prototype:

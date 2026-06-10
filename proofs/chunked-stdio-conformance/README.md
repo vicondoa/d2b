@@ -21,6 +21,10 @@ The tests prove:
   stdin backpressure.
 - Simulated pipe and PTY partial child writes drain from the bounded stdin
   queue without exposing duplicate or lost bytes at the RPC offset boundary.
+- Atomic `WriteStdin.close_after` succeeds, fails, and replays
+  idempotently with endpoint-specific close semantics: pipe-backed stdin
+  closes only after queued bytes drain, while TTY close leaves PTY output
+  readable and does not synthesize EOF/HUP.
 - Per-connection decoded-byte budget and per-exec stdin permits bound
   malicious concurrent `WriteStdin` fan-in.
 - A deterministic active slow-consumer stress keeps retained output below
@@ -35,8 +39,11 @@ The tests prove:
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.
 - Resize, signal, and cancel events share an ordered client control
-  sequence; process exit status is recorded separately, with signal exits
-  mapped to shell-style `128 + signal` status codes.
+  sequence with `request_id` replay for identical retained requests and
+  typed rejection for mismatched duplicate IDs.
+- Process exit status is recorded separately from client controls, is
+  visible only after retained output drains, and maps signal exits to
+  shell-style `128 + signal` status codes.
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path
