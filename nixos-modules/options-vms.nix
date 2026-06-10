@@ -586,8 +586,7 @@
             '';
           };
           auth.tokenFile = lib.mkOption {
-            type = lib.types.nullOr (lib.types.addCheck lib.types.str
-              (s: lib.hasPrefix "/" s && s != "/nix/store" && !(lib.hasPrefix "/nix/store/" s)));
+            type = lib.types.nullOr lib.types.str;
             default = null;
             example = "/run/secrets/nixling/work/guest-control-token";
             description = ''

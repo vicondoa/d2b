@@ -73,6 +73,10 @@ let
   processNodes = processVm.nodes;
   tokenVirtiofsd = lib.findFirst (node: node.id == "virtiofsd-nl-gctl") null processNodes;
   cloudHypervisor = lib.findFirst (node: node.id == "cloud-hypervisor") null processNodes;
+  validTokenFile =
+    lib.hasPrefix "/" tokenFile
+    && tokenFile != "/nix/store"
+    && !(lib.hasPrefix "/nix/store/" tokenFile);
   positive =
     assert tokenShare != null;
     assert configuredTokenFile == tokenFile;
@@ -101,6 +105,6 @@ let
       loadCredential = service.serviceConfig.LoadCredential;
     };
 in
-if guestControlEnable
+if guestControlEnable && validTokenFile
 then positive
 else builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath
