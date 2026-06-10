@@ -48,7 +48,7 @@ W0 protocol.
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
 | Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
-| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` + consolidated fixes | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, mixed four-session shared-scheduler fairness, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
+| Chunked stdio conformance | `guest-control-w0-conf` | `4f0a8e1` + consolidated fixes | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, mixed four-session shared-scheduler fairness with modeled unary-health capacity, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
 
 ## Evidence details
 

@@ -34,8 +34,8 @@ The tests prove:
   without bound.
 - Four concurrent attached sessions, including a mixed deterministic
   scheduler with slow-output, blocked-stdin, interactive echo, and
-  unary-health load, meet bounded service-turn and fairness thresholds
-  without relying on wall-clock timing.
+  modeled unary-health RPC capacity, meet bounded service-turn and
+  fairness thresholds without relying on wall-clock timing.
 - Restarted sessions reject stale generation tokens.
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.

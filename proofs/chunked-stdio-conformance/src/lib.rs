@@ -979,6 +979,47 @@ pub fn stdin_pattern(absolute_offset: u64, len: usize) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct HealthRpcModel {
+        capacity: usize,
+        in_flight: usize,
+        max_in_flight: usize,
+        completed: u64,
+        last_turn: Option<u64>,
+        max_gap: u64,
+    }
+
+    impl HealthRpcModel {
+        fn new(capacity: usize) -> Self {
+            Self {
+                capacity,
+                in_flight: 0,
+                max_in_flight: 0,
+                completed: 0,
+                last_turn: None,
+                max_gap: 0,
+            }
+        }
+
+        fn handle(&mut self, turn: u64) -> Result<(), ProtocolError> {
+            if self.in_flight >= self.capacity {
+                return Err(ProtocolError::SlowConsumer {
+                    retained: self.in_flight,
+                    cap: self.capacity,
+                });
+            }
+            self.in_flight += 1;
+            self.max_in_flight = self.max_in_flight.max(self.in_flight);
+            if let Some(last) = self.last_turn {
+                self.max_gap = self.max_gap.max(turn - last);
+            }
+            self.last_turn = Some(turn);
+            self.completed += 1;
+            self.in_flight -= 1;
+            Ok(())
+        }
+    }
+
     fn fill_output(session: &mut ChunkedSession, stream: Stream, total: usize) {
         let token = session.token();
         let mut offset = 0_u64;
@@ -1417,26 +1458,20 @@ mod tests {
 
         let mut interactive = ChunkedSession::new(202, MIB, MIB, 64 * KIB);
         let interactive_token = interactive.token();
+        let mut health = HealthRpcModel::new(1);
         let mut interactive_ops = 0_u64;
-        let mut health_ops = 0_u64;
         let mut turn = 0_u64;
         let mut last_interactive_turn = 0_u64;
-        let mut last_health_turn = 0_u64;
         let mut max_interactive_gap = 0_u64;
-        let mut max_health_gap = 0_u64;
 
         while slow_offset < 2 * MIB as u64
             || blocked_write_id <= 64
             || interactive_ops < INTERACTIVE_OPS
-            || health_ops < HEALTH_OPS
+            || health.completed < HEALTH_OPS
         {
             turn += 1;
-            if health_ops < HEALTH_OPS {
-                if last_health_turn != 0 {
-                    max_health_gap = max_health_gap.max(turn - last_health_turn);
-                }
-                last_health_turn = turn;
-                health_ops += 1;
+            if health.completed < HEALTH_OPS {
+                health.handle(turn).unwrap();
             }
 
             turn += 1;
@@ -1502,9 +1537,10 @@ mod tests {
         assert_eq!(slow_offset, 2 * MIB as u64);
         assert!(blocked_slow > 0);
         assert_eq!(interactive_ops, INTERACTIVE_OPS);
-        assert_eq!(health_ops, HEALTH_OPS);
+        assert_eq!(health.completed, HEALTH_OPS);
+        assert_eq!(health.max_in_flight, 1);
         assert!(max_interactive_gap <= MAX_TURN_GAP);
-        assert!(max_health_gap <= MAX_TURN_GAP);
+        assert!(health.max_gap <= MAX_TURN_GAP);
     }
 
     #[test]
