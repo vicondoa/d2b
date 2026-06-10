@@ -40,7 +40,7 @@ W0 protocol.
 | --- | --- | --- | --- |
 | ADR gate | `guest-control-ttRPC` | `c3bd668` | ADR 0026 added, then accepted after feasibility evidence and panel review. |
 | CH CONNECT transport | integrated W0 decision branch | `4c5eded` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque u32 ACK, not used as a buffer limit, malformed/refused ACK failures surface only bounded error categories, handshake timeout is bounded, and post-OK half-close preserves guest output drain. |
-| Static guest build | `guest-control-w0-static` | `a085e68` | PASS with implementation constraints: Nix static-musl derivation works for x86_64 and aarch64; ELF has no interpreter/NEEDED; generated-code unsafe allowance must be handled. |
+| Static guest build | `guest-control-w0-static` | `a085e68` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `nixling-guestd`/`nixling-userd` artifacts remain a follow-up implementation gate. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf88` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
 | HMAC auth | `guest-control-w0-auth` | `7a97d09` | PASS: transcript-bound proof-of-possession prototype with redaction and replay tests. |
 | Safe PTY | `guest-control-w0-pty` | `72ddbe3` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
@@ -70,15 +70,15 @@ an opaque numeric acknowledgement for nixling's purposes), not a buffer
 size. Guest-control must not derive flow-control or ttRPC message limits
 from it.
 
-Tests cover success, wrong port refusal, malformed OK, EOF before OK, and
-timeout. The remaining design cases are locked as follows and must be in
+Tests cover success, wrong port refusal, malformed OK, EOF before OK,
+timeout, and host-write EOF after OK while guest output continues to
+drain. The remaining design cases are locked as follows and must be in
 the implementation harness before guest-control ships:
 
-- **half-close:** after a successful `OK`, stdin/host write EOF maps to a
-  ttRPC transport shutdown for that direction only; guest output may
-  still drain until EOF or protocol error. Guest-side EOF likewise wakes
+- **guest-side half-close:** after a successful `OK`, guest-side EOF wakes
   pending host reads without implying the host request stream was already
-  closed.
+  closed. Host-write EOF preserving guest-output drain is covered by the
+  `4c5eded` proof.
 - **stale socket after VM restart:** socket existence is not readiness.
   The host must run `CONNECT`, Hello/auth, and Health on every use. A
   stale base UDS or old listener that no longer matches the VM boot ID,
@@ -129,14 +129,17 @@ provides virtio-vsock. That runtime test must prove:
 
 Result: **pass with implementation constraints**.
 
-The proof crate builds through a Nix static-musl derivation for:
+The representative ttRPC dependency probe builds through a Nix
+static-musl derivation for:
 
 - `x86_64-unknown-linux-musl`
 - `aarch64-unknown-linux-musl`
 
 `readelf` evidence shows no ELF interpreter and no `DT_NEEDED`
-entries. `cargo-deny` and `cargo-audit` passed for the proof
-dependency set.
+entries. `cargo-deny` and `cargo-audit` passed for the proof dependency
+set. The actual `nixling-guestd`, `nixling-userd`, and
+`nixling-exec-runner` binaries do not exist in W0; their static package
+outputs remain a required implementation-wave gate.
 
 Reproducible proof source:
 

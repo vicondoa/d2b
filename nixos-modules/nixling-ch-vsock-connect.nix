@@ -86,12 +86,26 @@ pkgs.writeShellApplication {
           except OSError:
               sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
               sys.exit(1)
-          sock.sendall(f"CONNECT {port}\n".encode())
+          try:
+              sock.sendall(f"CONNECT {port}\n".encode())
+          except TimeoutError:
+              sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
+              sys.exit(1)
+          except OSError:
+              sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
+              sys.exit(1)
           # Read CH's OK line byte-by-byte so we don't slurp payload bytes.
           reply = b""
           try:
               while not reply.endswith(b"\n"):
-                  chunk = sock.recv(1)
+                  try:
+                      chunk = sock.recv(1)
+                  except TimeoutError:
+                      sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
+                      sys.exit(1)
+                  except OSError:
+                      sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
+                      sys.exit(1)
                   if not chunk:
                       sys.stderr.write("nixling-ch-vsock-connect: eof-before-ack\n")
                       sys.exit(1)
@@ -99,9 +113,6 @@ pkgs.writeShellApplication {
                   if len(reply) > 128:
                       sys.stderr.write("nixling-ch-vsock-connect: ack-too-long\n")
                       sys.exit(1)
-          except TimeoutError:
-              sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
-              sys.exit(1)
           if not reply.startswith(b"OK ") or not reply.endswith(b"\n"):
               sys.stderr.write("nixling-ch-vsock-connect: connect-refused\n")
               sys.exit(1)

@@ -848,10 +848,12 @@ environment variables, cwd, credential paths, CH socket paths, HMAC
 material, or guest free-form errors.
 
 Health responses and CLI JSON use the same rule except for fields that are
-the explicit user-facing API result. For example, `ExecCreate --json` may
-return the new `execId`, and `ExecLogs --json` may return the requested log
-payload when the user asked for logs, but daemon logs, metrics, spans,
-health JSON, and error JSON must not duplicate those payloads or IDs.
+the explicit user-facing API result. Attached exec forms reject `--json`
+with usage; detached run JSON, for example
+`nixling vm exec run <vm> --detach --json -- <argv...>`, may return the
+new `execId`, and `ExecLogs --json` may return the requested log payload
+when the user asked for logs, but daemon logs, metrics, spans, health JSON,
+and error JSON must not duplicate those payloads or IDs.
 
 ## Required tests
 

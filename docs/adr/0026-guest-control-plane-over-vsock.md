@@ -329,9 +329,10 @@ for failing a must-pass row.
   numeric value is the host-side allocated local port/opaque
   acknowledgement from Cloud Hypervisor; nixling must not derive buffer
   sizes, flow-control windows, or ttRPC limits from it. The feasibility
-  proof covers success, refusal, malformed reply, timeout, and EOF before
-  OK. The implementation harness before guest-control ships must also
-  cover half-close, stale socket after VM restart, and guest listener
+  proof covers success, refusal, malformed reply, timeout, EOF before OK,
+  and host-write EOF after OK while guest output continues to drain. The
+  implementation harness before guest-control ships must also cover
+  guest-side EOF, stale socket after VM restart, and guest listener
   absence. Half-close means EOF on one side is propagated without
   treating the opposite direction as already closed; stale sockets and
   absent listeners fail readiness with typed transport errors and never
