@@ -1,10 +1,17 @@
 # Guest-control exec I/O credit-window protocol
 
-This document selects the bounded ttRPC exec-I/O shape for the
-nixling guest-control plane. Unary guest-control APIs continue to use
-ordinary ttRPC request/response messages. Attached and detached exec I/O
-uses a ttRPC async duplex stream carrying nixling `TerminalFrame`
-protobuf messages with application-level byte credit. Raw ttRPC stream
+This document records the bounded credit-window ttRPC stream candidate
+for nixling guest-control exec I/O. The W0 decision selected
+[chunked stdio RPCs](./guest-control-exec-io-chunked-stdio.md) instead
+because raw ttRPC stream buffering was the observed failure mode and the
+unary chunked model is simpler to bound and test. This credit-window
+overlay remains a fallback candidate if the selected chunked-stdio path
+fails later implementation evidence.
+
+Under this candidate, unary guest-control APIs continue to use ordinary
+ttRPC request/response messages. Attached and detached exec I/O uses a
+ttRPC async duplex stream carrying nixling `TerminalFrame` protobuf
+messages with application-level byte credit. Raw ttRPC stream
 backpressure is not relied on for correctness.
 
 The design goal is Docker-like exec behavior while preserving bounded

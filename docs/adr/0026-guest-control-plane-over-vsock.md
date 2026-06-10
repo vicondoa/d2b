@@ -117,25 +117,35 @@ failures use typed nixling errors.
 
 ## Decision
 
-W0 targets ttRPC/protobuf first. Nixling must not lock the guest-control
-wire protocol until the W0 feasibility dossier is complete and the full
-panel signs off on the outcome.
+W0 targets ttRPC/protobuf for guest-control APIs. Unary ttRPC calls carry
+health, capabilities, lifecycle, inspection, wait, signal, resize, and
+log metadata.
 
-Preferred outcomes, in order:
+Raw `ttrpc-rust` async streams are not selected for Docker-like exec I/O:
+the W0 backpressure proof showed unbounded-enough buffering and
+non-byte-exact output when an application receiver stalled.
 
-1. **ttRPC for control and exec I/O.** Use ttRPC unary calls for
-   health, capabilities, and lifecycle, and ttRPC async streams for
-   interactive/detached exec I/O if they pass the conformance matrix.
-2. **ttRPC control plus Kata-style stdio RPCs.** Use ttRPC unary calls
-   and chunked stdio RPCs (`WriteStdin`, `ReadStdout`, `ReadStderr`,
-   `CloseStdin`, `TtyWinResize`) if that model satisfies interactive
-   latency and backpressure requirements.
-3. **ttRPC control plus a nixling binary stream.** Use ttRPC for
-   unary/control calls and a nixling-owned binary stream only if ttRPC
-   streams/chunked stdio do not satisfy exec I/O.
-4. **Custom JSON control as last resort.** Use nixling-owned
-   length-prefixed JSON control only if ttRPC fails documented
-   requirements and the panel approves the fallback.
+The selected bounded exec I/O protocol is **Kata-style chunked stdio
+over unary ttRPC calls**:
+
+1. `WriteStdin` transfers bounded stdin chunks with explicit byte
+   offsets, idempotency metadata, and deadlines.
+2. `ReadStdout` and `ReadStderr` read bounded chunks from server-owned
+   append-only output logs at explicit byte offsets. In TTY mode, PTY
+   output is merged into stdout and stderr reads return a typed
+   unavailable error.
+3. `CloseStdin` half-closes stdin independently of output EOF and process
+   exit.
+4. `TtyWinResize`, `ExecSignal`, `ExecCancel`, `ExecInspect`, and
+   `ExecWait` remain typed unary control calls.
+5. Attached exec uses concurrent short long-poll reads to preserve
+   interactive UX; detached exec and `exec logs` use the same retained-log
+   cursor model.
+
+The credit-window ttRPC stream overlay remains documented as a fallback
+candidate if chunked stdio fails later implementation evidence. A custom
+binary stream or custom JSON control remains a last resort and requires a
+new panel-approved decision.
 
 ## W0 feasibility gate
 
@@ -405,8 +415,8 @@ Negative:
   parallelized safely.
 - ttRPC/protobuf introduces a second generated-contract toolchain if
   selected.
-- If ttRPC streaming is insufficient, nixling still needs a custom
-  stream protocol for exec I/O.
+- Exec I/O still needs a new chunked-stdio contract, offset state
+  machine, and retained-log implementation.
 
 ## Alternatives considered
 

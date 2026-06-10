@@ -17,17 +17,22 @@ Use **ttRPC/protobuf for guest-control unary APIs**:
 
 Do **not** use raw `ttrpc-rust` async streams alone for Docker-like exec
 I/O. W0 backpressure evidence shows that raw async streams can buffer
-too much and lose byte-exact delivery under a stalled receiver. Exec I/O
-needs either:
+too much and lose byte-exact delivery under a stalled receiver.
 
-1. a nixling-defined credit/window protocol carried as protobuf messages
-   over a ttRPC duplex stream; or
-2. a Kata-style chunked stdio RPC model with explicit byte budgets and
-   slow-consumer cancellation.
+Select **Kata-style chunked stdio RPCs** for exec I/O:
 
-The next design step should compare those two bounded-I/O shapes. The
-custom binary stream remains a fallback only if the bounded ttRPC shapes
-fail.
+- `ExecCreate`, `ExecInspect`, `ExecWait`, `ExecLogs`, `ExecSignal`,
+  resize, and cancellation remain unary ttRPC/protobuf calls.
+- `WriteStdin`, `ReadStdout`, `ReadStderr`, and `CloseStdin` move
+  bounded byte chunks with explicit offsets, deadlines, and typed
+  backpressure/slow-consumer errors.
+- Attached CLI exec polls stdout/stderr with short long-poll reads;
+  detached exec and logs use the same cursor model over bounded retained
+  output.
+
+The credit-window stream overlay remains a viable future design if
+chunked stdio fails implementation evidence, but it is not the selected
+W0 protocol.
 
 ## Proof branches
 
@@ -195,24 +200,50 @@ requirements by themselves.
 
 ## Protocol lock recommendation
 
-Lock the next design step to:
+Lock the implementation design to:
 
 1. ttRPC/protobuf for guest-control unary APIs;
-2. ttRPC duplex stream carrying nixling `TerminalFrame` messages **only
-   if** a credit/window layer is added and proves byte-exact bounded I/O;
-3. Kata-style chunked stdio as the main fallback for exec I/O if the
-   credit/window layer is too complex or fails;
-4. custom binary stream only as a last-resort fallback after another
-   panel review.
+2. Kata-style chunked stdio RPCs for exec I/O, using explicit byte
+   offsets, bounded chunks, short long-poll reads, bounded retained logs,
+   and typed backpressure/slow-consumer cancellation;
+3. no raw ttRPC stream forwarding for exec I/O;
+4. no custom binary stream unless the selected chunked-stdio path fails a
+   later implementation gate and a new panel review approves a fallback.
 
 Do not implement raw ttRPC stream forwarding for exec I/O.
+
+### Bounded exec I/O decision
+
+The bounded candidates both satisfy the ADR terminal matrix on paper:
+
+- the credit-window overlay carries byte-exact `TerminalFrame` messages
+  over a ttRPC duplex stream and offers the most Docker-like attached
+  full-duplex UX with low interactive latency;
+- chunked stdio uses unary ttRPC calls with explicit stdin/stdout/stderr
+  offsets, bounded server-owned logs, and short long-poll reads.
+
+Select **chunked stdio** for the W0 implementation path. It better fits
+the W0 proof outcomes because raw ttRPC stream buffering was the observed
+failure mode, while unary request/response boundaries make allocation,
+backpressure, and retry behavior explicit and independently testable.
+It also gives detached logs the same byte-cursor contract as attached
+exec, avoids a second stream state machine, isolates conformance failures
+to individual RPCs, and follows Kata prior art.
+
+The tradeoff is attached UX latency: chunked stdio must keep reads
+concurrent and use short long-poll timeouts to meet the ADR latency
+threshold. That is acceptable because the required p95/max latency gates
+remain part of the implementation test plan. The credit-window overlay is
+not selected because its lower-latency duplex UX comes with higher
+protocol complexity, more subtle half-close/fairness interactions, and
+more implementation risk around ttRPC stream buffering.
 
 ## Required follow-up gates
 
 - Design and review the bounded exec I/O shape:
-  - ttRPC `TerminalFrame` with credit/window messages, or
-  - Kata-style chunked stdio with budgets and cancellation.
-- Update ADR 0026 once that bounded exec I/O shape is selected.
+  Kata-style chunked stdio with budgets, offsets, long-poll reads, and
+  cancellation.
+- Keep ADR 0026 aligned with the selected chunked-stdio outcome.
 - Add generated-code postprocessing to the implementation plan.
 - Keep guest binaries static and first-party unsafe-free.
 - Preserve old-running-VM SSH compatibility until the documented removal
