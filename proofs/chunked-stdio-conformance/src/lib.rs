@@ -296,6 +296,7 @@ pub struct ChunkedSession {
     stdin_cap: usize,
     stdout: OutputLog,
     stderr: OutputLog,
+    pre_terminal_output_available: bool,
     stdin: StdinQueue,
     stdin_endpoint: StdinEndpoint,
     stdin_closed: bool,
@@ -338,6 +339,7 @@ impl ChunkedSession {
             stdin_cap,
             stdout: OutputLog::new(),
             stderr: OutputLog::new(),
+            pre_terminal_output_available: false,
             stdin: StdinQueue::new(),
             stdin_endpoint,
             stdin_closed: false,
@@ -724,12 +726,21 @@ impl ChunkedSession {
         self.terminal_status
     }
 
-    pub fn visible_terminal_status_after_output_drain(&self) -> Option<ExitStatus> {
-        if self.retained_output_bytes() == 0 {
+    pub fn visible_terminal_status_after_output_available(&self) -> Option<ExitStatus> {
+        if self.pre_terminal_output_available {
             self.terminal_status
         } else {
             None
         }
+    }
+
+    pub fn mark_pre_terminal_output_available(
+        &mut self,
+        token: SessionToken,
+    ) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.pre_terminal_output_available = true;
+        Ok(())
     }
 
     fn check_token(&self, token: SessionToken) -> Result<(), ProtocolError> {
@@ -1593,9 +1604,9 @@ mod tests {
             .set_terminal_status(token, ExitStatus::from_signal(Signal::Int))
             .unwrap();
         assert_eq!(
-            session.visible_terminal_status_after_output_drain(),
+            session.visible_terminal_status_after_output_available(),
             None,
-            "terminal status must not be visible while output remains retained"
+            "terminal status must not be visible before preceding output is available"
         );
         assert_eq!(
             session.push_control(
@@ -1636,13 +1647,16 @@ mod tests {
                 status_code: 130,
             })
         );
-        session.ack_output(token, Stream::Stdout, 4).unwrap();
+        session
+            .mark_pre_terminal_output_available(token)
+            .expect("mark preceding output available");
         assert_eq!(
-            session.visible_terminal_status_after_output_drain(),
+            session.visible_terminal_status_after_output_available(),
             Some(ExitStatus::Signal {
                 signal: Signal::Int,
                 status_code: 130,
             })
         );
+        assert_eq!(session.retained_output_bytes(), 4);
     }
 }

@@ -42,8 +42,9 @@ The tests prove:
   sequence with `request_id` replay for identical retained requests and
   typed rejection for mismatched duplicate IDs.
 - Process exit status is recorded separately from client controls, is
-  visible only after retained output drains, and maps signal exits to
-  shell-style `128 + signal` status codes.
+  visible only after preceding output is available through retained
+  cursors, and maps signal exits to shell-style `128 + signal` status
+  codes.
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path

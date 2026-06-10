@@ -60,9 +60,15 @@ The proof crate validates the exact host-side shape:
 
 1. connect to the CH base UDS;
 2. send `CONNECT <port>\n`;
-3. read the complete `OK <buffer-size>\n` line without consuming payload;
+3. read the complete `OK <local-port>\n` acknowledgement without
+   consuming payload;
 4. hand the post-OK stream to `ttrpc::r#async::transport::Socket::new`;
 5. construct the client with `Client::new`.
+
+The `OK` number is Cloud Hypervisor's host-side allocated local port (or
+an opaque numeric acknowledgement for nixling's purposes), not a buffer
+size. Guest-control must not derive flow-control or ttRPC message limits
+from it.
 
 Tests cover success, wrong port refusal, malformed OK, EOF before OK, and
 timeout. The remaining design cases are locked as follows and must be in
@@ -466,8 +472,8 @@ It validates:
   sequence with `request_id` replay for identical retained requests and
   typed rejection for mismatched duplicate IDs;
 - process exit status recorded separately from client controls, visible
-  only after retained output drains, with signal exits mapped to
-  shell-style `128 + signal` status codes.
+  only after preceding output is available through retained cursors, with
+  signal exits mapped to shell-style `128 + signal` status codes.
 
 SSH compatibility remains design-level rather than a broad executable
 prototype:

@@ -269,11 +269,12 @@ Initial pass/fail thresholds are:
 
 Each candidate must also produce byte-exact transcripts for the matrix,
 fail on reordered resize/signal/cancel control events, and keep terminal
-process status ordered after output drain. Real-transport implementation
-tests must record p50/p95/max latency; deterministic W0 proofs record
-service-turn gaps. Concurrent proof must run slow-output, blocked-stdin,
-interactive, and unary-health work together and show no head-of-line
-blocking, no starvation, and bounded memory.
+process status hidden until output preceding terminal observation is
+available through stream/log cursors. Real-transport implementation tests
+must record p50/p95/max latency; deterministic W0 proofs record service-turn
+gaps. Concurrent proof must run slow-output, blocked-stdin, interactive,
+and unary-health work together and show no head-of-line blocking, no
+starvation, and bounded memory.
 
 Nice-to-have properties such as lower latency, lower dependency
 footprint, and simpler docs can break ties, but they cannot compensate
@@ -318,15 +319,18 @@ for failing a must-pass row.
   for guest control.
 - Host CONNECT setup is part of the transport contract: connect to the
   CH base UDS, send exactly `CONNECT <port>\n`, read and validate the
-  full `OK <buffer-size>\n` line without consuming payload bytes, and
-  only then hand the raw post-OK byte stream to ttRPC. The feasibility
-  proof covers success, refusal, malformed reply, timeout, and EOF
-  before OK. The implementation harness before guest-control ships must
-  also cover half-close, stale socket after VM restart, and guest
-  listener absence. Half-close means EOF on one side is propagated
-  without treating the opposite direction as already closed; stale
-  sockets and absent listeners fail readiness with typed transport errors
-  and never degrade to socket-existence success.
+  full `OK <local-port>\n` acknowledgement without consuming payload
+  bytes, and only then hand the raw post-OK byte stream to ttRPC. The
+  numeric value is the host-side allocated local port/opaque
+  acknowledgement from Cloud Hypervisor; nixling must not derive buffer
+  sizes, flow-control windows, or ttRPC limits from it. The feasibility
+  proof covers success, refusal, malformed reply, timeout, and EOF before
+  OK. The implementation harness before guest-control ships must also
+  cover half-close, stale socket after VM restart, and guest listener
+  absence. Half-close means EOF on one side is propagated without
+  treating the opposite direction as already closed; stale sockets and
+  absent listeners fail readiness with typed transport errors and never
+  degrade to socket-existence success.
 - The CH CONNECT harness must reject wrong ports and then wrap the same
   accepted stream as the ttRPC client/server transport so the test
   proves the real handoff shape, not just the textual prelude.
