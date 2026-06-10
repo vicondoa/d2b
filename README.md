@@ -414,6 +414,11 @@ For security disclosure, see [`SECURITY.md`](SECURITY.md).
 
 [Diataxis]: https://diataxis.fr
 
+## Acknowledgements
+
+Nixling's desktop-compartmentalization framing owes a debt to
+[Spectrum OS], and to its lead Alyssa Ross, @alyssais.
+
 ## License
 
 [Apache-2.0](./LICENSE).
@@ -435,4 +440,5 @@ repo root.
 [Flatpak]: https://flatpak.org/
 [virt-manager]: https://virt-manager.org/
 [GNOME Boxes]: https://apps.gnome.org/Boxes/
+[Spectrum OS]: https://spectrum-os.org/
 [docs/explanation/design.md]: ./docs/explanation/design.md
