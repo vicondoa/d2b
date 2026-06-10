@@ -456,8 +456,9 @@ It validates:
 - stale-generation rejection after restart;
 - EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
   (`0x04` data through `WriteStdin`);
-- resize, signal, and exit events ordered by one control sequence, with
-  signal exits mapped to shell-style `128 + signal` status codes.
+- resize, signal, and cancel events ordered by one client control
+  sequence, with process exit status recorded separately and signal exits
+  mapped to shell-style `128 + signal` status codes.
 
 SSH compatibility remains design-level rather than a broad executable
 prototype:

@@ -34,8 +34,9 @@ The tests prove:
 - Restarted sessions reject stale generation tokens.
 - TTY Ctrl-D (`0x04`) is data, while EOF is `CloseStdin` at the next
   stdin offset.
-- Resize, signal, and exit events share an ordered control sequence, and
-  signal exits map to shell-style `128 + signal` status codes.
+- Resize, signal, and cancel events share an ordered client control
+  sequence; process exit status is recorded separately, with signal exits
+  mapped to shell-style `128 + signal` status codes.
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path

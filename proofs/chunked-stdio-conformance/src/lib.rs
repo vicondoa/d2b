@@ -125,13 +125,19 @@ impl ExitStatus {
 pub enum ControlEvent {
     Resize(WindowSize),
     Signal(Signal),
-    Exit(ExitStatus),
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrderedControlEvent {
     pub seq: u64,
     pub event: ControlEvent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StdinEndpoint {
+    Pipe,
+    Pty,
 }
 
 #[derive(Clone, Debug)]
@@ -276,6 +282,7 @@ pub struct ChunkedSession {
     stdout: OutputLog,
     stderr: OutputLog,
     stdin: StdinQueue,
+    stdin_endpoint: StdinEndpoint,
     stdin_closed: bool,
     child_stdin_closed: bool,
     stdin_inflight: bool,
@@ -283,10 +290,27 @@ pub struct ChunkedSession {
     writes: HashMap<u64, AcceptedWrite>,
     next_control_seq: u64,
     events: Vec<OrderedControlEvent>,
+    terminal_status: Option<ExitStatus>,
 }
 
 impl ChunkedSession {
     pub fn new(session_id: u64, output_cap: usize, stdin_cap: usize, max_chunk: usize) -> Self {
+        Self::with_stdin_endpoint(
+            session_id,
+            output_cap,
+            stdin_cap,
+            max_chunk,
+            StdinEndpoint::Pipe,
+        )
+    }
+
+    pub fn with_stdin_endpoint(
+        session_id: u64,
+        output_cap: usize,
+        stdin_cap: usize,
+        max_chunk: usize,
+        stdin_endpoint: StdinEndpoint,
+    ) -> Self {
         Self {
             token: SessionToken {
                 session_id,
@@ -298,6 +322,7 @@ impl ChunkedSession {
             stdout: OutputLog::new(),
             stderr: OutputLog::new(),
             stdin: StdinQueue::new(),
+            stdin_endpoint,
             stdin_closed: false,
             child_stdin_closed: false,
             stdin_inflight: false,
@@ -307,6 +332,7 @@ impl ChunkedSession {
             // mutation must therefore use control_seq=1.
             next_control_seq: 1,
             events: Vec::new(),
+            terminal_status: None,
         }
     }
 
@@ -499,6 +525,9 @@ impl ChunkedSession {
         offset: u64,
     ) -> Result<WriteStdinResponse, ProtocolError> {
         self.check_token(token)?;
+        if self.stdin_inflight {
+            return Err(ProtocolError::StdinRequestInFlight);
+        }
         let expected = self.stdin_next_offset();
         if self.stdin_closed {
             if self.close_stdin_request == Some((request_id, offset)) {
@@ -522,7 +551,8 @@ impl ChunkedSession {
             });
         }
         self.stdin_closed = true;
-        self.child_stdin_closed = self.stdin_buffered_bytes() == 0;
+        self.child_stdin_closed =
+            self.stdin_endpoint == StdinEndpoint::Pipe && self.stdin_buffered_bytes() == 0;
         self.close_stdin_request = Some((request_id, offset));
         Ok(WriteStdinResponse {
             next_offset: expected,
@@ -538,7 +568,10 @@ impl ChunkedSession {
         self.check_token(token)?;
         let consumed = self.stdin.consume(max_len);
         self.evict_stdin_dedupe();
-        if self.stdin_closed && self.stdin_buffered_bytes() == 0 {
+        if self.stdin_closed
+            && self.stdin_endpoint == StdinEndpoint::Pipe
+            && self.stdin_buffered_bytes() == 0
+        {
             self.child_stdin_closed = true;
         }
         Ok(consumed)
@@ -579,6 +612,20 @@ impl ChunkedSession {
 
     pub fn events(&self) -> &[OrderedControlEvent] {
         &self.events
+    }
+
+    pub fn set_terminal_status(
+        &mut self,
+        token: SessionToken,
+        status: ExitStatus,
+    ) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.terminal_status = Some(status);
+        Ok(())
+    }
+
+    pub fn terminal_status(&self) -> Option<ExitStatus> {
+        self.terminal_status
     }
 
     fn check_token(&self, token: SessionToken) -> Result<(), ProtocolError> {
@@ -780,11 +827,16 @@ mod tests {
 
     #[test]
     fn partial_child_writes_drain_queue_without_duplicate_or_lost_stdin() {
-        for (name, write_steps) in [
-            ("pipe", &[8 * KIB, 16 * KIB, 4 * KIB][..]),
-            ("pty", &[1024, 4096, 2048][..]),
+        for (name, endpoint, write_steps) in [
+            (
+                "pipe",
+                StdinEndpoint::Pipe,
+                &[8 * KIB, 16 * KIB, 4 * KIB][..],
+            ),
+            ("pty", StdinEndpoint::Pty, &[1024, 4096, 2048][..]),
         ] {
-            let mut session = ChunkedSession::new(20, MIB, 64 * KIB, 64 * KIB);
+            let mut session =
+                ChunkedSession::with_stdin_endpoint(20, MIB, 64 * KIB, 64 * KIB, endpoint);
             let token = session.token();
             let first = stdin_pattern(0, 64 * KIB);
             let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
@@ -836,10 +888,24 @@ mod tests {
                 "{name} child stdin must stay open until queued bytes drain"
             );
             assert_eq!(session.consume_stdin(token, 64 * KIB).unwrap(), second);
-            assert!(
-                session.child_stdin_closed(),
-                "{name} child stdin must close only after queued bytes drain"
-            );
+            if endpoint == StdinEndpoint::Pipe {
+                assert!(
+                    session.child_stdin_closed(),
+                    "{name} child stdin must close only after queued bytes drain"
+                );
+            } else {
+                assert!(
+                    !session.child_stdin_closed(),
+                    "{name} protocol close must not synthesize PTY EOF/HUP"
+                );
+                session
+                    .append_output(token, Stream::Stdout, b"after-close")
+                    .unwrap();
+                assert_eq!(
+                    session.read_stdout(token, 0, 64 * KIB).unwrap().data,
+                    b"after-close"
+                );
+            }
         }
     }
 
@@ -1119,6 +1185,10 @@ mod tests {
             session.write_stdin(token, 2, 64 * KIB as u64, &first),
             Err(ProtocolError::StdinRequestInFlight)
         );
+        assert_eq!(
+            session.close_stdin(token, 99, 64 * KIB as u64),
+            Err(ProtocolError::StdinRequestInFlight)
+        );
         session.finish_stdin_request(token).unwrap();
         let second = stdin_pattern(64 * KIB as u64, 64 * KIB);
         session
@@ -1215,11 +1285,10 @@ mod tests {
             .push_control(token, 2, ControlEvent::Signal(Signal::Int))
             .unwrap();
         session
-            .push_control(
-                token,
-                3,
-                ControlEvent::Exit(ExitStatus::from_signal(Signal::Int)),
-            )
+            .push_control(token, 3, ControlEvent::Cancel)
+            .unwrap();
+        session
+            .set_terminal_status(token, ExitStatus::from_signal(Signal::Int))
             .unwrap();
         assert_eq!(
             session.push_control(
@@ -1248,12 +1317,16 @@ mod tests {
                 },
                 OrderedControlEvent {
                     seq: 3,
-                    event: ControlEvent::Exit(ExitStatus::Signal {
-                        signal: Signal::Int,
-                        status_code: 130,
-                    }),
+                    event: ControlEvent::Cancel,
                 },
             ]
+        );
+        assert_eq!(
+            session.terminal_status(),
+            Some(ExitStatus::Signal {
+                signal: Signal::Int,
+                status_code: 130,
+            })
         );
     }
 }

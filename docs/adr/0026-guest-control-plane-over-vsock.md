@@ -267,12 +267,13 @@ Initial pass/fail thresholds are:
   per-session budget fails. The initial per-session budget is 64 MiB
   above idle for the fake-transport tests.
 
-Each candidate must also produce byte-exact transcripts for the matrix
-and fail on reordered resize, signal, or exit events. Real-transport
-implementation tests must record p50/p95/max latency; deterministic W0
-proofs record service-turn gaps. Concurrent proof must run slow-output,
-blocked-stdin, interactive, and unary-health work together and show no
-head-of-line blocking, no starvation, and bounded memory.
+Each candidate must also produce byte-exact transcripts for the matrix,
+fail on reordered resize/signal/cancel control events, and keep terminal
+process status ordered after output drain. Real-transport implementation
+tests must record p50/p95/max latency; deterministic W0 proofs record
+service-turn gaps. Concurrent proof must run slow-output, blocked-stdin,
+interactive, and unary-health work together and show no head-of-line
+blocking, no starvation, and bounded memory.
 
 Nice-to-have properties such as lower latency, lower dependency
 footprint, and simpler docs can break ties, but they cannot compensate
@@ -446,13 +447,16 @@ The new `nixling vm exec` / `nixling exec` command does not fall back
 to SSH. On old running VMs it returns a typed
 `guest-control-unavailable-old-generation` error with remediation.
 
-Operators discover old VMs through `nixling status`, `nixling vm
-status <vm>`, and JSON output that includes the guest-control state
-`unavailable-old-generation`. During the compatibility window, every
-SSH compatibility use emits a deprecation warning. Removing the
-compatibility path requires a follow-up ADR or changelogged release gate
-with tests proving no old-generation VMs remain in the supported
-upgrade path.
+Operators discover old VMs before the implementing release through the
+compatibility warning/remediation emitted by SSH-backed commands. The
+release that implements guest-control must add a versioned status JSON
+field for guest-control state, such as `unavailable-old-generation`, and
+update the status schema/docs in the same change; W0 does not add that
+field to the current frozen status schema. During the compatibility
+window, every SSH compatibility use emits a deprecation warning.
+Removing the compatibility path requires a follow-up ADR or changelogged
+release gate with tests proving no old-generation VMs remain in the
+supported upgrade path.
 
 The compatibility test matrix must cover:
 
@@ -469,8 +473,10 @@ The compatibility test matrix must cover:
   convenience until converted;
 - `vm konsole` with an old running VM and SSH metadata present: keeps
   the existing SSH behavior and emits the compatibility warning;
-- `nixling status` and `nixling vm status <vm>` expose
-  `unavailable-old-generation` and the remediation command;
+- the implementing release updates `nixling status` and
+  `nixling vm status <vm>` with a schema-versioned guest-control state
+  field exposing `unavailable-old-generation` and the remediation
+  command;
 - `nixling exec` and `nixling vm exec run` never fall back to SSH and
   return typed `guest-control-unavailable-old-generation` on old VMs;
 - human output includes the VM name and exact remediation command;
