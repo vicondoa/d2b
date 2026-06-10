@@ -1,0 +1,616 @@
+# Guest control exec I/O: chunked stdio ttRPC design
+
+This document specifies the bounded exec I/O protocol selected for the
+post-W0 guest-control design: ttRPC unary calls for lifecycle and
+Kata-style chunked stdio RPCs for stdin/stdout/stderr. It is the design
+follow-up to [ADR 0026](../adr/0026-guest-control-plane-over-vsock.md)
+and the [W0 feasibility dossier](./guest-control-w0-feasibility.md).
+
+## Decision summary
+
+Use one authenticated ttRPC connection per host-to-guest control session.
+Exec lifecycle, inspection, wait, signal, resize, and stdio movement are
+all unary ttRPC calls. Stdio is not represented as raw ttRPC streams.
+Instead, each caller transfers bounded chunks with explicit cursors:
+
+- `WriteStdin` appends one bounded stdin chunk if the guest has capacity.
+- `ReadStdout` and `ReadStderr` return bounded chunks at requested byte
+  offsets from server-owned append-only per-exec logs.
+- `CloseStdin` half-closes stdin exactly once.
+- `TtyWinResize` and `Signal` are ordered control events on the exec's
+  control sequence.
+- `Wait` long-polls for terminal process state, and `Inspect` returns the
+  current state without consuming output.
+
+This follows Kata Agent's prior-art shape (`WriteStdin`, `ReadStdout`,
+`ReadStderr`, `CloseStdin`, `TtyWinResize`, `SignalProcess`, and
+`WaitProcess`) while adding nixling-specific offset cursors, memory
+budgets, long-poll behavior, detached-log retention, and typed
+slow-consumer cancellation.
+
+## Service surface
+
+The protobuf names below are design-level names. Field numbers are not
+assigned here; schema generation owns that when implementation starts.
+All requests carry `vm_id`, `exec_id`, `request_id`, and the negotiated
+`protocol_version` through the common ttRPC metadata/auth envelope.
+
+```protobuf
+service GuestExec {
+  rpc ExecCreate(ExecCreateRequest) returns (ExecCreateResponse);
+  rpc ExecInspect(ExecInspectRequest) returns (ExecInspectResponse);
+  rpc ExecWait(ExecWaitRequest) returns (ExecWaitResponse);
+  rpc ExecLogs(ExecLogsRequest) returns (ExecLogsResponse);
+
+  rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
+  rpc ReadStdout(ReadOutputRequest) returns (ReadOutputResponse);
+  rpc ReadStderr(ReadOutputRequest) returns (ReadOutputResponse);
+  rpc CloseStdin(CloseStdinRequest) returns (CloseStdinResponse);
+  rpc TtyWinResize(TtyWinResizeRequest) returns (TtyWinResizeResponse);
+  rpc ExecSignal(ExecSignalRequest) returns (ExecSignalResponse);
+  rpc ExecCancel(ExecCancelRequest) returns (ExecCancelResponse);
+}
+```
+
+`ExecLogs` is a convenience wrapper for old/detached execs. Attached
+clients use `ReadStdout`/`ReadStderr` directly so polling state, cursors,
+and backpressure are identical for attached and detached sessions.
+
+## Exec lifecycle messages
+
+### `ExecCreate`
+
+Request fields:
+
+- `argv`: repeated string, already split by the CLI after `--`.
+- `user`: optional validated guest user selector.
+- `cwd`: optional absolute path.
+- `env`: repeated key/value entries after host-side policy filtering.
+- `tty`: bool. When true, stdout and stderr are PTY-merged into stdout;
+  `ReadStderr` returns `tty-stderr-unavailable`.
+- `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
+- `detached`: bool. Detached execs persist bounded logs after caller
+  disconnect.
+- `initial_terminal_size`: optional `{rows, cols}` required for `tty`.
+- `output_policy`: `{max_chunk_bytes, max_stdout_log_bytes,
+  max_stderr_log_bytes, slow_consumer_timeout_ms, wait_timeout_ms}`. The
+  server clamps each value to the VM capability maximum.
+
+Response fields:
+
+- `exec_id`.
+- `created_at_monotonic_ns` and `control_seq` initially `0`.
+- `stdout_cursor` and `stderr_cursor` initially `0`.
+- `effective_limits`: the clamped protocol limits.
+- `state`: `created` or typed failure.
+
+`ExecCreate` starts the guest process only after the session object,
+stdio pipes or PTY, log buffers, and event queue have been allocated.
+For TTY execs, the PTY is opened with the initial geometry before spawn,
+so the child observes the correct size from its first instruction.
+
+### `ExecInspect`
+
+Returns non-consuming state:
+
+- state enum: `created`, `running`, `exited`, `signaled`, `cancelled`,
+  `slow-consumer-cancelled`, `protocol-error`, `lost-guestd`, `reaped`;
+- `exit_code` or `signal` when terminal;
+- `stdin_state`: `open`, `closing`, `closed`, `closed-by-process`,
+  `rejected-not-interactive`;
+- `stdout_start_offset`, `stdout_end_offset`, `stderr_start_offset`,
+  `stderr_end_offset`;
+- `stdout_dropped_bytes`, `stderr_dropped_bytes`, and
+  `truncated_for_retention` booleans;
+- `last_control_seq`, `created_at`, `started_at`, `exited_at`, and
+  bounded counters for bytes/chunks/errors.
+
+The start/end offsets define the valid read window. If a caller asks for
+an offset below `*_start_offset`, the server returns `offset-expired`
+with the new start offset rather than silently serving newer bytes.
+
+### `ExecWait`
+
+Request fields:
+
+- `timeout_ms`: clamped by `effective_limits.wait_timeout_ms`.
+- `known_state_generation`: optional value from a previous inspect/wait.
+
+Response fields:
+
+- current terminal/non-terminal state;
+- exit status or signal when known;
+- `state_generation`;
+- current stdout/stderr offset window.
+
+If the process is still running and no state changed, `ExecWait` holds
+the unary request until the timeout expires or state changes. Timeout is
+not an error; it returns `running` with `timed_out: true`. Client-side
+RPC cancellation cancels only that wait call, not the exec.
+
+## Stdio message shapes
+
+### `WriteStdin`
+
+Request fields:
+
+- `offset`: caller's stdin byte offset for idempotency.
+- `data`: bytes, length `1..max_chunk_bytes`.
+- `close_after`: optional bool for atomic final chunk plus half-close.
+- `client_deadline_ms`: optional deadline for waiting on guest pipe
+  capacity.
+
+Response fields:
+
+- `accepted_offset` and `accepted_len`;
+- `next_offset`;
+- `stdin_state`;
+- `blocked_ms`.
+
+Rules:
+
+1. `data.len()` is checked before allocation and must not exceed
+   `effective_limits.max_chunk_bytes`.
+2. `offset` must equal the server's next expected stdin offset, unless it
+   exactly repeats the previous accepted chunk and `request_id` matches a
+   dedupe entry. Otherwise the server returns `stdin-offset-mismatch`
+   with the expected offset.
+3. If the child pipe/PTY cannot accept data, the server waits only until
+   `min(client_deadline_ms, stdin_write_deadline_ms)`. On expiry it
+   returns `stdin-backpressure` without buffering the chunk beyond the
+   one in-flight RPC payload.
+4. If stdin is already closed, the call returns `stdin-closed` and the
+   expected offset.
+5. In non-interactive execs, all writes return `stdin-not-open`.
+6. `close_after` commits after the bytes have been written. If the bytes
+   cannot be written, stdin remains open and the caller retries or calls
+   `CloseStdin`.
+
+### `CloseStdin`
+
+Request fields:
+
+- `offset`: the caller's final stdin offset.
+
+Response fields:
+
+- `stdin_state` and `final_offset`.
+
+Rules:
+
+- The close is accepted only when `offset` equals the next expected stdin
+  offset.
+- Close is idempotent for the same final offset.
+- For pipe-backed non-TTY execs, the server closes the child's stdin fd.
+- For TTY execs, close means host input is closed; it does not synthesize
+  Ctrl-D. If the CLI wants Ctrl-D semantics it sends the terminal byte
+  through `WriteStdin` before close.
+- A child closing its read side transitions to `closed-by-process`; later
+  writes get `stdin-closed-by-process`.
+
+### `ReadStdout` / `ReadStderr`
+
+Request fields:
+
+- `offset`: absolute byte offset in the stream log.
+- `max_len`: requested maximum bytes, clamped to `max_chunk_bytes`.
+- `wait`: bool.
+- `timeout_ms`: long-poll duration if `wait` is true.
+
+Response fields:
+
+- `stream`: `stdout` or `stderr`;
+- `offset`: the request offset served;
+- `data`: bytes, length `0..max_len`;
+- `next_offset`;
+- `start_offset` and `end_offset` after the read;
+- `eof`: true only when process output for that stream is complete and
+  `next_offset == end_offset`;
+- `truncated`: true if any older bytes were dropped by retention;
+- `timed_out`: true for long-poll timeout with no bytes.
+
+Rules:
+
+1. `max_len` is validated before allocation and must be non-zero and at
+   most `max_chunk_bytes` after clamping.
+2. If `offset < start_offset`, the server returns `offset-expired` with
+   `start_offset`; the client decides whether to fail the command or
+   resume from the retained prefix boundary for log viewing.
+3. If `offset > end_offset`, the server returns `offset-in-future`.
+4. If data is available at `offset`, return immediately with up to
+   `max_len` bytes.
+5. If no data is available and EOF is not reached, `wait=true` holds the
+   unary call until bytes arrive, EOF arrives, process state changes, or
+   timeout. Timeout returns an empty successful response with
+   `timed_out: true`.
+6. EOF is sticky and idempotent. Reads at `end_offset` after EOF return
+   empty data with `eof: true`.
+
+## Cursors, offsets, and idempotency
+
+All stdin/stdout/stderr offsets are unsigned 64-bit absolute byte offsets
+per exec and per stream. They never wrap during a retained exec; reaching
+`u64::MAX` is a fatal `offset-exhausted` protocol error that cancels the
+exec. The server maintains:
+
+- `stdin_next_offset`: next expected `WriteStdin`/`CloseStdin` offset;
+- `stdout_start_offset` / `stdout_end_offset`;
+- `stderr_start_offset` / `stderr_end_offset`;
+- a bounded `request_id` dedupe ring for recently accepted stdin writes,
+  close, signal, resize, and cancel operations.
+
+Read calls are naturally idempotent because offsets address immutable
+log bytes. Write/control calls are idempotent only for the same
+`request_id` and same payload hash while their dedupe entry is retained.
+A duplicate with mismatched payload is `request-id-conflict`.
+
+## Chunk and buffer limits
+
+Default design limits:
+
+| Limit | Default | Hard maximum | Notes |
+| --- | ---: | ---: | --- |
+| `max_chunk_bytes` | 64 KiB | 1 MiB | Below ttRPC's observed 4 MiB rejection point; checked before allocation. |
+| stdin in-flight per exec | 1 chunk | 1 MiB | No guest-side stdin queue beyond current RPC plus OS pipe/PTY capacity. |
+| stdout live buffer per stream | 1 MiB | 8 MiB | Attached sessions; producer blocks before exceeding it. |
+| stderr live buffer per stream | 1 MiB | 8 MiB | Not used for TTY execs. |
+| detached stdout log | 16 MiB | 128 MiB | Ring-retained by offset with truncation accounting. |
+| detached stderr log | 16 MiB | 128 MiB | Separate in non-TTY mode. |
+| long-poll read timeout | 100 ms | 1 s | CLI can immediately re-poll for interactive use. |
+| slow-consumer grace | 30 s | 5 min | Must satisfy the W0 slow-consumer proof. |
+
+The hard maximums are capability values negotiated at `Hello` time and
+may be lowered by VM policy. Raising them requires updating tests and
+memory-budget documentation.
+
+## Server-side storage model
+
+Each exec owns two output log objects, or one stdout log for TTY mode.
+Each log is an append-only byte sequence with a bounded retained window.
+The implementation may use a ring buffer, segmented files under guestd's
+runtime directory, or a hybrid, but the visible semantics are identical:
+absolute offsets, immutable retained bytes, explicit dropped-byte counts,
+and EOF markers.
+
+Attached execs keep live logs at least until the process reaches a
+terminal state and all attached readers have consumed EOF. Detached execs
+persist logs until the retention policy expires, the operator explicitly
+removes the exec record, or the VM reboots. Guestd restart loses only
+non-persisted runtime state; host callers observe `lost-guestd` or
+`stale-session` and must not attach to an exec whose guest-side session
+identity no longer matches.
+
+Output reader tasks append bytes from the child fd into the log only
+while the log has capacity. When the retained window is full:
+
+- For attached, non-detached execs, the reader stops reading from the fd,
+  causing pipe/PTY backpressure to reach the child. If the full condition
+  persists past `slow_consumer_grace`, guestd cancels the exec with
+  `slow-consumer-cancelled`.
+- For detached execs, the log may evict the oldest bytes and increment
+  `dropped_bytes` up to the configured retention limit. The child is not
+  cancelled solely because no host is attached, but total disk/memory use
+  remains bounded.
+- For attached+detached execs, the detached retention policy wins for log
+  storage, while attached clients still receive `offset-expired` if they
+  fall behind the retained window.
+
+## Polling and long-poll behavior
+
+Long-polling is deliberately short. It hides idle polling latency without
+allowing one stalled unary call to monopolize resources indefinitely.
+Recommended CLI loop:
+
+1. Issue parallel `ReadStdout(wait=true)` and, for non-TTY,
+   `ReadStderr(wait=true)` from current cursors.
+2. Issue `ExecWait(timeout_ms=long_poll_timeout)` concurrently or after a
+   read timeout.
+3. Write local terminal/stdout/stderr bytes immediately as chunks arrive.
+4. Re-issue reads until each stream reports EOF and wait reports a
+   terminal state.
+
+The server enforces a per-exec cap on simultaneous pending read waits per
+stream, normally one. A second wait at the same cursor replaces or rejects
+the older one with `superseded-read-wait`; this prevents abandoned
+clients from accumulating waiters.
+
+## Ordering of resize, signal, cancel, and exit
+
+Every control mutation carries a `control_seq` supplied by the client and
+accepted by the server when it equals `last_control_seq + 1`. The server
+returns `control-seq-mismatch` with the expected value otherwise. This
+sequence covers:
+
+- `TtyWinResize`;
+- `ExecSignal`;
+- `ExecCancel`;
+- `CloseStdin` when it changes stdin state.
+
+`WriteStdin` is ordered by stdin byte offset, not by `control_seq`.
+Output chunks are ordered by stream offset. Terminal state is ordered
+after all output bytes guestd read before observing process exit. If a
+process exits while unread bytes remain in OS pipes, guestd drains those
+pipes until EOF or the bounded buffer policy blocks; only then does it
+return stream EOF. If draining cannot complete because a client is too
+slow, the terminal state becomes `slow-consumer-cancelled` rather than
+silently dropping bytes for attached sessions.
+
+### Resize
+
+`TtyWinResize` is valid only for TTY execs and includes `{rows, cols}`.
+The first resize after create must have `control_seq = 1` only if the CLI
+observes a size change after `ExecCreate`; otherwise the create-time
+geometry is authoritative. Guestd applies the PTY resize and sends
+SIGWINCH to the foreground process group before acknowledging success.
+
+### Signal
+
+`ExecSignal` includes a numeric signal and a `target` enum:
+`foreground_process_group` for TTY, `process_tree` for non-TTY, and
+`root_process` for explicit advanced use if later approved. The default
+CLI termination behavior maps to foreground process group in TTY and
+process tree in non-TTY. A signal accepted after process exit is
+idempotent no-op only for duplicate `request_id`; otherwise it returns
+`exec-already-exited`.
+
+### Cancel
+
+`ExecCancel` is the host-initiated cleanup primitive. It closes stdin,
+terminates the process according to the guest policy escalation, marks
+state `cancelled`, wakes all waiters/readers, and preserves retained logs
+according to detached/attached retention. Transport disconnect does not
+cancel detached execs. It cancels attached non-detached execs after a
+small grace period unless another authorized attach takes ownership.
+
+## EOF, close, and half-close semantics
+
+- Stdin close and output EOF are independent.
+- `CloseStdin` never implies process termination.
+- Child exit never implies stdin close succeeded; inspect reports both.
+- Output EOF is per stream. In non-TTY mode stdout may EOF before stderr.
+- In TTY mode stderr is absent; all PTY output is stdout.
+- Ctrl-D is data in TTY mode, not a protocol close. The CLI sends byte
+  `0x04` through `WriteStdin` when the local terminal produces it.
+- EOF responses are replayable forever while the exec record exists.
+
+## Bounded memory and backpressure proof
+
+Raw ttRPC streams failed W0 because application receivers could stall
+while payloads accumulated behind stream delivery tasks. This design
+moves flow control into the application protocol:
+
+1. The server never accepts more than one stdin chunk per exec beyond the
+   OS pipe/PTY capacity. A blocked child therefore blocks or rejects the
+   next `WriteStdin`; guestd does not build an unbounded stdin queue.
+2. Output is copied from child fds only into bounded logs. If an attached
+   reader stops, output log capacity fills, guestd stops reading, and the
+   kernel pipe/PTY blocks the child. If the condition lasts past the
+   grace window, guestd returns a typed slow-consumer cancellation.
+3. Detached output uses bounded ring retention. Dropping old detached log
+   bytes is explicit through `start_offset`, `dropped_bytes`, and
+   `truncated` fields, never silent for attached readers.
+4. Each ttRPC request/response has a preallocation size check. The server
+   rejects over-limit chunks before copying payloads into session buffers.
+5. Pending waits are bounded per exec and timeout quickly.
+6. Per-connection and per-VM caps limit concurrent exec count, pending RPC
+   count, total retained log bytes, and total live buffer bytes.
+
+With default limits, a non-TTY attached exec consumes at most roughly:
+
+```text
+stdin_rpc_chunk        <= 64 KiB
+stdout_live_buffer     <= 1 MiB
+stderr_live_buffer     <= 1 MiB
+read_response_chunks   <= 2 * 64 KiB
+metadata/dedupe/events <= implementation budget, target < 1 MiB
+```
+
+Detached execs add configured retained log storage but remain bounded by
+`detached stdout log + detached stderr log`. The W0 conformance budget of
+64 MiB above idle for four concurrent sessions is therefore achievable
+with the defaults and must be proven by tests before implementation
+locks.
+
+## Conformance matrix mapping
+
+| ADR 0026 row | Chunked stdio behavior |
+| --- | --- |
+| stdin open/close, EOF, TTY Ctrl-D | `stdin_open`, `WriteStdin` offsets, `CloseStdin`, and TTY Ctrl-D-as-data define this explicitly. |
+| stdout/stderr separation | Separate logs and read RPCs in non-TTY mode. |
+| TTY merge | PTY output maps to stdout; stderr read is typed unavailable. |
+| initial geometry and resize ordering | Geometry is part of create; later resizes use `control_seq`. |
+| PTY leadership / foreground process group | Not solved by wire format; implementation must use the W0 safe-PTY proof path. |
+| Ctrl-C/signal delivery | `ExecSignal` targets foreground process group for TTY. |
+| exit code/signal propagation | `ExecWait` and `Inspect` report terminal state separately from I/O EOF. |
+| bounded memory / backpressure | Bounded logs, one stdin chunk, limited waiters, and slow-consumer cancellation. |
+| concurrent sessions/fairness | Per-exec caps and short polling prevent one stalled exec from owning global queues. |
+| cancellation/disconnect cleanup | `ExecCancel` plus attached/detached disconnect policy. |
+| half-close behavior | `CloseStdin` is independent of output reads and wait. |
+| guestd restart / VM reboot | Session identity, inspect state, and stale-session errors reject unsafe reattach. |
+| raw-mode restoration | CLI owns local raw mode and restores on terminal state or protocol error. |
+| max message size | `max_chunk_bytes` checked before allocation and below ttRPC's max. |
+| malformed messages | Typed `protocol-error` codes with bounded fields only. |
+| no data leakage | Logs/metrics carry counters, offsets, outcomes, and booleans, not payloads. |
+
+## CLI behavior
+
+### Attached exec
+
+`nixling exec <vm> -- <argv...>` creates a non-TTY exec with stdin
+closed. The CLI reads stdout/stderr through offsets until both streams
+EOF and `ExecWait` returns terminal. The CLI exits with the remote exit
+code for normal command exit; signal termination and protocol failures
+map to typed nixling errors.
+
+`--interactive` opens stdin. The CLI forwards local stdin in
+`max_chunk_bytes` chunks with increasing offsets and sends `CloseStdin`
+on local EOF. If `WriteStdin` returns `stdin-backpressure`, the CLI
+blocks local input reading or uses terminal flow control until retry is
+accepted.
+
+`--tty` allocates a PTY, sends initial geometry in `ExecCreate`, sends
+resizes as sequenced `TtyWinResize` calls, merges output through stdout,
+and restores local terminal raw mode on every return path.
+
+### Detached exec
+
+`--detach` returns the `exec_id`, initial state, and effective retention
+limits. The process continues after host transport disconnect. Operators
+use:
+
+- `nixling vm exec inspect <vm> <exec-id>` for state and offset windows;
+- `nixling vm exec logs <vm> <exec-id>` for retained logs;
+- `nixling vm exec attach <vm> <exec-id>` to resume attached polling from
+  a chosen cursor;
+- `nixling vm exec kill <vm> <exec-id>` for `ExecSignal` or later policy
+  escalation.
+
+### Old-generation VMs
+
+As required by ADR 0026, new exec commands do not fall back to SSH. If a
+running VM lacks guest-control capabilities, the CLI returns
+`guest-control-unavailable-old-generation` with remediation. Existing
+SSH-backed compatibility commands outside generic exec keep their
+separate compatibility window.
+
+### Logs UX
+
+`ExecLogs` uses the same offset model as `ReadStdout`/`ReadStderr` but
+packages stream records for CLI display or JSON. Human logs default to
+available retained bytes and warn when `dropped_bytes > 0`. JSON includes
+`startOffset`, `endOffset`, `nextOffset`, `droppedBytes`, `eof`, and
+`truncated`, but never embeds unbounded metadata. Payload bytes are
+emitted only as the requested command output/log stream, not in error
+objects, daemon logs, metrics, or health JSON.
+
+## Errors
+
+Required typed error kinds:
+
+- `exec-not-found`
+- `stale-session`
+- `exec-already-exited`
+- `tty-required`
+- `tty-stderr-unavailable`
+- `stdin-not-open`
+- `stdin-closed`
+- `stdin-closed-by-process`
+- `stdin-offset-mismatch`
+- `stdin-backpressure`
+- `offset-expired`
+- `offset-in-future`
+- `max-chunk-exceeded`
+- `control-seq-mismatch`
+- `request-id-conflict`
+- `superseded-read-wait`
+- `slow-consumer-cancelled`
+- `protocol-error`
+
+Each error response carries only bounded fields: expected offsets,
+current windows, limits, state enum, and remediation enum. It must not
+include argv, env, cwd, stdout/stderr bytes, token material, socket
+paths, or guest-derived free-form strings.
+
+## Observability
+
+Metrics and logs may include:
+
+- bytes read/written per stream;
+- chunks read/written per stream;
+- read wait timeouts;
+- blocked stdin write duration histograms;
+- output backpressure duration histograms;
+- cancellations by bounded reason enum;
+- offset-expired and max-chunk-exceeded counters;
+- current exec count and retained-log byte gauges.
+
+They must not include payload bytes, session IDs, command lines,
+environment variables, cwd, credential paths, CH socket paths, HMAC
+material, or guest free-form errors.
+
+## Required tests
+
+Before implementation exits design hardening, add at least:
+
+1. protobuf/schema drift tests for every message above;
+2. max-chunk tests: exactly max succeeds, max+1 fails before allocation;
+3. stdin offset/idempotency tests, including duplicate request IDs and
+   mismatched duplicate payloads;
+4. close-stdin tests for non-TTY pipe and TTY Ctrl-D-as-data behavior;
+5. stdout/stderr byte-exact 64 MiB + 64 MiB non-TTY test;
+6. stdin 16 MiB slow-reader test with bounded RSS;
+7. 30-second slow stdout/stderr consumer test proving block or
+   `slow-consumer-cancelled` with bounded RSS;
+8. detached retention tests proving dropped-byte accounting and
+   `offset-expired` behavior;
+9. long-poll timeout and waiter-cap tests;
+10. resize ordering tests that fail on reordered `control_seq`;
+11. signal ordering and foreground process-group delivery tests;
+12. concurrent-session fake-transport test with slow-output,
+    blocked-stdin, interactive TTY, and unary health loop, requiring p95
+    interactive latency <= 250 ms and max <= 1 s;
+13. guestd restart and VM reboot stale-session rejection tests;
+14. CLI raw-mode restoration tests for success, signal, protocol error,
+    and disconnect;
+15. observability redaction tests proving stdout/stderr/env/token/socket
+    material never enters logs, metrics, or JSON errors.
+
+## UX latency tradeoffs
+
+Chunked stdio trades stream immediacy for explicit bounds. Interactive
+latency depends on read long-poll timeout, chunk size, scheduler fairness,
+and RPC overhead. The defaults intentionally choose small 64 KiB chunks
+and 100 ms read waits so shell echo and resize feedback stay responsive
+under load. Larger chunks improve bulk throughput but can increase
+head-of-line time for a single response; callers may request smaller
+chunks for TTY sessions.
+
+The CLI should issue stdout/stderr reads concurrently and immediately
+re-poll after any response. It should not sleep between successful reads.
+For bulk detached logs, the CLI may request larger chunks up to the
+effective maximum.
+
+## Implementation complexity
+
+This design is more complex than raw ttRPC streams because guestd must
+own per-exec logs, offsets, dedupe state, waiter accounting, and explicit
+backpressure policy. It is still simpler than a custom binary stream
+because:
+
+- lifecycle and I/O remain protobuf/ttRPC contracts;
+- every method is unary and fits existing ttRPC request handling;
+- retries/idempotency are explicit;
+- attached and detached logs share one cursor model;
+- message-size enforcement lives at protobuf RPC boundaries;
+- conformance failures can be isolated to individual RPCs.
+
+The main implementation risks are fairness bugs in the guestd scheduler,
+PTY drain behavior after process exit, retention-window edge cases, and
+incorrect CLI retry behavior around `stdin-backpressure` or
+`offset-expired`.
+
+## Open risks
+
+- PTY output backpressure is kernel- and workload-sensitive; tests must
+  prove the selected PTY crate and guest kernel block writers instead of
+  dropping data.
+- Detached logs can hide slow consumers by evicting old bytes; UX must
+  make truncation obvious in human and JSON output.
+- Short long-poll timeouts increase RPC rate. Capability negotiation may
+  need per-VM rate limits if many clients attach concurrently.
+- Server-side segmented files reduce RSS but introduce cleanup and disk
+  quota risk. Pure memory rings are simpler but constrain detached log
+  sizes. Implementation must choose one and test quota behavior.
+- `control_seq` protects ordering for host-originated controls, but
+  process exit can race with accepted signal/resize calls. The state
+  machine must define the visible result and tests must lock it.
+- Guestd restart cannot preserve live process handles unless a later
+  design adds durable supervision. Current design intentionally rejects
+  stale reattach rather than pretending continuity.
+
+## References
+
+- [ADR 0026: Guest control plane over virtio-vsock](../adr/0026-guest-control-plane-over-vsock.md)
+- [Guest control W0 feasibility dossier](./guest-control-w0-feasibility.md)
+- [Kata Agent protocol stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)
+- [Kata Agent stream message shapes](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L211-L227)
