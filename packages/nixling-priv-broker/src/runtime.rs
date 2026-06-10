@@ -217,6 +217,18 @@ enum BrokerError {
         requested: String,
         resolved: String,
     },
+    /// A `StoreSync` attempt failed (or was denied) after the dispatch
+    /// arm already emitted the signed ADR 0027 terminal
+    /// `OperationFields::StoreSync` audit record. This variant carries the
+    /// classified `error_stage` slug for the wire error envelope; its
+    /// [`BrokerError::audit`] is a deliberate no-op so the generic dispatch
+    /// error path never writes a SECOND record for the same attempt
+    /// (exactly one terminal StoreSync record per attempt).
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    StoreSyncFailed {
+        error_stage: &'static str,
+        message: String,
+    },
     Protocol(String),
 }
 
@@ -2142,79 +2154,100 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 });
             }
             let started = std::time::Instant::now();
-            let outcome =
-                crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let result =
+                crate::ops::store_sync::run_store_sync(intent, &vm_name, req.generation_token);
             let total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let hardlink_farm_path_str = outcome.hardlink_farm_path.display().to_string();
 
-            // Build the signed ADR 0027 terminal audit record. Only the
-            // shapes the current `run_store_sync` path reaches are wired
-            // (pure fast path / deferred-cleanup success); the `failed`,
-            // `denied`, and `ok_cleanup_failed` shapes await the staged
-            // StoreSync state machine. `env` attribution and per-phase
+            // ADR 0027: every StoreSync attempt that reaches this handler
+            // emits EXACTLY ONE terminal `OperationFields::StoreSync`
+            // record. The audit context is derived from the trusted
+            // resolved intent (NOT the run_store_sync outcome), so a
+            // failure that aborts before any link accounting still emits a
+            // fully-attributed record. `generation_id` is the
+            // collision-free on-disk key. `env` attribution and per-phase
             // timings beyond `total_ms` are follow-up enrichments.
+            let hardlink_farm_path_str = intent.hardlink_farm_path.display().to_string();
+            let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
             let audit_ctx = crate::ops::store_sync_audit::StoreSyncAuditContext {
-                vm: outcome.vm.clone(),
+                vm: vm_name.clone(),
                 vm_id: req.vm_id.as_str().to_owned(),
                 env: None,
                 bundle_closure_ref: req.bundle_closure_ref.as_str().to_owned(),
                 hardlink_farm_path: hardlink_farm_path_str.clone(),
-                generation_id: outcome.generation_id.clone(),
-                generation_token: outcome.generation_token,
+                generation_id: crate::ops::store_sync::generation_id_for_intent(intent),
+                generation_token: req.generation_token,
                 caller_principal: Some(format!(
                     "uid:{caller_uid}/role:{}",
                     audit_context.peer_role.as_str()
                 )),
-                closure_count: outcome.closure_count,
+                closure_count,
                 timings: crate::ops::store_sync_audit::StoreSyncTimings {
                     total_ms,
                     ..Default::default()
                 },
             };
-            let audit_fields = if outcome.fast_path {
-                crate::ops::store_sync_audit::StoreSyncAuditFields::ok_fast_path(
-                    audit_ctx,
-                    outcome.retained_generations.clone(),
-                )
-            } else {
-                crate::ops::store_sync_audit::StoreSyncAuditFields::ok_non_fast_path(
-                    audit_ctx,
-                    outcome.linked_count,
-                    outcome.skipped_count,
-                    outcome.retained_generations.clone(),
-                )
-            };
+            let audit_fields = crate::ops::store_sync::audit_fields_for_result(audit_ctx, &result);
             debug_assert!(
                 audit_fields.validate().is_ok(),
                 "StoreSync terminal audit record violates the signed schema: {:?}",
                 audit_fields.validate()
             );
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "StoreSync",
-                req.vm_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                outcome.vm.as_str(),
-                outcome.vm.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::StoreSync(audit_fields),
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::StoreSync(
-                nixling_ipc::broker_wire::StoreSyncResponse {
-                    vm: outcome.vm,
-                    generation_id: outcome.generation_id,
-                    generation_token: outcome.generation_token,
-                    hardlink_farm_path: hardlink_farm_path_str,
-                    closure_count: outcome.closure_count,
-                    retained_generations: outcome.retained_generations,
-                    swept_count: outcome.swept_count,
-                    cleanup_deferred: outcome.cleanup_deferred,
-                },
-            )))
+
+            match result {
+                Ok(outcome) => {
+                    write_success_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "StoreSync",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        outcome.vm.as_str(),
+                        outcome.vm.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        OperationFields::StoreSync(audit_fields),
+                    )?;
+                    Ok(DispatchResult::no_fds(BrokerResponse::StoreSync(
+                        nixling_ipc::broker_wire::StoreSyncResponse {
+                            vm: outcome.vm,
+                            generation_id: outcome.generation_id,
+                            generation_token: outcome.generation_token,
+                            hardlink_farm_path: hardlink_farm_path_str,
+                            closure_count: outcome.closure_count,
+                            retained_generations: outcome.retained_generations,
+                            swept_count: outcome.swept_count,
+                            cleanup_deferred: outcome.cleanup_deferred,
+                        },
+                    )))
+                }
+                Err(err) => {
+                    // Terminal failure record (decision = "errored",
+                    // result = "error"). The `failed`/`denied` audit shape
+                    // is carried in `operation_fields`; the header
+                    // `error_kind` is the classified stage slug.
+                    let error_kind = store_sync_error_kind(err.error_stage());
+                    write_decision_op_record!(
+                        audit_log,
+                        bundle_metadata,
+                        "StoreSync",
+                        req.vm_id.as_str(),
+                        caller_uid,
+                        caller_gid,
+                        &caller_role,
+                        vm_name.as_str(),
+                        vm_name.as_str(),
+                        tracing_span_id_str(req.tracing_span_id.as_ref()),
+                        "errored",
+                        Some(error_kind),
+                        OperationFields::StoreSync(audit_fields),
+                    )?;
+                    Err(BrokerError::StoreSyncFailed {
+                        error_stage: error_kind,
+                        message: err.to_string(),
+                    })
+                }
+            }
         }
         RealBrokerRequest::ReadSecretById(_) => Err(BrokerError::Unimplemented {
             operation: "ReadSecretById",
@@ -3074,6 +3107,28 @@ fn tracing_span_id_str(
     tracing_span_id: Option<&nixling_ipc::types::TracingSpanId>,
 ) -> Option<&str> {
     tracing_span_id.map(nixling_ipc::types::TracingSpanId::as_str)
+}
+
+/// Maps a classified [`crate::ops::store_sync_audit::ErrorStage`] to the
+/// stable header `error_kind` slug recorded on the terminal StoreSync
+/// failure/denial audit record (ADR 0027). The full signed shape lives in
+/// `operation_fields`; this slug is the coarse, greppable category.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'static str {
+    use crate::ops::store_sync_audit::ErrorStage;
+    match stage {
+        ErrorStage::None => "store-sync-failed",
+        ErrorStage::Authz => "store-sync-authz-denied",
+        ErrorStage::Lock => "store-sync-lock-failed",
+        ErrorStage::Probe => "store-sync-probe-failed",
+        ErrorStage::Verify => "store-sync-verify-failed",
+        ErrorStage::Stage => "store-sync-stage-failed",
+        ErrorStage::Rename => "store-sync-rename-failed",
+        ErrorStage::Metadata => "store-sync-metadata-failed",
+        ErrorStage::Integrity => "store-sync-integrity-failed",
+        ErrorStage::CurrentSwap => "store-sync-current-swap-failed",
+        ErrorStage::Marker => "store-sync-marker-failed",
+    }
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -5339,6 +5394,11 @@ impl BrokerError {
                     ),
                 )?;
             }
+            // The StoreSync dispatch arm already wrote the signed terminal
+            // `OperationFields::StoreSync` record (ADR 0027: exactly one
+            // terminal record per attempt). Writing the generic error entry
+            // here would emit a duplicate, so this is a deliberate no-op.
+            Self::StoreSyncFailed { .. } => {}
             _ => {}
         }
         Ok(())
@@ -5505,6 +5565,16 @@ impl BrokerError {
                     "SpawnRunner {field} mismatch: request `{requested}` does not match trusted bundle intent `{resolved}`"
                 ),
                 "Use the BundleOpId that matches the requested VM/role; daemon and broker versions may be out of sync.",
+            ),
+            Self::StoreSyncFailed {
+                error_stage,
+                message,
+            } => error_response(
+                "Broker.StoreSyncFailed",
+                "StoreSync",
+                None,
+                &format!("StoreSync failed ({error_stage}): {message}"),
+                "Inspect the signed StoreSync audit record (operation_fields.error_stage) for the failing phase; retry after resolving the underlying condition.",
             ),
         }
     }
@@ -7455,6 +7525,374 @@ mod tests {
                     opaque_ref: "cid:42".to_owned(),
                 }],
             }
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Build a `corp-vm` bundle whose resolved store-view intent points at
+    /// tempdir-backed closure + farm paths (rooted under `root`, single
+    /// filesystem) so a full `StoreSync` dispatch round-trip runs
+    /// unprivileged. `host_generation` controls the resolved generation so
+    /// a mismatching wire token can deterministically force a pre-lock
+    /// failure. Returns the bundle plus the per-VM hardlink-farm root.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn store_sync_dispatch_bundle(root: &Path, host_generation: u32) -> (TestBundle, PathBuf) {
+        use nixling_core::closures::{ClosureGeneration, ClosureMetadata};
+        use nixling_core::manifest_v04::ManifestV04;
+
+        let mut bundle = build_test_bundle(root);
+
+        let store_src = root.join("nix-store-mock");
+        fs::create_dir_all(&store_src).expect("create fake nix store");
+        let toplevel = store_src.join("aaaaaaaaaaaaaaaa-corp-vm-system");
+        fs::create_dir_all(&toplevel).expect("create fake toplevel");
+        fs::write(toplevel.join("hello"), "payload").expect("write fake toplevel payload");
+        let db_dump = root.join("corp-vm-registration");
+        fs::write(&db_dump, "db-dump").expect("write fake db dump");
+        let state_dir = root.join("state").join("corp-vm");
+        let farm_path = state_dir.join("store-view");
+        fs::create_dir_all(&farm_path).expect("create per-vm farm root");
+
+        let closure_path = bundle
+            .bundle_path
+            .parent()
+            .expect("bundle dir")
+            .join("closures/corp-vm.json");
+        let closure = ClosureMetadata {
+            schema_version: "v2".to_owned(),
+            vm: "corp-vm".to_owned(),
+            toplevel: toplevel.display().to_string(),
+            closure_paths: vec![toplevel.display().to_string()],
+            db_dump_path: db_dump.display().to_string(),
+            declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
+            runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
+            runner_parity_ok: true,
+            generation: ClosureGeneration {
+                host_generation: Some(u64::from(host_generation)),
+                vm_generation: Some(host_generation.to_string()),
+                source_revision: Some("deadbeef".to_owned()),
+                generated_at: Some("2026-01-01T00:00:00Z".to_owned()),
+            },
+        };
+        write_json_file(&closure_path, &closure);
+
+        let mut manifest: ManifestV04 =
+            serde_json::from_slice(&fs::read(&bundle.manifest_path).expect("read manifest"))
+                .expect("parse manifest");
+        manifest
+            .vms
+            .get_mut("corp-vm")
+            .expect("corp-vm manifest entry")
+            .state_dir = state_dir.display().to_string();
+        write_json_file(&bundle.manifest_path, &manifest);
+
+        bundle.resolver = Arc::new(
+            BundleResolver::load_with_policy(
+                &bundle.bundle_path,
+                &nixling_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+            )
+            .expect("reload store-sync dispatch bundle"),
+        );
+        (bundle, farm_path)
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn store_sync_request(generation_token: u32) -> nixling_ipc::broker_wire::BrokerRequest {
+        use nixling_core::bundle_resolver::intent_id_store_view;
+        use nixling_ipc::broker_wire::{BrokerRequest, StoreSyncRequest};
+        use nixling_ipc::types::{BundleClosureRef, TracingSpanId, VmId};
+
+        BrokerRequest::StoreSync(StoreSyncRequest {
+            vm_id: VmId::new("corp-vm"),
+            bundle_closure_ref: BundleClosureRef::new(intent_id_store_view("corp-vm")),
+            generation_token,
+            tracing_span_id: Some(TracingSpanId::new("span-store-sync")),
+        })
+    }
+
+    /// W3 success emission must survive the W4 dispatch-arm refactor: the
+    /// first (non-fast) sync emits EXACTLY ONE allowed terminal record with
+    /// the deferred-cleanup `ok_non_fast_path` shape.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn store_sync_dispatch_emits_single_success_record() {
+        use crate::ops::store_sync_audit::{
+            AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
+        };
+        use nixling_ipc::broker_wire::BrokerCallerRole;
+
+        let root = test_audit_dir("store-sync-dispatch-success");
+        let (bundle, _farm) = store_sync_dispatch_bundle(&root, 7);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+
+        let request = store_sync_request(7);
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+        let before = capture.lock().expect("capture lock before").len();
+        let result = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect("store sync succeeds");
+        match result.response {
+            BrokerResponse::StoreSync(resp) => {
+                assert_eq!(resp.vm, "corp-vm");
+                assert_eq!(resp.generation_token, 7);
+                assert!(resp.cleanup_deferred);
+            }
+            other => panic!("expected StoreSync response, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture lock after");
+        assert_eq!(records.len(), before + 1, "exactly one terminal record");
+        let record = records[before].clone();
+        drop(records);
+        assert_eq!(record.operation, "StoreSync");
+        assert_eq!(record.decision, "allowed");
+        assert_eq!(record.result, "success");
+        assert_eq!(record.error_kind, None);
+        let fields = match OperationFields::from_operation_value(
+            "StoreSync",
+            record.operation_fields.clone().expect("operation fields"),
+        )
+        .expect("deserialize store-sync fields")
+        {
+            OperationFields::StoreSync(fields) => fields,
+            other => panic!("expected StoreSync fields, got {other:?}"),
+        };
+        fields.validate().expect("signed schema holds");
+        assert_eq!(fields.sync_status, SyncStatus::Ok);
+        assert_eq!(fields.error_stage, ErrorStage::None);
+        assert_eq!(fields.cleanup_status, CleanupStatus::DeferredAmbiguous);
+        assert_eq!(
+            fields.cleanup_reason,
+            CleanupReason::RunningGenerationAmbiguous
+        );
+        assert_eq!(fields.authz_outcome, AuthzOutcome::Allow);
+        assert!(!fields.fast_path);
+        assert_eq!(
+            fields.linked_count + fields.skipped_count,
+            fields.closure_count
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A second sync of the same closure must take the fast path and still
+    /// emit EXACTLY ONE allowed record carrying `skipped_fast_path` +
+    /// `fast_path`.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn store_sync_dispatch_fast_path_emits_single_skipped_record() {
+        use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, SyncStatus};
+        use nixling_ipc::broker_wire::BrokerCallerRole;
+
+        let root = test_audit_dir("store-sync-dispatch-fast-path");
+        let (bundle, _farm) = store_sync_dispatch_bundle(&root, 7);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+
+        let dispatch_once = || {
+            let request = store_sync_request(7);
+            let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+                .expect("audit ctx");
+            dispatch_request_with_backend(
+                request,
+                1000,
+                caller_gid,
+                caller_role.clone(),
+                &audit_context,
+                &config,
+                &log,
+                Some(&bundle.resolver),
+                &backend,
+            )
+            .expect("store sync succeeds")
+        };
+
+        // Publish generation 7, then re-sync it (fast path).
+        let _ = dispatch_once();
+        let before_fast = capture.lock().expect("capture lock").len();
+        let _ = dispatch_once();
+
+        let records = capture.lock().expect("capture lock after fast path");
+        assert_eq!(
+            records.len(),
+            before_fast + 1,
+            "fast-path re-sync emits exactly one record"
+        );
+        let record = records[before_fast].clone();
+        drop(records);
+        assert_eq!(record.operation, "StoreSync");
+        assert_eq!(record.decision, "allowed");
+        assert_eq!(record.result, "success");
+        let fields = match OperationFields::from_operation_value(
+            "StoreSync",
+            record.operation_fields.clone().expect("operation fields"),
+        )
+        .expect("deserialize store-sync fields")
+        {
+            OperationFields::StoreSync(fields) => fields,
+            other => panic!("expected StoreSync fields, got {other:?}"),
+        };
+        fields.validate().expect("signed schema holds");
+        assert_eq!(fields.sync_status, SyncStatus::Ok);
+        assert!(fields.fast_path);
+        assert_eq!(fields.cleanup_status, CleanupStatus::SkippedFastPath);
+        assert_eq!(fields.cleanup_reason, CleanupReason::FastPath);
+        assert_eq!(fields.linked_count, 0);
+        assert_eq!(fields.skipped_count, fields.closure_count);
+        assert_eq!(fields.swept_count, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A deterministic pre-lock failure (wire generation token does not
+    /// match the resolved closure generation) must emit EXACTLY ONE signed
+    /// `failed` terminal record (decision = errored), leak no guest
+    /// metadata, and NOT produce a duplicate record when the outer
+    /// error-audit path runs.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn store_sync_dispatch_failure_emits_single_signed_failure_record() {
+        use crate::ops::store_sync_audit::{
+            AuthzOutcome, CleanupReason, CleanupStatus, ErrorStage, SyncStatus,
+        };
+        use nixling_ipc::broker_wire::BrokerCallerRole;
+
+        let root = test_audit_dir("store-sync-dispatch-failure");
+        // Resolved generation is 7; the wire asks for 8 → GenerationMismatch
+        // before lock/filesystem side effects (error_stage = probe).
+        let (bundle, farm) = store_sync_dispatch_bundle(&root, 7);
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+
+        let request = store_sync_request(8);
+        let audit_context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("audit context");
+        let before = capture.lock().expect("capture lock before").len();
+        let error = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&bundle.resolver),
+            &backend,
+        )
+        .expect_err("generation mismatch must fail");
+        match &error {
+            BrokerError::StoreSyncFailed {
+                error_stage,
+                message,
+            } => {
+                assert_eq!(*error_stage, "store-sync-probe-failed");
+                assert!(message.contains("generation"), "message: {message}");
+            }
+            other => panic!("expected StoreSyncFailed, got {other:?}"),
+        }
+
+        let after_dispatch = capture.lock().expect("capture lock after dispatch").len();
+        assert_eq!(
+            after_dispatch,
+            before + 1,
+            "failure emits exactly one terminal record"
+        );
+
+        let record = {
+            let records = capture.lock().expect("capture lock for record");
+            records[before].clone()
+        };
+        assert_eq!(record.operation, "StoreSync");
+        assert_eq!(record.decision, "errored");
+        assert_eq!(record.result, "error");
+        assert_eq!(
+            record.error_kind.as_deref(),
+            Some("store-sync-probe-failed")
+        );
+        let fields = match OperationFields::from_operation_value(
+            "StoreSync",
+            record.operation_fields.clone().expect("operation fields"),
+        )
+        .expect("deserialize store-sync fields")
+        {
+            OperationFields::StoreSync(fields) => fields,
+            other => panic!("expected StoreSync fields, got {other:?}"),
+        };
+        fields.validate().expect("signed schema holds for failure");
+        assert_eq!(fields.sync_status, SyncStatus::Failed);
+        assert_eq!(fields.error_stage, ErrorStage::Probe);
+        assert_eq!(fields.cleanup_status, CleanupStatus::NotAttempted);
+        assert_eq!(fields.cleanup_reason, CleanupReason::None);
+        assert_eq!(fields.authz_outcome, AuthzOutcome::Allow);
+        assert!(!fields.fast_path);
+
+        // No guest-served metadata may be planted by a pre-lock failure.
+        assert!(
+            !farm.join("meta").exists(),
+            "pre-lock failure must not write guest metadata"
+        );
+        assert!(!farm.join("live").exists());
+        assert!(!farm.join("state").exists());
+
+        // The outer error-audit path must NOT write a second (duplicate)
+        // record: BrokerError::StoreSyncFailed.audit() is a no-op because
+        // the terminal record was already emitted in the dispatch arm.
+        error
+            .audit(
+                &log,
+                1000,
+                caller_gid,
+                &CallerRole::AdminUid { uid: 1000 },
+                &audit_context,
+                Some(&bundle.resolver),
+                "StoreSync",
+                "corp-vm",
+            )
+            .expect("outer error audit");
+        let after_outer = capture.lock().expect("capture lock after outer").len();
+        assert_eq!(
+            after_outer,
+            before + 1,
+            "outer error-audit must not duplicate the terminal StoreSync record"
         );
 
         let _ = fs::remove_dir_all(&root);

@@ -37,8 +37,13 @@ use nix::fcntl::{flock, FlockArg};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
-/// Typed errors for the `StoreSync` handler. Maps cleanly onto the
-/// dispatch-layer `BrokerError` variants in `runtime.rs`.
+use crate::ops::store_sync_audit::{ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields};
+
+/// Typed errors for the `StoreSync` handler. Each value classifies the
+/// signed ADR 0027 [`ErrorStage`] the attempt failed at (see
+/// [`StoreSyncError::error_stage`]) so the dispatch layer can emit a
+/// precise terminal `StoreSync` audit record instead of a generic
+/// broker-error record.
 #[derive(Debug)]
 pub enum StoreSyncError {
     /// The wire-supplied generation overflowed `u32` (host-resolver
@@ -51,8 +56,39 @@ pub enum StoreSyncError {
     /// the wire `vm_id`.
     VmMismatch { wire: String, resolved: String },
     /// Underlying hardlink-farm primitive returned a typed error
-    /// (cross-fs, marker missing/unparseable, I/O failure).
-    HardlinkFarm(HardlinkFarmError),
+    /// (cross-fs, marker missing/unparseable, I/O failure). `stage`
+    /// records WHICH StoreSync phase invoked the primitive — the
+    /// primitive's own error cannot disambiguate the phase, so it is
+    /// tagged at the call-site.
+    HardlinkFarm {
+        stage: ErrorStage,
+        source: HardlinkFarmError,
+    },
+}
+
+impl StoreSyncError {
+    /// Tag a hardlink-farm primitive failure with the StoreSync stage
+    /// that invoked it.
+    fn at(stage: ErrorStage, source: HardlinkFarmError) -> Self {
+        Self::HardlinkFarm { stage, source }
+    }
+
+    /// The signed-schema [`ErrorStage`] this failure maps to.
+    ///
+    /// Pre-lock request validation (vm / generation identity checked
+    /// against the trusted resolved intent) has no filesystem side
+    /// effects; it is classified as the earliest pre-materialisation
+    /// verification stage, `probe`. Hardlink-farm failures carry the
+    /// stage tagged at their call-site. There is no success-shaped
+    /// fallback: every variant resolves to a concrete non-`none` stage.
+    pub fn error_stage(&self) -> ErrorStage {
+        match self {
+            Self::GenerationOverflow { .. }
+            | Self::GenerationMismatch { .. }
+            | Self::VmMismatch { .. } => ErrorStage::Probe,
+            Self::HardlinkFarm { stage, .. } => *stage,
+        }
+    }
 }
 
 impl std::fmt::Display for StoreSyncError {
@@ -70,16 +106,61 @@ impl std::fmt::Display for StoreSyncError {
                 f,
                 "store-sync vm mismatch: wire={wire:?} resolved={resolved:?}"
             ),
-            Self::HardlinkFarm(err) => write!(f, "hardlink-farm: {err}"),
+            Self::HardlinkFarm { stage, source } => {
+                write!(f, "hardlink-farm[{stage:?}]: {source}")
+            }
         }
     }
 }
 
 impl std::error::Error for StoreSyncError {}
 
-impl From<HardlinkFarmError> for StoreSyncError {
-    fn from(err: HardlinkFarmError) -> Self {
-        Self::HardlinkFarm(err)
+/// Classify a [`build_store_view_cross_mount_safe`] failure into a
+/// StoreSync [`ErrorStage`]. A genuine distinct-`st_dev`
+/// [`HardlinkFarmError::DifferentFilesystem`] is a fatal topology probe
+/// failure (`probe`); everything else from the materialise step
+/// (collision, escaped cross-mount, genuine I/O) is a `stage` failure.
+///
+/// [`build_store_view_cross_mount_safe`]: crate::ops::store_view_farm::build_store_view_cross_mount_safe
+fn build_error_stage(err: &HardlinkFarmError) -> ErrorStage {
+    match err {
+        HardlinkFarmError::DifferentFilesystem { .. } => ErrorStage::Probe,
+        _ => ErrorStage::Stage,
+    }
+}
+
+/// Derive the collision-free on-disk generation id from a resolved
+/// store-view intent. Single source of truth shared by [`run_store_sync`]
+/// (which keys the materialise/publish steps on it) and the dispatch
+/// layer's terminal audit record (which reports it even on a failure
+/// before the sync proper begins).
+pub fn generation_id_for_intent(intent: &ResolvedStoreViewIntent) -> String {
+    let system_path = hardlink_farm::system_store_path(&intent.closure_paths);
+    hardlink_farm::generation_id(&intent.closure_paths, system_path)
+}
+
+/// Map a [`run_store_sync`] result onto the signed ADR 0027 terminal
+/// `StoreSync` audit record. Success becomes the pure fast-path or the
+/// deferred-cleanup non-fast-path shape; failure becomes the `failed`
+/// shape carrying the error's classified [`ErrorStage`]
+/// (`sync_status=failed`, `cleanup_status=not_attempted`,
+/// `cleanup_reason=none`). Correct-by-construction: the returned record
+/// always passes [`StoreSyncAuditFields::validate`].
+pub fn audit_fields_for_result(
+    ctx: StoreSyncAuditContext,
+    result: &Result<StoreSyncOutcome, StoreSyncError>,
+) -> StoreSyncAuditFields {
+    match result {
+        Ok(outcome) if outcome.fast_path => {
+            StoreSyncAuditFields::ok_fast_path(ctx, outcome.retained_generations.clone())
+        }
+        Ok(outcome) => StoreSyncAuditFields::ok_non_fast_path(
+            ctx,
+            outcome.linked_count,
+            outcome.skipped_count,
+            outcome.retained_generations.clone(),
+        ),
+        Err(err) => StoreSyncAuditFields::failed(ctx, err.error_stage()),
     }
 }
 
@@ -163,12 +244,12 @@ pub fn run_store_sync(
     // Reconcile possible stale `state/current.tmp` / `meta/current.tmp`
     // left over by a previous crashed publish BEFORE building the new
     // generation — keeps the split layout in a known-good shape.
-    hardlink_farm::reconcile_split_current_tmp(&intent.hardlink_farm_path)?;
+    hardlink_farm::reconcile_split_current_tmp(&intent.hardlink_farm_path)
+        .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
 
     // Derive the collision-free on-disk key ONCE so the fast-path probe
     // and the materialise/publish steps agree on the same generation id.
-    let system_path = hardlink_farm::system_store_path(&intent.closure_paths);
-    let generation_id = hardlink_farm::generation_id(&intent.closure_paths, system_path);
+    let generation_id = generation_id_for_intent(intent);
 
     // Record the previously-published generation (host-only `state`
     // view) so retention can keep N-1 alongside the new generation.
@@ -211,18 +292,23 @@ pub fn run_store_sync(
             &generation_id,
             &intent.closure_paths,
             &marker,
-        )?;
+        )
+        .map_err(|e| StoreSyncError::at(build_error_stage(&e), e))?;
         hardlink_farm::write_meta_db_dump(
             &intent.hardlink_farm_path,
             &generation_id,
             &intent.db_dump_path,
-        )?;
+        )
+        .map_err(|e| StoreSyncError::at(ErrorStage::Metadata, e))?;
         // ADR 0027 publish ordering: state/current first (host view is
         // never behind), meta/current next (guest view), live marker
         // LAST (its existence implies a fully-published generation).
-        hardlink_farm::swap_state_current(&intent.hardlink_farm_path, &generation_id)?;
-        hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, &generation_id)?;
-        hardlink_farm::plant_live_marker(&intent.hardlink_farm_path, &intent.vm)?;
+        hardlink_farm::swap_state_current(&intent.hardlink_farm_path, &generation_id)
+            .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
+        hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, &generation_id)
+            .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
+        hardlink_farm::plant_live_marker(&intent.hardlink_farm_path, &intent.vm)
+            .map_err(|e| StoreSyncError::at(ErrorStage::Marker, e))?;
         (counts.linked, counts.skipped)
     } else {
         // Pure fast path: nothing relinked, every top-level basename is
@@ -264,10 +350,13 @@ pub fn run_store_sync(
 
 fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
     std::fs::create_dir_all(farm_root).map_err(|err| {
-        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
-            path: farm_root.display().to_string(),
-            detail: format!("create farm root for sync.lock: {err}"),
-        })
+        StoreSyncError::at(
+            ErrorStage::Lock,
+            HardlinkFarmError::Io {
+                path: farm_root.display().to_string(),
+                detail: format!("create farm root for sync.lock: {err}"),
+            },
+        )
     })?;
     let path = hardlink_farm::sync_lock_path(farm_root);
     let file = OpenOptions::new()
@@ -276,16 +365,22 @@ fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
         .write(true)
         .open(&path)
         .map_err(|err| {
-            StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
-                path: path.display().to_string(),
-                detail: format!("open sync.lock: {err}"),
-            })
+            StoreSyncError::at(
+                ErrorStage::Lock,
+                HardlinkFarmError::Io {
+                    path: path.display().to_string(),
+                    detail: format!("open sync.lock: {err}"),
+                },
+            )
         })?;
     flock(file.as_raw_fd(), FlockArg::LockExclusive).map_err(|err| {
-        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
-            path: path.display().to_string(),
-            detail: format!("lock sync.lock: {err}"),
-        })
+        StoreSyncError::at(
+            ErrorStage::Lock,
+            HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: format!("lock sync.lock: {err}"),
+            },
+        )
     })?;
     Ok(file)
 }
@@ -513,6 +608,9 @@ mod tests {
                 resolved: 5
             }
         ));
+        // Pre-lock request validation classifies as the `probe` stage
+        // (earliest pre-materialisation verification; no FS side effects).
+        assert_eq!(err.error_stage(), ErrorStage::Probe);
     }
 
     #[test]
@@ -520,6 +618,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "delta", 1, 1);
         let err = run_store_sync(&intent, "epsilon", 1).expect_err("vm mismatch refused");
+        assert_eq!(err.error_stage(), ErrorStage::Probe);
         match err {
             StoreSyncError::VmMismatch { wire, resolved } => {
                 assert_eq!(wire, "epsilon");
@@ -527,5 +626,162 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn generation_overflow_maps_to_probe_stage() {
+        let tmp = tempdir().unwrap();
+        // A resolved generation that does not fit in u32 overflows the
+        // wire token; this is a pre-lock request guard → probe stage.
+        let intent = intent_with(tmp.path(), "kappa", u64::from(u32::MAX) + 1, 1);
+        let err = run_store_sync(&intent, "kappa", 0).expect_err("overflow refused");
+        assert!(matches!(err, StoreSyncError::GenerationOverflow { .. }));
+        assert_eq!(err.error_stage(), ErrorStage::Probe);
+    }
+
+    #[test]
+    fn build_error_stage_classifies_topology_vs_materialise() {
+        // A genuine distinct-st_dev failure is a fatal topology probe.
+        assert_eq!(
+            build_error_stage(&HardlinkFarmError::DifferentFilesystem {
+                a: "/nix/store".to_owned(),
+                a_dev: 1,
+                b: "/var/lib/nixling".to_owned(),
+                b_dev: 2,
+            }),
+            ErrorStage::Probe
+        );
+        // Everything else from the materialise step is a `stage` failure:
+        // genuine I/O, escaped cross-mount link, generation collision.
+        assert_eq!(
+            build_error_stage(&HardlinkFarmError::Io {
+                path: "/x".to_owned(),
+                detail: "boom".to_owned(),
+            }),
+            ErrorStage::Stage
+        );
+        assert_eq!(
+            build_error_stage(&HardlinkFarmError::CrossMountLink {
+                source: "/nix/store/x".to_owned(),
+                destination: "/var/lib/nixling/x".to_owned(),
+                dev: 1,
+            }),
+            ErrorStage::Stage
+        );
+        assert_eq!(
+            build_error_stage(&HardlinkFarmError::GenerationCollision {
+                generation_dir: "/x".to_owned(),
+                existing: "a".to_owned(),
+                incoming: "b".to_owned(),
+            }),
+            ErrorStage::Stage
+        );
+    }
+
+    #[test]
+    fn failed_sync_before_lock_writes_no_guest_metadata() {
+        let tmp = tempdir().unwrap();
+        let intent = intent_with(tmp.path(), "sigma", 5, 1);
+        let err = run_store_sync(&intent, "sigma", 6).expect_err("generation mismatch refused");
+        assert_eq!(err.error_stage(), ErrorStage::Probe);
+        // A failure before the lock/materialise phase must not publish any
+        // guest-served metadata or live pool: no meta/ subtree appears.
+        let farm = &intent.hardlink_farm_path;
+        assert!(
+            !farm.join("meta").exists(),
+            "failed sync must not create guest-served meta/"
+        );
+        assert!(
+            !farm.join("live").exists(),
+            "failed sync must not create the live pool"
+        );
+        assert!(
+            !farm.join("state").exists(),
+            "failed sync must not create host-only state/"
+        );
+    }
+
+    fn audit_ctx_fixture() -> StoreSyncAuditContext {
+        StoreSyncAuditContext {
+            vm: "corp-vm".to_owned(),
+            vm_id: "corp-vm".to_owned(),
+            env: None,
+            bundle_closure_ref: "store-view:vm:corp-vm".to_owned(),
+            hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store-view".to_owned(),
+            generation_id: "g-cafef00d".to_owned(),
+            generation_token: 7,
+            caller_principal: Some("uid:998/role:daemon".to_owned()),
+            closure_count: 3,
+            timings: crate::ops::store_sync_audit::StoreSyncTimings::default(),
+        }
+    }
+
+    fn outcome_fixture(fast_path: bool, linked: u32, skipped: u32) -> StoreSyncOutcome {
+        StoreSyncOutcome {
+            vm: "corp-vm".to_owned(),
+            generation_token: 7,
+            generation_id: "g-cafef00d".to_owned(),
+            hardlink_farm_path: PathBuf::from("/var/lib/nixling/vms/corp-vm/store-view"),
+            closure_count: 3,
+            linked_count: linked,
+            skipped_count: skipped,
+            retained_generations: vec![7],
+            swept_count: 0,
+            fast_path,
+            cleanup_deferred: true,
+        }
+    }
+
+    #[test]
+    fn audit_fields_for_result_maps_non_fast_success() {
+        use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, ErrorStage, SyncStatus};
+        let result: Result<StoreSyncOutcome, StoreSyncError> = Ok(outcome_fixture(false, 2, 1));
+        let fields = audit_fields_for_result(audit_ctx_fixture(), &result);
+        fields.validate().expect("non-fast-path record is valid");
+        assert_eq!(fields.sync_status, SyncStatus::Ok);
+        assert_eq!(fields.error_stage, ErrorStage::None);
+        assert!(!fields.fast_path);
+        assert_eq!(fields.linked_count, 2);
+        assert_eq!(fields.skipped_count, 1);
+        assert_eq!(fields.cleanup_status, CleanupStatus::DeferredAmbiguous);
+        assert_eq!(
+            fields.cleanup_reason,
+            CleanupReason::RunningGenerationAmbiguous
+        );
+    }
+
+    #[test]
+    fn audit_fields_for_result_maps_fast_path_success() {
+        use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, SyncStatus};
+        let result: Result<StoreSyncOutcome, StoreSyncError> = Ok(outcome_fixture(true, 0, 3));
+        let fields = audit_fields_for_result(audit_ctx_fixture(), &result);
+        fields.validate().expect("fast-path record is valid");
+        assert_eq!(fields.sync_status, SyncStatus::Ok);
+        assert!(fields.fast_path);
+        assert_eq!(fields.linked_count, 0);
+        assert_eq!(fields.skipped_count, fields.closure_count);
+        assert_eq!(fields.cleanup_status, CleanupStatus::SkippedFastPath);
+        assert_eq!(fields.cleanup_reason, CleanupReason::FastPath);
+    }
+
+    #[test]
+    fn audit_fields_for_result_maps_failure_to_signed_failed_shape() {
+        use crate::ops::store_sync_audit::{CleanupReason, CleanupStatus, ErrorStage, SyncStatus};
+        let result: Result<StoreSyncOutcome, StoreSyncError> =
+            Err(StoreSyncError::GenerationMismatch {
+                wire: 8,
+                resolved: 7,
+            });
+        let fields = audit_fields_for_result(audit_ctx_fixture(), &result);
+        fields.validate().expect("failed record is valid");
+        assert_eq!(fields.sync_status, SyncStatus::Failed);
+        assert_eq!(fields.error_stage, ErrorStage::Probe);
+        // Failure before cleanup: cleanup never ran, no guest-meta leak.
+        assert_eq!(fields.cleanup_status, CleanupStatus::NotAttempted);
+        assert_eq!(fields.cleanup_reason, CleanupReason::None);
+        assert_eq!(
+            fields.authz_outcome,
+            crate::ops::store_sync_audit::AuthzOutcome::Allow
+        );
     }
 }

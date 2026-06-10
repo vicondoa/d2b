@@ -184,14 +184,21 @@ metadata and (per the signed plan) from future metric labels.
 The `decision` field follows the broker default
 (`allowed` / `denied-refused` / `errored`).
 
-> **Current wiring (W3):** only the success path emits the signed
-> terminal record (`ok_fast_path` / `ok_non_fast_path`). Failure and
-> deny paths still fall back to the generic `BrokerError` audit record;
-> the `failed`/`denied`/`ok_cleanup_failed` constructors are
-> implemented and unit-tested but not yet wired, pending the staged
-> StoreSync state machine that tracks a precise `error_stage`. `env`
-> attribution and per-phase timings beyond `total_ms` are likewise
-> follow-up enrichment.
+> **Current wiring (W4):** the success path (`ok_fast_path` /
+> `ok_non_fast_path`) and the failure path (`failed`) both emit the signed
+> terminal record. Every `run_store_sync` attempt that reaches the handler
+> emits exactly one terminal `OperationFields::StoreSync` record — success
+> with `decision = allowed`, failure with `decision = errored` and a
+> classified `error_stage` — and the failure no longer falls back to the
+> generic `BrokerError` audit record (`BrokerError::StoreSyncFailed`'s own
+> `audit()` is a no-op so the record is never duplicated). The `denied`
+> constructor is implemented and unit-tested but **not yet reachable from
+> dispatch**: there is no per-VM/per-caller StoreSync authorization policy
+> at this layer (the only kernel-trusted identity is the global peer-uid
+> gate applied before dispatch), so a real authz-deny trigger awaits that
+> policy. `ok_cleanup_failed` likewise awaits the post-activation
+> sweep/cleanup wave. `env` attribution and per-phase timings beyond
+> `total_ms` are follow-up enrichment.
 
 ## Refusal modes
 
@@ -209,13 +216,22 @@ The handler is fail-closed and maps each refusal to a typed
   (would otherwise silently truncate).
 - `VmMismatch` — bundle resolver returned an intent keyed at a
   different VM than the wire `vm_id`.
-- `HardlinkFarm` — the underlying primitive returned a
+- `HardlinkFarm { stage, source }` — the underlying primitive returned a
   `HardlinkFarmError` (cross-filesystem, marker missing/unparseable,
-  I/O failure).
+  I/O failure). `stage` carries the classified `error_stage` of the
+  failing publish step (`probe` for topology/cross-filesystem,
+  `metadata` for the `db.dump` write, `current_swap` for the
+  state/meta `current` swaps, `marker` for the live marker, `lock` for
+  the sync-lock, otherwise `stage` for materialisation).
 
-All map onto `BrokerError::LiveHandler(_)` (or
-`BrokerError::BundleIntentMissing`) for the wire-level error
-envelope.
+`BundleIntentMissing` is raised in the dispatch arm **before** the
+StoreSync handler runs (there is no resolved intent to attribute), so it
+keeps its own `BrokerError::BundleIntentMissing` audit path and does not
+emit a terminal StoreSync record. Every other variant is raised **inside**
+`run_store_sync`: each emits exactly one signed `failed` terminal record
+(carrying its classified `error_stage`) and then surfaces as
+`BrokerError::StoreSyncFailed { error_stage, message }` for the wire-level
+error envelope.
 
 ## Guest-visible generation metadata
 

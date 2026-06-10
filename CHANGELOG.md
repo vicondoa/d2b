@@ -93,10 +93,17 @@ deprecations ship one minor release before removal.
   response now carries the collision-free `generation_id` alongside the
   u32 `generation_token` (request + response renamed `generation` →
   `generation_token`); the token is display/wire only and is never used
-  as the on-disk layout key. Each StoreSync success emits one terminal
-  structured broker audit record under the signed `StoreSyncAuditFields`
-  schema (`schema_version = 1`) with invariant-enforcing constructors
-  and `validate()`.
+  as the on-disk layout key. Each StoreSync attempt that reaches the
+  broker handler emits exactly one terminal structured broker audit
+  record under the signed `StoreSyncAuditFields` schema
+  (`schema_version = 1`) with invariant-enforcing constructors and
+  `validate()`: success records use `ok_fast_path` / `ok_non_fast_path`,
+  and a failure emits a `failed` record carrying the classified
+  `error_stage` (the failure surfaces as `BrokerError::StoreSyncFailed`
+  and is never double-audited). Authorization-deny emission
+  (`error_stage = authz`) is modelled by the `denied` constructor but is
+  not yet reachable from dispatch, pending a per-VM StoreSync
+  authorization policy.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former

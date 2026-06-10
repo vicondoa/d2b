@@ -7,17 +7,22 @@
 //! that the JSON drift / schema tests use to reject hand-built invalid
 //! combinations.
 //!
-//! Scope note (W3): the constructors model the full signed enum surface,
-//! but only the variants the **current** `run_store_sync` execution path
-//! actually reaches are wired into dispatch today
-//! ([`StoreSyncAuditFields::ok_fast_path`] and
-//! [`StoreSyncAuditFields::ok_non_fast_path`]). The remaining terminal
-//! shapes ([`failed`](StoreSyncAuditFields::failed),
-//! [`denied`](StoreSyncAuditFields::denied),
+//! Scope note (W4): the constructors model the full signed enum surface.
+//! The success path ([`ok_fast_path`](StoreSyncAuditFields::ok_fast_path),
+//! [`ok_non_fast_path`](StoreSyncAuditFields::ok_non_fast_path)) and the
+//! failure path ([`failed`](StoreSyncAuditFields::failed)) are wired into
+//! dispatch: every `run_store_sync` attempt that reaches the handler now
+//! emits exactly one terminal record, success or failure, with a
+//! classified `error_stage`. The remaining shapes
+//! ([`denied`](StoreSyncAuditFields::denied),
 //! [`ok_cleanup_failed`](StoreSyncAuditFields::ok_cleanup_failed)) are
-//! implemented and validated here so the schema is complete and ready to
-//! wire once the staged StoreSync state machine (which tracks the failing
-//! `error_stage`) lands. See `docs/reference/store-sync.md`.
+//! implemented and validated here but not yet reachable from dispatch:
+//! `denied` awaits a per-VM/per-caller StoreSync authorization policy
+//! (the only kernel-trusted identity at this layer is the global
+//! peer-uid gate applied before dispatch), and `ok_cleanup_failed` awaits
+//! the post-activation sweep/cleanup wave. `env` attribution and
+//! per-phase timings beyond `total_ms` are likewise follow-up enrichment.
+//! See `docs/reference/store-sync.md`.
 //!
 //! Redaction contract: this is the **host-confidential** audit record
 //! (broker audit log is `0640 root:nixlingd`). It deliberately does NOT
