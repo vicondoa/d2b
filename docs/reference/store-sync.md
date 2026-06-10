@@ -133,7 +133,7 @@ Fields:
 | ---------------------- | --------------- | --------------------------------------------------------------------- |
 | `schema_version`       | `u32`           | Audit schema version (`1`).                                           |
 | `vm`                   | `String`        | Resolved VM name.                                                     |
-| `vm_id`                | `String`        | Canonical VM id (`store-view:vm:<vm>`).                               |
+| `vm_id`                | `String`        | Per-VM scope id carried on the broker wire (plain VM name).           |
 | `env`                  | `Option<String>`| Host-audit env attribution. Never in guest metadata.                 |
 | `generation_id`        | `String`        | Collision-free on-disk layout key. Audit/guest-meta only.            |
 | `generation_token`     | `u32`           | Truncated display/wire token. Audit/guest-meta only.                 |
