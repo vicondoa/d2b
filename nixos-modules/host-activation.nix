@@ -387,12 +387,12 @@ in
         (name: _: ''
           guest_control_virtiofsd_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "virtiofsd-nl-gctl") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
           guest_control_ch_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.id == "cloud-hypervisor") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+          ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}" 2>/dev/null || true
+          ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}/token" 2>/dev/null || true
           for uid in $guest_control_virtiofsd_uids; do
             [ "$uid" = "0" ] && continue
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
             ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}" 2>/dev/null || true
-            ${pkgs.acl}/bin/setfacl -b "/var/lib/nixling/guest-control-${name}/token" 2>/dev/null || true
             ${activationHelper} setfacl-on-path \
               --path "/var/lib/nixling/guest-control-${name}" \
               --acl-spec "u:$uid:rx" \

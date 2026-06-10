@@ -1,10 +1,9 @@
 # Store + virtiofs share reference
 
-This reference documents the per-VM virtiofs share set the headless
-alpha daemon supervises. The shape is anchored by the
-[runner-shape audit](runner-shape-audit.md); the
-[`virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
-generator emits matching argv.
+This reference documents the current daemon-owned per-VM virtiofs share
+set. Historical microvm.nix runner evidence lives in
+[runner-shape audit](runner-shape-audit.md); current argv comes from
+`nixos-modules/processes-json.nix`.
 
 ## Framework-managed shares
 
@@ -14,7 +13,7 @@ guest-control token share is present only when
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | `/nix/store`                                          | RO   |
+| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | per-VM hardlink farm served as guest `/nix/store`     | RO   |
 | `nl-meta`     | `/run/nixling/vms/corp-vm/nl-meta.sock`  | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
 | `nl-hkeys`    | `/run/nixling/vms/corp-vm/nl-hkeys.sock` | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
 | `nl-ssh-host` | `/run/nixling/vms/corp-vm/nl-ssh-host.sock` | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`      | RW   |
