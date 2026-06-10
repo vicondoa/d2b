@@ -1515,7 +1515,7 @@ mod tests {
         let mut blocked_write_id = 1_u64;
         let mut blocked_slow = 0_usize;
 
-        let mut interactive = ChunkedSession::new(202, MIB, MIB, 64 * KIB);
+        let mut interactive = ChunkedSession::tty(202, MIB, MIB, 64 * KIB);
         let interactive_token = interactive.token();
         let mut health = HealthRpcModel::new(1);
         let mut interactive_ops = 0_u64;
@@ -1787,7 +1787,7 @@ mod tests {
 
     #[test]
     fn eof_and_tty_ctrl_d_are_distinct() {
-        let mut session = ChunkedSession::new(5, MIB, MIB, 64 * KIB);
+        let mut session = ChunkedSession::tty(5, MIB, MIB, 64 * KIB);
         let token = session.token();
         assert_eq!(
             session
@@ -1800,6 +1800,17 @@ mod tests {
         assert_eq!(
             session.close_stdin(token, 99, 1).unwrap().disposition,
             WriteDisposition::Accepted
+        );
+        session
+            .append_output(token, Stream::Stdout, b"after-close")
+            .unwrap();
+        assert_eq!(
+            session.read_stdout(token, 0, 64 * KIB).unwrap().data,
+            b"after-close"
+        );
+        assert_eq!(
+            session.read_stderr(token, 0, 64 * KIB),
+            Err(ProtocolError::TtyStderrUnavailable)
         );
         assert_eq!(
             session.close_stdin(token, 99, 1).unwrap().disposition,
