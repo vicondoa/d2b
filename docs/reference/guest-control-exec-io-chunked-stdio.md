@@ -222,7 +222,9 @@ Rules:
   offset. Reusing the same `request_id` with a different offset returns
   `request-id-conflict`; a different `request_id` after stdin is already
   closed returns `stdin-closed`.
-- For pipe-backed non-TTY execs, the server closes the child's stdin fd.
+- For pipe-backed non-TTY execs, the server schedules EOF and closes the
+  child's stdin fd only after all already accepted stdin bytes through the
+  final offset have drained from the bounded queue.
 - For TTY execs, close means host input is closed; it does not synthesize
   Ctrl-D. If the CLI wants Ctrl-D semantics it sends the terminal byte
   through `WriteStdin` before close.
