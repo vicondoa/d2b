@@ -3,10 +3,40 @@
 //! Each daemon-managed VM owns a per-VM store-view under
 //! `/var/lib/nixling/vms/<vm>/store-view/`. The guest is served from
 //! `live/`, a flat hardlink pool containing the retained VM closure
-//! basenames. `generations/<N>/` stores metadata only (`marker.json`,
-//! `store-paths`, and the system symlink), so a new generation only
-//! materialises top-level store paths that are not already present in
-//! `live/`.
+//! basenames.
+//!
+//! ## Layouts
+//!
+//! Two on-disk metadata layouts coexist during the daemon-native
+//! migration:
+//!
+//! - **Legacy** ([`build_farm`]): `generations/<N>/` (keyed by the u32
+//!   generation token) stores metadata only (`marker.json`,
+//!   `store-paths`, the `system` symlink, and guest `meta.json`). Used by
+//!   the activation/rollback reconcile path. Untouched by the W2 split.
+//! - **Split** (ADR 0027, [`build_store_view`]): the StoreSync canonical
+//!   target. `meta/` is the guest-served metadata root and `state/`,
+//!   `gcroots/`, `sync.lock` are host-only. The on-disk key is a
+//!   collision-free [`generation_id`] derived from the full closure
+//!   identity, NOT the truncated u32 token (which remains
+//!   display/wire metadata as `generation_token`):
+//!
+//!   ```text
+//!   <store_root>/
+//!     live/<basename>/ …               # flat hardlink pool, /nix/.ro-store
+//!     live/.nixling-marker-<vm>         # zero-length readiness marker
+//!     meta/                            # guest read-only share root
+//!       current -> generations/<generation-id>
+//!       generations/<generation-id>/{store-paths,db.dump,meta.json}
+//!     state/                           # host-only broker state
+//!       current -> generations/<generation-id>
+//!       generations/<generation-id>/{system,marker.json,meta.json}
+//!     gcroots/generation-<generation-id> -> /nix/store/…   # host-only
+//!     sync.lock                        # host-only
+//!   ```
+//!
+//! In both layouts a new generation only materialises top-level store
+//! paths that are not already present in `live/`.
 //!
 //! The primitives in this module are:
 //!
@@ -32,6 +62,7 @@
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
@@ -212,16 +243,169 @@ pub struct BuildStoreViewFarmRequest {
     pub marker: GenerationMarker,
 }
 
+/// Schema version for the host-only generation metadata document
+/// (`state/generations/<id>/meta.json`). Host-only; never exposed to the
+/// guest. Bump independently of the guest schema.
+pub const HOST_META_SCHEMA_VERSION: u32 = 1;
+
+/// Host-only generation metadata, written under `state/`.
+///
+/// ADR 0027: this is the host-confidential record root. It is NOT served
+/// through `nl-meta` (which is wired to `meta/`) and never reaches the
+/// guest. W2 records the subset of audit fields that StoreSync can
+/// already account for; the full audit schema (caller principal, authz,
+/// timings, cleanup, integrity) is a follow-up wave.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostGenerationMeta {
+    pub schema_version: u32,
+    pub generation_id: String,
+    pub generation_token: u32,
+    pub vm: String,
+    pub sync_status: String,
+    pub closure_count: u32,
+    pub linked_count: u32,
+    pub skipped_count: u32,
+}
+
+/// Top-level link accounting for one store-view materialisation.
+///
+/// `linked` is the number of top-level closure basenames newly hardlinked
+/// into `live/`; `skipped` is the number already present. For a complete
+/// sync `linked + skipped == closure_count`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreViewLinkCounts {
+    pub linked: u32,
+    pub skipped: u32,
+}
+
+/// Wire request for an out-of-process **split-layout** store-view build
+/// ([`build_store_view`]).
+///
+/// Parallel to [`BuildStoreViewFarmRequest`] but for the ADR 0027 split
+/// layout keyed by the collision-free [`generation_id`] rather than the
+/// u32 token. The broker serialises this to the `build-store-view` helper
+/// verb, which runs inside the same private mount namespace (so
+/// cross-vfsmount `link(2)` EXDEV does not block the hardlinks) and calls
+/// [`build_store_view`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BuildStoreViewRequest {
+    /// Per-VM farm root (`.../store-view`), not the `live/` dir.
+    pub farm_root: PathBuf,
+    /// Collision-free on-disk generation key (see [`generation_id`]).
+    pub generation_id: String,
+    /// Absolute `/nix/store/<...>` closure paths to hardlink in.
+    pub closure_paths: Vec<PathBuf>,
+    /// Marker pinned into `state/generations/<id>/marker.json`.
+    pub marker: GenerationMarker,
+}
+
 /// Return the flat live hardlink pool served by virtiofsd.
 pub fn live_dir(store_root: &Path) -> PathBuf {
     store_root.join("live")
 }
 
-/// Return the generation metadata directory.
+/// Return the legacy generation metadata directory (u32-token keyed).
 pub fn generation_dir(store_root: &Path, generation_number: u64) -> PathBuf {
     store_root
         .join("generations")
         .join(generation_number.to_string())
+}
+
+/// Guest read-only metadata root (`meta/`), served as
+/// `/run/nixling-store-meta`. Host-authored, guest-readable.
+pub fn meta_dir(store_root: &Path) -> PathBuf {
+    store_root.join("meta")
+}
+
+/// Host-only broker state root (`state/`). Never served to the guest.
+pub fn state_dir(store_root: &Path) -> PathBuf {
+    store_root.join("state")
+}
+
+/// Host-only GC-roots root (`gcroots/`). Never served to the guest.
+pub fn gcroots_dir(store_root: &Path) -> PathBuf {
+    store_root.join("gcroots")
+}
+
+/// Host-only broker sync lock path (`sync.lock`).
+pub fn sync_lock_path(store_root: &Path) -> PathBuf {
+    store_root.join("sync.lock")
+}
+
+/// Guest-served per-generation metadata dir
+/// (`meta/generations/<generation-id>`).
+pub fn meta_generation_dir(store_root: &Path, generation_id: &str) -> PathBuf {
+    meta_dir(store_root).join("generations").join(generation_id)
+}
+
+/// Host-only per-generation metadata dir
+/// (`state/generations/<generation-id>`).
+pub fn state_generation_dir(store_root: &Path, generation_id: &str) -> PathBuf {
+    state_dir(store_root)
+        .join("generations")
+        .join(generation_id)
+}
+
+/// Derive the collision-free on-disk `generation_id` from the full
+/// ordered closure identity plus the system/toplevel store path.
+///
+/// ADR 0027 requires the on-disk key to be derived from the full closure
+/// identity (not the truncated u32 token, which only survives as
+/// `generation_token` display/wire metadata). The id is a SHA-256 over
+/// the deterministically-sorted, length-prefixed set of top-level closure
+/// basenames plus the system path, so it is independent of the input
+/// ordering and distinct closures cannot collide onto one directory key.
+/// The `g-` prefix keeps the name a single, separator-free, filesystem-
+/// safe path component.
+pub fn generation_id(closure_paths: &[PathBuf], system_path: Option<&Path>) -> String {
+    let mut basenames: Vec<String> = closure_paths
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
+        .collect();
+    basenames.sort_unstable();
+    basenames.dedup();
+
+    let mut hasher = Sha256::new();
+    hasher.update((basenames.len() as u64).to_le_bytes());
+    for name in &basenames {
+        hasher.update((name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+    }
+    hasher.update(b"system:");
+    if let Some(system) = system_path {
+        let rendered = system.to_string_lossy();
+        hasher.update((rendered.len() as u64).to_le_bytes());
+        hasher.update(rendered.as_bytes());
+    } else {
+        hasher.update((0u64).to_le_bytes());
+    }
+    let digest = hasher.finalize();
+    let hex = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    format!("g-{hex}")
+}
+
+/// Pick the system/toplevel store path from a closure for the `system`
+/// symlink and GC root: prefer the `nixos-system-*` basename, else the
+/// first path. Mirrors [`write_system_symlink`]'s selection so the
+/// `generation_id`, the `state/generations/<id>/system` symlink, and the
+/// `gcroots/generation-<id>` root all reference the same store path.
+pub fn system_store_path(closure_paths: &[PathBuf]) -> Option<&Path> {
+    closure_paths
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("nixos-system-"))
+                .unwrap_or(false)
+        })
+        .or_else(|| closure_paths.first())
+        .map(|p| p.as_path())
 }
 
 /// Returns `Ok(())` iff `a` and `b` live on the same filesystem
@@ -371,11 +555,42 @@ pub fn build_farm(
     })?;
     assert_same_filesystem(store_root, &live_dir)?;
 
-    let stage_dir = store_root.join(format!(
-        "live.stage.{}.{}",
-        generation_number,
-        std::process::id()
-    ));
+    let _ = link_closures_into_live(store_root, &generation_number.to_string(), closure_paths)?;
+
+    std::fs::create_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
+        path: generation_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &generation_dir)?;
+    write_store_paths(&generation_dir, closure_paths)?;
+    write_system_symlink(&generation_dir, closure_paths)?;
+    write_guest_meta(
+        &generation_dir,
+        &marker.closure_hash,
+        marker,
+        closure_paths.len(),
+    )?;
+    write_generation_marker(&generation_dir, marker)?;
+    write_live_marker(&live_dir, &marker.vm)?;
+    Ok(generation_dir)
+}
+
+/// Stage and hardlink every top-level closure basename into `live/`.
+///
+/// Shared by the legacy [`build_farm`] and the split-layout
+/// [`build_store_view`]. Top-level paths already present in `live/` are
+/// skipped (the flat pool is shared across retained generations); the
+/// rest are hardlinked into a private `live.stage.<tag>.<pid>` sibling
+/// and atomically renamed into `live/`. `store_root` and `live/` must
+/// already exist and share one filesystem (the caller asserts this).
+/// Returns the top-level link/skip accounting.
+fn link_closures_into_live(
+    store_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let live_dir = live_dir(store_root);
+    let stage_dir = store_root.join(format!("live.stage.{}.{}", stage_tag, std::process::id()));
     if stage_dir.exists() {
         std::fs::remove_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
             path: stage_dir.display().to_string(),
@@ -387,6 +602,7 @@ pub fn build_farm(
         detail: e.to_string(),
     })?;
 
+    let mut counts = StoreViewLinkCounts::default();
     let build_result = (|| {
         for source in closure_paths {
             assert_same_filesystem(source, store_root)?;
@@ -396,14 +612,18 @@ pub fn build_farm(
             })?;
             let live_path = live_dir.join(file_name);
             if live_path.exists() {
+                counts.skipped = counts.skipped.saturating_add(1);
                 continue;
             }
             let staged_path = stage_dir.join(file_name);
             hardlink_tree(source, &staged_path)?;
             match std::fs::rename(&staged_path, &live_path) {
-                Ok(()) => {}
+                Ok(()) => {
+                    counts.linked = counts.linked.saturating_add(1);
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     let _ = std::fs::remove_dir_all(&staged_path);
+                    counts.skipped = counts.skipped.saturating_add(1);
                 }
                 Err(err) => {
                     return Err(HardlinkFarmError::Io {
@@ -421,18 +641,161 @@ pub fn build_farm(
         return Err(err);
     }
     let _ = std::fs::remove_dir_all(&stage_dir);
+    Ok(counts)
+}
 
-    std::fs::create_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
-        path: generation_dir.display().to_string(),
+/// Build (materialise) one generation of the ADR 0027 **split** store
+/// view: link top-level closure basenames into the shared `live/` pool,
+/// write guest-safe metadata under `meta/generations/<id>/`, host-only
+/// metadata under `state/generations/<id>/`, and plant the host-only
+/// `gcroots/generation-<id>` root.
+///
+/// `generation_id` is the collision-free on-disk key (see
+/// [`generation_id`]). This function does NOT swap the `state/current` or
+/// `meta/current` pointers, copy `db.dump`, or plant the live readiness
+/// marker: those are the in-process "publish" steps the caller performs
+/// after a successful (possibly cross-mount-retried) materialisation, in
+/// the ADR-mandated order (state/current, then meta/current, then the
+/// zero-length live marker LAST). Returns the top-level link accounting.
+pub fn build_store_view(
+    store_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+    marker: &GenerationMarker,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let state_gen = state_generation_dir(store_root, generation_id);
+    // Fail-closed collision/idempotency guard, scoped to the host-only
+    // state generation marker. `generation_id` is a full-closure hash, so
+    // a different `closure_hash` under the same id implies a SHA-256
+    // collision: refuse rather than union two closures. The same closure
+    // re-links idempotently; a markerless partial dir (crash before
+    // marker write) is rebuilt from scratch.
+    if state_gen.exists() {
+        if state_gen.join("marker.json").exists() {
+            let existing = read_generation_marker(&state_gen)?;
+            if existing.closure_hash != marker.closure_hash {
+                return Err(HardlinkFarmError::GenerationCollision {
+                    generation_dir: state_gen.display().to_string(),
+                    existing: existing.closure_hash,
+                    incoming: marker.closure_hash.clone(),
+                });
+            }
+        } else {
+            std::fs::remove_dir_all(&state_gen).map_err(|e| HardlinkFarmError::Io {
+                path: state_gen.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        }
+    }
+
+    let live_dir = live_dir(store_root);
+    std::fs::create_dir_all(store_root).map_err(|e| HardlinkFarmError::Io {
+        path: store_root.display().to_string(),
         detail: e.to_string(),
     })?;
-    assert_same_filesystem(store_root, &generation_dir)?;
-    write_store_paths(&generation_dir, closure_paths)?;
-    write_system_symlink(&generation_dir, closure_paths)?;
-    write_guest_meta(&generation_dir, marker, closure_paths.len())?;
-    write_generation_marker(&generation_dir, marker)?;
-    write_live_marker(&live_dir, &marker.vm)?;
-    Ok(generation_dir)
+    std::fs::create_dir_all(&live_dir).map_err(|e| HardlinkFarmError::Io {
+        path: live_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &live_dir)?;
+
+    let counts = link_closures_into_live(store_root, generation_id, closure_paths)?;
+
+    // Guest-served metadata (`meta/generations/<id>/`): store-paths +
+    // guest-safe meta.json only. db.dump is copied in by the caller
+    // before the meta/current swap.
+    let meta_gen = meta_generation_dir(store_root, generation_id);
+    std::fs::create_dir_all(&meta_gen).map_err(|e| HardlinkFarmError::Io {
+        path: meta_gen.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &meta_gen)?;
+    write_store_paths(&meta_gen, closure_paths)?;
+    write_guest_meta(&meta_gen, generation_id, marker, closure_paths.len())?;
+
+    // Host-only metadata (`state/generations/<id>/`): system symlink,
+    // broker marker, and the host record. Never served to the guest.
+    std::fs::create_dir_all(&state_gen).map_err(|e| HardlinkFarmError::Io {
+        path: state_gen.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &state_gen)?;
+    write_system_symlink(&state_gen, closure_paths)?;
+    write_host_meta(
+        &state_gen,
+        generation_id,
+        marker,
+        &counts,
+        closure_paths.len(),
+    )?;
+    write_generation_marker(&state_gen, marker)?;
+
+    plant_generation_gcroot(store_root, generation_id, closure_paths)?;
+
+    Ok(counts)
+}
+
+/// Plant the host-only `gcroots/generation-<id>` symlink pointing at the
+/// generation's system store path, so concurrent host GC cannot collect a
+/// source path already linked into `live/`. tmp+rename for crash safety.
+fn plant_generation_gcroot(
+    store_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+) -> Result<(), HardlinkFarmError> {
+    let Some(system) = system_store_path(closure_paths) else {
+        return Ok(());
+    };
+    let gcroots = gcroots_dir(store_root);
+    std::fs::create_dir_all(&gcroots).map_err(|e| HardlinkFarmError::Io {
+        path: gcroots.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    let link = gcroots.join(format!("generation-{generation_id}"));
+    let tmp = gcroots.join(format!("generation-{generation_id}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(system, &tmp).map_err(|e| HardlinkFarmError::Io {
+        path: tmp.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    std::fs::rename(&tmp, &link).map_err(|e| HardlinkFarmError::Io {
+        path: link.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if let Ok(dir) = std::fs::File::open(&gcroots) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Copy the closure-scoped Nix DB dump into `meta/generations/<id>/db.dump`.
+/// In-process (a byte copy, cross-mount-safe). tmp+rename for crash
+/// safety. Must complete before the `meta/current` swap so the guest
+/// never observes a current generation without its `db.dump`.
+pub fn write_meta_db_dump(
+    store_root: &Path,
+    generation_id: &str,
+    db_dump_path: &Path,
+) -> Result<(), HardlinkFarmError> {
+    let meta_gen = meta_generation_dir(store_root, generation_id);
+    std::fs::create_dir_all(&meta_gen).map_err(|e| HardlinkFarmError::Io {
+        path: meta_gen.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    let target = meta_gen.join("db.dump");
+    let tmp = meta_gen.join("db.dump.tmp");
+    std::fs::copy(db_dump_path, &tmp).map_err(|e| HardlinkFarmError::Io {
+        path: db_dump_path.display().to_string(),
+        detail: format!("copy db.dump: {e}"),
+    })?;
+    std::fs::rename(&tmp, &target).map_err(|e| HardlinkFarmError::Io {
+        path: target.display().to_string(),
+        detail: format!("install db.dump: {e}"),
+    })?;
+    if let Ok(dir) = std::fs::File::open(&meta_gen) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 fn write_store_paths(
@@ -473,12 +836,13 @@ fn write_store_paths(
 /// for crash safety.
 fn write_guest_meta(
     generation_dir: &Path,
+    generation_id: &str,
     marker: &GenerationMarker,
     closure_count: usize,
 ) -> Result<(), HardlinkFarmError> {
     let meta = GuestGenerationMeta {
         schema_version: GUEST_META_SCHEMA_VERSION,
-        generation_id: marker.closure_hash.clone(),
+        generation_id: generation_id.to_owned(),
         generation_token: marker.generation_number,
         sync_status: "ok".to_owned(),
         closure_count: u32::try_from(closure_count).unwrap_or(u32::MAX),
@@ -508,6 +872,59 @@ fn write_guest_meta(
         detail: e.to_string(),
     })?;
     if let Ok(dir) = std::fs::File::open(generation_dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Write the host-only generation metadata
+/// (`state/generations/<id>/meta.json`).
+///
+/// ADR 0027: host-confidential. Written under `state/` (never `meta/`),
+/// so it is not exposed by the guest `nl-meta` share. tmp+rename+fsync
+/// for crash safety.
+fn write_host_meta(
+    state_generation_dir: &Path,
+    generation_id: &str,
+    marker: &GenerationMarker,
+    counts: &StoreViewLinkCounts,
+    closure_count: usize,
+) -> Result<(), HardlinkFarmError> {
+    let meta = HostGenerationMeta {
+        schema_version: HOST_META_SCHEMA_VERSION,
+        generation_id: generation_id.to_owned(),
+        generation_token: marker.generation_number,
+        vm: marker.vm.clone(),
+        sync_status: "ok".to_owned(),
+        closure_count: u32::try_from(closure_count).unwrap_or(u32::MAX),
+        linked_count: counts.linked,
+        skipped_count: counts.skipped,
+    };
+    let path = state_generation_dir.join("meta.json");
+    let tmp = state_generation_dir.join("meta.json.tmp");
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("serialize: {e}"),
+    })?;
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        file.write_all(&bytes).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        file.sync_all().map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if let Ok(dir) = std::fs::File::open(state_generation_dir) {
         let _ = dir.sync_all();
     }
     Ok(())
@@ -928,6 +1345,163 @@ pub fn reconcile_stale_swap_tmp(store_root: &Path) -> Result<(), HardlinkFarmErr
             detail: err.to_string(),
         }),
     }
+}
+
+/// Atomically point `<base_dir>/current` at `generations/<generation_id>`.
+///
+/// `base_dir` is either `state/` or `meta/`. The target must already
+/// exist (the caller materialised it). tmp symlink + POSIX-atomic
+/// rename + directory fsync, mirroring [`swap_current_symlink`] but
+/// keyed on the collision-free `generation_id` rather than a u32. The
+/// relative target keeps `current` valid if the farm root is moved.
+fn swap_current_pointer(base_dir: &Path, generation_id: &str) -> Result<(), HardlinkFarmError> {
+    let target_dir = base_dir.join("generations").join(generation_id);
+    if !target_dir.exists() {
+        return Err(HardlinkFarmError::Io {
+            path: target_dir.display().to_string(),
+            detail: "cannot publish current: generation directory is missing".to_owned(),
+        });
+    }
+    std::fs::create_dir_all(base_dir).map_err(|e| HardlinkFarmError::Io {
+        path: base_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    let current_path = base_dir.join("current");
+    let tmp_path = base_dir.join("current.tmp");
+    let _ = std::fs::remove_file(&tmp_path);
+    let relative_target = PathBuf::from("generations").join(generation_id);
+    std::os::unix::fs::symlink(&relative_target, &tmp_path).map_err(|e| HardlinkFarmError::Io {
+        path: tmp_path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    std::fs::rename(&tmp_path, &current_path).map_err(|e| HardlinkFarmError::Io {
+        path: current_path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    if let Ok(dir) = std::fs::File::open(base_dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Publish `state/current -> generations/<generation_id>` (host-only).
+/// ADR 0027 ordering: swap state BEFORE meta so the host broker's view
+/// of the active generation is never behind the guest's.
+pub fn swap_state_current(store_root: &Path, generation_id: &str) -> Result<(), HardlinkFarmError> {
+    swap_current_pointer(&state_dir(store_root), generation_id)
+}
+
+/// Publish `meta/current -> generations/<generation_id>` (guest-served).
+/// ADR 0027 ordering: swap meta AFTER state and BEFORE planting the live
+/// marker.
+pub fn swap_meta_current(store_root: &Path, generation_id: &str) -> Result<(), HardlinkFarmError> {
+    swap_current_pointer(&meta_dir(store_root), generation_id)
+}
+
+/// Read the generation id a `<base_dir>/current` symlink points at, if any.
+fn read_current_pointer_id(base_dir: &Path) -> Option<String> {
+    let current = base_dir.join("current");
+    let target = std::fs::read_link(&current).ok()?;
+    target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_owned())
+}
+
+/// Read the active generation id under `state/current` (host-only view).
+pub fn read_state_current_id(store_root: &Path) -> Option<String> {
+    read_current_pointer_id(&state_dir(store_root))
+}
+
+/// Read the active generation id under `meta/current` (guest-served view).
+pub fn read_meta_current_id(store_root: &Path) -> Option<String> {
+    read_current_pointer_id(&meta_dir(store_root))
+}
+
+/// Remove stale `current.tmp` files left under `state/` and `meta/` by a
+/// previous publish that crashed between symlink-write and rename.
+/// Idempotent.
+pub fn reconcile_split_current_tmp(store_root: &Path) -> Result<(), HardlinkFarmError> {
+    for base in [state_dir(store_root), meta_dir(store_root)] {
+        let tmp_path = base.join("current.tmp");
+        match std::fs::remove_file(&tmp_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(HardlinkFarmError::Io {
+                    path: tmp_path.display().to_string(),
+                    detail: err.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Plant the zero-length per-VM live readiness marker under `live/`.
+///
+/// ADR 0027: this is the LAST step of a publish — after `state/current`
+/// and `meta/current` are swapped — so the marker's existence implies a
+/// fully-published generation. Public wrapper over the private
+/// [`write_live_marker`] so the split-layout StoreSync caller can plant
+/// it explicitly (the legacy [`build_farm`] still plants it inline).
+pub fn plant_live_marker(store_root: &Path, vm: &str) -> Result<(), HardlinkFarmError> {
+    let live = live_dir(store_root);
+    std::fs::create_dir_all(&live).map_err(|e| HardlinkFarmError::Io {
+        path: live.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    write_live_marker(&live, vm)
+}
+
+/// Read the u32 `generation_token` recorded in the host marker for a
+/// materialised split generation, if present. Used to surface the wire
+/// token for a fast-path (skip-relink) StoreSync without re-deriving it.
+pub fn read_generation_token(store_root: &Path, generation_id: &str) -> Option<u32> {
+    let state_gen = state_generation_dir(store_root, generation_id);
+    let marker = read_generation_marker(&state_gen).ok()?;
+    Some(marker.generation_number)
+}
+
+/// Fast-path readiness probe for the split layout.
+///
+/// Returns true only when a COMPLETE, consistent same-generation layout
+/// already exists, so StoreSync can skip relinking and republishing:
+///   * `state/current` and `meta/current` both resolve to `generation_id`;
+///   * the host state marker exists, parses, and names the same closure;
+///   * the live readiness marker exists; and
+///   * every top-level closure basename is already present in `live/`.
+/// Any missing/mismatched component yields false (rebuild + republish),
+/// never a success-shaped shortcut.
+pub fn split_fast_path_ready(
+    store_root: &Path,
+    generation_id: &str,
+    vm: &str,
+    closure_paths: &[PathBuf],
+) -> bool {
+    if read_state_current_id(store_root).as_deref() != Some(generation_id) {
+        return false;
+    }
+    if read_meta_current_id(store_root).as_deref() != Some(generation_id) {
+        return false;
+    }
+    let state_gen = state_generation_dir(store_root, generation_id);
+    let marker = match read_generation_marker(&state_gen) {
+        Ok(marker) => marker,
+        Err(_) => return false,
+    };
+    if marker.vm != vm {
+        return false;
+    }
+    let live = live_dir(store_root);
+    if !live.join(format!(".nixling-marker-{vm}")).exists() {
+        return false;
+    }
+    closure_paths.iter().all(|p| {
+        p.file_name()
+            .map(|name| live.join(name).exists())
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
@@ -1527,5 +2101,182 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let parsed: GenerationMarker = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, m);
+    }
+
+    fn split_closure(root: &Path) -> Vec<PathBuf> {
+        let store = root.join("source-store");
+        let system = store.join("zzz-nixos-system-host");
+        let dep = store.join("aaa-dep");
+        std::fs::create_dir_all(system.join("bin")).unwrap();
+        std::fs::write(system.join("bin/switch-to-configuration"), b"#!/bin/sh\n").unwrap();
+        std::fs::create_dir_all(&dep).unwrap();
+        std::fs::write(dep.join("data"), b"payload").unwrap();
+        vec![system, dep]
+    }
+
+    #[test]
+    fn generation_id_is_order_independent_and_collision_free() {
+        let dir = tempdir().unwrap();
+        let closure = split_closure(dir.path());
+        let system = system_store_path(&closure).map(Path::to_path_buf);
+        let forward = generation_id(&closure, system.as_deref());
+        let mut reversed = closure.clone();
+        reversed.reverse();
+        let backward = generation_id(&reversed, system.as_deref());
+        assert_eq!(forward, backward, "id is independent of input order");
+        assert!(forward.starts_with("g-"), "id carries the g- prefix");
+
+        // A different closure (extra path) yields a different id.
+        let mut bigger = closure.clone();
+        bigger.push(dir.path().join("source-store/ccc-extra"));
+        let other = generation_id(&bigger, system.as_deref());
+        assert_ne!(forward, other);
+    }
+
+    #[test]
+    fn build_store_view_writes_split_tree_with_guest_host_split() {
+        let dir = tempdir().unwrap();
+        let farm = dir.path().join("farm");
+        let closure = split_closure(dir.path());
+        let system = system_store_path(&closure).map(Path::to_path_buf);
+        let gid = generation_id(&closure, system.as_deref());
+        let marker = GenerationMarker {
+            closure_hash: "sha256:split".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-06-09T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 11,
+        };
+
+        let counts = build_store_view(&farm, &gid, &closure, &marker).unwrap();
+        assert_eq!(counts.linked, 2);
+        assert_eq!(counts.skipped, 0);
+
+        // live/: flat pool of top-level basenames, inode-shared.
+        let live_bin = farm.join("live/zzz-nixos-system-host/bin/switch-to-configuration");
+        assert!(live_bin.exists());
+        assert_eq!(
+            std::fs::metadata(&live_bin).unwrap().ino(),
+            std::fs::metadata(closure[0].join("bin/switch-to-configuration"))
+                .unwrap()
+                .ino()
+        );
+
+        // meta/generations/<id>/: guest-safe only.
+        let meta_gen = meta_generation_dir(&farm, &gid);
+        assert!(meta_gen.join("store-paths").exists());
+        assert!(meta_gen.join("meta.json").exists());
+        assert!(!meta_gen.join("system").exists());
+        assert!(!meta_gen.join("marker.json").exists());
+
+        // state/generations/<id>/: host-only.
+        let state_gen = state_generation_dir(&farm, &gid);
+        assert!(state_gen.join("marker.json").exists());
+        assert!(state_gen.join("system").exists());
+        assert!(state_gen.join("meta.json").exists());
+
+        // gcroots/generation-<id> -> system store path.
+        let gcroot = gcroots_dir(&farm).join(format!("generation-{gid}"));
+        assert!(gcroot.exists());
+        assert_eq!(std::fs::read_link(&gcroot).unwrap(), closure[0]);
+
+        // build_store_view must NOT swap currents or plant the marker.
+        assert!(read_state_current_id(&farm).is_none());
+        assert!(read_meta_current_id(&farm).is_none());
+        assert!(!live_dir(&farm).join(".nixling-marker-corp-vm").exists());
+
+        // Guest meta.json key set is exactly the allow-list, generation_id
+        // is the split key, and no host-only field leaks in.
+        let guest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(meta_gen.join("meta.json")).unwrap()).unwrap();
+        let gobj = guest.as_object().unwrap();
+        let mut keys: Vec<&str> = gobj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "closure_count",
+                "generation_id",
+                "generation_token",
+                "schema_version",
+                "sync_status",
+            ]
+        );
+        assert_eq!(gobj["generation_id"], serde_json::json!(gid));
+        assert_eq!(gobj["generation_token"], serde_json::json!(11));
+
+        // Host meta.json carries the host-only fields.
+        let host: HostGenerationMeta =
+            serde_json::from_slice(&std::fs::read(state_gen.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(host.generation_id, gid);
+        assert_eq!(host.generation_token, 11);
+        assert_eq!(host.vm, "corp-vm");
+        assert_eq!(host.linked_count, 2);
+        assert_eq!(host.closure_count, 2);
+    }
+
+    #[test]
+    fn split_publish_swaps_currents_and_plants_marker_last() {
+        let dir = tempdir().unwrap();
+        let farm = dir.path().join("farm");
+        let closure = split_closure(dir.path());
+        let system = system_store_path(&closure).map(Path::to_path_buf);
+        let gid = generation_id(&closure, system.as_deref());
+        let marker = GenerationMarker {
+            closure_hash: "sha256:split".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-06-09T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 11,
+        };
+        build_store_view(&farm, &gid, &closure, &marker).unwrap();
+
+        // Not ready until both currents + the live marker are published.
+        assert!(!split_fast_path_ready(&farm, &gid, "corp-vm", &closure));
+
+        swap_state_current(&farm, &gid).unwrap();
+        swap_meta_current(&farm, &gid).unwrap();
+        plant_live_marker(&farm, "corp-vm").unwrap();
+
+        assert_eq!(read_state_current_id(&farm).as_deref(), Some(gid.as_str()));
+        assert_eq!(read_meta_current_id(&farm).as_deref(), Some(gid.as_str()));
+        let live_marker = live_dir(&farm).join(".nixling-marker-corp-vm");
+        assert!(live_marker.exists());
+        assert_eq!(std::fs::metadata(&live_marker).unwrap().len(), 0);
+        assert_eq!(read_generation_token(&farm, &gid), Some(11));
+
+        // Now the fast path reports ready for the same closure.
+        assert!(split_fast_path_ready(&farm, &gid, "corp-vm", &closure));
+        // ...but not for a different VM name.
+        assert!(!split_fast_path_ready(&farm, &gid, "other-vm", &closure));
+    }
+
+    #[test]
+    fn build_store_view_refuses_generation_id_collision() {
+        let dir = tempdir().unwrap();
+        let farm = dir.path().join("farm");
+        let closure = split_closure(dir.path());
+        let system = system_store_path(&closure).map(Path::to_path_buf);
+        let gid = generation_id(&closure, system.as_deref());
+        let marker_a = GenerationMarker {
+            closure_hash: "sha256:closure-a".to_owned(),
+            nixling_version: "0.4.0".to_owned(),
+            activated_at: "2026-06-09T09:00:00Z".to_owned(),
+            vm: "corp-vm".to_owned(),
+            generation_number: 11,
+        };
+        build_store_view(&farm, &gid, &closure, &marker_a).unwrap();
+
+        // Reuse the same on-disk id with a DIFFERENT closure identity:
+        // simulates a SHA-256 collision. Must refuse rather than union.
+        let marker_b = GenerationMarker {
+            closure_hash: "sha256:closure-b".to_owned(),
+            ..marker_a.clone()
+        };
+        let err = build_store_view(&farm, &gid, &closure, &marker_b).unwrap_err();
+        assert!(matches!(err, HardlinkFarmError::GenerationCollision { .. }));
+
+        // Same id + same closure identity stays idempotent.
+        build_store_view(&farm, &gid, &closure, &marker_a).expect("idempotent rebuild");
     }
 }

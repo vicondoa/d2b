@@ -40,7 +40,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use nixling_host::hardlink_farm::{
-    self, BuildStoreViewFarmRequest, GenerationMarker, HardlinkFarmError,
+    self, BuildStoreViewFarmRequest, BuildStoreViewRequest, GenerationMarker, HardlinkFarmError,
+    StoreViewLinkCounts,
 };
 
 /// `unshare(1)` — already assumed present by the activation path in
@@ -57,6 +58,11 @@ const HELPER_BIN: &str = "/run/current-system/sw/bin/nixling-activation-helper";
 /// helper verb. `$0` is the helper path passed as the first positional.
 const NS_SHELL_SCRIPT: &str =
     "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view-farm";
+
+/// As [`NS_SHELL_SCRIPT`] but execs the ADR 0027 split-layout verb
+/// (`build-store-view`) instead of the legacy `build-store-view-farm`.
+const STORE_VIEW_NS_SHELL_SCRIPT: &str =
+    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view";
 
 /// Build (or idempotently reconcile) one generation of the per-VM
 /// store-view hardlink farm, transparently handling the NixOS
@@ -167,15 +173,15 @@ fn build_farm_via_namespace(
         // stdin dropped here -> EOF for the helper.
     });
 
-    let output = child.wait_with_output().map_err(|e| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!("await store-view farm build: {e}"),
-    })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view farm build: {e}"),
+        })?;
     let _ = writer.join();
 
-    let generation_dir = farm_root
-        .join("generations")
-        .join(generation.to_string());
+    let generation_dir = farm_root.join("generations").join(generation.to_string());
 
     if output.status.success() {
         return Ok(generation_dir);
@@ -198,6 +204,134 @@ fn build_farm_via_namespace(
         path: farm_root.display().to_string(),
         detail: format!(
             "store-view farm build helper failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    })
+}
+
+/// Materialise one generation of the ADR 0027 **split** store view
+/// ([`hardlink_farm::build_store_view`]), transparently handling the
+/// NixOS `/nix/store` self-bind-mount exactly like
+/// [`build_farm_cross_mount_safe`].
+///
+/// Returns the top-level link/skip accounting. This materialises `live/`,
+/// `meta/generations/<id>/`, `state/generations/<id>/`, and the
+/// `gcroots/generation-<id>` root; it does NOT swap `state/current` /
+/// `meta/current` or plant the live marker — the broker performs those
+/// in-process publish steps after a successful materialisation.
+pub fn build_store_view_cross_mount_safe(
+    farm_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+    marker: &GenerationMarker,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    match hardlink_farm::build_store_view(farm_root, generation_id, closure_paths, marker) {
+        Ok(counts) => Ok(counts),
+        Err(HardlinkFarmError::CrossMountLink { .. }) => {
+            build_store_view_via_namespace(farm_root, generation_id, closure_paths, marker)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Build the `unshare … sh -ceu … helper build-store-view` argv. Split
+/// out so the wiring can be asserted without spawning.
+fn store_view_build_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
+    vec![
+        unshare_bin.to_owned(),
+        "--mount".to_owned(),
+        "--propagation".to_owned(),
+        "private".to_owned(),
+        sh_bin.to_owned(),
+        "-ceu".to_owned(),
+        STORE_VIEW_NS_SHELL_SCRIPT.to_owned(),
+        helper_bin.to_owned(),
+    ]
+}
+
+/// Run the split-layout store-view build inside a private mount namespace
+/// where `/nix/store` is lazily detached. On success the helper prints
+/// the [`StoreViewLinkCounts`] as one JSON line on stdout; on failure it
+/// prints the typed [`HardlinkFarmError`] (recovered here so the
+/// collision / different-fs / marker mapping is preserved).
+fn build_store_view_via_namespace(
+    farm_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+    marker: &GenerationMarker,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let request = BuildStoreViewRequest {
+        farm_root: farm_root.to_path_buf(),
+        generation_id: generation_id.to_owned(),
+        closure_paths: closure_paths.to_vec(),
+        marker: marker.clone(),
+    };
+    let payload = serde_json::to_vec(&request).map_err(|e| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!("serialise store-view request: {e}"),
+    })?;
+
+    let argv = store_view_build_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: argv[0].clone(),
+            detail: format!("spawn unshare for store-view build: {e}"),
+        })?;
+
+    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "child stdin unavailable for store-view build".to_owned(),
+    })?;
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+    });
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view build: {e}"),
+        })?;
+    let _ = writer.join();
+
+    if output.status.success() {
+        if let Some(line) = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+        {
+            if let Ok(counts) = serde_json::from_str::<StoreViewLinkCounts>(line) {
+                return Ok(counts);
+            }
+        }
+        // Success exit but no parseable counts: treat as a complete
+        // build with unknown accounting rather than failing the sync.
+        return Ok(StoreViewLinkCounts::default());
+    }
+
+    if let Some(line) = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
+            return Err(typed);
+        }
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!(
+            "store-view build helper failed (exit {}): {}",
             output
                 .status
                 .code()
@@ -238,5 +372,30 @@ mod tests {
         assert!(NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
         assert!(NS_SHELL_SCRIPT.contains("|| true"));
         assert!(NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view-farm"));
+    }
+
+    #[test]
+    fn store_view_build_argv_wires_private_namespace_and_split_verb() {
+        let argv = store_view_build_argv("/u/unshare", "/bin/sh", "/h/helper");
+        assert_eq!(
+            argv,
+            vec![
+                "/u/unshare",
+                "--mount",
+                "--propagation",
+                "private",
+                "/bin/sh",
+                "-ceu",
+                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view",
+                "/h/helper",
+            ]
+        );
+    }
+
+    #[test]
+    fn store_view_ns_shell_script_execs_split_verb() {
+        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
+        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("|| true"));
+        assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view"));
     }
 }

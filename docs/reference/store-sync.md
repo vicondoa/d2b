@@ -1,13 +1,45 @@
 # `StoreSync` broker op
 
 This page documents the typed broker op that hardlink-farms a VM's
-resolved closure into `/var/lib/nixling/vms/<vm>/store-view/live/`
-and atomically swaps the per-VM `store-view/current` symlink to the
-freshly built metadata generation.
+resolved closure into the per-VM ADR 0027 **split** store view under
+`/var/lib/nixling/vms/<vm>/store-view/` and atomically publishes the new
+generation.
 
-It is the canonical writer for `store-view`; host activation may publish
-next-generation pointers and enforce directory posture, but it must not
-build/sweep/activate store-view closures.
+It is the **sole canonical writer** for `store-view`; host activation may
+publish next-generation pointers and enforce directory posture, but it
+must not build/sweep/activate store-view closures. There is no bash
+store-view writer and no backend toggle — the Rust broker owns the layout.
+
+## On-disk layout (ADR 0027 split)
+
+`run_store_sync` writes the split layout, keyed by a collision-free
+`generation_id` (a SHA-256 over the full ordered closure identity plus the
+system store path, `g-<hex>`; **not** the truncated u32 token):
+
+| Path                                              | Trust          | Contents                                                                 |
+| ------------------------------------------------- | -------------- | ------------------------------------------------------------------------ |
+| `store-view/live/`                                | guest (ro)     | flat hardlink pool of top-level closure basenames; served as `/nix/.ro-store` |
+| `store-view/live/.nixling-marker-<vm>`            | guest (ro)     | zero-length cold-start readiness marker, planted **last**                |
+| `store-view/meta/current`                         | guest (ro)     | `-> generations/<generation_id>`                                          |
+| `store-view/meta/generations/<id>/`               | guest (ro)     | `store-paths`, guest-safe `meta.json`, `db.dump`                          |
+| `store-view/state/current`                        | host-only      | `-> generations/<generation_id>`                                         |
+| `store-view/state/generations/<id>/`              | host-only      | `system -> /nix/store/...`, `marker.json`, host `meta.json`              |
+| `store-view/gcroots/generation-<id>`              | host-only      | symlink to the generation's system store path (GC pin)                   |
+| `store-view/sync.lock`                            | host-only      | `flock(2)` exclusion for the op                                          |
+
+The guest `nl-meta` share points at `store-view/meta/` only; `state/`,
+`gcroots/`, and `sync.lock` are never exposed to the guest.
+
+Publish ordering is fixed: materialise `live/` + `meta/`/`state/`
+generations + the gcroot, copy `db.dump`, then swap `state/current`,
+then `meta/current`, then plant the zero-length live marker **last**.
+The marker's existence therefore implies a fully-published generation.
+
+A **fast path** short-circuits relinking/republishing when a complete,
+consistent same-generation layout already exists (`state/current` and
+`meta/current` both resolve to `generation_id`, the host marker matches
+the closure + VM, the live marker is present, and every top-level
+basename is already in `live/`).
 
 ## Why a broker op (instead of the daemon doing it)
 
@@ -22,8 +54,9 @@ The per-VM hardlink farm shares **inodes** with `/nix/store`. The
    rename of each top-level basename. A crash mid-build leaves the
    prior live pool intact.
 3. A `marker.json` (typed `GenerationMarker`) is written **last**
-   so a partially built generation can be reconciled by
-   `reconcile_stale_swap_tmp` on the next run.
+   under `state/generations/<id>/` (and, on the legacy path,
+   `generations/<u32>/`) so a partially built generation can be
+   reconciled on the next run.
 
 The daemon does not have the privileges to satisfy any of these
 guarantees — the farm root lives under `/var/lib/nixling/vms/<vm>/`
@@ -77,7 +110,7 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 | Field                  | Type     | Notes                                                |
 | ---------------------- | -------- | ---------------------------------------------------- |
 | `vm`                   | `String` | Echoed VM name from the resolved intent.             |
-| `generation`           | `u32`    | Activated generation (matches `current` symlink).    |
+| `generation`           | `u32`    | Activated generation **token** (display/wire; the on-disk key is the `generation_id`). |
 | `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/nixling/vms/<vm>/store-view`). |
 | `closure_count`        | `u32`    | Number of top-level closure paths linked in.         |
 | `retained_generations` | `Vec<u32>` | Generations retained for cleanup safety.           |
@@ -127,13 +160,13 @@ envelope.
 
 ## Guest-visible generation metadata
 
-Each generation directory carries a guest-safe `meta.json` written by
-an **independent allow-list serializer**
-([ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)). The
-serializer (`GuestGenerationMeta` in `hardlink_farm.rs`) is constructed
-from primitives and never receives the full host audit record, so a
-field added to the host audit struct cannot leak to the guest. Its key
-set is exactly:
+Each guest generation directory (`store-view/meta/generations/<id>/`)
+carries a guest-safe `meta.json` written by an **independent allow-list
+serializer** ([ADR 0027](../adr/0027-store-view-hardlink-live-pool.md)).
+The serializer (`GuestGenerationMeta` in `hardlink_farm.rs`) is
+constructed from primitives and never receives the full host audit
+record, so a field added to the host audit struct cannot leak to the
+guest. Its key set is exactly:
 
 - `schema_version`
 - `generation_id` (collision-free closure identity; the canonical key)
@@ -144,7 +177,10 @@ set is exactly:
 
 It exposes no `live/`, host-only paths, host-absolute symlinks, marker
 payloads, caller/authz fields, retained generations, swept counts,
-timings, cleanup fields, or error details.
+timings, cleanup fields, or error details. The host-only counterpart
+(`HostGenerationMeta`, written to `state/generations/<id>/meta.json`)
+carries `vm`, `linked_count`, and `skipped_count` and is never served to
+the guest.
 
 ## Live readiness marker
 
@@ -159,14 +195,25 @@ asserts `len() == 0`.
 ## Implementation file map
 
 - `packages/nixling-priv-broker/src/ops/store_sync.rs` — pure
-  handler (`run_store_sync`) + typed `StoreSyncError`.
+  handler (`run_store_sync`) + typed `StoreSyncError`. Derives the
+  `generation_id`, materialises via `build_store_view_cross_mount_safe`,
+  and publishes (`state/current`, `meta/current`, live marker).
+- `packages/nixling-priv-broker/src/ops/store_view_farm.rs` —
+  cross-mount-safe wrappers (`build_store_view_cross_mount_safe`) that
+  retry the build in a private mount namespace when `/nix/store` is a
+  separate vfsmount.
 - `packages/nixling-host/src/hardlink_farm.rs` — underlying
-  same-filesystem-checked atomic-swap primitive; authors the
-  zero-length live marker and the guest-safe `meta.json`.
+  same-filesystem-checked split-layout primitive (`build_store_view`,
+  the `generation_id` derivation, the publish/read helpers); authors the
+  zero-length live marker and the guest-safe + host-only `meta.json`.
+- `packages/nixling-host/src/bin/nixling-activation-helper.rs` —
+  the `build-store-view` verb run inside the private mount namespace.
 - `packages/nixling-priv-broker/src/runtime.rs` — wire dispatch
   arm (`RealBrokerRequest::StoreSync(req) => …`).
 - `packages/nixling-ipc/src/broker_wire.rs` — typed request/
-  response structs + enum variants.
+  response structs + enum variants. The wire still carries the u32
+  `generation` token; exposing `generation_id` on the wire/audit is a
+  deferred follow-up wave.
 - `packages/nixling-ipc/src/types.rs` — `BundleClosureRef`
   opaque newtype.
 - `packages/nixling-priv-broker/src/ops/audit_op.rs` —

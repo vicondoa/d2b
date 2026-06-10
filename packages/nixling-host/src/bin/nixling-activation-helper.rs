@@ -45,7 +45,9 @@ use nix::sys::stat::{fchmod, Mode};
 use nix::unistd::{fchown, ftruncate, Gid, Uid};
 use rustix::fs::{Mode as RxMode, OFlags, ResolveFlags, CWD};
 
-use nixling_host::hardlink_farm::{build_farm, BuildStoreViewFarmRequest};
+use nixling_host::hardlink_farm::{
+    build_farm, build_store_view, BuildStoreViewFarmRequest, BuildStoreViewRequest,
+};
 
 /// v1.1.2fu24 panel-security R5 critical must-fix: open `path`
 /// with `openat2(AT_FDCWD, path, { O_NOFOLLOW + ..., RESOLVE_NO_SYMLINKS })`.
@@ -140,7 +142,8 @@ fn print_help() {
            nixling-activation-helper enforce-dir-posture --path P --uid U --gid G --mode M\n  \
            nixling-activation-helper setfacl-on-path --path P --acl-spec A [--also-spec A2] [--require-kind regular|directory|socket|any] [--setfacl-bin PATH]\n  \
            nixling-activation-helper chown-if-orphan --path P --uid U --gid G\n  \
-           nixling-activation-helper build-store-view-farm   (request JSON on stdin)\n\
+           nixling-activation-helper build-store-view-farm   (request JSON on stdin)\n  \
+           nixling-activation-helper build-store-view        (request JSON on stdin)\n\
          \n\
          EXIT CODES:\n  \
            0 success / already-correct\n  \
@@ -654,6 +657,51 @@ fn cmd_build_store_view_farm() -> ExitCode {
     }
 }
 
+fn cmd_build_store_view() -> ExitCode {
+    use std::io::Read;
+
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+        eprintln!("build-store-view: read stdin: {e}");
+        return ExitCode::from(1);
+    }
+    let req: BuildStoreViewRequest = match serde_json::from_slice(&buf) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("build-store-view: parse request: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    // Already inside the broker-established private mount namespace with
+    // `/nix/store` lazily detached, so the closure paths and the per-VM
+    // farm root resolve on the same (root) mount and `link(2)` succeeds.
+    match build_store_view(
+        &req.farm_root,
+        &req.generation_id,
+        &req.closure_paths,
+        &req.marker,
+    ) {
+        Ok(counts) => {
+            // Emit the link/skip accounting as a single JSON line on
+            // stdout so the calling broker can recover it.
+            if let Ok(j) = serde_json::to_string(&counts) {
+                println!("{j}");
+            }
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            // Typed HardlinkFarmError as one JSON line on stdout so the
+            // broker preserves its collision / different-fs / marker
+            // mapping; human-readable detail to stderr.
+            if let Ok(j) = serde_json::to_string(&e) {
+                println!("{j}");
+            }
+            eprintln!("build-store-view: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // `build-store-view-farm` takes its (potentially large) request as
     // JSON on stdin, not `--flag value` argv, so it bypasses the
@@ -661,6 +709,11 @@ fn main() -> ExitCode {
     // `unshare --mount --propagation private` + `umount -l /nix/store`.
     if std::env::args().nth(1).as_deref() == Some("build-store-view-farm") {
         return cmd_build_store_view_farm();
+    }
+    // `build-store-view` is the ADR 0027 split-layout build, same
+    // stdin-JSON contract, same private-namespace invocation.
+    if std::env::args().nth(1).as_deref() == Some("build-store-view") {
+        return cmd_build_store_view();
     }
     let args = match parse_args() {
         Ok(a) => a,

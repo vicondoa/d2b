@@ -125,3 +125,110 @@ fn build_store_view_farm_verb_emits_typed_error_json_on_collision() {
         "expected GenerationCollision, got {parsed:?}",
     );
 }
+
+use nixling_host::hardlink_farm::{self, BuildStoreViewRequest, StoreViewLinkCounts};
+
+fn run_store_view_helper(request: &BuildStoreViewRequest) -> std::process::Output {
+    let payload = serde_json::to_vec(request).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nixling-activation-helper"))
+        .arg("build-store-view")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn helper");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&payload)
+        .expect("write request");
+    child.wait_with_output().expect("await helper")
+}
+
+#[test]
+fn build_store_view_verb_writes_split_tree_and_emits_counts() {
+    let tmp = tempdir().unwrap();
+    let farm_root = tmp.path().join("vms/vm-a/store-view");
+    std::fs::create_dir_all(&farm_root).unwrap();
+    let closure = fake_closure(tmp.path(), 2);
+    let gid = hardlink_farm::generation_id(&closure, hardlink_farm::system_store_path(&closure));
+
+    let request = BuildStoreViewRequest {
+        farm_root: farm_root.clone(),
+        generation_id: gid.clone(),
+        closure_paths: closure.clone(),
+        marker: marker("closure-xyz"),
+    };
+    let output = run_store_view_helper(&request);
+    assert!(
+        output.status.success(),
+        "helper failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Success: stdout carries the link/skip accounting JSON.
+    let line = String::from_utf8_lossy(&output.stdout);
+    let counts: StoreViewLinkCounts =
+        serde_json::from_str(line.trim()).expect("stdout carries StoreViewLinkCounts JSON");
+    assert_eq!(counts.linked, 2);
+    assert_eq!(counts.skipped, 0);
+
+    // Split tree: guest meta under meta/, host metadata under state/.
+    assert!(farm_root
+        .join("meta/generations")
+        .join(&gid)
+        .join("meta.json")
+        .exists());
+    assert!(farm_root
+        .join("state/generations")
+        .join(&gid)
+        .join("marker.json")
+        .exists());
+    let farmed = farm_root.join("live/aaaaaaaaaaaaaaaa-fake-0/bin/payload");
+    assert_eq!(
+        std::fs::metadata(&farmed).unwrap().ino(),
+        std::fs::metadata(closure[0].join("bin/payload"))
+            .unwrap()
+            .ino(),
+    );
+    // build_store_view does NOT swap currents or plant the live marker.
+    assert!(!farm_root.join("state/current").exists());
+    assert!(!farm_root.join("meta/current").exists());
+}
+
+#[test]
+fn build_store_view_verb_emits_typed_error_json_on_collision() {
+    let tmp = tempdir().unwrap();
+    let farm_root = tmp.path().join("vms/vm-a/store-view");
+    std::fs::create_dir_all(&farm_root).unwrap();
+    let closure = fake_closure(tmp.path(), 1);
+    let gid = hardlink_farm::generation_id(&closure, hardlink_farm::system_store_path(&closure));
+
+    let first = BuildStoreViewRequest {
+        farm_root: farm_root.clone(),
+        generation_id: gid.clone(),
+        closure_paths: closure.clone(),
+        marker: marker("first"),
+    };
+    assert!(run_store_view_helper(&first).status.success());
+
+    // Reuse the SAME generation id with a DIFFERENT closure hash ->
+    // collision; verb exits non-zero and emits the typed error JSON.
+    let collide = BuildStoreViewRequest {
+        farm_root,
+        generation_id: gid,
+        closure_paths: closure,
+        marker: marker("second"),
+    };
+    let output = run_store_view_helper(&collide);
+    assert!(!output.status.success(), "collision must fail");
+    let line = String::from_utf8_lossy(&output.stdout);
+    let parsed: HardlinkFarmError =
+        serde_json::from_str(line.trim()).expect("stdout carries typed HardlinkFarmError JSON");
+    assert!(
+        matches!(parsed, HardlinkFarmError::GenerationCollision { .. }),
+        "expected GenerationCollision, got {parsed:?}",
+    );
+}

@@ -13,21 +13,41 @@ invariants are the same.
 ## On-disk layout
 
 Per VM, nixling keeps the canonical store-view tree under
-`/var/lib/nixling/vms/<vm>/store-view/`:
+`/var/lib/nixling/vms/<vm>/store-view/`.
 
-| Path | Purpose |
-| --- | --- |
-| `store-view/live/` | The flat hardlink pool that virtiofsd exposes to the guest. Every package entry is a hardlink to a host `/nix/store` path, never a byte-for-byte copy. |
-| `store-view/current -> generations/<N>` | The active generation pointer. Updated atomically by Rust `StoreSync`. |
-| `store-view/generations/<N>/system` | Symlink to the host's system toplevel for that generation. |
-| `store-view/generations/<N>/store-paths` | Newline-delimited closure list for retention + GC. |
-| `store-view/generations/<N>/db.dump` | `nix-store --dump-db` payload for the retained closure. |
-| `store-view/generations/<N>/marker.json` | Typed generation marker used by the hardlink-farm primitive. |
-| `store-view/gcroots/generation-<N>` | Host-side GC root pinning the retained generation. |
+Rust `StoreSync` writes the ADR 0027 **split** layout, keyed by a
+collision-free `generation_id` (SHA-256 over the full ordered closure
+identity + system path, `g-<hex>`; the u32 token survives only as
+display/wire `generation_token`):
 
-The Rust primitive layer models the same lifecycle with a per-generation
-`marker.json` and a staged `current.tmp` symlink before the final atomic rename.
-That is the crash-safety contract the daemon-era activation path follows.
+| Path | Trust | Purpose |
+| --- | --- | --- |
+| `store-view/live/` | guest (ro) | The flat hardlink pool virtiofsd exposes to the guest. Every entry is a hardlink to a host `/nix/store` path, never a copy. |
+| `store-view/live/.nixling-marker-<vm>` | guest (ro) | Zero-length cold-start readiness marker, planted **last**. |
+| `store-view/meta/current -> generations/<id>` | guest (ro) | Active guest-served generation pointer. |
+| `store-view/meta/generations/<id>/store-paths` | guest (ro) | Newline-delimited closure list. |
+| `store-view/meta/generations/<id>/meta.json` | guest (ro) | Guest-safe allow-list metadata. |
+| `store-view/meta/generations/<id>/db.dump` | guest (ro) | `nix-store --dump-db` payload for the retained closure. |
+| `store-view/state/current -> generations/<id>` | host-only | Active host-side generation pointer (swapped **before** `meta/current`). |
+| `store-view/state/generations/<id>/system` | host-only | Symlink to the host's system toplevel for that generation. |
+| `store-view/state/generations/<id>/marker.json` | host-only | Typed generation marker used by the hardlink-farm primitive. |
+| `store-view/state/generations/<id>/meta.json` | host-only | Host-only metadata (`vm`, link/skip counts). |
+| `store-view/gcroots/generation-<id>` | host-only | Host-side GC root pinning the retained generation's system path. |
+| `store-view/sync.lock` | host-only | `flock(2)` exclusion for the `StoreSync` op. |
+
+The guest `nl-meta` share is pointed at `store-view/meta/` only;
+`state/`, `gcroots/`, and `sync.lock` are host-only and never exposed.
+
+> **Transitional note (W2):** the shipping `nixos-modules/store.nix`
+> activation path and the legacy `build_farm`/rollback flows still use
+> the older single-root layout — `store-view/current -> generations/<N>`
+> with `generations/<N>/{system,store-paths,db.dump,marker.json}` and
+> `gcroots/generation-<N>` — keyed by the u32 token. Consolidating those
+> non-`StoreSync` callers onto the split layout is a follow-up wave.
+
+The Rust primitive layer models crash-safety with a per-generation
+`marker.json` and staged `current.tmp` symlinks before each final atomic
+rename.
 
 ## Hardlink-farm invariants
 
@@ -72,11 +92,14 @@ nixling uses two marker styles:
   because it lives under the guest-served `live/` pool. The virtiofsd preflight
   checks both the real tree and the bind-mounted view visible to the service.
   A hand-made directory without the marker is refused.
-- **Generation marker**: the Rust primitive layer writes `generations/<N>/marker.json`
-  and refuses to activate a generation if the marker is missing, malformed, or
-  mismatched. Alongside it the primitive writes a guest-safe `meta.json`
-  (an independent allow-list serializer: `schema_version`, `generation_id`,
-  `generation_token`, `sync_status`, `closure_count`).
+- **Generation marker**: the Rust primitive layer writes the typed
+  `marker.json` (under `state/generations/<id>/` for the split-layout
+  `StoreSync` path, or `generations/<N>/` for the legacy path) and
+  refuses to activate a generation if the marker is missing, malformed,
+  or mismatched. Alongside it the primitive writes a guest-safe
+  `meta.json` under `meta/generations/<id>/` (an independent allow-list
+  serializer: `schema_version`, `generation_id`, `generation_token`,
+  `sync_status`, `closure_count`).
 
 Together, those checks stop both stale bind-mount views and partially created
 activations from being mistaken for a valid store generation.
@@ -123,6 +146,13 @@ Everything else is pruned:
 - host per-user GC roots for those generations;
 - hardlink-farm entries not referenced by the union of retained `store-paths`
   files.
+
+> **Transitional note (W2):** the split-layout `StoreSync` path keys
+> generations by `generation_id` (under `state/`/`meta/generations/<id>/`
+> and `gcroots/generation-<id>`) and currently reports
+> `cleanup_deferred: true` with `swept_count: 0` — retention/sweep for
+> the split layout is a follow-up wave. The rule above still governs the
+> legacy `generations/<N>` callers.
 
 This is **per-VM** retention. It does not prune host NixOS system generations;
 operators still need host-level garbage collection such as:
