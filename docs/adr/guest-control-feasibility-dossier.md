@@ -39,7 +39,7 @@ W0 protocol.
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
 | ADR gate | `guest-control-ttRPC` | `c3bd668` | ADR 0026 added, then accepted after feasibility evidence and panel review. |
-| CH CONNECT transport | integrated W0 decision branch | `19dd688` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque/local-port ACK and not used as a buffer limit. |
+| CH CONNECT transport | integrated W0 decision branch | `8d4be40` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque/local-port ACK, not used as a buffer limit, and malformed/refused ACK failures surface only bounded error categories. |
 | Static guest build | `guest-control-w0-static` | `a085e68` | PASS with implementation constraints: Nix static-musl derivation works for x86_64 and aarch64; ELF has no interpreter/NEEDED; generated-code unsafe allowance must be handled. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf88` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
 | HMAC auth | `guest-control-w0-auth` | `7a97d09` | PASS: transcript-bound proof-of-possession prototype with redaction and replay tests. |
