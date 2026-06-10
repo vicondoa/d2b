@@ -41,7 +41,8 @@ use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
 use crate::ops::store_sync_audit::{
-    ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields, StoreSyncTimings,
+    CleanupReason, CleanupStatus, ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields,
+    StoreSyncTimings,
 };
 use crate::ops::store_view_posture::{posture_store_view_matrix_paths, PostureError};
 
@@ -160,11 +161,23 @@ pub fn audit_fields_for_result(
         Ok(outcome) if outcome.fast_path => {
             StoreSyncAuditFields::ok_fast_path(ctx, outcome.retained_generations.clone())
         }
-        Ok(outcome) => StoreSyncAuditFields::ok_non_fast_path(
+        Ok(outcome) if outcome.cleanup_status == CleanupStatus::Failed => {
+            StoreSyncAuditFields::ok_cleanup_failed(
+                ctx,
+                outcome.linked_count,
+                outcome.skipped_count,
+                outcome.retained_generations.clone(),
+                outcome.swept_count,
+            )
+        }
+        Ok(outcome) => StoreSyncAuditFields::ok_non_fast_path_with_cleanup(
             ctx,
             outcome.linked_count,
             outcome.skipped_count,
             outcome.retained_generations.clone(),
+            outcome.swept_count,
+            outcome.cleanup_status,
+            outcome.cleanup_reason,
         ),
         Err(err) => StoreSyncAuditFields::failed(ctx, err.error_stage()),
     }
@@ -195,6 +208,8 @@ pub struct StoreSyncOutcome {
     pub swept_count: u32,
     pub fast_path: bool,
     pub cleanup_deferred: bool,
+    pub cleanup_status: CleanupStatus,
+    pub cleanup_reason: CleanupReason,
     pub timings: StoreSyncTimings,
 }
 
@@ -374,15 +389,48 @@ fn run_store_sync_inner(
     if let Some(previous) = previous_token.filter(|previous| *previous != resolved_u32) {
         retained.push(previous);
     }
-    let cleanup_deferred = true;
-    let swept_count = 0;
+    let retained_ids = {
+        let mut ids = vec![generation_id.clone()];
+        if let Some(previous_id) = previous_id.filter(|id| *id != generation_id) {
+            ids.push(previous_id);
+        }
+        ids
+    };
+    let cleanup_started = Instant::now();
+    let cleanup = cleanup_store_view(&intent.hardlink_farm_path, &intent.vm, &retained_ids);
+    timings.cleanup_ms = elapsed_ms(cleanup_started);
+    let (cleanup_status, cleanup_reason, swept_count) = match cleanup {
+        CleanupOutcome::Completed { swept_count } => {
+            (CleanupStatus::Completed, CleanupReason::None, swept_count)
+        }
+        CleanupOutcome::DeferredOnline => {
+            (CleanupStatus::DeferredOnline, CleanupReason::VmRunning, 0)
+        }
+        CleanupOutcome::DeferredMetadata => (
+            CleanupStatus::DeferredMetadata,
+            CleanupReason::MissingRetainedMetadata,
+            0,
+        ),
+        CleanupOutcome::Failed { swept_count } => {
+            (CleanupStatus::Failed, CleanupReason::IoError, swept_count)
+        }
+    };
+    let cleanup_deferred = matches!(
+        cleanup_status,
+        CleanupStatus::DeferredOnline
+            | CleanupStatus::DeferredAmbiguous
+            | CleanupStatus::DeferredMetadata
+    );
     tracing::info!(
         vm = %intent.vm,
         generation = resolved_generation,
         generation_id = %generation_id,
         fast_path,
         force_republish,
-        "store-sync cleanup deferred until running-generation retention is available"
+        cleanup_status = ?cleanup_status,
+        cleanup_reason = ?cleanup_reason,
+        swept_count,
+        "store-sync cleanup disposition"
     );
     timings.lock_hold_ms = elapsed_ms(lock_hold_started);
     timings.total_ms = elapsed_ms(total_started);
@@ -399,8 +447,164 @@ fn run_store_sync_inner(
         swept_count,
         fast_path,
         cleanup_deferred,
+        cleanup_status,
+        cleanup_reason,
         timings,
     })
+}
+
+enum CleanupOutcome {
+    Completed { swept_count: u32 },
+    DeferredOnline,
+    DeferredMetadata,
+    Failed { swept_count: u32 },
+}
+
+fn cleanup_store_view(store_root: &Path, vm: &str, retained_ids: &[String]) -> CleanupOutcome {
+    if live_pool_may_be_served(store_root, vm) {
+        return CleanupOutcome::DeferredOnline;
+    }
+    match cleanup_store_view_inner(store_root, retained_ids) {
+        Ok(swept_count) => CleanupOutcome::Completed { swept_count },
+        Err(CleanupError::MissingMetadata) => CleanupOutcome::DeferredMetadata,
+        Err(CleanupError::Io { swept_count }) => CleanupOutcome::Failed { swept_count },
+    }
+}
+
+enum CleanupError {
+    MissingMetadata,
+    Io { swept_count: u32 },
+}
+
+fn cleanup_store_view_inner(
+    store_root: &Path,
+    retained_ids: &[String],
+) -> Result<u32, CleanupError> {
+    let retained: std::collections::BTreeSet<&str> =
+        retained_ids.iter().map(String::as_str).collect();
+    let mut desired = std::collections::BTreeSet::new();
+    for id in retained_ids {
+        let store_paths = hardlink_farm::meta_generation_dir(store_root, id).join("store-paths");
+        let raw =
+            std::fs::read_to_string(&store_paths).map_err(|_| CleanupError::MissingMetadata)?;
+        for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+            let path = Path::new(line);
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return Err(CleanupError::MissingMetadata);
+            };
+            desired.insert(name.to_owned());
+        }
+    }
+
+    let mut swept = 0u32;
+    let live = hardlink_farm::live_dir(store_root);
+    if let Ok(entries) = std::fs::read_dir(&live) {
+        for entry in entries {
+            let entry = entry.map_err(|_| CleanupError::Io { swept_count: swept })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with(".nixling-marker-") || desired.contains(name) {
+                continue;
+            }
+            remove_path(&entry.path()).map_err(|_| CleanupError::Io { swept_count: swept })?;
+            swept = swept.saturating_add(1);
+        }
+    }
+    prune_generation_dir(
+        &hardlink_farm::meta_dir(store_root).join("generations"),
+        &retained,
+    )
+    .map_err(|_| CleanupError::Io { swept_count: swept })?;
+    prune_generation_dir(
+        &hardlink_farm::state_dir(store_root).join("generations"),
+        &retained,
+    )
+    .map_err(|_| CleanupError::Io { swept_count: swept })?;
+    prune_gcroots(&hardlink_farm::gcroots_dir(store_root), &retained)
+        .map_err(|_| CleanupError::Io { swept_count: swept })?;
+    Ok(swept)
+}
+
+fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
+    let live = hardlink_farm::live_dir(store_root).display().to_string();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if pid == std::process::id() {
+            continue;
+        }
+        let cmdline = entry.path().join("cmdline");
+        let Ok(raw) = std::fs::read(&cmdline) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&raw);
+        if text.contains(&live) || (text.contains("virtiofs") && text.contains(vm)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn prune_generation_dir(
+    generations_dir: &Path,
+    retained: &std::collections::BTreeSet<&str>,
+) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(generations_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !retained.contains(name) {
+            remove_path(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn prune_gcroots(
+    gcroots: &Path,
+    retained: &std::collections::BTreeSet<&str>,
+) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(gcroots) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("generation-"))
+        else {
+            continue;
+        };
+        if !retained.contains(id) {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_path(path: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -660,6 +864,24 @@ mod tests {
     }
 
     #[test]
+    fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
+        let tmp = tempdir().unwrap();
+        let intent = intent_with(tmp.path(), "theta", 8, 1);
+        let stale = intent
+            .hardlink_farm_path
+            .join("live/zzzzzzzzzzzzzzzz-stale");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("payload"), b"stale").unwrap();
+
+        let outcome = run_store_sync(&intent, "theta", 8).expect("sync succeeds");
+        assert_eq!(outcome.cleanup_status, CleanupStatus::Completed);
+        assert_eq!(outcome.cleanup_reason, CleanupReason::None);
+        assert_eq!(outcome.swept_count, 1);
+        assert!(!stale.exists());
+        assert!(!outcome.cleanup_deferred);
+    }
+
+    #[test]
     fn farm_shares_inodes_with_source_no_recursive_chown() {
         use std::os::unix::fs::MetadataExt;
         let tmp = tempdir().unwrap();
@@ -825,6 +1047,16 @@ mod tests {
             swept_count: 0,
             fast_path,
             cleanup_deferred: true,
+            cleanup_status: if fast_path {
+                CleanupStatus::SkippedFastPath
+            } else {
+                CleanupStatus::DeferredAmbiguous
+            },
+            cleanup_reason: if fast_path {
+                CleanupReason::FastPath
+            } else {
+                CleanupReason::RunningGenerationAmbiguous
+            },
             timings: StoreSyncTimings {
                 total_ms: 10,
                 lock_wait_ms: 1,

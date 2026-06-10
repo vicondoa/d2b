@@ -196,10 +196,13 @@ The `decision` field follows the broker default
 > dispatch**: there is no per-VM/per-caller StoreSync authorization policy
 > at this layer (the only kernel-trusted identity is the global peer-uid
 > gate applied before dispatch), so a real authz-deny trigger awaits that
-> policy. `ok_cleanup_failed` likewise awaits the post-activation
-> sweep/cleanup wave. Successful StoreSync attempts populate available
-> per-phase timings; pre-handler/failure paths still carry only the
-> dispatch-level `total_ms`.
+> policy. StoreSync performs conservative post-activation cleanup only when no
+> virtiofsd process appears to be serving the VM's `store-view/live`; online or
+> uncertain serving state returns `deferred_online`/`vm_running`. Cleanup I/O
+> failures use `ok_cleanup_failed` (`cleanup_status=failed`,
+> `cleanup_reason=io_error`) without rolling back the activated generation.
+> Successful StoreSync attempts populate available per-phase timings;
+> pre-handler/failure paths still carry only the dispatch-level `total_ms`.
 
 ## Observability export (W5)
 

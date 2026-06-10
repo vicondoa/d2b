@@ -7796,7 +7796,7 @@ mod tests {
             BrokerResponse::StoreSync(resp) => {
                 assert_eq!(resp.vm, "corp-vm");
                 assert_eq!(resp.generation_token, 7);
-                assert!(resp.cleanup_deferred);
+                assert!(!resp.cleanup_deferred);
             }
             other => panic!("expected StoreSync response, got {other:?}"),
         }
@@ -7822,11 +7822,8 @@ mod tests {
         assert_eq!(fields.sync_status, SyncStatus::Ok);
         assert_eq!(fields.env.as_deref(), Some("work"));
         assert_eq!(fields.error_stage, ErrorStage::None);
-        assert_eq!(fields.cleanup_status, CleanupStatus::DeferredAmbiguous);
-        assert_eq!(
-            fields.cleanup_reason,
-            CleanupReason::RunningGenerationAmbiguous
-        );
+        assert_eq!(fields.cleanup_status, CleanupStatus::Completed);
+        assert_eq!(fields.cleanup_reason, CleanupReason::None);
         assert_eq!(fields.authz_outcome, AuthzOutcome::Allow);
         assert!(!fields.fast_path);
         assert_eq!(
@@ -7848,10 +7845,7 @@ mod tests {
         assert_eq!(export_record.generation_token, 7);
         assert_eq!(export_record.sync_status, SyncStatus::Ok);
         assert_eq!(export_record.error_stage, ErrorStage::None);
-        assert_eq!(
-            export_record.cleanup_status,
-            CleanupStatus::DeferredAmbiguous
-        );
+        assert_eq!(export_record.cleanup_status, CleanupStatus::Completed);
         assert_eq!(export_record.authz_outcome, AuthzOutcome::Allow);
         assert!(!export_record.fast_path);
 

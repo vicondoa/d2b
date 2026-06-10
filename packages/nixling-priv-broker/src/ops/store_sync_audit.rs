@@ -442,6 +442,28 @@ impl StoreSyncAuditFields {
         }
     }
 
+    pub fn ok_non_fast_path_with_cleanup(
+        ctx: StoreSyncAuditContext,
+        linked_count: u32,
+        skipped_count: u32,
+        retained_generations: Vec<u32>,
+        swept_count: u32,
+        cleanup_status: CleanupStatus,
+        cleanup_reason: CleanupReason,
+    ) -> Self {
+        Self {
+            sync_status: SyncStatus::Ok,
+            cleanup_status,
+            cleanup_reason,
+            linked_count,
+            skipped_count,
+            retained_generations,
+            swept_count,
+            fast_path: false,
+            ..Self::base(ctx)
+        }
+    }
+
     /// Pure fast path: a complete, consistent same-generation layout was
     /// already published, so nothing relinked and no sweep ran.
     pub fn ok_fast_path(ctx: StoreSyncAuditContext, retained_generations: Vec<u32>) -> Self {

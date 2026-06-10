@@ -88,8 +88,11 @@ deprecations ship one minor release before removal.
   `RENAME_EXCHANGE`, so the served basename is never absent.
 - StoreSync success audit/export records now populate available phase timings
   (`lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`,
-  `metadata_ms`) in addition to `total_ms`; cleanup/sweep timings remain zero
-  until the cleanup/retention wave lands.
+  `metadata_ms`, `cleanup_ms`) in addition to `total_ms`.
+- StoreSync now performs conservative cleanup/retention when no virtiofsd
+  process appears to be serving the VM's `store-view/live` path. Offline-safe
+  cleanup removes unretained live basenames, stale meta/state generation dirs,
+  and stale gcroots; online or uncertain serving state defers cleanup.
 
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
