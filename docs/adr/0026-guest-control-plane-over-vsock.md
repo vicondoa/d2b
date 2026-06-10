@@ -222,6 +222,10 @@ Every terminal transport candidate must pass the same matrix:
 - typed protocol errors for malformed messages;
 - no token, environment, stdout, or stderr leakage into logs, metrics,
   or JSON envelopes.
+- retained stdout/stderr storage is guest-local, bounded by per-exec,
+  per-user, and VM-global quotas, protected by ownership/mode and
+  symlink-safe traversal, isolated between guest users, and cleaned by TTL
+  or explicit removal.
 
 W0 must quantify the stress cases it runs. The exact numbers may be
 adjusted during implementation, but the dossier must record payload
@@ -338,6 +342,46 @@ kind, and truncation/cancellation booleans. They must not log per-frame
 payloads, session IDs, commands, user or environment values, CH socket
 paths, guest-derived free-form errors, stdout/stderr bytes, transcript
 bytes, tokens, MACs, or credential paths.
+
+Retained stdout/stderr bytes are not observability data. They are command
+payloads and may appear only in the explicit `ReadStdout`, `ReadStderr`,
+`ExecLogs`, attached CLI stdout/stderr, or an operator-requested output
+file. They must not be duplicated into host daemon state, broker audit
+records, health responses, traces, metrics, structured logs, bundle
+manifests, or host sidecar directories. JSON responses that are not the
+explicit logs API carry offsets, counters, booleans, bounded error kinds,
+and remediation only.
+
+The implementation test plan must include canary-based redaction coverage
+for:
+
+- argv and command lines;
+- cwd and environment values;
+- token values, env-file names, credential paths, HMAC MACs, and auth
+  transcript material;
+- Cloud Hypervisor/vsock/socket paths;
+- session IDs, exec IDs, and request IDs in telemetry surfaces;
+- guest-derived free-form errors;
+- stdout/stderr payload bytes;
+- debug/display formatting of transport and auth failures.
+
+Each canary must be asserted absent from daemon/guestd/userd logs,
+metrics, spans/events, health output, and CLI JSON error envelopes across
+success, auth failure, protocol failure, stale-session, quota failure,
+attached, detached, TTY, and non-TTY paths. The only allowed matches are
+the explicit payload stream requested by the user and stable CLI JSON
+fields whose contract intentionally returns values such as `execId`.
+
+Retained-log storage has its own security gate. File-backed logs must live
+under guest-local guestd runtime/state directories, never under
+`/nix/store`, host-shared mounts, virtiofs exports, host bundle state, or
+host audit/observability state. Directories and segments are created with
+restrictive ownership and mode, path traversal is rooted at pre-opened
+directory file descriptors, symlinks and unsafe parents are rejected, and
+cleanup unlinks by directory file descriptor. Tests must prove per-user
+isolation, symlink/hard-link rejection, quota enforcement, TTL/startup
+cleanup, and absence of retained bytes from host-visible state except the
+intentional logs API response.
 
 ## Backward compatibility
 

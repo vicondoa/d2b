@@ -280,6 +280,62 @@ non-persisted runtime state; host callers observe `lost-guestd` or
 `stale-session` and must not attach to an exec whose guest-side session
 identity no longer matches.
 
+### Retained-log storage security
+
+Retained stdout/stderr bytes are **guest-local state**. The host may
+receive them only as the explicit response body of
+`ReadStdout`/`ReadStderr`/`ExecLogs`, and the CLI may write them only to
+the operator-requested terminal, stdout/stderr, or output file. They must
+not be copied into host daemon state, broker audit records, host metrics,
+host spans, host health JSON, bundle manifests, or any host-visible
+sidecar directory.
+
+If retained logs are file-backed, they live below guestd-owned guest
+paths, never below `/nix/store`, a host-shared mount, or a virtiofs export:
+
+- live attached state: `/run/nixling/guest-control/exec/<uid>/<exec-id>/`;
+- detached retained state:
+  `/var/lib/nixling/guest-control/exec/<uid>/<exec-id>/`.
+
+The path components above are design-level names; implementations may use
+different leaves only if they preserve the same security properties:
+
+1. The top-level runtime/state parents are created by guest activation as
+   `root:nixling-guestd`, mode `0750` or stricter. Per-exec directories
+   and log segments are `0700` directories and `0600` files, owned by the
+   in-guest `nixling-guestd` service account (or an equivalently isolated
+   service principal), not by the target workload user.
+2. Per-user isolation is enforced before opening a log object. Guestd
+   maps every exec to the authenticated target user and hands any
+   append/read capability to the matching `nixling-userd` over already-open
+   file descriptors; userd never resolves another user's retained-log path.
+3. Every open is rooted at the pre-opened runtime/state directory and uses
+   symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
+   surprises, non-regular log segments, world/group-writable parents, and
+   cross-device escapes are fatal `retained-log-path-unsafe` errors before
+   bytes are read or written.
+4. File-backed segments are created with exclusive create semantics and
+   restrictive mode before any child output is accepted. Cleanup must
+   unlink by directory file descriptor, not by re-parsing a string path.
+5. Quotas are enforced at three levels: per-stream/per-exec
+   `max_*_log_bytes`, per-guest-user retained-log bytes, and a VM-global
+   guest-control retained-log budget. `ExecCreate(detached=true)` fails
+   with a bounded `retained-log-quota-exceeded` error if admitting the exec
+   would exceed either aggregate quota.
+6. Cleanup is deterministic. Attached non-detached logs are removed after
+   all readers have observed EOF, or after a short terminal-state grace
+   period if the client disappears. Detached logs expire at the earlier of
+   explicit operator removal, VM reboot, or the configured TTL; the default
+   TTL is 24 hours and implementations must support a lower site policy.
+   Startup cleanup removes expired, orphaned, partially-created, and
+   path-unsafe records before serving `ExecLogs`.
+
+Guestd may keep small live rings in memory instead of files for attached
+execs, but detached retained logs still count against the same per-user and
+VM quotas. In-memory implementations must prove that reboot/restart loss
+is surfaced as `lost-guestd`/`stale-session` rather than silently serving
+partial output as durable retained logs.
+
 Output reader tasks append bytes from the child fd into the log only
 while the log has capacity. When the retained window is full:
 
@@ -528,6 +584,12 @@ They must not include payload bytes, session IDs, command lines,
 environment variables, cwd, credential paths, CH socket paths, HMAC
 material, or guest free-form errors.
 
+Health responses and CLI JSON use the same rule except for fields that are
+the explicit user-facing API result. For example, `ExecCreate --json` may
+return the new `execId`, and `ExecLogs --json` may return the requested log
+payload when the user asked for logs, but daemon logs, metrics, spans,
+health JSON, and error JSON must not duplicate those payloads or IDs.
+
 ## Required tests
 
 Before implementation exits design hardening, add at least:
@@ -552,8 +614,51 @@ Before implementation exits design hardening, add at least:
 13. guestd restart and VM reboot stale-session rejection tests;
 14. CLI raw-mode restoration tests for success, signal, protocol error,
     and disconnect;
-15. observability redaction tests proving stdout/stderr/env/token/socket
-    material never enters logs, metrics, or JSON errors.
+15. retained-log storage security tests covering guest-local path roots,
+    ownership/mode, symlink and hard-link rejection, per-user isolation,
+    per-exec/per-user/VM quota enforcement, TTL/startup cleanup, and the
+    absence of retained stdout/stderr bytes from host-visible state other
+    than explicit `ExecLogs` responses;
+16. observability redaction tests proving stdout/stderr/env/token/socket
+    material never enters logs, metrics, spans, health, or JSON errors.
+
+### Redaction test matrix
+
+The implementation test suite must seed every surface below with stable
+canary values and assert that only the allowed API response contains them.
+Use distinct canaries for argv, cwd, environment, credential paths, HMAC
+MACs, socket paths, IDs, guest error text, stdout, stderr, and transcripts
+so a failure names the leaking class.
+
+| Canary class | Seed location | Must be absent from | Allowed location |
+| --- | --- | --- | --- |
+| argv / command line | `ExecCreate argv = ["sh", "-c", "echo ARG_CANARY"]` | daemon logs, guestd logs except bounded kind, metrics labels/samples, spans, health, error JSON | never; CLI human dry-run is out of scope for guestd telemetry |
+| cwd | `--workdir /home/alice/CWD_CANARY` | logs, metrics, spans, health, error JSON | never; use bounded `cwd-invalid`/`cwd-denied` kinds |
+| env / tokens | `--env TOKEN_CANARY=...`, env-file path | logs, metrics, spans, health, error JSON, retained-log metadata | child stdout/stderr only if the command itself prints it and user requested logs |
+| credential path | guestd `LoadCredential` path and token-file validation errors | logs, metrics, spans, health, CLI JSON errors | never; report bounded credential error kind |
+| HMAC/MAC/transcript | failed auth proof with known MAC and transcript canaries | logs, metrics, spans, health, CLI JSON errors | never; report bounded auth failure kind |
+| CH/vsock/socket paths | stale or refused CONNECT using a path canary | logs, metrics, spans, health, CLI JSON errors | never; report bounded transport kind |
+| session / exec / request IDs in telemetry | successful and failed calls with ID canaries | logs, metrics labels, span attrs/events, health | CLI JSON fields whose contract explicitly returns `execId`/cursor state |
+| guest-derived free-form errors | child exits after writing `ERR_CANARY` to stderr; guestd returns malformed free-form text in a fake transport | daemon logs, guestd structured logs, metrics, spans, health, CLI JSON error object | stderr stream only when requested as command output/logs |
+| stdout/stderr payloads | child writes `STDOUT_CANARY` and `STDERR_CANARY` | logs, metrics, spans, health, CLI JSON errors, inspect/wait JSON | `ReadStdout`/`ReadStderr`/`ExecLogs` payloads and attached CLI stdout/stderr |
+| socket paths / transcripts in debug formatting | force `Debug`/`Display` on transport/auth errors | all structured logs, spans, health, CLI JSON errors | never |
+
+Required assertions:
+
+1. Capture daemon, guestd, and userd structured logs during the test and
+   grep for every canary; matches are allowed only in the explicit payload
+   stream under test.
+2. Scrape Prometheus/OpenTelemetry metric output and assert canaries are
+   absent from metric names, labels, exemplars, and sample values except
+   numeric byte counts.
+3. Export spans/events and assert canaries are absent from span names,
+   attributes, events, status descriptions, and exception fields.
+4. Call `Health`, `ExecInspect`, `ExecWait`, failed `ExecCreate`, failed
+   auth, and failed `ExecLogs --json`; assert JSON contains bounded enums,
+   counters, offsets, booleans, and remediation only.
+5. Run the same canaries through attached, detached, TTY, non-TTY,
+   success, protocol-error, auth-error, quota-error, and stale-session
+   paths so redaction is not limited to the happy path.
 
 ## UX latency tradeoffs
 
