@@ -77,6 +77,78 @@ The proof crate builds through a Nix static-musl derivation for:
 entries. `cargo-deny` and `cargo-audit` passed for the proof
 dependency set.
 
+Reproducible proof source:
+
+- branch: `guest-control-w0-static`
+- commit: `a085e68be5bfa9ed19fcb3441b4f914c7120ac69`
+- derivation: `.w0-static-proof/ttrpc-static-proof.nix`
+- probe crate: `.w0-static-proof/probe`
+
+Static derivation invocations:
+
+```console
+$ nix-build .w0-static-proof/ttrpc-static-proof.nix \
+    --argstr target x86_64-unknown-linux-musl --no-out-link
+/nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0
+
+$ nix-build .w0-static-proof/ttrpc-static-proof.nix \
+    --argstr target aarch64-unknown-linux-musl --no-out-link
+/nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0
+```
+
+The derivation sets `CARGO_BUILD_TARGET` to the requested target
+triple and `RUSTFLAGS="-C target-feature=+crt-static"`, then runs:
+
+```sh
+readelf -lW "$out/bin/nixling-ttrpc-static-proof" \
+  > "$out/readelf-program-headers.txt"
+readelf -dW "$out/bin/nixling-ttrpc-static-proof" \
+  > "$out/readelf-dynamic.txt" || true
+grep -q 'Requesting program interpreter' "$out/readelf-program-headers.txt" \
+  && exit 1
+grep -q '(NEEDED)' "$out/readelf-dynamic.txt" \
+  && exit 1
+```
+
+Rerun evidence:
+
+```console
+$ file /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/bin/nixling-ttrpc-static-proof
+ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, not stripped
+$ grep -n 'Requesting program interpreter' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
+no Requesting program interpreter
+$ grep -n '(NEEDED)' /nix/store/3n3v6yy65y13gnpk8ja5ash913ns4iyw-nixling-ttrpc-static-proof-x86_64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
+no DT_NEEDED entries
+
+$ file /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/bin/nixling-ttrpc-static-proof
+ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, not stripped
+$ grep -n 'Requesting program interpreter' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-program-headers.txt || echo 'no Requesting program interpreter'
+no Requesting program interpreter
+$ grep -n '(NEEDED)' /nix/store/j94w60hai3bjm79pxsshmxj7qlh3qqs3-nixling-ttrpc-static-proof-aarch64-unknown-linux-musl-0.0.0/readelf-dynamic.txt || echo 'no DT_NEEDED entries'
+no DT_NEEDED entries
+```
+
+Supply-chain proof commands:
+
+```console
+$ cargo-deny --manifest-path .w0-static-proof/probe/Cargo.toml \
+    check --config packages/deny.toml bans licenses sources
+bans ok, licenses ok, sources ok
+
+$ nix shell nixpkgs#cargo-audit -c cargo-audit audit \
+    --file .w0-static-proof/probe/Cargo.lock \
+    --db /nix/store/c6lmvfkhycqqzry2y47245lc5l9xmnph-rustsec-advisory-db-git \
+    --no-fetch --format json
+{"database":{"advisory-count":1098,"last-commit":null,"last-updated":null},"lockfile":{"dependency-count":138},"settings":{"target_arch":[],"target_os":[],"severity":null,"ignore":[],"informational_warnings":["unmaintained","unsound","notice"]},"vulnerabilities":{"found":false,"count":0,"list":[]},"warnings":{}}
+```
+
+The audit run used the same pinned RustSec snapshot as the repository
+flake check (`rev 831c50f4a4304068f125e603add6a8839f08b3eb`). It
+returned exit code 0. Because the offline run had no crates.io index,
+`cargo-audit` also printed non-fatal yanked-metadata lookup errors to
+stderr; the JSON report still records zero vulnerabilities and zero
+warnings.
+
 Raw cargo musl builds failed on the local host because the installed
 Rust toolchain lacks musl std targets. The implementation should use Nix
 static derivations for guest artifacts, and optionally document raw cargo
@@ -98,6 +170,45 @@ uses a build step that:
 Recommended implementation: use an xtask generator or build step that
 postprocesses generated ttRPC files and fails the build if generated
 code reintroduces unsafe allowance or unsafe tokens.
+
+Reproducible proof source:
+
+- branch: `guest-control-w0-codegen`
+- commit: `06298c0ce0dd48aa5bce5ca6111acb186ebb460d`
+- crate: `packages/ttrpc-unsafe-proof`
+
+The proof crate was added as a temporary workspace member and built
+with the workspace Rust lint `unsafe_code = "forbid"`. Its build
+script:
+
+1. invokes `ttrpc_codegen::Codegen`;
+2. requires at least one generated protocol source to contain
+   `#![allow(unsafe_code)]`;
+3. removes that exact crate-level allowance;
+4. scans `proof.rs` and `proof_ttrpc.rs` token-by-token for `unsafe`;
+5. writes a module shim and lets the crate compile under
+   `#![forbid(unsafe_code)]`.
+
+Rerun command and result:
+
+```console
+$ cargo test -p ttrpc-unsafe-proof --locked
+running 1 test
+test tests::generated_server_bindings_compile_under_forbid_unsafe ... ok
+
+test result: ok. 1 passed; 0 failed
+```
+
+Generated-code postprocess proof:
+
+```console
+$ grep -n 'unsafe' proof.rs || echo 'no unsafe token'
+no unsafe token
+$ grep -n 'unsafe' proof_ttrpc.rs || echo 'no unsafe token'
+no unsafe token
+$ grep -n '#!\[allow(unsafe_code)\]' proof*.rs || echo 'no generated allow(unsafe_code)'
+no generated allow(unsafe_code)
+```
 
 ### Transcript-bound HMAC auth
 
