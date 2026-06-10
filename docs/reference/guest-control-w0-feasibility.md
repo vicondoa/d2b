@@ -198,6 +198,18 @@ payloads when an application receiver stalls. Raw ttRPC stream queues
 therefore do not satisfy ADR 0026's backpressure and byte-exact
 requirements by themselves.
 
+Panel follow-up corrected the message-size invariant for protobuf
+`bytes`: generated decoders may allocate the field before a
+`WriteStdin` handler can compare it with `max_chunk_bytes`. The selected
+chunked-stdio design therefore requires a ttRPC receive cap
+(`1 MiB + 16 KiB`) for pre-decode rejection of truly oversized messages,
+plus bounded post-decode allocation for effective-limit violations:
+four concurrent `WriteStdin` handlers per connection, a 4 MiB
+per-connection decoded-byte semaphore, and one per-exec stdin in-flight
+permit. An effective `max_chunk_bytes + 1` request may allocate one
+bounded decoded protobuf value, but it is rejected before session-buffer
+copy or stdin queueing.
+
 ## Protocol lock recommendation
 
 Lock the implementation design to:
@@ -205,7 +217,8 @@ Lock the implementation design to:
 1. ttRPC/protobuf for guest-control unary APIs;
 2. Kata-style chunked stdio RPCs for exec I/O, using explicit byte
    offsets, bounded chunks, short long-poll reads, bounded retained logs,
-   and typed backpressure/slow-consumer cancellation;
+   typed backpressure/slow-consumer cancellation, and explicit
+   post-decode byte-budget semaphores for protobuf `bytes` fields;
 3. no raw ttRPC stream forwarding for exec I/O;
 4. no custom binary stream unless the selected chunked-stdio path fails a
    later implementation gate and a new panel review approves a fallback.

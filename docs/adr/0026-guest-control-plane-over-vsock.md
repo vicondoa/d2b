@@ -218,7 +218,9 @@ Every terminal transport candidate must pass the same matrix:
 - guestd restart and daemon restart behavior;
 - VM reboot and stale-session rejection;
 - terminal raw-mode restoration in the CLI;
-- max message/frame size enforcement before allocation;
+- max message/frame size enforcement before protobuf decode where the
+  transport exposes a receive cap, and otherwise bounded post-decode
+  allocation with explicit semaphore budgets;
 - typed protocol errors for malformed messages;
 - no token, environment, stdout, or stderr leakage into logs, metrics,
   or JSON envelopes.
@@ -226,8 +228,9 @@ Every terminal transport candidate must pass the same matrix:
 W0 must quantify the stress cases it runs. The exact numbers may be
 adjusted during implementation, but the dossier must record payload
 sizes, stall durations, frame/message limits, maximum resident memory
-observed, and expected typed error behavior before allocation for
-oversized input.
+observed, and expected typed error behavior for oversized input,
+distinguishing transport receive-cap rejection before protobuf decode
+from bounded post-decode application-limit rejection.
 
 Initial W0 pass/fail thresholds are:
 
@@ -239,9 +242,12 @@ Initial W0 pass/fail thresholds are:
   at least 30 seconds while the guest process continues writing; memory
   must remain bounded and the remote writer must block or receive a
   typed slow-consumer cancellation rather than unbounded buffering;
-- frame/message limit test: send one message at the configured maximum
-  and one byte above it; the oversized message is rejected before
-  payload allocation with a typed protocol error;
+- frame/message limit test: send one message at the configured maximum,
+  one byte above the effective application chunk limit, and one byte
+  above the ttRPC receive cap. The receive-cap violation is rejected
+  before protobuf decode; the effective-limit violation may allocate one
+  bounded decoded protobuf `bytes` field but must be rejected before
+  session-buffer copy while holding the documented byte-budget permits;
 - fake-transport interactive latency test: under four concurrent exec
   sessions (one slow-output, one blocked-stdin, one interactive TTY,
   one unary health loop), p95 input-to-output latency for the
