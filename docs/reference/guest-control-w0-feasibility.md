@@ -46,6 +46,7 @@ W0 protocol.
 | Safe PTY | `guest-control-w0-pty` | `72ddbe3` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
+| Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | this commit | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
 
 ## Evidence details
 
@@ -62,7 +63,54 @@ The proof crate validates the exact host-side shape:
 5. construct the client with `Client::new`.
 
 Tests cover success, wrong port refusal, malformed OK, EOF before OK, and
-timeout. No host proxy daemon or per-VM host unit is required.
+timeout. The remaining design cases are locked as follows and must be in
+the implementation harness before guest-control ships:
+
+- **half-close:** after a successful `OK`, stdin/host write EOF maps to a
+  ttRPC transport shutdown for that direction only; guest output may
+  still drain until EOF or protocol error. Guest-side EOF likewise wakes
+  pending host reads without implying the host request stream was already
+  closed.
+- **stale socket after VM restart:** socket existence is not readiness.
+  The host must run `CONNECT`, Hello/auth, and Health on every use. A
+  stale base UDS or old listener that no longer matches the VM boot ID,
+  CID, socket identity, and HMAC transcript returns a typed
+  `stale-guest-control-socket`/`stale-session` error and remediation to
+  restart or refresh the VM state.
+- **guest listener absent:** CH refusal, EOF, or timeout during
+  `CONNECT 14318` is `guest-control-listener-absent`, not fallback to
+  SSH for generic exec and not a successful readiness result.
+
+No host proxy daemon or per-VM host unit is required.
+
+### Guest AF_VSOCK ttRPC server
+
+Result: **pass as static compile proof; runtime test cfg-gated**.
+
+Routine developer and CI hosts generally do not expose a guest
+AF_VSOCK device, so W0 cannot require a live `bind(AF_VSOCK)` in the
+default Layer-1 gate. The committed compile proof
+`packages/nixling-host/tests/guest_vsock_ttrpc_compile.rs` type-checks
+the safe guest-side shape instead:
+
+1. build a ttRPC async listener with `Listener::bind("vsock://-1:14318")`;
+2. attach that listener to `ttrpc::r#async::Server::new()`;
+3. type-check host client construction with
+   `Socket::connect("vsock://<cid>:14318")`;
+4. keep the proof crate under `#![forbid(unsafe_code)]`.
+
+`ttrpc-rust`'s Linux vsock transport is implemented with
+`tokio-vsock`; Nixling does not call `from_raw_vsock_listener_fd` or any
+other unsafe listener constructor. A live runtime test should be added
+behind an explicit cfg or integration-test knob on a host/microVM that
+provides virtio-vsock. That runtime test must prove:
+
+- guest bind on `VMADDR_CID_ANY:14318`;
+- host `CONNECT 14318` through CH and ttRPC Hello/Health over the same
+  post-OK stream;
+- half-close behavior in both directions;
+- typed failure when the guest listener is absent;
+- typed stale-socket rejection after VM restart or guest boot-ID change.
 
 ### Static guest build
 
@@ -197,6 +245,41 @@ bounded mpsc queues, but message delivery tasks can still accumulate
 payloads when an application receiver stalls. Raw ttRPC stream queues
 therefore do not satisfy ADR 0026's backpressure and byte-exact
 requirements by themselves.
+
+## Port registry
+
+| Port | Direction | Owner | Status |
+| ---: | --- | --- | --- |
+| `14317` | guest-to-host | Observability OTLP/Alloy relay | Existing; not available for guest control. |
+| `14318` | host-to-guest | `nixling-guestd` ttRPC control | Reserved for Hello, Health, capabilities, lifecycle, exec chunked stdio, and framework guest operations. |
+| `14319` | host-to-guest | Future guest-control stream side channel | Reserved but unused by W0; requires a new panel-approved decision before use. |
+
+The control reservation starts at `14318` specifically to avoid
+colliding with the existing observability port `14317`. The two surfaces
+also differ by protocol and direction: `14317` carries OTLP relay traffic
+and may be guest-to-host, while `14318` carries authenticated ttRPC
+guest-control traffic after the CH `CONNECT` handshake and HMAC
+Hello/auth. No guest-control RPC may reuse `14317`.
+
+## Long-poll and overload caps
+
+Default per-VM caps:
+
+| Budget | Default | Overload behavior |
+| --- | ---: | --- |
+| Concurrent exec sessions | 32 per VM | `exec-capacity-exceeded`; no process is spawned. |
+| Attached exec sessions | 8 per VM | `exec-attach-capacity-exceeded`; detached execs continue. |
+| Pending `ReadStdout` waits | 1 per exec per connection, 64 per VM | New duplicate wait is `superseded-read-wait` or `read-wait-capacity-exceeded`. |
+| Pending `ReadStderr` waits | 1 per exec per connection, 64 per VM | Same as stdout; TTY mode returns `tty-stderr-unavailable`. |
+| Pending `ExecWait` calls | 1 per exec per connection, 64 per VM | Duplicate wait is superseded or rejected with `wait-capacity-exceeded`. |
+| Long-poll timeout | 100 ms default, 1 s hard max | Server clamps higher requests. |
+| ttRPC request rate | 200 RPC/s per connection, 1000 RPC/s per VM burst | Excess returns `rate-limited` with bounded retry-after. |
+| Retained output | 16 MiB stdout + 16 MiB stderr per detached exec, 512 MiB per VM | Older detached bytes are evicted with explicit dropped-byte accounting; attached readers get `offset-expired`. |
+
+All overload errors are typed protocol errors with bounded fields only:
+limit name, effective limit, current count where safe, and retry/remedy
+enum. They must not include argv, environment, stdout/stderr payloads,
+socket paths, tokens, MACs, or guest-derived free-form strings.
 
 ## Protocol lock recommendation
 
