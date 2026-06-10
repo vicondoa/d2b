@@ -158,31 +158,32 @@ new panel-approved decision.
 
 The feasibility dossier must include:
 
-- static guest builds for `x86_64-linux` and `aarch64-linux`;
-- static guest builds must target `x86_64-unknown-linux-musl` and
+- a representative static-musl ttRPC guest dependency probe for
+  `x86_64-linux` and `aarch64-linux`;
+- the representative probe must target `x86_64-unknown-linux-musl` and
   `aarch64-unknown-linux-musl`, or an equivalent Nix static-musl target
   that produces target-native static Linux binaries;
 - cargo-deny/cargo-audit results for ttRPC, protobuf/codegen, and
   transitive dependencies;
 - proof that generated protobuf/ttRPC code does not weaken
   `unsafe_code = "forbid"` in the new guest crates;
-- proof that no guest binary has an ELF interpreter or `DT_NEEDED`
-  dynamic dependencies;
+- proof that the representative static probe has no ELF interpreter or
+  `DT_NEEDED` dynamic dependencies;
 - exact commands or Nix derivations used for static evidence. At
-  minimum the check shape is:
+  minimum the W0 check shape is:
 
   ```text
-  cargo build --manifest-path packages/Cargo.toml \
-    -p nixling-guestd -p nixling-userd \
-    --release --target x86_64-unknown-linux-musl
-  cargo build --manifest-path packages/Cargo.toml \
-    -p nixling-guestd -p nixling-userd \
-    --release --target aarch64-unknown-linux-musl
-  readelf -lW <guest-binary>   # no INTERP
-  readelf -dW <guest-binary>   # no NEEDED
+  nix build .#w0-static-proof-x86_64-unknown-linux-musl
+  nix build .#w0-static-proof-aarch64-unknown-linux-musl
+  readelf -lW <proof-binary>   # no INTERP
+  readelf -dW <proof-binary>   # no NEEDED
   cargo deny check bans licenses sources
   cargo audit --no-fetch
   ```
+
+Real `nixling-guestd`, `nixling-userd`, and `nixling-exec-runner`
+static/no-unsafe artifacts are not produced by W0. They are a required
+implementation gate before any guest-control release.
 
   The final implementation may use Nix static derivations instead of
   raw cargo commands, but the emitted evidence must prove the same
