@@ -10,6 +10,13 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Fixed
+
+- TPM-enabled guests now flush stale loaded/saved TPM sessions during
+  early boot before SRK provisioning. This prevents swtpm session-handle
+  exhaustion from breaking TPM-bound credentials while preserving NVRAM
+  and persistent handles.
+
 ### Added
 
 - `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
