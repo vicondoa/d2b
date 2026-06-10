@@ -109,6 +109,22 @@ The start/end offsets define the valid read window. If a caller asks for
 an offset below `*_start_offset`, the server returns `offset-expired`
 with the new start offset rather than silently serving newer bytes.
 
+Terminal status has two forms:
+
+- `recorded_terminal_status`: the child exit/signal/cancel result guestd
+  has observed.
+- `visible_terminal_status`: populated only after guestd has appended all
+  output bytes it read before terminal observation and the retained output
+  cursors make that output available. Until then, `ExecInspect` reports
+  the recorded status plus `visible_terminal_status = null` and the stream
+  end offsets needed to drain the output first.
+
+Detached execs may record terminal status before a client reads retained
+logs, but `visible_terminal_status` still requires retained-log cursor
+metadata that makes any preceding output discoverable through `ExecLogs`.
+Attached CLI flows use `visible_terminal_status` for process exit and
+local raw-mode cleanup.
+
 ### `ExecWait`
 
 Request fields:
@@ -119,14 +135,18 @@ Request fields:
 Response fields:
 
 - current terminal/non-terminal state;
-- exit status or signal when known;
+- recorded exit status or signal when known;
+- `visible_terminal_status`, populated only after preceding output is
+  available through the returned stdout/stderr offset window;
 - `state_generation`;
 - current stdout/stderr offset window.
 
-If the process is still running and no state changed, `ExecWait` holds
-the unary request until the timeout expires or state changes. Timeout is
-not an error; it returns `running` with `timed_out: true`. Client-side
-RPC cancellation cancels only that wait call, not the exec.
+If the process is still running, or terminal status is recorded but not
+yet visible because preceding output has not drained into the retained
+cursor window, `ExecWait` holds the unary request until the timeout
+expires or state/visibility changes. Timeout is not an error; it returns
+the current state with `timed_out: true`. Client-side RPC cancellation
+cancels only that wait call, not the exec.
 
 ## Stdio message shapes
 
@@ -606,7 +626,7 @@ locks.
 | initial geometry and resize ordering | Geometry is part of create; later resizes use `control_seq`. |
 | PTY leadership / foreground process group | Not solved by wire format; implementation must use the safe-PTY proof path: session leader, controlling terminal, `tcgetpgrp` foreground owner, and child job handoff are required. |
 | Ctrl-C/signal delivery | `ExecSignal` targets the current `tcgetpgrp` foreground process group for TTY, including after a shell hands the terminal to a child job. |
-| exit code/signal propagation | `ExecWait` and `Inspect` report terminal state separately from I/O EOF. |
+| exit code/signal propagation | `ExecWait` and `Inspect` report recorded terminal state separately from I/O EOF, and expose `visible_terminal_status` only after output preceding terminal observation is available through stream/log cursors. |
 | bounded memory / backpressure | Bounded logs, one stdin chunk, limited waiters, and slow-consumer cancellation. |
 | concurrent sessions/fairness | Per-exec caps and short polling prevent one stalled exec from owning global queues. |
 | cancellation/disconnect cleanup | `ExecCancel` plus attached/detached disconnect policy. |

@@ -156,6 +156,13 @@ struct AcceptedWrite {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct AcceptedCloseAfter {
+    offset: u64,
+    len: usize,
+    hash: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct AcceptedControl {
     seq: u64,
     event: ControlEvent,
@@ -294,6 +301,7 @@ pub struct ChunkedSession {
     child_stdin_closed: bool,
     stdin_inflight: bool,
     close_stdin_request: Option<(u64, u64)>,
+    close_after_request: Option<(u64, AcceptedCloseAfter)>,
     writes: HashMap<u64, AcceptedWrite>,
     controls: HashMap<u64, AcceptedControl>,
     next_control_seq: u64,
@@ -335,6 +343,7 @@ impl ChunkedSession {
             child_stdin_closed: false,
             stdin_inflight: false,
             close_stdin_request: None,
+            close_after_request: None,
             writes: HashMap::new(),
             controls: HashMap::new(),
             // ExecCreate reports control_seq=0. The first post-create
@@ -351,6 +360,7 @@ impl ChunkedSession {
 
     pub fn restart(&mut self) -> SessionToken {
         self.token.generation += 1;
+        self.stdin_inflight = false;
         self.token
     }
 
@@ -515,6 +525,21 @@ impl ChunkedSession {
             }
             return Err(ProtocolError::RequestIdConflict);
         }
+        if let Some((previous_id, previous)) = &self.close_after_request {
+            if *previous_id == write_id {
+                if previous.offset == offset
+                    && previous.hash == Self::hash(data)
+                    && previous.len == data.len()
+                    && close_after
+                {
+                    return Ok(WriteStdinResponse {
+                        next_offset: expected,
+                        disposition: WriteDisposition::Duplicate,
+                    });
+                }
+                return Err(ProtocolError::RequestIdConflict);
+            }
+        }
         if self.stdin_closed {
             return Err(ProtocolError::StdinClosed);
         }
@@ -551,6 +576,14 @@ impl ChunkedSession {
             self.stdin_closed = true;
             let next = self.stdin_next_offset();
             self.close_stdin_request = Some((write_id, next));
+            self.close_after_request = Some((
+                write_id,
+                AcceptedCloseAfter {
+                    offset,
+                    len: data.len(),
+                    hash: Self::hash(data),
+                },
+            ));
             self.child_stdin_closed =
                 self.stdin_endpoint == StdinEndpoint::Pipe && self.stdin_buffered_bytes() == 0;
         }
@@ -572,6 +605,13 @@ impl ChunkedSession {
         }
         let expected = self.stdin_next_offset();
         if self.stdin_closed {
+            if self
+                .close_after_request
+                .as_ref()
+                .is_some_and(|(id, _)| *id == request_id)
+            {
+                return Err(ProtocolError::RequestIdConflict);
+            }
             if self.close_stdin_request == Some((request_id, offset)) {
                 return Ok(WriteStdinResponse {
                     next_offset: expected,
@@ -1018,11 +1058,8 @@ mod tests {
             );
             assert_eq!(
                 session.close_stdin(token, 10, 64 * KIB as u64),
-                Ok(WriteStdinResponse {
-                    next_offset: 64 * KIB as u64,
-                    disposition: WriteDisposition::Duplicate,
-                }),
-                "{name} close_after request id must replay the close state"
+                Err(ProtocolError::RequestIdConflict),
+                "{name} close_after request id is scoped to the WriteStdin RPC shape"
             );
             assert!(
                 !session.child_stdin_closed(),
@@ -1032,6 +1069,14 @@ mod tests {
                 session.consume_stdin(token, 64 * KIB).unwrap(),
                 final_chunk,
                 "{name} close_after must deliver the final chunk exactly once"
+            );
+            assert_eq!(
+                session.write_stdin_close_after(token, 10, 0, &final_chunk),
+                Ok(WriteStdinResponse {
+                    next_offset: 64 * KIB as u64,
+                    disposition: WriteDisposition::Duplicate,
+                }),
+                "{name} close_after lost-response retry after drain must stay idempotent"
             );
             if endpoint == StdinEndpoint::Pipe {
                 assert!(
@@ -1398,6 +1443,25 @@ mod tests {
     }
 
     #[test]
+    fn restart_releases_stale_stdin_permit() {
+        let mut session = ChunkedSession::new(10, MIB, MIB, 64 * KIB);
+        let old = session.token();
+        session.begin_stdin_request(old).unwrap();
+        let new = session.restart();
+        assert_eq!(
+            session.finish_stdin_request(old),
+            Err(ProtocolError::StaleSession)
+        );
+        assert_eq!(
+            session.write_stdin(new, 1, 0, b"x"),
+            Ok(WriteStdinResponse {
+                next_offset: 1,
+                disposition: WriteDisposition::Accepted,
+            })
+        );
+    }
+
+    #[test]
     fn eof_and_tty_ctrl_d_are_distinct() {
         let mut session = ChunkedSession::new(5, MIB, MIB, 64 * KIB);
         let token = session.token();
@@ -1486,6 +1550,19 @@ mod tests {
         assert_eq!(
             session.push_control(token, 12, 3, ControlEvent::Cancel),
             Ok(WriteDisposition::Accepted)
+        );
+        assert_eq!(
+            session.push_control(token, 12, 3, ControlEvent::Cancel),
+            Ok(WriteDisposition::Duplicate)
+        );
+        assert_eq!(
+            session.push_control(
+                token,
+                12,
+                3,
+                ControlEvent::Resize(WindowSize { rows: 1, cols: 1 }),
+            ),
+            Err(ProtocolError::RequestIdConflict)
         );
         session
             .append_output(token, Stream::Stdout, b"tail")
