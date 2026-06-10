@@ -44,6 +44,7 @@ pkgs.writeShellApplication {
       import socket
       import sys
       import threading
+      import time
       HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
       def write_all(fd, data):
@@ -76,9 +77,18 @@ pkgs.writeShellApplication {
               sys.stderr.write("usage: nixling-ch-vsock-connect <base-socket> <port>\n")
               sys.exit(2)
           base, port = sys.argv[1], sys.argv[2]
+          deadline = time.monotonic() + HANDSHAKE_TIMEOUT_SECONDS
+
+          def refresh_deadline():
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
+                  sys.exit(1)
+              sock.settimeout(remaining)
+
           try:
               sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-              sock.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
+              refresh_deadline()
               sock.connect(base)
           except TimeoutError:
               sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
@@ -87,6 +97,7 @@ pkgs.writeShellApplication {
               sys.stderr.write("nixling-ch-vsock-connect: transport-unreachable\n")
               sys.exit(1)
           try:
+              refresh_deadline()
               sock.sendall(f"CONNECT {port}\n".encode())
           except TimeoutError:
               sys.stderr.write("nixling-ch-vsock-connect: connect-timeout\n")
@@ -97,6 +108,7 @@ pkgs.writeShellApplication {
           # Read CH's OK line byte-by-byte so we don't slurp payload bytes.
           reply = b""
           while not reply.endswith(b"\n"):
+              refresh_deadline()
               try:
                   chunk = sock.recv(1)
               except TimeoutError:

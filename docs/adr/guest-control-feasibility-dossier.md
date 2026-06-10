@@ -78,7 +78,7 @@ the implementation harness before guest-control ships:
 - **guest-side half-close:** after a successful `OK`, guest-side EOF wakes
   pending host reads without implying the host request stream was already
   closed. Host-write EOF preserving guest-output drain is covered by the
-  `4c5eded` proof.
+  `4c5ededc82fdcfb222e375dafcb528a7d771331d` proof.
 - **stale socket after VM restart:** socket existence is not readiness.
   The host must run `CONNECT`, Hello/auth, and Health on every use. A
   stale base UDS or old listener that no longer matches the VM boot ID,
