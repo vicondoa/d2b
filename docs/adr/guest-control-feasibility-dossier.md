@@ -47,7 +47,7 @@ W0 protocol.
 | Strengthened PTY/job-control | `guest-control-w0-pty2` | `eb4fedb` | PASS: session leadership, controlling-terminal foreground ownership, SIGINT after shell job handoff, TIOCSWINSZ/SIGWINCH, PTY EIO/POLLHUP drain, and TTY protocol-side CloseStdin semantics. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
-| Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` | `35a25ba` | PASS as static compile proof: safe `ttrpc-rust` async server/listener shape over `vsock://-1:14318`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
+| Guest AF_VSOCK ttRPC server | `guest-control-w0-vsock` + integrated W0 decision branch | `35a25ba` + `19dd688` | PASS as static compile proof: safe guest `ttrpc-rust` async server/listener shape over `vsock://-1:14318`, plus post-CH-CONNECT Unix stream wrapping with `Socket::new(stream)`; runtime AF_VSOCK tests are cfg-gated for hosts with virtio-vsock. |
 | Chunked stdio conformance | integrated W0 decision branch | `19dd688` | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, TTY stdout-only/stderr-unavailable behavior, zero-length read and append-after-EOF rejection, 16 MiB slow stdin idempotency, deterministic slow-consumer bounds, four-attached-session byte-skew fairness, mixed three-exec plus unary-Health scheduler fairness with capacity saturation, stale restart, EOF vs Ctrl-D, resize/signal/cancel ordering, control/idempotency replay, close-after semantics, terminal-status cursor accounting, and signal exit mapping. |
 
 ## Evidence details
@@ -85,10 +85,11 @@ the implementation harness before guest-control ships:
   CID, socket identity, and HMAC transcript returns a typed
   `stale-guest-control-socket`/`stale-session` error and remediation to
   restart or refresh the VM state.
-- **guest listener absent:** CH refusal, EOF, or timeout during
-  `CONNECT 14318` maps to the bounded Health state `listener-absent`,
-  not fallback to SSH for generic exec and not a successful readiness
-  result.
+- **guest listener absent / transport unavailable:** CH refusal, EOF,
+  malformed/overlong ACK, transport I/O error, or timeout during
+  `CONNECT 14318` maps to the bounded Health state
+  `transport-unreachable` with the matching bounded reason enum, not
+  fallback to SSH for generic exec and not a successful readiness result.
 
 No host proxy daemon or per-VM host unit is required.
 
@@ -110,7 +111,7 @@ the safe guest-side shape instead:
 4. keep the proof crate under `#![forbid(unsafe_code)]`.
 
 The host-side transport proof is the CH base-UDS `CONNECT <port>` proof
-above, not direct host `Socket::connect("vsock://<cid>:14318")`.
+above, not direct host AF_VSOCK client construction.
 
 `ttrpc-rust`'s Linux vsock transport is implemented with
 `tokio-vsock`; Nixling does not call `from_raw_vsock_listener_fd` or any

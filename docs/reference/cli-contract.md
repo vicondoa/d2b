@@ -1890,6 +1890,15 @@ key). The SSH user comes from `--user` or the manifest `ssh_user`
 existing per-VM key + manifest `static_ip` / `ssh_user`. No new
 privileged surface, no virtiofs.
 
+**Guest-control compatibility note:** ADR 0026 reserves the future
+guest-control implementation path for `config sync`. Once a running VM
+advertises healthy guest-control, `config sync` prefers guestd. During the
+old-generation compatibility window, VMs without guest-control capability
+continue using the existing SSH path and JSON responses include bounded
+compatibility metadata such as `transport: "ssh-compat"` plus a
+remediation command. The new generic `nixling exec` surface never falls
+back to SSH.
+
 ### `config diff`
 
 **Synopsis:** `nixling config diff <vm> --against <guestConfigFile> [--json]`

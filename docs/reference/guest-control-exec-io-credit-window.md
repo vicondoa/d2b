@@ -314,10 +314,13 @@ bytes are still released only according to client credit.
 
 Human output mirrors Docker-style behavior: command bytes go only to the
 requested stdout/stderr/TTY destinations; protocol errors print concise
-redacted diagnostics. JSON mode reports bounded envelope fields such as
-`exec_id`, `vm`, `outcome`, `exit_code`, `signal`, `bytes_stdout`,
-`bytes_stderr`, and `error_code`; it never embeds stdout, stderr,
-environment, command arguments, HMAC material, or raw session tokens.
+redacted diagnostics. The fallback preserves the selected product rule:
+attached `exec`/`attach` reject `--json`, while detached run metadata,
+`inspect`, and `logs` may use JSON. JSON mode reports bounded envelope
+fields such as `exec_id`, `vm`, `outcome`, `exit_code`, `signal`,
+`bytes_stdout`, `bytes_stderr`, and `error_code`; it never embeds stdout,
+stderr, environment, command arguments, HMAC material, or raw session
+tokens except where `logs --json` explicitly returns requested log payloads.
 
 ## Conformance matrix
 

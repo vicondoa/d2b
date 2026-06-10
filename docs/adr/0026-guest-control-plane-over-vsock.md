@@ -267,10 +267,13 @@ Initial pass/fail thresholds are:
   slow-output exec, blocked-stdin exec, interactive TTY exec, and a unary
   Health RPC loop sharing the scheduler, with bounded service-turn gaps
   for interactive and health work and no byte-skew starvation;
-- memory high-water mark: the dossier records idle RSS and test RSS; any
-  candidate whose RSS grows without bound or exceeds the recorded
-  per-session budget fails. The initial per-session budget is 64 MiB
-  above idle for the fake-transport tests.
+- memory high-water mark: raw-stream candidates must record idle RSS and
+  test RSS because transport queues can grow outside the application
+  model. The selected chunked-stdio W0 proof records retained-byte,
+  decoded-byte, and queue budgets deterministically; implementation
+  runtime gates must add RSS high-water evidence and fail if resident
+  memory grows without bound or exceeds the recorded per-session budget.
+  The initial per-session runtime budget is 64 MiB above idle.
 
 Each candidate must also produce byte-exact transcripts for the matrix,
 fail on reordered resize/signal/cancel control events, and keep terminal

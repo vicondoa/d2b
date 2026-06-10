@@ -700,6 +700,10 @@ The bounded reason enum is closed in W0:
 - `listener-absent`
 - `connect-refused`
 - `connect-timeout`
+- `eof-before-ack`
+- `malformed-ack`
+- `ack-too-long`
+- `transport-io`
 - `auth-token-rejected`
 - `protocol-version-unsupported`
 - `session-generation-mismatch`
@@ -728,7 +732,7 @@ Allowed state mappings:
 | `degraded` | `exec-subsystem-unavailable`, `log-storage-unavailable`, `quota-exceeded`, `rate-limited`, `internal-health-check-failed` | `retry`, `reduce-load`, `inspect-guest-logs`, `restart-vm` |
 | `unavailable-old-generation` | `old-generation` | `upgrade-guest`, `restart-vm` |
 | `listener-absent` | `listener-absent` | `check-guestd-service`, `restart-vm` |
-| `transport-unreachable` | `connect-refused`, `connect-timeout` | `retry`, `restart-vm` |
+| `transport-unreachable` | `connect-refused`, `connect-timeout`, `eof-before-ack`, `malformed-ack`, `ack-too-long`, `transport-io` | `retry`, `restart-vm`, `check-guestd-service` |
 | `auth-failed` | `auth-token-rejected` | `check-auth-token` |
 | `protocol-mismatch` | `protocol-version-unsupported` | `upgrade-guest` |
 | `stale-session` | `session-generation-mismatch` | `retry`, `restart-vm` |
