@@ -787,10 +787,15 @@ in
   # snippet runs on every nixos-rebuild switch + every boot and
   # idempotently re-asserts the canonical posture.
   #
-  # Also enforce per-VM store / store-meta ownership (`nixlingd:users
-  # 2775`); the BindMountFromHardlinkFarm broker op preserves the
-  # source's root:kvm 2755 which trips the ownership-matrix preflight.
-  # Re-enforce here.
+  # Also enforce per-VM store-view top-level ownership (ADR 0027):
+  # `store-view`, `store-view/live`, and `store-view/meta` are
+  # runner/virtiofsd-readable (`nixlingd:users 0755`); the broker
+  # hardlink/bind ops can leave a freshly-created inode with a stricter
+  # source posture that trips the ownership-matrix preflight, so
+  # re-enforce here. Legacy `store`/`store-meta` are postured only when
+  # present (migrated VMs). Host-only `store-view/state`,
+  # `store-view/gcroots`, and `store-view/sync.lock` are NOT touched
+  # here — they are broker-owned `nixlingd:nixling`.
   #
   # Replace the `[ ! -L ] && chown && chmod` shell pattern with calls to
   # nixling-activation-helper which use O_DIRECTORY|O_NOFOLLOW +
@@ -822,9 +827,29 @@ in
       if [ -d /var/lib/nixling/vms ] && [ -n "$users_gid" ]; then
         for vm_dir in /var/lib/nixling/vms/*/; do
           vm_dir="''${vm_dir%/}"
-          for sub in store store-meta store-view store-view/live store-view/generations; do
+          # ADR 0027: activation may create the missing top-level
+          # store-view directory inodes and re-assert posture on them so
+          # the read-only ro-store/nl-meta virtiofsd shares always have a
+          # directory to serve, but it must NOT recurse into the live
+          # hardlink pool and must NOT touch broker-owned host-only state
+          # (store-view/state, store-view/gcroots, store-view/sync.lock,
+          # integrity leaves) — those are `nixlingd:nixling` and managed
+          # by the broker StoreSync path, never `users 0755`. Posture
+          # only the runner-readable top-level paths here.
+          for sub in store-view store-view/live store-view/meta; do
             path="$vm_dir/$sub"
+            ${pkgs.coreutils}/bin/mkdir -p "$path" 2>/dev/null || true
             [ -d "$path" ] && ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
+            ${activationHelper} enforce-dir-posture \
+              --path "$path" \
+              --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
+          done
+          # Legacy recovery artifacts (migrated VMs only): posture if
+          # present, never created by activation.
+          for sub in store store-meta; do
+            path="$vm_dir/$sub"
+            [ -d "$path" ] || continue
+            ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
             ${activationHelper} enforce-dir-posture \
               --path "$path" \
               --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true

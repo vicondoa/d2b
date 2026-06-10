@@ -328,7 +328,15 @@ in
                   proto = "virtiofs";
                 }
                 {
-                  source = "${cfg.store.stateDir}/${name}/store-view";
+                  # Guest metadata share is rooted at the signed
+                  # `store-view/meta` subtree (ADR 0027), NOT the
+                  # store-view root: the root also holds the served
+                  # `live/` hardlink pool and the host-only
+                  # `state/`, `gcroots/`, and `sync.lock` which must
+                  # never reach the guest. virtiofsd serves this share
+                  # `--readonly` (forced in processes-json.nix off the
+                  # `nl-meta` tag, independent of this source path).
+                  source = "${cfg.store.stateDir}/${name}/store-view/meta";
                   mountPoint = "/run/nixling-store-meta";
                   tag = "nl-meta";
                   proto = "virtiofs";

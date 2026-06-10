@@ -26,8 +26,36 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::ErrorKind;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+
+/// Whether a matrix entry is a directory or a regular file. Mirrors the
+/// `kind` enum in `nixos-modules/options-ownership-matrix.nix`.
+///
+/// `File` entries are checked with no-follow `symlink_metadata`, must be
+/// a regular file when present, reassert owner/group/mode on the file
+/// inode, and are NEVER walked recursively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EntryKind {
+    #[default]
+    Dir,
+    File,
+}
+
+impl EntryKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dir => "dir",
+            Self::File => "file",
+        }
+    }
+}
+
+fn default_required() -> bool {
+    true
+}
 
 /// One row of the per-VM state ownership matrix. Matches the Nix
 /// submodule in `nixos-modules/options-ownership-matrix.nix`.
@@ -43,10 +71,22 @@ pub struct OwnershipEntry {
     /// Expected mode in the low 12 bits (suid/sgid/sticky + rwx),
     /// matching the value returned by `Metadata::mode() & 0o7777`.
     pub expected_mode: u32,
+    /// Whether the entry is a directory or a regular file. File-kind
+    /// entries reassert mode/uid/gid on the file inode and never
+    /// recurse.
+    #[serde(default)]
+    pub kind: EntryKind,
+    /// Whether the entry must exist by preflight time. When `false`,
+    /// the entry is posture-if-present: a not-found (`ENOENT`) stat
+    /// result is skipped silently; every other stat error still
+    /// surfaces as drift/error.
+    #[serde(default = "default_required")]
+    pub required: bool,
     /// Whether the daemon may recurse into the directory when
     /// checking. The enforcer additionally rejects recursion into the
-    /// `store` subdirectory regardless of this flag (hardlink-farm
-    /// carve-out).
+    /// `store` / `store-view/live` subdirectories regardless of this
+    /// flag (hardlink-farm carve-out), and never recurses into
+    /// `file`-kind entries.
     pub recursive: bool,
 }
 
@@ -64,10 +104,27 @@ pub struct Ownership {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum OwnershipMismatch {
-    /// `stat(2)` failed on the declared path (missing directory,
-    /// broken symlink under a parent, permission denied for the
-    /// daemon's uid).
-    StatFailed { path: PathBuf, detail: String },
+    /// `stat(2)` (`symlink_metadata`, no-follow) failed on the declared
+    /// path. `not_found` distinguishes `ENOENT` (the path is absent —
+    /// for `required = false` entries this is never emitted; for
+    /// `required = true` entries it is emitted but treated as a
+    /// migration-window warning by the preflight) from every other
+    /// stat error (`EACCES`, `EIO`, `ELOOP`, …), which is always
+    /// fail-closed drift.
+    StatFailed {
+        path: PathBuf,
+        detail: String,
+        not_found: bool,
+    },
+    /// The path exists but its inode type disagrees with the entry
+    /// `kind` (a `file` entry resolved to a non-regular-file, or a
+    /// `dir` entry resolved to a non-directory). No-follow: a symlink
+    /// is reported as a kind mismatch rather than being traversed.
+    KindMismatch {
+        path: PathBuf,
+        expected_kind: String,
+        actual_kind: String,
+    },
     /// The path exists but owner/group/mode differ from the matrix.
     Drift {
         path: PathBuf,
@@ -76,10 +133,11 @@ pub enum OwnershipMismatch {
         drift_reason: DriftReason,
     },
     /// Recursive walk found a child whose owner/group/mode differs.
-    /// Children of the `store` subdirectory are NEVER reported here:
-    /// the enforcer refuses to recurse into the hardlink farm to
-    /// avoid even READING ownership on inodes shared with /nix/store
-    /// in a way that could be misinterpreted as a fix-up signal.
+    /// Children of the `store` / `store-view/live` subdirectories are
+    /// NEVER reported here: the enforcer refuses to recurse into the
+    /// hardlink pool to avoid even READING ownership on inodes shared
+    /// with /nix/store in a way that could be misinterpreted as a
+    /// fix-up signal.
     ChildDrift {
         path: PathBuf,
         expected_uid: u32,
@@ -103,6 +161,7 @@ impl OwnershipMismatch {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::StatFailed { .. } => "ownership-matrix-stat-failed",
+            Self::KindMismatch { .. } => "ownership-matrix-kind-mismatch",
             Self::Drift { .. } => "ownership-matrix-drift",
             Self::ChildDrift { .. } => "ownership-matrix-child-drift",
         }
@@ -112,25 +171,31 @@ impl OwnershipMismatch {
     pub fn path(&self) -> &Path {
         match self {
             Self::StatFailed { path, .. }
+            | Self::KindMismatch { path, .. }
             | Self::Drift { path, .. }
             | Self::ChildDrift { path, .. } => path.as_path(),
         }
     }
 }
 
-/// Per-VM state root identifier of the hardlink-farm carve-out.
+/// Per-VM hardlink-pool paths the enforcer NEVER recurses into.
 ///
-/// The string is compared byte-for-byte against `entry.path`. Kept
-/// pub(crate) so the matching test in [`tests`] can re-assert the
-/// canonical value.
+/// Each string is compared byte-for-byte against `entry.path`. Covers
+/// the canonical `store-view/live` pool and the legacy `store` farm;
+/// both share inodes with /nix/store, so recursing would risk
+/// propagating ownership/ACL changes into the system store.
 const HARDLINK_FARM_CARVE_OUTS: &[&str] = &["store", "store-view/live"];
 
 /// Return whether the enforcer is permitted to recurse into this
 /// entry. Combines the operator-declared `recursive` flag with the
 /// hardlink-farm carve-out: even if a future operator typo flips
-/// `recursive = true` on the `store` entry, this function still
-/// returns `false`.
+/// `recursive = true` on the `store` / `store-view/live` entry, this
+/// function still returns `false`. A `file`-kind entry is a single
+/// inode and is never walked.
 pub fn should_recurse(entry: &OwnershipEntry) -> bool {
+    if entry.kind == EntryKind::File {
+        return false;
+    }
     if HARDLINK_FARM_CARVE_OUTS.contains(&entry.path.as_str()) {
         return false;
     }
@@ -157,17 +222,55 @@ pub fn check_ownership_matrix(
             base.join(&entry.path)
         };
 
+        // No-follow stat: never traverse a symlink at the leaf.
         let meta = match fs::symlink_metadata(&target) {
             Ok(m) => m,
             Err(err) => {
-                drifts.push(OwnershipMismatch::StatFailed {
-                    path: target,
-                    detail: err.to_string(),
-                });
+                if err.kind() == ErrorKind::NotFound {
+                    // ENOENT. Optional entries skip silently; required
+                    // entries surface a `not_found` StatFailed that the
+                    // preflight policy downgrades during the migration
+                    // window.
+                    if entry.required {
+                        drifts.push(OwnershipMismatch::StatFailed {
+                            path: target,
+                            detail: err.to_string(),
+                            not_found: true,
+                        });
+                    }
+                } else {
+                    // EACCES / EIO / ELOOP / … — always fail-closed,
+                    // independent of `required`.
+                    drifts.push(OwnershipMismatch::StatFailed {
+                        path: target,
+                        detail: err.to_string(),
+                        not_found: false,
+                    });
+                }
                 continue;
             }
         };
 
+        // Kind check (no-follow): a `file` entry must resolve to a
+        // regular file; a `dir` entry must resolve to a directory. A
+        // symlink (or any other type) is a kind mismatch, never
+        // traversed.
+        let ft = meta.file_type();
+        let kind_ok = match entry.kind {
+            EntryKind::File => ft.is_file(),
+            EntryKind::Dir => ft.is_dir(),
+        };
+        if !kind_ok {
+            drifts.push(OwnershipMismatch::KindMismatch {
+                path: target,
+                expected_kind: entry.kind.as_str().to_owned(),
+                actual_kind: actual_kind_str(&meta).to_owned(),
+            });
+            continue;
+        }
+
+        // Owner/group/mode reassertion, for both file- and dir-kind
+        // entries, on the stat'd inode.
         let actual = Ownership {
             uid: meta.uid(),
             gid: meta.gid(),
@@ -201,6 +304,20 @@ pub fn check_ownership_matrix(
     drifts
 }
 
+/// Human-readable inode type for a [`OwnershipMismatch::KindMismatch`].
+fn actual_kind_str(meta: &fs::Metadata) -> &'static str {
+    let ft = meta.file_type();
+    if ft.is_dir() {
+        "dir"
+    } else if ft.is_file() {
+        "file"
+    } else if ft.is_symlink() {
+        "symlink"
+    } else {
+        "other"
+    }
+}
+
 /// Bounded shallow walk used only for `recursive = true` entries that
 /// pass the hardlink-farm carve-out. Does NOT follow symlinks; does
 /// NOT cross filesystem boundaries (the per-VM tree is required to
@@ -213,6 +330,7 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
             out.push(OwnershipMismatch::StatFailed {
                 path: root.to_path_buf(),
                 detail: format!("read_dir failed: {err}"),
+                not_found: err.kind() == ErrorKind::NotFound,
             });
             return;
         }
@@ -223,9 +341,11 @@ fn walk_children(root: &Path, expected: &Ownership, out: &mut Vec<OwnershipMisma
         let meta = match fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(err) => {
+                let not_found = err.kind() == ErrorKind::NotFound;
                 out.push(OwnershipMismatch::StatFailed {
                     path,
                     detail: err.to_string(),
+                    not_found,
                 });
                 continue;
             }
@@ -278,6 +398,20 @@ mod tests {
             expected_uid: current_uid(),
             expected_gid: current_gid(),
             expected_mode: mode,
+            kind: EntryKind::Dir,
+            required: true,
+            recursive: false,
+        }
+    }
+
+    fn mk_file_entry(path: &str, mode: u32, required: bool) -> OwnershipEntry {
+        OwnershipEntry {
+            path: path.to_owned(),
+            expected_uid: current_uid(),
+            expected_gid: current_gid(),
+            expected_mode: mode,
+            kind: EntryKind::File,
+            required,
             recursive: false,
         }
     }
@@ -408,6 +542,8 @@ mod tests {
             expected_uid: current_uid(),
             expected_gid: current_gid(),
             expected_mode: 0o2775,
+            kind: EntryKind::Dir,
+            required: false,
             // Hostile override: operator (or test) declared recursive.
             // The carve-out MUST still hold.
             recursive: true,
@@ -439,6 +575,8 @@ mod tests {
             expected_uid: current_uid(),
             expected_gid: current_gid(),
             expected_mode: 0o0755,
+            kind: EntryKind::Dir,
+            required: true,
             recursive: true,
         };
 
@@ -462,6 +600,8 @@ mod tests {
             expected_uid: current_uid(),
             expected_gid: current_gid(),
             expected_mode: 0o0750,
+            kind: EntryKind::Dir,
+            required: true,
             recursive: true,
         };
         let drifts = check_ownership_matrix("vm1", base, &[entry]);
@@ -478,8 +618,15 @@ mod tests {
         let m = OwnershipMismatch::StatFailed {
             path: PathBuf::from("/x"),
             detail: "no".to_owned(),
+            not_found: true,
         };
         assert_eq!(m.kind(), "ownership-matrix-stat-failed");
+        let m = OwnershipMismatch::KindMismatch {
+            path: PathBuf::from("/x"),
+            expected_kind: "file".to_owned(),
+            actual_kind: "dir".to_owned(),
+        };
+        assert_eq!(m.kind(), "ownership-matrix-kind-mismatch");
         let m = OwnershipMismatch::Drift {
             path: PathBuf::from("/x"),
             expected: Ownership {
@@ -499,5 +646,141 @@ mod tests {
             },
         };
         assert_eq!(m.kind(), "ownership-matrix-drift");
+    }
+
+    #[test]
+    fn file_kind_happy_path_no_drift() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let f = base.join("sync.lock");
+        stdfs::write(&f, b"").unwrap();
+        stdfs::set_permissions(&f, stdfs::Permissions::from_mode(0o0600)).unwrap();
+
+        let drifts =
+            check_ownership_matrix("vm1", base, &[mk_file_entry("sync.lock", 0o0600, true)]);
+        assert!(drifts.is_empty(), "unexpected drift: {drifts:?}");
+    }
+
+    #[test]
+    fn file_kind_reasserts_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let f = base.join("sync.lock");
+        stdfs::write(&f, b"").unwrap();
+        // 0644 on disk but the entry expects 0600: file-kind must
+        // still reassert mode on the file inode.
+        stdfs::set_permissions(&f, stdfs::Permissions::from_mode(0o0644)).unwrap();
+
+        let drifts =
+            check_ownership_matrix("vm1", base, &[mk_file_entry("sync.lock", 0o0600, true)]);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        match &drifts[0] {
+            OwnershipMismatch::Drift { drift_reason, .. } => {
+                assert!(drift_reason.mode);
+            }
+            other => panic!("expected Drift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_kind_on_directory_is_kind_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // The path exists but is a directory while the entry is
+        // file-kind.
+        stdfs::create_dir(base.join("sync.lock")).unwrap();
+
+        let drifts =
+            check_ownership_matrix("vm1", base, &[mk_file_entry("sync.lock", 0o0600, true)]);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        match &drifts[0] {
+            OwnershipMismatch::KindMismatch {
+                expected_kind,
+                actual_kind,
+                ..
+            } => {
+                assert_eq!(expected_kind, "file");
+                assert_eq!(actual_kind, "dir");
+            }
+            other => panic!("expected KindMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dir_kind_on_file_is_kind_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        stdfs::write(base.join("state"), b"x").unwrap();
+
+        let drifts = check_ownership_matrix("vm1", base, &[mk_entry("state", 0o0750)]);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        match &drifts[0] {
+            OwnershipMismatch::KindMismatch {
+                expected_kind,
+                actual_kind,
+                ..
+            } => {
+                assert_eq!(expected_kind, "dir");
+                assert_eq!(actual_kind, "file");
+            }
+            other => panic!("expected KindMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn optional_missing_entry_is_silently_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        prepare(base, ".", 0o2770);
+
+        // Optional file-kind entry whose path is absent: NO mismatch
+        // is emitted at all (optional skips only ENOENT).
+        let drifts = check_ownership_matrix(
+            "vm1",
+            base,
+            &[mk_file_entry("does-not-exist", 0o0640, false)],
+        );
+        assert!(
+            drifts.is_empty(),
+            "optional-missing must be silent: {drifts:?}"
+        );
+    }
+
+    #[test]
+    fn required_missing_entry_reports_not_found_stat_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        prepare(base, ".", 0o2770);
+
+        let drifts =
+            check_ownership_matrix("vm1", base, &[mk_file_entry("sync.lock", 0o0600, true)]);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        match &drifts[0] {
+            OwnershipMismatch::StatFailed { not_found, .. } => {
+                assert!(*not_found, "required-missing must flag not_found");
+            }
+            other => panic!("expected StatFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_follow_symlink_at_leaf_is_kind_mismatch() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // A symlink standing in for a dir-kind entry must be reported,
+        // not traversed (no-follow `symlink_metadata`).
+        let real = base.join("real-dir");
+        stdfs::create_dir(&real).unwrap();
+        symlink(&real, base.join("state")).unwrap();
+
+        let drifts = check_ownership_matrix("vm1", base, &[mk_entry("state", 0o0750)]);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        match &drifts[0] {
+            OwnershipMismatch::KindMismatch { actual_kind, .. } => {
+                assert_eq!(actual_kind, "symlink");
+            }
+            other => panic!("expected KindMismatch for symlink, got {other:?}"),
+        }
     }
 }
