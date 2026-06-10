@@ -90,14 +90,16 @@ will introduce are:
   > is RETIRED. virtiofsd profiles now declare zero host
   > capabilities (`capabilities = []`), `requiresStartRoot = false`,
   > and a `userNamespace` block mapping in-NS UID/GID 0 to the
-  > per-VM runner principal. The broker pre-establishes the
+  > per-share principal. Normal VM shares map to the per-VM runner
+  > principal; the guest-control token share maps to the narrower
+  > `nixling-<vm>-gctlfs` principal. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
   > per-runner user NS. This is strictly stronger than v1.1.1: a
   > compromised virtiofsd cannot access host resources outside its
   > bind-mounted share, even with kernel exploits that bypass the
   > sandbox, because the host kernel sees its credentials as the
-  > unprivileged runner principal — there are no in-host caps to
+  > unprivileged share principal — there are no in-host caps to
   > escalate from.
 
 The first non-NixOS target is Ubuntu 24.04 LTS x86_64 with kernel

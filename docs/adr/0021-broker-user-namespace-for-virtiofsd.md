@@ -59,9 +59,12 @@ exec'ing virtiofsd. Concretely:
 
 1. The role profile (`minijail-profiles.nix`) declares
    `userNamespace = { hostUidForZero = <uid>; hostGidForZero = <gid>; }`
-   for the virtiofsd shares. The host UID is the
+   for the virtiofsd shares. Normal VM shares map to the
    `stablePrincipalId` for `nixling-<vm>-runner` (the same
-   ephemeral UID virtiofsd already runs as).
+   ephemeral UID virtiofsd already runs as). The guest-control token
+   share (`nl-gctl`) deliberately maps to the narrower
+   `nixling-<vm>-gctlfs` principal so it can read only the materialized
+   token and create only its dedicated runtime socket.
 2. `processes-json.nix` propagates this into the role's
    `RoleProfile.userNamespace` field (camelCase JSON shape).
 3. The broker's bundle resolver (`bundle_resolver.rs`) carries
@@ -96,8 +99,8 @@ exec'ing virtiofsd. Concretely:
    `CAP_DAC_OVERRIDE`, `CAP_SYS_ADMIN`, `CAP_SETUID`, or
    `CAP_DAC_READ_SEARCH` granted on the host.
 6. virtiofsd is invoked with `--sandbox=chroot
-   --inode-file-handles=never` (and `--readonly` for the
-   `/nix/store` share). Inside the user NS, `--sandbox=chroot`
+   --inode-file-handles=never` (and `--readonly` for every
+   read-only share, including `/nix/store` and `nl-gctl`). Inside the user NS, `--sandbox=chroot`
    works because the namespace gives virtiofsd
    `CAP_SYS_ADMIN` for `pivot_root(2)`.
 
@@ -124,6 +127,11 @@ This is **acceptable for ALL current virtiofsd shares**:
   about UID ownership on its host key — only its read mode.
 - `nl-hkeys` / `nl-meta`: same story — content semantics, not
   ownership semantics, are what matters.
+- `nl-gctl` guest-control token share: the share runs under the
+  dedicated `nixling-<vm>-gctlfs` principal, not the general runner
+  principal, and is read-only. Host activation grants that UID only
+  read/traverse access to `/var/lib/nixling/guest-control-<vm>/token`
+  plus its dedicated virtiofs socket directory.
 
 If a future share needs true UID-preserving semantics (e.g.,
 `/home/<user>` mounted into the guest with the host user's
