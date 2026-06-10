@@ -15,6 +15,7 @@ pub const MIB: usize = 1024 * KIB;
 pub const DEFAULT_CHUNK: usize = 256 * KIB;
 pub const TTRPC_MESSAGE_CAP: usize = 4 * MIB;
 pub const MAX_DEDUPE_ENTRIES: usize = 1024;
+pub const MAX_CONTROL_EVENTS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct SessionToken {
@@ -58,6 +59,7 @@ pub enum ProtocolError {
     ReceiveMessageTooLarge,
     EmptyRead,
     OutputClosed,
+    TerminalState,
     OutputCursorAhead {
         next: u64,
         got: u64,
@@ -480,6 +482,9 @@ impl ChunkedSession {
         data: &[u8],
     ) -> Result<u64, ProtocolError> {
         self.check_token(token)?;
+        if self.terminal_status.is_some() {
+            return Err(ProtocolError::TerminalState);
+        }
         if self.tty && stream == Stream::Stderr {
             return Err(ProtocolError::TtyStderrUnavailable);
         }
@@ -818,6 +823,9 @@ impl ChunkedSession {
         event: ControlEvent,
     ) -> Result<WriteDisposition, ProtocolError> {
         self.check_token(token)?;
+        if self.terminal_status.is_some() {
+            return Err(ProtocolError::TerminalState);
+        }
         if let Some(previous) = self.controls.get(&request_id) {
             if previous.seq == seq && previous.event == event {
                 return Ok(WriteDisposition::Duplicate);
@@ -835,6 +843,9 @@ impl ChunkedSession {
             .insert(request_id, AcceptedControl { seq, event });
         self.evict_control_dedupe_to_limit();
         self.events.push(OrderedControlEvent { seq, event });
+        if self.events.len() > MAX_CONTROL_EVENTS {
+            self.events.remove(0);
+        }
         Ok(WriteDisposition::Accepted)
     }
 
@@ -1924,10 +1935,11 @@ mod tests {
                 5,
                 ControlEvent::Resize(WindowSize { rows: 24, cols: 80 })
             ),
-            Err(ProtocolError::ControlSequenceGap {
-                expected: 4,
-                got: 5
-            })
+            Err(ProtocolError::TerminalState)
+        );
+        assert_eq!(
+            session.append_output(token, Stream::Stdout, b"late"),
+            Err(ProtocolError::TerminalState)
         );
         assert_eq!(
             session.events(),
@@ -1951,6 +1963,21 @@ mod tests {
         );
         assert_eq!(session.retained_output_bytes(), 4);
 
+        let mut bounded_events = ChunkedSession::new(14, MIB, MIB, 64 * KIB);
+        let bounded_token = bounded_events.token();
+        for idx in 1..=(MAX_CONTROL_EVENTS + 128) {
+            assert_eq!(
+                bounded_events.push_control(
+                    bounded_token,
+                    10_000 + idx as u64,
+                    idx as u64,
+                    ControlEvent::Cancel,
+                ),
+                Ok(WriteDisposition::Accepted)
+            );
+            assert!(bounded_events.events().len() <= MAX_CONTROL_EVENTS);
+        }
+
         let mut future_status = ChunkedSession::new(13, MIB, MIB, 64 * KIB);
         let future_status_token = future_status.token();
         future_status
@@ -1965,9 +1992,10 @@ mod tests {
             ),
             Err(ProtocolError::OutputCursorAhead { next: 4, got: 8 })
         );
-        future_status
-            .append_output(future_status_token, Stream::Stdout, b"more")
-            .unwrap();
+        assert_eq!(
+            future_status.append_output(future_status_token, Stream::Stdout, b"more"),
+            Err(ProtocolError::TerminalState)
+        );
         assert_eq!(
             future_status.visible_terminal_status_after_output_available(),
             Some(ExitStatus::ProtocolError),
