@@ -28,8 +28,8 @@ use nixling_core::bundle::Bundle;
 use nixling_core::bundle_resolver::{
     intent_id_activation, intent_id_gc_host, intent_id_hosts_host, intent_id_installer_host,
     intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_store_view,
-    intent_id_sysctl, intent_id_trust, intent_id_usbip_firewall, BundleResolver,
+    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
+    intent_id_trust, intent_id_usbip_firewall, BundleResolver,
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
@@ -2644,13 +2644,18 @@ struct VmStartRunner<'a> {
     resolver: &'a BundleResolver,
 }
 
+fn resolve_store_view_intent_for_vm<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+) -> Result<&'a nixling_core::bundle_resolver::ResolvedStoreViewIntent, String> {
+    resolver
+        .find_store_view_intent(vm)
+        .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
+}
+
 impl VmStartRunner<'_> {
     fn sync_store_view(&self, vm: &str) -> Result<(), String> {
-        let intent_id = intent_id_store_view(vm);
-        let intent = self
-            .resolver
-            .find_store_view_intent(&intent_id)
-            .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())?;
+        let intent = resolve_store_view_intent_for_vm(self.resolver, vm)?;
         match dispatch_broker_request(
             self.state,
             BrokerRequest::StoreSync(nixling_ipc::broker_wire::StoreSyncRequest {
@@ -6842,6 +6847,7 @@ mod broker_dispatch_tests {
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
     use std::os::fd::{AsRawFd, RawFd};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
@@ -6885,8 +6891,9 @@ mod broker_dispatch_tests {
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, vm_start_node_mode, ArtifactPaths, DaemonConfig,
-        PeerIdentity, PeerRole, ServerState, VmStartNodeMode, VM_RUNNER_ROLE_ID,
+        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm, vm_start_node_mode,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VmStartNodeMode,
+        VM_RUNNER_ROLE_ID,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -7153,6 +7160,86 @@ mod broker_dispatch_tests {
             processes_path,
             ..ArtifactPaths::default()
         }
+    }
+
+    #[test]
+    fn vm_start_store_sync_resolves_bare_vm_name() {
+        let root = test_daemon_state_dir("store-sync-resolves-bare-vm");
+        let artifacts = write_minimal_vm_start_bundle_artifacts(&root);
+        let bundle_dir = artifacts
+            .bundle_path
+            .parent()
+            .expect("bundle path parent")
+            .to_path_buf();
+        let host_path = bundle_dir.join("host.json");
+        fs::copy(host_fixture_path(), &host_path).expect("copy host fixture");
+        let closure_path = bundle_dir.join("closures/vm-a.json");
+        let fake_store = root.join("nix-store-mock");
+        fs::create_dir_all(&fake_store).expect("create fake store");
+        let toplevel = fake_store.join("aaaaaaaaaaaaaaaa-vm-a-system");
+        fs::create_dir_all(&toplevel).expect("create fake toplevel");
+        let db_dump = root.join("vm-a.db.dump");
+        fs::write(&db_dump, b"db").expect("write db dump");
+        write_json_file(
+            &closure_path,
+            &json!({
+                "schemaVersion": "v2",
+                "vm": "vm-a",
+                "toplevel": toplevel.display().to_string(),
+                "closurePaths": [toplevel.display().to_string()],
+                "dbDumpPath": db_dump.display().to_string(),
+                "declaredRunner": "/run/current-system/sw/bin/cloud-hypervisor",
+                "runnerParityPath": "/run/current-system/sw/bin/cloud-hypervisor",
+                "runnerParityOk": true,
+                "generation": {
+                    "hostGeneration": 7,
+                    "vmGeneration": "7",
+                    "sourceRevision": "test",
+                    "generatedAt": "2026-01-01T00:00:00Z"
+                }
+            }),
+        );
+        let mut bundle_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        bundle_json["schemaVersion"] = json!("v1");
+        bundle_json["hostPath"] = json!(host_path.display().to_string());
+        bundle_json["closures"] = json!([
+            { "vm": "vm-a", "path": "closures/vm-a.json" }
+        ]);
+        write_json_file(&artifacts.bundle_path, &bundle_json);
+        for path in [
+            &artifacts.bundle_path,
+            &artifacts.processes_path,
+            &bundle_dir.join("privileges.json"),
+            &host_path,
+            &closure_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod test bundle artifact");
+        }
+        let resolver = nixling_core::bundle_resolver::BundleResolver::load_with_policy(
+            &artifacts.bundle_path,
+            &nixling_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+        )
+        .expect("load resolver with store-view closure");
+
+        let intent = resolve_store_view_intent_for_vm(&resolver, "vm-a")
+            .expect("bare VM name resolves store-view intent");
+        assert_eq!(
+            intent.intent_id,
+            nixling_core::bundle_resolver::intent_id_store_view("vm-a")
+        );
+        assert!(
+            resolver
+                .find_store_view_intent(&nixling_core::bundle_resolver::intent_id_store_view(
+                    "vm-a"
+                ))
+                .is_none(),
+            "passing a pre-wrapped store-view id double-wraps and must not be used"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[allow(dead_code)]

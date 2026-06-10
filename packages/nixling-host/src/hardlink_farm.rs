@@ -617,6 +617,8 @@ fn link_closures_into_live(
             }
             let staged_path = stage_dir.join(file_name);
             hardlink_tree(source, &staged_path)?;
+            fsync_tree_bottom_up(&staged_path)?;
+            fsync_dir(&stage_dir)?;
             match std::fs::rename(&staged_path, &live_path) {
                 Ok(()) => {
                     counts.linked = counts.linked.saturating_add(1);
@@ -633,6 +635,9 @@ fn link_closures_into_live(
                 }
             }
         }
+        if counts.linked > 0 {
+            fsync_dir(&live_dir)?;
+        }
         Ok(())
     })();
 
@@ -642,6 +647,44 @@ fn link_closures_into_live(
     }
     let _ = std::fs::remove_dir_all(&stage_dir);
     Ok(counts)
+}
+
+fn fsync_dir(path: &Path) -> Result<(), HardlinkFarmError> {
+    let file = std::fs::File::open(path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("open for fsync: {e}"),
+    })?;
+    file.sync_all().map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("fsync: {e}"),
+    })
+}
+
+fn fsync_tree_bottom_up(path: &Path) -> Result<(), HardlinkFarmError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("stat before fsync: {e}"),
+    })?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: format!("read dir for fsync: {e}"),
+    })? {
+        let entry = entry.map_err(|e| HardlinkFarmError::Io {
+            path: path.display().to_string(),
+            detail: format!("read dir entry for fsync: {e}"),
+        })?;
+        let child = entry.path();
+        if std::fs::symlink_metadata(&child)
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            fsync_tree_bottom_up(&child)?;
+        }
+    }
+    fsync_dir(path)
 }
 
 /// Build (materialise) one generation of the ADR 0027 **split** store
@@ -1099,6 +1142,15 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                     std::fs::copy(source, destination).map_err(|ce| HardlinkFarmError::Io {
                         path: destination.display().to_string(),
                         detail: format!("copy fallback after EMLINK: {ce}"),
+                    })?;
+                    let copied =
+                        std::fs::File::open(destination).map_err(|ce| HardlinkFarmError::Io {
+                            path: destination.display().to_string(),
+                            detail: format!("open copy fallback for fsync: {ce}"),
+                        })?;
+                    copied.sync_all().map_err(|ce| HardlinkFarmError::Io {
+                        path: destination.display().to_string(),
+                        detail: format!("fsync copy fallback after EMLINK: {ce}"),
                     })?;
                     return Ok(());
                 }

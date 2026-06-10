@@ -305,18 +305,7 @@ fn build_store_view_via_namespace(
     let _ = writer.join();
 
     if output.status.success() {
-        if let Some(line) = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-        {
-            if let Ok(counts) = serde_json::from_str::<StoreViewLinkCounts>(line) {
-                return Ok(counts);
-            }
-        }
-        // Success exit but no parseable counts: treat as a complete
-        // build with unknown accounting rather than failing the sync.
-        return Ok(StoreViewLinkCounts::default());
+        return parse_store_view_counts(&output.stdout, farm_root);
     }
 
     if let Some(line) = String::from_utf8_lossy(&output.stdout)
@@ -339,6 +328,28 @@ fn build_store_view_via_namespace(
                 .unwrap_or_else(|| "signal".to_owned()),
             String::from_utf8_lossy(&output.stderr).trim(),
         ),
+    })
+}
+
+fn parse_store_view_counts(
+    stdout: &[u8],
+    farm_root: &Path,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    if let Some(line) = String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        return serde_json::from_str::<StoreViewLinkCounts>(line).map_err(|err| {
+            HardlinkFarmError::Io {
+                path: farm_root.display().to_string(),
+                detail: format!("parse store-view build counts: {err}"),
+            }
+        });
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "store-view build helper exited successfully without link counts".to_owned(),
     })
 }
 
@@ -397,5 +408,15 @@ mod tests {
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("|| true"));
         assert!(STORE_VIEW_NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view"));
+    }
+
+    #[test]
+    fn successful_helper_without_counts_fails_closed() {
+        let err = parse_store_view_counts(b"", Path::new("/tmp/store-view"))
+            .expect_err("missing helper counts must not become a success-shaped zero count");
+        assert!(
+            err.to_string().contains("without link counts"),
+            "unexpected error: {err}"
+        );
     }
 }
