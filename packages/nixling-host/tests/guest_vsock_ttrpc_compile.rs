@@ -2,11 +2,11 @@
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux_vsock_ttrpc {
+    use tokio::net::UnixStream;
     use ttrpc::r#async::{
         transport::{Listener, Socket},
         Server,
     };
-    use tokio::net::UnixStream;
 
     const GUEST_CONTROL_PORT: u32 = 14318;
 

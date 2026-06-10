@@ -99,7 +99,7 @@ nixling exec <vm> [--interactive|-i] [--tty|-t] [--detach|-d]
   [--env-file <path>] [--timeout <duration>]
   -- <argv...>
 
-nixling vm exec run <vm> [same flags] -- <argv...>
+nixling vm exec run <vm> [same flags] [--json with --detach only] -- <argv...>
 nixling vm exec inspect <vm> <exec-id> [--json]
 nixling vm exec logs <vm> <exec-id> [--stdout] [--stderr] [--json]
 nixling vm exec attach <vm> <exec-id>

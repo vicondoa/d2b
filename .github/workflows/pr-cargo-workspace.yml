@@ -37,6 +37,8 @@ jobs:
                 CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test &&
                 CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --features layer1-bootstrap) &&
               cd .. &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --manifest-path proofs/chunked-stdio-conformance/Cargo.toml --all-targets -- -D warnings &&
               CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo clippy --manifest-path proofs/w0-ch-connect-proof/Cargo.toml --all-targets -- -D warnings &&
               CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/w0-ch-connect-proof/Cargo.toml
             ' -- "$channel"
