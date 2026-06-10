@@ -38,7 +38,8 @@ W0 protocol.
 
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
-| ADR gate | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0026 added, then accepted after feasibility evidence and panel review. |
+| ADR introduced | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0026 added with the feasibility gate. |
+| ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0026 accepted after feasibility evidence and panel review findings were addressed. |
 | CH CONNECT transport | integrated W0 decision branch | `6797def8a1916966b4262d70f2381ce5845a6e8f` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque u32 ACK, not used as a buffer limit, malformed/refused ACK failures surface only bounded error categories, handshake timeout is bounded, and post-OK half-close preserves guest output drain. |
 | Static guest build | `guest-control-w0-static` | `a085e68be5bfa9ed19fcb3441b4f914c7120ac69` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `nixling-guestd`/`nixling-userd` artifacts remain a follow-up implementation gate. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf881a0aa4b7344b2005290248533a1576605` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
@@ -85,11 +86,14 @@ the implementation harness before guest-control ships:
   CID, socket identity, and HMAC transcript returns a typed
   `stale-guest-control-socket`/`stale-session` error and remediation to
   restart or refresh the VM state.
-- **guest listener absent / transport unavailable:** CH refusal, EOF,
+- **guest listener absent:** a missing guestd capability or explicit
+  listener-missing health result maps to bounded Health state
+  `listener-absent` with reason `listener-absent`.
+- **transport unavailable during CONNECT:** CH refusal, EOF,
   malformed/overlong ACK, transport I/O error, or timeout during
-  `CONNECT 14318` maps to the bounded Health state
-  `transport-unreachable` with the matching bounded reason enum, not
-  fallback to SSH for generic exec and not a successful readiness result.
+  `CONNECT 14318` maps to bounded Health state `transport-unreachable`
+  with the matching bounded reason enum, not fallback to SSH for generic
+  exec and not a successful readiness result.
 
 No host proxy daemon or per-VM host unit is required.
 
