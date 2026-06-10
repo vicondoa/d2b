@@ -14,11 +14,11 @@ guest-control token share is present only when
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `corp-vm-virtiofs-ro-store.sock`         | `/nix/store`                                          | RO   |
-| `nl-meta`     | `corp-vm-virtiofs-nl-meta.sock`          | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
-| `nl-hkeys`    | `corp-vm-virtiofs-nl-hkeys.sock`         | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
-| `nl-ssh-host` | `corp-vm-virtiofs-nl-ssh-host.sock`      | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`         | RW   |
-| `nl-gctl`     | `corp-vm/guest-control/nl-gctl.sock`     | `/var/lib/nixling/guest-control-corp-vm`              | RO   |
+| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | `/nix/store`                                          | RO   |
+| `nl-meta`     | `/run/nixling/vms/corp-vm/nl-meta.sock`  | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
+| `nl-hkeys`    | `/run/nixling/vms/corp-vm/nl-hkeys.sock` | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
+| `nl-ssh-host` | `/run/nixling/vms/corp-vm/nl-ssh-host.sock` | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`      | RW   |
+| `nl-gctl`     | `/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock` | `/var/lib/nixling/guest-control-corp-vm` | RO |
 
 CH connects to each socket via the `--fs socket=<path>,tag=<tag>`
 flag (see `ChArgvInput.fs_shares` in

@@ -8,6 +8,12 @@ network. Instead it evaluates the existing `examples/minimal` host and
 builds the microvm.nix runner derivation, then inspects the generated
 shell scripts.
 
+This document is historical runner-shape evidence for the retired
+microvm.nix runner. It is not the current daemon-owned virtiofsd parity
+oracle. Current virtiofsd argv and share semantics are documented in
+[`store-virtiofs.md`](./store-virtiofs.md) and emitted by
+`nixos-modules/processes-json.nix`.
+
 `examples/minimal` is otherwise unchanged, but today its headless VM
 still defaults to microvm.nix's non-Cloud-Hypervisor backend. The
 portability plan selects Cloud Hypervisor as the first daemon backend, so
