@@ -77,7 +77,8 @@ Request fields:
 - `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
 - `detached`: bool. Detached execs persist bounded logs after caller
   disconnect.
-- `initial_terminal_size`: optional `{rows, cols}` required for `tty`.
+- `initial_terminal_size`: optional `{rows, cols}` required for `tty`, with
+  each dimension in the Linux `winsize` range `1..65535`.
 - `output_policy`: `{max_chunk_bytes, max_stdout_log_bytes,
   max_stderr_log_bytes, slow_consumer_timeout_ms, wait_timeout_ms}`. The
   server clamps each value to the VM capability maximum.
@@ -801,8 +802,9 @@ blocks local input reading or uses terminal flow control until retry is
 accepted.
 
 `--tty` allocates a PTY, sends initial geometry in `ExecCreate`, sends
-resizes as sequenced `TtyWinResize` calls, merges output through stdout,
-and restores local terminal raw mode on every return path.
+resizes as sequenced `TtyWinResize` calls with rows/cols in `1..65535`,
+merges output through stdout, and restores local terminal raw mode on every
+return path.
 
 ### Detached exec
 

@@ -193,6 +193,13 @@ def ref_name(prop):
     return None
 
 
+def deref(prop):
+    referenced = ref_name(prop)
+    if referenced:
+        return defs.get(referenced, {})
+    return prop
+
+
 def assert_scalar_shape(proto_name, field, prop):
     core = schema_core(prop)
     proto_type = field["type"]
@@ -207,7 +214,15 @@ def assert_scalar_shape(proto_name, field, prop):
         return
 
     if proto_type == "bytes":
-        if core.get("type") != "array" or schema_core(core.get("items", {})).get("type") != "integer":
+        core = deref(core)
+        item = schema_core(core.get("items", {}))
+        if (
+            core.get("type") != "array"
+            or item.get("type") != "integer"
+            or item.get("format") != "uint8"
+            or item.get("minimum") != 0.0
+            or item.get("maximum") != 255.0
+        ):
             raise SystemExit(f"{proto_name}.{field['name']} bytes field is not byte-array shaped in schema")
         return
 

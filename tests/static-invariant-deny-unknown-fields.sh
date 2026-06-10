@@ -200,6 +200,29 @@ def assert_guest_control_chunk_bounds():
                     file=sys.stderr,
                 )
                 sys.exit(10)
+        if field == "data":
+            item = resolve(prop.get("items", {}))
+            if item.get("format") != "uint8" or item.get("minimum") != 0.0 or item.get("maximum") != 255.0:
+                print(f"{definition}.{field} byte item bounds drifted: {item}", file=sys.stderr)
+                sys.exit(11)
+
+
+def assert_guest_control_terminal_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    checks = (
+        ("TerminalSize", "rows"),
+        ("TerminalSize", "cols"),
+        ("TtyWinResizeRequest", "rows"),
+        ("TtyWinResizeRequest", "cols"),
+    )
+    for definition, field in checks:
+        node = resolve(schema.get("definitions", {}).get(definition, {}))
+        prop = resolve(node.get("properties", {}).get(field, {}))
+        if prop.get("minimum") != 1.0 or prop.get("maximum") != 65535.0:
+            print(f"{definition}.{field} terminal geometry bounds drifted: {prop}", file=sys.stderr)
+            sys.exit(12)
 
 
 if valid_path is None:
@@ -233,6 +256,7 @@ if not any("Additional properties" in err.message or "Unevaluated properties" in
 assert_nested_unknowns_rejected()
 assert_guest_control_string_bounds()
 assert_guest_control_chunk_bounds()
+assert_guest_control_terminal_bounds()
 PY
 )
 

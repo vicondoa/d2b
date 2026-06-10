@@ -592,13 +592,7 @@
       ],
       "properties": {
         "data": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 1048576
+          "$ref": "#/definitions/GuestOutputBytes"
         },
         "droppedBytes": {
           "type": "integer",
@@ -1051,6 +1045,17 @@
       "maxLength": 128,
       "minLength": 1
     },
+    "GuestOutputBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 1048576,
+      "minItems": 0
+    },
     "GuestReadinessContract": {
       "type": "object",
       "required": [
@@ -1097,6 +1102,17 @@
       "type": "string",
       "maxLength": 32,
       "minLength": 1
+    },
+    "GuestStdinBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 1048576,
+      "minItems": 1
     },
     "GuestSubsystem": {
       "type": "string",
@@ -1448,13 +1464,7 @@
       ],
       "properties": {
         "data": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 1048576
+          "$ref": "#/definitions/GuestOutputBytes"
         },
         "droppedBytes": {
           "type": "integer",
@@ -1538,12 +1548,14 @@
         "cols": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "maximum": 65535.0,
+          "minimum": 1.0
         },
         "rows": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "maximum": 65535.0,
+          "minimum": 1.0
         }
       },
       "additionalProperties": false
@@ -1644,7 +1656,8 @@
         "cols": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "maximum": 65535.0,
+          "minimum": 1.0
         },
         "controlSeq": {
           "type": "integer",
@@ -1657,7 +1670,8 @@
         "rows": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "maximum": 65535.0,
+          "minimum": 1.0
         }
       },
       "additionalProperties": false
@@ -1691,14 +1705,7 @@
           "type": "boolean"
         },
         "data": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0.0
-          },
-          "maxItems": 1048576,
-          "minItems": 1
+          "$ref": "#/definitions/GuestStdinBytes"
         },
         "metadata": {
           "$ref": "#/definitions/GuestExecRequestMetadata"

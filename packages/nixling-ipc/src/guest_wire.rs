@@ -66,6 +66,61 @@ macro_rules! bounded_string {
     };
 }
 
+macro_rules! bounded_bytes {
+    ($(#[$meta:meta])* $name:ident, $min:literal, $max:literal) => {
+        $(#[$meta])*
+        #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub Vec<u8>);
+
+        impl JsonSchema for $name {
+            fn schema_name() -> String {
+                stringify!($name).to_owned()
+            }
+
+            fn json_schema(
+                _gen: &mut schemars::gen::SchemaGenerator,
+            ) -> schemars::schema::Schema {
+                let item = schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        schemars::schema::InstanceType::Integer,
+                    ))),
+                    format: Some("uint8".to_owned()),
+                    number: Some(Box::new(schemars::schema::NumberValidation {
+                        minimum: Some(0.0),
+                        maximum: Some(255.0),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                });
+
+                schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+                    instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        schemars::schema::InstanceType::Array,
+                    ))),
+                    array: Some(Box::new(schemars::schema::ArrayValidation {
+                        items: Some(schemars::schema::SingleOrVec::Single(Box::new(item))),
+                        min_items: Some($min),
+                        max_items: Some($max),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
+            }
+        }
+    };
+}
+
+bounded_bytes! {
+    /// Stdin payload bytes.
+    GuestStdinBytes, 1, 1048576
+}
+
+bounded_bytes! {
+    /// Stdout/stderr payload bytes.
+    GuestOutputBytes, 0, 1048576
+}
+
 bounded_string! {
     /// Guest-control schema version token.
     GuestSchemaVersion, 32
@@ -487,7 +542,9 @@ pub struct EnvVar {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalSize {
+    #[schemars(range(min = 1, max = 65535))]
     pub rows: u32,
+    #[schemars(range(min = 1, max = 65535))]
     pub cols: u32,
 }
 
@@ -577,8 +634,7 @@ pub struct ExecLogsResponse {
     pub stream: OutputStream,
     pub offset: u64,
     pub end_offset: u64,
-    #[schemars(length(max = 1048576))]
-    pub data: Vec<u8>,
+    pub data: GuestOutputBytes,
     pub next_offset: u64,
     pub eof: bool,
     pub start_offset: u64,
@@ -592,8 +648,7 @@ pub struct ExecLogsResponse {
 pub struct WriteStdinRequest {
     pub metadata: GuestExecRequestMetadata,
     pub offset: u64,
-    #[schemars(length(min = 1, max = 1048576))]
-    pub data: Vec<u8>,
+    pub data: GuestStdinBytes,
     pub close_after: bool,
     pub client_deadline_ms: Option<u64>,
 }
@@ -628,8 +683,7 @@ pub struct ReadOutputResponse {
     pub stream: OutputStream,
     pub offset: u64,
     pub end_offset: u64,
-    #[schemars(length(max = 1048576))]
-    pub data: Vec<u8>,
+    pub data: GuestOutputBytes,
     pub next_offset: u64,
     pub eof: bool,
     pub start_offset: u64,
@@ -660,7 +714,9 @@ pub struct CloseStdinResponse {
 pub struct TtyWinResizeRequest {
     pub metadata: GuestExecRequestMetadata,
     pub control_seq: u64,
+    #[schemars(range(min = 1, max = 65535))]
     pub rows: u32,
+    #[schemars(range(min = 1, max = 65535))]
     pub cols: u32,
 }
 
