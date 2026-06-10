@@ -45,8 +45,9 @@ The tests prove:
 - Process exit status is recorded separately from client controls, is
   visible only after preceding output is retained, delivered/acknowledged,
   or explicitly dropped with cursor accounting, rejects future
-  ACK/accounting cursors, stays hidden after unaccounted loss, and maps
-  signal exits to shell-style `128 + signal` status codes.
+  ACK/accounting cursors, turns unaccounted pre-terminal output loss into
+  a visible protocol-error terminal state, and maps signal exits to
+  shell-style `128 + signal` status codes.
 
 SSH compatibility is intentionally design-level: existing SSH-backed commands
 such as `config sync` and `vm konsole` continue using their current SSH path

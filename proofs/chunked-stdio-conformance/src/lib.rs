@@ -117,6 +117,7 @@ impl Signal {
 pub enum ExitStatus {
     Code(i32),
     Signal { signal: Signal, status_code: i32 },
+    ProtocolError,
 }
 
 impl ExitStatus {
@@ -545,7 +546,13 @@ impl ChunkedSession {
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
         self.log_mut(stream)
-            .evict_undelivered_through(through_offset)
+            .evict_undelivered_through(through_offset)?;
+        self.terminal_status = Some(TerminalSnapshot {
+            status: ExitStatus::ProtocolError,
+            stdout_end: 0,
+            stderr_end: 0,
+        });
+        Ok(())
     }
 
     pub fn evict_accounted_output(
@@ -879,9 +886,6 @@ impl ChunkedSession {
     }
 
     fn evict_stdin_dedupe(&mut self) {
-        let earliest = self.stdin.base_offset;
-        self.writes
-            .retain(|_, accepted| accepted.offset + accepted.len as u64 > earliest);
         self.evict_stdin_dedupe_to_limit();
     }
 
@@ -1069,6 +1073,16 @@ mod tests {
         }
         assert_eq!(delivered, stdin_pattern(0, total));
         assert_eq!(session.stdin_buffered_bytes(), 0);
+        let last_offset = offset - DEFAULT_CHUNK as u64;
+        let last_chunk = stdin_pattern(last_offset, DEFAULT_CHUNK);
+        assert_eq!(
+            session.write_stdin(token, write_id - 1, last_offset, &last_chunk),
+            Ok(WriteStdinResponse {
+                next_offset: offset,
+                disposition: WriteDisposition::Duplicate,
+            }),
+            "lost-response retry must stay idempotent after child stdin drains"
+        );
 
         assert!(matches!(
             session.write_stdin(token, write_id, offset + 1, b"gap"),
@@ -1859,8 +1873,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             evicted.visible_terminal_status_after_output_available(),
-            None,
-            "terminal status must stay hidden if pre-terminal output was evicted before delivery"
+            Some(ExitStatus::ProtocolError),
+            "unaccounted pre-terminal output loss must produce a visible protocol error"
+        );
+        evicted
+            .ack_output(evicted_token, Stream::Stdout, 4)
+            .unwrap();
+        assert_eq!(
+            evicted.visible_terminal_status_after_output_available(),
+            Some(ExitStatus::ProtocolError),
+            "later ACKs cannot retroactively expose the original remote status after unaccounted loss"
         );
     }
 }

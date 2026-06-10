@@ -129,6 +129,13 @@ through `ExecLogs`. Attached CLI flows use `visible_terminal_status` for
 process exit and local raw-mode cleanup once their read cursor has consumed
 or can still read the preceding output.
 
+If guestd loses pre-terminal output without delivering it to the attached
+reader or representing it through detached `start_offset`/`dropped_bytes`
+accounting, the exec transitions to terminal `protocol-error` with bounded
+kind `output-lost`. This wakes waiters/readers and lets the CLI restore
+local terminal state with a typed nixling error instead of polling
+forever.
+
 ### `ExecWait`
 
 Request fields:

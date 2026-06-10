@@ -473,8 +473,9 @@ It validates:
   typed rejection for mismatched duplicate IDs;
 - process exit status recorded separately from client controls, visible
   only after preceding output is retained, delivered/acknowledged, or
-  explicitly dropped with cursor accounting, with signal exits mapped to
-  shell-style `128 + signal` status codes.
+  explicitly dropped with cursor accounting, with unaccounted output loss
+  mapped to a visible protocol-error terminal state and signal exits mapped
+  to shell-style `128 + signal` status codes.
 
 SSH compatibility remains design-level rather than a broad executable
 prototype:
