@@ -453,5 +453,15 @@ more implementation risk around ttRPC stream buffering.
 - Keep ADR 0026 aligned with the selected chunked-stdio outcome.
 - Add generated-code postprocessing to the implementation plan.
 - Keep guest binaries static and first-party unsafe-free.
+- Carry the retained stdout/stderr storage security contract into the
+  implementation plan: guest-local runtime/state roots, restrictive
+  ownership and modes, symlink-safe traversal, per-user isolation,
+  per-exec/per-user/VM quotas, TTL cleanup, and no host-visible retained
+  bytes outside explicit logs responses.
+- Add canary-based redaction tests for logs, metrics, spans, health, and
+  CLI JSON across argv, command lines, cwd, credential paths, HMAC/MAC and
+  transcript material, session/exec/request IDs in telemetry,
+  guest-derived free-form errors, stdout/stderr payloads, tokens,
+  environment values, socket paths, and debug-formatted failures.
 - Preserve old-running-VM SSH compatibility until the documented removal
   gate.

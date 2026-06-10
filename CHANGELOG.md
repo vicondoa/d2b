@@ -24,6 +24,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Guest-control retained-log security requirements and canary-based
+  redaction test coverage for stdout/stderr logs, telemetry, health, and
+  CLI JSON.
+
 - `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
   duplex-stream exec I/O design using nixling `TerminalFrame` messages,
   explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
