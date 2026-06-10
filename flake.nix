@@ -44,6 +44,41 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        rustPackagesSrc = pkgs.runCommand "nixling-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages}/. $out/packages/
+        '';
+        cargoLock = {
+          lockFile = ./packages/Cargo.lock;
+          outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+        };
+        guestStaticPackage = packageName: binName:
+          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+            pname = "${binName}-static";
+            version = "0.0.0-bootstrap";
+            src = rustPackagesSrc;
+            sourceRoot = "nixling-rust-src/packages";
+            inherit cargoLock;
+            cargoBuildFlags = [ "--package" packageName "--bin" binName ];
+            doCheck = false;
+            RUSTC_WRAPPER = "";
+            SCCACHE_DIR = "";
+            nativeBuildInputs = [ pkgs.binutils ];
+            postInstall = ''
+              bin="$out/bin/${binName}"
+              test -x "$bin"
+              if readelf -l "$bin" | grep -q 'Requesting program interpreter'; then
+                echo "${binName}: unexpected ELF interpreter" >&2
+                readelf -l "$bin" >&2
+                exit 1
+              fi
+              if readelf -d "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
+                echo "${binName}: unexpected dynamic dependency" >&2
+                readelf -d "$bin" >&2
+                exit 1
+              fi
+            '';
+          };
       in {
         manpages = pkgs.runCommand "nixling-manpages" { } ''
           install -Dm644 ${./docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
@@ -55,6 +90,11 @@
           install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
         '';
+
+        nixling-guestd-static = guestStaticPackage "nixling-guestd" "nixling-guestd";
+        nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
+        nixling-exec-runner-static =
+          guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
       });
 
       apps = forAllSystems (system: { });
@@ -216,6 +256,30 @@
             runHook postInstall
           '';
         };
+
+        guest-static-elf = pkgs.runCommand "nixling-guest-static-elf" {
+          nativeBuildInputs = [ pkgs.binutils ];
+        } ''
+          for bin in \
+            ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
+            ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
+            ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
+          do
+            test -x "$bin"
+            if readelf -l "$bin" | grep -q 'Requesting program interpreter'; then
+              echo "$bin: unexpected ELF interpreter" >&2
+              readelf -l "$bin" >&2
+              exit 1
+            fi
+            if readelf -d "$bin" 2>/dev/null | grep -q '(NEEDED)'; then
+              echo "$bin: unexpected dynamic dependency" >&2
+              readelf -d "$bin" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$out"
+          echo ok > "$out/guest-static-elf"
+        '';
 
         # Real cargo-deny gate: bans, licenses, and sources for both
         # the main workspace and the broker workspace.  Advisory
