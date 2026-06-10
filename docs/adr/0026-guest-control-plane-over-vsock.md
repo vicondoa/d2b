@@ -137,9 +137,9 @@ over unary ttRPC calls**:
 
 1. `WriteStdin` transfers bounded stdin chunks with explicit byte
    offsets, idempotency metadata, and deadlines.
-2. `ReadStdout` and `ReadStderr` read bounded chunks from server-owned
-   append-only output logs at explicit byte offsets. In TTY mode, PTY
-   output is merged into stdout and stderr reads return a typed
+2. `ReadOutput(stream=stdout|stderr)` reads bounded chunks from
+   server-owned append-only output logs at explicit byte offsets. In TTY
+   mode, PTY output is merged into stdout and stderr reads return a typed
    unavailable error.
 3. `CloseStdin` half-closes stdin independently of output EOF and process
    exit.
@@ -405,9 +405,9 @@ paths, guest-derived free-form errors, stdout/stderr bytes, transcript
 bytes, tokens, MACs, or credential paths.
 
 Retained stdout/stderr bytes are not observability data. They are command
-payloads and may appear only in the explicit `ReadStdout`, `ReadStderr`,
-`ExecLogs`, attached CLI stdout/stderr, or an operator-requested output
-file. They must not be duplicated into host daemon state, broker audit
+payloads and may appear only in the explicit `ReadOutput`, `ExecLogs`,
+attached CLI stdout/stderr, or an operator-requested output file. They
+must not be duplicated into host daemon state, broker audit
 records, health responses, traces, metrics, structured logs, bundle
 manifests, or host sidecar directories. JSON responses that are not the
 explicit logs API carry offsets, counters, booleans, bounded error kinds,

@@ -23,7 +23,7 @@ Select **Kata-style chunked stdio RPCs** for exec I/O:
 
 - `ExecCreate`, `ExecInspect`, `ExecWait`, `ExecLogs`, `ExecSignal`,
   resize, and cancellation remain unary ttRPC/protobuf calls.
-- `WriteStdin`, `ReadStdout`, `ReadStderr`, and `CloseStdin` move
+- `WriteStdin`, `ReadOutput(stream=stdout|stderr)`, and `CloseStdin` move
   bounded byte chunks with explicit offsets, deadlines, and typed
   backpressure/slow-consumer errors.
 - Attached CLI exec polls stdout/stderr with short long-poll reads;
@@ -433,8 +433,8 @@ Default per-VM caps:
 | --- | ---: | --- |
 | Concurrent exec sessions | 32 per VM | `exec-capacity-exceeded`; no process is spawned. |
 | Attached exec sessions | 8 per VM | `exec-attach-capacity-exceeded`; detached execs continue. |
-| Pending `ReadStdout` waits | 1 per exec per connection, 64 per VM | New duplicate wait is `superseded-read-wait` or `read-wait-capacity-exceeded`. |
-| Pending `ReadStderr` waits | 1 per exec per connection, 64 per VM | Same as stdout; TTY mode returns `tty-stderr-unavailable`. |
+| Pending `ReadOutput(stdout)` waits | 1 per exec per connection, 64 per VM | New duplicate wait is `superseded-read-wait` or `read-wait-capacity-exceeded`. |
+| Pending `ReadOutput(stderr)` waits | 1 per exec per connection, 64 per VM | Same as stdout; TTY mode returns `tty-stderr-unavailable`. |
 | Pending `ExecWait` calls | 1 per exec per connection, 64 per VM | Duplicate wait is superseded or rejected with `wait-capacity-exceeded`. |
 | Long-poll timeout | 100 ms default, 1 s hard max | Server clamps higher requests. |
 | ttRPC request rate | 200 RPC/s per connection, 1000 RPC/s per VM burst | Excess returns `rate-limited` with bounded retry-after. |
@@ -461,7 +461,7 @@ cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml
 It validates:
 
 - 64 MiB stdout and 64 MiB stderr byte-exact delivery through
-  independent `ReadStdout`/`ReadStderr` offset cursors;
+  independent `ReadOutput(stream=...)` offset cursors;
 - 16 MiB slow stdin through `WriteStdin`, including exact-offset
   appends, same-request duplicate replay acceptance, different-request
   stale replay rejection, offset-gap rejection, stale-data rejection, and

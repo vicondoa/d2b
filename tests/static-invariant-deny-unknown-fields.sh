@@ -148,6 +148,9 @@ def assert_guest_control_string_bounds():
         return
 
     expected = {
+        "GuestSchemaVersion": 32,
+        "GuestConnectRequestLine": 64,
+        "GuestConnectAckLine": 64,
         "GuestVmId": 128,
         "RequestId": 128,
         "ExecId": 128,

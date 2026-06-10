@@ -109,7 +109,7 @@
       "$ref": "#/definitions/ReadOutputRequest"
     },
     "schemaVersion": {
-      "type": "string"
+      "$ref": "#/definitions/GuestSchemaVersion"
     },
     "transport": {
       "$ref": "#/definitions/GuestTransportSchema"
@@ -803,11 +803,21 @@
         "signals"
       ]
     },
+    "GuestConnectAckLine": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
     "GuestConnectAckValue": {
       "type": "string",
       "enum": [
         "opaque-local-port"
       ]
+    },
+    "GuestConnectRequestLine": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
     },
     "GuestControlError": {
       "type": "object",
@@ -1021,10 +1031,10 @@
           "$ref": "#/definitions/GuestConnectAckValue"
         },
         "okAck": {
-          "type": "string"
+          "$ref": "#/definitions/GuestConnectAckLine"
         },
         "requestLine": {
-          "type": "string"
+          "$ref": "#/definitions/GuestConnectRequestLine"
         }
       },
       "additionalProperties": false
@@ -1081,6 +1091,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "GuestSchemaVersion": {
+      "type": "string",
+      "maxLength": 32,
+      "minLength": 1
     },
     "GuestSubsystem": {
       "type": "string",

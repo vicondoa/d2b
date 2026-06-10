@@ -67,6 +67,21 @@ macro_rules! bounded_string {
 }
 
 bounded_string! {
+    /// Guest-control schema version token.
+    GuestSchemaVersion, 32
+}
+
+bounded_string! {
+    /// Cloud Hypervisor CONNECT request line shape.
+    GuestConnectRequestLine, 64
+}
+
+bounded_string! {
+    /// Cloud Hypervisor OK acknowledgement line shape.
+    GuestConnectAckLine, 64
+}
+
+bounded_string! {
     /// VM identity bound into guest-control auth transcripts.
     GuestVmId, 128
 }
@@ -167,7 +182,7 @@ pub enum GuestIdentityBinding {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestControlSchema {
-    pub schema_version: String,
+    pub schema_version: GuestSchemaVersion,
     pub protocol_version: u32,
     pub transport: GuestTransportSchema,
     pub limits: GuestEffectiveLimits,
@@ -221,8 +236,8 @@ pub enum GuestTransportKind {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestHostConnectShape {
-    pub request_line: String,
-    pub ok_ack: String,
+    pub request_line: GuestConnectRequestLine,
+    pub ok_ack: GuestConnectAckLine,
     pub ack_value: GuestConnectAckValue,
 }
 

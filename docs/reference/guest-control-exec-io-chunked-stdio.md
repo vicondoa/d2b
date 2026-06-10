@@ -184,6 +184,7 @@ Response fields:
 - `next_offset`;
 - `stdin_state`;
 - `blocked_ms`;
+- `disposition`: `accepted`, `duplicate`, or `rejected`;
 - `error`, populated for typed retryable failures such as
   `stdin-offset-mismatch`, `stdin-backpressure`, `request-id-conflict`, and
   `stdin-byte-budget-exhausted`.
@@ -233,7 +234,7 @@ Request fields:
 
 Response fields:
 
-- `stdin_state` and `final_offset`.
+- `stdin_state`, `final_offset`, and `disposition`;
 - `error`, populated for typed failures such as `stdin-closed`,
   `request-id-conflict`, or `stdin-offset-mismatch`.
 
@@ -601,10 +602,9 @@ require a future explicit API flag.
 ### Signal
 
 `ExecSignal` includes a numeric signal and a `target` enum:
-`foreground_process_group` for TTY, `process_tree` for non-TTY, and
-`root_process` for explicit advanced use if later approved. The default
-CLI termination behavior maps to foreground process group in TTY and
-process tree in non-TTY. A signal accepted after process exit is
+`foreground_process_group` for TTY and `process_tree` for non-TTY. The
+default CLI termination behavior maps to foreground process group in TTY
+and process tree in non-TTY. A signal accepted after process exit is
 idempotent no-op only for duplicate `request_id`; otherwise it returns
 `exec-already-exited`.
 
