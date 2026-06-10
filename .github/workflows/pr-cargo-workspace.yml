@@ -35,5 +35,8 @@ jobs:
               CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --workspace &&
               (cd nixling-priv-broker &&
                 CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test &&
-                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --features layer1-bootstrap)
+                CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --features layer1-bootstrap) &&
+              cd .. &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml &&
+              CARGO_BUILD_RUSTC_WRAPPER="" rustup run "$channel" cargo test --manifest-path proofs/w0-ch-connect-proof/Cargo.toml
             ' -- "$channel"
