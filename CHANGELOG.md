@@ -31,6 +31,11 @@ deprecations ship one minor release before removal.
   labels, bounded string identifiers/payload metadata, oneof-style terminal
   status, structured stdio error results, and descriptor-shape drift checks.
 
+- Initial guest-side Rust crates for the guest control plane:
+  `nixling-guestd`, `nixling-userd`, and `nixling-exec-runner`, with
+  fail-closed binaries, fakeable daemon/user/session traits, and bounded
+  runner input validation.
+
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.

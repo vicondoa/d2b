@@ -921,6 +921,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-exec-runner"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "nixling-guestd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-ipc",
+]
+
+[[package]]
 name = "nixling-host"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -954,6 +965,13 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nixling-userd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-ipc",
 ]
 
 [[package]]

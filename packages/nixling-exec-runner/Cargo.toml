@@ -1,0 +1,12 @@
+[package]
+name = "nixling-exec-runner"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+

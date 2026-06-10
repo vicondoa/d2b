@@ -1,0 +1,13 @@
+[package]
+name = "nixling-guestd"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+
