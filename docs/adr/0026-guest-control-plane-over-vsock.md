@@ -205,7 +205,8 @@ preference alone.
 
 ## Terminal conformance matrix
 
-Every terminal transport candidate must pass the same matrix:
+Every terminal transport candidate must pass the W0 transport portion of
+the same matrix:
 
 - stdin open/close behavior, including EOF and TTY Ctrl-D distinction;
 - stdout/stderr separation in non-TTY mode;
@@ -230,12 +231,15 @@ Every terminal transport candidate must pass the same matrix:
   at the selected transport's available cap, and bounded post-decode
   allocation with explicit semaphore budgets;
 - typed protocol errors for malformed messages;
-- no token, environment, stdout, or stderr leakage into logs, metrics,
-  or JSON envelopes.
-- retained stdout/stderr storage is guest-local, bounded by per-exec,
-  per-user, and VM-global quotas, protected by ownership/mode and
-  symlink-safe traversal, isolated between guest users, and cleaned by TTL
-  or explicit removal.
+- implementation gate: no token, environment, stdout, or stderr leakage
+  into logs, metrics, audit records, health/status, or JSON envelopes.
+  W0 records the closed redaction contract and canary matrix; production
+  guestd/userd implementations must provide the canary tests.
+- implementation gate: retained stdout/stderr storage is guest-local,
+  bounded by per-exec, per-user, and VM-global quotas, protected by
+  ownership/mode and symlink-safe traversal, isolated between guest users,
+  and cleaned by TTL or explicit removal. W0 records the storage contract;
+  production retained-log backends must provide storage/ACL/quota tests.
 
 The dossier must quantify the stress cases it runs. The exact numbers may be
 adjusted during implementation, but the dossier must record payload
