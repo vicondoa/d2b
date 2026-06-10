@@ -138,11 +138,20 @@ mod tests {
     fn accepts_bounded_command() {
         assert!(valid_command().validate().is_ok());
         assert!(validate_argv(&["x".repeat(MAX_ARG_LEN)]).is_ok());
+        assert!(validate_argv(&vec!["x".to_owned(); MAX_ARGV]).is_ok());
         assert!(validate_cwd(Some(&format!("/{}", "x".repeat(MAX_CWD_LEN - 1)))).is_ok());
         assert!(validate_env(&[RunnerEnv {
             key: "K".repeat(MAX_ENV_KEY_LEN),
             value: "V".repeat(MAX_ENV_VALUE_LEN),
         }])
+        .is_ok());
+        assert!(validate_env(&vec![
+            RunnerEnv {
+                key: "K".to_owned(),
+                value: "V".to_owned(),
+            };
+            MAX_ENV
+        ])
         .is_ok());
     }
 
@@ -172,6 +181,10 @@ mod tests {
         assert_eq!(
             validate_argv(&["".to_owned()]),
             Err(ValidationError::ArgEmpty)
+        );
+        assert_eq!(
+            validate_argv(&["bad\0arg".to_owned()]),
+            Err(ValidationError::ArgContainsNul)
         );
         assert_eq!(
             validate_cwd(Some("a\0b")),

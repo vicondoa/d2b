@@ -16,6 +16,8 @@ pub enum GuestHealthError {
     TooManyCapabilities,
     TooManyDegradedSubsystems,
     HostSynthesizedHealth,
+    ProtocolVersionMismatch,
+    HealthyWithDegradedSubsystems,
     InvalidGuestReportedMapping,
 }
 
@@ -54,6 +56,15 @@ pub fn degraded(
 pub fn guest_reported(response: HealthResponse) -> Result<HealthResponse, GuestHealthError> {
     if response.origin != HealthOrigin::GuestReported {
         return Err(GuestHealthError::HostSynthesizedHealth);
+    }
+    if response.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION {
+        return Err(GuestHealthError::ProtocolVersionMismatch);
+    }
+    if response.state == HealthState::Healthy && !response.degraded_subsystems.is_empty() {
+        return Err(GuestHealthError::HealthyWithDegradedSubsystems);
+    }
+    if response.state == HealthState::Degraded && response.degraded_subsystems.is_empty() {
+        return Err(GuestHealthError::EmptyDegradedSubsystems);
     }
     if response.capabilities.len() > MAX_HEALTH_CAPABILITIES {
         return Err(GuestHealthError::TooManyCapabilities);
@@ -219,6 +230,32 @@ mod tests {
         assert!(matches!(
             guest_reported(host_synthesized),
             Err(GuestHealthError::HostSynthesizedHealth)
+        ));
+        let wrong_version = HealthResponse {
+            origin: HealthOrigin::GuestReported,
+            state: HealthState::Healthy,
+            reason: HealthReason::None,
+            remediation: HealthRemediation::None,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION + 1,
+            capabilities: Vec::new(),
+            degraded_subsystems: Vec::new(),
+        };
+        assert!(matches!(
+            guest_reported(wrong_version),
+            Err(GuestHealthError::ProtocolVersionMismatch)
+        ));
+        let healthy_with_degraded = HealthResponse {
+            origin: HealthOrigin::GuestReported,
+            state: HealthState::Healthy,
+            reason: HealthReason::None,
+            remediation: HealthRemediation::None,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            capabilities: Vec::new(),
+            degraded_subsystems: vec![GuestSubsystem::Exec],
+        };
+        assert!(matches!(
+            guest_reported(healthy_with_degraded),
+            Err(GuestHealthError::HealthyWithDegradedSubsystems)
         ));
     }
 }
