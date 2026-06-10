@@ -4299,10 +4299,7 @@ fn cleanup_cloud_hypervisor_stale_sockets(
     role: &nixling_ipc::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(
-        role,
-        nixling_ipc::broker_wire::RunnerRole::CloudHypervisor
-    ) {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::CloudHypervisor) {
         return Ok(());
     }
     for path in cloud_hypervisor_socket_paths(argv) {
@@ -5808,7 +5805,10 @@ mod tests {
         use nixling_ipc::broker_wire::RunnerRole;
 
         let cases = [
-            (ProcessRole::SwtpmPreStartFlush, Some(RunnerRole::SwtpmFlush)),
+            (
+                ProcessRole::SwtpmPreStartFlush,
+                Some(RunnerRole::SwtpmFlush),
+            ),
             (ProcessRole::Swtpm, Some(RunnerRole::Swtpm)),
             (ProcessRole::Virtiofsd, Some(RunnerRole::Virtiofsd)),
             (ProcessRole::Video, Some(RunnerRole::Video)),
