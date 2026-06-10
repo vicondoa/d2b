@@ -401,23 +401,27 @@ fn run_store_sync_inner(
         }
         ids
     };
-    let cleanup_started = Instant::now();
-    let cleanup = cleanup_store_view(&intent.hardlink_farm_path, &intent.vm, &retained_ids);
-    timings.cleanup_ms = elapsed_ms(cleanup_started);
-    let (cleanup_status, cleanup_reason, swept_count) = match cleanup {
-        CleanupOutcome::Completed { swept_count } => {
-            (CleanupStatus::Completed, CleanupReason::None, swept_count)
-        }
-        CleanupOutcome::DeferredOnline => {
-            (CleanupStatus::DeferredOnline, CleanupReason::VmRunning, 0)
-        }
-        CleanupOutcome::DeferredMetadata => (
-            CleanupStatus::DeferredMetadata,
-            CleanupReason::MissingRetainedMetadata,
-            0,
-        ),
-        CleanupOutcome::Failed { swept_count } => {
-            (CleanupStatus::Failed, CleanupReason::IoError, swept_count)
+    let (cleanup_status, cleanup_reason, swept_count) = if fast_path {
+        (CleanupStatus::SkippedFastPath, CleanupReason::FastPath, 0)
+    } else {
+        let cleanup_started = Instant::now();
+        let cleanup = cleanup_store_view(&intent.hardlink_farm_path, &intent.vm, &retained_ids);
+        timings.cleanup_ms = elapsed_ms(cleanup_started);
+        match cleanup {
+            CleanupOutcome::Completed { swept_count } => {
+                (CleanupStatus::Completed, CleanupReason::None, swept_count)
+            }
+            CleanupOutcome::DeferredOnline => {
+                (CleanupStatus::DeferredOnline, CleanupReason::VmRunning, 0)
+            }
+            CleanupOutcome::DeferredMetadata => (
+                CleanupStatus::DeferredMetadata,
+                CleanupReason::MissingRetainedMetadata,
+                0,
+            ),
+            CleanupOutcome::Failed { swept_count } => {
+                (CleanupStatus::Failed, CleanupReason::IoError, swept_count)
+            }
         }
     };
     let cleanup_deferred = matches!(

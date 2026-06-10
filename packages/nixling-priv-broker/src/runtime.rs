@@ -8023,8 +8023,8 @@ mod tests {
         fields.validate().expect("signed schema holds");
         assert_eq!(fields.sync_status, SyncStatus::Ok);
         assert!(fields.fast_path);
-        assert_eq!(fields.cleanup_status, CleanupStatus::Completed);
-        assert_eq!(fields.cleanup_reason, CleanupReason::None);
+        assert_eq!(fields.cleanup_status, CleanupStatus::SkippedFastPath);
+        assert_eq!(fields.cleanup_reason, CleanupReason::FastPath);
         assert_eq!(fields.linked_count, 0);
         assert_eq!(fields.skipped_count, fields.closure_count);
         assert_eq!(fields.swept_count, 0);
@@ -8042,8 +8042,8 @@ mod tests {
         assert_export_allow_list(fast_obj);
         assert_eq!(fast_record.sync_status, SyncStatus::Ok);
         assert!(fast_record.fast_path, "second export is the fast path");
-        assert_eq!(fast_record.cleanup_status, CleanupStatus::Completed);
-        assert_eq!(fast_record.cleanup_reason, CleanupReason::None);
+        assert_eq!(fast_record.cleanup_status, CleanupStatus::SkippedFastPath);
+        assert_eq!(fast_record.cleanup_reason, CleanupReason::FastPath);
         assert_eq!(fast_record.linked_count, 0);
         assert_eq!(fast_record.skipped_count, fast_record.closure_count);
 

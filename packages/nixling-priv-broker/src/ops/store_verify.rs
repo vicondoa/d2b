@@ -178,6 +178,7 @@ pub fn finish_repair_after_store_sync(
         Ok(outcome)
             if outcome.cleanup_status == crate::ops::store_sync_audit::CleanupStatus::Failed =>
         {
+            mark_repair_attempted(intent);
             return StoreVerifyResponse {
                 vm: initial.vm,
                 status: StoreVerifyStatus::Failed,
@@ -194,6 +195,7 @@ pub fn finish_repair_after_store_sync(
         }
         Ok(_) => {}
         Err(err) => {
+            mark_repair_attempted(intent);
             return StoreVerifyResponse {
                 vm: initial.vm,
                 status: StoreVerifyStatus::Failed,
@@ -225,7 +227,9 @@ pub fn finish_repair_after_store_sync(
                         remediation: None,
                     };
                 }
+                mark_repair_attempted(intent);
                 return StoreVerifyResponse {
+                    repaired: 0,
                     remediation: Some(
                         "repair incomplete; inspect audit_ref and broker logs".to_owned(),
                     ),
@@ -233,7 +237,9 @@ pub fn finish_repair_after_store_sync(
                 };
             }
             Err(err) => {
+                mark_repair_attempted(intent);
                 return StoreVerifyResponse {
+                    repaired: 0,
                     remediation: Some(format!(
                         "repair incomplete; inspect audit_ref and broker logs ({err})"
                     )),
@@ -253,11 +259,18 @@ pub fn finish_repair_after_store_sync(
             audit_ref: after.audit_ref,
             remediation: None,
         },
-        StoreVerifyStatus::Drift => StoreVerifyResponse {
-            remediation: Some("repair incomplete; inspect audit_ref and broker logs".to_owned()),
-            ..after
-        },
+        StoreVerifyStatus::Drift => {
+            mark_repair_attempted(intent);
+            StoreVerifyResponse {
+                repaired: 0,
+                remediation: Some(
+                    "repair incomplete; inspect audit_ref and broker logs".to_owned(),
+                ),
+                ..after
+            }
+        }
         StoreVerifyStatus::Unknown => {
+            mark_repair_attempted(intent);
             let remediation = after.remediation.clone().unwrap_or_else(|| {
                 "repair incomplete; inspect audit_ref and broker logs".to_owned()
             });
@@ -268,6 +281,21 @@ pub fn finish_repair_after_store_sync(
         }
         _ => after,
     }
+}
+
+fn mark_repair_attempted(intent: &ResolvedStoreViewIntent) {
+    let store_root = &intent.hardlink_farm_path;
+    let path = hardlink_farm::read_state_current_id(store_root)
+        .map(|generation_id| generation_integrity_path(store_root, &generation_id))
+        .unwrap_or_else(|| vm_unknown_integrity_path(store_root));
+    let Ok(raw) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(mut record) = serde_json::from_slice::<IntegrityRecord>(&raw) else {
+        return;
+    };
+    record.repair_attempted = true;
+    let _ = write_integrity_record(&path, &record);
 }
 
 fn replace_live_paths_for_repair(intent: &ResolvedStoreViewIntent) -> Result<(), String> {
@@ -895,6 +923,38 @@ mod tests {
             std::fs::read_to_string(live_alpha.join("payload")).unwrap(),
             "aaaaaaaaaaaaaaaa-alpha"
         );
+    }
+
+    #[test]
+    fn incomplete_repair_marks_repair_attempted_for_status() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let live_alpha =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join("aaaaaaaaaaaaaaaa-alpha");
+        std::fs::remove_dir_all(&live_alpha).unwrap();
+
+        let initial = run_store_verify(&intent, false);
+        assert_eq!(initial.status, StoreVerifyStatus::Drift);
+        let response = finish_repair_after_store_sync(
+            &intent,
+            initial,
+            Err(StoreSyncError::GenerationMismatch {
+                wire: 1,
+                resolved: 2,
+            }),
+        );
+        assert_eq!(response.status, StoreVerifyStatus::Failed);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("\"repair_attempted\": true"));
     }
 
     #[test]
