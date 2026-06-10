@@ -46,6 +46,7 @@ W0 protocol.
 | Safe PTY | `guest-control-w0-pty` | `72ddbe3` | PASS: `portable-pty` plus safe `nix` APIs can cover PTY open/resize/I/O and foreground process-group signaling without first-party unsafe. |
 | Generated-code unsafe | `guest-control-w0-codegen` | `06298c0` | PASS: proof build postprocesses ttRPC generated code to remove `#![allow(unsafe_code)]` and verifies no generated unsafe tokens remain. |
 | Backpressure | `guest-control-w0-pressure` | `9a849c9` | FAIL for raw ttRPC streams: 30s slow consumer exceeded memory budget and output was not byte-exact. |
+| Chunked stdio conformance | `guest-control-w0-conf` | this commit | PASS: executable proof covers 64 MiB stdout + 64 MiB stderr offset reads, 16 MiB slow stdin idempotency, 30s slow-consumer bounds, four-session attached fairness, stale restart, EOF vs Ctrl-D, resize ordering, and signal exit mapping. |
 
 ## Evidence details
 
@@ -198,6 +199,48 @@ payloads when an application receiver stalls. Raw ttRPC stream queues
 therefore do not satisfy ADR 0026's backpressure and byte-exact
 requirements by themselves.
 
+### Chunked stdio conformance
+
+Result: **pass for the selected protocol model**.
+
+The executable proof crate at
+`proofs/chunked-stdio-conformance` models the selected Kata-style
+chunked stdio protocol with bounded unary RPC semantics and safe Rust
+only. Run the proof with:
+
+```bash
+cargo test --manifest-path proofs/chunked-stdio-conformance/Cargo.toml
+```
+
+It validates:
+
+- 64 MiB stdout and 64 MiB stderr byte-exact delivery through
+  independent `ReadStdout`/`ReadStderr` offset cursors;
+- 16 MiB slow stdin through `WriteStdin`, including exact-offset
+  appends, duplicate replay acceptance, offset-gap rejection, stale-data
+  rejection, and bounded stdin backpressure;
+- a 30 second slow-consumer run that keeps retained output under the
+  configured cap and reports typed `SlowConsumer` pressure rather than
+  growing unbounded buffers;
+- four concurrent attached sessions with p95 read latency <= 25 ms, max
+  read latency <= 100 ms, and <= 128 KiB byte-skew fairness;
+- stale-generation rejection after restart;
+- EOF (`CloseStdin` at the next offset) distinct from TTY Ctrl-D
+  (`0x04` data through `WriteStdin`);
+- resize, signal, and exit events ordered by one control sequence, with
+  signal exits mapped to shell-style `128 + signal` status codes.
+
+SSH compatibility remains design-level rather than a broad executable
+prototype:
+
+| VM state | CLI behavior | Compatibility result |
+| --- | --- | --- |
+| Old running VM without `guest-control` capability | Keep using the existing SSH lifecycle/exec path. | Compatible; no forced restart. |
+| New or restarted VM advertising `guest-control` capability | Use chunked stdio RPCs for exec I/O. | New protocol active. |
+| VM restarts while a client holds an old generation token | Reject the next RPC as stale. | Fail closed; client must reconnect/rediscover. |
+| Guest-control unavailable but SSH still configured | Fall back only through the documented SSH compatibility path. | Operator-visible old-generation behavior. |
+| Future removal gate reached | Remove SSH fallback only after the documented migration gate. | No silent behavior change before the gate. |
+
 ## Protocol lock recommendation
 
 Lock the implementation design to:
@@ -240,9 +283,11 @@ more implementation risk around ttRPC stream buffering.
 
 ## Required follow-up gates
 
-- Design and review the bounded exec I/O shape:
-  Kata-style chunked stdio with budgets, offsets, long-poll reads, and
-  cancellation.
+- Keep the executable chunked stdio conformance proof green as the
+  production guest-control implementation replaces the model with real
+  ttRPC handlers.
+- Design and review any remaining production-specific details around
+  long-poll deadlines and cancellation.
 - Keep ADR 0026 aligned with the selected chunked-stdio outcome.
 - Add generated-code postprocessing to the implementation plan.
 - Keep guest binaries static and first-party unsafe-free.
