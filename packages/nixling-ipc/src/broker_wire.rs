@@ -726,9 +726,9 @@ pub struct PrepareStoreViewRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Store-sync request. The broker resolves the closure intent row keyed
-/// by `vm_id` (canonical id form `"store-view:vm:<vm>"`) and refuses
-/// the op if `bundle_closure_ref` does not match. The broker also
+/// Store-sync request. The broker resolves the closure intent row from
+/// the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref`
+/// does not match. The broker also
 /// refuses if the wire-supplied `generation_token` does not match the
 /// bundle's resolved generation. The token is a content-derived stable
 /// equality value (see `closures-json.nix`), not a monotonic counter:
