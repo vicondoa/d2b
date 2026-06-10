@@ -999,11 +999,13 @@ PTY drain behavior after process exit, retention-window edge cases, and
 incorrect CLI retry behavior around `stdin-backpressure` or
 `offset-expired`.
 
-## Open risks
+## Implementation gates
 
-- PTY output backpressure is kernel- and workload-sensitive; tests must
-  prove the selected PTY crate and guest kernel block writers instead of
-  dropping data.
+- PTY output backpressure is kernel- and workload-sensitive. W0 proves the
+  wire/protocol model for TTY stdout-only reads and bounded output logs;
+  the implementation must add runtime tests proving the selected PTY crate
+  and guest kernel block writers instead of dropping data before
+  guest-control ships.
 - Detached logs can hide slow consumers by evicting old bytes; UX must
   make truncation obvious in human and JSON output.
 - Short long-poll timeouts increase RPC rate. Capability negotiation may
