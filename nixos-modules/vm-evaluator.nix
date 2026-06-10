@@ -48,6 +48,7 @@ let
       modules = [
         ./vm-options.nix
         ./vm-guest-base.nix
+        ./guest-control.nix
         # inherit the host's nixpkgs.config so per-VM evals
         # honor the consumer's allowUnfree / allowUnfreePredicate /
         # permittedInsecurePackages settings without re-stating them

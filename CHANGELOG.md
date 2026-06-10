@@ -39,6 +39,8 @@ deprecations ship one minor release before removal.
 - Bootstrap/fail-closed guest-static package outputs `nixling-guestd-static`,
   `nixling-userd-static`, and `nixling-exec-runner-static`, plus an ELF check
   proving the guest binaries have no interpreter or dynamic dependencies.
+  Guest VM evals now consume these static outputs through the guest-control
+  module, with a static-fast eval gate proving the package references.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
