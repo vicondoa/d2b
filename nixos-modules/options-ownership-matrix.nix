@@ -102,6 +102,42 @@ let
       '';
     })
     (mkEntry {
+      path = "store-view";
+      owner = "nixlingd";
+      group = "users";
+      mode = "0755";
+      recursive = false;
+      description = ''
+        Canonical per-VM store-view root. Contains metadata-only
+        `generations/` plus the served `live/` hardlink pool. Must not
+        inherit broad writable default ACLs from the per-VM state root.
+      '';
+    })
+    (mkEntry {
+      path = "store-view/live";
+      owner = "nixlingd";
+      group = "users";
+      mode = "0755";
+      recursive = false;
+      description = ''
+        CRITICAL CARVE-OUT: canonical per-VM /nix/store hardlink live pool.
+        Inodes under package trees are SHARED with /nix/store; recursive
+        ownership/ACL ops here propagate into /nix/store. The enforcer MUST
+        NEVER recurse into this subdirectory.
+      '';
+    })
+    (mkEntry {
+      path = "store-view/generations";
+      owner = "nixlingd";
+      group = "users";
+      mode = "0755";
+      recursive = false;
+      description = ''
+        Metadata-only generation directory for store-view. Per-generation
+        leaves are repaired out-of-band with directory-only operations.
+      '';
+    })
+    (mkEntry {
       path = "store-meta";
       owner = "nixlingd";
       group = "users";

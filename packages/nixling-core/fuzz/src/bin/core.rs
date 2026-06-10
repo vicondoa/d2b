@@ -505,6 +505,7 @@ fn build_synthetic_resolver() -> BundleResolver {
             "/nix/store/work-vm-system".to_owned(),
             "/nix/store/work-vm-runner".to_owned(),
         ],
+        db_dump_path: "/nix/store/work-vm-registration".to_owned(),
         declared_runner: "/nix/store/work-vm-runner".to_owned(),
         runner_parity_path: "/nix/store/work-vm-runner".to_owned(),
         runner_parity_ok: true,

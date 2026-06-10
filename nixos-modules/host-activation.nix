@@ -822,9 +822,11 @@ in
       if [ -d /var/lib/nixling/vms ] && [ -n "$users_gid" ]; then
         for vm_dir in /var/lib/nixling/vms/*/; do
           vm_dir="''${vm_dir%/}"
-          for sub in store store-meta; do
+          for sub in store store-meta store-view store-view/live store-view/generations; do
+            path="$vm_dir/$sub"
+            [ -d "$path" ] && ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
             ${activationHelper} enforce-dir-posture \
-              --path "$vm_dir/$sub" \
+              --path "$path" \
               --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
           done
         done

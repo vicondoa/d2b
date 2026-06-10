@@ -486,8 +486,17 @@ let
           NEW_TOP=$(readlink "$GEN_SRC/system")
           NEW_SRC=$GEN_SRC
           if [ "$CUR_TOP" = "$NEW_TOP" ] && [ "$CUR_SRC" = "$NEW_SRC" ]; then
-            echo "nixling-store-sync: $VM already at generation $CURRENT_GEN ($NEW_TOP); nothing to do."
-            exit 0
+            marker="$STORE_DIR/.nixling-marker-$VM"
+            missing=0
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              base=''${path##*/}
+              [ -e "$STORE_DIR/$base" ] || { missing=1; break; }
+            done < "$GEN_SRC/store-paths"
+            if [ "$missing" -eq 0 ] && [ -e "$marker" ]; then
+              echo "nixling-store-sync: $VM already at generation $CURRENT_GEN ($NEW_TOP); nothing to do."
+              exit 0
+            fi
           fi
         fi
       fi
@@ -533,7 +542,7 @@ let
       rm -rf "$STAGE_DIR"
       trap - EXIT
 
-      echo "  store/: +$NEW_COUNT new, $SKIP_COUNT already present"
+      echo "  store-view/live: +$NEW_COUNT new, $SKIP_COUNT already present"
 
       # ---------- generation metadata ----------
       NEW_GEN_DIR=$GEN_DIR/$NEXT_GEN
@@ -541,6 +550,9 @@ let
       install -m 0644 "$GEN_SRC/store-paths" "$NEW_GEN_DIR/store-paths"
       install -m 0644 "$GEN_SRC/db.dump"     "$NEW_GEN_DIR/db.dump"
       ln -sfT "$NEW_TOP" "$NEW_GEN_DIR/system"
+      printf '{"closureHash":"toplevel:%s","nixlingVersion":"activation","activatedAt":"%s","vm":"%s","generationNumber":%d}\n' \
+        "''${NEW_TOP##*/}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VM" "$NEXT_GEN" \
+        > "$NEW_GEN_DIR/marker.json"
       printf '{"generation":%d,"timestamp":%d,"system":"%s","source":"%s"}\n' \
         "$NEXT_GEN" "$(date +%s)" "$NEW_TOP" "$GEN_SRC" \
         > "$NEW_GEN_DIR/meta.json"
@@ -618,7 +630,37 @@ let
       mapfile -t KEEP < <(printf '%s\n' "''${KEEP[@]}" | sort -u)
       echo "  keeping generations: ''${KEEP[*]}"
 
-      # Prune unkept generations + their gcroots.
+      # ---------- sweep store-view/live ----------
+      # Union of store-paths across kept generations = paths we still need.
+      KEEP_PATHS=$(mktemp)
+      EXISTING_PATHS=$(mktemp)
+      REMOVE_PATHS=$(mktemp)
+      trap 'rm -f "$KEEP_PATHS" "$EXISTING_PATHS" "$REMOVE_PATHS"' EXIT
+      for k in "''${KEEP[@]}"; do
+        [ -f "$GEN_DIR/$k/store-paths" ] && cat "$GEN_DIR/$k/store-paths" >> "$KEEP_PATHS"
+      done
+      sed -n 's|.*/||p' "$KEEP_PATHS" | sort -u > "$KEEP_PATHS.basenames"
+      mv "$KEEP_PATHS.basenames" "$KEEP_PATHS"
+
+      find "$STORE_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' \
+        | ${pkgs.gawk}/bin/awk -v marker=".nixling-marker-$VM" '$0 != marker { print }' \
+        | sort -u > "$EXISTING_PATHS"
+      comm -23 "$EXISTING_PATHS" "$KEEP_PATHS" > "$REMOVE_PATHS"
+
+      REMOVED=0
+      while IFS= read -r base; do
+        [ -n "$base" ] || continue
+        case "$base" in
+          .nixling-marker-*|live.stage.*) continue ;;
+        esac
+        rm -rf "''${STORE_DIR:?}/$base"
+        REMOVED=$((REMOVED + 1))
+      done < "$REMOVE_PATHS"
+      rm -f "$EXISTING_PATHS" "$REMOVE_PATHS"
+      trap 'rm -f "$KEEP_PATHS"' EXIT
+      echo "  store-view/live: -$REMOVED pruned"
+
+      # Prune unkept generations + their gcroots after the live pool is swept.
       for d in "$GEN_DIR"/*; do
         [ -d "$d" ] || continue
         g=$(basename "$d")
@@ -637,37 +679,14 @@ let
         fi
       done
 
-      # ---------- sweep store/ ----------
-      # Union of store-paths across kept generations = paths we still need.
-      KEEP_PATHS=$(mktemp)
-      trap 'rm -f "$KEEP_PATHS"' EXIT
-      for k in "''${KEEP[@]}"; do
-        [ -f "$GEN_DIR/$k/store-paths" ] && cat "$GEN_DIR/$k/store-paths" >> "$KEEP_PATHS"
-      done
-      sort -u "$KEEP_PATHS" -o "$KEEP_PATHS"
-
-      # For each <base> in store/, drop if its corresponding /nix/store/<base>
-      # isn't in the keep set.
-      REMOVED=0
-      for d in "$STORE_DIR"/*; do
-        [ -e "$d" ] || continue
-        base=''${d##*/}
-        full="/nix/store/$base"
-        if ! grep -qxF "$full" "$KEEP_PATHS"; then
-          rm -rf "$d"
-          REMOVED=$((REMOVED + 1))
-        fi
-      done
-      echo "  store/: -$REMOVED pruned"
-
-      # Permissions: align store/ and store-meta/ directory inodes with
+      # Permissions: align store-view directory inodes with
       # the daemon ownership matrix (`nixlingd:users 0755`). The owner
       # (`nixlingd`) can mutate directory entries during StoreSync; the
       # broad `users` group gets read/execute only so local users cannot
       # unlink or replace entries in the guest store view or metadata.
       #
       # Only chmod AND chown the directory inodes that
-      # nixling creates (the per-VM /var/lib/nixling/vms/<vm>/store tree).
+      # nixling creates (the per-VM /var/lib/nixling/vms/<vm>/store-view tree).
       # Recursive chmod or chown on the files would change the
       # hardlinked /nix/store inodes too, violating Nix store
       # immutability — a virtiofsd RCE that escapes the per-VM bind
@@ -675,12 +694,12 @@ let
       # have writable+exec perms (or unexpected group ownership) on
       # them. File inodes retain their upstream Nix store ownership
       # (root:root) and modes (0555 for executables, 0444 for data).
-      find "$STORE_DIR" "$META_DIR" -type d -exec chown nixlingd:users {} + 2>/dev/null || true
-      find "$STORE_DIR" "$META_DIR" -type d -exec chmod 0755 {} + 2>/dev/null || true
+      find "$META_DIR" -type d -exec chown nixlingd:users {} + 2>/dev/null || true
+      find "$META_DIR" -type d -exec chmod 0755 {} + 2>/dev/null || true
 
       # Plant the per-VM marker (C1a). The microvm-virtiofsd@<vm>.service
       # drop-in ExecStartPre tests for this exact path before allowing
-      # the unit to start, so a hand-crafted /var/lib/nixling/vms/<vm>/store/
+      # the unit to start, so a hand-crafted /var/lib/nixling/vms/<vm>/store-view/live/
       # populated by anything other than nixling-store-sync cannot be
       # served by virtiofsd. Mode 0444 so the unprivileged virtiofsd
       # user (nl-virtiofs-<vm>) can read it but not modify it.
@@ -815,9 +834,9 @@ in
     # ---------------------------------------------------------------------------
     # Host activation hook.
     # On every `nixos-rebuild switch`, drop the per-VM next-generation
-    # pointer into /run/nixling/<vm>/next-generation and invoke the
-    # sync helper directly (in-process; faster than systemd-start and
-    # gives us synchronous error reporting in the activation log).
+    # pointer into /run/nixling/<vm>/next-generation. The daemon-native
+    # Rust StoreSync broker op is the canonical writer for store-view;
+    # activation must not build/sweep/activate per-VM store closures.
     #
     # /run/nixling is created by
     # host-daemon.nix tmpfiles (nixlingd:nixling 0750) under
@@ -831,9 +850,6 @@ in
         (name: gen: ''
           install -d -m 0755 /run/nixling/${name}
           ln -sfT ${gen} /run/nixling/${name}/next-generation
-          if ! ${nixlingStoreSync}/bin/nixling-store-sync ${name} ${gen}; then
-            echo "nixling: warning — nixling-store-sync for '${name}' failed (continuing activation)"
-          fi
         '')
         vmGenPaths)}
     '';

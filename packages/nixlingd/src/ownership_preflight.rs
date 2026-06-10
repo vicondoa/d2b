@@ -84,6 +84,28 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         recursive: false,
     },
     EntrySpec {
+        path: "store-view",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/live",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        // HARDLINK FARM CARVE-OUT — must stay false.
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/generations",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        recursive: false,
+    },
+    EntrySpec {
         path: "store-meta",
         owner_template: "nixlingd",
         group_template: "users",

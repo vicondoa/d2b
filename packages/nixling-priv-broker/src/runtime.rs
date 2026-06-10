@@ -2161,6 +2161,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     generation: outcome.generation,
                     closure_count: outcome.closure_count,
                     hardlink_farm_path: hardlink_farm_path_str.clone(),
+                    retained_generations: outcome.retained_generations.clone(),
+                    swept_count: outcome.swept_count,
+                    cleanup_deferred: outcome.cleanup_deferred,
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::StoreSync(
@@ -2169,6 +2172,9 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                     generation: outcome.generation,
                     hardlink_farm_path: hardlink_farm_path_str,
                     closure_count: outcome.closure_count,
+                    retained_generations: outcome.retained_generations,
+                    swept_count: outcome.swept_count,
+                    cleanup_deferred: outcome.cleanup_deferred,
                 },
             )))
         }
@@ -6040,6 +6046,7 @@ mod tests {
             vm: "corp-vm".to_owned(),
             toplevel: "/nix/store/corp-vm-system".to_owned(),
             closure_paths: vec!["/nix/store/corp-vm-system".to_owned()],
+            db_dump_path: "/nix/store/corp-vm-registration".to_owned(),
             declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_ok: true,
@@ -6584,8 +6591,9 @@ mod tests {
             vm: "alpha".to_owned(),
             generation: 7,
             hardlink_farm_path: root.join("store-view"),
-            target_view_path: root.join("store-view/generations/7/alpha-system"),
+            target_view_path: root.join("store-view/live/alpha-system"),
             closure_paths: vec![source_view],
+            db_dump_path: root.join("db.dump"),
         };
         let request = RunActivationRequest {
             bundle_activation_intent_ref: BundleOpId::new("activation:vm:alpha"),

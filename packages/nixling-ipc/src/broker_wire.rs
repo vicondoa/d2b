@@ -747,6 +747,9 @@ pub struct StoreSyncResponse {
     pub generation: u32,
     pub hardlink_farm_path: String,
     pub closure_count: u32,
+    pub retained_generations: Vec<u32>,
+    pub swept_count: u32,
+    pub cleanup_deferred: bool,
 }
 
 /// The broker derives the bridge, port,

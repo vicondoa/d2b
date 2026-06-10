@@ -123,7 +123,7 @@ impl OwnershipMismatch {
 /// The string is compared byte-for-byte against `entry.path`. Kept
 /// pub(crate) so the matching test in [`tests`] can re-assert the
 /// canonical value.
-const HARDLINK_FARM_CARVE_OUT: &str = "store";
+const HARDLINK_FARM_CARVE_OUTS: &[&str] = &["store", "store-view/live"];
 
 /// Return whether the enforcer is permitted to recurse into this
 /// entry. Combines the operator-declared `recursive` flag with the
@@ -131,7 +131,7 @@ const HARDLINK_FARM_CARVE_OUT: &str = "store";
 /// `recursive = true` on the `store` entry, this function still
 /// returns `false`.
 pub fn should_recurse(entry: &OwnershipEntry) -> bool {
-    if entry.path == HARDLINK_FARM_CARVE_OUT {
+    if HARDLINK_FARM_CARVE_OUTS.contains(&entry.path.as_str()) {
         return false;
     }
     entry.recursive
@@ -381,16 +381,17 @@ mod tests {
     /// CRITICAL regression for the hardlink-farm carve-out.
     ///
     /// Even if the operator declares `recursive = true` on the
-    /// `store` entry (a typo, or a misguided migration), the enforcer
+    /// `store`/`store-view/live` entry (a typo, or a misguided
+    /// migration), the enforcer
     /// MUST NOT recurse. We assert this two ways:
     ///
-    /// 1. [`should_recurse`] returns false for `path = "store"`
+    /// 1. [`should_recurse`] returns false for hardlink-farm paths
     ///    regardless of the `recursive` flag.
     /// 2. [`check_ownership_matrix`] does not emit any
     ///    `ChildDrift` for files under `store/`, even when those
     ///    files have intentionally bad ownership.
     #[test]
-    fn hardlink_farm_carve_out_holds() {
+    fn hardlink_farm_carve_out_holds_for_legacy_store() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         prepare(base, ".", 0o2770);
@@ -428,6 +429,22 @@ mod tests {
         assert!(
             drifts.is_empty(),
             "top-level matches; got unexpected drift(s): {drifts:?}",
+        );
+    }
+
+    #[test]
+    fn hardlink_farm_carve_out_holds_for_store_view_live() {
+        let entry = OwnershipEntry {
+            path: "store-view/live".to_owned(),
+            expected_uid: current_uid(),
+            expected_gid: current_gid(),
+            expected_mode: 0o0755,
+            recursive: true,
+        };
+
+        assert!(
+            !should_recurse(&entry),
+            "store-view/live carve-out must override `recursive = true`"
         );
     }
 

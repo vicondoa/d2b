@@ -26,8 +26,11 @@
 //!    `vm_id`, `bundle_closure_ref`, `generation`, `closure_count`,
 //!    and the resolved farm root path.
 
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 
+use nix::fcntl::{flock, FlockArg};
 use nixling_core::bundle_resolver::ResolvedStoreViewIntent;
 use nixling_host::hardlink_farm::{self, GenerationMarker, HardlinkFarmError};
 
@@ -88,6 +91,9 @@ pub struct StoreSyncOutcome {
     pub generation: u32,
     pub hardlink_farm_path: PathBuf,
     pub closure_count: u32,
+    pub retained_generations: Vec<u32>,
+    pub swept_count: u32,
+    pub cleanup_deferred: bool,
 }
 
 /// Drive the per-VM hardlink-farm sync for one bundle-resolved
@@ -130,11 +136,14 @@ pub fn run_store_sync(
         });
     }
 
+    let _lock = acquire_sync_lock(&intent.hardlink_farm_path)?;
+
     // Reconcile a possible stale `current.tmp` left over by a
     // previous crashed swap BEFORE we start building the new
     // generation — keeps the farm in a known-good shape and
     // exercises the primitive's documented crash-recovery path.
     hardlink_farm::reconcile_stale_swap_tmp(&intent.hardlink_farm_path)?;
+    let previous_current = hardlink_farm::current_generation(&intent.hardlink_farm_path)?;
 
     let marker = GenerationMarker {
         closure_hash: intent.closure_identity(),
@@ -155,17 +164,87 @@ pub fn run_store_sync(
         &intent.closure_paths,
         &marker,
     )?;
+    write_generation_db_dump(&intent.hardlink_farm_path, resolved_generation, &intent.db_dump_path)?;
 
     hardlink_farm::swap_current_symlink(&intent.hardlink_farm_path, resolved_u32)?;
+    let mut retained = vec![resolved_generation];
+    if let Some(previous) = previous_current.filter(|previous| *previous != resolved_generation) {
+        retained.push(previous);
+    }
+    let cleanup_deferred = true;
+    let swept_count = 0;
+    tracing::info!(
+        vm = %intent.vm,
+        generation = resolved_generation,
+        "store-sync cleanup deferred until running-generation retention is available"
+    );
 
     let closure_count = u32::try_from(intent.closure_paths.len()).unwrap_or(u32::MAX);
+    let retained_generations = retained
+        .into_iter()
+        .filter_map(|g| u32::try_from(g).ok())
+        .collect();
 
     Ok(StoreSyncOutcome {
         vm: intent.vm.clone(),
         generation: resolved_u32,
         hardlink_farm_path: intent.hardlink_farm_path.clone(),
         closure_count,
+        retained_generations,
+        swept_count,
+        cleanup_deferred,
     })
+}
+
+fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
+    std::fs::create_dir_all(farm_root).map_err(|err| {
+        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("create farm root for sync.lock: {err}"),
+        })
+    })?;
+    let path = farm_root.join("sync.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|err| {
+            StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: format!("open sync.lock: {err}"),
+            })
+        })?;
+    flock(file.as_raw_fd(), FlockArg::LockExclusive).map_err(|err| {
+        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
+            path: path.display().to_string(),
+            detail: format!("lock sync.lock: {err}"),
+        })
+    })?;
+    Ok(file)
+}
+
+fn write_generation_db_dump(
+    farm_root: &Path,
+    generation: u64,
+    db_dump_path: &Path,
+) -> Result<(), StoreSyncError> {
+    let generation_dir = hardlink_farm::generation_dir(farm_root, generation);
+    let target = generation_dir.join("db.dump");
+    let tmp = generation_dir.join("db.dump.tmp");
+    std::fs::copy(db_dump_path, &tmp).map_err(|err| {
+        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
+            path: db_dump_path.display().to_string(),
+            detail: format!("copy db.dump: {err}"),
+        })
+    })?;
+    std::fs::rename(&tmp, &target).map_err(|err| {
+        StoreSyncError::HardlinkFarm(HardlinkFarmError::Io {
+            path: target.display().to_string(),
+            detail: format!("install db.dump: {err}"),
+        })
+    })?;
+    Ok(())
 }
 
 fn current_unix_ms() -> u128 {
@@ -200,7 +279,9 @@ mod tests {
         generation: u64,
         n: usize,
     ) -> ResolvedStoreViewIntent {
-        let farm = root.join("vms").join(vm).join("store");
+        let farm = root.join("vms").join(vm).join("store-view");
+        let db_dump_path = root.join(format!("{vm}-{generation}.db.dump"));
+        std::fs::write(&db_dump_path, format!("db-dump-{vm}-{generation}")).unwrap();
         std::fs::create_dir_all(&farm).unwrap();
         let target = farm.join("current");
         ResolvedStoreViewIntent {
@@ -210,6 +291,7 @@ mod tests {
             hardlink_farm_path: farm,
             target_view_path: target,
             closure_paths: build_fake_closure(root, n),
+            db_dump_path,
         }
     }
 
@@ -225,8 +307,14 @@ mod tests {
 
         let gen_dir = intent.hardlink_farm_path.join("generations/7");
         assert!(gen_dir.join("marker.json").exists());
-        assert!(gen_dir.join("xxxxxxxxxxxxxxxx-fake-0/hello").exists());
-        assert!(gen_dir.join("xxxxxxxxxxxxxxxx-fake-1/hello").exists());
+        assert!(intent
+            .hardlink_farm_path
+            .join("live/xxxxxxxxxxxxxxxx-fake-0/hello")
+            .exists());
+        assert!(intent
+            .hardlink_farm_path
+            .join("live/xxxxxxxxxxxxxxxx-fake-1/hello")
+            .exists());
 
         let current = intent.hardlink_farm_path.join("current");
         let link_target = std::fs::read_link(&current).expect("current is a symlink");
@@ -252,7 +340,7 @@ mod tests {
 
         let linked = intent
             .hardlink_farm_path
-            .join("generations/3/xxxxxxxxxxxxxxxx-fake-0/hello");
+            .join("live/xxxxxxxxxxxxxxxx-fake-0/hello");
         let linked_meta = std::fs::metadata(&linked).unwrap();
         // Shared inode: this is the "hardlink farm" contract.
         assert_eq!(linked_meta.ino(), pre_ino, "farm shares inodes with source");

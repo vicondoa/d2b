@@ -1,14 +1,13 @@
 # `StoreSync` broker op
 
 This page documents the typed broker op that hardlink-farms a VM's
-resolved closure into `/var/lib/nixling/vms/<vm>/store/` and
-atomically swaps the per-VM `current` symlink to the freshly built
-generation directory.
+resolved closure into `/var/lib/nixling/vms/<vm>/store-view/live/`
+and atomically swaps the per-VM `store-view/current` symlink to the
+freshly built metadata generation.
 
-It replaces the per-VM `nixling-<vm>-store-sync.service` systemd
-oneshot (a bash script invoking `ln(1)` + `mv(1)` directly) with a
-broker-side typed handler so the daemon-only end-state can delete the
-generated systemd unit.
+It is the canonical writer for `store-view`; host activation may publish
+next-generation pointers and enforce directory posture, but it must not
+build/sweep/activate store-view closures.
 
 ## Why a broker op (instead of the daemon doing it)
 
@@ -19,9 +18,9 @@ The per-VM hardlink farm shares **inodes** with `/nix/store`. The
    (otherwise the `link(2)` call would fail at runtime; we check
    eagerly so we can refuse with a typed error).
 2. Each generation is built into a side directory
-   (`generations/N/`) and only flipped live by `renameat(2)` from
-   `current.tmp` → `current`. A crash mid-build leaves the prior
-   `current` intact.
+   (`live.stage.*`) and only appears in `live/` after an atomic
+   rename of each top-level basename. A crash mid-build leaves the
+   prior live pool intact.
 3. A `marker.json` (typed `GenerationMarker`) is written **last**
    so a partially built generation can be reconciled by
    `reconcile_stale_swap_tmp` on the next run.
@@ -36,7 +35,7 @@ must happen in the broker.
 The per-VM store-view path **shares inodes** with `/nix/store`.
 
 **NEVER `chown -R`, `chmod -R`, or `setfacl -R`** anywhere under
-`/var/lib/nixling/vms/<vm>/store/`. Any recursive mode/owner
+`/var/lib/nixling/vms/<vm>/store-view/live/`. Any recursive mode/owner
 mutation propagates **into `/nix/store` via the shared hardlink
 inodes** and immediately breaks ssh's `safe_path()` check on every
 host on the network (every `~/.ssh/authorized_keys` lookup walks
@@ -79,8 +78,11 @@ Response (`BrokerResponse::StoreSync(StoreSyncResponse)`):
 | ---------------------- | -------- | ---------------------------------------------------- |
 | `vm`                   | `String` | Echoed VM name from the resolved intent.             |
 | `generation`           | `u32`    | Activated generation (matches `current` symlink).    |
-| `hardlink_farm_path`   | `String` | Per-VM farm root (`/var/lib/nixling/vms/<vm>/store`). |
+| `hardlink_farm_path`   | `String` | Per-VM store-view root (`/var/lib/nixling/vms/<vm>/store-view`). |
 | `closure_count`        | `u32`    | Number of top-level closure paths linked in.         |
+| `retained_generations` | `Vec<u32>` | Generations retained for cleanup safety.           |
+| `swept_count`          | `u32`    | Top-level live entries removed by cleanup.           |
+| `cleanup_deferred`     | `bool`   | Whether cleanup was deferred after activation.       |
 
 ## Audit fields
 
@@ -92,6 +94,9 @@ record carrying:
 - `generation`
 - `closure_count`
 - `hardlink_farm_path`
+- `retained_generations`
+- `swept_count`
+- `cleanup_deferred`
 
 The `decision` field follows the broker default
 (`allowed` / `denied-refused` / `errored`).

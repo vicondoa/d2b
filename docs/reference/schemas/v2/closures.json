@@ -5,6 +5,7 @@
   "type": "object",
   "required": [
     "closurePaths",
+    "dbDumpPath",
     "declaredRunner",
     "generation",
     "runnerParityOk",
@@ -20,6 +21,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "dbDumpPath": {
+      "description": "Nix DB registration dump for the closure.",
+      "type": "string"
     },
     "declaredRunner": {
       "description": "Declared runner path from the public manifest/emitter.",

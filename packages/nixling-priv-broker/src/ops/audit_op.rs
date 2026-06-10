@@ -106,6 +106,9 @@ pub enum OperationFields {
         generation: u32,
         closure_count: u32,
         hardlink_farm_path: String,
+        retained_generations: Vec<u32>,
+        swept_count: u32,
+        cleanup_deferred: bool,
     },
     SetBridgePortFlags {
         vm: String,
@@ -349,6 +352,9 @@ impl OperationFields {
                 generation: u32,
                 closure_count: u32,
                 hardlink_farm_path: String,
+                retained_generations: Vec<u32>,
+                swept_count: u32,
+                cleanup_deferred: bool,
             }),
             "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
                 vm: String,
@@ -631,6 +637,9 @@ mod tests {
             generation: 42,
             closure_count: 17,
             hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store".to_owned(),
+            retained_generations: vec![42, 41],
+            swept_count: 3,
+            cleanup_deferred: false,
         }
     );
     roundtrip_test!(

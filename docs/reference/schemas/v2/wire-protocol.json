@@ -4740,12 +4740,18 @@
       "description": "Store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store/`); the active generation directory is reachable via the `current` symlink.",
       "type": "object",
       "required": [
+        "cleanupDeferred",
         "closureCount",
         "generation",
         "hardlinkFarmPath",
+        "retainedGenerations",
+        "sweptCount",
         "vm"
       ],
       "properties": {
+        "cleanupDeferred": {
+          "type": "boolean"
+        },
         "closureCount": {
           "type": "integer",
           "format": "uint32",
@@ -4758,6 +4764,19 @@
         },
         "hardlinkFarmPath": {
           "type": "string"
+        },
+        "retainedGenerations": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "sweptCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
         "vm": {
           "type": "string"

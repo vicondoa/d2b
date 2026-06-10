@@ -54,8 +54,11 @@ Both layers carry a dedicated unit test:
 | `swtpm` | `nixling-<vm>-swtpm` | `nixling-<vm>-swtpm` | `0700` | false | **CRITICAL SUBSYSTEM** (AGENTS.md): per-VM TPM 2.0 NVRAM. Wiping or rechowning this directory looks like device tampering to any IdP (Entra ID / Intune / BitLocker-class policies) and forces re-enrollment. Owned by the per-VM swtpm runner principal. |
 | `sshd-host-keys` | `nixlingd` | `nixling` | `0750` | false | Container for per-VM sshd host keys. The daemon refuses to start the VM if any leaf has drifted (see [ssh-host-key-preflight.md](./ssh-host-key-preflight.md)). |
 | `host-keys` | `nixlingd` | `nixling` | `0750` | false | Known-hosts pin store for per-VM ssh host key fingerprints. |
-| `store` | `nixlingd` | `users` | `2775` | **false (carve-out)** | Per-VM `/nix/store` hardlink farm. See the CRITICAL section above. The enforcer NEVER recurses into this path; the matrix verifies only the top-level dir's owner/group/mode. |
-| `store-meta` | `nixlingd` | `users` | `2775` | false | StoreSync metadata sibling: `current` symlink, per-generation marker, gcroots. Although not hardlinked into `/nix/store`, `recursive` is kept false so the "no recursive ownership ops on per-VM store state" rule applies uniformly. |
+| `store` | `nixlingd` | `users` | `0755` | **false (legacy carve-out)** | Legacy per-VM `/nix/store` hardlink farm retained only during migration. |
+| `store-view` | `nixlingd` | `users` | `0755` | false | Canonical store-view root; contains metadata-only `generations/`, `gcroots/`, `sync.lock`, and the `live/` hardlink pool. |
+| `store-view/live` | `nixlingd` | `users` | `0755` | **false (carve-out)** | Canonical per-VM `/nix/store` hardlink pool. The enforcer NEVER recurses into this path. |
+| `store-view/generations` | `nixlingd` | `users` | `0755` | false | Metadata-only generation directory. |
+| `store-meta` | `nixlingd` | `users` | `0755` | false | Legacy metadata sibling retained only during migration. |
 
 The `<vm>` token in `owner` / `group` is substituted with the VM name
 at enforcement time. This keeps the matrix VM-agnostic — every VM
@@ -71,7 +74,7 @@ describe WHAT each runner role may write inside the per-VM tree:
 | Role | `writablePaths` under `/var/lib/nixling/vms/<vm>/` | Matrix entry covering it |
 |---|---|---|
 | `host-reconcile` | the per-VM state dir | `.` |
-| `store-virtiofs-preflight` | `.` / `store` / `store-meta` (read-only) | `.`, `store`, `store-meta` |
+| `store-virtiofs-preflight` | `.` / `store-view` / `store-view/live` (read-only) | `.`, `store-view`, `store-view/live` |
 | `cloud-hypervisor-runner` | the per-VM state dir | `.` |
 | `swtpm-pre-start-flush` | `swtpm` | `swtpm` |
 | `swtpm` (long-lived) | `swtpm` | `swtpm` |

@@ -1,11 +1,12 @@
 //! Hardlink-farm primitive for the per-VM store activation lifecycle.
 //!
-//! Each daemon-managed VM owns a per-VM store under
-//! `/var/lib/nixling/vms/<vm>/store/`. New generations land in
-//! `generations/<N>/` as hardlink farms of the per-VM closure (every
-//! file is a hardlink to the underlying `/var/lib/nixling/store/`
-//! root; the per-VM dir gives the guest its own view of the closure
-//! without copying bytes).
+//! Each daemon-managed VM owns a per-VM store-view under
+//! `/var/lib/nixling/vms/<vm>/store-view/`. The guest is served from
+//! `live/`, a flat hardlink pool containing the retained VM closure
+//! basenames. `generations/<N>/` stores metadata only (`marker.json`,
+//! `store-paths`, and the system symlink), so a new generation only
+//! materialises top-level store paths that are not already present in
+//! `live/`.
 //!
 //! The primitives in this module are:
 //!
@@ -31,6 +32,8 @@
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -169,7 +172,7 @@ pub struct GenerationMarker {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildStoreViewFarmRequest {
-    /// Per-VM farm root (`.../store-view`), not the generation dir.
+    /// Per-VM farm root (`.../store-view`), not the `live/` dir.
     pub farm_root: PathBuf,
     /// Content-derived u32 generation number (carried as u64 to match
     /// [`build_farm`]'s signature; validated to fit u32 upstream).
@@ -178,6 +181,18 @@ pub struct BuildStoreViewFarmRequest {
     pub closure_paths: Vec<PathBuf>,
     /// Marker pinned into `generations/<N>/marker.json`.
     pub marker: GenerationMarker,
+}
+
+/// Return the flat live hardlink pool served by virtiofsd.
+pub fn live_dir(store_root: &Path) -> PathBuf {
+    store_root.join("live")
+}
+
+/// Return the generation metadata directory.
+pub fn generation_dir(store_root: &Path, generation_number: u64) -> PathBuf {
+    store_root
+        .join("generations")
+        .join(generation_number.to_string())
 }
 
 /// Returns `Ok(())` iff `a` and `b` live on the same filesystem
@@ -261,18 +276,17 @@ pub fn write_generation_marker(
 
 /// Build or reconcile one generation of the per-VM hardlink farm.
 ///
-/// `store_root` is the per-VM farm root (`.../store-view`), not the
-/// target generation dir itself. Every source path lands under
-/// `generations/<N>/` keyed by its Nix-store basename.
+/// `store_root` is the per-VM farm root (`.../store-view`). Every
+/// source path lands under `live/<basename>` if it is not already
+/// present. `generations/<N>/` contains metadata only.
 pub fn build_farm(
     store_root: &Path,
     generation_number: u64,
     closure_paths: &[PathBuf],
     marker: &GenerationMarker,
 ) -> Result<PathBuf, HardlinkFarmError> {
-    let generation_dir = store_root
-        .join("generations")
-        .join(generation_number.to_string());
+    let generation_dir = generation_dir(store_root, generation_number);
+    let live_dir = live_dir(store_root);
     // Fail-closed collision guard: the store-view generation number is
     // a content-derived u32 (see closures-json.nix). If this generation
     // dir already exists with a marker for a DIFFERENT closure, two
@@ -291,6 +305,19 @@ pub fn build_farm(
                     incoming: marker.closure_hash.clone(),
                 });
             }
+            if existing.vm == marker.vm
+                && existing.generation_number == marker.generation_number
+                && live_dir
+                    .join(format!(".nixling-marker-{}", marker.vm))
+                    .exists()
+                && closure_paths.iter().all(|p| {
+                    p.file_name()
+                        .map(|name| live_dir.join(name).exists())
+                        .unwrap_or(false)
+                })
+            {
+                return Ok(generation_dir);
+            }
         } else {
             // Populated generation dir with no trusted marker: a build
             // that crashed before write_generation_marker. It is never
@@ -305,21 +332,157 @@ pub fn build_farm(
             })?;
         }
     }
+    std::fs::create_dir_all(store_root).map_err(|e| HardlinkFarmError::Io {
+        path: store_root.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    std::fs::create_dir_all(&live_dir).map_err(|e| HardlinkFarmError::Io {
+        path: live_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    assert_same_filesystem(store_root, &live_dir)?;
+
+    let stage_dir = store_root.join(format!(
+        "live.stage.{}.{}",
+        generation_number,
+        std::process::id()
+    ));
+    if stage_dir.exists() {
+        std::fs::remove_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
+            path: stage_dir.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::create_dir_all(&stage_dir).map_err(|e| HardlinkFarmError::Io {
+        path: stage_dir.display().to_string(),
+        detail: e.to_string(),
+    })?;
+
+    let build_result = (|| {
+        for source in closure_paths {
+            assert_same_filesystem(source, store_root)?;
+            let file_name = source.file_name().ok_or_else(|| HardlinkFarmError::Io {
+                path: source.display().to_string(),
+                detail: "source path has no basename".to_owned(),
+            })?;
+            let live_path = live_dir.join(file_name);
+            if live_path.exists() {
+                continue;
+            }
+            let staged_path = stage_dir.join(file_name);
+            hardlink_tree(source, &staged_path)?;
+            match std::fs::rename(&staged_path, &live_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let _ = std::fs::remove_dir_all(&staged_path);
+                }
+                Err(err) => {
+                    return Err(HardlinkFarmError::Io {
+                        path: live_path.display().to_string(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(err) = build_result {
+        let _ = std::fs::remove_dir_all(&stage_dir);
+        return Err(err);
+    }
+    let _ = std::fs::remove_dir_all(&stage_dir);
+
     std::fs::create_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
         path: generation_dir.display().to_string(),
         detail: e.to_string(),
     })?;
     assert_same_filesystem(store_root, &generation_dir)?;
-    for source in closure_paths {
-        assert_same_filesystem(source, store_root)?;
-        let file_name = source.file_name().ok_or_else(|| HardlinkFarmError::Io {
-            path: source.display().to_string(),
-            detail: "source path has no basename".to_owned(),
-        })?;
-        hardlink_tree(source, &generation_dir.join(file_name))?;
-    }
+    write_store_paths(&generation_dir, closure_paths)?;
+    write_system_symlink(&generation_dir, closure_paths)?;
     write_generation_marker(&generation_dir, marker)?;
+    write_live_marker(&live_dir, &marker.vm)?;
     Ok(generation_dir)
+}
+
+fn write_store_paths(
+    generation_dir: &Path,
+    closure_paths: &[PathBuf],
+) -> Result<(), HardlinkFarmError> {
+    let path = generation_dir.join("store-paths");
+    let tmp = generation_dir.join("store-paths.tmp");
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        for p in closure_paths {
+            writeln!(file, "{}", p.display()).map_err(|e| HardlinkFarmError::Io {
+                path: tmp.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        }
+        file.sync_all().map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| HardlinkFarmError::Io {
+        path: path.display().to_string(),
+        detail: e.to_string(),
+    })
+}
+
+fn write_system_symlink(
+    generation_dir: &Path,
+    closure_paths: &[PathBuf],
+) -> Result<(), HardlinkFarmError> {
+    let Some(system) = closure_paths
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("nixos-system-"))
+                .unwrap_or(false)
+        })
+        .or_else(|| closure_paths.first())
+    else {
+        return Ok(());
+    };
+    let link = generation_dir.join("system");
+    let tmp = generation_dir.join("system.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(system, &tmp).map_err(|e| HardlinkFarmError::Io {
+        path: tmp.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    std::fs::rename(&tmp, &link).map_err(|e| HardlinkFarmError::Io {
+        path: link.display().to_string(),
+        detail: e.to_string(),
+    })
+}
+
+fn write_live_marker(live_dir: &Path, vm: &str) -> Result<(), HardlinkFarmError> {
+    let marker = live_dir.join(format!(".nixling-marker-{vm}"));
+    let tmp = live_dir.join(format!(".nixling-marker-{vm}.tmp"));
+    {
+        let mut file = std::fs::File::create(&tmp).map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        writeln!(file, "{vm}").map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        file.sync_all().map_err(|e| HardlinkFarmError::Io {
+            path: tmp.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    std::fs::rename(&tmp, &marker).map_err(|e| HardlinkFarmError::Io {
+        path: marker.display().to_string(),
+        detail: e.to_string(),
+    })
 }
 
 fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmError> {
@@ -566,6 +729,98 @@ pub fn swap_current_symlink(
     Ok(())
 }
 
+/// Read the current generation number from `<store_root>/current`.
+pub fn current_generation(store_root: &Path) -> Result<Option<u64>, HardlinkFarmError> {
+    let current = store_root.join("current");
+    let target = match std::fs::read_link(&current) {
+        Ok(target) => target,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(HardlinkFarmError::Io {
+                path: current.display().to_string(),
+                detail: err.to_string(),
+            });
+        }
+    };
+    let Some(name) = target.file_name().and_then(|n| n.to_str()) else {
+        return Ok(None);
+    };
+    match name.parse::<u64>() {
+        Ok(n) => Ok(Some(n)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Sweep `live/` to the union of top-level store path basenames required by
+/// `retained_generations`.
+pub fn sweep_live_pool(
+    store_root: &Path,
+    retained_generations: &[u64],
+) -> Result<usize, HardlinkFarmError> {
+    let live = live_dir(store_root);
+    let mut desired = BTreeSet::new();
+    for generation in retained_generations {
+        let store_paths = generation_dir(store_root, *generation).join("store-paths");
+        let content = match std::fs::read_to_string(&store_paths) {
+            Ok(content) => content,
+            Err(_) => return Ok(0),
+        };
+        for line in content.lines().filter(|line| !line.trim().is_empty()) {
+            let path = Path::new(line);
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                desired.insert(name.to_owned());
+            }
+        }
+    }
+
+    let mut removed = 0;
+    let entries = match std::fs::read_dir(&live) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => {
+            return Err(HardlinkFarmError::Io {
+                path: live.display().to_string(),
+                detail: err.to_string(),
+            });
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|e| HardlinkFarmError::Io {
+            path: live.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if name_str.starts_with(".nixling-marker-") || name_str.starts_with("live.stage.") {
+            continue;
+        }
+        if desired.contains(name_str) {
+            continue;
+        }
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| HardlinkFarmError::Io {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        if meta.is_dir() {
+            std::fs::remove_dir_all(&path).map_err(|e| HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        } else {
+            std::fs::remove_file(&path).map_err(|e| HardlinkFarmError::Io {
+                path: path.display().to_string(),
+                detail: e.to_string(),
+            })?;
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// Remove a stale `current.tmp` left behind by a previous
 /// activation that crashed between symlink-write and rename.
 /// Idempotent: no error if the tmp doesn't exist.
@@ -680,7 +935,7 @@ mod tests {
         )
         .unwrap();
 
-        let farm_binary = generation_dir.join("abc-system/bin/switch-to-configuration");
+        let farm_binary = live_dir(&farm_root).join("abc-system/bin/switch-to-configuration");
         assert!(farm_binary.exists());
         assert_eq!(
             std::fs::metadata(&farm_binary).unwrap().ino(),
@@ -689,12 +944,14 @@ mod tests {
                 .ino()
         );
         assert_eq!(
-            std::fs::read_link(generation_dir.join("abc-system/data-link")).unwrap(),
+            std::fs::read_link(live_dir(&farm_root).join("abc-system/data-link")).unwrap(),
             PathBuf::from("../dep/data")
         );
         let marker = read_generation_marker(&generation_dir).unwrap();
         assert_eq!(marker.generation_number, 7);
         assert_eq!(marker.vm, "corp-vm");
+        assert!(generation_dir.join("store-paths").exists());
+        assert!(generation_dir.join("system").exists());
     }
 
     #[test]
@@ -765,8 +1022,8 @@ mod tests {
             Err(HardlinkFarmError::GenerationCollision { .. })
         ));
         // The original closure's store view is untouched.
-        assert!(farm_root.join("generations/42/aaa-system/payload").exists());
-        assert!(!farm_root.join("generations/42/bbb-system/payload").exists());
+        assert!(live_dir(&farm_root).join("aaa-system/payload").exists());
+        assert!(!live_dir(&farm_root).join("bbb-system/payload").exists());
     }
 
     #[test]
@@ -800,14 +1057,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(stale_dir.join("ccc-system/payload").exists());
+        assert!(live_dir(&farm_root).join("ccc-system/payload").exists());
         assert!(!stale_dir.join("leftover-from-crash").exists());
         let marker = read_generation_marker(&stale_dir).unwrap();
         assert_eq!(marker.closure_hash, "toplevel:ccc-system");
     }
 
     #[test]
-    fn build_farm_replaces_wrong_symlink_target() {
+    fn build_farm_preserves_symlink_target_for_new_live_path() {
         let dir = tempdir().unwrap();
         let source_root = dir.path().join("source-store");
         let farm_root = dir.path().join("farm");
@@ -824,10 +1081,6 @@ mod tests {
         std::fs::write(dep_dir.join("wrong"), b"wrong").unwrap();
         std::os::unix::fs::symlink("../dep/real", system_path.join("data-link")).unwrap();
 
-        let generation_dir = farm_root.join("generations/8/alpha-system");
-        std::fs::create_dir_all(&generation_dir).unwrap();
-        std::os::unix::fs::symlink("../dep/wrong", generation_dir.join("data-link")).unwrap();
-
         build_farm(
             &farm_root,
             8,
@@ -842,14 +1095,15 @@ mod tests {
         )
         .unwrap();
 
+        let live_system_dir = live_dir(&farm_root).join("alpha-system");
         assert_eq!(
-            std::fs::read_link(generation_dir.join("data-link")).unwrap(),
+            std::fs::read_link(live_system_dir.join("data-link")).unwrap(),
             PathBuf::from("../dep/real")
         );
     }
 
     #[test]
-    fn build_farm_recovers_from_broken_symlink_destination() {
+    fn build_farm_preserves_broken_symlink_target_for_new_live_path() {
         let dir = tempdir().unwrap();
         let source_root = dir.path().join("source-store");
         let farm_root = dir.path().join("farm");
@@ -861,10 +1115,6 @@ mod tests {
         )
         .unwrap();
         std::os::unix::fs::symlink("missing-target", system_path.join("data-link")).unwrap();
-
-        let generation_dir = farm_root.join("generations/9/beta-system");
-        std::fs::create_dir_all(&generation_dir).unwrap();
-        std::os::unix::fs::symlink("broken-before", generation_dir.join("data-link")).unwrap();
 
         build_farm(
             &farm_root,
@@ -880,8 +1130,9 @@ mod tests {
         )
         .unwrap();
 
+        let live_system_dir = live_dir(&farm_root).join("beta-system");
         assert_eq!(
-            std::fs::read_link(generation_dir.join("data-link")).unwrap(),
+            std::fs::read_link(live_system_dir.join("data-link")).unwrap(),
             PathBuf::from("missing-target")
         );
     }
@@ -1035,6 +1286,58 @@ mod tests {
         reconcile_stale_swap_tmp(&store).unwrap();
         // Call twice for idempotency.
         reconcile_stale_swap_tmp(&store).unwrap();
+    }
+
+    #[test]
+    fn sweep_live_pool_keeps_retained_generations_and_removes_stale_entries() {
+        let dir = tempdir().unwrap();
+        let source_root = dir.path().join("source-store");
+        let farm_root = dir.path().join("farm");
+        let gen1_path = source_root.join("aaa-system");
+        let gen2_path = source_root.join("bbb-system");
+        let stale_path = live_dir(&farm_root).join("stale-system");
+        std::fs::create_dir_all(&gen1_path).unwrap();
+        std::fs::create_dir_all(&gen2_path).unwrap();
+        std::fs::write(gen1_path.join("payload"), b"a").unwrap();
+        std::fs::write(gen2_path.join("payload"), b"b").unwrap();
+
+        build_farm(
+            &farm_root,
+            1,
+            std::slice::from_ref(&gen1_path),
+            &GenerationMarker {
+                closure_hash: "toplevel:aaa-system".to_owned(),
+                nixling_version: "0.4.0".to_owned(),
+                activated_at: "2026-05-29T09:00:00Z".to_owned(),
+                vm: "corp-vm".to_owned(),
+                generation_number: 1,
+            },
+        )
+        .unwrap();
+        build_farm(
+            &farm_root,
+            2,
+            std::slice::from_ref(&gen2_path),
+            &GenerationMarker {
+                closure_hash: "toplevel:bbb-system".to_owned(),
+                nixling_version: "0.4.0".to_owned(),
+                activated_at: "2026-05-29T09:00:00Z".to_owned(),
+                vm: "corp-vm".to_owned(),
+                generation_number: 2,
+            },
+        )
+        .unwrap();
+        std::fs::create_dir_all(&stale_path).unwrap();
+        std::fs::write(stale_path.join("payload"), b"stale").unwrap();
+
+        let removed = sweep_live_pool(&farm_root, &[2]).unwrap();
+        assert_eq!(removed, 2);
+        assert!(!live_dir(&farm_root).join("aaa-system").exists());
+        assert!(live_dir(&farm_root).join("bbb-system/payload").exists());
+        assert!(!stale_path.exists());
+        assert!(live_dir(&farm_root)
+            .join(".nixling-marker-corp-vm")
+            .exists());
     }
 
     #[test]

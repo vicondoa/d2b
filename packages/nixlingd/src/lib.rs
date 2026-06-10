@@ -28,8 +28,8 @@ use nixling_core::bundle::Bundle;
 use nixling_core::bundle_resolver::{
     intent_id_activation, intent_id_gc_host, intent_id_hosts_host, intent_id_installer_host,
     intent_id_keys_rotate, intent_id_migrate_host, intent_id_nft_host, intent_id_nm_unmanaged_host,
-    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_sysctl,
-    intent_id_trust, intent_id_usbip_firewall, BundleResolver,
+    intent_id_rotate_known_host, intent_id_route_env, intent_id_runner, intent_id_store_view,
+    intent_id_sysctl, intent_id_trust, intent_id_usbip_firewall, BundleResolver,
 };
 use nixling_core::closures::ClosureMetadata;
 use nixling_core::error::BundleError;
@@ -60,7 +60,7 @@ use nixling_ipc::{
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
-    types::{BundleOpId, RoleId, ScopeId, VmId},
+    types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
     KnownFeatureFlag, BROKER_SOCKET_PATH,
 };
 use serde::{Deserialize, Serialize};
@@ -2642,6 +2642,53 @@ struct VmStartRunner<'a> {
 }
 
 impl VmStartRunner<'_> {
+    fn sync_store_view(&self, vm: &str) -> Result<(), String> {
+        let intent_id = intent_id_store_view(vm);
+        let intent = self
+            .resolver
+            .find_store_view_intent(&intent_id)
+            .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())?;
+        match dispatch_broker_request(
+            self.state,
+            BrokerRequest::StoreSync(nixling_ipc::broker_wire::StoreSyncRequest {
+                vm_id: VmId::new(vm),
+                bundle_closure_ref: BundleClosureRef::new(intent.intent_id.clone()),
+                generation: u32::try_from(intent.generation)
+                    .map_err(|_| "store-view-generation-overflow".to_owned())?,
+                tracing_span_id: None,
+            }),
+        ) {
+            Ok(BrokerResponse::StoreSync(_)) => Ok(()),
+            Ok(BrokerResponse::Error(error)) => {
+                tracing::warn!(
+                    vm = %vm,
+                    broker_kind = %error.kind,
+                    broker_operation = %error.operation,
+                    broker_message = %error.message,
+                    broker_action = %error.action,
+                    "StoreSync preflight dispatch failed"
+                );
+                Err(format!("broker-error:StoreSync:{}", error.kind))
+            }
+            Ok(other) => {
+                tracing::warn!(
+                    vm = %vm,
+                    broker_response_kind = %broker_response_kind(&other),
+                    "StoreSync preflight returned unexpected broker response"
+                );
+                Err("broker-protocol:StoreSync".to_owned())
+            }
+            Err(error) => {
+                tracing::warn!(
+                    vm = %vm,
+                    error = ?error,
+                    "StoreSync preflight dispatch failed"
+                );
+                Err("broker-dispatch:StoreSync".to_owned())
+            }
+        }
+    }
+
     fn spawn_runner(
         &self,
         vm: &str,
@@ -2833,7 +2880,12 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         budget: supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
         match vm_start_node_mode(&node.role) {
-            VmStartNodeMode::ReadinessOnly => wait_for_readiness(node, readiness, budget.readiness),
+            VmStartNodeMode::ReadinessOnly => {
+                if node.role == ProcessRole::StoreVirtiofsPreflight {
+                    self.sync_store_view(vm)?;
+                }
+                wait_for_readiness(node, readiness, budget.readiness)
+            }
             VmStartNodeMode::OneShot(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
                 wait_for_one_shot_exit(response.pid, response.start_time_ticks, budget.readiness)

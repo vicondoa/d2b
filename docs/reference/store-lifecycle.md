@@ -12,18 +12,18 @@ invariants are the same.
 
 ## On-disk layout
 
-Per VM, nixling keeps two closely related trees under
-`/var/lib/nixling/vms/<vm>/`:
+Per VM, nixling keeps the canonical store-view tree under
+`/var/lib/nixling/vms/<vm>/store-view/`:
 
 | Path | Purpose |
 | --- | --- |
-| `store/` | The hardlink farm that virtiofsd exposes to the guest. Every entry is a hardlink to a host `/nix/store` path, never a byte-for-byte copy. |
-| `store-meta/current -> generations/<N>` | The active generation pointer. Updated atomically on activation. |
-| `store-meta/generations/<N>/system` | Symlink to the host's system toplevel for that generation. |
-| `store-meta/generations/<N>/store-paths` | Newline-delimited closure list for retention + GC. |
-| `store-meta/generations/<N>/db.dump` | `nix-store --dump-db` payload for the retained closure. |
-| `store-meta/generations/<N>/meta.json` | Generation metadata (`generation`, `timestamp`, `runner`). |
-| `store-meta/gcroots/generation-<N>` | Host-side GC root pinning the retained generation. |
+| `store-view/live/` | The flat hardlink pool that virtiofsd exposes to the guest. Every package entry is a hardlink to a host `/nix/store` path, never a byte-for-byte copy. |
+| `store-view/current -> generations/<N>` | The active generation pointer. Updated atomically by Rust `StoreSync`. |
+| `store-view/generations/<N>/system` | Symlink to the host's system toplevel for that generation. |
+| `store-view/generations/<N>/store-paths` | Newline-delimited closure list for retention + GC. |
+| `store-view/generations/<N>/db.dump` | `nix-store --dump-db` payload for the retained closure. |
+| `store-view/generations/<N>/marker.json` | Typed generation marker used by the hardlink-farm primitive. |
+| `store-view/gcroots/generation-<N>` | Host-side GC root pinning the retained generation. |
 
 The Rust primitive layer models the same lifecycle with a per-generation
 `marker.json` and a staged `current.tmp` symlink before the final atomic rename.
@@ -64,7 +64,7 @@ building an unusable tree.
 
 nixling uses two marker styles:
 
-- **Farm marker**: `store/.nixling-marker-<vm>` is planted by the sync helper.
+- **Farm marker**: `store-view/live/.nixling-marker-<vm>` is planted by the sync helper.
   The virtiofsd preflight checks both the real tree and the bind-mounted view
   visible to the service. A hand-made directory without the marker is refused.
 - **Generation marker**: the Rust primitive layer writes `generations/<N>/marker.json`
@@ -79,7 +79,6 @@ activations from being mistaken for a valid store generation.
 The active generation pointer is always updated with a staged symlink and a
 single rename:
 
-- the shell path writes `store-meta/current.new` and renames it over `current`;
 - the Rust path writes `current.tmp`, renames it over `current`, and removes any
   stale `current.tmp` on the next activation via `reconcile_stale_swap_tmp`.
 
@@ -112,8 +111,8 @@ The legacy sync helper's retention rule is explicit:
 
 Everything else is pruned:
 
-- unkept `store-meta/generations/<N>/` directories;
-- their matching `store-meta/gcroots/generation-<N>` links;
+- unkept `store-view/generations/<N>/` directories;
+- their matching `store-view/gcroots/generation-<N>` links;
 - host per-user GC roots for those generations;
 - hardlink-farm entries not referenced by the union of retained `store-paths`
   files.
@@ -135,9 +134,10 @@ existing per-VM store tree is healthy.
 
 - `/var/lib/nixling/vms/<vm>/current`
 - `/var/lib/nixling/vms/<vm>/booted`
-- `/var/lib/nixling/vms/<vm>/store/`
-- `/var/lib/nixling/vms/<vm>/store-meta/generations/`
-- `/var/lib/nixling/vms/<vm>/store-meta/gcroots/`
+- `/var/lib/nixling/vms/<vm>/store/` (legacy fallback only)
+- `/var/lib/nixling/vms/<vm>/store-meta/generations/` (legacy fallback only)
+- `/var/lib/nixling/vms/<vm>/store-meta/gcroots/` (legacy fallback only)
+- `/var/lib/nixling/vms/<vm>/store-view/`
 
 ### Safety checks before the first native `--apply`
 
@@ -151,8 +151,8 @@ existing per-VM store tree is healthy.
 ### Transition steps
 
 1. Rebuild the host so the Rust CLI / daemon bits are on `$PATH`.
-2. Leave existing generations in place; the native path reads the
-   same `store-meta/` tree the bash path wrote.
+2. Leave existing legacy generations in place as fallback artifacts; Rust
+   `StoreSync` is the canonical writer for `store-view/`.
 3. Run the native verb with `--dry-run` first, then `--apply`. The
    v1.0 daemon-only contract (ADR 0015) is the only path; the
    historical `NIXLING_NATIVE_ONLY=1` env var is a no-op (its
@@ -166,7 +166,7 @@ existing per-VM store tree is healthy.
 - Roll back by reverting the host generation and rebuilding (the
   `NIXLING_LEGACY_BASH_OPT_IN=1` escape hatch was retired in v1.0
   along with the bash CLI; see ADR 0015 for the full removal list).
-- Do **not** manually delete `store-meta` generations just because
+- Do **not** manually delete `store-view` or `store-meta` generations just because
   you changed control-plane owners; both paths still expect the
   retained rollback generation to exist.
 

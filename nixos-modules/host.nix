@@ -328,10 +328,11 @@ in
                   proto = "virtiofs";
                 }
                 {
-                  source = "${cfg.store.stateDir}/${name}/store-meta";
+                  source = "${cfg.store.stateDir}/${name}/store-view";
                   mountPoint = "/run/nixling-store-meta";
                   tag = "nl-meta";
                   proto = "virtiofs";
+                  readOnly = true;
                 }
                 {
                   source = "${cfg.site.stateDir}/vms/${name}/host-keys";
