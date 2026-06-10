@@ -145,6 +145,8 @@ pub enum StdinEndpoint {
 struct OutputLog {
     base_offset: u64,
     bytes: Vec<u8>,
+    delivered_through: u64,
+    accounted_through: u64,
     eof: bool,
 }
 
@@ -187,6 +189,8 @@ impl OutputLog {
         Self {
             base_offset: 0,
             bytes: Vec::new(),
+            delivered_through: 0,
+            accounted_through: 0,
             eof: false,
         }
     }
@@ -228,8 +232,23 @@ impl OutputLog {
         self.base_offset = clamped;
     }
 
-    fn covers_from_start_through(&self, offset: u64) -> bool {
-        self.base_offset == 0 && self.next_offset() >= offset
+    fn mark_delivered_through(&mut self, offset: u64) {
+        self.delivered_through = self.delivered_through.max(offset);
+    }
+
+    fn makes_available_through(&self, offset: u64) -> bool {
+        self.delivered_through >= offset
+            || self.accounted_through >= offset
+            || (self.base_offset == 0 && self.next_offset() >= offset)
+    }
+
+    fn evict_undelivered_through(&mut self, offset: u64) {
+        self.evict_through(offset);
+    }
+
+    fn evict_accounted_through(&mut self, offset: u64) {
+        self.accounted_through = self.accounted_through.max(offset);
+        self.evict_through(offset);
     }
 }
 
@@ -467,7 +486,32 @@ impl ChunkedSession {
         through_offset: u64,
     ) -> Result<(), ProtocolError> {
         self.check_token(token)?;
-        self.log_mut(stream).evict_through(through_offset);
+        let log = self.log_mut(stream);
+        log.mark_delivered_through(through_offset);
+        log.evict_through(through_offset);
+        Ok(())
+    }
+
+    pub fn evict_undelivered_output(
+        &mut self,
+        token: SessionToken,
+        stream: Stream,
+        through_offset: u64,
+    ) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.log_mut(stream)
+            .evict_undelivered_through(through_offset);
+        Ok(())
+    }
+
+    pub fn evict_accounted_output(
+        &mut self,
+        token: SessionToken,
+        stream: Stream,
+        through_offset: u64,
+    ) -> Result<(), ProtocolError> {
+        self.check_token(token)?;
+        self.log_mut(stream).evict_accounted_through(through_offset);
         Ok(())
     }
 
@@ -752,8 +796,8 @@ impl ChunkedSession {
 
     pub fn visible_terminal_status_after_output_available(&self) -> Option<ExitStatus> {
         let snapshot = self.terminal_status?;
-        if self.stdout.covers_from_start_through(snapshot.stdout_end)
-            && self.stderr.covers_from_start_through(snapshot.stderr_end)
+        if self.stdout.makes_available_through(snapshot.stdout_end)
+            && self.stderr.makes_available_through(snapshot.stderr_end)
         {
             Some(snapshot.status)
         } else {
@@ -1675,7 +1719,48 @@ mod tests {
         );
         assert_eq!(session.retained_output_bytes(), 8);
 
-        let mut evicted = ChunkedSession::new(7, MIB, MIB, 64 * KIB);
+        let mut delivered = ChunkedSession::new(7, MIB, MIB, 64 * KIB);
+        let delivered_token = delivered.token();
+        delivered
+            .append_output(delivered_token, Stream::Stdout, b"tail")
+            .unwrap();
+        assert_eq!(
+            delivered
+                .read_stdout(delivered_token, 0, 64 * KIB)
+                .unwrap()
+                .data,
+            b"tail"
+        );
+        delivered
+            .ack_output(delivered_token, Stream::Stdout, 4)
+            .unwrap();
+        delivered
+            .set_terminal_status(delivered_token, ExitStatus::Code(0))
+            .unwrap();
+        assert_eq!(
+            delivered.visible_terminal_status_after_output_available(),
+            Some(ExitStatus::Code(0)),
+            "terminal status must be visible after an attached reader consumed pre-terminal output"
+        );
+
+        let mut accounted = ChunkedSession::new(8, MIB, MIB, 64 * KIB);
+        let accounted_token = accounted.token();
+        accounted
+            .append_output(accounted_token, Stream::Stdout, b"tail")
+            .unwrap();
+        accounted
+            .set_terminal_status(accounted_token, ExitStatus::Code(0))
+            .unwrap();
+        accounted
+            .evict_accounted_output(accounted_token, Stream::Stdout, 4)
+            .unwrap();
+        assert_eq!(
+            accounted.visible_terminal_status_after_output_available(),
+            Some(ExitStatus::Code(0)),
+            "terminal status must be visible after detached dropped-byte accounting covers pre-terminal output"
+        );
+
+        let mut evicted = ChunkedSession::new(9, MIB, MIB, 64 * KIB);
         let evicted_token = evicted.token();
         evicted
             .append_output(evicted_token, Stream::Stdout, b"tail")
@@ -1684,12 +1769,12 @@ mod tests {
             .set_terminal_status(evicted_token, ExitStatus::Code(0))
             .unwrap();
         evicted
-            .ack_output(evicted_token, Stream::Stdout, 1)
+            .evict_undelivered_output(evicted_token, Stream::Stdout, 1)
             .unwrap();
         assert_eq!(
             evicted.visible_terminal_status_after_output_available(),
             None,
-            "terminal status must stay hidden if pre-terminal output was evicted"
+            "terminal status must stay hidden if pre-terminal output was evicted before delivery"
         );
     }
 }

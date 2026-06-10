@@ -472,8 +472,9 @@ It validates:
   sequence with `request_id` replay for identical retained requests and
   typed rejection for mismatched duplicate IDs;
 - process exit status recorded separately from client controls, visible
-  only after preceding output is available through retained cursors, with
-  signal exits mapped to shell-style `128 + signal` status codes.
+  only after preceding output is retained, delivered/acknowledged, or
+  explicitly dropped with cursor accounting, with signal exits mapped to
+  shell-style `128 + signal` status codes.
 
 SSH compatibility remains design-level rather than a broad executable
 prototype:

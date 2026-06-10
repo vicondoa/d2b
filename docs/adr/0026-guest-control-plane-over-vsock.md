@@ -270,11 +270,12 @@ Initial pass/fail thresholds are:
 Each candidate must also produce byte-exact transcripts for the matrix,
 fail on reordered resize/signal/cancel control events, and keep terminal
 process status hidden until output preceding terminal observation is
-available through stream/log cursors. Real-transport implementation tests
-must record p50/p95/max latency; deterministic W0 proofs record service-turn
-gaps. Concurrent proof must run slow-output, blocked-stdin, interactive,
-and unary-health work together and show no head-of-line blocking, no
-starvation, and bounded memory.
+retained, delivered/acknowledged, or explicitly dropped with cursor
+accounting. Real-transport implementation tests must record p50/p95/max
+latency; deterministic W0 proofs record service-turn gaps. Concurrent
+proof must run slow-output, blocked-stdin, interactive, and unary-health
+work together and show no head-of-line blocking, no starvation, and
+bounded memory.
 
 Nice-to-have properties such as lower latency, lower dependency
 footprint, and simpler docs can break ties, but they cannot compensate
