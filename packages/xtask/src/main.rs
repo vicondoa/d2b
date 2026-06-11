@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap_complete::{
@@ -80,11 +81,7 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("packages/nixling-ipc/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control.rs");
-    let temp_proto_dir = env::temp_dir().join(format!(
-        "nixling-guest-proto-{}",
-        std::process::id()
-    ));
-    fs::create_dir_all(&temp_proto_dir)?;
+    let temp_proto_dir = create_exclusive_temp_dir("nixling-guest-proto")?;
     let temp_proto = temp_proto_dir.join("guest_control.proto");
     fs::write(&temp_proto, message_only_proto(&fs::read_to_string(&proto)?)?)?;
 
@@ -139,6 +136,22 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     );
     fs::write(path, generated)?;
     Ok(())
+}
+
+fn create_exclusive_temp_dir(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let base = env::temp_dir();
+    for attempt in 0..100_u32 {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos();
+        let path = base.join(format!("{prefix}-{}-{nonce}-{attempt}", std::process::id()));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(Box::new(error)),
+        }
+    }
+    Err(format!("could not create exclusive temp dir for {prefix}").into())
 }
 
 fn run_task<F>(label: &str, task: F) -> std::process::ExitCode

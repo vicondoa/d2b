@@ -27,7 +27,7 @@ if rg -n '\bunsafe\b|allow\(unsafe_code\)|expect\(unsafe_code\)|allow\(clippy::a
 fi
 
 if rg -n 'ttrpc|service GuestControl|GuestControl\\x12|Service|Client|Server|register_service|add_service|ServiceClient|ServiceServer' "$generated_file"; then
-  fail "guest-proto-bindings: generated bindings include service/runtime descriptors or stubs; W8 is message-only"
+  fail "guest-proto-bindings: generated guest-control bindings must stay message-only"
 fi
 
 if rg -n 'ttrpc' "$ROOT/packages/nixling-ipc/Cargo.toml"; then
