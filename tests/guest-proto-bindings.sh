@@ -9,6 +9,9 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
+command -v rg >/dev/null 2>&1 ||
+  fail "guest-proto-bindings: rg is required for static binding checks"
+
 generated_dir="$ROOT/packages/nixling-ipc/src/generated"
 generated_file="$generated_dir/guest_control.rs"
 ipc_crate="$ROOT/packages/nixling-ipc"
@@ -17,7 +20,7 @@ ipc_manifest="$ipc_crate/Cargo.toml"
 NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
   CARGO_BUILD_RUSTC_WRAPPER='' \
   RUSTC_WRAPPER='' \
-  cargo run --manifest-path "$ROOT/packages/Cargo.toml" -p xtask -- gen-guest-proto >/dev/null
+  cargo run --locked --manifest-path "$ROOT/packages/Cargo.toml" -p xtask -- gen-guest-proto >/dev/null
 
 if ! git -C "$ROOT" diff --exit-code -- "$generated_dir" >/dev/null; then
   git -C "$ROOT" --no-pager diff -- "$generated_dir" | sed -n '1,160p' >&2
