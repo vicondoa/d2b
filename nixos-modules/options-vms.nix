@@ -600,7 +600,9 @@
               Runtime validation requires the source and its parent
               directories to be symlink-free, the file to be regular,
               root-owned, outside `/nix/store`, and inaccessible to
-              group/world permission bits.
+              group/world permission bits. Nixling materializes a
+              root-owned copy readable only by the dedicated
+              `nixling-<vm>-gctlfs` guest-control virtiofsd principal.
             '';
           };
         };

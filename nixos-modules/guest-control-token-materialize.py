@@ -40,7 +40,7 @@ def reject_symlink_components(path, *, require_existing_file, check_parent_permi
             fail("path-component-group-or-world-writable")
 
 
-def validate_materialized(path):
+def validate_materialized(path, reader_gid):
     reject_symlink_components(path, require_existing_file=True, check_parent_permissions=False)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -50,13 +50,13 @@ def validate_materialized(path):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             fail("materialized-not-regular")
-        os.fchown(fd, 0, 0)
-        os.fchmod(fd, 0o400)
+        os.fchown(fd, 0, reader_gid)
+        os.fchmod(fd, 0o440)
     finally:
         os.close(fd)
 
 
-def copy_operator_token(source, target):
+def copy_operator_token(source, target, reader_gid):
     if not os.path.isabs(source):
         fail("source-not-absolute")
     if source == "/nix/store" or source.startswith("/nix/store/"):
@@ -74,15 +74,15 @@ def copy_operator_token(source, target):
             fail("source-not-root-owned")
         if stat.S_IMODE(st.st_mode) & 0o077:
             fail("source-group-or-world-permissions")
-        write_fd_to_target(src_fd, target)
+        write_fd_to_target(src_fd, target, reader_gid)
         write_source_marker(target, "operator")
     finally:
         os.close(src_fd)
 
 
-def write_fd_to_target(src_fd, target):
+def write_fd_to_target(src_fd, target, reader_gid):
     directory = os.path.dirname(target)
-    prepare_target_directory(directory)
+    prepare_target_directory(directory, reader_gid)
     tmp = os.path.join(directory, f".token.tmp.{os.getpid()}")
     try:
         dst_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o400)
@@ -92,8 +92,8 @@ def write_fd_to_target(src_fd, target):
                 if not chunk:
                     break
                 os.write(dst_fd, chunk)
-            os.fchown(dst_fd, 0, 0)
-            os.fchmod(dst_fd, 0o400)
+            os.fchown(dst_fd, 0, reader_gid)
+            os.fchmod(dst_fd, 0o440)
             os.fsync(dst_fd)
         finally:
             os.close(dst_fd)
@@ -105,20 +105,20 @@ def write_fd_to_target(src_fd, target):
             pass
 
 
-def generate_token(target):
+def generate_token(target, reader_gid):
     if os.path.exists(target) and read_source_marker(target) == "generated":
-        validate_materialized(target)
+        validate_materialized(target, reader_gid)
         return
     directory = os.path.dirname(target)
-    prepare_target_directory(directory)
+    prepare_target_directory(directory, reader_gid)
     tmp = os.path.join(directory, f".token.tmp.{os.getpid()}")
     token = (secrets.token_urlsafe(48) + "\n").encode("ascii")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o400)
         try:
             os.write(fd, token)
-            os.fchown(fd, 0, 0)
-            os.fchmod(fd, 0o400)
+            os.fchown(fd, 0, reader_gid)
+            os.fchmod(fd, 0o440)
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -128,7 +128,7 @@ def generate_token(target):
             os.unlink(tmp)
         except FileNotFoundError:
             pass
-    validate_materialized(target)
+    validate_materialized(target, reader_gid)
     write_source_marker(target, "generated")
 
 
@@ -172,7 +172,7 @@ def write_source_marker(target, value):
             pass
 
 
-def prepare_target_directory(directory):
+def prepare_target_directory(directory, reader_gid):
     reject_symlink_components(directory, require_existing_file=False, check_parent_permissions=False)
     parent = os.path.dirname(directory)
     created_parent = False
@@ -195,7 +195,7 @@ def prepare_target_directory(directory):
     finally:
         os.close(parent_fd)
     try:
-        os.mkdir(directory, mode=0o700)
+        os.mkdir(directory, mode=0o750)
     except FileExistsError:
         pass
     try:
@@ -206,8 +206,8 @@ def prepare_target_directory(directory):
         st = os.fstat(fd)
         if not stat.S_ISDIR(st.st_mode):
             fail("target-directory-not-directory")
-        os.fchown(fd, 0, 0)
-        os.fchmod(fd, 0o700)
+        os.fchown(fd, 0, reader_gid)
+        os.fchmod(fd, 0o750)
     finally:
         os.close(fd)
 
@@ -215,8 +215,9 @@ def prepare_target_directory(directory):
 for spec in specs:
     current_vm = spec["name"]
     target = spec["target"]
+    reader_gid = int(spec.get("readerGid", 0))
     source = spec.get("source")
     if source is None:
-        generate_token(target)
+        generate_token(target, reader_gid)
     else:
-        copy_operator_token(source, target)
+        copy_operator_token(source, target, reader_gid)

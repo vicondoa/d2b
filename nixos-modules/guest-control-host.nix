@@ -2,12 +2,14 @@
 
 let
   cfg = config.nixling;
+  nl = import ./lib.nix { inherit lib; };
   enabledGuestControlVms =
     lib.filterAttrs (_: vm: vm.enable && vm.guest.control.enable) cfg.vms;
   tokenSpecs = lib.mapAttrsToList (name: vm: {
     inherit name;
     source = vm.guest.control.auth.tokenFile;
     target = "${cfg.site.stateDir}/guest-control-${name}/token";
+    readerGid = nl.stablePrincipalId "nixling-${name}-gctlfs";
   }) enabledGuestControlVms;
   tokenMaterializer = ./guest-control-token-materialize.py;
 in
