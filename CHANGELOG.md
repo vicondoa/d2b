@@ -14,8 +14,8 @@ deprecations ship one minor release before removal.
 
 - Native, container-free SigNoz observability backend packages and ADR.
   The bundled observability path now targets SigNoz, the SigNoz OTel
-  Collector, schema migrator, ClickHouse, and ZooKeeper as native NixOS
-  services.
+  Collector, schema migrator, ClickHouse, and ClickHouse Keeper as native
+  NixOS services.
 
 - `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
   window-rule include generator. When enabled, installs a KDL file at

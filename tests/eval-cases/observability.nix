@@ -293,7 +293,7 @@ in
         obsVmName = obsVm;
         manifestHasObsVm = builtins.hasAttr obsVm nixos.config.nixling.manifest;
         clickhouseEnable = obsGuest.services.clickhouse.enable;
-        zookeeperEnable = obsGuest.services.zookeeper.enable;
+        keeperDeclared = builtins.hasAttr "clickhouse-keeper" services;
         signozDeclared = builtins.hasAttr "signoz" services;
         signozCollectorDeclared = builtins.hasAttr "signoz-otel-collector" services;
         signozMigrateDeclared = builtins.hasAttr "signoz-schema-migrate-sync" services;
@@ -313,7 +313,7 @@ in
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
           services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
         corpVsockInExecStartHasShape = hasInfix
-          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
           services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
         signozBindAddress = obsGuest.nixling.observability.signoz.listenAddress;
       };
@@ -321,7 +321,7 @@ in
       obsVmName = "sys-obs";
       manifestHasObsVm = true;
       clickhouseEnable = true;
-      zookeeperEnable = true;
+      keeperDeclared = true;
       signozDeclared = true;
       signozCollectorDeclared = true;
       signozMigrateDeclared = true;
@@ -337,7 +337,7 @@ in
       };
       corpIngress = {
         envName = "work";
-        receiverGrpcPort = 4319;
+        receiverGrpcPort = 14318;
         receiverHttpPort = null;
         role = "workload";
         vmName = "corp-vm";
@@ -550,7 +550,7 @@ in
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
           services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
         corpIngressExecHasShape = hasInfix
-          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
           services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
         hostIngressRestartIfChanged = services.nixling-otel-vsock-in-host.restartIfChanged;
         corpIngressRestartIfChanged = services.nixling-otel-vsock-in-corp-vm.restartIfChanged;

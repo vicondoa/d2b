@@ -38,8 +38,8 @@ else
   fail "stack must enable ClickHouse for native SigNoz"
 fi
 
-if grep -q 'services\.zookeeper' "$STACK"; then
-  ok "stack enables a ClickHouse coordinator"
+if grep -q 'systemd\.services\.clickhouse-keeper' "$STACK"; then
+  ok "stack enables ClickHouse Keeper as coordinator"
 else
   fail "stack must enable ZooKeeper or a ClickHouse Keeper equivalent"
 fi
@@ -75,7 +75,7 @@ else
   fail "guest collector must not serialize lib.mkIf wrappers into OTel YAML"
 fi
 
-for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'telemetry.metrics.address'; do
+for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'metrics.readers'; do
   if grep -q "$token" "$STACK" "$ROOT/nixos-modules/components/observability/host.nix" "$ROOT/nixos-modules/components/observability/guest.nix"; then
     ok "collector self-telemetry token present: $token"
   else
@@ -114,6 +114,35 @@ if grep -q '@uri' "$STACK" \
   ok "ClickHouse passwords are URL-encoded before DSN interpolation"
 else
   fail "ClickHouse passwords embedded in DSN query strings must be URL-encoded"
+fi
+
+if grep -q '<password remove="1"/>' "$STACK" \
+  && grep -q '<no_password/>' "$STACK" \
+  && grep -q '<ip>127.0.0.1</ip>' "$STACK"; then
+  ok "ClickHouse default user keeps a local-only auth method"
+else
+  fail "ClickHouse default user must not be left without an auth method"
+fi
+
+if ! grep -q -- '--manager-config' "$STACK" && ! grep -q 'conf/opamp.yaml' "$STACK"; then
+  ok "SigNoz OTel collector runs the static nixling config without OpAMP manager mode"
+else
+  fail "SigNoz OTel collector must not enable OpAMP manager mode for static nixling receivers"
+fi
+
+if grep -q 'chmod 0444 "$file"' "$ROOT/nixos-modules/observability-host-secrets.nix" \
+  && grep -q 'root:root 0700' "$ROOT/nixos-modules/observability-host-secrets.nix"; then
+  ok "observability secrets are readable inside read-only virtiofs but protected by host parent dir"
+else
+  fail "observability secrets must be readable through the read-only virtiofs share"
+fi
+
+if grep -q 'otel_obs_connect_uids=.*vsock-relay' "$ROOT/nixos-modules/host-activation.nix" \
+  && grep -q 'setfacl -d -m "u:$obs_uid:rw" "$obs_state_dir"' "$ROOT/nixos-modules/host-activation.nix" \
+  && grep -q 'setfacl -m "u:$obs_uid:rw,m::rw" "$obs_vsock"' "$ROOT/nixos-modules/host-activation.nix"; then
+  ok "workload OTLP relays inherit/connect to the obs VM vsock socket"
+else
+  fail "observed workload relay UIDs must get effective obs vsock socket ACLs"
 fi
 
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then

@@ -11,7 +11,8 @@
 # is identical in structure to the per-VM `host-keys/` share
 # managed by `host-keys.nix` + `store.nix`:
 #
-#   Host:    `<stateDir>/observability/*` (root:root 0400)
+#   Host:    `<stateDir>/observability/*` (root:root 0444 under a
+#            root:root 0700 parent)
 #   Share:   virtiofs tag `nl-obs-sec` → stack-VM mount
 #            `/run/nixling-obs-secrets/` (read-only)
 #   Guest:   stack services' `LoadCredential`
@@ -125,7 +126,7 @@ in
             name = "nixlingObservabilityHost${spec.name}";
             value = lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] (
               if spec.source != null then ''
-                ${pkgs.coreutils}/bin/install -m 0400 -o root -g root \
+                ${pkgs.coreutils}/bin/install -m 0444 -o root -g root \
                   ${lib.escapeShellArg (toString spec.source)} \
                   ${lib.escapeShellArg spec.path}
               '' else ''
@@ -138,17 +139,40 @@ in
                 ${pkgs.coreutils}/bin/rm -f "$tmp"
                 ${pkgs.coreutils}/bin/head -c ${toString spec.bytes} /dev/urandom \
                   | ${pkgs.coreutils}/bin/base64 > "$tmp"
-                ${pkgs.coreutils}/bin/chmod 0400 "$tmp"
+                ${pkgs.coreutils}/bin/chmod 0444 "$tmp"
                 ${pkgs.coreutils}/bin/chown root:root "$tmp"
                 ${pkgs.coreutils}/bin/mv -f "$tmp" "$file"
               fi
-              ${pkgs.coreutils}/bin/chmod 0400 "$file"
+              ${pkgs.coreutils}/bin/chmod 0444 "$file"
               ${pkgs.coreutils}/bin/chown root:root "$file"
             ''
             );
           })
           signozSecretSpecs))
       ];
+    }
+
+    {
+      system.activationScripts.nixlingObservabilityHostSecretShareAcls =
+        lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] ''
+          set -u
+          processes=/etc/nixling/processes.json
+          if [ -r "$processes" ]; then
+            obs_uid="$(${pkgs.jq}/bin/jq -r --arg vm ${lib.escapeShellArg obsCfg.vmName} '.vms[] | select(.vm == $vm) | .nodes[] | select(.id == "virtiofsd-nl-obs-sec") | .profile.uid' "$processes" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
+            case "$obs_uid" in
+              ""|null) ;;
+              *[!0-9]*) ;;
+              *)
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:--x" ${lib.escapeShellArg cfg.site.stateDir} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r-x" ${lib.escapeShellArg hostSecretsDir} 2>/dev/null || true
+                for secret in ${lib.escapeShellArg hostSecretsDir}/*; do
+                  [ -f "$secret" ] || continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r--" "$secret" 2>/dev/null || true
+                done
+                ;;
+            esac
+          fi
+        '';
     }
 
     # NOTE: the matching virtiofs share into sys-obs is

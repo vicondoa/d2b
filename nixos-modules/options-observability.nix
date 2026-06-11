@@ -284,8 +284,8 @@ in
           When null, nixling generates
           `${"$"}{nixling.site.stateDir}/observability/signoz-jwt-secret`
           at activation. When set, activation copies this file into that
-          host-secret path with `0400 root:root` before sharing it
-          read-only into `sys-obs`.
+          host-secret path with `0444 root:root` under a `0700`
+          root-owned directory before sharing it read-only into `sys-obs`.
         '';
       };
 
@@ -297,8 +297,8 @@ in
           When null, nixling generates
           `${"$"}{nixling.site.stateDir}/observability/signoz-root-password`
           at activation. When set, activation copies this file into that
-          host-secret path with `0400 root:root` before sharing it
-          read-only into `sys-obs`.
+          host-secret path with `0444 root:root` under a `0700`
+          root-owned directory before sharing it read-only into `sys-obs`.
         '';
       };
 
@@ -310,8 +310,8 @@ in
           SigNoz services. When null, nixling generates
           `${"$"}{nixling.site.stateDir}/observability/clickhouse-password`
           at activation. When set, activation copies this file into that
-          host-secret path with `0400 root:root` before sharing it
-          read-only into `sys-obs`.
+          host-secret path with `0444 root:root` under a `0700`
+          root-owned directory before sharing it read-only into `sys-obs`.
         '';
       };
     };

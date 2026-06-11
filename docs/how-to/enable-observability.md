@@ -15,8 +15,8 @@ LANs do not carry telemetry.
 - A working nixling deployment.
 - Enough capacity for the auto-declared `sys-obs` VM. Defaults are
   `vcpu = 4`, `mem = 8192` MiB, and about 40 GiB of persistent volumes:
-  32 GiB ClickHouse, 2 GiB ZooKeeper, 4 GiB SigNoz, and 2 GiB collector
-  state.
+  32 GiB ClickHouse, 2 GiB ClickHouse Keeper, 4 GiB SigNoz, and 2 GiB
+  collector state.
 
 ## Step 1: Enable the framework-level stack
 
@@ -84,7 +84,7 @@ Observability VM:
 
 ```bash
 systemctl status clickhouse.service
-systemctl status zookeeper.service
+systemctl status clickhouse-keeper.service
 systemctl status signoz-schema-migrate-sync.service
 systemctl status signoz.service
 systemctl status signoz-otel-collector.service
@@ -102,8 +102,8 @@ http://10.40.0.10:8080
 
 The address is derived from `nixling.observability.lanSubnet` and
 `nixling.observability.index`. Only the SigNoz UI port is opened by
-default; ClickHouse, ZooKeeper, collector health, pprof, zpages, and OTLP
-ports stay on loopback or Unix sockets inside `sys-obs`.
+default; ClickHouse, ClickHouse Keeper, collector health, pprof, zpages,
+and OTLP ports stay on loopback or Unix sockets inside `sys-obs`.
 
 ## First-run admin
 

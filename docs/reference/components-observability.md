@@ -22,13 +22,16 @@ should send telemetry.
 The bundled backend is native SigNoz:
 
 - ClickHouse stores telemetry.
-- ZooKeeper coordinates the single-node ClickHouse cluster used by
-  SigNoz's replicated schema.
+- ClickHouse Keeper coordinates the single-node ClickHouse cluster used
+  by SigNoz's replicated schema.
 - SigNoz serves the UI and API.
 - SigNoz OTel Collector ingests OTLP and writes logs, metrics, traces,
   and metadata to ClickHouse.
 
 No Docker, Podman, Kubernetes, Helm, or compose deployment is emitted.
+The collector runs from nixling's static generated config; SigNoz OpAMP
+manager mode is intentionally not enabled so it cannot rewrite the
+source-specific receivers.
 
 ## Data path
 
@@ -103,7 +106,7 @@ Workload VM:
 `sys-obs`:
 
 - `clickhouse.service`
-- `zookeeper.service`
+- `clickhouse-keeper.service`
 - `signoz-schema-migrate-sync.service`
 - `signoz-schema-migrate-async.service`
 - `signoz.service`
@@ -144,6 +147,7 @@ other broker state. Static gates:
 | Workload observability CID | `100 + envIndex * 100 + vm.index` |
 | Host obs ingress vsock port | `14317` |
 | Workload obs ingress vsock ports | `14318+`, one per observed VM |
+| Workload collector loopback gRPC receivers | `14318+`, matching the workload vsock port to avoid SigNoz internal control-plane ports |
 | Host collector egress | `/run/nixling/otel/host-egress.sock` |
 | Guest local OTLP | `/run/nixling/otel/otlp.sock` with compatibility symlink `/run/nixling/otlp.sock` |
 | Guest relay handoff | `/run/nixling/otel/otlp-egress.sock` |
@@ -152,8 +156,8 @@ other broker state. Static gates:
 | SigNoz OTLP HTTP | loopback `signoz.otlpHttpPort` inside `sys-obs` |
 
 Only the SigNoz UI port is opened through the obs VM firewall by default.
-ClickHouse, ZooKeeper, OTLP, health, pprof, and zpages listeners stay
-loopback or Unix-socket scoped.
+ClickHouse, ClickHouse Keeper, OTLP, health, pprof, and zpages listeners
+stay loopback or Unix-socket scoped.
 
 ## Secrets
 
@@ -163,10 +167,11 @@ Nixling generates SigNoz and ClickHouse credentials on the host under:
 /var/lib/nixling/observability/
 ```
 
-Files are root-owned `0400` and shared read-only into `sys-obs` at
-`/run/nixling-obs-secrets`. Secrets are consumed through systemd
-credentials or environment files, not embedded as literals in the Nix
-store.
+The host directory is root-owned `0700`; files are root-owned `0444` so
+guest-side systemd can read them through the read-only virtiofs secret
+share at `/run/nixling-obs-secrets`. Secrets are consumed through
+systemd credentials or environment files, not embedded as literals in the
+Nix store.
 
 ## Default resources
 
@@ -177,7 +182,7 @@ store.
 | vCPU | `4` |
 | RAM | `8192` MiB |
 | ClickHouse volume | `32768` MiB |
-| ZooKeeper volume | `2048` MiB |
+| ClickHouse Keeper volume | `2048` MiB |
 | SigNoz volume | `4096` MiB |
 | SigNoz collector volume | `2048` MiB |
 
