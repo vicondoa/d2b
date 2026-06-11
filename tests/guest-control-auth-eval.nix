@@ -86,10 +86,14 @@ let
     assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
       service.serviceConfig.LoadCredential;
     assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
+    assert service.wantedBy == [ ];
+    assert !(builtins.hasAttr "nixling-guestd" nixos.config.systemd.services);
     assert !(lib.hasInfix tokenFile serviceJson);
     assert processVm != null;
     assert tokenVirtiofsd != null;
     assert cloudHypervisor != null;
+    assert lib.all (node: !(lib.hasInfix "guestd" node.id)) processNodes;
+    assert lib.all (node: !(lib.hasInfix "guest-control-health" (builtins.toJSON node))) processNodes;
     assert builtins.elem "--readonly" tokenVirtiofsd.argv;
     assert builtins.elem "--socket-path=/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock"
       tokenVirtiofsd.argv;
