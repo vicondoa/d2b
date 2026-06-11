@@ -197,10 +197,13 @@ EOF
     let
       microvm = nl.vmRunner config name;
       extraArgs = microvm.cloud-hypervisor.extraArgs;
+      hasUserVsockExtraArg = lib.any
+        (arg: arg == "--vsock" || lib.hasPrefix "--vsock=" arg)
+        extraArgs;
       processedExtraArgs = builtins.foldl'
         (args: opt: (extractOptValues opt args).args)
         extraArgs
-        [ "--vsock" "--platform" ];
+        [ "--platform" ];
       hasUserConsole = (extractOptValues "--console" extraArgs).values != [ ];
       userSerialValues = (extractOptValues "--serial" extraArgs).values;
       hasUserSerial = userSerialValues != [ ];
@@ -223,22 +226,12 @@ EOF
       kernelCmdLine = lib.concatStringsSep " " (
         lib.filter (value: value != "") ([ kernelConsole "reboot=t" "panic=-1" ] ++ microvm.kernelParams)
       );
-      userVSockOpts = (extractOptValues "--vsock" extraArgs).values;
-      userVSockStr = if userVSockOpts == [ ] then null else builtins.head userVSockOpts;
-      userVSockPath = extractParamValue "socket" userVSockStr;
-      userVSockCID = extractParamValue "cid" userVSockStr;
-      vsockCID =
-        if microvm.vsock.cid != null && userVSockCID != null then
-          throw "Cannot set microvm.vsock.cid and --vsock cid= ... via microvm.cloud-hypervisor.extraArgs at the same time"
-        else if microvm.vsock.cid != null then
-          microvm.vsock.cid
-        else
-          userVSockCID;
-      supportsNotifySocket = vsockCID != null;
-      vsockPath = if userVSockPath != null then userVSockPath else "/var/lib/nixling/vms/${name}/notify.vsock";
+      vsockCID = microvm.vsock.cid;
+      vsockPath = microvm.vsock.socket;
+      supportsNotifySocket = true;
       vsockOpts =
-        if vsockCID == null then
-          null
+        if hasUserVsockExtraArg then
+          throw "nixling.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; nixling owns the Cloud Hypervisor vsock device for guest control and observability"
         else
           "cid=${toString vsockCID},socket=${vsockPath}";
       virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
@@ -379,7 +372,7 @@ EOF
     ]
     ++ lib.optionals (!hasUserConsole) [ "--console" "null" ]
     ++ lib.optionals (!hasUserSerial) [ "--serial" "tty" ]
-    ++ lib.optionals (vsockOpts != null) [ "--vsock" vsockOpts ]
+    ++ [ "--vsock" vsockOpts ]
     ++ lib.optionals vm.graphics.enable [ "--gpu" "socket=${microvm.graphics.socket}" ]
     ++ lib.optionals microvm.balloon [ "--balloon" balloonOps ]
     ++ variadicFlagArgs "--disk" diskParams

@@ -137,7 +137,7 @@ The observability transport has its own CID/port/path contract. Host-side vsock 
 |---|---|---|
 | Host vsock CID | `2` (kernel-fixed) | kernel |
 | Obs VM vsock CID | `1000` | framework |
-| Workload VM observability vsock CID | `100 + envIndex * 100 + vm.index` (`envIndex` = 0-based lexicographic position in `lib.attrNames config.nixling.envs`) | framework |
+| Env VM vsock CID | `100 + envIndex * 1000 + slot` (`envIndex` = 0-based lexicographic position in `lib.attrNames config.nixling.envs`; `slot = 1` for the env net VM and `slot = nixling.vms.<vm>.index` for workload VMs) | framework |
 | Vsock service port | `14317` | host relay listener / obs receiver |
 | Grafana TCP | `cfg.grafana.listenPort` (default `3000`), bound to `cfg.grafana.listenAddress` | obs VM |
 | CH exporter TCP | `cfg.ch.exporter.listenPort` (default `9101`), bound to `127.0.0.1` | host |
@@ -149,7 +149,7 @@ The observability transport has its own CID/port/path contract. Host-side vsock 
 | Workload VM vsock backend socket | `/var/lib/nixling/vms/<vm>/vsock.sock` | host (Cloud Hypervisor creates it) |
 | Obs VM vsock backend socket | `/var/lib/nixling/vms/<cfg.vmName>/vsock.sock` | host (Cloud Hypervisor creates it) |
 
-Manifest v2 also keeps a deterministic md5-based fallback CID for env-less legacy VMs so the always-emitted `observability` block stays populated, but env-backed workload VMs use the formula above.
+Manifest v3 keeps a deterministic md5-based fallback CID for env-less legacy VMs so the always-emitted `observability` block stays populated, but env-backed VMs use the formula above. The per-VM `observability.vsockHostSocket` field is the base Cloud Hypervisor vsock socket; guest-to-host OTLP traffic uses the suffixed `<base>_14317` listener.
 
 ## Naming conventions
 

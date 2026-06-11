@@ -268,11 +268,12 @@ The schema reserves the shape so later PRs can land the transport and
 component modules without another manifest-structure change.
 
 `vsockCid` is deterministic. Env-backed VMs use
-`100 + envIndex * 100 + index`, where `envIndex` is the alphabetical
-position of the env name (`lib.attrNames` order). Legacy env-less VMs
-keep a deterministic fallback placeholder so the always-emitted field
-stays a no-op for existing consumers that still use the deprecated
-`staticIp` path.
+`100 + envIndex * 1000 + slot`, where `envIndex` is the alphabetical
+position of the env name (`lib.attrNames` order), `slot = 1` for the
+env net VM, and `slot = nixling.vms.<vm>.index` for workload VMs.
+Legacy env-less VMs keep a deterministic fallback placeholder so the
+always-emitted field stays a no-op for existing consumers that still
+use the deprecated `staticIp` path.
 
 ## Compatibility policy
 
@@ -380,7 +381,7 @@ produces exactly:
     "observability": {
       "agentSocket": "/run/nixling/otlp.sock",
       "enabled": false,
-      "vsockCid": 110,
+      "vsockCid": 101,
       "vsockHostSocket": "/var/lib/nixling/vms/corp-vm/vsock.sock"
     },
     "sshUser": "alice",

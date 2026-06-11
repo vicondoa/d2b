@@ -443,6 +443,17 @@
           printf '%s\n' '${evidence}' > "$out/guest-exec-policy.json"
         '';
 
+        guest-control-vsock = let
+          evidence = import ./tests/guest-control-vsock-eval.nix {
+            inherit system pkgs;
+            flake = self;
+            scenario = "base";
+          };
+        in pkgs.runCommand "nixling-guest-control-vsock" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
+        '';
+
         # Real cargo-deny gate: bans, licenses, and sources for both
         # the main workspace and the broker workspace.  Advisory
         # checks are handled by rust-audit below (cargo-deny requires

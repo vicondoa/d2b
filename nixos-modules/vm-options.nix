@@ -119,9 +119,15 @@ in
 
     vsock = {
       cid = mkOption {
-        type = types.nullOr types.ints.positive;
-        default = null;
-        description = "Per-VM AF_VSOCK CID. Null = no vsock device.";
+        type = types.ints.positive;
+        readOnly = true;
+        description = "Host-owned per-VM AF_VSOCK CID.";
+      };
+
+      socket = mkOption {
+        type = types.str;
+        readOnly = true;
+        description = "Host-owned Cloud Hypervisor base vsock Unix socket path.";
       };
     };
 

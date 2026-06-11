@@ -20,22 +20,7 @@ let
   cfg = config.nixling;
   envMeta = cfg._envMeta;
   obsCfg = cfg.observability;
-  obsVsockCid = 1000;
-  obsOtlpPort = 14317;
   vmStateDir = name: "${cfg.store.stateDir}/${name}";
-  obsVsockHostSocket = "${vmStateDir obsCfg.vmName}/vsock.sock";
-  # microvm.nix's cloud-hypervisor runner removes `${vsockPath}_8888`
-  # and binds the systemd-notify bridge there
-  # (lib/runners/cloud-hypervisor.nix at
-  # microvm-nix/microvm.nix@77024c22f4ddf509137fc732094888d1ffe631e2),
-  # so the host-side AF_VSOCK backend uses a per-port suffix
-  # convention: `<base>_<port>`. OTLP guest traffic on port 14317
-  # therefore lands on `.../vsock.sock_14317`, not the base
-  # `vsock.sock` mux/control socket.
-  vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
-  obsOtlpVsockHostSocket = vsockSocketForPort obsVsockHostSocket obsOtlpPort;
-
-  chVsockConnect = import ./nixling-ch-vsock-connect.nix { inherit pkgs; };
 
   # graphics + audio components both
   # transitively depend on x86_64-only packages (crosvm-patched,
@@ -62,24 +47,6 @@ let
       evaluate on ${hostSystem}, or evaluate this configuration
       against an x86_64-linux nixpkgs instance.
     '';
-
-  # Fallback per-VM AF_VSOCK CID, derived from md5(vmName). Non-
-  # observability VMs keep this for cloud-hypervisor's systemd-notify
-  # path, which silences microvm.nix's eval-time
-  #   "cloud-hypervisor supports systemd-notify via vsock, but
-  #    microvm.vsock.cid must be set to enable this"
-  # warning. Observability-enabled VMs instead pin the transport CID and
-  # pass the host socket path via `microvm.cloud-hypervisor.extraArgs`,
-  # which microvm.nix then folds into the final
-  #   --vsock cid= ...,socket= ...
-  # Cloud Hypervisor argument.
-  #
-  # CIDs 0/1/2 are reserved (hypervisor/local/host); we take 24 bits of
-  # md5 (range 0..16_777_215) and offset by 4096 to stay clear of the
-  # reserved range and any low CIDs other host tooling might grab.
-  # Collision-resistant for ~1k VMs (birthday bound on 2^24 is ~4k).
-  fallbackVsockCid = name:
-    4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
 
   # Per-workload-VM derived values. Returns null when the VM has no
   # env (legacy mode — caller falls back to the VM's own
@@ -174,14 +141,10 @@ let
     esac
   '';
 
-  observabilityVsock = name: vm:
-    if obsCfg.enable && name == obsCfg.vmName then {
-      cid = obsVsockCid;
-      socket = obsVsockHostSocket;
-    } else if vm.observability.enable then {
-      cid = config.nixling.manifest.${name}.observability.vsockCid;
-      socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
-    } else null;
+  baseVsock = name: {
+    cid = config.nixling.manifest.${name}.observability.vsockCid;
+    socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
+  };
 
   vsockStateDirVmNames =
     lib.unique (workloadObsVmNames ++ lib.optional obsCfg.enable obsCfg.vmName);
@@ -229,7 +192,7 @@ in
       let
         vm' = checkVmPlatform name vm;
         derived = vmDerive name vm';
-        chVsock = observabilityVsock name vm';
+        chVsock = baseVsock name;
         obsCfg = cfg.observability;
         isObsVm = obsCfg.enable && name == obsCfg.vmName;
         obsSecretsShare = lib.optional isObsVm {
@@ -277,17 +240,12 @@ in
               ];
             }
           )
-          ++ lib.optional (chVsock == null) {
-            microvm.vsock.cid = lib.mkDefault (fallbackVsockCid name);
-          }
-          ++ lib.optional (chVsock != null) {
-            microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
-            microvm.vsock.cid = lib.mkForce chVsock.cid;
-            microvm.cloud-hypervisor.extraArgs = lib.mkAfter [
-              "--vsock"
-              "socket=${chVsock.socket}"
-            ];
-          }
+          ++ [
+            {
+              microvm.vsock.cid = lib.mkForce chVsock.cid;
+              microvm.vsock.socket = lib.mkForce chVsock.socket;
+            }
+          ]
           ++ lib.optional vm'.homeManager.enable {
             nixling.homeManager.users = vm'.homeManager.users;
           }

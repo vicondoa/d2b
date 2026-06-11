@@ -218,8 +218,7 @@ in
     expectedExtract = true;
   };
 
-  obs-cid-collision = mkCase {
-    kind = "expect-failure";
+  obs-cid-cross-env-noncollision = mkCase {
     override = { lib, ... }: {
       nixling.observability.enable = true;
       nixling.envs.aaa = {
@@ -245,8 +244,17 @@ in
         };
       };
     };
-    expectedSubstring = "Vsock CID collision:";
-    expectedSubstrings = [ "CID" "corp-vm" "other-vm" ];
+    extract = nixos:
+      let
+        data = manifest nixos;
+      in {
+        corp = data.corp-vm.observability.vsockCid;
+        other = data.other-vm.observability.vsockCid;
+      };
+    expectedExtract = {
+      corp = 210;
+      other = 1110;
+    };
   };
 
   obs-manifest-fields = mkCase {
@@ -261,7 +269,7 @@ in
       };
     expectedExtract = {
       enabled = false;
-      vsockCid = 210;
+      vsockCid = 1110;
       vsockHostSocket = "/var/lib/nixling/vms/corp-vm/vsock.sock";
       agentSocket = "/run/nixling/otlp.sock";
     };

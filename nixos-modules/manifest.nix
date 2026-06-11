@@ -62,11 +62,6 @@ let
     lib.imap0 (i: name: { inherit name; value = i; }) envNames
   );
 
-  # Legacy env-less VMs keep a deterministic fallback CID so the always-
-  # emitted observability block stays a no-op when observability is off.
-  legacyObsVsockCid = name:
-    4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
-
   netVmOfEnv = envName:
     let n = config.nixling.envs.${envName}.netName or "sys-${envName}-net";
     in n;
@@ -101,11 +96,18 @@ let
       usbipdHostIp =
         if m != null then m.hostUplinkIp
         else null;
-      obsVsockCid =
-        if envName != null && envIndexMap ? ${envName}
-        then 100 + (envIndexMap.${envName} * 100) + vm.index
-        else legacyObsVsockCid name;
       stateRoot = "${config.nixling.store.stateDir}/${name}";
+      envIndex =
+        if envName != null && envIndexMap ? ${envName}
+        then envIndexMap.${envName}
+        else null;
+      baseVsockCid = nl.guestControlVsockCid {
+        inherit name envIndex;
+        index = vm.index;
+        isNetVm = asNetVmForEnv != null;
+        isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
+      };
+      baseVsockHostSocket = nl.guestControlVsockHostSocket stateRoot;
     in
     {
       inherit name;
@@ -128,8 +130,8 @@ let
       audioService = "nixling-${name}-snd.service";
       observability = {
         enabled = vm.observability.enable;
-        vsockCid = obsVsockCid;
-        vsockHostSocket = "${stateRoot}/vsock.sock";
+        vsockCid = baseVsockCid;
+        vsockHostSocket = baseVsockHostSocket;
         agentSocket = "/run/nixling/otlp.sock";
       };
       staticIp =
@@ -167,7 +169,8 @@ let
       enabled = obsCfg.enable;
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
-      obsVsockHostSocket = "${config.nixling.store.stateDir}/${obsCfg.vmName}/vsock.sock";
+      obsVsockHostSocket =
+        nl.guestControlVsockHostSocket "${config.nixling.store.stateDir}/${obsCfg.vmName}";
       grafanaUrl = "http://${obsCfg.grafana.listenAddress}:${toString obsCfg.grafana.listenPort}";
       chExporter = {
         listenPort = obsCfg.ch.exporter.listenPort;

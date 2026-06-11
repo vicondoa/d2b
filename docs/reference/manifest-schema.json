@@ -15,7 +15,7 @@
         "manifestVersion": {
           "type": "integer",
           "const": 3,
-          "description": "Schema version. This document IS the v3 schema; the field is locked to `const: 3`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v4.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v3 manifests (versions 0, 1, 2) are historical and are no longer valid under this schema — the P2 daemon-only end-state (ph2-p2-manifestversion-bump) retired v2."
+          "description": "Schema version. This document IS the v3 schema; the field is locked to `const: 3`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v4.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v3 manifests (versions 0, 1, 2) are historical and are no longer valid under this schema; the daemon-only manifest revision retired v2."
         }
       }
     },
@@ -88,7 +88,7 @@
         "vsockCid": {
           "type": "integer",
           "minimum": 0,
-          "description": "Deterministic observability vsock CID. Env-backed VMs use 100 + envIndex * 100 + index, where envIndex is the alphabetical position of the env name. Legacy env-less VMs emit a deterministic fallback placeholder while observability is disabled."
+          "description": "Deterministic base Cloud Hypervisor vsock CID. Env-backed VMs use 100 + envIndex * 1000 + slot, where envIndex is the alphabetical position of the env name, slot 1 is reserved for the env net VM, and workload VMs use their nixling.vms.<vm>.index as the slot. Legacy env-less VMs emit a deterministic fallback placeholder while observability is disabled."
         },
         "vsockHostSocket": {
           "type": "string",
@@ -143,7 +143,7 @@
         },
         "usbipYubikey": {
           "type": "boolean",
-          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb attach|detach|probe` refuses to run when false. (The pre-P6 `nixling usb <vm>` bash orchestrator was retired in P6 per ADR 0015.)"
+          "description": "True iff nixling.vms.<name>.usbip.yubikey is set. `nixling usb attach|detach|probe` refuses to run when false. The legacy `nixling usb <vm>` bash orchestrator was retired per ADR 0015."
         },
         "audio": {
           "type": "boolean",
@@ -171,7 +171,7 @@
         },
         "usbipdHostIp": {
           "type": ["string", "null"],
-          "description": "Host IP of the per-env usbipd proxy. `nixling usb attach` passes this to `usbip attach -r` via the broker SpawnRunner DAG (v1.0; the pre-P6 `nixling usb <vm>` bash orchestrator was retired in P6 per ADR 0015). Null for net VMs and legacy."
+          "description": "Host IP of the per-env usbipd proxy. `nixling usb attach` passes this to `usbip attach -r` via the broker SpawnRunner DAG. The legacy `nixling usb <vm>` bash orchestrator was retired per ADR 0015. Null for net VMs and legacy."
         },
         "stateDir": {
           "type": "string",

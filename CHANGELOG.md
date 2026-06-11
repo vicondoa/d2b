@@ -46,6 +46,11 @@ deprecations ship one minor release before removal.
   option, framework-owned materialized token file, read-only guest credential
   share, and guestd `LoadCredential` wiring with eval coverage.
 
+- Host-owned Cloud Hypervisor vsock allocation now uses the manifest's
+  base socket path for every VM, reserves distinct CIDs for env net VMs and
+  workload VMs, and rejects consumer `--vsock` overrides so observability and
+  future guest-control traffic share one authoritative per-VM vsock device.
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate the future `nixling exec` allowlist defaults: generic exec is
   off by default, root exec is separately denied by default, and non-root users
