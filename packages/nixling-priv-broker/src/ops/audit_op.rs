@@ -152,6 +152,14 @@ pub enum OperationFields {
     UsbipBindFirewallRule {
         bundle_usbip_firewall_intent_ref: String,
     },
+    GuestControlSign {
+        vm_id: String,
+        role: String,
+        purpose: String,
+        transcript_len: usize,
+        peer_cid_present: bool,
+        capabilities_hash_present: bool,
+    },
     ApplyNmUnmanaged {
         bundle_nm_intent_ref: String,
         scope_id: String,

@@ -246,7 +246,8 @@ in
           "${brokerPackage}/bin/nixling-priv-broker serve " +
           "--audit-dir /var/lib/nixling/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
-          "--bundle-path ${bundleManifestPath}";
+          "--bundle-path ${bundleManifestPath} " +
+          "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";
         RestartSec = "2s";

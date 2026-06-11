@@ -154,6 +154,7 @@
             "DeregisterRunnerPidfd",
             "DiskInit",
             "ExportBrokerAudit",
+            "GuestControlSign",
             "Hello",
             "InjectSecretById",
             "LaunchMinijailChild",

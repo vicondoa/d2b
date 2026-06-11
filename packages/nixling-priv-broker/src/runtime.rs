@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -14,11 +14,15 @@ use std::{
 
 use crate::sys::{owned_fd_from_raw, path_safe, peer_credentials};
 #[cfg(not(feature = "layer1-bootstrap"))]
+use hmac::{Hmac, Mac};
+#[cfg(not(feature = "layer1-bootstrap"))]
 use nix::libc;
 use nix::sys::socket::{accept4, SockFlag};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use nix::unistd::dup;
 use serde_json::Value;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use sha2::Sha256;
 use tracing::warn;
 
 use crate::audit::AuditLog;
@@ -62,6 +66,7 @@ const DEFAULT_AUDIT_DIR: &str = "/var/lib/nixling/audit";
 /// to disable pruning.
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 14;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/nixling/current-bundle/manifest.json";
+const DEFAULT_STATE_DIR: &str = "/var/lib/nixling";
 const CAPABILITIES: &[&str] = &["Hello", "ValidateBundle", "ExportBrokerAudit"];
 
 #[derive(Debug, Clone)]
@@ -75,6 +80,7 @@ pub struct ServerConfig {
     /// `/var/lib/nixling/current-bundle/manifest.json`; the NixOS module's
     /// `nixling.site.bundle.currentManifest` option overrides.
     pub bundle_path: PathBuf,
+    pub state_dir: PathBuf,
     pub nixlingd_uid: u32,
     pub nixlingd_gid: u32,
     pub test_mode: bool,
@@ -218,6 +224,10 @@ enum BrokerError {
         resolved: String,
     },
     Protocol(String),
+    #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
+    GuestControlSignRefused {
+        reason: &'static str,
+    },
 }
 
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
@@ -239,6 +249,7 @@ where
             let mut audit_dir = PathBuf::from(DEFAULT_AUDIT_DIR);
             let mut audit_retention_days = DEFAULT_AUDIT_RETENTION_DAYS;
             let mut bundle_path = PathBuf::from(DEFAULT_BUNDLE_PATH);
+            let mut state_dir = PathBuf::from(DEFAULT_STATE_DIR);
             let mut nixlingd_uid = None;
             let mut nixlingd_gid = None;
             let mut test_mode = false;
@@ -272,6 +283,10 @@ where
                         // names a bundle path on the wire.
                         index += 1;
                         bundle_path = PathBuf::from(expect_arg(&rest, index, "--bundle-path")?);
+                    }
+                    "--state-dir" => {
+                        index += 1;
+                        state_dir = PathBuf::from(expect_arg(&rest, index, "--state-dir")?);
                     }
                     "--nixlingd-uid" => {
                         index += 1;
@@ -342,6 +357,7 @@ where
                 audit_dir,
                 audit_retention_days,
                 bundle_path,
+                state_dir,
                 nixlingd_uid: nixlingd_uid.unwrap_or(fallback_uid),
                 nixlingd_gid: nixlingd_gid.unwrap_or(fallback_gid),
                 test_mode,
@@ -1136,6 +1152,32 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(hello_ok_response()))
+        }
+        RealBrokerRequest::GuestControlSign(req) => {
+            let response = handle_guest_control_sign(req.clone(), config, resolver)?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "GuestControlSign",
+                req.vm_id.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                req.vm_id.as_str(),
+                "guest-control-auth",
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::GuestControlSign {
+                    vm_id: req.vm_id.as_str().to_owned(),
+                    role: format!("{:?}", req.role),
+                    purpose: req.purpose.clone(),
+                    transcript_len: guest_control_transcript_len(&req)?,
+                    peer_cid_present: req.peer_cid.is_some(),
+                    capabilities_hash_present: req.capabilities_hash.is_some(),
+                },
+            )?;
+            Ok(DispatchResult::no_fds(BrokerResponse::GuestControlSign(
+                response,
+            )))
         }
         RealBrokerRequest::ValidateBundle => {
             // The broker validates the server-configured bundle path.
@@ -2910,6 +2952,193 @@ fn write_success_op_record_impl(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
+type GuestControlHmac = Hmac<Sha256>;
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn handle_guest_control_sign(
+    req: nixling_ipc::broker_wire::GuestControlSignRequest,
+    config: &ServerConfig,
+    resolver: Option<&Arc<BundleResolver>>,
+) -> Result<nixling_ipc::broker_wire::GuestControlSignResponse, BrokerError> {
+    req.validate_shape()
+        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
+    let resolver = resolver.ok_or(BrokerError::BundleResolverUnavailable)?;
+    if resolver.find_manifest_vm(req.vm_id.as_str()).is_none() {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "vm-not-in-bundle",
+        });
+    }
+    let transcript = guest_control_transcript(&req)?;
+    let mut token = read_guest_control_token(&config.state_dir, req.vm_id.as_str())?;
+    let mut mac = GuestControlHmac::new_from_slice(&token).map_err(|_| {
+        BrokerError::GuestControlSignRefused {
+            reason: "token-unavailable",
+        }
+    })?;
+    mac.update(&transcript);
+    let tag = mac.finalize().into_bytes().to_vec();
+    token.fill(0);
+    Ok(nixling_ipc::broker_wire::GuestControlSignResponse { tag })
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn guest_control_transcript_len(
+    req: &nixling_ipc::broker_wire::GuestControlSignRequest,
+) -> Result<usize, BrokerError> {
+    Ok(guest_control_transcript(req)?.len())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn guest_control_transcript(
+    req: &nixling_ipc::broker_wire::GuestControlSignRequest,
+) -> Result<Vec<u8>, BrokerError> {
+    use nixling_ipc::broker_wire::GuestControlProofRole;
+    use nixling_ipc::guest_auth::{
+        self, AuthDirection, AuthPurpose, GuestAuthTranscript, ProofRole, AUTH_NONCE_LEN,
+        GUEST_CONTROL_AUTH_PORT,
+    };
+    req.validate_shape()
+        .map_err(|reason| BrokerError::GuestControlSignRefused { reason })?;
+    if req.protocol_version != nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
+        || req.guest_control_port != GUEST_CONTROL_AUTH_PORT
+    {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "protocol-or-port",
+        });
+    }
+    let host_nonce: [u8; AUTH_NONCE_LEN] =
+        req.host_nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| BrokerError::GuestControlSignRefused {
+                reason: "host-nonce-length",
+            })?;
+    let guest_nonce: [u8; AUTH_NONCE_LEN] =
+        req.guest_nonce.as_slice().try_into().map_err(|_| {
+            BrokerError::GuestControlSignRefused {
+                reason: "guest-nonce-length",
+            }
+        })?;
+    let role = match req.role {
+        GuestControlProofRole::HostProof => ProofRole::Host,
+        GuestControlProofRole::GuestProof => ProofRole::Guest,
+    };
+    Ok(guest_auth::encode_transcript(&GuestAuthTranscript {
+        role,
+        direction: AuthDirection::HostToGuest,
+        purpose: AuthPurpose::GuestControlAuthV1,
+        vm_id: req.vm_id.as_str(),
+        protocol_version: req.protocol_version,
+        guest_control_port: req.guest_control_port,
+        peer_cid: req.peer_cid,
+        host_nonce: &host_nonce,
+        guest_nonce: &guest_nonce,
+        guest_boot_id: &req.guest_boot_id,
+        capabilities_hash: req.capabilities_hash.as_deref().map(str::as_bytes),
+    }))
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, BrokerError> {
+    const MAX_TOKEN_BYTES: usize = 4096;
+    let token_path = state_dir.join(format!("guest-control-{vm_id}/token"));
+    validate_guest_control_token_path(state_dir, &token_path)?;
+    let file = nix::fcntl::open(
+        token_path.as_path(),
+        nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|_| BrokerError::GuestControlSignRefused {
+        reason: "token-open",
+    })?;
+    let mut file = fs::File::from(owned_fd_from_raw(file));
+    let mut token = Vec::new();
+    file.by_ref()
+        .take((MAX_TOKEN_BYTES + 1) as u64)
+        .read_to_end(&mut token)
+        .map_err(|_| BrokerError::GuestControlSignRefused {
+            reason: "token-read",
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| BrokerError::GuestControlSignRefused {
+            reason: "token-metadata",
+        })?;
+    if !metadata.is_file()
+        || !owner_is_safe_for_guest_control_token(metadata.uid())
+        || metadata.mode() & 0o137 != 0
+        || token.is_empty()
+        || token.len() > MAX_TOKEN_BYTES
+    {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "token-unsafe",
+        });
+    }
+    while matches!(token.last(), Some(b'\n' | b'\r')) {
+        token.pop();
+    }
+    if token.is_empty() {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "token-empty",
+        });
+    }
+    Ok(token)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn validate_guest_control_token_path(
+    state_dir: &Path,
+    token_path: &Path,
+) -> Result<(), BrokerError> {
+    if !state_dir.is_absolute()
+        || state_dir == Path::new("/nix/store")
+        || state_dir.starts_with("/nix/store/")
+        || !token_path.starts_with(state_dir)
+    {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "token-path",
+        });
+    }
+    let mut current = PathBuf::new();
+    let parent = token_path
+        .parent()
+        .ok_or(BrokerError::GuestControlSignRefused {
+            reason: "token-parent",
+        })?;
+    for component in parent.components() {
+        current.push(component);
+        let metadata =
+            fs::symlink_metadata(&current).map_err(|_| BrokerError::GuestControlSignRefused {
+                reason: "token-parent",
+            })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || !owner_is_safe_for_guest_control_token(metadata.uid())
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(BrokerError::GuestControlSignRefused {
+                reason: "token-parent-unsafe",
+            });
+        }
+    }
+    let metadata =
+        fs::symlink_metadata(token_path).map_err(|_| BrokerError::GuestControlSignRefused {
+            reason: "token-missing",
+        })?;
+    if metadata.file_type().is_symlink() {
+        return Err(BrokerError::GuestControlSignRefused {
+            reason: "token-symlink",
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn owner_is_safe_for_guest_control_token(uid: u32) -> bool {
+    uid == 0 || cfg!(test)
+}
+
+#[cfg(not(feature = "layer1-bootstrap"))]
 fn activation_mode_name(mode: nixling_ipc::broker_wire::ActivationMode) -> &'static str {
     match mode {
         nixling_ipc::broker_wire::ActivationMode::Switch => "switch",
@@ -4255,10 +4484,7 @@ fn cleanup_cloud_hypervisor_stale_sockets(
     role: &nixling_ipc::broker_wire::RunnerRole,
     argv: &[String],
 ) -> Result<(), BrokerError> {
-    if !matches!(
-        role,
-        nixling_ipc::broker_wire::RunnerRole::CloudHypervisor
-    ) {
+    if !matches!(role, nixling_ipc::broker_wire::RunnerRole::CloudHypervisor) {
         return Ok(());
     }
     for path in cloud_hypervisor_socket_paths(argv) {
@@ -5298,6 +5524,16 @@ impl BrokerError {
                     ),
                 )?;
             }
+            Self::GuestControlSignRefused { reason } => {
+                audit_log.write_error_entry(
+                    operation,
+                    caller_uid,
+                    "guest-control-sign-refused",
+                    opaque_target_id,
+                    "Broker.GuestControlSignRefused",
+                    reason,
+                )?;
+            }
             _ => {}
         }
         Ok(())
@@ -5439,6 +5675,13 @@ impl BrokerError {
                 None,
                 &message,
                 "Inspect the private broker socket framing and retry.",
+            ),
+            Self::GuestControlSignRefused { reason } => error_response(
+                "Broker.GuestControlSignRefused",
+                "GuestControlSign",
+                Some("W11"),
+                reason,
+                "Check guest-control token materialization and the structured auth transcript fields.",
             ),
             Self::OtelHostBridgeIntentInvalid {
                 intent_vm,
@@ -5764,7 +6007,10 @@ mod tests {
         use nixling_ipc::broker_wire::RunnerRole;
 
         let cases = [
-            (ProcessRole::SwtpmPreStartFlush, Some(RunnerRole::SwtpmFlush)),
+            (
+                ProcessRole::SwtpmPreStartFlush,
+                Some(RunnerRole::SwtpmFlush),
+            ),
             (ProcessRole::Swtpm, Some(RunnerRole::Swtpm)),
             (ProcessRole::Virtiofsd, Some(RunnerRole::Virtiofsd)),
             (ProcessRole::Video, Some(RunnerRole::Video)),
@@ -6246,10 +6492,98 @@ mod tests {
             audit_dir: root.join("audit"),
             audit_retention_days: 14,
             bundle_path: manifest_path.to_path_buf(),
+            state_dir: root.join("state"),
             nixlingd_uid: 1000,
             nixlingd_gid: Gid::current().as_raw(),
             test_mode: true,
         }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn write_guest_control_token(state_dir: &Path, vm: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = state_dir.join(format!("guest-control-{vm}"));
+        fs::create_dir_all(&dir).expect("create guest-control token dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o750))
+            .expect("chmod guest-control token dir");
+        let token = dir.join("token");
+        if token.exists() {
+            fs::set_permissions(&token, fs::Permissions::from_mode(0o600))
+                .expect("restore token write perms");
+            fs::remove_file(&token).expect("remove old token");
+        }
+        fs::write(&token, b"broker-test-token\n").expect("write token");
+        fs::set_permissions(&token, fs::Permissions::from_mode(mode)).expect("chmod token");
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    fn guest_control_sign_request(
+        role: nixling_ipc::broker_wire::GuestControlProofRole,
+    ) -> nixling_ipc::broker_wire::GuestControlSignRequest {
+        nixling_ipc::broker_wire::GuestControlSignRequest {
+            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
+            role,
+            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: "host-to-guest".to_owned(),
+            purpose: "guest-control-auth-v1".to_owned(),
+            guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(2),
+            host_nonce: vec![0x11; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
+            guest_boot_id: "boot-1".to_owned(),
+            capabilities_hash: match role {
+                nixling_ipc::broker_wire::GuestControlProofRole::HostProof => None,
+                nixling_ipc::broker_wire::GuestControlProofRole::GuestProof => {
+                    Some("caps-sha256".to_owned())
+                }
+            },
+            tracing_span_id: None,
+        }
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn guest_control_sign_returns_only_fixed_tag() {
+        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let bundle = build_test_bundle(root.path());
+        let config = test_server_config(root.path(), &bundle.bundle_path);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
+        let response = handle_guest_control_sign(
+            guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof),
+            &config,
+            Some(&bundle.resolver),
+        )
+        .expect("sign");
+        assert_eq!(response.tag.len(), nixling_ipc::guest_auth::AUTH_TAG_LEN);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn guest_control_sign_rejects_role_confusion_and_unsafe_token() {
+        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
+        let bundle = build_test_bundle(root.path());
+        let config = test_server_config(root.path(), &bundle.bundle_path);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
+
+        let mut bad =
+            guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof);
+        bad.capabilities_hash = Some("caps-sha256".to_owned());
+        assert!(matches!(
+            handle_guest_control_sign(bad, &config, Some(&bundle.resolver)),
+            Err(BrokerError::GuestControlSignRefused { .. })
+        ));
+
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o666);
+        assert!(matches!(
+            handle_guest_control_sign(
+                guest_control_sign_request(
+                    nixling_ipc::broker_wire::GuestControlProofRole::HostProof
+                ),
+                &config,
+                Some(&bundle.resolver),
+            ),
+            Err(BrokerError::GuestControlSignRefused { .. })
+        ));
     }
 
     #[cfg(not(feature = "layer1-bootstrap"))]

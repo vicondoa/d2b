@@ -730,6 +730,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "InjectSecretById"
               ]
             },
@@ -1713,6 +1731,24 @@
           }
         },
         {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignResponse"
+            }
+          }
+        },
+        {
           "description": "OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS on the same frame; the JSON body confirms which `(pid, start_time_ticks)` the broker verified.",
           "type": "object",
           "required": [
@@ -2259,6 +2295,116 @@
           ],
           "format": "uint32",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestControlProofRole": {
+      "type": "string",
+      "enum": [
+        "host-proof",
+        "guest-proof"
+      ]
+    },
+    "GuestControlSignRequest": {
+      "type": "object",
+      "required": [
+        "direction",
+        "guestBootId",
+        "guestControlPort",
+        "guestNonce",
+        "hostNonce",
+        "protocolVersion",
+        "purpose",
+        "role",
+        "vmId"
+      ],
+      "properties": {
+        "capabilitiesHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "type": "string"
+        },
+        "guestBootId": {
+          "type": "string"
+        },
+        "guestControlPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "guestNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "hostNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "peerCid": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/GuestControlProofRole"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestControlSignResponse": {
+      "type": "object",
+      "required": [
+        "tag"
+      ],
+      "properties": {
+        "tag": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         }
       },
       "additionalProperties": false
