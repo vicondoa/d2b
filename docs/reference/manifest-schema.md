@@ -550,7 +550,7 @@ struct VmObservability {
     vsock_cid: u32,
 }
 
-const SUPPORTED_VERSION: u32 = 2;
+const SUPPORTED_VERSION: u32 = 4;
 let m: Manifest = serde_json::from_str(&fs::read_to_string("/run/current-system/sw/share/nixling/vms.json")?)?;
 if m.meta.version > SUPPORTED_VERSION {
     bail!("manifest version {} newer than CLI build ({}); upgrade the CLI",

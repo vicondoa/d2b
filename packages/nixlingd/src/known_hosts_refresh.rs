@@ -252,7 +252,7 @@ mod tests {
     fn manifest_with(vms: Vec<VmEntry>) -> ManifestV04 {
         ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 3,
+                manifest_version: 4,
             },
             observability: ObservabilityMeta {
                 ch_exporter: ChExporterMeta { listen_port: 9100 },

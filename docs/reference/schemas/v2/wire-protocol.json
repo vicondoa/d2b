@@ -2675,7 +2675,7 @@
           ]
         },
         {
-          "description": "Bundle's emitted manifestVersion is not the version the running daemon supports (after the v2→v3 clean break, v2 bundles MUST be rejected with this distinct kind so operators can correlate the failure to a re-render of the bundle, not to a parse-side regression).",
+          "description": "Bundle's emitted manifestVersion is not the version the running daemon supports. Stale bundles MUST be rejected with this distinct kind so operators can correlate the failure to a re-render of the bundle, not to a parse-side regression.",
           "type": "string",
           "enum": [
             "manifest-version-mismatch"

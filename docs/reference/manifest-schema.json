@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/vicondoa/nixling/blob/main/docs/reference/manifest-schema.json",
   "title": "nixling JSON manifest",
-  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract a future Rust CLI port consumes. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
+  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract consumed by the Rust CLI and daemon. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
   "type": "object",
   "required": ["_manifest", "_observability"],
   "properties": {
@@ -65,6 +65,8 @@
           "properties": {
             "listenPort": {
               "type": "integer",
+              "minimum": 0,
+              "maximum": 65535,
               "description": "Loopback port exported by the host-side Cloud Hypervisor metrics exporter."
             }
           }
@@ -84,6 +86,7 @@
         "vsockCid": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 4294967295,
           "description": "Deterministic base Cloud Hypervisor vsock CID. Env-backed VMs use 100 + envIndex * 1000 + slot, where envIndex is the alphabetical position of the env name, slot 1 is reserved for the env net VM, and workload VMs use their nixling.vms.<vm>.index as the slot. Legacy env-less VMs emit a deterministic fallback placeholder while observability is disabled."
         },
         "vsockHostSocket": {
@@ -176,11 +179,13 @@
         "mtu": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 65535,
           "description": "Effective MTU for env-backed VMs when emitted. Omitted for legacy/env-less VMs."
         },
         "mssClamp": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 65535,
           "description": "Effective TCP MSS clamp for env-backed VMs when emitted. Omitted when no clamp is configured."
         },
         "lan": {

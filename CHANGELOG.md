@@ -844,19 +844,14 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   names are removed.
 - **Stable relay-binary interface.**
   `nixling.observability.transport.relayPackage` still
-  requires a `bin/socat`-compatible CLI today. A future
-  release will define a stable interface so non-socat relays
-  (e.g. a purpose-built Rust binary) can be swapped in
-  without socat-compat shims, and the socat-compatible path
-  will remain supported for at least one minor release after
-  that lands.
+  requires a `bin/socat`-compatible CLI today. Non-socat
+  relays need a dedicated compatibility interface before the
+  socat-compatible path can be removed.
 - **VM-runner abstraction.** Today the framework leaks the
   runner-unit name (`microvm@<vm>` for headless,
   `nixling-<vm>-gpu` for graphics) into the relay wiring, and
-  the observability code has to wire to both. v0.3.0 will
-  introduce a runner-agnostic abstraction (e.g.
-  `nixling-vm-runner@<vm>.service` aliased by whichever
-  concrete runner is used) so per-VM sidecar wiring stays
+  the observability code has to wire to both. A runner-agnostic
+  abstraction is required before per-VM sidecar wiring can stay
   on a single name.
 
 
@@ -1564,7 +1559,7 @@ seam.
     system catches schema regressions at eval time.
   - `docs/reference/manifest-schema.md` + `docs/reference/manifest-schema.json`
     (JSON Schema Draft 2020-12) — the v1 public manifest contract
-    for downstream consumers (e.g. the future Rust CLI port). The
+    for downstream consumers such as the Rust CLI. The
     JSON Schema is the canonical type spec; the prose doc is a
     field-by-field walkthrough + compatibility policy.
   - `docs/reference/cli-contract.md` — behavioural contract for any
