@@ -129,13 +129,14 @@ for name, body in blocks("message"):
     fields = []
     for line in body.splitlines():
         line = line.strip()
-        match = re.match(r"(optional\s+)?(repeated\s+)?([.\w]+)\s+(\w+)\s*=\s*\d+\s*;", line)
+        match = re.match(r"(optional\s+)?(repeated\s+)?([.\w]+)\s+(\w+)\s*=\s*(\d+)\s*;", line)
         if match:
             field = {
                 "name": match.group(4),
                 "type": match.group(3),
                 "optional": bool(match.group(1)),
                 "repeated": bool(match.group(2)),
+                "number": int(match.group(5)),
             }
             fields.append(field)
     message_fields[name] = fields
@@ -254,6 +255,32 @@ if "health" in hello_response_fields or "capabilities_hash" in hello_response_fi
     raise SystemExit("HelloResponse must not expose pre-auth health or capabilities_hash")
 if "AuthenticateRequest" not in message_fields or "AuthenticateResponse" not in message_fields:
     raise SystemExit("Authenticate messages missing from proto")
+hello_response_body = dict(blocks("message")).get("HelloResponse", "")
+if 'reserved 4, 5;' not in hello_response_body or 'reserved "capabilities_hash", "health";' not in hello_response_body:
+    raise SystemExit("HelloResponse must reserve retired pre-auth health/capability fields")
+
+
+def assert_field(proto_name, field_name, proto_type, number, optional=False):
+    fields = {
+        field["name"]: field
+        for field in message_fields.get(proto_name, [])
+    }
+    field = fields.get(field_name)
+    if field is None:
+        raise SystemExit(f"{proto_name}.{field_name} missing")
+    if field["type"] != proto_type or field["number"] != number or field["optional"] != optional:
+        raise SystemExit(
+            f"{proto_name}.{field_name} drifted: got type={field['type']} number={field['number']} optional={field['optional']}"
+        )
+
+
+assert_field("HelloRequest", "host_nonce", "bytes", 2)
+assert_field("HelloResponse", "guest_nonce", "bytes", 1)
+assert_field("AuthenticateRequest", "host_auth_tag", "bytes", 6)
+assert_field("AuthenticateResponse", "guest_auth_tag", "bytes", 1, optional=True)
+assert_field("AuthenticateResponse", "capabilities_hash", "string", 2, optional=True)
+assert_field("AuthenticateResponse", "health", "HealthResponse", 3)
+assert_field("AuthenticateResponse", "capabilities", "CapabilitiesResponse", 4)
 for proto_name, fields in sorted(message_fields.items()):
     if proto_name in skip_messages:
         continue

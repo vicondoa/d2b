@@ -15,6 +15,8 @@ pub const CONNECTION_INSTANCE_LEN: usize = 16;
 pub const GUEST_CONTROL_AUTH_PORT: u32 = 14_318;
 pub const DEFAULT_CHALLENGE_TTL_MS: u64 = 30_000;
 pub const DEFAULT_CHALLENGE_CAPACITY: usize = 128;
+pub const MAX_AUTH_HEALTH_CAPABILITIES: usize = 32;
+pub const MAX_AUTH_DEGRADED_SUBSYSTEMS: usize = 16;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -34,6 +36,8 @@ pub enum GuestAuthError {
     TokenUnavailable,
     MacRejected,
     CapabilitiesUnavailable,
+    InvalidCapabilitiesSnapshot,
+    InvalidHealthSnapshot,
     Unauthenticated,
 }
 
@@ -243,7 +247,7 @@ pub struct GuestAuthCore<T, R, B, C, S, K> {
     clock: K,
     challenge_ttl_ms: u64,
     challenge_capacity: usize,
-    authenticated_connections: BTreeSet<[u8; CONNECTION_INSTANCE_LEN]>,
+    authenticated_connections: BTreeSet<AuthConnectionContext>,
 }
 
 impl<T, R, B, C, S, K> GuestAuthCore<T, R, B, C, S, K> {
@@ -348,7 +352,7 @@ where
         );
         self.token.verify_tag(&host_transcript, &host_tag)?;
 
-        let snapshot = self.capabilities.snapshot()?;
+        let snapshot = validate_snapshot(self.capabilities.snapshot()?)?;
         let guest_transcript = encode_transcript(
             ProofRole::Guest,
             context,
@@ -359,7 +363,7 @@ where
         );
         let guest_tag = self.token.sign_tag(&guest_transcript)?;
         self.authenticated_connections
-            .insert(context.connection_instance);
+            .insert(context.clone());
 
         let mut response = pb::AuthenticateResponse::new();
         response.guest_auth_tag = Some(guest_tag.to_vec());
@@ -374,7 +378,7 @@ where
         context: &AuthConnectionContext,
     ) -> Result<pb::HealthResponse, GuestAuthError> {
         self.require_authenticated(context)?;
-        Ok(self.capabilities.snapshot()?.health)
+        Ok(validate_snapshot(self.capabilities.snapshot()?)?.health)
     }
 
     pub fn capabilities(
@@ -382,29 +386,116 @@ where
         context: &AuthConnectionContext,
     ) -> Result<pb::CapabilitiesResponse, GuestAuthError> {
         self.require_authenticated(context)?;
-        Ok(self.capabilities.snapshot()?.capabilities)
+        Ok(validate_snapshot(self.capabilities.snapshot()?)?.capabilities)
     }
 
     pub fn close_connection(&mut self, context: &AuthConnectionContext) {
         self.challenges
             .drop_connection(&context.connection_instance);
-        self.authenticated_connections
-            .remove(&context.connection_instance);
+        self.authenticated_connections.remove(context);
     }
 
     fn require_authenticated(
         &self,
         context: &AuthConnectionContext,
     ) -> Result<(), GuestAuthError> {
-        if self
-            .authenticated_connections
-            .contains(&context.connection_instance)
-        {
+        if self.authenticated_connections.contains(context) {
             Ok(())
         } else {
             Err(GuestAuthError::Unauthenticated)
         }
     }
+}
+
+fn validate_snapshot(snapshot: CapabilitiesSnapshot) -> Result<CapabilitiesSnapshot, GuestAuthError> {
+    validate_health(&snapshot.health)?;
+    validate_capabilities(&snapshot.capabilities)?;
+    Ok(snapshot)
+}
+
+fn validate_health(health: &pb::HealthResponse) -> Result<(), GuestAuthError> {
+    let origin = health
+        .origin
+        .enum_value()
+        .map_err(|_| GuestAuthError::InvalidHealthSnapshot)?;
+    let state = health
+        .state
+        .enum_value()
+        .map_err(|_| GuestAuthError::InvalidHealthSnapshot)?;
+    let reason = health
+        .reason
+        .enum_value()
+        .map_err(|_| GuestAuthError::InvalidHealthSnapshot)?;
+    let remediation = health
+        .remediation
+        .enum_value()
+        .map_err(|_| GuestAuthError::InvalidHealthSnapshot)?;
+    if origin != pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED {
+        return Err(GuestAuthError::InvalidHealthSnapshot);
+    }
+    if health.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION {
+        return Err(GuestAuthError::InvalidHealthSnapshot);
+    }
+    if health.capabilities.len() > MAX_AUTH_HEALTH_CAPABILITIES
+        || health.degraded_subsystems.len() > MAX_AUTH_DEGRADED_SUBSYSTEMS
+        || health
+            .capabilities
+            .iter()
+            .any(|capability| capability.enum_value().is_err())
+        || health
+            .degraded_subsystems
+            .iter()
+            .any(|subsystem| subsystem.enum_value().is_err())
+    {
+        return Err(GuestAuthError::InvalidHealthSnapshot);
+    }
+
+    match state {
+        pb::HealthState::HEALTH_STATE_HEALTHY => {
+            if reason != pb::HealthReason::HEALTH_REASON_NONE
+                || remediation != pb::HealthRemediation::HEALTH_REMEDIATION_NONE
+                || !health.degraded_subsystems.is_empty()
+            {
+                return Err(GuestAuthError::InvalidHealthSnapshot);
+            }
+        }
+        pb::HealthState::HEALTH_STATE_DEGRADED => {
+            let valid_reason = matches!(
+                reason,
+                pb::HealthReason::HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE
+                    | pb::HealthReason::HEALTH_REASON_LOG_STORAGE_UNAVAILABLE
+                    | pb::HealthReason::HEALTH_REASON_QUOTA_EXCEEDED
+                    | pb::HealthReason::HEALTH_REASON_RATE_LIMITED
+                    | pb::HealthReason::HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED
+            );
+            let valid_remediation = matches!(
+                remediation,
+                pb::HealthRemediation::HEALTH_REMEDIATION_RETRY
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_INSPECT_GUEST_LOGS
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_RESTART_VM
+            );
+            if !valid_reason || !valid_remediation || health.degraded_subsystems.is_empty() {
+                return Err(GuestAuthError::InvalidHealthSnapshot);
+            }
+        }
+        _ => return Err(GuestAuthError::InvalidHealthSnapshot),
+    }
+    Ok(())
+}
+
+fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), GuestAuthError> {
+    if capabilities.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
+        || capabilities.capabilities.len() > MAX_AUTH_HEALTH_CAPABILITIES
+        || capabilities
+            .capabilities
+            .iter()
+            .any(|capability| capability.enum_value().is_err())
+        || capabilities.limits.is_none()
+    {
+        return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
+    }
+    Ok(())
 }
 
 fn validate_context_and_metadata(
@@ -725,6 +816,41 @@ mod tests {
         assert!(core.health(&context).is_ok());
         core.close_connection(&context);
         assert_eq!(core.health(&context), Err(GuestAuthError::Unauthenticated));
+    }
+
+    #[test]
+    fn authenticated_rpc_requires_full_trusted_context() {
+        let context = context();
+        let mut wrong = context.clone();
+        wrong.peer_cid = 3;
+        let mut core = new_core();
+        core.hello(&context, &hello_request()).unwrap();
+        core.authenticate(&context, &authenticate_request(&context)).unwrap();
+
+        assert_eq!(core.health(&wrong), Err(GuestAuthError::Unauthenticated));
+        core.close_connection(&wrong);
+        assert!(core.health(&context).is_ok());
+    }
+
+    #[test]
+    fn invalid_guest_reported_health_is_rejected_before_response() {
+        let context = context();
+        let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+        provider.snapshot.health.origin =
+            EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_HOST_SYNTHESIZED);
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidHealthSnapshot)
+        );
     }
 
     #[test]
