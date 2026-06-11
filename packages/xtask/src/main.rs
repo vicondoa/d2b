@@ -80,21 +80,63 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_dir = repo_root.join("packages/nixling-ipc/src/generated");
     fs::create_dir_all(&out_dir)?;
     let out_file = out_dir.join("guest_control.rs");
+    let temp_proto_dir = env::temp_dir().join(format!(
+        "nixling-guest-proto-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&temp_proto_dir)?;
+    let temp_proto = temp_proto_dir.join("guest_control.proto");
+    fs::write(&temp_proto, message_only_proto(&fs::read_to_string(&proto)?)?)?;
 
     protobuf_codegen::Codegen::new()
         .pure()
-        .include(&proto_dir)
-        .input(&proto)
+        .include(&temp_proto_dir)
+        .input(&temp_proto)
         .out_dir(&out_dir)
         .run()?;
 
     sanitize_generated_rust(&out_file)?;
+    let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
+}
+
+fn message_only_proto(proto: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut out = String::new();
+    let mut skipping_service = false;
+    let mut depth = 0_i32;
+    for line in proto.lines() {
+        let trimmed = line.trim_start();
+        if !skipping_service && trimmed.starts_with("service GuestControl ") {
+            skipping_service = true;
+        }
+        if skipping_service {
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+            if depth <= 0 {
+                skipping_service = false;
+                depth = 0;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if skipping_service || depth != 0 {
+        Err("guest_control.proto service block was not closed".into())
+    } else {
+        Ok(out)
+    }
 }
 
 fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut generated = fs::read_to_string(path)?;
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
+    generated = generated.replace("#![allow(unknown_lints)]\n", "");
+    generated = generated.replace("#![allow(clippy::all)]\n", "");
+    generated = generated.replace(
+        "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
+        "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
+    );
     fs::write(path, generated)?;
     Ok(())
 }

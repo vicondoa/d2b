@@ -61,7 +61,8 @@ deprecations ship one minor release before removal.
 - `packages/nixling-ipc/src/generated/guest_control.rs` now contains committed
   protobuf message bindings generated from
   `packages/nixling-ipc/proto/guest_control.proto` via
-  `cargo run -p xtask -- gen-guest-proto`. The new
+  `cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto`.
+  The new
   `tests/guest-proto-bindings.sh` gate verifies the generated bindings are
   deterministic, unsafe-free, and message-only (no ttRPC runtime stubs).
 

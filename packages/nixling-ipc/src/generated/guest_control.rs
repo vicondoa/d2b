@@ -2,9 +2,13 @@
 // .proto file is parsed by pure
 // @generated
 
-// https://github.com/rust-lang/rust-clippy/issues/702
-#![allow(unknown_lints)]
-#![allow(clippy::all)]
+#![allow(clippy::bool_comparison)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::match_like_matches_macro)]
+#![allow(clippy::match_ref_pats)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::redundant_static_lifetimes)]
+#![allow(clippy::vec_init_then_push)]
 
 #![allow(unused_attributes)]
 #![cfg_attr(rustfmt, rustfmt::skip)]
@@ -8096,26 +8100,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     UMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10\
     !\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATI\
     ON\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_C\
-    ONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$2\xe1\x08\n\x0cGuestControl\
-    \x12H\n\x05Hello\x12\x1e.nixling.guest.v1.HelloRequest\x1a\x1f.nixling.g\
-    uest.v1.HelloResponse\x12]\n\x0cCapabilities\x12%.nixling.guest.v1.Capab\
-    ilitiesRequest\x1a&.nixling.guest.v1.CapabilitiesResponse\x12K\n\x06Heal\
-    th\x12\x1f.nixling.guest.v1.HealthRequest\x1a\x20.nixling.guest.v1.Healt\
-    hResponse\x12W\n\nExecCreate\x12#.nixling.guest.v1.ExecCreateRequest\x1a\
-    $.nixling.guest.v1.ExecCreateResponse\x12Z\n\x0bExecInspect\x12$.nixling\
-    .guest.v1.ExecInspectRequest\x1a%.nixling.guest.v1.ExecInspectResponse\
-    \x12Q\n\x08ExecWait\x12!.nixling.guest.v1.ExecWaitRequest\x1a\".nixling.\
-    guest.v1.ExecWaitResponse\x12Q\n\x08ExecLogs\x12!.nixling.guest.v1.ExecL\
-    ogsRequest\x1a\".nixling.guest.v1.ExecLogsResponse\x12W\n\nWriteStdin\
-    \x12#.nixling.guest.v1.WriteStdinRequest\x1a$.nixling.guest.v1.WriteStdi\
-    nResponse\x12W\n\nReadOutput\x12#.nixling.guest.v1.ReadOutputRequest\x1a\
-    $.nixling.guest.v1.ReadOutputResponse\x12W\n\nCloseStdin\x12#.nixling.gu\
-    est.v1.CloseStdinRequest\x1a$.nixling.guest.v1.CloseStdinResponse\x12S\n\
-    \x0cTtyWinResize\x12%.nixling.guest.v1.TtyWinResizeRequest\x1a\x1c.nixli\
-    ng.guest.v1.ControlAck\x12O\n\nExecSignal\x12#.nixling.guest.v1.ExecSign\
-    alRequest\x1a\x1c.nixling.guest.v1.ControlAck\x12O\n\nExecCancel\x12#.ni\
-    xling.guest.v1.ExecCancelRequest\x1a\x1c.nixling.guest.v1.ControlAckb\
-    \x06proto3\
+    ONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

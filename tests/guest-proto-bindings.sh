@@ -19,15 +19,15 @@ NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
 
 if ! git -C "$ROOT" diff --exit-code -- "$generated_dir" >/dev/null; then
   git -C "$ROOT" --no-pager diff -- "$generated_dir" | sed -n '1,160p' >&2
-  fail "guest-proto-bindings: generated guest protobuf bindings drifted; run cargo run -p xtask -- gen-guest-proto"
+  fail "guest-proto-bindings: generated guest protobuf bindings drifted; run cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto"
 fi
 
-if rg -n '\bunsafe\b|allow\(unsafe_code\)|expect\(unsafe_code\)' "$generated_file"; then
+if rg -n '\bunsafe\b|allow\(unsafe_code\)|expect\(unsafe_code\)|allow\(clippy::all\)|allow\(unknown_lints\)' "$generated_file"; then
   fail "guest-proto-bindings: generated bindings contain unsafe code or unsafe lint bypasses"
 fi
 
-if rg -n 'ttrpc|Service|Client|Server|register_service|add_service|ServiceClient|ServiceServer' "$generated_file"; then
-  fail "guest-proto-bindings: generated bindings include service/runtime stubs; W8 is message-only"
+if rg -n 'ttrpc|service GuestControl|GuestControl\\x12|Service|Client|Server|register_service|add_service|ServiceClient|ServiceServer' "$generated_file"; then
+  fail "guest-proto-bindings: generated bindings include service/runtime descriptors or stubs; W8 is message-only"
 fi
 
 if rg -n 'ttrpc' "$ROOT/packages/nixling-ipc/Cargo.toml"; then
