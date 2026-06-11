@@ -18,7 +18,10 @@ use futures::stream;
 use nixling_ipc::{guest_proto as pb, guest_wire::GUEST_CONTROL_PROTOCOL_VERSION};
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    time::Duration,
+};
 use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 
 use crate::{
@@ -120,7 +123,8 @@ fn validate_token_path(dir: &Path, path: &Path) -> Result<(), GuestdServiceError
     let metadata = fs::symlink_metadata(path).map_err(|_| GuestdServiceError::TokenUnavailable)?;
     if metadata.file_type().is_symlink()
         || !metadata.file_type().is_file()
-        || metadata.mode() & 0o022 != 0
+        || metadata.mode() & 0o077 != 0
+        || !owner_is_safe(metadata.uid())
     {
         return Err(GuestdServiceError::UnsafeCredential);
     }
@@ -131,6 +135,9 @@ fn validate_safe_directory_path(dir: &Path) -> Result<(), GuestdServiceError> {
     if !dir.is_absolute() {
         return Err(GuestdServiceError::MissingCredentialsDirectory);
     }
+    if dir == Path::new("/nix/store") || dir.starts_with("/nix/store/") {
+        return Err(GuestdServiceError::UnsafeCredential);
+    }
     let mut current = PathBuf::new();
     for component in dir.components() {
         current.push(component);
@@ -140,11 +147,18 @@ fn validate_safe_directory_path(dir: &Path) -> Result<(), GuestdServiceError> {
             return Err(GuestdServiceError::UnsafeCredential);
         }
         let mode = metadata.mode();
+        if !owner_is_safe(metadata.uid()) {
+            return Err(GuestdServiceError::UnsafeCredential);
+        }
         if mode & 0o002 != 0 && mode & 0o1000 == 0 {
             return Err(GuestdServiceError::UnsafeCredential);
         }
     }
     Ok(())
+}
+
+fn owner_is_safe(uid: u32) -> bool {
+    uid == 0 || cfg!(test)
 }
 
 pub fn build_runtime_auth_core(token: Vec<u8>) -> Result<RuntimeAuthCore, GuestdServiceError> {
@@ -165,36 +179,41 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
     loop {
-        let (stream, peer_addr) = listener
-            .accept()
-            .await
-            .map_err(|_| GuestdServiceError::Ttrpc)?;
+        let Ok((stream, peer_addr)) = listener.accept().await else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
         let auth = Arc::clone(&auth);
         let vm_id = config.vm_id.clone();
         tokio::spawn(async move {
-            let context = connection_context(vm_id, peer_addr.cid());
-            let _ = run_single_connection(stream, auth, context).await;
+            if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
+                let _ = run_single_connection(stream, auth, context).await;
+            }
         });
     }
 }
 
-fn connection_context(vm_id: String, peer_cid: u32) -> AuthConnectionContext {
-    AuthConnectionContext {
+fn connection_context(
+    vm_id: String,
+    peer_cid: u32,
+) -> Result<AuthConnectionContext, GuestdServiceError> {
+    Ok(AuthConnectionContext {
         vm_id,
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
         guest_control_port: GUEST_CONTROL_AUTH_PORT,
         peer_cid,
         direction: AuthDirection::HostToGuest,
         purpose: AuthPurpose::GuestControlAuthV1,
-        connection_instance: new_connection_instance(),
-    }
+        connection_instance: new_connection_instance()?,
+    })
 }
 
-fn new_connection_instance() -> [u8; CONNECTION_INSTANCE_LEN] {
+fn new_connection_instance() -> Result<[u8; CONNECTION_INSTANCE_LEN], GuestdServiceError> {
     let mut instance = [0_u8; CONNECTION_INSTANCE_LEN];
     let mut rng = OsNonceRng;
-    let _ = rng.fill_bytes(&mut instance);
-    instance
+    rng.fill_bytes(&mut instance)
+        .map_err(|_| GuestdServiceError::TokenUnavailable)?;
+    Ok(instance)
 }
 
 pub async fn run_single_connection<S>(
@@ -221,10 +240,8 @@ where
         .map_err(|_| GuestdServiceError::Ttrpc)?;
     let _ = done_rx.await;
     cleanup.close();
-    server
-        .shutdown()
-        .await
-        .map_err(|_| GuestdServiceError::Ttrpc)
+    server.disconnect().await;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -253,6 +270,27 @@ impl GuestControlService {
                 "guest-control-unauthenticated",
             ))
         }
+    }
+
+    fn validate_metadata(
+        &self,
+        metadata: Option<&pb::RequestMetadata>,
+    ) -> Result<(), ttrpc::Error> {
+        let metadata = metadata.ok_or_else(|| {
+            rpc_status(
+                ttrpc::Code::INVALID_ARGUMENT,
+                "guest-control-metadata-invalid",
+            )
+        })?;
+        if metadata.vm_id != self.context.vm_id
+            || metadata.protocol_version != self.context.protocol_version
+        {
+            return Err(rpc_status(
+                ttrpc::Code::INVALID_ARGUMENT,
+                "guest-control-metadata-invalid",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -286,8 +324,9 @@ impl GuestControl for GuestControlService {
     async fn capabilities(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::CapabilitiesRequest,
+        request: pb::CapabilitiesRequest,
     ) -> ttrpc::Result<pb::CapabilitiesResponse> {
+        self.validate_metadata(request.metadata.as_ref())?;
         self.lock_auth()?
             .capabilities(&self.context)
             .map_err(map_auth_rpc_error)
@@ -296,8 +335,9 @@ impl GuestControl for GuestControlService {
     async fn health(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::HealthRequest,
+        request: pb::HealthRequest,
     ) -> ttrpc::Result<pb::HealthResponse> {
+        self.validate_metadata(request.metadata.as_ref())?;
         self.lock_auth()?
             .health(&self.context)
             .map_err(map_auth_rpc_error)
@@ -720,6 +760,18 @@ mod tests {
         MessageField::some(metadata)
     }
 
+    fn health_request() -> pb::HealthRequest {
+        let mut request = pb::HealthRequest::new();
+        request.metadata = metadata();
+        request
+    }
+
+    fn capabilities_request() -> pb::CapabilitiesRequest {
+        let mut request = pb::CapabilitiesRequest::new();
+        request.metadata = metadata();
+        request
+    }
+
     async fn authenticate(service: &GuestControlService) {
         let ctx = ttrpc_context();
         let mut hello = pb::HelloRequest::new();
@@ -782,22 +834,35 @@ mod tests {
     async fn health_and_capabilities_are_same_connection_authenticated() {
         let ctx = ttrpc_context();
         let service = test_service(1);
-        assert_unauthenticated(service.health(&ctx, pb::HealthRequest::new()).await);
-        assert_unauthenticated(
-            service
-                .capabilities(&ctx, pb::CapabilitiesRequest::new())
-                .await,
-        );
+        assert_unauthenticated(service.health(&ctx, health_request()).await);
+        assert_unauthenticated(service.capabilities(&ctx, capabilities_request()).await);
 
         authenticate(&service).await;
-        assert!(service.health(&ctx, pb::HealthRequest::new()).await.is_ok());
-        assert!(service
-            .capabilities(&ctx, pb::CapabilitiesRequest::new())
-            .await
-            .is_ok());
+        assert!(service.health(&ctx, health_request()).await.is_ok());
+        assert!(service.capabilities(&ctx, capabilities_request()).await.is_ok());
 
         let other = GuestControlService::new(Arc::clone(&service.auth), test_context(2));
-        assert_unauthenticated(other.health(&ctx, pb::HealthRequest::new()).await);
+        assert_unauthenticated(other.health(&ctx, health_request()).await);
+    }
+
+    #[tokio::test]
+    async fn health_and_capabilities_validate_request_metadata() {
+        let ctx = ttrpc_context();
+        let service = test_service(7);
+        authenticate(&service).await;
+
+        let mut wrong = health_request();
+        wrong.metadata.as_mut().unwrap().vm_id = "other-vm".to_owned();
+        match service.health(&ctx, wrong).await {
+            Err(ttrpc::Error::RpcStatus(status)) => {
+                assert_eq!(
+                    status.code.enum_value().unwrap(),
+                    ttrpc::Code::INVALID_ARGUMENT
+                );
+                assert!(!status.message.contains("other-vm"));
+            }
+            other => panic!("expected invalid metadata status, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -805,13 +870,13 @@ mod tests {
         let ctx = ttrpc_context();
         let service = test_service(3);
         authenticate(&service).await;
-        assert!(service.health(&ctx, pb::HealthRequest::new()).await.is_ok());
+        assert!(service.health(&ctx, health_request()).await.is_ok());
         service
             .auth
             .lock()
             .unwrap()
             .close_connection(&service.context);
-        assert_unauthenticated(service.health(&ctx, pb::HealthRequest::new()).await);
+        assert_unauthenticated(service.health(&ctx, health_request()).await);
     }
 
     #[tokio::test]

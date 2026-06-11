@@ -73,8 +73,8 @@ deprecations ship one minor release before removal.
   behavior is enabled yet.
 
 - `nixling-guestd` now owns generated ttRPC service bindings and a dormant
-  `--serve --vm-id <vm>` service mode for authenticated Hello/Health/
-  Capabilities. The guest service remains opt-in manual-start only
+  `--serve --vm-id <vm>` service mode for Hello challenge, Authenticate, and
+  authenticated Health/Capabilities. The guest service remains opt-in manual-start only
   (`wantedBy = []`) and does not enable host readiness or exec behavior.
 
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
