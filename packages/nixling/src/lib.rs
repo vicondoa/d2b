@@ -1236,6 +1236,7 @@ struct ManifestVm {
     audio: bool,
     usbip_yubikey: bool,
     static_ip: Option<String>,
+    usbipd_host_ip: Option<String>,
     is_net_vm: bool,
     state_dir: String,
     bridge: String,
@@ -3942,6 +3943,34 @@ fn usb_mutating_verb(
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
     if flags.apply {
+        if verb == "usb attach" {
+            let guest_plan = usb_guest_attach_plan(context, vm, bus_id, json_mode)?;
+            let outcome = try_daemon_mutating_verb(
+                context,
+                request_type,
+                serde_json::json!({
+                    "vm": vm,
+                    "busId": bus_id,
+                }),
+                flags.dry_run,
+                flags.apply,
+                json_mode,
+            )?;
+            match outcome {
+                DaemonVerbOutcome::Applied { summary } => {
+                    run_usb_guest_attach(&guest_plan, json_mode)?;
+                    print_stdout(&format!("{summary}\n"));
+                    if !json_mode {
+                        print_stdout(&format!(
+                            "nixling usb attach --apply: imported busid '{}' inside vm '{}'\n",
+                            guest_plan.bus_id, guest_plan.vm_name
+                        ));
+                    }
+                    return Ok(0);
+                }
+                other => return emit_daemon_mutating_outcome(other, json_mode),
+            }
+        }
         return dispatch_mutating_verb(
             context,
             request_type,
@@ -3961,6 +3990,7 @@ fn usb_mutating_verb(
             "SpawnRunner(sys-<env>-usbipd/backend)",
             "SpawnRunner(sys-<env>-usbipd/proxy)",
             "UsbipProxyReconcile",
+            "GuestUsbipAttach(ssh sudo -n usbip attach)",
         ]
     } else {
         vec!["UsbipUnbind", "UsbipProxyReconcile"]
@@ -3971,7 +4001,11 @@ fn usb_mutating_verb(
         "vm": vm,
         "busId": bus_id,
         "planned": planned,
-        "notes": "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, and reconcile plan without mutating host state.",
+        "notes": if verb == "usb attach" {
+            "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and guest import without mutating host or guest state."
+        } else {
+            "USBIP dry-run reports the daemon → broker unbind and reconcile plan without mutating host state."
+        },
     });
     if json_mode {
         let mut rendered = serde_json::to_string_pretty(&summary)
@@ -3984,11 +4018,266 @@ fn usb_mutating_verb(
         } else {
             "unbind"
         };
-        print_stdout(&format!(
-            "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
-        ));
+        if verb == "usb attach" {
+            print_stdout(&format!(
+                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach\n"
+            ));
+        } else {
+            print_stdout(&format!(
+                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
+            ));
+        }
     }
     Ok(0)
+}
+
+#[derive(Debug, Clone)]
+struct UsbGuestAttachPlan {
+    vm_name: String,
+    bus_id: String,
+    host: String,
+    user: String,
+    usbip_host: String,
+    key_path: PathBuf,
+    known_hosts: PathBuf,
+}
+
+fn usb_guest_attach_ssh_argv(
+    key_path: &Path,
+    known_hosts: &Path,
+    remote: &str,
+    usbip_host: &str,
+    bus_id: &str,
+) -> Vec<String> {
+    vec![
+        "ssh".to_owned(),
+        "-i".to_owned(),
+        key_path.display().to_string(),
+        "-o".to_owned(),
+        format!("UserKnownHostsFile={}", known_hosts.display()),
+        "-o".to_owned(),
+        "BatchMode=yes".to_owned(),
+        "-o".to_owned(),
+        "ConnectTimeout=8".to_owned(),
+        "-o".to_owned(),
+        "StrictHostKeyChecking=accept-new".to_owned(),
+        remote.to_owned(),
+        "sudo".to_owned(),
+        "-n".to_owned(),
+        "usbip".to_owned(),
+        "attach".to_owned(),
+        "-r".to_owned(),
+        usbip_host.to_owned(),
+        "-b".to_owned(),
+        bus_id.to_owned(),
+    ]
+}
+
+fn usb_attach_cli_failure(
+    kind: &str,
+    code: &str,
+    what_was_checked: &str,
+    observed_state: &str,
+    remediation: &str,
+    is_json: bool,
+) -> CliFailure {
+    let envelope = host_error_envelope(
+        kind,
+        code,
+        1,
+        what_was_checked,
+        observed_state,
+        remediation,
+        "docs/reference/components-usbip.md#common-gotchas--failure-modes",
+    );
+    let rendered_stderr = if is_json {
+        let mut rendered =
+            serde_json::to_string_pretty(&envelope).expect("serialize usb attach failure envelope");
+        rendered.push('\n');
+        rendered
+    } else {
+        format!(
+            "nixling: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}\n",
+            envelope.kind,
+            envelope.code,
+            envelope.exit_code,
+            envelope.what_was_checked,
+            envelope.observed_state,
+            envelope.remediation,
+            envelope.docs_anchor,
+        )
+    };
+    CliFailure {
+        exit_code: envelope.exit_code,
+        message: envelope.kind,
+        rendered_stderr: Some(rendered_stderr),
+    }
+}
+
+fn usb_resolve_bundle_key_path(
+    bundle_path: &Path,
+    vm_name: &str,
+    is_json: bool,
+) -> Result<Option<PathBuf>, CliFailure> {
+    match bundle_path.try_exists() {
+        Ok(true) => {
+            let bundle: Bundle = match read_json_file(bundle_path) {
+                Ok(bundle) => bundle,
+                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+                Err(err) => {
+                    return Err(usb_attach_cli_failure(
+                        "nixling usb attach --apply failed to read the trusted bundle",
+                        "usb-guest-import-prerequisite",
+                        "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
+                        &format!("Failed to read bundle {}: {err}", bundle_path.display()),
+                        "Rebuild the host so the bundle is readable to the launcher, or ensure the framework-managed key exists at /var/lib/nixling/keys/<vm>_ed25519.",
+                        is_json,
+                    ));
+                }
+            };
+            Ok(Some(bundle.managed_keys.effective_key_path(vm_name)))
+        }
+        Ok(false) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(err) => Err(usb_attach_cli_failure(
+            "nixling usb attach --apply failed to inspect the trusted bundle",
+            "usb-guest-import-prerequisite",
+            "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
+            &format!("Failed to inspect bundle {}: {err}", bundle_path.display()),
+            "Fix the bundle path or filesystem permissions, then retry `nixling usb attach`.",
+            is_json,
+        )),
+    }
+}
+
+fn usb_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), CliFailure> {
+    match key_path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(usb_attach_cli_failure(
+            "nixling usb attach --apply cannot find the VM SSH key",
+            "usb-guest-import-prerequisite",
+            "Whether the framework-managed VM SSH key exists before mutating host USBIP state.",
+            &format!("SSH key not found at {}", key_path.display()),
+            "Rebuild the host or run `nixling keys rotate <vm>` for the target VM, then retry `nixling usb attach`.",
+            is_json,
+        )),
+        Err(err) => {
+            let remediation = if err.kind() == io::ErrorKind::PermissionDenied {
+                "Verify your shell session is a member of the `nixling` group (`id -nG | tr ' ' '\\n' | grep -x nixling`) and that /var/lib/nixling grants launcher traversal, then retry `nixling usb attach`."
+            } else {
+                "Fix the SSH key path or filesystem error, then retry `nixling usb attach`."
+            };
+            Err(usb_attach_cli_failure(
+                "nixling usb attach --apply cannot access the VM SSH key",
+                "usb-guest-import-prerequisite",
+                "Whether the framework-managed VM SSH key is accessible before mutating host USBIP state.",
+                &format!("Failed to inspect SSH key {}: {err}", key_path.display()),
+                remediation,
+                is_json,
+            ))
+        }
+    }
+}
+
+fn usb_guest_attach_plan(
+    context: &Context,
+    vm_name: &str,
+    bus_id: &str,
+    is_json: bool,
+) -> Result<UsbGuestAttachPlan, CliFailure> {
+    let manifest = context.load_manifest()?;
+    let vm = manifest.entries.get(vm_name).ok_or_else(|| {
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM is not in the manifest",
+            "usage",
+            "Whether the requested VM exists in the active manifest before mutating host USBIP state.",
+            &format!("Unknown VM '{vm_name}' in manifest"),
+            "Run `nixling list` and retry with a declared VM name.",
+            is_json,
+        )
+    })?;
+    let host = vm.static_ip.clone().ok_or_else(|| {
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no static IP",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no staticIp in the manifest"),
+            "Start from a VM that belongs to a nixling env and has a generated static IP, then retry `nixling usb attach`.",
+            is_json,
+        )
+    })?;
+    let user = vm.ssh_user.clone().ok_or_else(|| {
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no SSH user",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no sshUser in the manifest"),
+            "Set `nixling.vms.<vm>.ssh.user`, rebuild the host, and retry `nixling usb attach`.",
+            is_json,
+        )
+    })?;
+    let usbip_host = vm.usbipd_host_ip.clone().ok_or_else(|| {
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no USBIP proxy IP",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has per-env USBIP proxy metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no usbipdHostIp in the manifest"),
+            "Rebuild the host with a current nixling module so the manifest includes usbipdHostIp, then retry `nixling usb attach`.",
+            is_json,
+        )
+    })?;
+    let key_path = usb_resolve_bundle_key_path(&context.bundle_path, vm_name, is_json)?
+        .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{vm_name}_ed25519")));
+    usb_validate_key_exists(&key_path, is_json)?;
+
+    Ok(UsbGuestAttachPlan {
+        vm_name: vm_name.to_owned(),
+        bus_id: bus_id.to_owned(),
+        host,
+        user,
+        usbip_host,
+        key_path,
+        known_hosts: PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
+    })
+}
+
+fn run_usb_guest_attach(plan: &UsbGuestAttachPlan, is_json: bool) -> Result<(), CliFailure> {
+    let remote = format!("{}@{}", plan.user, plan.host);
+    let argv = usb_guest_attach_ssh_argv(
+        &plan.key_path,
+        &plan.known_hosts,
+        &remote,
+        &plan.usbip_host,
+        &plan.bus_id,
+    );
+    let status = Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .map_err(|err| {
+            usb_attach_cli_failure(
+                "nixling usb attach --apply failed to SSH into the guest",
+                "usb-guest-import-failed",
+                "Guest-side USBIP import after the host-side daemon → broker attach succeeded.",
+                &format!("SSH guest import failed for vm '{}': {err}", plan.vm_name),
+                &format!("The host-side USBIP attach may already be active. Check VM reachability and guest sudo/usbip availability, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+                is_json,
+            )
+        })?;
+    if !status.success() {
+        return Err(usb_attach_cli_failure(
+            "nixling usb attach --apply guest import command failed",
+            "usb-guest-import-failed",
+            "Guest-side `sudo -n usbip attach` after the host-side daemon → broker attach succeeded.",
+            &format!(
+                "Guest import in vm '{}' exited {}",
+                plan.vm_name,
+                status.code().unwrap_or(-1)
+            ),
+            &format!("The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+            is_json,
+        ));
+    }
+    Ok(())
 }
 
 fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailure> {
@@ -5845,21 +6134,7 @@ fn broker_error_envelope(
     )
 }
 
-/// Top-level dispatcher for mutating verbs. Runs the native daemon
-/// path; failure modes surface as typed envelopes (daemon-down
-/// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
-/// Rust CLI dispatching through nixlingd → broker is the only
-/// operator path — no bash fallback.
-fn dispatch_mutating_verb(
-    context: &Context,
-    request_type: &str,
-    extra_fields: serde_json::Value,
-    dry_run: bool,
-    apply: bool,
-    json: bool,
-) -> Result<i32, CliFailure> {
-    let outcome =
-        try_daemon_mutating_verb(context, request_type, extra_fields, dry_run, apply, json)?;
+fn emit_daemon_mutating_outcome(outcome: DaemonVerbOutcome, json: bool) -> Result<i32, CliFailure> {
     match outcome {
         DaemonVerbOutcome::Applied { summary } => {
             print_stdout(&format!("{summary}\n"));
@@ -5938,6 +6213,24 @@ fn dispatch_mutating_verb(
             )
         }
     }
+}
+
+/// Top-level dispatcher for mutating verbs. Runs the native daemon
+/// path; failure modes surface as typed envelopes (daemon-down
+/// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
+/// Rust CLI dispatching through nixlingd → broker is the only
+/// operator path — no bash fallback.
+fn dispatch_mutating_verb(
+    context: &Context,
+    request_type: &str,
+    extra_fields: serde_json::Value,
+    dry_run: bool,
+    apply: bool,
+    json: bool,
+) -> Result<i32, CliFailure> {
+    let outcome =
+        try_daemon_mutating_verb(context, request_type, extra_fields, dry_run, apply, json)?;
+    emit_daemon_mutating_outcome(outcome, json)
 }
 
 fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
@@ -6289,7 +6582,7 @@ mod host_install_dispatch_tests {
         broker_error_envelope, cmd_host_install, cmd_vm_start, daemon_supported_features,
         encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, ApiReadySimple,
         ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag,
-        SockType, UnixAddr, VmStartArgs, MAX_FRAME_BYTES,
+        SockType, UnixAddr, UsbAttachArgs, VmStartArgs, MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -6458,6 +6751,30 @@ mod host_install_dispatch_tests {
             serde_json::to_vec(&manifest).expect("serialize manifest"),
         )
         .expect("write manifest");
+    }
+
+    fn write_usb_attach_manifest(path: &PathBuf, vm: &str) {
+        let manifest = json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": true,
+                "staticIp": "10.20.0.10",
+                "usbipdHostIp": "192.0.2.1",
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize usb attach manifest"),
+        )
+        .expect("write usb attach manifest");
     }
 
     fn run_vm_start_with_mock_daemon(
@@ -6834,6 +7151,47 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn usb_attach_prevalidates_guest_import_before_daemon_dispatch() {
+        let manifest_path = test_socket_path("usb-attach-prevalidate", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test manifest dir");
+        }
+        let vm = "unit-usb-missing-key";
+        write_usb_attach_manifest(&manifest_path, vm);
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: test_socket_path("usb-attach-prevalidate", ".sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = UsbAttachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: true,
+            human: false,
+        };
+
+        let err = super::cmd_usb_attach(&context, &args)
+            .expect_err("missing key must fail before daemon dispatch");
+        assert_eq!(err.exit_code, 1);
+        let rendered = err.rendered_stderr.as_deref().unwrap_or("");
+        assert!(rendered.contains("nixling usb attach --apply"));
+        assert!(!rendered.contains("vm konsole"));
+        assert!(!rendered.contains("--key"));
+        assert!(!rendered.contains("daemon-down"));
+
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
     fn start_apply_no_wait_api_exits_zero_on_process_alive() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let args = VmStartArgs {
@@ -7036,6 +7394,7 @@ mod host_install_dispatch_tests {
             audio: false,
             usbip_yubikey: false,
             static_ip: Some("10.20.0.10".to_owned()),
+            usbipd_host_ip: Some("192.0.2.1".to_owned()),
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -7118,6 +7477,7 @@ mod host_install_dispatch_tests {
             audio: true,
             usbip_yubikey: false,
             static_ip: None,
+            usbipd_host_ip: None,
             is_net_vm: false,
             state_dir: "/var/lib/nixling/vms/vm-a".to_owned(),
             bridge: "nl-dev".to_owned(),
@@ -7985,6 +8345,44 @@ mod config_cmd_tests {
         assert_eq!(
             &argv[target + 1..],
             &["cat", "/var/lib/nixling-guest/guest-config.nix"]
+        );
+    }
+
+    #[test]
+    fn usb_guest_attach_ssh_argv_runs_guest_import_after_destination() {
+        let argv = super::usb_guest_attach_ssh_argv(
+            &PathBuf::from("/var/lib/nixling/keys/work-aad_ed25519"),
+            &PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
+            "alice@10.20.0.10",
+            "192.0.2.1",
+            "1-2",
+        );
+
+        assert_eq!(argv[0], "ssh");
+        let key_pos = argv.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(argv[key_pos + 1], "/var/lib/nixling/keys/work-aad_ed25519");
+        assert!(argv
+            .iter()
+            .any(|a| a == "UserKnownHostsFile=/var/lib/nixling/known_hosts.nixling"));
+        assert!(argv.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
+        assert!(argv.iter().any(|a| a == "BatchMode=yes"));
+        assert!(argv.iter().any(|a| a == "ConnectTimeout=8"));
+        assert!(!argv.iter().any(|a| a == "StrictHostKeyChecking=no"));
+        assert!(!argv.iter().any(|a| a == "UserKnownHostsFile=/dev/null"));
+
+        let remote_pos = argv.iter().position(|a| a == "alice@10.20.0.10").unwrap();
+        assert_eq!(
+            &argv[remote_pos + 1..],
+            &[
+                "sudo",
+                "-n",
+                "usbip",
+                "attach",
+                "-r",
+                "192.0.2.1",
+                "-b",
+                "1-2"
+            ]
         );
     }
 }

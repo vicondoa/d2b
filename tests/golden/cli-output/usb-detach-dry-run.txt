@@ -1,1 +1,1 @@
-nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm' and reconcile the USBIP proxy
+nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
