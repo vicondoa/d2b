@@ -150,7 +150,7 @@ fn validate_safe_directory_path(dir: &Path) -> Result<(), GuestdServiceError> {
         if !owner_is_safe(metadata.uid()) {
             return Err(GuestdServiceError::UnsafeCredential);
         }
-        if mode & 0o002 != 0 && mode & 0o1000 == 0 {
+        if mode & 0o022 != 0 {
             return Err(GuestdServiceError::UnsafeCredential);
         }
     }
@@ -994,8 +994,9 @@ mod tests {
 
     #[test]
     fn credential_loader_rejects_unsafe_sources_without_leaking_path() {
-        let root =
-            std::env::temp_dir().join(format!("nixling-guestd-cred-test-{}", std::process::id()));
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(format!("nixling-guestd-cred-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
