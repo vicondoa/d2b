@@ -26,10 +26,6 @@
   "patternProperties": {
     "^[a-z][a-z0-9-]*$": {
       "$ref": "#/$defs/vmEntry"
-    },
-    "^_": {
-      "description": "Reserved namespace for future schema-metadata keys beyond `_manifest` and `_observability`. CLI consumers MUST tolerate unknown _-prefixed keys without bumping manifestVersion.",
-      "type": ["object", "array", "string", "number", "boolean", "null"]
     }
   },
   "additionalProperties": false,
@@ -77,7 +73,7 @@
     },
     "vmObservability": {
       "type": "object",
-      "description": "Per-VM observability transport metadata. Always emitted so future observability components can rely on the field existing.",
+      "description": "Per-VM observability transport metadata. Always emitted so consumers can rely on a stable transport metadata location.",
       "required": ["enabled", "vsockCid", "vsockHostSocket", "agentSocket"],
       "additionalProperties": false,
       "properties": {
@@ -98,6 +94,22 @@
           "type": "string",
           "const": "/run/nixling/otlp.sock",
           "description": "In-guest Unix socket reserved for the workload observability agent."
+        }
+      }
+    },
+    "vmLanPolicy": {
+      "type": "object",
+      "description": "Per-VM LAN east-west policy metadata for env-backed VMs.",
+      "required": ["allowEastWest", "effectiveEastWest"],
+      "additionalProperties": false,
+      "properties": {
+        "allowEastWest": {
+          "type": "boolean",
+          "description": "Raw nixling.envs.<env>.allowEastWest setting for this VM's env."
+        },
+        "effectiveEastWest": {
+          "type": "boolean",
+          "description": "Effective east-west policy after combining env and site opt-ins."
         }
       }
     },
@@ -160,6 +172,19 @@
         "env": {
           "type": ["string", "null"],
           "description": "Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs."
+        },
+        "mtu": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Effective MTU for env-backed VMs when emitted. Omitted for legacy/env-less VMs."
+        },
+        "mssClamp": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Effective TCP MSS clamp for env-backed VMs when emitted. Omitted when no clamp is configured."
+        },
+        "lan": {
+          "$ref": "#/$defs/vmLanPolicy"
         },
         "isNetVm": {
           "type": "boolean",

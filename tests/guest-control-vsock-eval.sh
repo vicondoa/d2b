@@ -20,12 +20,17 @@ eval_ok() {
 eval_fail() {
   local scenario=$1 expected=$2
   local stderr="$scratch/$scenario.stderr"
+  : > "$stderr"
   if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
     nix eval --raw --impure --expr "import $ROOT/tests/guest-control-vsock-eval.nix { scenario = \"$scenario\"; }" >/dev/null 2>"$stderr"; then
     fail "guest-control-vsock-eval: $scenario unexpectedly passed"
   fi
   if ! grep -q "$expected" "$stderr"; then
-    sed -n '1,100p' "$stderr" >&2 || true
+    if [ -s "$stderr" ]; then
+      sed -n '1,100p' "$stderr" >&2 || true
+    else
+      printf 'guest-control-vsock-eval: %s produced no stderr\n' "$scenario" >&2
+    fi
     fail "guest-control-vsock-eval: $scenario failure did not contain '$expected'"
   fi
 }

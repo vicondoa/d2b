@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** stable from `manifestVersion = 4` onward.
+**Status:** current schema version is `manifestVersion = 4`.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this document and the JSON Schema
 disagree, the JSON Schema wins.
@@ -95,15 +95,14 @@ verifying owner, mode, version, and hash.
 
 Every top-level key is either:
 
-1. **A reserved key** starting with `_` (currently `_manifest` and
-   `_observability`), or
+1. **One of the two reserved keys** (`_manifest` or `_observability`), or
 2. **A VM name** matching `^[a-z][a-z0-9-]*$` (the regex enforced by
    `nixos-modules/assertions.nix`'s `vmNameOk`).
 
 The leading-underscore rule means reserved keys can never collide with
-any valid VM name. Schema v3 requires (since the v0.2.0 bump that introduced observability; the contract is unchanged) `_observability`; future unknown
-reserved keys still remain ignorable by consumers built against the
-same schema version.
+any valid VM name. Schema v4 requires `_observability` and rejects
+unknown `_`-prefixed top-level keys fail-closed; adding another reserved
+sentinel requires a manifest-version bump.
 
 ## Reserved keys
 
@@ -125,8 +124,7 @@ the reserved top-level `_observability` sentinel and per-VM
 clean break, with no v2 compatibility window. Version 4 keeps the v3
 JSON shape but changes the per-VM `observability.vsockCid` /
 `observability.vsockHostSocket` semantics to be the host-owned base
-Cloud Hypervisor vsock device for observability today and guest-control
-traffic later. The daemon refuses prior bundles with
+Cloud Hypervisor vsock device. The daemon refuses prior bundles with
 `manifest-version-mismatch` (exit code 41).
 
 ### `_observability`
@@ -151,8 +149,9 @@ traffic later. The daemon refuses prior bundles with
 | `grafanaUrl`         | string           | yes      | Resolved Grafana URL derived from `nixling.observability.grafana.*`.        |
 | `chExporter`         | object           | yes      | Host-side Cloud Hypervisor exporter metadata. Currently `{ listenPort }`.   |
 
-Future reserved keys would also start with `_`. CLI implementations
-MUST silently ignore unknown top-level keys whose name starts with `_`.
+Unknown top-level keys whose name starts with `_` are invalid under
+manifest v4. New reserved sentinels are introduced only with a new
+`manifestVersion`.
 
 ## Per-VM entry
 
@@ -170,6 +169,9 @@ is the canonical type spec; the table below is for human readability.
 | `tap`            | string             | yes      | Host-side tap-device name. Derived: `<env>-l<index>` (workload), `<env>-u2` (net VM), or `vm-<name>` (legacy).            |
 | `bridge`         | string \| null     | yes      | Linux bridge the tap attaches to. Workload: `br-<env>-lan`. Net VM: `br-<env>-up`. Legacy hand-rolled VM: `null`.         |
 | `env`            | string \| null     | yes      | Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs.                                   |
+| `mtu`            | unsigned integer \| absent | no | Effective MTU for env-backed VMs when emitted. Absent for legacy/env-less VMs. |
+| `mssClamp`       | unsigned integer \| absent | no | Effective TCP MSS clamp for env-backed VMs when emitted. Absent when no clamp is configured. |
+| `lan`            | object \| absent   | no       | LAN east-west policy metadata for env-backed VMs when emitted. Shape: `{ allowEastWest, effectiveEastWest }`. |
 | `isNetVm`        | boolean            | yes      | True iff this VM is the auto-generated `sys-<env>-net`. CLI uses this for bring-up ordering.                              |
 | `netVm`          | string \| null     | yes      | For workload VMs: name of the net VM serving this VM's env. Null for net VMs and legacy VMs.                              |
 | `usbipdHostIp`   | string \| null     | yes      | Host IP of the per-env usbipd proxy. Retained for the legacy/guest-side USBIP attach flow. Null for net VMs/legacy.      |
@@ -193,7 +195,7 @@ intentional — it lets a Rust consumer parse a single per-VM entry
 out of a stream without losing the name, and it makes the CLI's
 `jq` filters that emit per-VM JSON to subprocesses self-describing.
 
-A v3+ schema MAY drop `name` if every consumer is updated to derive
+A v4+ schema MAY drop `name` if every consumer is updated to derive
 it from the enclosing key. Until then, treat `name` and the
 enclosing key as required to match.
 
@@ -204,7 +206,7 @@ and `audioService` are all mechanically derivable from `name` today.
 The schema carries them explicitly because:
 
 1. **The path layout is part of the framework's public contract.** A
-   v3+ schema might thread `nixling.site.stateDir` overrides through
+   v4+ schema might thread `nixling.site.stateDir` overrides through
    to these paths (currently advisory-only); when that happens, the
    manifest is the place to look up the resolved path, not a string
    template inside the CLI.
@@ -249,8 +251,7 @@ convention as the same path minus the `.pub` suffix.
 
 #### `observability` and `_observability`
 
-Schema v3 (the current daemon-only end-state version; bumped from
-v2) emits an always-present observability envelope in two places:
+Schema v4 emits an always-present observability envelope in two places:
 
 1. `_observability` describes the host-wide stack wiring: whether the
    observability track is enabled, which VM name is reserved for the
@@ -263,8 +264,8 @@ v2) emits an always-present observability envelope in two places:
 
 The per-VM block is present even when
 `nixling.vms.<name>.observability.enable = false`. That is deliberate:
-The schema reserves the shape so later PRs can land the transport and
-component modules without another manifest-structure change.
+the schema reserves a stable location for transport metadata without
+another manifest-structure change.
 
 `vsockCid` is deterministic. Env-backed VMs use
 `100 + envIndex * 1000 + slot`, where `envIndex` is the alphabetical
@@ -280,8 +281,8 @@ use the deprecated `staticIp` path.
 
 | Change kind                                               | Bump | Rationale                                       |
 |-----------------------------------------------------------|------|-------------------------------------------------|
-| Add new optional per-VM field                             | no   | Old consumers ignore unknown keys.              |
-| Add new reserved `_*` top-level key                       | no   | Reserved namespace exists for forward compat.   |
+| Add new optional per-VM field                             | yes  | v4 consumers reject unknown per-VM keys fail-closed. |
+| Add new reserved `_*` top-level key                       | yes  | v4 consumers reject unknown reserved keys fail-closed. |
 | Remove a per-VM field                                     | yes  | Old consumers may read missing key as null.     |
 | Rename a per-VM field                                     | yes  | Old consumers won't find the renamed field.    |
 | Narrow a field's type (e.g. `nullOr str` → `str`)         | no   | Strictly more permissive for consumers.         |
@@ -305,8 +306,8 @@ For `k > 0`:
 For `k = 0` (same version):
 
 1. **Parse the manifest normally.**
-2. **Tolerate unknown top-level reserved keys** (starting with `_`).
-3. **Tolerate unknown per-VM fields.** (Future additive changes.)
+2. **Reject unknown top-level reserved keys** (starting with `_`).
+3. **Reject unknown per-VM fields.**
 4. **Tolerate unknown VM names** in the map — the consumer may not
    recognise every VM but should still be able to operate on the
    ones it knows about.
@@ -497,7 +498,7 @@ are mechanically derived from `name` and the env):
 ```bash
 MANIFEST=/run/current-system/sw/share/nixling/vms.json
 
-# Enumerate VM names (skipping the reserved _* sentinels):
+# Enumerate VM names (skipping the reserved sentinels):
 jq -r 'to_entries[] | select(.key | startswith("_") | not) | .key' "$MANIFEST"
 
 # Look up one VM's apiSocket:

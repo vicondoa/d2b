@@ -149,7 +149,7 @@ The observability transport has its own CID/port/path contract. Host-side vsock 
 | Workload VM vsock backend socket | `/var/lib/nixling/vms/<vm>/vsock.sock` | host (Cloud Hypervisor creates it) |
 | Obs VM vsock backend socket | `/var/lib/nixling/vms/<cfg.vmName>/vsock.sock` | host (Cloud Hypervisor creates it) |
 
-Manifest v3 keeps a deterministic md5-based fallback CID for env-less legacy VMs so the always-emitted `observability` block stays populated, but env-backed VMs use the formula above. The per-VM `observability.vsockHostSocket` field is the base Cloud Hypervisor vsock socket; guest-to-host OTLP traffic uses the suffixed `<base>_14317` listener.
+Manifest v4 keeps a deterministic md5-based fallback CID for env-less legacy VMs so the always-emitted `observability` block stays populated, but env-backed VMs use the formula above. The per-VM `observability.vsockHostSocket` field is the base Cloud Hypervisor vsock socket; guest-to-host OTLP traffic uses the suffixed `<base>_14317` listener.
 
 ## Naming conventions
 
