@@ -15,7 +15,7 @@
         "manifestVersion": {
           "type": "integer",
           "const": 4,
-          "description": "Schema version. This document IS the v4 schema; the field is locked to `const: 4`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v5.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v4 manifests (versions 0, 1, 2, 3) are historical and are no longer valid under this schema; the base-vsock manifest revision retired v3."
+          "description": "Schema version. This document is the v4 schema; the field is locked to `const: 4`. Breaking schema revisions use a new schema document with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v4 manifests (versions 0, 1, 2, 3) are historical and are no longer valid under this schema."
         }
       }
     },

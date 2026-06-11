@@ -4,25 +4,18 @@ Three layers of validation, ordered cheapest-to-most-expensive.
 
 ## Naming expectations
 
-Tests reference systemd unit names directly. On a daemon-owned host,
-the units you should see on a host with nixling installed are:
+Tests should treat `nixlingd` and the privileged broker as the only
+host-visible systemd surface. Per-VM lifecycle work is represented in
+the daemon process DAG and broker runner roles, not by per-VM host
+units.
 
-| Resource                       | Unit name                                |
-| ------------------------------ | ---------------------------------------- |
-| User-facing per-VM             | `nixling@<vm>.service`                   |
-| Backend (microvm.nix template) | `microvm@<vm>.service`                   |
-| Per-VM virtiofsd               | `microvm-virtiofsd@<vm>.service` |
-| Per-VM GPU sidecar             | `nixling-<vm>-gpu.service`               |
-| Per-VM video sidecar           | `nixling-<vm>-video.service`             |
-| Per-VM audio sidecar           | `nixling-<vm>-snd.service`               |
-| Per-VM TPM emulator            | `nixling-<vm>-swtpm.service`             |
-| Per-VM store sync              | `nixling-<vm>-store-sync.service`        |
-| Per-env USBIP proxy            | `nixling-sys-<env>-usbipd-proxy.{service,socket}` |
-| Per-env USBIP backend          | `nixling-sys-<env>-usbipd-backend.service` |
-| Host observability bridge      | `nixling-otel-host-bridge.service`       |
-| Host CH exporter               | `nixling-ch-exporter.service`            |
-| Auto-declared per-env net VM   | `nixling@sys-<env>-net.service` (workload-side `microvm@sys-<env>-net.service` backend) |
-| Polkit launcher group          | `nixling` (singleton)           |
+| Resource | Name |
+| --- | --- |
+| Public daemon | `nixlingd.service` |
+| Privileged broker socket | `nixling-priv-broker.socket` |
+| Privileged broker service | `nixling-priv-broker.service` |
+| Lifecycle permission group | `nixling` |
+| Per-VM runner roles | `cloud-hypervisor`, `virtiofsd`, `swtpm`, `gpu`, `video`, `audio`, `vsock-relay`, `usbip` in `processes.json` |
 
 State directories follow the matching pattern:
 
@@ -225,8 +218,8 @@ tests/audio.sh --list
 | `test_host_pipewire_alive`            | `pipewire.service` + `wireplumber.service` are active and `wpctl status` is reachable.    |
 | `test_host_has_audio_devices`         | At least one real ALSA/v4l2/bluez5 device is visible to WirePlumber.                       |
 | `test_host_has_audio_sinks_and_sources` | At least one real Sink (not just "Dummy Output") and one Source — catches the failure mode where rebuild loses ALSA visibility. |
-| `test_sidecar_unit_present`           | At least one `nixling-<vm>-snd.service` per-VM system unit is registered. |
-| `test_sidecar_socket_lifecycle`       | Starting `nixling-<vm>-snd.service` creates the UDS with `group=kvm mode=0660`; stop removes it (RemoveOnStop). |
+| `test_sidecar_runner_present`         | At least one audio runner is declared in the daemon process graph. |
+| `test_sidecar_socket_lifecycle`       | Starting the audio runner creates the UDS with `group=kvm mode=0660`; stopping the runner removes it. |
 | `test_cli_status_smoke`               | `nixling audio status <vm>` reports the expected fields for an audio-enabled VM.          |
 | `test_cli_grant_revoke`               | `nixling audio mic on / speaker on / mic off / off` round-trip: state file transitions correctly, sidecar lifecycle follows. |
 | `test_cli_rejects_audio_disabled_vm`  | Trying `nixling audio mic on <non-audio-vm>` fails with a clear error.                    |
@@ -278,13 +271,10 @@ isolated even after a workload spoofs a peer-style MAC.
   running guest. Lift that adversarial cross-env attach/isolation path
   into the runtime `nixosTest` suite.
 
-- **Audit `--strict` graphics-VM running-check mock test** (Spec
-  correction #38 / v0.1.6 follow-up Test-H8). The v0.1.6 fix in
-  `nixos-modules/cli.nix` extended the
-  `bridge_isolated_workload.<vm>` running-check from the previous
-  `microvm@<vm>` probe to also accept `nixling@<vm>` or
-  `nixling-<vm>-gpu` as evidence the VM is up — without this,
-  graphics VMs were blanket-skipped by `nixling audit --strict`
+- **Audit `--strict` graphics-VM running-check mock test**. The
+  `bridge_isolated_workload.<vm>` running-check should use daemon
+  running-state evidence for graphics VMs as well as headless VMs; without
+  this, graphics VMs can be blanket-skipped by `nixling audit --strict`
   even when actively running. **Known gap:** this still needs a live
   host / higher-fidelity harness because the shell-application wrapper
   bakes `systemctl` in via `runtimeInputs`; a plain `PATH` stub is not

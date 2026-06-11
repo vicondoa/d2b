@@ -23,13 +23,13 @@ workload VM <vm>
 │ /run/nixling/otlp-egress.sock     guest relay handoff               │
 │   │                                                                  │
 │   ▼                                                                  │
-│ nixling-otel-vsock-out.service    socat                             │
+│ nixling-otel-vsock-out.service    guest-side relay                  │
 └───┬───────────────────────────────────────────────────────────────────┘
     │ AF_VSOCK: CID 2, port 14317
     ▼
 host
 ┌──────────────────────────────────────────────────────────────────────┐
-│ nixling-otel-relay@<vm>.service   socat                             │
+│ broker SpawnRunner{role=VsockRelay}                                 │
 │   │                                                                  │
 │   ├─ workload backend: /var/lib/nixling/vms/<vm>/vsock.sock         │
 │   └─ obs backend:      /var/lib/nixling/vms/sys-obs-stack/vsock.sock│
@@ -38,7 +38,7 @@ host
     ▼
 obs VM: sys-obs-stack
 ┌──────────────────────────────────────────────────────────────────────┐
-│ nixling-otel-vsock-in.service     socat                             │
+│ nixling-otel-vsock-in.service     obs-VM receiver                   │
 │   │                                                                  │
 │   ▼                                                                  │
 │ /run/nixling/obs-ingress.sock                                        │
@@ -61,7 +61,7 @@ parallel host path
 │ /run/nixling/host-egress.sock                                        │
 │   │                                                                  │
 │   ▼                                                                  │
-│ nixling-otel-host-bridge.service                                     │
+│ broker SpawnRunner{role=OtelHostBridge}                             │
 └───┬───────────────────────────────────────────────────────────────────┘
     │ same obs-VM backend socket on the host
     ▼
@@ -154,46 +154,37 @@ Manifest v4 keeps a deterministic md5-based fallback CID for env-less legacy VMs
 | Kind | Pattern | Example |
 |---|---|---|
 | System-declared VM | `sys-<env>-<role>` | `sys-obs-stack` |
-| Per-VM templated host unit | `nixling-<role>@<vm>.service` | `nixling-otel-relay@work-aad.service` |
-| Global host singleton unit | `nixling-<role>.service` | `nixling-ch-exporter.service`, `nixling-otel-host-bridge.service` |
+| Daemon DAG role | `processes.json` node role | `vsock-relay`, `cloud-hypervisor-runner` |
+| Broker runner role | `SpawnRunner{role=...}` | `VsockRelay`, `OtelHostBridge` |
 | In-VM unit (guest or obs) | plain `nixling-<role>.service` | `nixling-otel-vsock-out.service`, `nixling-otel-vsock-in.service` |
 | Per-VM state | `/var/lib/nixling/vms/<vm>/...` | `/var/lib/nixling/vms/work-aad/vsock.sock` |
 | Per-VM runtime (in-VM) | `/run/nixling/...` | `/run/nixling/otlp.sock` |
 
-**Service names**: nixling-defined services use `nixling-<role>.service`
-(templated: `nixling-<role>@<vm>.service`). Services declared via
-upstream NixOS modules (`services.alloy`, `services.grafana`, etc.)
-keep their upstream names. This matches the existing precedent for
-`pipewire.service` (audio), `swtpm@<vm>.service`, and
-`microvm@<vm>.service`.
+**Service names**: host-side observability relay work is daemon/broker-owned
+and appears as process DAG nodes rather than host systemd units. Services
+declared inside guests or by upstream NixOS modules (`services.alloy`,
+`services.grafana`, etc.) keep their upstream names.
 
-## Systemd units
+## Runtime units and runner roles
 
-nixling-defined observability sidecars follow the v0.1.7 H7 lifecycle
-rule: `restartIfChanged = false` is set at the top level of the service
-definition, not as `unitConfig.X-RestartIfChanged`. That invariant does
-not extend to upstream NixOS services. `alloy.service`,
-`grafana.service`, `prometheus.service`, `loki.service`, and
-`tempo.service` keep their upstream nixpkgs defaults (currently
-`restartIfChanged = true`).
+Observability's host-side relays are broker-spawned runner roles. Upstream NixOS
+services (`alloy.service`, `grafana.service`, `prometheus.service`,
+`loki.service`, and `tempo.service`) keep their nixpkgs defaults.
 
-| Unit | Scope | Restart | `restartIfChanged` | What it does |
-|---|---|---|---|---|
-| `nixling-otel-relay@<vm>.service` | host | `on-failure` | `false` (top-level) | Bridges one monitored workload VM's host-side vsock backend socket to the obs VM's host-side vsock backend socket. |
-| `nixling-otel-host-bridge.service` | host | `on-failure` | `false` (top-level) | Bridges the host Alloy egress path into the obs VM without using IP transport. |
-| `nixling-ch-exporter.service` | host | `on-failure` | `false` (top-level) | Polls each VM's Cloud Hypervisor API socket and exposes Prometheus text on loopback for host Alloy to scrape. |
-| `alloy.service` | host | `always` | `true` (upstream default) | Host forwarder that scrapes host journald, node metrics, and selected systemd-unit metrics, then forwards upstream to the obs stack. |
-| `nixling-otel-vsock-out.service` | workload guest | `on-failure` | `false` (top-level) | Bridges the guest-side OTLP Unix socket into AF_VSOCK toward host CID `2`, port `14317`. |
-| `alloy.service` | workload guest | `always` | `true` (upstream default) | Guest-local Alloy agent that scrapes journald and node metrics and receives in-guest OTLP traffic. |
-| `nixling-otel-vsock-in.service` | obs VM | `on-failure` | `false` (top-level) | Receives AF_VSOCK traffic on port `14317` and forwards it to the obs VM's ingress UDS. |
-| `alloy.service` | obs VM | `always` | `true` (upstream default) | Central Alloy receiver for workload-VM and host telemetry. |
-| `grafana.service` | obs VM | `on-failure` | `true` (upstream default) | Dashboard and query UI backed by provisioned Prometheus, Loki, and Tempo datasources. |
-| `prometheus.service` | obs VM | `always` | `true` (upstream default) | Metrics storage and query engine. |
-| `loki.service` | obs VM | `always` | `true` (upstream default) | Log storage and query engine. |
-| `tempo.service` | obs VM | `always` | `true` (upstream default) | Trace storage and query backend. |
-
-> Note: The H7 invariant applies to nixling-defined sidecars only;
-> upstream services follow nixpkgs conventions.
+| Runtime surface | Scope | What it does |
+|---|---|---|
+| `SpawnRunner{role=VsockRelay}` | host | Bridges one monitored workload VM's suffixed `<base>_14317` vsock backend socket to the obs VM's base vsock socket via Cloud Hypervisor CONNECT port `14317`. |
+| `SpawnRunner{role=OtelHostBridge}` | host | Bridges the host Alloy egress path into the obs VM without using IP transport. |
+| Cloud Hypervisor metrics scrape | host | Polls each VM's Cloud Hypervisor API socket and exposes Prometheus text on loopback for host Alloy to scrape. |
+| `alloy.service` | host | Host forwarder that scrapes host journald, node metrics, and selected systemd-unit metrics, then forwards upstream to the obs stack. |
+| `nixling-otel-vsock-out.service` | workload guest | Bridges the guest-side OTLP Unix socket into AF_VSOCK toward host CID `2`, port `14317`. |
+| `alloy.service` | workload guest | Guest-local Alloy agent that scrapes journald and node metrics and receives in-guest OTLP traffic. |
+| `nixling-otel-vsock-in.service` | obs VM | Receives AF_VSOCK traffic on port `14317` and forwards it to the obs VM's ingress UDS. |
+| `alloy.service` | obs VM | Central Alloy receiver for workload-VM and host telemetry. |
+| `grafana.service` | obs VM | Dashboard and query UI backed by provisioned Prometheus, Loki, and Tempo datasources. |
+| `prometheus.service` | obs VM | Metrics storage and query engine. |
+| `loki.service` | obs VM | Log storage and query engine. |
+| `tempo.service` | obs VM | Trace storage and query backend. |
 
 ## Security boundaries
 
@@ -269,7 +260,7 @@ OpenTelemetry span and trace attributes use dot-notation aligned with OTel seman
 | `NixlingVMDown` | warning | `up == 0` | `for 5m` |
 | `NixlingNetVMDownWithRunningWorkloads` | critical | net VM down + workload up | composite |
 | `NixlingObsVMUnreachableFromHost` | warning | obs VM CH API unreachable | `for 10m` |
-| `NixlingVsockRelayDown` | warning | `nixling-otel-relay@` failing | `for 3m` |
+| `NixlingVsockRelayDown` | warning | relay runner unhealthy | `for 3m` |
 | `NixlingCHAPISocketMissing` | warning | VM running but CH API down | `for 2m` |
 | `NixlingStoreSyncFailure` | warning | Loki: store-sync FAIL in 10m | rate-based |
 | `NixlingGuestTelemetryMissing` | info | absent scrape timestamp | `for 10m` |
