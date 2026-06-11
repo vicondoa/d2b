@@ -356,6 +356,12 @@ let
     pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
     dsn="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw_uri"
     for _ in $(seq 1 120); do
+      if ${pkgs.clickhouse}/bin/clickhouse-keeper-client --host 127.0.0.1 --port ${toString keeperClientPort} --query ruok 2>/dev/null | ${pkgs.gnugrep}/bin/grep -qx imok; then
+        break
+      fi
+      sleep 1
+    done
+    for _ in $(seq 1 120); do
       if ${pkgs.clickhouse}/bin/clickhouse-client --host 127.0.0.1 --port ${toString clickhousePort} --user signoz --password "$pw" --query 'SELECT 1' >/dev/null 2>&1; then
         break
       fi
@@ -633,7 +639,7 @@ in
     systemd.services.signoz-schema-migrate-async = {
       description = "Run SigNoz ClickHouse schema async migrations";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "clickhouse.service" "clickhouse-keeper.service" ];
+      requires = [ "clickhouse.service" "clickhouse-keeper.service" "signoz-schema-migrate-sync.service" ];
       after = [ "clickhouse.service" "clickhouse-keeper.service" "signoz-schema-migrate-sync.service" ];
       serviceConfig = {
         Type = "oneshot";
