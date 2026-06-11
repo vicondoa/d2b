@@ -121,7 +121,7 @@ sentinel requires a manifest-version bump.
 v0.2.0 bumped `manifestVersion` from 1 to 2 for observability, adding
 the reserved top-level `_observability` sentinel and per-VM
 `observability` block. The daemon-only end-state then bumped 2 → 3 as a
-clean break, with no v2 compatibility window. Version 4 keeps the v3
+clean break, with no v2 compatibility window. Version 4 keeps the same
 JSON shape but changes the per-VM `observability.vsockCid` /
 `observability.vsockHostSocket` semantics to be the host-owned base
 Cloud Hypervisor vsock device. The daemon refuses prior bundles with
