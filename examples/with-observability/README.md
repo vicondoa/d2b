@@ -23,7 +23,7 @@ surface directly.
 ```text
 host: demo
 ├─ work env (declared)
-│  ├─ work-app (10.20.0.10, obs vsock CID 210)
+│  ├─ work-app (10.20.0.10, obs vsock CID 1110)
 │  └─ host relay: broker-spawned VsockRelay runner (RunnerRole::VsockRelay)
 ├─ obs env (auto-declared by nixling.observability.enable)
 │  └─ sys-obs-stack (Grafana http://10.40.0.10:3000, obs vsock CID 1000)

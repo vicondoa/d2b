@@ -2,13 +2,13 @@
 
 Schema: [`manifest_v04.json`](./manifest_v04.json)
 
-`manifest_v04.json` captures the typed public `vms.json` contract the CLI,
-daemon, and broker still accept for v0.4.x compatibility.
+`manifest_v04.json` captures the typed public `vms.json` contract consumed by
+the Rust CLI, daemon, and broker.
 
 ## Top-level fields
 
-- `_manifest` — manifest metadata (`schemaVersion`, emitter metadata, and
-  other reserved sentinels).
+- `_manifest` — manifest metadata. Contains `manifestVersion`, pinned to `4`
+  in the schema and parser.
 - `_observability` — reserved observability sentinel block.
 - dynamic VM keys — every non-reserved top-level key is one VM row.
 
@@ -16,5 +16,6 @@ daemon, and broker still accept for v0.4.x compatibility.
 
 - The JSON Schema models the reserved sentinel keys explicitly and leaves VM
   names as pattern-matched dynamic properties.
-- Future public-manifest breaking changes require a new manifest schema, not
-  an in-place mutation of this companion.
+- Unknown reserved sentinels and unknown per-VM fields are rejected
+  fail-closed. Public-manifest breaking changes require a manifest-version
+  bump and matching schema update.

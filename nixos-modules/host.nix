@@ -146,8 +146,7 @@ let
     socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
   };
 
-  vsockStateDirVmNames =
-    lib.unique (workloadObsVmNames ++ lib.optional obsCfg.enable obsCfg.vmName);
+  vsockStateDirVmNames = daemonSupervisedVmNames;
 
 in
 
@@ -426,8 +425,8 @@ in
   # to that user at activation time. nixling-otel-host-bridge's
   # ExecStartPre setfacl runs AFTER alloy.service (After= + bindsTo)
   # so the directory is guaranteed to exist by then.
-  # Observability VMs need their per-VM state dir present before
-  # cloud-hypervisor binds `.../vsock.sock` there.
+  # Every enabled VM gets a host-owned Cloud Hypervisor base vsock socket,
+  # so every per-VM state dir must exist before CH binds `.../vsock.sock`.
   ++ map
     (name: "d ${vmStateDir name} 2770 microvm kvm -")
     vsockStateDirVmNames;

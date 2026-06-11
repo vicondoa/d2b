@@ -145,6 +145,7 @@ let
 
   manifest = nixos.config.nixling.manifest;
   processRows = nixos.config.nixling._bundle.processesJson.data.vms;
+  tmpfilesRules = nixos.config.systemd.tmpfiles.rules;
   processVm = name: lib.findFirst (vm: vm.vm == name) null processRows;
   processNode = name: nodeId:
     lib.findFirst (node: node.id == nodeId) null (processVm name).nodes;
@@ -171,6 +172,9 @@ let
     assert assertManifestVsock name;
     assert vsockValues (chArgv name) == [ (expectedVsockArg name) ];
     true;
+  assertStateDirTmpfile = name:
+    assert builtins.elem "d /var/lib/nixling/vms/${name} 2770 microvm kvm -" tmpfilesRules;
+    true;
   alphaRelay = processNode "alpha-vm" "vsock-relay";
   alphaReadiness = processNode "alpha-vm" "guest-ssh-readiness";
   allProcessesJson = builtins.toJSON processRows;
@@ -190,6 +194,13 @@ let
     assert assertChVsock "sys-beta-net";
     assert assertChVsock "sys-obs-stack";
     assert assertChVsock "legacy-vm";
+    assert assertStateDirTmpfile "alpha-vm";
+    assert assertStateDirTmpfile "alpha-high";
+    assert assertStateDirTmpfile "beta-vm";
+    assert assertStateDirTmpfile "sys-alpha-net";
+    assert assertStateDirTmpfile "sys-beta-net";
+    assert assertStateDirTmpfile "sys-obs-stack";
+    assert assertStateDirTmpfile "legacy-vm";
     assert manifest.alpha-vm.observability.vsockCid == 110;
     assert manifest.alpha-high.observability.vsockCid == 210;
     assert manifest.beta-vm.observability.vsockCid == 1110;

@@ -10,6 +10,7 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 . "$HERE/lib.sh"
 
 scratch=$(nl_mktemp .guest-control-vsock.XXXXXX)
+mkdir -p "$scratch"
 
 eval_ok() {
   local scenario=$1
@@ -19,8 +20,8 @@ eval_ok() {
 
 eval_fail() {
   local scenario=$1 expected=$2
-  local stderr="$scratch/$scenario.stderr"
-  : > "$stderr"
+  local stderr
+  stderr=$(mktemp "$scratch/$scenario.XXXXXX.stderr")
   if NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
     nix eval --raw --impure --expr "import $ROOT/tests/guest-control-vsock-eval.nix { scenario = \"$scenario\"; }" >/dev/null 2>"$stderr"; then
     fail "guest-control-vsock-eval: $scenario unexpectedly passed"
