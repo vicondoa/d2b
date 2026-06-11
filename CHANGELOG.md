@@ -54,6 +54,10 @@ deprecations ship one minor release before removal.
   `observability.vsockCid` / `observability.vsockHostSocket` fields now define
   the base Cloud Hypervisor vsock device.
 
+- `nixlingd` now has an internal Cloud Hypervisor CONNECT helper for the
+  guest-control transport port. This is transport groundwork only: it does not
+  change VM readiness, status output, CLI help, or exec behavior.
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate exec allowlist defaults: generic exec is off by default, root
   exec is separately denied by default, and non-root users must be explicitly
