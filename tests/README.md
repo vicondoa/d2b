@@ -103,7 +103,7 @@ Layer-1 script inventory:
 | `tests/niri-vm-borders-eval.sh` | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom outputPath. |
 | `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
 | `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services plus the host, workload-guest, and obs-guest observability relay units. |
-| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for `nixling-<vm>-video.service` (`AF_UNIX` only, syscall filter, empty capability sets). |
+| `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner{role=Video}` descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
 | `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
 | `tests/bridge-isolation-runtime.sh` | Hermetic runtime check that Linux bridge port isolation still blocks workload↔workload traffic while preserving workload↔net-VM reachability. |
 | `tests/network-isolation.sh` | Optional live-host datapath checks for same-env east-west and cross-env isolation. |
@@ -150,7 +150,7 @@ tests/nixling-store.sh --list
 
 ## Layer 2 (network isolation) — `network-isolation.sh`
 
-Optional live-host datapath checks for the Wave 3 network isolation
+Optional live-host datapath checks for the network isolation
 claims. The script looks for running workload VMs with SSH access and:
 
 - verifies same-env east-west is blocked when bridge taps are isolated,
@@ -172,7 +172,7 @@ tests/network-isolation.sh
 
 ## Layer 2 (audit forwarding) — `audit-forwarding.sh`
 
-Optional live-host audit pipeline check for Wave 3. The script looks for
+Optional live-host audit pipeline check. The script looks for
 an audit-enabled, observability-enabled running VM plus a reachable obs
 VM, verifies the default `/etc/passwd` watch is loaded, adds a
 per-run nonce watch under `/run/`, triggers it, and polls Loki on the

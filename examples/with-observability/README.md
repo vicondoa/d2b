@@ -119,10 +119,7 @@ cd examples/with-observability \
 Set `nixling.observability.transport.relayPackage = pkgs.your-relay;`
 to replace the default `pkgs.socat` relay package across the
 observability transport. The package must expose a `bin/socat`-
-compatible CLI for the current transport. When `nixling-otel-relay`
-lands, nixling will add a dedicated relay interface first and keep
-`bin/socat` compatibility for at least one minor release with
-CHANGELOG migration notes before removal.
+compatible CLI for the current transport.
 
 ## See also
 
