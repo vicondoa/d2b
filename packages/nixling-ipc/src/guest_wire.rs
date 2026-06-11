@@ -522,22 +522,39 @@ impl HealthResponse {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestEffectiveLimits {
+    #[schemars(range(min = 1, max = 1048576))]
     pub max_chunk_bytes: u64,
+    #[schemars(range(min = 1, max = 4194304))]
     pub max_recv_message_bytes: u64,
+    #[schemars(range(max = 16777216))]
     pub decoded_write_stdin_bytes_per_connection: u64,
+    #[schemars(range(max = 4))]
     pub write_stdin_handlers_per_connection: u32,
+    #[schemars(range(max = 1))]
     pub stdin_queue_chunks_per_exec: u32,
+    #[schemars(range(max = 8388608))]
     pub stdout_live_buffer_bytes: u64,
+    #[schemars(range(max = 8388608))]
     pub stderr_live_buffer_bytes: u64,
+    #[schemars(range(max = 134217728))]
     pub detached_stdout_log_bytes: u64,
+    #[schemars(range(max = 134217728))]
     pub detached_stderr_log_bytes: u64,
+    #[schemars(range(max = 1000))]
     pub long_poll_timeout_ms: u64,
+    #[schemars(range(max = 300000))]
     pub slow_consumer_grace_ms: u64,
+    #[schemars(range(max = 256))]
     pub exec_sessions_per_vm: u32,
+    #[schemars(range(max = 64))]
     pub attached_sessions_per_vm: u32,
+    #[schemars(range(max = 512))]
     pub pending_read_output_waits_per_stream: u32,
+    #[schemars(range(max = 512))]
     pub pending_exec_waits_per_vm: u32,
+    #[schemars(range(max = 200))]
     pub rpc_rate_per_connection_per_second: u32,
+    #[schemars(range(max = 1000))]
     pub rpc_rate_per_vm_burst: u32,
 }
 

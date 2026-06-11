@@ -1018,86 +1018,103 @@
         "attachedSessionsPerVm": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 64.0,
           "minimum": 0.0
         },
         "decodedWriteStdinBytesPerConnection": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 16777216.0,
           "minimum": 0.0
         },
         "detachedStderrLogBytes": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 134217728.0,
           "minimum": 0.0
         },
         "detachedStdoutLogBytes": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 134217728.0,
           "minimum": 0.0
         },
         "execSessionsPerVm": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 256.0,
           "minimum": 0.0
         },
         "longPollTimeoutMs": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 1000.0,
           "minimum": 0.0
         },
         "maxChunkBytes": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "maximum": 1048576.0,
+          "minimum": 1.0
         },
         "maxRecvMessageBytes": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "maximum": 4194304.0,
+          "minimum": 1.0
         },
         "pendingExecWaitsPerVm": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 512.0,
           "minimum": 0.0
         },
         "pendingReadOutputWaitsPerStream": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 512.0,
           "minimum": 0.0
         },
         "rpcRatePerConnectionPerSecond": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 200.0,
           "minimum": 0.0
         },
         "rpcRatePerVmBurst": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 1000.0,
           "minimum": 0.0
         },
         "slowConsumerGraceMs": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 300000.0,
           "minimum": 0.0
         },
         "stderrLiveBufferBytes": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 8388608.0,
           "minimum": 0.0
         },
         "stdinQueueChunksPerExec": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 1.0,
           "minimum": 0.0
         },
         "stdoutLiveBufferBytes": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 8388608.0,
           "minimum": 0.0
         },
         "writeStdinHandlersPerConnection": {
           "type": "integer",
           "format": "uint32",
+          "maximum": 4.0,
           "minimum": 0.0
         }
       },

@@ -281,6 +281,35 @@ assert_field("AuthenticateResponse", "guest_auth_tag", "bytes", 1, optional=True
 assert_field("AuthenticateResponse", "capabilities_hash", "string", 2, optional=True)
 assert_field("AuthenticateResponse", "health", "HealthResponse", 3)
 assert_field("AuthenticateResponse", "capabilities", "CapabilitiesResponse", 4)
+
+limit_props = defs.get("GuestEffectiveLimits", {}).get("properties", {})
+limit_maxima = {
+    "maxChunkBytes": 1048576,
+    "maxRecvMessageBytes": 4194304,
+    "decodedWriteStdinBytesPerConnection": 16777216,
+    "writeStdinHandlersPerConnection": 4,
+    "stdinQueueChunksPerExec": 1,
+    "stdoutLiveBufferBytes": 8388608,
+    "stderrLiveBufferBytes": 8388608,
+    "detachedStdoutLogBytes": 134217728,
+    "detachedStderrLogBytes": 134217728,
+    "longPollTimeoutMs": 1000,
+    "slowConsumerGraceMs": 300000,
+    "execSessionsPerVm": 256,
+    "attachedSessionsPerVm": 64,
+    "pendingReadOutputWaitsPerStream": 512,
+    "pendingExecWaitsPerVm": 512,
+    "rpcRatePerConnectionPerSecond": 200,
+    "rpcRatePerVmBurst": 1000,
+}
+for field_name, expected_maximum in limit_maxima.items():
+    prop = schema_core(limit_props.get(field_name, {}))
+    if prop.get("maximum") != float(expected_maximum):
+        raise SystemExit(f"GuestEffectiveLimits.{field_name} missing maximum {expected_maximum}")
+for field_name in ("maxChunkBytes", "maxRecvMessageBytes"):
+    prop = schema_core(limit_props.get(field_name, {}))
+    if prop.get("minimum") != 1.0:
+        raise SystemExit(f"GuestEffectiveLimits.{field_name} must have minimum 1")
 for proto_name, fields in sorted(message_fields.items()):
     if proto_name in skip_messages:
         continue
