@@ -59,7 +59,10 @@ pub enum GuestControlTransportProbeResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DirectoryPolicy {
-    StrictRootOwned,
+    ProductionStateRoot {
+        uid: u32,
+        gid: u32,
+    },
     #[cfg(test)]
     AllowTestTempDirs,
 }
@@ -76,13 +79,18 @@ impl GuestControlTransportProbeResult {
 pub fn connect_guest_control_vsock(
     socket_path: impl AsRef<Path>,
     state_root: impl AsRef<Path>,
+    expected_state_root_uid: u32,
+    expected_state_root_gid: u32,
     setup_timeout: Duration,
 ) -> GuestControlTransportProbeResult {
     match connect_guest_control_vsock_inner(
         socket_path.as_ref(),
         state_root.as_ref(),
         setup_timeout,
-        DirectoryPolicy::StrictRootOwned,
+        DirectoryPolicy::ProductionStateRoot {
+            uid: expected_state_root_uid,
+            gid: expected_state_root_gid,
+        },
     ) {
         Ok(connected) => GuestControlTransportProbeResult::Connected(connected),
         Err(failure) => GuestControlTransportProbeResult::Failed(failure),
@@ -172,16 +180,16 @@ fn validate_socket_path(
 
     let canonical_root =
         fs::canonicalize(state_root).map_err(|_| GuestControlTransportFailure::StateRootInvalid)?;
+    validate_root_ancestors(&canonical_root, directory_policy)?;
     validate_directory_chain(&canonical_root, &canonical_root, directory_policy)?;
     let parent = socket_path
         .parent()
         .ok_or(GuestControlTransportFailure::SocketOutsideStateRoot)?;
     let canonical_parent =
         fs::canonicalize(parent).map_err(|_| GuestControlTransportFailure::SocketMissing)?;
-    if !canonical_parent.starts_with(&canonical_root) {
+    if canonical_parent != canonical_root {
         return Err(GuestControlTransportFailure::SocketOutsideStateRoot);
     }
-    validate_directory_chain(&canonical_root, &canonical_parent, directory_policy)?;
 
     let metadata = fs::symlink_metadata(socket_path)
         .map_err(|_| GuestControlTransportFailure::SocketMissing)?;
@@ -194,6 +202,27 @@ fn validate_socket_path(
     }
     if metadata.nlink() != 1 {
         return Err(GuestControlTransportFailure::SocketHardLinked);
+    }
+    Ok(())
+}
+
+fn validate_root_ancestors(
+    root: &Path,
+    _directory_policy: DirectoryPolicy,
+) -> Result<(), GuestControlTransportFailure> {
+    #[cfg(test)]
+    if matches!(_directory_policy, DirectoryPolicy::AllowTestTempDirs) {
+        return Ok(());
+    }
+    let mut ancestors = Vec::new();
+    let mut current = root;
+    while let Some(parent) = current.parent() {
+        ancestors.push(parent.to_path_buf());
+        current = parent;
+    }
+    ancestors.reverse();
+    for ancestor in ancestors {
+        validate_root_owned_directory(&ancestor)?;
     }
     Ok(())
 }
@@ -230,8 +259,25 @@ fn validate_directory_metadata(
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
         return Err(GuestControlTransportFailure::UnsafeDirectory);
     }
-    if directory_policy == DirectoryPolicy::StrictRootOwned
-        && (metadata.uid() != 0 || (metadata.mode() & 0o022) != 0)
+    match directory_policy {
+        DirectoryPolicy::ProductionStateRoot { uid, gid } => {
+            if metadata.uid() != uid || metadata.gid() != gid || (metadata.mode() & 0o002) != 0 {
+                return Err(GuestControlTransportFailure::UnsafeDirectory);
+            }
+        }
+        #[cfg(test)]
+        DirectoryPolicy::AllowTestTempDirs => {}
+    }
+    Ok(())
+}
+
+fn validate_root_owned_directory(path: &Path) -> Result<(), GuestControlTransportFailure> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| GuestControlTransportFailure::StateRootInvalid)?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || (metadata.mode() & 0o022) != 0
     {
         return Err(GuestControlTransportFailure::UnsafeDirectory);
     }
