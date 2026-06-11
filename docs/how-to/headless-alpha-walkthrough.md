@@ -189,7 +189,7 @@ are no-ops in v1.0; the bash CLI itself was retired in v1.0.
 | Component                 | Wire-stable | Live today | Remaining rollout |
 |---------------------------|:-----------:|:----------:|:-----------------:|
 | `ch_argv` generator       | ✅                  | ✅         | — |
-| `virtiofsd_argv` generator| ✅                  | ✅         | — |
+| virtiofsd argv / shares   | ✅                  | ✅         | emitted by `nixos-modules/processes-json.nix`; see `docs/reference/store-virtiofs.md` |
 | `swtpm_argv` generator    | ✅                  | ✅ (opt-in)| — |
 | Supervisor DAG executor   | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
 | Broker host-reconcile ops (`ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile`) | ✅ | ✅ (non-bootstrap dispatch) | public `host prepare --apply` rollout |

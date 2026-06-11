@@ -43,7 +43,7 @@ def reject_symlink_components(path, *, require_existing_file, check_parent_permi
 def validate_materialized(path):
     reject_symlink_components(path, require_existing_file=True, check_parent_permissions=False)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
         fail("materialized-open-failed")
     try:
@@ -63,7 +63,7 @@ def copy_operator_token(source, target):
         fail("source-in-nix-store")
     reject_symlink_components(source, require_existing_file=True, check_parent_permissions=True)
     try:
-        src_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        src_fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
         fail("source-open-failed")
     try:
@@ -75,6 +75,7 @@ def copy_operator_token(source, target):
         if stat.S_IMODE(st.st_mode) & 0o077:
             fail("source-group-or-world-permissions")
         write_fd_to_target(src_fd, target)
+        write_source_marker(target, "operator")
     finally:
         os.close(src_fd)
 
@@ -105,7 +106,7 @@ def write_fd_to_target(src_fd, target):
 
 
 def generate_token(target):
-    if os.path.exists(target):
+    if os.path.exists(target) and read_source_marker(target) == "generated":
         validate_materialized(target)
         return
     directory = os.path.dirname(target)
@@ -128,6 +129,47 @@ def generate_token(target):
         except FileNotFoundError:
             pass
     validate_materialized(target)
+    write_source_marker(target, "generated")
+
+
+def marker_path(target):
+    return os.path.join(os.path.dirname(target), "token.source")
+
+
+def read_source_marker(target):
+    path = marker_path(target)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        data = os.read(fd, 64).decode("ascii", errors="ignore").strip()
+        if data in ("generated", "operator"):
+            return data
+        return None
+    finally:
+        os.close(fd)
+
+
+def write_source_marker(target, value):
+    directory = os.path.dirname(target)
+    tmp = os.path.join(directory, f".token.source.tmp.{os.getpid()}")
+    path = marker_path(target)
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(fd, (value + "\n").encode("ascii"))
+            os.fchown(fd, 0, 0)
+            os.fchmod(fd, 0o600)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 
 
 def prepare_target_directory(directory):
