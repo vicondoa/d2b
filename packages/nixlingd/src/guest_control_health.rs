@@ -17,6 +17,7 @@ use nixling_ipc::guest_auth::{
 use nixling_ipc::guest_proto as pb;
 use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 use protobuf::{Message, MessageField};
+use subtle::ConstantTimeEq;
 
 use crate::guest_control_vsock::GuestControlConnectedStream;
 
@@ -205,7 +206,10 @@ where
             Some(capabilities_hash.clone()),
         ))?
         .tag;
-    if guest_tag != &expected_guest_tag {
+    if guest_tag.len() != AUTH_TAG_LEN || expected_guest_tag.len() != AUTH_TAG_LEN {
+        return Err(GuestControlHealthError::AuthFailed);
+    }
+    if guest_tag.as_slice().ct_eq(&expected_guest_tag).unwrap_u8() != 1 {
         return Err(GuestControlHealthError::AuthFailed);
     }
 

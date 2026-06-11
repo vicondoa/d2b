@@ -879,6 +879,18 @@ impl DispatchAuditContext {
 }
 
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
+    if let BrokerRequest::GuestControlSign(req) = request {
+        return Ok(serde_json::json!({
+            "vmId": req.vm_id.as_str(),
+            "role": format!("{:?}", req.role),
+            "purpose": req.purpose,
+            "hostNonceLen": req.host_nonce.len(),
+            "guestNonceLen": req.guest_nonce.len(),
+            "guestBootIdPresent": !req.guest_boot_id.is_empty(),
+            "peerCidPresent": req.peer_cid.is_some(),
+            "capabilitiesHashPresent": req.capabilities_hash.is_some(),
+        }));
+    }
     let mut value = serde_json::to_value(request)
         .map_err(|err| BrokerError::Protocol(format!("serialize request fields: {err}")))?;
     match &mut value {
@@ -3066,7 +3078,7 @@ fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, Br
         })?;
     if !metadata.is_file()
         || !owner_is_safe_for_guest_control_token(metadata.uid())
-        || metadata.mode() & 0o137 != 0
+        || metadata.mode() & 0o177 != 0
         || token.is_empty()
         || token.len() > MAX_TOKEN_BYTES
     {
@@ -6547,7 +6559,7 @@ mod tests {
         let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o400);
         let response = handle_guest_control_sign(
             guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof),
             &config,
@@ -6563,7 +6575,7 @@ mod tests {
         let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o400);
 
         let mut bad =
             guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof);

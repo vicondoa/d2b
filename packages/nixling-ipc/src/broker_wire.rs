@@ -607,6 +607,9 @@ impl GuestControlSignRequest {
         if self.direction != "host-to-guest" || self.purpose != "guest-control-auth-v1" {
             return Err("domain");
         }
+        if self.guest_boot_id.is_empty() || self.guest_boot_id.len() > 128 {
+            return Err("guest-boot-id");
+        }
         match self.role {
             GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {
                 Err("host-proof-capabilities-hash")
