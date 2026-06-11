@@ -92,9 +92,11 @@ else
 fi
 
 guest_workload_resource_block=$(
-  sed -n '/resource.attributes = \\[/,/\\];/p' "$ROOT/nixos-modules/components/observability/guest.nix"
+  sed -n '/resource.attributes = \[/,/\];/p' "$ROOT/nixos-modules/components/observability/guest.nix"
 )
-if grep -q 'service.name' <<<"$guest_workload_resource_block"; then
+if [ -z "$guest_workload_resource_block" ]; then
+  fail "guest workload resource processor block was not found"
+elif grep -q 'service.name' <<<"$guest_workload_resource_block"; then
   fail "guest workload resource processor must preserve application service.name"
 else
   ok "guest workload resource processor preserves application service.name"
