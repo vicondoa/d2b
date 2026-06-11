@@ -68,10 +68,33 @@ for token in 'ingress.sources' 'sourceReceivers' 'sourceProcessors' 'sourcePipel
   fi
 done
 
+if grep -q '} // lib.optionalAttrs cfg\.scrapeNodeMetrics {' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && ! grep -q 'hostmetrics = lib\.mkIf cfg\.scrapeNodeMetrics' "$ROOT/nixos-modules/components/observability/guest.nix"; then
+  ok "guest collector conditionals are resolved before YAML serialization"
+else
+  fail "guest collector must not serialize lib.mkIf wrappers into OTel YAML"
+fi
+
+for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'telemetry.metrics.address'; do
+  if grep -q "$token" "$STACK" "$ROOT/nixos-modules/components/observability/host.nix" "$ROOT/nixos-modules/components/observability/guest.nix"; then
+    ok "collector self-telemetry token present: $token"
+  else
+    fail "collector self-telemetry token missing: $token"
+  fi
+done
+
 if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
   ok "collector pipelines are source-specific, not a shared otlp receiver"
 else
   fail "collector must route through source-specific receiver pipelines"
+fi
+
+if grep -q '@uri' "$STACK" \
+  && ! grep -q 'password=$pw"' "$STACK" \
+  && ! grep -q 'password=$SIGNOZ_CLICKHOUSE_PASSWORD' "$STACK"; then
+  ok "ClickHouse passwords are URL-encoded before DSN interpolation"
+else
+  fail "ClickHouse passwords embedded in DSN query strings must be URL-encoded"
 fi
 
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then

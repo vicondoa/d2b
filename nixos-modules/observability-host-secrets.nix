@@ -47,18 +47,21 @@ let
     {
       name = "SignozJwtSecret";
       path = hostSignozJwtSecretPath;
+      source = obsCfg.signoz.jwtSecretFile;
       minSize = 32;
       bytes = 64;
     }
     {
       name = "SignozRootPassword";
       path = hostSignozRootPasswordPath;
+      source = obsCfg.signoz.rootPasswordFile;
       minSize = 16;
       bytes = 48;
     }
     {
       name = "ClickHousePassword";
       path = hostClickHousePasswordPath;
+      source = obsCfg.signoz.clickhousePasswordFile;
       minSize = 16;
       bytes = 48;
     }
@@ -120,7 +123,12 @@ in
         (builtins.listToAttrs (map
           (spec: {
             name = "nixlingObservabilityHost${spec.name}";
-            value = lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] ''
+            value = lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] (
+              if spec.source != null then ''
+                ${pkgs.coreutils}/bin/install -m 0400 -o root -g root \
+                  ${lib.escapeShellArg (toString spec.source)} \
+                  ${lib.escapeShellArg spec.path}
+              '' else ''
               file=${lib.escapeShellArg spec.path}
               if [ -s "$file" ] && [ "$(${pkgs.coreutils}/bin/stat -c %s "$file")" -ge ${toString spec.minSize} ]; then
                 :
@@ -136,7 +144,8 @@ in
               fi
               ${pkgs.coreutils}/bin/chmod 0400 "$file"
               ${pkgs.coreutils}/bin/chown root:root "$file"
-            '';
+            ''
+            );
           })
           signozSecretSpecs))
       ];

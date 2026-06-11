@@ -69,17 +69,22 @@ LAN routing.
 | `nixling.observability.signoz.otlpGrpcPort` | port | `4317` | SigNoz collector loopback OTLP gRPC port. |
 | `nixling.observability.signoz.otlpHttpPort` | port | `4318` | SigNoz collector loopback OTLP HTTP port. |
 | `nixling.observability.signoz.adminEmail` | str | `"admin@nixling.local"` | Root SigNoz admin email. |
+| `nixling.observability.signoz.jwtSecretFile` | path or string or null | `null` | Optional host path for the SigNoz JWT/tokenizer secret. |
+| `nixling.observability.signoz.rootPasswordFile` | path or string or null | `null` | Optional host path for the SigNoz root password. |
+| `nixling.observability.signoz.clickhousePasswordFile` | path or string or null | `null` | Optional host path for the ClickHouse password used by SigNoz services. |
 | `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Socat-compatible relay package for vsock bridges. |
 
 Legacy Grafana/Tempo/Loki/Prometheus-specific options are retired or
 kept only as migration shims. Do not use them for new configurations.
+`retention.*` and `sampling.*` currently warn when changed and do not
+configure SigNoz/ClickHouse TTL.
 
 ## Per-VM options
 
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `nixling.vms.<vm>.observability.enable` | bool | `false` | Enable telemetry collection for this VM. |
-| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `true` | Compatibility toggle for guest log collection. |
+| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `false` | Compatibility toggle reserved for future guest journald collection. |
 | `nixling.vms.<vm>.observability.scrapeNodeMetrics` | bool | `true` | Enable guest hostmetrics collection. |
 
 ## Runtime services
@@ -137,6 +142,19 @@ Files are root-owned `0400` and shared read-only into `sys-obs` at
 `/run/nixling-obs-secrets`. Secrets are consumed through systemd
 credentials or environment files, not embedded as literals in the Nix
 store.
+
+## Default resources
+
+`sys-obs` defaults are sized for a single-node SigNoz store:
+
+| Resource | Default |
+| --- | --- |
+| vCPU | `4` |
+| RAM | `8192` MiB |
+| ClickHouse volume | `32768` MiB |
+| ZooKeeper volume | `2048` MiB |
+| SigNoz volume | `4096` MiB |
+| SigNoz collector volume | `2048` MiB |
 
 ## Migration notes
 

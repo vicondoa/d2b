@@ -92,6 +92,12 @@ deprecations ship one minor release before removal.
 - Host and guest telemetry collection is moving from Alloy pipelines to
   OpenTelemetry Collector services that export OTLP over nixling's
   broker-supervised Unix/vsock transport.
+- Retired Grafana credential-file options are now documented as
+  compatibility shims; native SigNoz credentials can be sourced from
+  `nixling.observability.signoz.{jwtSecretFile,rootPasswordFile,clickhousePasswordFile}`.
+- `retention.*` and `sampling.*` remain compatibility shims for the
+  retired Tempo/Loki backend and warn when changed; native
+  SigNoz/ClickHouse retention is operator-managed.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former

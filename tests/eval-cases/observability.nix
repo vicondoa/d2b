@@ -103,34 +103,6 @@ let
     );
   dashboardFiles = map (name: dashboardDir + "/${name}") dashboardNames;
   dashboardPaths = map toString dashboardFiles;
-  dashboards = map (file: builtins.fromJSON (builtins.readFile file)) dashboardFiles;
-
-  collectDatasourceRefs =
-    value:
-    if builtins.isAttrs value then
-      (lib.optional (value ? datasource && value.datasource != null) value.datasource)
-      ++ lib.concatMap collectDatasourceRefs (builtins.attrValues value)
-    else if builtins.isList value then
-      lib.concatMap collectDatasourceRefs value
-    else
-      [ ];
-
-  dashboardHasRequiredShape =
-    dashboard:
-    builtins.typeOf (dashboard.uid or null) == "string"
-    && builtins.typeOf (dashboard.title or null) == "string"
-    && builtins.typeOf (dashboard.schemaVersion or null) == "int"
-    && builtins.isList (dashboard.panels or [ ])
-    && (dashboard.panels or [ ]) != [ ];
-
-  dashboardDatasourceRefsOk =
-    dashboard:
-    builtins.all (
-      ref:
-      builtins.isAttrs ref
-      && builtins.elem (ref.uid or "") [ "prometheus" "loki" "tempo" ]
-      && builtins.elem (ref.type or "") [ "prometheus" "loki" "tempo" ]
-    ) (collectDatasourceRefs dashboard);
 
   mkCase = spec: evalCase spec;
 in
@@ -183,7 +155,7 @@ in
     };
   };
 
-  obs-grafana-bind-tracks-obs-ip = mkCase {
+  obs-signoz-bind-tracks-obs-ip = mkCase {
     override = { ... }: {
       nixling.observability.enable = true;
       nixling.observability.lanSubnet = "10.44.0.0/24";
@@ -274,31 +246,31 @@ in
     };
     extract = nixos:
       let
-        relay = nixos.config.systemd.services."nixling-otel-relay@";
-        execStartPre = builtins.head relay.serviceConfig.ExecStartPre;
+        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        corpDag = builtins.head (builtins.filter (dag: dag.vm == "corp-vm") processes.vms);
+        relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") corpDag.nodes);
+        obsDag = builtins.head (builtins.filter (dag: dag.vm == "sys-obs") processes.vms);
+        bridgeNode = builtins.head (builtins.filter (node: node.id == "otel-host-bridge") obsDag.nodes);
+        activationText = nixos.config.system.activationScripts.nixlingRoleUidAcls.text;
       in
       {
-        relayGroupDeclared = builtins.hasAttr "nixling-otel-relay" nixos.config.users.groups;
-        relayUserDeclared = builtins.hasAttr "nixling-otel-relay" nixos.config.users.users;
-        relayUserGroup = nixos.config.users.users.nixling-otel-relay.group;
-        relayServiceUser = relay.serviceConfig.User;
-        relayServiceGroup = relay.serviceConfig.Group;
-        relayDynamicUser = relay.serviceConfig.DynamicUser;
-        relaySupplementaryGroups = relay.serviceConfig.SupplementaryGroups or [ ];
-        relayExecStartPreHasAclRefresh = hasInfix "nixling-otel-acl-refresh" execStartPre;
-        relayExecStartPreMatchesActivationPath =
-          lib.removePrefix "+" execStartPre == nixos.config.system.activationScripts.nixlingOtelSocketAcls.text;
+        relayNodeRole = relayNode.role;
+        relayProfileHasEmptyCaps = relayNode.profile.capabilities == [ ];
+        relayProfileSeccomp = relayNode.profile.seccompPolicyRef;
+        bridgeNodeRole = bridgeNode.role;
+        bridgeProfileHasRuntimeBind =
+          builtins.any (path: path == "/run/nixling/otel") bridgeNode.profile.mountPolicy.writablePaths;
+        activationGrantsOtelRuntime = hasInfix "/run/nixling/otel" activationText;
+        activationExcludesBridgeFromBroadVmAcl = hasInfix "otel_host_bridge_uids" activationText;
       };
     expectedExtract = {
-      relayGroupDeclared = true;
-      relayUserDeclared = true;
-      relayUserGroup = "nixling-otel-relay";
-      relayServiceUser = "nixling-otel-relay";
-      relayServiceGroup = "nixling-otel-relay";
-      relayDynamicUser = false;
-      relaySupplementaryGroups = [ ];
-      relayExecStartPreHasAclRefresh = true;
-      relayExecStartPreMatchesActivationPath = true;
+      relayNodeRole = "vsock-relay";
+      relayProfileHasEmptyCaps = true;
+      relayProfileSeccomp = "w1-vsock-relay";
+      bridgeNodeRole = "otel-host-bridge";
+      bridgeProfileHasRuntimeBind = true;
+      activationGrantsOtelRuntime = true;
+      activationExcludesBridgeFromBroadVmAcl = true;
     };
   };
 
@@ -430,35 +402,28 @@ in
     extract = nixos:
       let
         workGuest = nixos.config.microvm.vms.corp-vm.config.config;
-        workGuestAlloyConfig = workGuest.environment.etc."alloy/config.alloy".text;
       in
       {
         auditEnabled = workGuest.security.audit.enable;
         auditdEnabled = workGuest.security.auditd.enable;
         auditdSyslogPlugin = workGuest.security.auditd.plugins.syslog.active;
-        alloyHasJournalGroup = builtins.elem "systemd-journal" (workGuest.systemd.services.alloy.serviceConfig.SupplementaryGroups or [ ]);
+        guestOtelCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
+        guestAlloyAbsent = ! builtins.hasAttr "alloy" workGuest.systemd.services;
+        scrapeJournalResolved = workGuest.nixling.observability.scrapeJournal;
         auditRules = sortStrings workGuest.security.audit.rules;
-        alloyHasJournalReceiver = hasInfix "otelcol.receiver.loki \"journal\"" workGuestAlloyConfig;
-        alloyHasAuditJournalSource = hasInfix "loki.source.journal \"audit\"" workGuestAlloyConfig;
-        alloyHasAudispUnitLabel = hasInfix "unit   = \"audisp-syslog\"" workGuestAlloyConfig;
-        alloyHasAudispMatch = hasInfix "matches    = \"_TRANSPORT=syslog SYSLOG_IDENTIFIER=audisp-syslog\"" workGuestAlloyConfig;
-        alloyHasGeneralJournalSource = hasInfix "loki.source.journal \"journal\"" workGuestAlloyConfig;
       };
     expectedExtract = {
       auditEnabled = true;
       auditdEnabled = true;
       auditdSyslogPlugin = true;
-      alloyHasJournalGroup = true;
+      guestOtelCollectorDeclared = true;
+      guestAlloyAbsent = true;
+      scrapeJournalResolved = false;
       auditRules = [
         "-w /etc/passwd -p wa -k identity"
         "-w /etc/shadow -p wa -k identity"
         "-w /etc/sudoers -p wa -k priv-esc"
       ];
-      alloyHasJournalReceiver = true;
-      alloyHasAuditJournalSource = true;
-      alloyHasAudispUnitLabel = true;
-      alloyHasAudispMatch = true;
-      alloyHasGeneralJournalSource = false;
     };
   };
 
@@ -501,15 +466,12 @@ in
   obs-dashboards-schema = mkCase {
     extract = _nixos: {
       dashboardFileCount = builtins.length dashboardPaths;
-      requiredShape = builtins.all dashboardHasRequiredShape dashboards;
-      datasourceRefsOk = builtins.all dashboardDatasourceRefsOk dashboards;
+      retiredDashboardDirIsEmpty = dashboardPaths == [ ];
     };
     expectedExtract = {
-      dashboardFileCount = 6;
-      requiredShape = true;
-      datasourceRefsOk = true;
+      dashboardFileCount = 0;
+      retiredDashboardDirIsEmpty = true;
     };
-    aux = _nixos: { inherit dashboardPaths; };
   };
 
   obs-rules-promtool = mkCase {
@@ -521,17 +483,20 @@ in
       let
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-      in
-      builtins.length obsGuest.services.prometheus.ruleFiles;
-    expectedExtract = 1;
-    aux = nixos:
-      let
-        obsVm = nixos.config.nixling.observability.vmName;
-        obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
+        services = obsGuest.systemd.services;
       in
       {
-        rulesPath = toString (builtins.head obsGuest.services.prometheus.ruleFiles);
+        prometheusRuleFilesAbsent = !(obsGuest.services ? prometheus) || (obsGuest.services.prometheus.ruleFiles or [ ]) == [ ];
+        signozServicesDeclared = builtins.all (name: builtins.hasAttr name services) [
+          "signoz"
+          "signoz-otel-collector"
+          "signoz-schema-migrate-sync"
+        ];
       };
+    expectedExtract = {
+      prometheusRuleFilesAbsent = true;
+      signozServicesDeclared = true;
+    };
   };
 
   obs-metric-references = mkCase {
@@ -543,14 +508,29 @@ in
       let
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
+        ingressSources = obsGuest.nixling.observability.ingress.sources;
+        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        corpDag = builtins.head (builtins.filter (dag: dag.vm == "corp-vm") processes.vms);
+        relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") corpDag.nodes);
+        relayArgv = builtins.concatStringsSep " " relayNode.argv;
       in
       {
-        dashboardFileCount = builtins.length dashboardPaths;
-        ruleFileCount = builtins.length obsGuest.services.prometheus.ruleFiles;
+        sourceNames = sortStrings (builtins.attrNames ingressSources);
+        hostReceiverGrpcPort = ingressSources.host.receiverGrpcPort;
+        corpReceiverGrpcPort = ingressSources.corp-vm.receiverGrpcPort;
+        hostVsockPort = ingressSources.host.vsockPort;
+        corpVsockPort = ingressSources.corp-vm.vsockPort;
+        relayTargetsCorpIngressPort = hasInfix
+          "nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14318"
+          relayArgv;
       };
     expectedExtract = {
-      dashboardFileCount = 6;
-      ruleFileCount = 1;
+      sourceNames = [ "corp-vm" "host" ];
+      hostReceiverGrpcPort = 4317;
+      corpReceiverGrpcPort = 4319;
+      hostVsockPort = 14317;
+      corpVsockPort = 14318;
+      relayTargetsCorpIngressPort = true;
     };
   };
 
@@ -563,10 +543,24 @@ in
       let
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
+        services = obsGuest.systemd.services;
       in
-      sortStrings (map (scrape: scrape.job_name) obsGuest.services.prometheus.scrapeConfigs);
-    expectedExtract = [ "alloy" "grafana" "loki" "prometheus" "tempo" ];
-    aux = nixos: { hostAlloyConfigPath = toString nixos.config.services.alloy.configPath; };
+      {
+        hostIngressExecHasShape = hasInfix
+          "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
+          services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
+        corpIngressExecHasShape = hasInfix
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
+        hostIngressRestartIfChanged = services.nixling-otel-vsock-in-host.restartIfChanged;
+        corpIngressRestartIfChanged = services.nixling-otel-vsock-in-corp-vm.restartIfChanged;
+      };
+    expectedExtract = {
+      hostIngressExecHasShape = true;
+      corpIngressExecHasShape = true;
+      hostIngressRestartIfChanged = false;
+      corpIngressRestartIfChanged = false;
+    };
   };
 
   obs-stability = mkCase {
@@ -578,25 +572,26 @@ in
       let
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-        grafanaDatasources = obsGuest.services.grafana.provision.datasources.settings.datasources;
+        workGuest = nixos.config.microvm.vms.corp-vm.config.config;
       in
       {
-        datasourceUids = sortStrings (map (ds: ds.uid or "") grafanaDatasources);
-        obsPrometheusJobs = sortStrings (map (scrape: scrape.job_name) obsGuest.services.prometheus.scrapeConfigs);
+        retiredBackendServicesAbsent = !(
+          obsGuest.systemd.services ? grafana
+          || obsGuest.systemd.services ? prometheus
+          || obsGuest.systemd.services ? loki
+          || obsGuest.systemd.services ? tempo
+          || obsGuest.systemd.services ? alloy
+        );
+        hostCollectorDeclared = builtins.hasAttr "nixling-host-otel-collector" nixos.config.systemd.services;
+        guestCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
+        guestVsockOutDeclared = builtins.hasAttr "nixling-otel-vsock-out" workGuest.systemd.services;
       };
     expectedExtract = {
-      datasourceUids = [ "loki" "prometheus" "tempo" ];
-      obsPrometheusJobs = [ "alloy" "grafana" "loki" "prometheus" "tempo" ];
+      retiredBackendServicesAbsent = true;
+      hostCollectorDeclared = true;
+      guestCollectorDeclared = true;
+      guestVsockOutDeclared = true;
     };
-    aux = nixos:
-      let
-        obsVm = nixos.config.nixling.observability.vmName;
-        obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-      in
-      {
-        rulesPath = toString (builtins.head obsGuest.services.prometheus.ruleFiles);
-        hostAlloyConfigPath = toString nixos.config.services.alloy.configPath;
-      };
   };
 
   obs-graphics-runner-wiring = mkCase {
@@ -618,22 +613,25 @@ in
     };
     extract = nixos:
       let
-        relay = nixos.config.systemd.services."nixling-otel-relay@";
         gpuUnit = nixos.config.systemd.services."nixling-gpu-vm-gpu" or null;
+        processes = builtins.fromJSON nixos.config.nixling._bundle.processesJson.jsonText;
+        gpuDag = builtins.head (builtins.filter (dag: dag.vm == "gpu-vm") processes.vms);
+        nodeIds = sortStrings (map (node: node.id) gpuDag.nodes);
+        relayNode = builtins.head (builtins.filter (node: node.id == "vsock-relay") gpuDag.nodes);
       in
       {
-        relayBindsToHasMicrovm = builtins.elem "microvm@%i.service" (relay.bindsTo or [ ]);
         gpuServiceDeclared = gpuUnit != null;
-        gpuWantsRelay = if gpuUnit == null then null else builtins.elem "nixling-otel-relay@gpu-vm.service" (gpuUnit.wants or [ ]);
-        relayExecConditionHasEligibility = hasInfix "nixling-otel-relay-eligible" (relay.serviceConfig.ExecCondition or "");
-        relayExecStartPreGatesOnVsockSock = builtins.any (cmd: hasInfix "vsock.sock" cmd) (relay.serviceConfig.ExecStartPre or [ ]);
+        relayNodeDeclared = builtins.elem "vsock-relay" nodeIds;
+        relayNodeRole = relayNode.role;
+        relayNodeTargetsObs = hasInfix
+          "nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock"
+          (builtins.concatStringsSep " " relayNode.argv);
       };
     expectedExtract = {
-      relayBindsToHasMicrovm = false;
       gpuServiceDeclared = true;
-      gpuWantsRelay = true;
-      relayExecConditionHasEligibility = true;
-      relayExecStartPreGatesOnVsockSock = true;
+      relayNodeDeclared = true;
+      relayNodeRole = "vsock-relay";
+      relayNodeTargetsObs = true;
     };
   };
 }

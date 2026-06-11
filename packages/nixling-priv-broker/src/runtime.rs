@@ -7490,6 +7490,128 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
+    fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
+        use nixling_core::bundle_resolver::{intent_id_runner, BundleVerifyPolicy};
+        use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
+        use nixling_core::test_support::RoleProfileBuilder;
+        use nixling_ipc::broker_wire::{
+            BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
+        };
+        use nixling_ipc::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+
+        let root = test_audit_dir("spawn-runner-otel-host-bridge-non-obs-vm");
+        let bundle = build_test_bundle(&root);
+        let mut processes: ProcessesJson =
+            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
+                .expect("parse processes.json");
+        processes.vms[0].nodes.push(ProcessNode {
+            id: NodeId("otel-host-bridge".to_owned()),
+            role: ProcessRole::OtelHostBridge,
+            unit: None,
+            binary_path: Some("/nix/store/test-socat/bin/socat".to_owned()),
+            argv: vec![
+                "nixling-otel-host-bridge".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/corp-vm/vsock.sock 14317\""
+                    .to_owned(),
+            ],
+            env: Vec::new(),
+            profile: RoleProfileBuilder::new()
+                .with_profile_id("profile-otel-host-bridge")
+                .with_uid(1003)
+                .with_gid(1003)
+                .with_seccomp_policy_ref(Some("w1-otel-host-bridge"))
+                .with_writable_paths(vec![WritablePath {
+                    path: "/run/nixling/otel".to_owned(),
+                    purpose: "host otel bridge runtime".to_owned(),
+                }])
+                .with_cgroup_placement(CgroupPlacement {
+                    subtree: "nixling.slice/corp-vm/otel-host-bridge".to_owned(),
+                    controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                    delegated: false,
+                })
+                .build(),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+        });
+        write_json_file(&bundle.processes_path, &processes);
+        let resolver = match try_load_resolver_with_policy(
+            &bundle.bundle_path,
+            &BundleVerifyPolicy::for_tests(),
+        ) {
+            BundleSlot::Loaded(resolver) => resolver,
+            other => panic!("rewritten bundle should load, got {other:?}"),
+        };
+
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+        let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
+        let request = BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("otel-host-bridge"),
+            role: RunnerRole::OtelHostBridge,
+            bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
+            runtime_allocations: vec![RunnerAllocation {
+                kind: RunnerAllocationKind::VsockCid,
+                opaque_ref: "cid:1000".to_owned(),
+            }],
+            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
+        });
+        let audit_context = DispatchAuditContext::from_request(&request, 5153, &caller_role)
+            .expect("audit context");
+
+        let error = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&resolver),
+            &backend,
+        )
+        .expect_err("otel host bridge intent for non-obs vm must be denied");
+        match error {
+            BrokerError::OtelHostBridgeIntentInvalid {
+                intent_vm,
+                expected_obs_vm,
+            } => {
+                assert_eq!(intent_vm, "corp-vm");
+                assert_eq!(expected_obs_vm, "obs");
+            }
+            other => panic!("expected OtelHostBridgeIntentInvalid, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture lock");
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.operation, "SpawnRunner");
+        assert_eq!(record.decision, "denied-refused");
+        assert_eq!(record.result, "denied");
+        assert_eq!(
+            record.error_kind.as_deref(),
+            Some("otel-host-bridge-intent-invalid")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
     fn signal_runner_returns_no_pidfd_for_unknown_runner() {
         use nixling_ipc::broker_wire::{BrokerCallerRole, BrokerRequest, RunnerSignal};
         use nixling_ipc::types::{RoleId, VmId};

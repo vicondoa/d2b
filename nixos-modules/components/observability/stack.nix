@@ -24,9 +24,7 @@ let
   clickhousePasswordCredential = "clickhouse-password";
   signozJwtCredential = "signoz-jwt-secret";
   signozRootPasswordCredential = "signoz-root-password";
-
   clickhouseDsn = "tcp://127.0.0.1:${toString clickhousePort}";
-  clickhouseDsnEnv = "tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$SIGNOZ_CLICKHOUSE_PASSWORD";
   defaultIngressSources = {
     host = {
       vmName = "host";
@@ -50,7 +48,20 @@ let
   sourceReceivers = lib.mapAttrs' (sourceName: source:
     lib.nameValuePair "otlp/${sourceName}" (otlpReceiverFor sourceName source)
   ) ingressSources;
-  sourceProcessors = lib.mapAttrs' (sourceName: source:
+  selfMetricsReceiver = {
+    "prometheus/self" = {
+      config.scrape_configs = [
+        {
+          job_name = "signoz-otel-collector";
+          scrape_interval = "30s";
+          static_configs = [
+            { targets = [ "127.0.0.1:8888" ]; }
+          ];
+        }
+      ];
+    };
+  };
+  sourceProcessors = (lib.mapAttrs' (sourceName: source:
     lib.nameValuePair "resource/${sourceName}" {
       attributes = [
         { key = "vm.name"; value = source.vmName; action = "upsert"; }
@@ -61,8 +72,17 @@ let
         { key = "deployment.environment"; value = source.envName; action = "upsert"; }
       ];
     }
-  ) ingressSources;
-  sourcePipelines = lib.foldl' lib.recursiveUpdate { } (map
+  ) ingressSources) // {
+    "resource/self" = {
+      attributes = [
+        { key = "vm.name"; value = cfg.vmName; action = "upsert"; }
+        { key = "vm.env"; value = "obs"; action = "upsert"; }
+        { key = "vm.role"; value = "obs"; action = "upsert"; }
+        { key = "service.name"; value = "signoz-otel-collector"; action = "upsert"; }
+      ];
+    };
+  };
+  sourcePipelines = (lib.foldl' lib.recursiveUpdate { } (map
     (sourceName: {
       "traces/${sourceName}" = {
         receivers = [ "otlp/${sourceName}" ];
@@ -80,7 +100,13 @@ let
         exporters = [ "clickhouselogsexporter" "metadataexporter" ];
       };
     })
-    sourceNames);
+    sourceNames)) // {
+    "metrics/self" = {
+      receivers = [ "prometheus/self" ];
+      processors = [ "resource/self" "memory_limiter" "batch" ];
+      exporters = [ "metadataexporter" "signozclickhousemetrics" ];
+    };
+  };
   vsockIngressServices = lib.mapAttrs' (sourceName: source:
     lib.nameValuePair "nixling-otel-vsock-in-${sourceName}" {
       description = "Receive OTLP from ${sourceName} and forward to the SigNoz collector";
@@ -186,7 +212,7 @@ let
 
   collectorConfig = pkgs.writeText "nixling-signoz-otel-collector.yaml" (
     lib.generators.toYAML { } {
-      receivers = sourceReceivers;
+      receivers = sourceReceivers // selfMetricsReceiver;
       processors = {
         memory_limiter = {
           check_interval = "1s";
@@ -240,7 +266,10 @@ let
         };
       };
       service = {
-        telemetry.logs.encoding = "json";
+        telemetry = {
+          logs.encoding = "json";
+          metrics.address = "127.0.0.1:8888";
+        };
         extensions = [ "health_check" "zpages" "pprof" ];
         pipelines = sourcePipelines;
       };
@@ -257,11 +286,13 @@ let
     set -eu
     export SIGNOZ_ANALYTICS_ENABLED=false
     export TELEMETRY_ENABLED=false
+    export SIGNOZ_CLICKHOUSE_PASSWORD="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
+    pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$SIGNOZ_CLICKHOUSE_PASSWORD" '$v|@uri')"
     export SIGNOZ_TOKENIZER_JWT_SECRET="$(cat "$CREDENTIALS_DIRECTORY/${signozJwtCredential}")"
     export SIGNOZ_USER_ROOT_ENABLED=true
     export SIGNOZ_USER_ROOT_EMAIL="${cfg.signoz.adminEmail}"
     export SIGNOZ_USER_ROOT_PASSWORD="$(cat "$CREDENTIALS_DIRECTORY/${signozRootPasswordCredential}")"
-    export SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN="${clickhouseDsnEnv}"
+    export SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw_uri"
     export SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
     export SIGNOZ_WEB_DIRECTORY=${signoz}/web
     exec ${signoz}/bin/signoz server --config ${signozConfig}
@@ -270,10 +301,11 @@ let
   collectorStart = pkgs.writeShellScript "nixling-signoz-otel-collector-start" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
-    export SIGNOZ_CLICKHOUSE_TRACES_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_traces?username=signoz&password=$pw"
-    export SIGNOZ_CLICKHOUSE_METRICS_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_metrics?username=signoz&password=$pw"
-    export SIGNOZ_CLICKHOUSE_LOGS_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_logs?username=signoz&password=$pw"
-    export SIGNOZ_CLICKHOUSE_METADATA_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_metadata?username=signoz&password=$pw"
+    pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
+    export SIGNOZ_CLICKHOUSE_TRACES_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_traces?username=signoz&password=$pw_uri"
+    export SIGNOZ_CLICKHOUSE_METRICS_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_metrics?username=signoz&password=$pw_uri"
+    export SIGNOZ_CLICKHOUSE_LOGS_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_logs?username=signoz&password=$pw_uri"
+    export SIGNOZ_CLICKHOUSE_METADATA_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_metadata?username=signoz&password=$pw_uri"
     exec ${signozOtelCollector}/bin/signoz-otel-collector \
       --config ${collectorConfig} \
       --manager-config ${signozOtelCollector}/conf/opamp.yaml \
@@ -283,7 +315,8 @@ let
   migrateSync = pkgs.writeShellScript "nixling-signoz-migrate-sync" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
-    dsn="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw"
+    pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
+    dsn="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw_uri"
     for _ in $(seq 1 120); do
       if ${pkgs.clickhouse}/bin/clickhouse-client --host 127.0.0.1 --port ${toString clickhousePort} --user signoz --password "$pw" --query 'SELECT 1' >/dev/null 2>&1; then
         break
@@ -296,7 +329,8 @@ let
   migrateAsync = pkgs.writeShellScript "nixling-signoz-migrate-async" ''
     set -eu
     pw="$(cat "$CREDENTIALS_DIRECTORY/${clickhousePasswordCredential}")"
-    dsn="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw"
+    pw_uri="$(${pkgs.jq}/bin/jq -nr --arg v "$pw" '$v|@uri')"
+    dsn="tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$pw_uri"
     ${signozSchemaMigrator}/bin/signoz-schema-migrator async --dsn "$dsn" --replication --cluster-name cluster
   '';
 in
@@ -364,6 +398,24 @@ in
         type = lib.types.str;
         default = "admin@nixling.local";
         description = "Root SigNoz admin email for first-run bootstrap.";
+      };
+
+      jwtSecretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.unspecified;
+        default = null;
+        description = "Host-only SigNoz credential override mirrored into the obs VM option surface for module compatibility.";
+      };
+
+      rootPasswordFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.unspecified;
+        default = null;
+        description = "Host-only SigNoz credential override mirrored into the obs VM option surface for module compatibility.";
+      };
+
+      clickhousePasswordFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.unspecified;
+        default = null;
+        description = "Host-only ClickHouse credential override mirrored into the obs VM option surface for module compatibility.";
       };
     };
 

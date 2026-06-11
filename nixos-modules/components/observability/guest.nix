@@ -19,7 +19,19 @@ let
           endpoint = guestOtlpSocket;
           transport = "unix";
         };
-        hostmetrics = lib.mkIf cfg.scrapeNodeMetrics {
+        prometheus = {
+          config.scrape_configs = [
+            {
+              job_name = "nixling-guest-otel-collector";
+              scrape_interval = "30s";
+              static_configs = [
+                { targets = [ "127.0.0.1:${toString collectorMetricsPort}" ]; }
+              ];
+            }
+          ];
+        };
+      } // lib.optionalAttrs cfg.scrapeNodeMetrics {
+        hostmetrics = {
           collection_interval = "30s";
           scrapers = {
             cpu = { };
@@ -60,7 +72,7 @@ let
       service = {
         telemetry.metrics.address = "127.0.0.1:${toString collectorMetricsPort}";
         pipelines.metrics = {
-          receivers = [ "otlp" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
+          receivers = [ "otlp" "prometheus" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
           processors = [ "memory_limiter" "resource" "batch" ];
           exporters = [ "otlp" ];
         };
@@ -82,8 +94,8 @@ in
   options.nixling.observability = {
     scrapeJournal = lib.mkOption {
       type = lib.types.bool;
-      default = true;
-      description = "Compatibility toggle; journald collection is not yet wired in the native OTel collector path.";
+      default = false;
+      description = "Compatibility toggle reserved for future journald collection; native OTel guest logs are not yet scraped from journald.";
     };
 
     scrapeNodeMetrics = lib.mkOption {
@@ -114,6 +126,12 @@ in
   };
 
   config = {
+    warnings = lib.optional cfg.scrapeJournal ''
+      nixling.vms.<vm>.observability.scrapeJournal is currently a
+      compatibility no-op in the native SigNoz path; journald/audit log
+      ingestion is not wired yet.
+    '';
+
     microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
     users.users.otel = {

@@ -13,10 +13,10 @@ LANs do not carry telemetry.
 ## Prerequisites
 
 - A working nixling deployment.
-- Enough capacity for the auto-declared `sys-obs` VM. The SigNoz stack
-  includes ClickHouse and is heavier than the retired Grafana stack; use
-  the default `sys-obs` resources unless you have sized your own
-  ClickHouse memory and disk budget.
+- Enough capacity for the auto-declared `sys-obs` VM. Defaults are
+  `vcpu = 4`, `mem = 8192` MiB, and about 40 GiB of persistent volumes:
+  32 GiB ClickHouse, 2 GiB ZooKeeper, 4 GiB SigNoz, and 2 GiB collector
+  state.
 
 ## Step 1: Enable the framework-level stack
 
@@ -122,6 +122,28 @@ The root password is generated on the host at:
 
 Read it with `sudo` on the host. Do not copy it into a world-readable
 Nix store file.
+
+To source credentials from a declarative secrets system, pass host paths
+as strings:
+
+```nix
+nixling.observability.signoz = {
+  jwtSecretFile = "/run/secrets/nixling/signoz-jwt-secret";
+  rootPasswordFile = "/run/secrets/nixling/signoz-root-password";
+  clickhousePasswordFile = "/run/secrets/nixling/clickhouse-password";
+};
+```
+
+The old `nixling.observability.grafana.*PasswordFile` options do not
+affect native SigNoz authentication.
+
+## Retention and disk budget
+
+The `nixling.observability.retention.*` and `sampling.*` options are
+compatibility shims from the retired Tempo/Loki stack. Changing them
+emits a warning; they do not currently configure SigNoz or ClickHouse
+TTL. Use SigNoz/ClickHouse retention controls and size the `sys-obs`
+volumes for your workload before enabling high-volume telemetry.
 
 ## Alert notifications
 

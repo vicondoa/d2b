@@ -17,6 +17,9 @@ Current policy:
 - `kind=critical` remains an OTel attribute, but the old
   Tempo-tenant-specific retention model is not automatically migrated;
 - ClickHouse/SigNoz retention is the backend-retention control surface.
+  The legacy `nixling.observability.retention.*` and `sampling.*`
+  options are compatibility shims and currently warn when changed; they
+  do not configure ClickHouse TTL.
 
 Historical Tempo data is not migrated to SigNoz automatically. Preserve
 the old `sys-obs-stack` state until the new `sys-obs` stack is validated

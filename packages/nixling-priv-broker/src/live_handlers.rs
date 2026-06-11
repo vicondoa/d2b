@@ -1800,6 +1800,41 @@ fn ch_vsock_connect_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
     })
 }
 
+fn grant_obs_vsock_acl_once(uid: u32, socket: &Path) -> Result<bool, String> {
+    if !socket.exists() {
+        return Ok(false);
+    }
+    let Some(parent) = socket.parent() else {
+        return Err("socket path has no parent".to_owned());
+    };
+    setfacl_fd_safe(parent, &format!("u:{uid}:--x"), AclPathKind::Directory)?;
+    setfacl_fd_safe(socket, &format!("u:{uid}:rw"), AclPathKind::Socket)?;
+    Ok(socket.exists())
+}
+
+fn spawn_obs_vsock_acl_retry(uid: u32, socket: PathBuf) {
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            match grant_obs_vsock_acl_once(uid, &socket) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::debug!(
+                        path = %socket.display(),
+                        error = %err,
+                        "obs-vsock socket ACL refresh not ready yet",
+                    );
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        tracing::warn!(
+            path = %socket.display(),
+            "obs-vsock socket ACL refresh timed out",
+        );
+    });
+}
+
 fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
     if !matches!(
         plan.seccomp_policy_ref.as_deref(),
@@ -1810,36 +1845,17 @@ fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError>
     let Some(socket) = ch_vsock_connect_socket_arg(plan) else {
         return Ok(());
     };
-    let Some(parent) = socket.parent() else {
-        return Err(LiveHandlerError::SpawnFailed {
-            detail: "obs-vsock ACL refresh: socket path has no parent".to_owned(),
-        });
-    };
     let uid = plan.uid;
-    for _ in 0..120 {
-        if socket.exists() {
-            setfacl_fd_safe(parent, &format!("u:{uid}:--x"), AclPathKind::Directory).map_err(
-                |detail| LiveHandlerError::SpawnFailed {
-                    detail: format!("refresh obs-vsock state-dir ACL for runner uid {uid}: {detail}"),
-                },
-            )?;
-            setfacl_fd_safe(&socket, &format!("u:{uid}:rw"), AclPathKind::Socket).map_err(
-                |detail| LiveHandlerError::SpawnFailed {
-                    detail: format!("refresh obs-vsock socket ACL for runner uid {uid}: {detail}"),
-                },
-            )?;
-            if socket.exists() {
-                return Ok(());
-            }
+    match grant_obs_vsock_acl_once(uid, &socket) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            spawn_obs_vsock_acl_retry(uid, socket);
+            Ok(())
         }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+            detail: format!("refresh obs-vsock ACL for runner uid {uid}: {detail}"),
+        }),
     }
-    Err(LiveHandlerError::SpawnFailed {
-        detail: format!(
-            "obs-vsock ACL refresh timed out for runner uid {uid} before {} became connectable",
-            socket.display()
-        ),
-    })
 }
 
 pub(crate) fn live_grant_verified_device_acl(

@@ -12,6 +12,19 @@ let
   hostEgressSocket = "${otelRuntimeDir}/host-egress.sock";
   hostCollectorMetricsPort = 12345;
 
+  runtimePrep = pkgs.writeShellScript "nixling-host-otel-runtime-prep" ''
+    set -eu
+    ${pkgs.coreutils}/bin/install -d -m 0750 -o nixlingd -g nixling ${otelRuntimeDir}
+    ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:--x /run/nixling
+    ${pkgs.acl}/bin/setfacl \
+      -m u:nixling-host-otel-collector:rwx \
+      -m d:u:nixling-host-otel-collector:rwx \
+      ${otelRuntimeDir}
+    if [ -S ${hostEgressSocket} ]; then
+      ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw ${hostEgressSocket}
+    fi
+  '';
+
   collectorConfig = pkgs.writeText "nixling-host-otel-collector.yaml" (
     lib.generators.toYAML { } {
       receivers = {
@@ -27,6 +40,17 @@ let
             paging = { };
             processes = { };
           };
+        };
+        prometheus = {
+          config.scrape_configs = [
+            {
+              job_name = "nixling-host-otel-collector";
+              scrape_interval = "30s";
+              static_configs = [
+                { targets = [ "127.0.0.1:${toString hostCollectorMetricsPort}" ]; }
+              ];
+            }
+          ];
         };
       };
       processors = {
@@ -57,7 +81,7 @@ let
       service = {
         telemetry.metrics.address = "127.0.0.1:${toString hostCollectorMetricsPort}";
         pipelines.metrics = {
-          receivers = [ "hostmetrics" ];
+          receivers = [ "hostmetrics" "prometheus" ];
           processors = [ "memory_limiter" "resource" "batch" ];
           exporters = [ "otlp" ];
         };
@@ -88,12 +112,11 @@ lib.mkIf cfg.enable {
       Type = "exec";
       User = "nixling-host-otel-collector";
       Group = "nixling-host-otel-collector";
+      ExecStartPre = "+${runtimePrep}";
       ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config=file:${collectorConfig}";
       Restart = "on-failure";
       RestartSec = "3s";
       StateDirectory = "nixling-host-otel-collector";
-      RuntimeDirectory = "nixling/otel";
-      RuntimeDirectoryMode = "0750";
       NoNewPrivileges = true;
       ProtectSystem = "strict";
       ProtectHome = true;
