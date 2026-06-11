@@ -102,6 +102,35 @@ else
   ok "guest workload resource processor preserves application service.name"
 fi
 
+GUEST="$ROOT/nixos-modules/components/observability/guest.nix"
+if grep -q 'lib.optionalAttrs cfg\.scrapeJournal {' "$GUEST" \
+  && grep -q 'journald = {' "$GUEST" \
+  && grep -q 'lib.optional cfg\.scrapeJournal "journald"' "$GUEST"; then
+  ok "guest collector wires the journald receiver into the logs pipeline when scrapeJournal is on"
+else
+  fail "guest collector must add the journald receiver to the logs pipeline under scrapeJournal"
+fi
+
+if grep -q 'extraGroups = lib.optional cfg\.scrapeJournal "systemd-journal"' "$GUEST" \
+  && grep -q 'path = lib.optional cfg\.scrapeJournal pkgs\.systemd' "$GUEST"; then
+  ok "guest journald collection grants journal read access and journalctl on PATH"
+else
+  fail "guest journald collection must grant systemd-journal access and journalctl on PATH"
+fi
+
+if grep -q 'type = "severity_parser"' "$GUEST" \
+  && grep -q 'parse_from = "body.PRIORITY"' "$GUEST" \
+  && grep -q 'error = "3"' "$GUEST" \
+  && grep -q 'storage = "file_storage/journald"' "$GUEST" \
+  && grep -q '"file_storage/journald" = {' "$GUEST" \
+  && grep -q 'directory = "/var/lib/otel/journald"' "$GUEST" \
+  && grep -q 'create_directory = true' "$GUEST" \
+  && grep -q 'extensions = lib.optional cfg\.scrapeJournal "file_storage/journald"' "$GUEST"; then
+  ok "guest journald logs carry severity and persist a restart-safe read cursor"
+else
+  fail "guest journald receiver must map PRIORITY->severity and bind+enable a file_storage cursor"
+fi
+
 if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
   ok "collector pipelines are source-specific, not a shared otlp receiver"
 else

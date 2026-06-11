@@ -33,6 +33,22 @@ The collector runs from nixling's static generated config; SigNoz OpAMP
 manager mode is intentionally not enabled so it cannot rewrite the
 source-specific receivers.
 
+Each opted-in workload VM runs a guest OpenTelemetry collector that
+forwards OTLP (metrics, traces, logs) over the guest→host vsock relay.
+The guest collector also tails the VM's systemd journal through the
+contrib `journald` receiver (`scrapeJournal`, default on) so guest
+service logs land in SigNoz tagged with the VM's `vm.name` / `vm.env`
+resource attributes. The journal `PRIORITY` field is mapped to OTel
+severity, and a `file_storage` cursor lets a collector restart resume
+where it left off rather than dropping entries written during downtime.
+
+> The systemd journal can contain sensitive data (auth failures,
+> command lines, service-logged secrets). Guest journal logs are
+> forwarded only over the in-guest → vsock → `sys-obs` path (never the
+> workload env LAN) into the operator's own observability VM. Set
+> `nixling.vms.<vm>.observability.scrapeJournal = false` to disable
+> guest log collection for a VM.
+
 ## Data path
 
 ```text
@@ -87,7 +103,7 @@ configure SigNoz/ClickHouse TTL.
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `nixling.vms.<vm>.observability.enable` | bool | `false` | Enable telemetry collection for this VM. |
-| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `false` | Compatibility toggle reserved for future guest journald collection. |
+| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `true` | Tail the guest systemd journal (journald receiver) and forward it to SigNoz as logs. |
 | `nixling.vms.<vm>.observability.scrapeNodeMetrics` | bool | `true` | Enable guest hostmetrics collection. |
 
 ## Runtime services

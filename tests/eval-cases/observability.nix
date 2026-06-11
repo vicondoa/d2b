@@ -390,6 +390,26 @@ in
     expectedExtract = false;
   };
 
+  obs-journal-default-on = mkCase {
+    override = { ... }: {
+      nixling.observability.enable = true;
+      nixling.vms.corp-vm.observability.enable = true;
+    };
+    extract = nixos:
+      let
+        workGuest = nixos.config.microvm.vms.corp-vm.config.config;
+      in
+      {
+        scrapeJournalResolved = workGuest.nixling.observability.scrapeJournal;
+        otelUserInJournalGroup =
+          builtins.elem "systemd-journal" (workGuest.users.users.otel.extraGroups or [ ]);
+      };
+    expectedExtract = {
+      scrapeJournalResolved = true;
+      otelUserInJournalGroup = true;
+    };
+  };
+
   obs-audit-surface = mkCase {
     override = { ... }: {
       nixling.observability.enable = true;
