@@ -46,6 +46,12 @@ deprecations ship one minor release before removal.
   option, framework-owned materialized token file, read-only guest credential
   share, and guestd `LoadCredential` wiring with eval coverage.
 
+- Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
+  now validate the future `nixling exec` allowlist defaults: generic exec is
+  off by default, root exec is separately denied by default, and non-root users
+  must be explicitly listed. This is dormant policy wiring only; the exec
+  runtime/CLI implementation lands in a later step.
+
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
   CLI JSON.

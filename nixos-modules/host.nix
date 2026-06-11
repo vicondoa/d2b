@@ -317,6 +317,11 @@ in
               nixling.sshUser = vm'.ssh.user;
               nixling.sudo = vm'.sudo;
               nixling.guestControl.enable = vm'.guest.control.enable;
+              nixling.guestControl.exec = {
+                enable = lib.mkForce vm'.guest.exec.enable;
+                allowRoot = lib.mkForce vm'.guest.exec.allowRoot;
+                users = lib.mkForce vm'.guest.exec.users;
+              };
             }
             # Per-VM framework-managed shares moved from store.nix to
             # break the module-system infinite

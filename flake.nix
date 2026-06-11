@@ -432,6 +432,17 @@
           printf '%s\n' '${evidence}' > "$out/guest-static-consumption.json"
         '';
 
+        guest-exec-policy = let
+          evidence = import ./tests/guest-exec-policy-eval.nix {
+            inherit system pkgs;
+            flake = self;
+            scenario = "enabled";
+          };
+        in pkgs.runCommand "nixling-guest-exec-policy" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-exec-policy.json"
+        '';
+
         # Real cargo-deny gate: bans, licenses, and sources for both
         # the main workspace and the broker workspace.  Advisory
         # checks are handled by rust-audit below (cargo-deny requires

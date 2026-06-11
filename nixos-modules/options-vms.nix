@@ -607,6 +607,50 @@
           };
         };
 
+        guest.exec = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable validation of the guest-control exec policy for this VM.
+
+              This is policy metadata and dormant guest-side wiring only until
+              the guestd exec runtime lands. It does not make `nixling exec`
+              available by itself. Generic exec remains off by default, and
+              enabling it requires `guest.control.enable = true` plus either
+              an explicit non-root user allowlist or `allowRoot = true`.
+            '';
+          };
+
+          allowRoot = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Permit the future guest-control exec runtime to target root.
+
+              This defaults to false and is separate from the non-root user
+              allowlist. In the current policy-wiring stage it is validation
+              metadata only and does not emit a root `nixling-userd` service.
+            '';
+          };
+
+          users = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "alice" ];
+            description = ''
+              Explicit non-root guest users that the future guest-control exec
+              runtime may target.
+
+              No users are allowed by default, and the SSH user is not
+              implicitly added. Usernames are intentionally restricted to a
+              raw-safe lowercase subset so dormant guest-side unit names and
+              runtime directories are unambiguous. `root` is never listed here;
+              use `allowRoot` for the separate root-exec policy gate.
+            '';
+          };
+        };
+
         # REMOVED. The submodule path is kept ONLY so that
         # legacy consumer assignments produce a readable assertion
         # error rather than the cryptic "option does not exist"

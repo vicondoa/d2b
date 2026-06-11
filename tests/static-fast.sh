@@ -142,6 +142,7 @@ run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-
 run_gate "tests/guest-control-proto.sh" "bash '$ROOT/tests/guest-control-proto.sh'"
 run_gate "tests/guest-control-auth-eval.sh" "bash '$ROOT/tests/guest-control-auth-eval.sh'"
 run_gate "tests/guest-control-token-materializer.sh" "bash '$ROOT/tests/guest-control-token-materializer.sh'"
+run_gate "tests/guest-exec-policy-eval.sh" "bash '$ROOT/tests/guest-exec-policy-eval.sh'"
 run_gate "tests/guest-static-elf.sh" "bash '$ROOT/tests/guest-static-elf.sh'"
 run_gate "tests/guest-static-consumption-eval.sh" "bash '$ROOT/tests/guest-static-consumption-eval.sh'"
 
