@@ -151,6 +151,29 @@ in
       ];
     }
 
+    {
+      system.activationScripts.nixlingObservabilityHostSecretShareAcls =
+        lib.stringAfter [ "nixlingObservabilityHostSecretsDir" ] ''
+          set -u
+          processes=/etc/nixling/processes.json
+          if [ -r "$processes" ]; then
+            obs_uid="$(${pkgs.jq}/bin/jq -r --arg vm ${lib.escapeShellArg obsCfg.vmName} '.vms[] | select(.vm == $vm) | .nodes[] | select(.id == "virtiofsd-nl-obs-sec") | .profile.uid' "$processes" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
+            case "$obs_uid" in
+              ""|null) ;;
+              *[!0-9]*) ;;
+              *)
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:--x" ${lib.escapeShellArg cfg.site.stateDir} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r-x" ${lib.escapeShellArg hostSecretsDir} 2>/dev/null || true
+                for secret in ${lib.escapeShellArg hostSecretsDir}/*; do
+                  [ -f "$secret" ] || continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:r--" "$secret" 2>/dev/null || true
+                done
+                ;;
+            esac
+          fi
+        '';
+    }
+
     # NOTE: the matching virtiofs share into sys-obs is
     # declared in `nixos-modules/host.nix`'s composedConfig pass
     # (v1.1 moved it out of store.nix to avoid module-system infinite
