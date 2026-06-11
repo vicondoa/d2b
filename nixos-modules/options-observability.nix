@@ -268,6 +268,14 @@ in
           HTTP ingress inside the observability VM.
         '';
       };
+
+      adminEmail = lib.mkOption {
+        type = lib.types.str;
+        default = "admin@nixling.local";
+        description = ''
+          Root SigNoz admin email used for first-run bootstrap.
+        '';
+      };
     };
 
     ch.exporter = {
