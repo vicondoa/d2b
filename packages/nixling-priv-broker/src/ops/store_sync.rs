@@ -44,7 +44,9 @@ use crate::ops::store_sync_audit::{
     CleanupReason, CleanupStatus, ErrorStage, StoreSyncAuditContext, StoreSyncAuditFields,
     StoreSyncTimings,
 };
-use crate::ops::store_view_posture::{posture_store_view_matrix_paths, PostureError};
+use crate::ops::store_view_posture::{
+    plant_live_marker_with_matrix_posture, posture_store_view_matrix_paths, PostureError,
+};
 
 /// Typed errors for the `StoreSync` handler. Each value classifies the
 /// signed ADR 0027 [`ErrorStage`] the attempt failed at (see
@@ -375,9 +377,7 @@ fn run_store_sync_inner(
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
         hardlink_farm::swap_meta_current(&intent.hardlink_farm_path, &generation_id)
             .map_err(|e| StoreSyncError::at(ErrorStage::CurrentSwap, e))?;
-        hardlink_farm::plant_live_marker(&intent.hardlink_farm_path, &intent.vm)
-            .map_err(|e| StoreSyncError::at(ErrorStage::Marker, e))?;
-        posture_store_view_matrix_paths(&intent.hardlink_farm_path, &intent.vm)
+        plant_live_marker_with_matrix_posture(&intent.hardlink_farm_path, &intent.vm)
             .map_err(|err| posture_error(ErrorStage::Marker, err))?;
         timings.metadata_ms = elapsed_ms(metadata_started);
         (counts.linked, counts.skipped)
@@ -678,6 +678,7 @@ fn current_unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -718,8 +719,6 @@ mod tests {
 
     #[test]
     fn happy_path_populates_split_layout_and_swaps_currents() {
-        use std::os::unix::fs::MetadataExt;
-
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 2);
         let outcome = run_store_sync(&intent, "alpha", 7).expect("happy path succeeds");
@@ -873,6 +872,25 @@ mod tests {
     }
 
     #[test]
+    fn fast_path_repairs_live_marker_posture() {
+        let tmp = tempdir().unwrap();
+        let intent = intent_with(tmp.path(), "alpha", 7, 1);
+        run_store_sync(&intent, "alpha", 7).expect("first sync succeeds");
+        let live_marker = intent
+            .hardlink_farm_path
+            .join("live")
+            .join(".nixling-marker-alpha");
+        std::fs::set_permissions(&live_marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let outcome = run_store_sync(&intent, "alpha", 7).expect("fast path succeeds");
+        assert!(outcome.fast_path);
+        let meta = std::fs::symlink_metadata(&live_marker).unwrap();
+        assert_eq!(meta.mode() & 0o777, 0o644);
+        assert_eq!(meta.uid(), nix::unistd::Uid::current().as_raw());
+        assert_eq!(meta.gid(), nix::unistd::Gid::current().as_raw());
+    }
+
+    #[test]
     fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "theta", 8, 1);
@@ -892,7 +910,6 @@ mod tests {
 
     #[test]
     fn farm_shares_inodes_with_source_no_recursive_chown() {
-        use std::os::unix::fs::MetadataExt;
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "beta", 3, 1);
 

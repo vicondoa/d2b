@@ -5,7 +5,9 @@
 //! recurse into `live/`, because those package trees are hardlinked to
 //! `/nix/store`.
 
-use std::os::unix::fs::PermissionsExt;
+use std::fs::OpenOptions;
+use std::os::fd::AsFd;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use nix::unistd::{chown, Gid, Uid};
@@ -164,6 +166,46 @@ pub(crate) fn posture_store_view_matrix_paths(
         principals.host_gid,
     )?;
     Ok(())
+}
+
+pub(crate) fn plant_live_marker_with_matrix_posture(
+    store_root: &Path,
+    vm: &str,
+) -> Result<(), PostureError> {
+    let principals = resolve_principals()?;
+    let live = hardlink_farm::live_dir(store_root);
+    let marker = live.join(format!(".nixling-marker-{vm}"));
+    let tmp = live.join(format!(".nixling-marker-{vm}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .open(&tmp)
+        .map_err(|err| io_error(&tmp, format!("create marker tmp: {err}")))?;
+    crate::sys::path_safe::fchown(
+        file.as_fd(),
+        Some(principals.owner_uid.as_raw()),
+        Some(principals.runner_gid.as_raw()),
+    )
+    .map_err(|err| io_error(&tmp, format!("fchown marker tmp: {err}")))?;
+    crate::sys::path_safe::fchmod(file.as_fd(), 0o644)
+        .map_err(|err| io_error(&tmp, format!("fchmod marker tmp: {err}")))?;
+    file.sync_all()
+        .map_err(|err| io_error(&tmp, format!("fsync marker tmp: {err}")))?;
+    drop(file);
+    std::fs::rename(&tmp, &marker)
+        .map_err(|err| io_error(&marker, format!("rename marker tmp: {err}")))?;
+    if let Ok(dir) = std::fs::File::open(&live) {
+        let _ = dir.sync_all();
+    }
+    posture_existing(
+        &marker,
+        PathKind::File,
+        0o644,
+        principals.owner_uid,
+        principals.runner_gid,
+    )
 }
 
 pub(crate) fn posture_host_only_file(path: &Path) -> Result<(), PostureError> {

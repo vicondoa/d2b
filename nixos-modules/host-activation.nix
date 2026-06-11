@@ -866,6 +866,13 @@ in
               --path "$path" \
               --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
           done
+          vm_name="''${vm_dir##*/}"
+          live_marker="$vm_dir/store-view/live/.nixling-marker-$vm_name"
+          if [ -f "$live_marker" ] && [ ! -L "$live_marker" ]; then
+            ${pkgs.acl}/bin/setfacl -k "$live_marker" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown "$nixlingd_uid:$users_gid" "$live_marker" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0644 "$live_marker" 2>/dev/null || true
+          fi
           # Legacy recovery artifacts (migrated VMs only): posture if
           # present, never created by activation.
           for sub in store store-meta; do
