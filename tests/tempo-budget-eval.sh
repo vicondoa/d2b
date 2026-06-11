@@ -75,7 +75,7 @@ else
   fail "guest collector must not serialize lib.mkIf wrappers into OTel YAML"
 fi
 
-for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'telemetry.metrics.address'; do
+for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'metrics.readers'; do
   if grep -q "$token" "$STACK" "$ROOT/nixos-modules/components/observability/host.nix" "$ROOT/nixos-modules/components/observability/guest.nix"; then
     ok "collector self-telemetry token present: $token"
   else

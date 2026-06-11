@@ -268,7 +268,14 @@ let
       service = {
         telemetry = {
           logs.encoding = "json";
-          metrics.address = "127.0.0.1:8888";
+          metrics.readers = [
+            {
+              pull.exporter.prometheus = {
+                host = "127.0.0.1";
+                port = 8888;
+              };
+            }
+          ];
         };
         extensions = [ "health_check" "zpages" "pprof" ];
         pipelines = sourcePipelines;

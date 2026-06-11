@@ -75,7 +75,14 @@ let
         retry_on_failure.enabled = true;
       };
       service = {
-        telemetry.metrics.address = "127.0.0.1:${toString collectorMetricsPort}";
+        telemetry.metrics.readers = [
+          {
+            pull.exporter.prometheus = {
+              host = "127.0.0.1";
+              port = collectorMetricsPort;
+            };
+          }
+        ];
         pipelines.metrics = {
           receivers = [ "otlp" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
           processors = [ "memory_limiter" "resource" "batch" ];
