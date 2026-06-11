@@ -58,6 +58,13 @@ deprecations ship one minor release before removal.
   guest-control transport port. This is transport groundwork only: it does not
   change VM readiness, status output, CLI help, or exec behavior.
 
+- `packages/nixling-ipc/src/generated/guest_control.rs` now contains committed
+  protobuf message bindings generated from
+  `packages/nixling-ipc/proto/guest_control.proto` via
+  `cargo run -p xtask -- gen-guest-proto`. The new
+  `tests/guest-proto-bindings.sh` gate verifies the generated bindings are
+  deterministic, unsafe-free, and message-only (no ttRPC runtime stubs).
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate exec allowlist defaults: generic exec is off by default, root
   exec is separately denied by default, and non-root users must be explicitly

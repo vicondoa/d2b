@@ -57,6 +57,7 @@ fn main() -> std::process::ExitCode {
         (Some("gen-cli-shell-artifacts"), None, None) => {
             run_task("gen-cli-shell-artifacts", gen_cli_shell_artifacts)
         }
+        (Some("gen-guest-proto"), None, None) => run_task("gen-guest-proto", gen_guest_proto),
         (Some("gen-daemon-api"), None, None) => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -65,11 +66,37 @@ fn main() -> std::process::ExitCode {
         }),
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-daemon-api|release-notes <version>>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-daemon-api|release-notes <version>>"
             );
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/nixling-ipc/proto");
+    let proto = proto_dir.join("guest_control.proto");
+    let out_dir = repo_root.join("packages/nixling-ipc/src/generated");
+    fs::create_dir_all(&out_dir)?;
+    let out_file = out_dir.join("guest_control.rs");
+
+    protobuf_codegen::Codegen::new()
+        .pure()
+        .include(&proto_dir)
+        .input(&proto)
+        .out_dir(&out_dir)
+        .run()?;
+
+    sanitize_generated_rust(&out_file)?;
+    Ok(vec![out_file])
+}
+
+fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut generated = fs::read_to_string(path)?;
+    generated = generated.replace("#![allow(unsafe_code)]\n", "");
+    fs::write(path, generated)?;
+    Ok(())
 }
 
 fn run_task<F>(label: &str, task: F) -> std::process::ExitCode

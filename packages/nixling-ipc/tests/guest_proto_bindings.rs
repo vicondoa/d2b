@@ -1,0 +1,121 @@
+use nixling_ipc::guest_proto as pb;
+use nixling_ipc::guest_wire::{
+    GUEST_CONTROL_PROTOCOL_VERSION, GUEST_CONTROL_VSOCK_PORT, HARD_MAX_CHUNK_BYTES,
+};
+use protobuf::{EnumOrUnknown, Message, MessageField};
+
+fn round_trip<M>(message: M)
+where
+    M: Message + Default + PartialEq + std::fmt::Debug,
+{
+    let encoded = message.write_to_bytes().expect("message encodes");
+    let decoded = M::parse_from_bytes(&encoded).expect("message decodes");
+    assert_eq!(decoded, message);
+}
+
+#[test]
+fn generated_health_round_trips_with_guest_wire_constants() {
+    let mut health = pb::HealthResponse::new();
+    health.origin = EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
+    health.state = EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_HEALTHY);
+    health.reason = EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
+    health.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
+    health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+    health.capabilities.push(EnumOrUnknown::new(
+        pb::GuestCapability::GUEST_CAPABILITY_HEALTH,
+    ));
+
+    round_trip(health);
+}
+
+#[test]
+fn generated_hello_and_capabilities_shapes_compile() {
+    let mut metadata = pb::RequestMetadata::new();
+    metadata.vm_id = "corp-vm".to_owned();
+    metadata.request_id = "req-1".to_owned();
+    metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut hello = pb::HelloRequest::new();
+    hello.metadata = MessageField::some(metadata.clone());
+    hello.host_nonce = "host-nonce".to_owned();
+    hello.transcript_version = 1;
+    round_trip(hello);
+
+    let mut health = pb::HealthResponse::new();
+    health.origin = EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
+    health.state = EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_HEALTHY);
+    health.reason = EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
+    health.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
+    health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut hello_response = pb::HelloResponse::new();
+    hello_response.guest_nonce = "guest-nonce".to_owned();
+    hello_response.guest_boot_id = "boot-id".to_owned();
+    hello_response.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+    hello_response.capabilities_hash = "hash".to_owned();
+    hello_response.health = MessageField::some(health);
+    round_trip(hello_response);
+
+    let mut limits = pb::GuestEffectiveLimits::new();
+    limits.max_chunk_bytes = HARD_MAX_CHUNK_BYTES;
+    limits.max_recv_message_bytes = 4 * 1024 * 1024;
+
+    let mut caps = pb::CapabilitiesResponse::new();
+    caps.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+    caps.capabilities.push(EnumOrUnknown::new(
+        pb::GuestCapability::GUEST_CAPABILITY_HEALTH,
+    ));
+    caps.limits = MessageField::some(limits);
+    round_trip(caps);
+}
+
+#[test]
+fn generated_exec_message_shapes_compile_without_service_stubs() {
+    let mut common = pb::RequestMetadata::new();
+    common.vm_id = "corp-vm".to_owned();
+    common.request_id = "req-2".to_owned();
+    common.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut exec_metadata = pb::ExecRequestMetadata::new();
+    exec_metadata.common = MessageField::some(common.clone());
+    exec_metadata.exec_id = "exec-1".to_owned();
+    exec_metadata.guest_boot_id = "boot-1".to_owned();
+
+    let mut create = pb::ExecCreateRequest::new();
+    create.metadata = MessageField::some(common);
+    create.argv = vec!["/bin/true".to_owned()];
+    create.user = Some("alice".to_owned());
+    create.tty = false;
+    round_trip(create);
+
+    let mut logs = pb::ReadOutputRequest::new();
+    logs.metadata = MessageField::some(exec_metadata.clone());
+    logs.stream = EnumOrUnknown::new(pb::OutputStream::OUTPUT_STREAM_STDOUT);
+    logs.max_len = HARD_MAX_CHUNK_BYTES;
+    round_trip(logs);
+
+    let mut status = pb::TerminalStatus::new();
+    status.outcome = Some(pb::terminal_status::Outcome::ExitCode(0));
+    round_trip(status);
+
+    let mut signal = pb::ExecSignalRequest::new();
+    signal.metadata = MessageField::some(exec_metadata);
+    signal.signal = 15;
+    signal.target = EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_PROCESS_TREE);
+    round_trip(signal);
+}
+
+#[test]
+fn generated_transport_schema_constants_match_guest_wire() {
+    assert_eq!(GUEST_CONTROL_VSOCK_PORT, 14_318);
+    assert_eq!(
+        pb::GuestCapability::GUEST_CAPABILITY_HEALTH as i32,
+        1,
+        "generated enum discriminant changed"
+    );
+    assert_eq!(
+        pb::HealthState::HEALTH_STATE_HEALTHY as i32,
+        1,
+        "generated health enum discriminant changed"
+    );
+}

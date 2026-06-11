@@ -962,6 +962,7 @@ name = "nixling-ipc"
 version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-core",
+ "protobuf",
  "schemars",
  "serde",
  "serde_json",
@@ -2211,6 +2212,7 @@ dependencies = [
  "nixling",
  "nixling-core",
  "nixling-ipc",
+ "protobuf-codegen",
  "schemars",
  "serde_json",
 ]
