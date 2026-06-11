@@ -244,8 +244,8 @@ CLI should mirror that pattern:
 2. Compose `<keysDir>/<name>_ed25519` (the framework-managed key) as
    the default; let consumers override per VM via their own config.
 
-If a future use case warrants a manifest-side hint, the recommended
-addition is `sshPubKeyPath` (the `.pub` file under `<keysDir>/`).
+If a manifest-side hint becomes necessary, the recommended addition is
+`sshPubKeyPath` (the `.pub` file under `<keysDir>/`).
 Public keys are not secret; the private key is then derivable by
 convention as the same path minus the `.pub` suffix.
 

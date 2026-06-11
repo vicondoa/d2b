@@ -132,10 +132,43 @@ impl JsonSchema for ManifestV04 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestMeta {
     pub manifest_version: u32,
+}
+
+impl JsonSchema for ManifestMeta {
+    fn schema_name() -> String {
+        "ManifestMeta".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut version_schema = SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
+            enum_values: Some(vec![serde_json::json!(MANIFEST_VERSION_CURRENT)]),
+            ..Default::default()
+        };
+        version_schema.metadata = Some(Box::new(Metadata {
+            description: Some(
+                "Manifest schema version. Must equal the parser's supported version.".to_owned(),
+            ),
+            ..Default::default()
+        }));
+
+        let mut validation = ObjectValidation::default();
+        validation.required.insert("manifestVersion".to_owned());
+        validation
+            .properties
+            .insert("manifestVersion".to_owned(), Schema::Object(version_schema));
+        validation.additional_properties = Some(Box::new(Schema::Bool(false)));
+
+        Schema::Object(SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+            object: Some(Box::new(validation)),
+            ..Default::default()
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

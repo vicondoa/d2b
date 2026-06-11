@@ -38,7 +38,7 @@ State directories follow the matching pattern:
 
 The per-VM manifest baked into the CLI generation lives at
 `/run/current-system/sw/share/nixling/vms.json`. The reserved
-`_manifest` top-level key carries `manifestVersion = 2`, and the
+`_manifest` top-level key carries the current `manifestVersion`, and the
 reserved `_observability` key carries host-wide observability metadata.
 User-facing VM names cannot start with `_` (eval-time assertion in
 `nixos-modules/assertions.nix`). The schema is documented in

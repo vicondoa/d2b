@@ -39,10 +39,11 @@ architectural decision. The short version:
 - The polkit allowlist for per-VM units is retired; `nixling`
   group membership + `SO_PEERCRED` on `public.sock` is the only
   lifecycle authorisation surface.
-- The manifest contract bumps from `manifestVersion: 2` to
-  `manifestVersion: 3`. There is no auto-rewriter — `ManifestV04::from_slice`
-  rejects v2 bundles outright with the typed `manifest-parse-error`
-  / `manifest-version-mismatch` envelope.
+- The manifest contract bumps from `manifestVersion: 2` to the current
+  value documented in `docs/reference/manifest-schema.md`. There is no
+  auto-rewriter — `ManifestV04::from_slice` rejects stale bundles
+  outright with the typed `manifest-parse-error` /
+  `manifest-version-mismatch` envelope.
 
 There is **no deprecation window**. v0.5 was skipped; the v0.4.x →
 v1.0.0 boundary deletes every legacy surface in one cut. Operators
@@ -130,7 +131,7 @@ sudo cat /run/current-system/sw/share/nixling/vms.json \
 ```
 
 If you vendor the bundle to a sibling host, regenerate it on the
-producer host first; never hand-edit `manifestVersion` to `3`
+producer host first; never hand-edit `manifestVersion`
 without a fresh derivation, because the rest of the schema also
 changed.
 
