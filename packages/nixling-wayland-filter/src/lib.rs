@@ -4,6 +4,7 @@
 //! import through this crate root.
 
 pub mod diag;
+pub mod dmabuf;
 pub mod filter;
 pub mod policy;
 

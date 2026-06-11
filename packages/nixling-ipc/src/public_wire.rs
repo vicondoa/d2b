@@ -58,6 +58,8 @@ pub enum PublicRequest {
     UsbipUnbind(UsbipUnbindCliRequest),
     #[serde(rename = "usb probe")]
     UsbipProbe,
+    #[serde(rename = "store verify")]
+    StoreVerify(StoreVerifyRequest),
     #[serde(rename = "migrate")]
     Migrate(MigrateRequest),
     #[serde(rename = "host prepare")]
@@ -98,6 +100,8 @@ pub enum PublicResponse {
     KeysShow(KeysShowResponse),
     #[serde(rename = "usb probe")]
     UsbipProbe(UsbipProbeResponse),
+    #[serde(rename = "store verify")]
+    StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
     #[serde(rename = "error")]
@@ -230,6 +234,16 @@ pub struct UsbipUnbindCliRequest {
     #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreVerifyRequest {
+    pub vm: String,
+    #[serde(default)]
+    pub repair: bool,
+}
+
+pub type StoreVerifyResponse = crate::broker_wire::StoreVerifyResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

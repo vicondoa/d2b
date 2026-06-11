@@ -111,6 +111,31 @@ Workload VM:
 - `nixling-otel-vsock-in-host.service`
 - `nixling-otel-vsock-in-<vm>.service` for each observed workload
 
+## Host StoreSync observability export
+
+The privileged broker emits a StoreSync-only telemetry export at:
+
+```text
+${nixling.site.stateDir}/observability/store-sync/store-sync-<utc-date>.jsonl
+```
+
+The host OTel collector tails `store-sync-*.jsonl` with a `filelog`
+receiver and forwards those records through the same host→`sys-obs`
+OTLP bridge as host metrics. This export is a positive allow-list
+projection, not the broker audit log. Host-confidential fields
+(`caller_principal`, retained generation lists, host/store paths,
+`db.dump`, marker payloads) are redacted by construction in the broker.
+The target VM/env stay in JSON content (`target_vm` / `target_env`) and
+are not promoted to resource attributes.
+
+The collector identity gets focused read/traverse ACLs on the StoreSync
+export directory only. It is not added to the `nixlingd` group and gets
+no access to the unified broker audit log, privileged daemon socket, or
+other broker state. Static gates:
+
+- [`tests/store-sync-export-eval.sh`](../../tests/store-sync-export-eval.sh)
+- [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh)
+
 ## Socket and port contract
 
 | Resource | Value |

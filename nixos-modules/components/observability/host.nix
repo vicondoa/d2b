@@ -11,6 +11,8 @@ let
   otelRuntimeDir = "/run/nixling/otel";
   hostEgressSocket = "${otelRuntimeDir}/host-egress.sock";
   hostCollectorMetricsPort = 12345;
+  storeSyncExportDir = "${config.nixling.site.stateDir}/observability/store-sync";
+  storeSyncExportGlob = "${storeSyncExportDir}/store-sync-*.jsonl";
 
   runtimePrep = pkgs.writeShellScript "nixling-host-otel-runtime-prep" ''
     set -eu
@@ -23,6 +25,17 @@ let
     if [ -S ${hostEgressSocket} ]; then
       ${pkgs.acl}/bin/setfacl -m u:nixling-host-otel-collector:rw ${hostEgressSocket}
     fi
+
+    state_dir=${lib.escapeShellArg config.nixling.site.stateDir}
+    obs_dir="$state_dir/observability"
+    export_dir=${lib.escapeShellArg storeSyncExportDir}
+    [ -d "$state_dir" ] || exit 0
+    [ -d "$obs_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0700 -o root -g root "$obs_dir"
+    [ -d "$export_dir" ] || ${pkgs.coreutils}/bin/install -d -m 0750 -o root -g root "$export_dir"
+    ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:--x" "$state_dir" 2>/dev/null || true
+    ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:--x" "$obs_dir" 2>/dev/null || true
+    ${pkgs.acl}/bin/setfacl -m "u:nixling-host-otel-collector:r-x" "$export_dir" 2>/dev/null || true
+    ${pkgs.acl}/bin/setfacl -d -m "u:nixling-host-otel-collector:r--" "$export_dir" 2>/dev/null || true
   '';
 
   collectorConfig = pkgs.writeText "nixling-host-otel-collector.yaml" (
@@ -52,6 +65,18 @@ let
             }
           ];
         };
+        "filelog/store_sync_audit" = {
+          include = [ storeSyncExportGlob ];
+          start_at = "end";
+          include_file_name = false;
+          include_file_path = false;
+          operators = [
+            {
+              type = "json_parser";
+              parse_from = "body";
+            }
+          ];
+        };
       };
       processors = {
         memory_limiter = {
@@ -65,6 +90,14 @@ let
           { key = "vm.env"; value = "host"; action = "upsert"; }
           { key = "vm.role"; value = "host"; action = "upsert"; }
           { key = "service.name"; value = "nixling-host-otel-collector"; action = "upsert"; }
+        ];
+        "resource/store_sync_audit".attributes = [
+          { key = "host.name"; value = hostName; action = "upsert"; }
+          { key = "vm.name"; value = "host"; action = "upsert"; }
+          { key = "vm.env"; value = "host"; action = "upsert"; }
+          { key = "vm.role"; value = "host"; action = "upsert"; }
+          { key = "service.name"; value = "nixling-store-sync"; action = "upsert"; }
+          { key = "source"; value = "store-sync-audit"; action = "upsert"; }
         ];
         batch = {
           send_batch_size = 4096;
@@ -83,6 +116,11 @@ let
         pipelines.metrics = {
           receivers = [ "hostmetrics" "prometheus" ];
           processors = [ "memory_limiter" "resource" "batch" ];
+          exporters = [ "otlp" ];
+        };
+        pipelines."logs/store_sync_audit" = {
+          receivers = [ "filelog/store_sync_audit" ];
+          processors = [ "memory_limiter" "resource/store_sync_audit" "batch" ];
           exporters = [ "otlp" ];
         };
       };

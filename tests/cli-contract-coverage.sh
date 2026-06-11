@@ -87,6 +87,7 @@ EXPECTED_DISPOSITION = {
     "rollback": "rust-native",
     "generations": "rust-native",
     "gc": "rust-native",
+    "store verify": "rust-native",
     "trust": "rust-native",
     "rotate-known-host": "rust-native",
     "keys list": "rust-native",
@@ -104,6 +105,7 @@ JSON_SCHEMA = {
     "audit": "audit.schema.json",
     "host check": "host-check.schema.json",
     "auth status": "auth-status.schema.json",
+    "store verify": "store-verify.schema.json",
 }
 HELP_GROUPS = {
     "list": ["list"],
@@ -113,6 +115,7 @@ HELP_GROUPS = {
     "usb attach": ["usb attach"],
     "usb detach": ["usb detach"],
     "usb probe": ["usb probe"],
+    "store verify": ["store verify"],
     "audit": ["audit"],
     "host check": ["host check"],
     "auth status": ["auth status"],
@@ -153,6 +156,11 @@ FLAG_INVOCATIONS = {
     "usb probe": {
         "--json": ["usb", "probe", "--json"],
         "--human": ["usb", "probe", "--human"],
+    },
+    "store verify": {
+        "--repair": ["store", "verify", "corp-vm", "--repair", "--json"],
+        "--json": ["store", "verify", "corp-vm", "--json"],
+        "--human": ["store", "verify", "corp-vm", "--human"],
     },
     "audit": {
         "--strict": ["audit", "--strict", "--json"],

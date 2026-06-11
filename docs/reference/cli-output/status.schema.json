@@ -39,6 +39,40 @@
         }
       ]
     },
+    "LivePoolIntegrityOutputV1": {
+      "type": "object",
+      "required": [
+        "repairAttempted",
+        "status"
+      ],
+      "properties": {
+        "auditRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remediation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repairAttempted": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "unknownReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "RunnerParityOutputV2": {
       "type": "object",
       "required": [
@@ -190,6 +224,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "livePoolIntegrity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LivePoolIntegrityOutputV1"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "name": {

@@ -827,6 +827,7 @@ for _d13_gate in \
   release-tag-eval \
   ssh-host-key-preflight-eval \
   state-dir-acl-eval \
+  store-sync-export-eval \
   stop-dag-reconcile-eval \
   supervisor-option-absent-eval \
   tap-dag-contract-doc-eval \

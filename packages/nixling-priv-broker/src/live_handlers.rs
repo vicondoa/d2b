@@ -2307,8 +2307,9 @@ mod tests {
             vm: "alpha".to_owned(),
             generation: 42,
             hardlink_farm_path: root.join("store-view"),
-            target_view_path: root.join("store-view/generations/42/alpha-system"),
+            target_view_path: root.join("store-view/live/alpha-system"),
             closure_paths: vec![source_view],
+            db_dump_path: root.join("db.dump"),
         }
     }
 
@@ -2323,6 +2324,7 @@ mod tests {
                 "/var/lib/nixling/vms/alpha/store-view/generations/99/current-system",
             ),
             closure_paths: Vec::new(),
+            db_dump_path: PathBuf::from("/nix/store/alpha-registration"),
         };
         let marker = hardlink_farm::GenerationMarker {
             closure_hash: "toplevel:old-system".to_owned(),

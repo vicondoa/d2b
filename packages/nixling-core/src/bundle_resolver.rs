@@ -392,6 +392,7 @@ pub struct ResolvedStoreViewIntent {
     pub hardlink_farm_path: PathBuf,
     pub target_view_path: PathBuf,
     pub closure_paths: Vec<PathBuf>,
+    pub db_dump_path: PathBuf,
 }
 
 impl ResolvedStoreViewIntent {
@@ -2384,10 +2385,8 @@ fn build_store_view_intents(
             continue;
         };
         let hardlink_farm_path = PathBuf::from(&vm.state_dir).join("store-view");
-        let target_view_path = hardlink_farm_path
-            .join("generations")
-            .join(generation.to_string())
-            .join(target_name);
+        let live_view_path = hardlink_farm_path.join("live");
+        let target_view_path = live_view_path.join(target_name);
         let mut closure_paths: Vec<PathBuf> =
             closure.closure_paths.iter().map(PathBuf::from).collect();
         let toplevel_path = PathBuf::from(&closure.toplevel);
@@ -2404,6 +2403,7 @@ fn build_store_view_intents(
                 hardlink_farm_path,
                 target_view_path,
                 closure_paths,
+                db_dump_path: PathBuf::from(&closure.db_dump_path),
             },
         );
     }
@@ -2928,6 +2928,7 @@ mod tests {
             vm: "personal-dev".to_owned(),
             toplevel: "/nix/store/personal-dev-system".to_owned(),
             closure_paths: vec!["/nix/store/personal-dev-system".to_owned()],
+            db_dump_path: "/nix/store/personal-dev-registration".to_owned(),
             declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_ok: true,
@@ -3026,9 +3027,10 @@ mod tests {
             generation: 42,
             hardlink_farm_path: PathBuf::from("/var/lib/nixling/vms/corp-vm/store-view"),
             target_view_path: PathBuf::from(
-                "/var/lib/nixling/vms/corp-vm/store-view/generations/42/abc123-nixos-system-corp",
+                "/var/lib/nixling/vms/corp-vm/store-view/live/abc123-nixos-system-corp",
             ),
             closure_paths: Vec::new(),
+            db_dump_path: PathBuf::from("/nix/store/corp-vm-registration"),
         };
         // Identity is the toplevel basename (carries the Nix input hash),
         // so two distinct closures of one VM never share an identity even

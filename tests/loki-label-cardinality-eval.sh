@@ -23,6 +23,7 @@ ALLOWED_RESOURCE_KEYS=(
   host.name
   service.name
   service.namespace
+  source
   vm.env
   vm.name
   vm.role
@@ -107,13 +108,19 @@ else
 fi
 rm -f /tmp/nixling-forbidden-resource-keys.$$
 
-for token in 'action = "upsert"' 'vm.name' 'vm.env' 'vm.role' 'service.name'; do
+for token in 'action = "upsert"' 'vm.name' 'vm.env' 'vm.role' 'service.name' 'source'; do
   if grep -R -q "$token" "${FILES[@]}"; then
     ok "collector config contains $token"
   else
     fail "collector config missing $token"
   fi
 done
+
+if grep -R -q 'target_vm.*key[[:space:]]*=' "${FILES[@]}" || grep -R -q 'target_env.*key[[:space:]]*=' "${FILES[@]}"; then
+  fail "StoreSync target_vm/target_env must stay in JSON content, not resource attributes"
+else
+  ok "StoreSync target_vm/target_env are not promoted to resource attributes"
+fi
 
 log "summary: PASS=$PASS FAIL=$FAIL"
 if (( FAIL > 0 )); then

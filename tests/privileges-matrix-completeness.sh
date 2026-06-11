@@ -83,7 +83,7 @@ def record_cli(parts):
                 op = [vm_alias]
             else:
                 op.append(parts[1])
-        elif parts[0] in {'audio', 'auth', 'debug', 'keys', 'usb'} and not parts[1].startswith('--'):
+        elif parts[0] in {'audio', 'auth', 'debug', 'keys', 'store', 'usb'} and not parts[1].startswith('--'):
             op.append(parts[1])
         elif (parts[0], parts[1]) in {('audit', '--human'), ('audit', '--json'), ('status', '--check-bridges')}:
             op.append(parts[1])

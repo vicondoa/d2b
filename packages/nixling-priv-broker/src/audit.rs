@@ -583,7 +583,7 @@ fn set_root_nixlingd_acl(file: &File, expected_gid: u32, test_mode: bool) -> io:
     Ok(())
 }
 
-fn utc_date_string() -> String {
+pub(crate) fn utc_date_string() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

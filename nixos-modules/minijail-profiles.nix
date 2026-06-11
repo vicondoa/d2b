@@ -244,7 +244,8 @@ let
         seccompPolicyRef = "w1-store-virtiofs-preflight";
         readOnlyPaths = [
           (stateDirOf name)
-          "${stateDirOf name}/store"
+          "${stateDirOf name}/store-view"
+          "${stateDirOf name}/store-view/live"
           "${stateDirOf name}/store-meta"
           "/nix/store"
         ];

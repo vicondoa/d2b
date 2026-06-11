@@ -43,12 +43,12 @@ let
       closure = vmClosureInfo name;
       relativePath = "closures/${name}.json";
       file = pkgs.runCommand "nixling-${name}-closure.json" { nativeBuildInputs = [ pkgs.python3 ]; } ''
-        python - "$out" "${closure}/store-paths" <<'PY'
+        python - "$out" "${closure}/store-paths" "${closure}/registration" <<'PY'
         import hashlib
         import json
         import sys
 
-        out, store_paths = sys.argv[1], sys.argv[2]
+        out, store_paths, db_dump = sys.argv[1], sys.argv[2], sys.argv[3]
         with open(store_paths, encoding="utf-8") as f:
             paths = [line.strip() for line in f if line.strip()]
 
@@ -74,6 +74,7 @@ let
             "vm": "${name}",
             "toplevel": "${top}",
             "closurePaths": paths,
+            "dbDumpPath": db_dump,
             "declaredRunner": "${runner}",
             "runnerParityPath": "${runner}",
             "runnerParityOk": True,
