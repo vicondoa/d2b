@@ -6,9 +6,11 @@
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use socket2::{Domain, SockAddr, Socket, Type};
 
 pub const GUEST_CONTROL_CONNECT_PORT: u16 = 14_318;
 pub const GUEST_CONTROL_CONNECT_LINE: &[u8] = b"CONNECT 14318\n";
@@ -24,6 +26,8 @@ pub enum GuestControlTransportFailure {
     SocketMissing,
     SocketIsSymlink,
     SocketNotUnixSocket,
+    SocketHardLinked,
+    UnsafeDirectory,
     ConnectIo { kind: String },
     WriteIo { kind: String },
     AckIo { kind: String },
@@ -34,13 +38,13 @@ pub enum GuestControlTransportFailure {
 }
 
 pub struct GuestControlConnectedStream {
-    stream: UnixStream,
+    socket: Socket,
     ack_token: String,
 }
 
 impl GuestControlConnectedStream {
-    pub fn into_stream(self) -> UnixStream {
-        self.stream
+    pub fn into_socket(self) -> Socket {
+        self.socket
     }
 
     pub fn ack_token(&self) -> &str {
@@ -51,6 +55,13 @@ impl GuestControlConnectedStream {
 pub enum GuestControlTransportProbeResult {
     Connected(GuestControlConnectedStream),
     Failed(GuestControlTransportFailure),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectoryPolicy {
+    StrictRootOwned,
+    #[cfg(test)]
+    AllowTestTempDirs,
 }
 
 impl GuestControlTransportProbeResult {
@@ -71,6 +82,24 @@ pub fn connect_guest_control_vsock(
         socket_path.as_ref(),
         state_root.as_ref(),
         setup_timeout,
+        DirectoryPolicy::StrictRootOwned,
+    ) {
+        Ok(connected) => GuestControlTransportProbeResult::Connected(connected),
+        Err(failure) => GuestControlTransportProbeResult::Failed(failure),
+    }
+}
+
+#[cfg(test)]
+fn connect_guest_control_vsock_for_tests(
+    socket_path: impl AsRef<Path>,
+    state_root: impl AsRef<Path>,
+    setup_timeout: Duration,
+) -> GuestControlTransportProbeResult {
+    match connect_guest_control_vsock_inner(
+        socket_path.as_ref(),
+        state_root.as_ref(),
+        setup_timeout,
+        DirectoryPolicy::AllowTestTempDirs,
     ) {
         Ok(connected) => GuestControlTransportProbeResult::Connected(connected),
         Err(failure) => GuestControlTransportProbeResult::Failed(failure),
@@ -81,42 +110,55 @@ fn connect_guest_control_vsock_inner(
     socket_path: &Path,
     state_root: &Path,
     setup_timeout: Duration,
+    directory_policy: DirectoryPolicy,
 ) -> Result<GuestControlConnectedStream, GuestControlTransportFailure> {
-    validate_socket_path(socket_path, state_root)?;
+    validate_socket_path(socket_path, state_root, directory_policy)?;
 
-    let mut stream = UnixStream::connect(socket_path).map_err(|error| {
-        GuestControlTransportFailure::ConnectIo {
+    let deadline = Instant::now() + setup_timeout;
+    let mut socket = connect_unix_socket_with_timeout(socket_path, remaining_setup_time(deadline)?)
+        .map_err(|error| GuestControlTransportFailure::ConnectIo {
             kind: error.kind().to_string(),
-        }
-    })?;
-    stream
-        .set_read_timeout(Some(setup_timeout))
+        })?;
+    let remaining = remaining_setup_time(deadline)?;
+    socket
+        .set_read_timeout(Some(remaining))
         .map_err(io_failure(|kind| GuestControlTransportFailure::AckIo {
             kind,
         }))?;
-    stream
-        .set_write_timeout(Some(setup_timeout))
+    socket
+        .set_write_timeout(Some(remaining))
         .map_err(io_failure(|kind| GuestControlTransportFailure::WriteIo {
             kind,
         }))?;
-    stream
+    socket
         .write_all(GUEST_CONTROL_CONNECT_LINE)
         .map_err(io_failure(|kind| GuestControlTransportFailure::WriteIo {
             kind,
         }))?;
-    let ack_token = read_ack_token(&mut stream)?;
-    stream.set_read_timeout(None).map_err(io_failure(|kind| {
+    let ack_token = read_ack_token(&mut socket, deadline)?;
+    socket.set_read_timeout(None).map_err(io_failure(|kind| {
         GuestControlTransportFailure::AckIo { kind }
     }))?;
-    stream.set_write_timeout(None).map_err(io_failure(|kind| {
+    socket.set_write_timeout(None).map_err(io_failure(|kind| {
         GuestControlTransportFailure::WriteIo { kind }
     }))?;
-    Ok(GuestControlConnectedStream { stream, ack_token })
+    Ok(GuestControlConnectedStream { socket, ack_token })
+}
+
+fn connect_unix_socket_with_timeout(
+    socket_path: &Path,
+    timeout: Duration,
+) -> std::io::Result<Socket> {
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    let addr = SockAddr::unix(socket_path)?;
+    socket.connect_timeout(&addr, timeout)?;
+    Ok(socket)
 }
 
 fn validate_socket_path(
     socket_path: &Path,
     state_root: &Path,
+    directory_policy: DirectoryPolicy,
 ) -> Result<(), GuestControlTransportFailure> {
     if !socket_path.is_absolute() {
         return Err(GuestControlTransportFailure::SocketPathNotAbsolute);
@@ -130,6 +172,7 @@ fn validate_socket_path(
 
     let canonical_root =
         fs::canonicalize(state_root).map_err(|_| GuestControlTransportFailure::StateRootInvalid)?;
+    validate_directory_chain(&canonical_root, &canonical_root, directory_policy)?;
     let parent = socket_path
         .parent()
         .ok_or(GuestControlTransportFailure::SocketOutsideStateRoot)?;
@@ -138,6 +181,7 @@ fn validate_socket_path(
     if !canonical_parent.starts_with(&canonical_root) {
         return Err(GuestControlTransportFailure::SocketOutsideStateRoot);
     }
+    validate_directory_chain(&canonical_root, &canonical_parent, directory_policy)?;
 
     let metadata = fs::symlink_metadata(socket_path)
         .map_err(|_| GuestControlTransportFailure::SocketMissing)?;
@@ -148,6 +192,49 @@ fn validate_socket_path(
     if !file_type.is_socket() {
         return Err(GuestControlTransportFailure::SocketNotUnixSocket);
     }
+    if metadata.nlink() != 1 {
+        return Err(GuestControlTransportFailure::SocketHardLinked);
+    }
+    Ok(())
+}
+
+fn validate_directory_chain(
+    root: &Path,
+    leaf: &Path,
+    directory_policy: DirectoryPolicy,
+) -> Result<(), GuestControlTransportFailure> {
+    if !leaf.starts_with(root) {
+        return Err(GuestControlTransportFailure::SocketOutsideStateRoot);
+    }
+    let mut current = root.to_path_buf();
+    validate_directory_metadata(&current, directory_policy)?;
+    let relative = leaf
+        .strip_prefix(root)
+        .map_err(|_| GuestControlTransportFailure::SocketOutsideStateRoot)?;
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(GuestControlTransportFailure::SocketPathTraversal);
+        };
+        current.push(name);
+        validate_directory_metadata(&current, directory_policy)?;
+    }
+    Ok(())
+}
+
+fn validate_directory_metadata(
+    path: &Path,
+    directory_policy: DirectoryPolicy,
+) -> Result<(), GuestControlTransportFailure> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| GuestControlTransportFailure::StateRootInvalid)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(GuestControlTransportFailure::UnsafeDirectory);
+    }
+    if directory_policy == DirectoryPolicy::StrictRootOwned
+        && (metadata.uid() != 0 || (metadata.mode() & 0o022) != 0)
+    {
+        return Err(GuestControlTransportFailure::UnsafeDirectory);
+    }
     Ok(())
 }
 
@@ -156,10 +243,18 @@ fn has_parent_dir(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
-fn read_ack_token(stream: &mut UnixStream) -> Result<String, GuestControlTransportFailure> {
+fn read_ack_token(
+    stream: &mut Socket,
+    deadline: Instant,
+) -> Result<String, GuestControlTransportFailure> {
     let mut ack = Vec::with_capacity(MAX_ACK_BYTES);
     let mut byte = [0_u8; 1];
     loop {
+        stream
+            .set_read_timeout(Some(remaining_setup_time(deadline)?))
+            .map_err(io_failure(|kind| GuestControlTransportFailure::AckIo {
+                kind,
+            }))?;
         match stream.read(&mut byte) {
             Ok(0) => return Err(GuestControlTransportFailure::AckEof),
             Ok(_) => {
@@ -194,6 +289,13 @@ fn read_ack_token(stream: &mut UnixStream) -> Result<String, GuestControlTranspo
     Ok(token.to_owned())
 }
 
+fn remaining_setup_time(deadline: Instant) -> Result<Duration, GuestControlTransportFailure> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(GuestControlTransportFailure::AckTimeout)
+}
+
 fn io_failure<F>(constructor: F) -> impl FnOnce(std::io::Error) -> GuestControlTransportFailure
 where
     F: FnOnce(String) -> GuestControlTransportFailure,
@@ -207,7 +309,7 @@ mod tests {
     use std::fs::{self, File};
     use std::io::{Read, Write};
     use std::os::unix::fs::symlink;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::thread;
     use std::time::Duration;
@@ -222,7 +324,7 @@ mod tests {
     }
 
     fn connect(path: &Path, root: &Path) -> GuestControlTransportProbeResult {
-        connect_guest_control_vsock(path, root, Duration::from_millis(100))
+        connect_guest_control_vsock_for_tests(path, root, Duration::from_millis(100))
     }
 
     fn fake_ch<F>(path: &Path, responder: F) -> thread::JoinHandle<Vec<u8>>
@@ -314,6 +416,19 @@ mod tests {
         assert_eq!(
             connect(&socket, root.path()).failure(),
             Some(&GuestControlTransportFailure::SocketNotUnixSocket)
+        );
+    }
+
+    #[test]
+    fn rejects_hard_linked_socket_path() {
+        let root = state_root();
+        let socket = socket_path(&root);
+        let linked = root.path().join("linked.sock");
+        let _listener = UnixListener::bind(&socket).expect("bind socket");
+        fs::hard_link(&socket, &linked).expect("hard-link socket");
+        assert_eq!(
+            connect(&linked, root.path()).failure(),
+            Some(&GuestControlTransportFailure::SocketHardLinked)
         );
     }
 
@@ -411,6 +526,26 @@ mod tests {
         });
         assert_eq!(
             connect(&socket, root.path()).failure(),
+            Some(&GuestControlTransportFailure::AckTimeout)
+        );
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn slow_drip_ack_respects_single_setup_deadline() {
+        let root = state_root();
+        let socket = socket_path(&root);
+        let handle = fake_ch(&socket, |stream| {
+            let _ = stream.write_all(b"O");
+            thread::sleep(Duration::from_millis(75));
+            let _ = stream.write_all(b"K");
+            thread::sleep(Duration::from_millis(75));
+            let _ = stream.write_all(b" 1\n");
+        });
+        let result =
+            connect_guest_control_vsock_for_tests(&socket, root.path(), Duration::from_millis(100));
+        assert_eq!(
+            result.failure(),
             Some(&GuestControlTransportFailure::AckTimeout)
         );
         let _ = handle.join();
