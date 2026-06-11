@@ -66,55 +66,80 @@ let
     ];
   };
   cliPkg = lib.findFirst
-    (p: ((p.pname or "") == "nixling") || lib.hasPrefix "nixling" (p.name or ""))
+    (p: builtins.pathExists "\${p}/bin/nixling")
     (throw "nixling package not found in systemPackages")
     nixos.config.environment.systemPackages;
+  closureLinks = lib.concatStringsSep "\n" (lib.mapAttrsToList (_: closure: ''
+    mkdir -p "\$out/\${dirOf closure.relativePath}"
+    ln -s \${closure.path} "\$out/\${closure.relativePath}"
+  '') nixos.config.nixling._bundle.closures);
 in
-  cliPkg
+  nixos.pkgs.runCommand "nixling-cli-json-fixture" { } ''
+    mkdir -p "\$out/bin"
+    ln -s \${cliPkg}/bin/nixling "\$out/bin/nixling"
+    ln -s \${nixos.config.nixling._manifestJsonPath} "\$out/vms.json"
+    ln -s \${nixos.config.nixling._bundle.bundle.path} "\$out/bundle.json"
+    ln -s \${nixos.config.nixling._bundle.hostJson.path} "\$out/host.json"
+    ln -s \${nixos.config.nixling._bundle.processesJson.path} "\$out/processes.json"
+    \${closureLinks}
+  ''
 EOF
 
-CLI_OUT=$(nix-build --no-out-link "$SCRATCH/cli-json-test.nix")
-CLI="$CLI_OUT/bin/nixling"
+FIXTURE_OUT=$(nix-build --no-out-link "$SCRATCH/cli-json-test.nix")
+CLI="$FIXTURE_OUT/bin/nixling"
 [ -x "$CLI" ] || fail "built CLI missing at $CLI"
 ok "built synthetic nixling CLI"
 
-mkdir -p "$SCRATCH/state/corp-vm" "$SCRATCH/fakebin"
+MANIFEST_PATH="$FIXTURE_OUT/vms.json"
+BUNDLE_PATH="$FIXTURE_OUT/bundle.json"
+STATE_ROOT="$SCRATCH/state"
+DAEMON_STATE_DIR="$SCRATCH/daemon-state"
+HOST_RUNTIME_PATH="$SCRATCH/missing-host-runtime.json"
+PUBLIC_SOCKET="$SCRATCH/missing-public.sock"
+BROKER_SOCKET="$SCRATCH/missing-priv.sock"
+SYSTEM_STATE_STOPPED="$SCRATCH/system-state-stopped.json"
+SYSTEM_STATE_ACTIVE="$SCRATCH/system-state-active.json"
+mkdir -p "$STATE_ROOT/corp-vm" "$DAEMON_STATE_DIR"
+cat > "$SYSTEM_STATE_STOPPED" <<'EOF'
+{"units":{"nixlingd.service":"inactive"},"bridges":{}}
+EOF
+cat > "$SYSTEM_STATE_ACTIVE" <<'EOF'
+{"units":{"nixlingd.service":"active"},"bridges":{}}
+EOF
+
+cli_env_stopped=(
+  NIXLING_MANIFEST_PATH="$MANIFEST_PATH"
+  NIXLING_BUNDLE_PATH="$BUNDLE_PATH"
+  NIXLING_STATE_ROOT="$STATE_ROOT"
+  NIXLING_DAEMON_STATE_DIR="$DAEMON_STATE_DIR"
+  NIXLING_HOST_RUNTIME_PATH="$HOST_RUNTIME_PATH"
+  NIXLING_PUBLIC_SOCKET="$PUBLIC_SOCKET"
+  NIXLING_BROKER_SOCKET="$BROKER_SOCKET"
+  NIXLING_TEST_SYSTEM_STATE_JSON="$SYSTEM_STATE_STOPPED"
+  HOME="$SCRATCH/home"
+  XDG_RUNTIME_DIR="$SCRATCH/runtime"
+)
+cli_env_active=(
+  NIXLING_MANIFEST_PATH="$MANIFEST_PATH"
+  NIXLING_BUNDLE_PATH="$BUNDLE_PATH"
+  NIXLING_STATE_ROOT="$STATE_ROOT"
+  NIXLING_DAEMON_STATE_DIR="$DAEMON_STATE_DIR"
+  NIXLING_HOST_RUNTIME_PATH="$HOST_RUNTIME_PATH"
+  NIXLING_PUBLIC_SOCKET="$PUBLIC_SOCKET"
+  NIXLING_BROKER_SOCKET="$BROKER_SOCKET"
+  NIXLING_TEST_SYSTEM_STATE_JSON="$SYSTEM_STATE_ACTIVE"
+  HOME="$SCRATCH/home"
+  XDG_RUNTIME_DIR="$SCRATCH/runtime"
+)
+
 ln -sfT /nix/store/nixling-current "$SCRATCH/state/corp-vm/current"
 ln -sfT /nix/store/nixling-booted "$SCRATCH/state/corp-vm/booted"
-cat > "$SCRATCH/fakebin/systemctl" <<'EOF'
-#!/usr/bin/env bash
-set -eu
-if [ "${1:-}" = "--no-pager" ]; then shift; fi
-[ "${1:-}" = "is-active" ] || exit 1
-shift
-quiet=false
-if [ "${1:-}" = "--quiet" ]; then
-  quiet=true
-  shift
-fi
-unit="${1:-}"
-case "$unit" in
-  nixling@corp-vm.service|microvm@corp-vm.service)
-    if [ "$quiet" = true ]; then exit 0; fi
-    printf 'active\n'
-    ;;
-  *)
-    if [ "$quiet" = true ]; then exit 3; fi
-    printf 'inactive\n'
-    ;;
-esac
-EOF
-chmod +x "$SCRATCH/fakebin/systemctl"
-cp "$CLI" "$SCRATCH/nixling-pending"
-sed -i "s|systemctl|$SCRATCH/fakebin/systemctl|g" "$SCRATCH/nixling-pending"
-sed -i "s|^[[:space:]]*STATE_ROOT=.*|      STATE_ROOT=$SCRATCH/state|" "$SCRATCH/nixling-pending"
 
-HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
-  "$CLI" list --json > "$SCRATCH/list.json"
+env "${cli_env_stopped[@]}" "$CLI" list --json > "$SCRATCH/list.json"
 if jq -e '
     type == "array"
     and all(.[];
-      ((keys | sort) == ["env","graphics","isNetVm","name","staticIp","status","tpm","usbip"])
+      ((keys | sort) == ["env","graphics","isNetVm","name","runnerParityOk","staticIp","status","tpm","usbip"])
       and (.name | type == "string")
       and ((.env == null) or (.env | type == "string"))
       and (.graphics | type == "boolean")
@@ -123,6 +148,7 @@ if jq -e '
       and ((.staticIp == null) or (.staticIp | type == "string"))
       and (.status | type == "string")
       and (.isNetVm | type == "boolean")
+      and (.runnerParityOk | type == "boolean")
     )
     and any(.[]; .name == "corp-vm" and .env == "work" and .isNetVm == false and .status == "stopped")
     and any(.[]; .name == "sys-work-net" and .isNetVm == true)
@@ -132,111 +158,105 @@ else
   fail "list --json output did not match the expected shape"
 fi
 
-HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
-  "$CLI" status corp-vm --json > "$SCRATCH/status.json"
+env "${cli_env_stopped[@]}" "$CLI" status corp-vm --json > "$SCRATCH/status.json"
 if jq -e '
-    (keys | sort) == ["booted","current","name","pendingRestart","services"]
+    (keys | sort) == ["booted","current","declaredRoles","env","name","pendingRestart","readiness","runnerParity","runtime","services"]
     and .name == "corp-vm"
-    and ((.current == null) or (.current | type == "string"))
-    and ((.booted == null) or (.booted | type == "string"))
+    and .env == "work"
+    and .current == "/nix/store/nixling-current"
+    and .booted == "/nix/store/nixling-booted"
     and (.pendingRestart | type == "boolean")
-    and ((.services | keys | sort) == ["gpu","microvm","nixling","snd","swtpm","virtiofsd"])
+    and .runtime == "unknown"
+    and (.declaredRoles == [])
+    and (.readiness == [])
+    and ((.services | keys | sort) == ["gpu","microvm","nixling","snd","swtpm","video","virtiofsd"])
     and (.services.nixling | type == "string")
     and (.services.microvm | type == "string")
     and (.services.virtiofsd | type == "string")
     and (.services.gpu == null)
+    and (.services.video == null)
     and (.services.snd == null)
     and (.services.swtpm == null)
     and (.pendingRestart == false)
+    and ((.runnerParity | keys | sort) == ["declaredRunner","runnerParityOk","runnerParityPath"])
+    and (.runnerParity.runnerParityOk == true)
   ' "$SCRATCH/status.json" >/dev/null 2>&1; then
   ok "status <vm> --json returns the documented stopped per-VM object"
 else
   fail "status <vm> --json output did not match the expected stopped shape"
 fi
 
-PATH="$SCRATCH/fakebin:$PATH" HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
-  "$SCRATCH/nixling-pending" list --json > "$SCRATCH/list-pending.json"
+cat > "$DAEMON_STATE_DIR/pidfd-table.json" <<'EOF'
+{"entries":[{"vm":"corp-vm","role":"ch-runner","pid":12345}]}
+EOF
+
+env "${cli_env_active[@]}" "$CLI" list --json > "$SCRATCH/list-pending.json"
 if jq -e 'any(.[]; .name == "corp-vm" and .status == "pending-restart")' "$SCRATCH/list-pending.json" >/dev/null 2>&1; then
   ok "list --json reports pending-restart when booted != current and the VM is active"
 else
   fail "list --json did not surface the pending-restart status"
 fi
 
-PATH="$SCRATCH/fakebin:$PATH" HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
-  "$SCRATCH/nixling-pending" status corp-vm --json > "$SCRATCH/status-pending.json"
+env "${cli_env_active[@]}" "$CLI" status corp-vm --json > "$SCRATCH/status-pending.json"
 if jq -e '
     .name == "corp-vm"
     and .pendingRestart == true
     and .current == "/nix/store/nixling-current"
     and .booted == "/nix/store/nixling-booted"
     and .services.nixling == "active"
-    and .services.microvm == "active"
+    and .services.microvm == "running"
+    and .runtime == "unknown"
+    and .runnerParity.runnerParityOk == true
   ' "$SCRATCH/status-pending.json" >/dev/null 2>&1; then
   ok "status <vm> --json reports running pending-restart state consistently"
 else
   fail "status <vm> --json did not preserve pending-restart/current/booted consistency"
 fi
 
-HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
-  "$CLI" keys list --json > "$SCRATCH/keys.json"
-if jq -e '
-    type == "array"
-    and all(.[];
-      ((keys | sort) == ["fingerprint","mtime","publicKey","status","vm"])
-      and (.vm | type == "string")
-      and (.fingerprint | type == "string")
-      and (.publicKey | type == "string")
-      and (.mtime | type == "string")
-      and (.status | type == "string")
-    )
-    and any(.[]; .vm == "corp-vm" and .status == "present" and (.fingerprint | startswith("SHA256:")) and (.publicKey | endswith("corp-vm_ed25519.pub")))
-    and any(.[]; .vm == "sys-work-net" and .status == "missing")
+set +e
+env "${cli_env_stopped[@]}" "$CLI" keys list --json > "$SCRATCH/keys.json" 2> "$SCRATCH/keys.stderr"
+keys_exit=$?
+set -e
+if [ "$keys_exit" -eq 1 ] \
+  && [ ! -s "$SCRATCH/keys.stderr" ] \
+  && jq -e '
+    ((keys | sort) == ["code","docsAnchor","exitCode","kind","observedState","remediation","whatWasChecked"])
+    and .kind == "nixling keys list requires nixlingd"
+    and .code == "daemon-down"
+    and .exitCode == 1
+    and (.whatWasChecked | contains("Daemon connectivity"))
+    and (.observedState | contains("nixlingd is unreachable"))
+    and (.remediation | contains("Start nixlingd"))
+    and .docsAnchor == "docs/reference/error-codes.md#daemon-down"
   ' "$SCRATCH/keys.json" >/dev/null 2>&1; then
-  ok "keys list --json returns structured key inventory"
+  ok "keys list --json returns the structured daemon-down envelope without nixlingd"
 else
-  fail "keys list --json output did not match the expected shape"
+  fail "keys list --json daemon-down envelope did not match the expected shape"
 fi
 
 command -v script >/dev/null 2>&1 || fail "util-linux 'script' is required for the audit TTY check"
-HOME="$SCRATCH/home" XDG_RUNTIME_DIR="$SCRATCH/runtime" \
+set +e
+env "${cli_env_stopped[@]}" \
   NIXLING_AUDIT_TESTMODE_KVM_MODE=660 \
   script -q -e -c "$CLI audit --json" /dev/null > "$SCRATCH/audit.raw" 2> "$SCRATCH/audit.stderr"
+audit_exit=$?
+set -e
 tr -d '\r' < "$SCRATCH/audit.raw" > "$SCRATCH/audit.json"
-if jq -e '
-    (keys | sort) == [
-      "autoUpgrade_commits_lock",
-      "bridge_isolation",
-      "ch_crosvm_pair_ok",
-      "ch_version",
-      "crosvm_rev",
-      "fail2ban_active",
-      "kvm_dev_mode",
-      "seccomp_rev",
-      "sidecars_per_vm",
-      "ssh",
-      "store_delivery",
-      "usbipd_per_env_isolation",
-      "virtiofsd",
-      "wayland_user_in_kvm"
-    ]
-    and (.kvm_dev_mode | type == "string")
-    and (.wayland_user_in_kvm | type == "boolean")
-    and (.store_delivery | type == "object")
-    and (.virtiofsd | type == "object")
-    and (.ssh | type == "object")
-    and (.bridge_isolation | type == "object")
-    and (.autoUpgrade_commits_lock | type == "boolean")
-    and (.ch_version | type == "string")
-    and (.crosvm_rev | type == "string")
-    and (.seccomp_rev | type == "string")
-    and (.ch_crosvm_pair_ok | type == "boolean")
-    and (.fail2ban_active | type == "boolean")
-    and (.sidecars_per_vm | type == "object")
-    and (.usbipd_per_env_isolation | type == "object")
+if [ "$audit_exit" -eq 1 ] \
+  && [ ! -s "$SCRATCH/audit.stderr" ] \
+  && jq -e '
+    ((keys | sort) == ["code","docsAnchor","exitCode","kind","observedState","remediation","whatWasChecked"])
+    and .kind == "nixling audit requires nixlingd"
+    and .code == "daemon-down"
+    and .exitCode == 1
+    and (.whatWasChecked | contains("Daemon connectivity"))
+    and (.observedState | contains("nixlingd is unreachable"))
+    and (.remediation | contains("Start nixlingd"))
+    and .docsAnchor == "docs/reference/error-codes.md#daemon-down"
   ' "$SCRATCH/audit.json" >/dev/null 2>&1; then
-  ok "audit --json stays JSON on a TTY and preserves the documented schema"
+  ok "audit --json stays JSON on a TTY and returns the structured daemon-down envelope"
 else
-  fail "audit --json emitted non-JSON output or regressed its schema on a TTY"
+  fail "audit --json did not preserve the daemon-down JSON envelope on a TTY"
 fi
 
 log "==> cli-json OK"

@@ -278,9 +278,9 @@
           description = ''
             Maximum advertised Wayland protocol versions for specific globals.
             Each entry maps an interface name to a version cap and is passed
-            as `--max-version INTERFACE=VERSION` to the filter proxy. The
-            filter proxy emits runtime advisory diagnostics when a cap is set
-            below the nixling-required minimum for a given interface.
+            as `--max-version INTERFACE=VERSION` to the filter proxy. This is
+            a compatibility override; unlike allow/deny global overrides, it
+            does not currently emit a runtime policy warning.
           '';
         };
 
