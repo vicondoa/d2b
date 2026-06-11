@@ -29,6 +29,9 @@ The bundled backend is native SigNoz:
   and metadata to ClickHouse.
 
 No Docker, Podman, Kubernetes, Helm, or compose deployment is emitted.
+The collector runs from nixling's static generated config; SigNoz OpAMP
+manager mode is intentionally not enabled so it cannot rewrite the
+source-specific receivers.
 
 ## Data path
 
@@ -144,6 +147,7 @@ other broker state. Static gates:
 | Workload observability CID | `100 + envIndex * 100 + vm.index` |
 | Host obs ingress vsock port | `14317` |
 | Workload obs ingress vsock ports | `14318+`, one per observed VM |
+| Workload collector loopback gRPC receivers | `14318+`, matching the workload vsock port to avoid SigNoz internal control-plane ports |
 | Host collector egress | `/run/nixling/otel/host-egress.sock` |
 | Guest local OTLP | `/run/nixling/otel/otlp.sock` with compatibility symlink `/run/nixling/otlp.sock` |
 | Guest relay handoff | `/run/nixling/otel/otlp-egress.sock` |

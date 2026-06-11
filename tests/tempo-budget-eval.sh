@@ -124,10 +124,10 @@ else
   fail "ClickHouse default user must not be left without an auth method"
 fi
 
-if grep -q 'conf/manager.yaml' "$STACK" && ! grep -q 'conf/opamp.yaml' "$STACK"; then
-  ok "SigNoz OTel collector uses the packaged manager config"
+if ! grep -q -- '--manager-config' "$STACK" && ! grep -q 'conf/opamp.yaml' "$STACK"; then
+  ok "SigNoz OTel collector runs the static nixling config without OpAMP manager mode"
 else
-  fail "SigNoz OTel collector manager config path must match the package"
+  fail "SigNoz OTel collector must not enable OpAMP manager mode for static nixling receivers"
 fi
 
 if grep -q 'chmod 0444 "$file"' "$ROOT/nixos-modules/observability-host-secrets.nix" \

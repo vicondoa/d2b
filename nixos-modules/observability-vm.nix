@@ -24,7 +24,7 @@ let
           envName = if vm.env == null then "none" else vm.env;
           role = "workload";
           vsockPort = hostVsockPort + 1 + i;
-          receiverGrpcPort = hostGrpcPort + 2 + i;
+          receiverGrpcPort = hostVsockPort + 1 + i;
           receiverHttpPort = null;
         };
       })

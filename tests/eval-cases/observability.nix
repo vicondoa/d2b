@@ -313,7 +313,7 @@ in
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
           services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
         corpVsockInExecStartHasShape = hasInfix
-          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
           services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
         signozBindAddress = obsGuest.nixling.observability.signoz.listenAddress;
       };
@@ -337,7 +337,7 @@ in
       };
       corpIngress = {
         envName = "work";
-        receiverGrpcPort = 4319;
+        receiverGrpcPort = 14318;
         receiverHttpPort = null;
         role = "workload";
         vmName = "corp-vm";
