@@ -236,7 +236,7 @@ pub enum GuestVsockDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuestIdentityBinding {
-    VmIdCidSocketAndTokenTranscript,
+    VmIdCidPortAndTokenTranscript,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -34,6 +34,8 @@ const HARD_MAX_EXEC_SESSIONS_PER_VM: u32 = 256;
 const HARD_MAX_ATTACHED_SESSIONS_PER_VM: u32 = 64;
 const HARD_MAX_PENDING_READ_OUTPUT_WAITS_PER_STREAM: u32 = 512;
 const HARD_MAX_PENDING_EXEC_WAITS_PER_VM: u32 = 512;
+const HARD_MAX_RPC_RATE_PER_CONNECTION_PER_SECOND: u32 = 200;
+const HARD_MAX_RPC_RATE_PER_VM_BURST: u32 = 1_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -551,6 +553,8 @@ fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), 
         || limits.pending_read_output_waits_per_stream
             > HARD_MAX_PENDING_READ_OUTPUT_WAITS_PER_STREAM
         || limits.pending_exec_waits_per_vm > HARD_MAX_PENDING_EXEC_WAITS_PER_VM
+        || limits.rpc_rate_per_connection_per_second > HARD_MAX_RPC_RATE_PER_CONNECTION_PER_SECOND
+        || limits.rpc_rate_per_vm_burst > HARD_MAX_RPC_RATE_PER_VM_BURST
     {
         return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
     }
@@ -978,6 +982,28 @@ mod tests {
             .as_mut()
             .unwrap()
             .max_recv_message_bytes = TTRPC_FRAME_CAP_BYTES + 1;
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidCapabilitiesSnapshot)
+        );
+
+        let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+        provider
+            .snapshot
+            .capabilities
+            .limits
+            .as_mut()
+            .unwrap()
+            .rpc_rate_per_vm_burst = HARD_MAX_RPC_RATE_PER_VM_BURST + 1;
         let mut core = GuestAuthCore::new(
             SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
             FixedNonceRng(GUEST_NONCE),

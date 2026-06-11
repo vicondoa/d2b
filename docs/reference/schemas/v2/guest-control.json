@@ -1146,7 +1146,7 @@
     "GuestIdentityBinding": {
       "type": "string",
       "enum": [
-        "vm-id-cid-socket-and-token-transcript"
+        "vm-id-cid-port-and-token-transcript"
       ]
     },
     "GuestNonce": {
