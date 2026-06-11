@@ -1624,6 +1624,7 @@ pub fn read_generation_token(store_root: &Path, generation_id: &str) -> Option<u
 ///   * the host state marker exists, parses, and names the same closure;
 ///   * the live readiness marker exists; and
 ///   * every top-level closure basename is already present in `live/`.
+///
 /// Any missing/mismatched component yields false (rebuild + republish),
 /// never a success-shaped shortcut.
 pub fn split_fast_path_ready(
