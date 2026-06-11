@@ -480,7 +480,7 @@ impl DmabufFeedbackHandler {
 
     fn send_filtered_format_table(&mut self, slf: &Rc<ZwpLinuxDmabufFeedbackV1>, table: Vec<u8>) {
         let (filtered, index_map) = filter_format_table(&table, &self.filters);
-        if table.len() % 16 != 0 {
+        if !table.len().is_multiple_of(16) {
             log::warn!(
                 "dmabuf feedback format table has trailing {} bytes; dropping incomplete entry",
                 table.len() % 16
