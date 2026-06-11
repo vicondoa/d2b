@@ -30,15 +30,27 @@ runners. The GPU sidecar runs as the dedicated per-VM
 | `nixling.vms.<vm>.graphics.crossDomainTrusted` | bool | `false` | Allow the `cross-domain` context type in the crosvm GPU sidecar. Set true only for VMs whose primary purpose is Wayland forwarding (e.g. a FreeRDP launchpad). Must be false for VMs running Docker — a privileged-container escape could attack the host compositor via cross-domain. |
 | `nixling.vms.<vm>.graphics.waylandFilter.enable` | bool | `true` | When cross-domain forwarding is trusted, insert the host-jailed `nixling-wayland-filter` between crosvm and the real host compositor. Disable only to use the legacy direct compositor socket path. |
 | `nixling.vms.<vm>.graphics.waylandFilter.debugLogging` | bool | `false` | Enable verbose `wl-proxy` protocol tracing for this VM's host-side filter runner. The trace goes to the runner stderr stream and can include app metadata such as titles, app IDs, registry names, object IDs, and fd numbers; use only for short-lived debugging. |
+| `nixling.vms.<vm>.graphics.waylandFilter.byteLogging` | bool | `false` | Enable raw `wl-proxy` recv/send hexdump diagnostics for this VM's host-side filter runner. Logs bounded byte prefixes and fd counts; use only for short-lived corruption debugging. |
+| `nixling.vms.<vm>.graphics.waylandFilter.rawRelay` | bool | `false` | Diagnostic mode that bypasses the `wl-proxy` object/filter layer and relays raw Wayland bytes/fds. Disables filtering and app-id/title rewriting; use only for short-lived byte compatibility tests. |
 | `nixling.vms.<vm>.graphics.waylandFilter.denyGlobals` | list of str | `[]` | Additional Wayland globals to hide from the guest. |
 | `nixling.vms.<vm>.graphics.waylandFilter.allowGlobals` | list of str | `[]` | Globals to allow even if denied by the secure defaults. The proxy emits runtime advisory diagnostics for boundary-narrowing overrides. |
 | `nixling.vms.<vm>.graphics.waylandFilter.maxVersions` | attrs of positive int | `{}` | Per-interface advertised version caps passed as `--max-version INTERFACE=VERSION`. |
+| `nixling.vms.<vm>.graphics.waylandFilter.dmabufAllow` | list of str | `[]` | dmabuf format/modifier filters to allow unconditionally, in `FORMAT[:MODIFIER]` form. Allow rules override deny rules. |
+| `nixling.vms.<vm>.graphics.waylandFilter.dmabufDeny` | list of str | `[]` | dmabuf format/modifier filters to hide from legacy modifier events and v4/v5 feedback tranches unless explicitly allowed. |
 | `nixling.vms.<vm>.graphics.virglVideo` | bool | `false` | Experimental Firefox/VA-API path: enables `VIRGL_RENDERER_USE_VIDEO` through crosvm/rutabaga. Default off because prior testing deadlocked the GPU command loop when video caps were advertised. |
 
-The filter's built-in policy caps `zwp_linux_dmabuf_v1` to version 3 by
-default. Version 3 keeps dmabuf `wl_buffer` creation available while avoiding
-the v4/v5 feedback/modifier path, which must not be advertised through the
-host-side proxy until it has a dedicated compatibility gate.
+The filter's built-in policy exposes the compositor's
+`zwp_linux_dmabuf_v1` version by default so Mesa can use dmabuf feedback
+for accelerated Wayland EGL. Use `waylandFilter.maxVersions` only as a
+short-lived diagnostic override when isolating driver/proxy regressions.
+Use `waylandFilter.dmabufDeny` / `dmabufAllow` when the protocol version is
+correct but a specific format/modifier pair is not safe for the host driver.
+For example, NVIDIA hosts affected by linear DMA-BUF pitch import issues can
+keep dmabuf feedback v4/v5 visible while hiding linear modifiers:
+
+```nix
+nixling.vms.work.graphics.waylandFilter.dmabufDeny = [ "all:linear" ];
+```
 
 Site-level dependency:
 

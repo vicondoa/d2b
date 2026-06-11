@@ -232,6 +232,32 @@
           '';
         };
 
+        graphics.waylandFilter.byteLogging = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Enable raw Wayland transport hexdump logging for this VM's
+            host-side Wayland filter runner. This sets `WL_PROXY_HEXDUMP=1`
+            and logs bounded recv/send byte prefixes plus fd counts for
+            short-lived debugging of protocol corruption.
+
+            Output may contain application metadata and protocol payload
+            bytes. Do not leave enabled during normal operation.
+          '';
+        };
+
+        graphics.waylandFilter.rawRelay = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Diagnostic mode: bypass the wl-proxy object/filter layer and
+            relay raw Wayland bytes plus SCM_RIGHTS file descriptors between
+            crosvm and the host compositor. This disables global filtering and
+            app-id/title rewriting, so use it only for short-lived byte
+            compatibility tests.
+          '';
+        };
+
         graphics.waylandFilter.denyGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];
@@ -267,6 +293,34 @@
             as `--max-version INTERFACE=VERSION` to the filter proxy. The
             filter proxy emits runtime advisory diagnostics when a cap is set
             below the nixling-required minimum for a given interface.
+          '';
+        };
+
+        graphics.waylandFilter.dmabufAllow = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "XR24:linear" "AR24:0x0100000000000001" ];
+          description = ''
+            dmabuf format/modifier filters to allow unconditionally, in
+            `FORMAT[:MODIFIER]` form. `FORMAT` may be `all`, a fourcc such as
+            `XR24`, a hexadecimal value, or a decimal value. `MODIFIER` may be
+            `linear`, `invalid`, a hexadecimal value, or a decimal value.
+
+            These rules are applied by the host Wayland filter to legacy
+            `zwp_linux_dmabuf_v1.modifier` events and v4/v5 feedback tranche
+            format tables. Allow rules override deny rules.
+          '';
+        };
+
+        graphics.waylandFilter.dmabufDeny = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [ ];
+          example = [ "all:linear" ];
+          description = ''
+            dmabuf format/modifier filters to deny unless explicitly allowed,
+            in `FORMAT[:MODIFIER]` form. This can be used to keep dmabuf
+            feedback v4/v5 available while hiding known-bad modifiers from
+            guests.
           '';
         };
 

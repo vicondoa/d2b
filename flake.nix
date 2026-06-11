@@ -118,7 +118,7 @@
           sourceRoot = "nixling-rust-src/packages";
           cargoLock = {
             lockFile = ./packages/Cargo.lock;
-            outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+            outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
           };
           # Repo-local .cargo/config.toml files set
           # `rustc-wrapper = "sccache"`, but the Nix sandbox doesn't
@@ -229,13 +229,17 @@
         rust-deny = let
           mainVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/Cargo.lock;
-            outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+            outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
           };
           brokerVendor = pkgs.rustPlatform.importCargoLock {
             lockFile = ./packages/nixling-priv-broker/Cargo.lock;
           };
           cargoConfig = vendorDir: ''
             [source.crates-io]
+            replace-with = "vendored-sources"
+            [source."git+https://github.com/vicondoa/wl-proxy.git?rev=83b0001ce6c1f8d379609b07b7bcb8528bd044cd#83b0001ce6c1f8d379609b07b7bcb8528bd044cd"]
+            git = "https://github.com/vicondoa/wl-proxy.git"
+            rev = "83b0001ce6c1f8d379609b07b7bcb8528bd044cd"
             replace-with = "vendored-sources"
             [source.vendored-sources]
             directory = "${vendorDir}"

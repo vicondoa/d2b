@@ -10,8 +10,10 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
+nix = { version = "0.29", default-features = false, features = ["poll", "socket", "uio"] }
 thiserror = "2"
-wl-proxy = { version = "=0.1.2", git = "https://github.com/vicondoa/wl-proxy.git", rev = "f631210faa877c4c803d3c35c21e9c52d127672e", package = "wl-proxy", features = [
+uapi = "0.2"
+wl-proxy = { version = "=0.1.2", git = "https://github.com/vicondoa/wl-proxy.git", rev = "83b0001ce6c1f8d379609b07b7bcb8528bd044cd", package = "wl-proxy", features = [
     "protocol-drm",
     "protocol-stream",
     "protocol-wl_eglstream_controller",

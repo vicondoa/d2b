@@ -39,7 +39,7 @@ let
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+      outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
     };
     cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
     doCheck = false;
@@ -554,11 +554,16 @@ EOF
           let parts = lib.splitString "=" nameVersion;
           in [ "--max-version" nameVersion ])
         (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
+      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
+      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
     in {
       binaryPath = nixlingWaylandFilterBinary;
       env = lib.optionals vm.graphics.waylandFilter.debugLogging [
         "WL_PROXY_DEBUG=1"
         "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
+      ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
+        "WL_PROXY_HEXDUMP=1"
+        "WL_PROXY_HEXDUMP_LIMIT=8192"
       ];
       argv = [
         "nixling-${vmName}-wlproxy"
@@ -567,7 +572,9 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
-      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs;
+      ] ++ lib.optionals vm.graphics.waylandFilter.rawRelay [
+        "--raw-relay"
+      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
   videoBinaryPath = _name:

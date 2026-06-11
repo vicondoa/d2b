@@ -91,9 +91,13 @@ let
           graphics.crossDomainTrusted = true;
           graphics.waylandFilter = {
             debugLogging = true;
+            byteLogging = true;
+            rawRelay = true;
             denyGlobals = [ "wp_drm_lease_device_v1" ];
             allowGlobals = [ "zwp_linux_dmabuf_v1" ];
             maxVersions.xdg_wm_base = 3;
+            dmabufAllow = [ "XR24:linear" ];
+            dmabufDeny = [ "all:linear" ];
           };
           config = {
             networking.hostName = lib.mkDefault "demo-cd";
@@ -187,8 +191,16 @@ in
     "waylandFilter.allowGlobals should serialize to wayland-proxy argv";
   assert lib.assertMsg (builtins.elem "--max-version" trustedWlproxyArgv && builtins.elem "xdg_wm_base=3" trustedWlproxyArgv)
     "waylandFilter.maxVersions should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "--dmabuf-allow" trustedWlproxyArgv && builtins.elem "XR24:linear" trustedWlproxyArgv)
+    "waylandFilter.dmabufAllow should serialize to wayland-proxy argv";
+  assert lib.assertMsg (builtins.elem "--dmabuf-deny" trustedWlproxyArgv && builtins.elem "all:linear" trustedWlproxyArgv)
+    "waylandFilter.dmabufDeny should serialize to wayland-proxy argv";
   assert lib.assertMsg (builtins.elem "WL_PROXY_DEBUG=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_PREFIX=nixling-demo-cd-wlproxy" trustedWlproxyEnv)
     "waylandFilter.debugLogging should serialize WL_PROXY_DEBUG/WL_PROXY_PREFIX to wayland-proxy env";
+  assert lib.assertMsg (builtins.elem "WL_PROXY_HEXDUMP=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_HEXDUMP_LIMIT=8192" trustedWlproxyEnv)
+    "waylandFilter.byteLogging should serialize WL_PROXY_HEXDUMP/WL_PROXY_HEXDUMP_LIMIT to wayland-proxy env";
+  assert lib.assertMsg (builtins.elem "--raw-relay" trustedWlproxyArgv)
+    "waylandFilter.rawRelay should serialize --raw-relay to wayland-proxy argv";
   assert lib.assertMsg (builtins.elem "--listen" trustedWlproxyArgv && builtins.elem "/run/nixling-wlproxy/demo-cd/wayland-0" trustedWlproxyArgv)
     "wayland-proxy argv should listen on the filter socket used by readiness";
   assert lib.assertMsg (builtins.elem "--connect" trustedWlproxyArgv && builtins.elem "/run/user/1000/wayland-0" trustedWlproxyArgv)

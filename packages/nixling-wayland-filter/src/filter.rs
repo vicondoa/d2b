@@ -23,6 +23,7 @@ use wl_proxy::{
                 WlEglstreamDisplay, WlEglstreamDisplayCap, WlEglstreamDisplayHandler,
             },
         },
+        linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
         wayland::{
             wl_buffer::WlBuffer,
             wl_display::{WlDisplay, WlDisplayHandler},
@@ -40,6 +41,7 @@ use wl_proxy::{
 
 use crate::{
     diag::{DiagRateLimiter, DropReason},
+    dmabuf::DmabufHandler,
     policy::FilterPolicy,
 };
 
@@ -224,6 +226,10 @@ impl WlRegistryHandler for FilterRegistryHandler {
             eglstream_display.set_handler(FilterEglstreamDisplayHandler {
                 vm: self.policy.vm_name.clone(),
             });
+        } else if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>() {
+            if !self.policy.dmabuf_filters.is_empty() {
+                dmabuf.set_handler(DmabufHandler::new(self.policy.dmabuf_filters.clone()));
+            }
         }
 
         slf.send_bind(name, id);
