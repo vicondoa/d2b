@@ -398,6 +398,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "store verify",
+    "subject": "store/VM",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "keys list",
     "subject": "key",
     "scope": "per-VM",
@@ -1171,6 +1183,18 @@ let
   },
   {
     "operation": "StoreSync",
+    "subject": "store",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "StoreVerify",
     "subject": "store",
     "scope": "per-VM",
     "allowedGroups": [
