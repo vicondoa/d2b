@@ -28,6 +28,7 @@ use nixling_wayland_filter::filter::{
 };
 use nixling_wayland_filter::{
     diag::DiagRateLimiter,
+    dmabuf::{parse_filter as parse_dmabuf_filter, DmabufFilter},
     policy::{FilterPolicy, PolicyInput},
 };
 
@@ -67,6 +68,14 @@ struct Args {
     #[arg(long = "max-version", value_name = "INTERFACE=VERSION")]
     max_versions: Vec<String>,
 
+    /// Allow a dmabuf format/modifier in `FORMAT[:MODIFIER]` form (repeatable).
+    #[arg(long = "dmabuf-allow", value_name = "FORMAT[:MODIFIER]")]
+    dmabuf_allow: Vec<String>,
+
+    /// Deny a dmabuf format/modifier in `FORMAT[:MODIFIER]` form (repeatable).
+    #[arg(long = "dmabuf-deny", value_name = "FORMAT[:MODIFIER]")]
+    dmabuf_deny: Vec<String>,
+
     /// Emit a log line for every global filtered from advertisement.
     #[arg(long)]
     log_filtered_globals: bool,
@@ -80,6 +89,13 @@ fn parse_max_version(s: &str) -> Result<(String, u32), String> {
         .parse()
         .map_err(|_| format!("invalid version `{ver_str}` in `{s}`"))?;
     Ok((iface.to_owned(), ver))
+}
+
+fn parse_dmabuf_filters(values: &[String]) -> Result<Vec<DmabufFilter>, String> {
+    values
+        .iter()
+        .map(|value| parse_dmabuf_filter(value))
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn main() {
@@ -98,6 +114,15 @@ fn main() {
             std::process::exit(1);
         });
 
+    let dmabuf_allow = parse_dmabuf_filters(&args.dmabuf_allow).unwrap_or_else(|e| {
+        eprintln!("nixling-wayland-filter: error in --dmabuf-allow: {e}");
+        std::process::exit(1);
+    });
+    let dmabuf_deny = parse_dmabuf_filters(&args.dmabuf_deny).unwrap_or_else(|e| {
+        eprintln!("nixling-wayland-filter: error in --dmabuf-deny: {e}");
+        std::process::exit(1);
+    });
+
     let input = PolicyInput {
         vm_name: args.vm_name.clone(),
         app_id_prefix: args.app_id_prefix.clone(),
@@ -105,6 +130,8 @@ fn main() {
         deny_globals: args.deny_globals.clone(),
         allow_globals: args.allow_globals.clone(),
         max_versions,
+        dmabuf_allow,
+        dmabuf_deny,
         log_filtered_globals: args.log_filtered_globals,
     };
 
@@ -117,8 +144,7 @@ fn main() {
     }
 
     // Step 3: prove the upstream compositor is reachable before exposing a
-    // listen socket. Each accepted client gets its own upstream connection
-    // below, matching wl-proxy's SimpleProxy model.
+    // listen socket. Each accepted client gets its own upstream connection below.
     match build_state(&args.connect) {
         Ok(_) => {}
         Err(e) => {
@@ -178,9 +204,10 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
                 let policy = policy.clone();
                 let vm = vm.clone();
                 let name = format!("nixling-wlproxy-{vm}-{client_id}");
-                if let Err(e) = thread::Builder::new().name(name).spawn(move || {
+                let spawn = thread::Builder::new().name(name).spawn(move || {
                     run_client(client_id, stream.into(), &upstream, policy);
-                }) {
+                });
+                if let Err(e) = spawn {
                     log::warn!("[nixling-wlproxy] vm={vm} failed to spawn client thread: {e}");
                 }
             }
