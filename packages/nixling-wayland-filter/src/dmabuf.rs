@@ -342,19 +342,14 @@ impl DmabufBufferParamsHandler {
     ) {
         if usize::try_from(plane_idx).map_or(true, |idx| idx >= MAX_DMABUF_PLANES) {
             self.invalid_plane_count += 1;
-            log::warn!(
-                "dmabuf buffer plane ignored: plane={plane_idx} reason=plane index out of bounds"
-            );
             return;
         }
         if self.planes.iter().any(|plane| plane.plane_idx == plane_idx) {
             self.invalid_plane_count += 1;
-            log::warn!("dmabuf buffer plane ignored: plane={plane_idx} reason=duplicate plane");
             return;
         }
         if self.planes.len() >= MAX_DMABUF_PLANES {
             self.invalid_plane_count += 1;
-            log::warn!("dmabuf buffer plane ignored: plane={plane_idx} reason=too many planes");
             return;
         }
         self.planes.push(DmabufPlane {
