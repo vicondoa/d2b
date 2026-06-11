@@ -531,6 +531,10 @@ in
           <users>
             <default>
               <password remove="1"/>
+              <no_password/>
+              <networks>
+                <ip>127.0.0.1</ip>
+              </networks>
             </default>
             <signoz>
               <password from_env="SIGNOZ_CLICKHOUSE_PASSWORD"/>

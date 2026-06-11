@@ -116,6 +116,14 @@ else
   fail "ClickHouse passwords embedded in DSN query strings must be URL-encoded"
 fi
 
+if grep -q '<password remove="1"/>' "$STACK" \
+  && grep -q '<no_password/>' "$STACK" \
+  && grep -q '<ip>127.0.0.1</ip>' "$STACK"; then
+  ok "ClickHouse default user keeps a local-only auth method"
+else
+  fail "ClickHouse default user must not be left without an auth method"
+fi
+
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then
   ok "backend binds are loopback-oriented and only SigNoz UI port is opened"
 else
