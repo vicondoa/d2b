@@ -13,26 +13,16 @@
 
 use std::{
     cell::RefCell,
-    env, io,
-    io::IoSlice,
-    os::{
-        fd::{AsRawFd, OwnedFd, RawFd},
-        unix::net::{UnixListener, UnixStream},
-    },
+    io,
+    os::{fd::OwnedFd, unix::net::UnixListener},
     path::PathBuf,
     rc::Rc,
-    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
 use clap::Parser;
 use env_logger::Env;
-use nix::{
-    cmsg_space,
-    sys::socket::{recvmsg, sendmsg, ControlMessage, ControlMessageOwned, MsgFlags},
-    unistd::close,
-};
 use nixling_wayland_filter::filter::{
     build_state, install_client_handlers, FilterClientHandler, FilterStateHandler,
 };
@@ -89,13 +79,6 @@ struct Args {
     /// Emit a log line for every global filtered from advertisement.
     #[arg(long)]
     log_filtered_globals: bool,
-
-    /// Diagnostic mode: bypass wl-proxy and relay raw Wayland bytes/fds unchanged.
-    ///
-    /// This disables global filtering and app-id/title rewriting. It exists only
-    /// to compare the byte stream crosvm sees against the normal filtered path.
-    #[arg(long, hide = true)]
-    raw_relay: bool,
 }
 
 fn parse_max_version(s: &str) -> Result<(String, u32), String> {
@@ -162,24 +145,14 @@ fn main() {
 
     // Step 3: prove the upstream compositor is reachable before exposing a
     // listen socket. Each accepted client gets its own upstream connection below.
-    if args.raw_relay {
-        if let Err(e) = UnixStream::connect(&args.connect) {
+    match build_state(&args.connect) {
+        Ok(_) => {}
+        Err(e) => {
             eprintln!(
-                "nixling-wayland-filter: failed to connect raw relay upstream `{}`: {e}",
+                "nixling-wayland-filter: failed to connect to upstream compositor `{}`: {e}",
                 args.connect
             );
             std::process::exit(1);
-        }
-    } else {
-        match build_state(&args.connect) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!(
-                    "nixling-wayland-filter: failed to connect to upstream compositor `{}`: {e}",
-                    args.connect
-                );
-                std::process::exit(1);
-            }
         }
     }
 
@@ -216,10 +189,10 @@ fn main() {
     );
 
     // Step 5: dispatch loop.
-    accept_loop(listener, args.connect, policy, args.raw_relay);
+    accept_loop(listener, args.connect, policy);
 }
 
-fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy, raw_relay: bool) {
+fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy) {
     let vm = policy.vm_name.clone();
     let mut next_client_id: u64 = 1;
     loop {
@@ -231,13 +204,8 @@ fn accept_loop(listener: UnixListener, upstream: String, policy: FilterPolicy, r
                 let policy = policy.clone();
                 let vm = vm.clone();
                 let name = format!("nixling-wlproxy-{vm}-{client_id}");
-                let thread_vm = vm.clone();
                 let spawn = thread::Builder::new().name(name).spawn(move || {
-                    if raw_relay {
-                        run_raw_relay_client(client_id, stream, &upstream, &thread_vm);
-                    } else {
-                        run_client(client_id, stream.into(), &upstream, policy);
-                    }
+                    run_client(client_id, stream.into(), &upstream, policy);
                 });
                 if let Err(e) = spawn {
                     log::warn!("[nixling-wlproxy] vm={vm} failed to spawn client thread: {e}");
@@ -299,195 +267,6 @@ fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy)
     }
     state.destroy();
     diag.borrow_mut().flush_suppressed();
-}
-
-fn run_raw_relay_client(client_id: u64, client: UnixStream, upstream: &str, vm: &str) {
-    let server = match UnixStream::connect(upstream) {
-        Ok(stream) => stream,
-        Err(e) => {
-            log::warn!(
-                "[nixling-raw-wlrelay] vm={vm} client={client_id} upstream connect failed: {e}"
-            );
-            return;
-        }
-    };
-
-    let client_to_server_read = match client.try_clone() {
-        Ok(stream) => stream,
-        Err(e) => {
-            log::warn!("[nixling-raw-wlrelay] vm={vm} client={client_id} client clone failed: {e}");
-            return;
-        }
-    };
-    let server_to_client_read = match server.try_clone() {
-        Ok(stream) => stream,
-        Err(e) => {
-            log::warn!("[nixling-raw-wlrelay] vm={vm} client={client_id} server clone failed: {e}");
-            return;
-        }
-    };
-
-    let vm = Arc::new(vm.to_owned());
-    log::info!("[nixling-raw-wlrelay] vm={vm} client={client_id} raw relay connected");
-
-    let vm_for_c2s = vm.clone();
-    let c2s = thread::spawn(move || {
-        relay_raw_direction(
-            &vm_for_c2s,
-            client_id,
-            "client->raw",
-            "raw->server",
-            client_to_server_read,
-            server,
-        )
-    });
-    let s2c = thread::spawn(move || {
-        relay_raw_direction(
-            &vm,
-            client_id,
-            "server->raw",
-            "raw->client",
-            server_to_client_read,
-            client,
-        )
-    });
-
-    let _ = c2s.join();
-    let _ = s2c.join();
-}
-
-fn relay_raw_direction(
-    vm: &str,
-    client_id: u64,
-    recv_label: &str,
-    send_label: &str,
-    read: UnixStream,
-    write: UnixStream,
-) {
-    let mut buf = vec![0u8; 16 * 1024];
-    loop {
-        let mut fds = Vec::<RawFd>::new();
-        let len = match recv_raw(&read, &mut buf, &mut fds) {
-            Ok(0) => break,
-            Ok(len) => len,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                log::warn!(
-                    "[nixling-raw-wlrelay] vm={vm} client={client_id} {recv_label} recv failed: {e}"
-                );
-                break;
-            }
-        };
-
-        log_raw_hexdump(
-            vm,
-            client_id,
-            "recv",
-            recv_label,
-            read.as_raw_fd(),
-            &buf[..len],
-            fds.len(),
-        );
-        if let Err(e) = send_raw(&write, &buf[..len], &fds) {
-            log::warn!(
-                "[nixling-raw-wlrelay] vm={vm} client={client_id} {send_label} send failed: {e}"
-            );
-            close_fds(&fds);
-            break;
-        }
-        log_raw_hexdump(
-            vm,
-            client_id,
-            "send",
-            send_label,
-            write.as_raw_fd(),
-            &buf[..len],
-            fds.len(),
-        );
-        close_fds(&fds);
-    }
-}
-
-fn recv_raw(stream: &UnixStream, buf: &mut [u8], fds: &mut Vec<RawFd>) -> io::Result<usize> {
-    let mut iov = [io::IoSliceMut::new(buf)];
-    let mut cmsg = cmsg_space!([RawFd; 253]);
-    let msg = recvmsg::<()>(
-        stream.as_raw_fd(),
-        &mut iov,
-        Some(&mut cmsg),
-        MsgFlags::empty(),
-    )
-    .map_err(io::Error::from)?;
-    for cmsg in msg.cmsgs().map_err(io::Error::from)? {
-        if let ControlMessageOwned::ScmRights(rights) = cmsg {
-            fds.extend(rights);
-        }
-    }
-    Ok(msg.bytes)
-}
-
-fn send_raw(stream: &UnixStream, buf: &[u8], fds: &[RawFd]) -> io::Result<()> {
-    let iov = [IoSlice::new(buf)];
-    let res = if fds.is_empty() {
-        sendmsg::<()>(stream.as_raw_fd(), &iov, &[], MsgFlags::empty(), None)
-    } else {
-        let cmsgs = [ControlMessage::ScmRights(fds)];
-        sendmsg::<()>(stream.as_raw_fd(), &iov, &cmsgs, MsgFlags::empty(), None)
-    };
-    let written = res.map_err(io::Error::from)?;
-    if written != buf.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::WriteZero,
-            format!("partial sendmsg wrote {written}/{} bytes", buf.len()),
-        ));
-    }
-    Ok(())
-}
-
-fn close_fds(fds: &[RawFd]) {
-    for fd in fds {
-        let _ = close(*fd);
-    }
-}
-
-fn raw_hexdump_enabled() -> bool {
-    std::env::var("WL_PROXY_HEXDUMP").as_deref() == Ok("1")
-}
-
-fn raw_hexdump_limit() -> usize {
-    env::var("WL_PROXY_HEXDUMP_LIMIT")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(8192)
-}
-
-fn log_raw_hexdump(
-    vm: &str,
-    client_id: u64,
-    kind: &str,
-    label: &str,
-    socket: RawFd,
-    bytes: &[u8],
-    fd_count: usize,
-) {
-    if !raw_hexdump_enabled() {
-        return;
-    }
-    let limit = raw_hexdump_limit();
-    let shown = bytes.len().min(limit);
-    let mut hex = String::with_capacity(shown.saturating_mul(3));
-    for (idx, byte) in bytes.iter().take(shown).enumerate() {
-        if idx > 0 {
-            hex.push(' ');
-        }
-        use std::fmt::Write;
-        let _ = write!(&mut hex, "{byte:02x}");
-    }
-    let truncated = bytes.len().saturating_sub(shown);
-    eprintln!(
-        "[wl-raw-relay-hexdump] vm={vm} client={client_id} kind={kind} label={label} socket={socket} bytes={} fds={fd_count} shown={shown} truncated={truncated} hex={hex}",
-        bytes.len(),
-    );
 }
 
 fn is_recoverable_accept_error(error: &io::Error) -> bool {

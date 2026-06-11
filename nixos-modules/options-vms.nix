@@ -246,18 +246,6 @@
           '';
         };
 
-        graphics.waylandFilter.rawRelay = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = ''
-            Diagnostic mode: bypass the wl-proxy object/filter layer and
-            relay raw Wayland bytes plus SCM_RIGHTS file descriptors between
-            crosvm and the host compositor. This disables global filtering and
-            app-id/title rewriting, so use it only for short-lived byte
-            compatibility tests.
-          '';
-        };
-
         graphics.waylandFilter.denyGlobals = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = [ ];

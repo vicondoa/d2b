@@ -572,8 +572,6 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
-      ] ++ lib.optionals vm.graphics.waylandFilter.rawRelay [
-        "--raw-relay"
       ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
