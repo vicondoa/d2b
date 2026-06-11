@@ -7411,13 +7411,12 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
-        // The broker MUST refuse a `SpawnRunner` request whose role is
-        // `RunnerRole::OtelHostBridge` when the bundle-resolved runner
-        // intent's `vm_name` does not match
-        // `manifest._observability.vmName`. The default test bundle uses
-        // obs vm "obs" and a runner intent for "corp-vm" — a perfect
-        // mismatch case.
+    fn spawn_runner_rejects_otel_host_bridge_role_for_non_bridge_intent() {
+        // The broker MUST refuse a request that claims
+        // `RunnerRole::OtelHostBridge` while referencing a bundle intent
+        // for another role. OtelHostBridge is now represented in the
+        // process graph, so the normal closed-set intent matching path
+        // catches this before the obs-VM-specific check.
         use nixling_core::bundle_resolver::intent_id_runner;
         use nixling_ipc::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
@@ -7451,7 +7450,6 @@ mod tests {
             }],
             tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
         });
-        let expected_request_fields = request_fields_value(&request).expect("request fields");
         let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
             .expect("audit context");
 
@@ -7466,47 +7464,25 @@ mod tests {
             Some(&bundle.resolver),
             &backend,
         )
-        .expect_err("otel host bridge intent for non-obs vm must be denied");
+        .expect_err("otel host bridge role for non-bridge intent must be denied");
         match error {
-            BrokerError::OtelHostBridgeIntentInvalid {
-                intent_vm,
-                expected_obs_vm,
+            BrokerError::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
             } => {
-                assert_eq!(intent_vm, "corp-vm");
-                assert_eq!(expected_obs_vm, "obs");
+                assert_eq!(field, "role");
+                assert_eq!(requested, "otel-host-bridge");
+                assert_eq!(resolved, "cloud-hypervisor");
             }
-            other => panic!("expected OtelHostBridgeIntentInvalid, got {other:?}"),
+            other => panic!("expected SpawnRunnerIntentMismatch, got {other:?}"),
         }
 
         let records = capture.lock().expect("capture lock");
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.operation, "SpawnRunner");
-        assert_eq!(record.decision, "denied-refused");
-        assert_eq!(record.result, "denied");
         assert_eq!(
-            record.error_kind.as_deref(),
-            Some("otel-host-bridge-intent-invalid")
-        );
-        assert_eq!(record.request_fields, expected_request_fields);
-        assert_eq!(record.peer_pid, 5152);
-        let fields = OperationFields::from_operation_value(
-            "SpawnRunner",
-            record.operation_fields.clone().expect("operation fields"),
-        )
-        .expect("deserialize operation fields");
-        assert_eq!(
-            fields,
-            OperationFields::SpawnRunner {
-                bundle_runner_intent_ref: intent_id_runner("corp-vm", "ch-runner"),
-                vm_id: "corp-vm".to_owned(),
-                role_id: "ch-runner".to_owned(),
-                role: RunnerRole::OtelHostBridge.as_str().to_owned(),
-                runtime_allocations: vec![RunnerAllocation {
-                    kind: RunnerAllocationKind::VsockCid,
-                    opaque_ref: "cid:42".to_owned(),
-                }],
-            }
+            records.len(),
+            0,
+            "intent mismatch is rejected before the OtelHostBridge-specific audit branch"
         );
 
         let _ = fs::remove_dir_all(&root);
