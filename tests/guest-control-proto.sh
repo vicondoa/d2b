@@ -56,7 +56,7 @@ reject_descriptor() {
 
 require_descriptor 'name: "GuestControl"' "GuestControl service"
 for method in \
-  Hello Capabilities Health ExecCreate ExecInspect ExecWait ExecLogs \
+  Hello Authenticate Capabilities Health ExecCreate ExecInspect ExecWait ExecLogs \
   WriteStdin ReadOutput CloseStdin TtyWinResize ExecSignal ExecCancel
 do
   require_descriptor "name: \"$method\"" "method $method"
@@ -65,7 +65,7 @@ done
 for field in \
   guest_boot_id pending_read_output_waits_per_stream pending_exec_waits_per_vm \
   rpc_rate_per_connection_per_second rpc_rate_per_vm_burst end_offset \
-  timed_out retry_after_ms
+  timed_out retry_after_ms host_auth_tag guest_auth_tag
 do
   require_descriptor "name: \"$field\"" "field $field"
 done
@@ -249,6 +249,11 @@ def assert_scalar_shape(proto_name, field, prop):
 
 
 skip_messages = {"TerminalStatus"}
+hello_response_fields = {field["name"] for field in message_fields.get("HelloResponse", [])}
+if "health" in hello_response_fields or "capabilities_hash" in hello_response_fields:
+    raise SystemExit("HelloResponse must not expose pre-auth health or capabilities_hash")
+if "AuthenticateRequest" not in message_fields or "AuthenticateResponse" not in message_fields:
+    raise SystemExit("Authenticate messages missing from proto")
 for proto_name, fields in sorted(message_fields.items()):
     if proto_name in skip_messages:
         continue

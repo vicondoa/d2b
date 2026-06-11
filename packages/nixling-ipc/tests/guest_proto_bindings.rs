@@ -37,9 +37,24 @@ fn generated_hello_and_capabilities_shapes_compile() {
 
     let mut hello = pb::HelloRequest::new();
     hello.metadata = MessageField::some(metadata.clone());
-    hello.host_nonce = "host-nonce".to_owned();
+    hello.host_nonce = vec![1; 32];
     hello.transcript_version = 1;
     round_trip(hello);
+
+    let mut hello_response = pb::HelloResponse::new();
+    hello_response.guest_nonce = vec![2; 32];
+    hello_response.guest_boot_id = "boot-id".to_owned();
+    hello_response.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+    round_trip(hello_response);
+
+    let mut auth = pb::AuthenticateRequest::new();
+    auth.metadata = MessageField::some(metadata.clone());
+    auth.host_nonce = vec![1; 32];
+    auth.guest_nonce = vec![2; 32];
+    auth.guest_boot_id = "boot-id".to_owned();
+    auth.transcript_version = 1;
+    auth.host_auth_tag = vec![3; 32];
+    round_trip(auth);
 
     let mut health = pb::HealthResponse::new();
     health.origin = EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
@@ -47,14 +62,6 @@ fn generated_hello_and_capabilities_shapes_compile() {
     health.reason = EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
     health.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
     health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-
-    let mut hello_response = pb::HelloResponse::new();
-    hello_response.guest_nonce = "guest-nonce".to_owned();
-    hello_response.guest_boot_id = "boot-id".to_owned();
-    hello_response.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-    hello_response.capabilities_hash = "hash".to_owned();
-    hello_response.health = MessageField::some(health);
-    round_trip(hello_response);
 
     let mut limits = pb::GuestEffectiveLimits::new();
     limits.max_chunk_bytes = HARD_MAX_CHUNK_BYTES;
@@ -66,7 +73,14 @@ fn generated_hello_and_capabilities_shapes_compile() {
         pb::GuestCapability::GUEST_CAPABILITY_HEALTH,
     ));
     caps.limits = MessageField::some(limits);
-    round_trip(caps);
+    round_trip(caps.clone());
+
+    let mut authenticated = pb::AuthenticateResponse::new();
+    authenticated.guest_auth_tag = Some(vec![4; 32]);
+    authenticated.capabilities_hash = Some("capabilities-sha256".to_owned());
+    authenticated.health = MessageField::some(health);
+    authenticated.capabilities = MessageField::some(caps);
+    round_trip(authenticated);
 }
 
 #[test]

@@ -7,6 +7,7 @@ package nixling.guest.v1;
 // streaming for stdin/stdout/stderr.
 service GuestControl {
   rpc Hello(HelloRequest) returns (HelloResponse);
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
   rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 
@@ -37,16 +38,33 @@ message ExecRequestMetadata {
 
 message HelloRequest {
   RequestMetadata metadata = 1;
-  string host_nonce = 2;
+  bytes host_nonce = 2;
   uint32 transcript_version = 3;
 }
 
 message HelloResponse {
-  string guest_nonce = 1;
+  bytes guest_nonce = 1;
   string guest_boot_id = 2;
   uint32 protocol_version = 3;
-  string capabilities_hash = 4;
-  HealthResponse health = 5;
+  reserved 4, 5;
+  reserved "capabilities_hash", "health";
+}
+
+message AuthenticateRequest {
+  RequestMetadata metadata = 1;
+  bytes host_nonce = 2;
+  bytes guest_nonce = 3;
+  string guest_boot_id = 4;
+  uint32 transcript_version = 5;
+  bytes host_auth_tag = 6;
+}
+
+message AuthenticateResponse {
+  optional bytes guest_auth_tag = 1;
+  optional string capabilities_hash = 2;
+  HealthResponse health = 3;
+  CapabilitiesResponse capabilities = 4;
+  GuestControlError error = 5;
 }
 
 message CapabilitiesRequest {

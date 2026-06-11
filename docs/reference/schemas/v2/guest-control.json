@@ -3,6 +3,8 @@
   "title": "GuestControlSchema",
   "type": "object",
   "required": [
+    "authenticate",
+    "authenticated",
     "capabilities",
     "capabilitiesRequest",
     "closeStdin",
@@ -34,6 +36,12 @@
     "writeStdinResult"
   ],
   "properties": {
+    "authenticate": {
+      "$ref": "#/definitions/AuthenticateRequest"
+    },
+    "authenticated": {
+      "$ref": "#/definitions/AuthenticateResponse"
+    },
     "capabilities": {
       "$ref": "#/definitions/CapabilitiesResponse"
     },
@@ -126,6 +134,96 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "AuthenticateRequest": {
+      "type": "object",
+      "required": [
+        "guestBootId",
+        "guestNonce",
+        "hostAuthTag",
+        "hostNonce",
+        "metadata",
+        "transcriptVersion"
+      ],
+      "properties": {
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "guestNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "hostAuthTag": {
+          "$ref": "#/definitions/GuestAuthTag"
+        },
+        "hostNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "transcriptVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthenticateResponse": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapabilitiesResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilitiesHash": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapabilitiesHash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "guestAuthTag": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestAuthTag"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HealthResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "CapabilitiesHash": {
       "type": "string",
       "maxLength": 128,
@@ -780,6 +878,17 @@
       "maxLength": 4096,
       "minLength": 1
     },
+    "GuestAuthTag": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 32,
+      "minItems": 32
+    },
     "GuestBootId": {
       "type": "string",
       "maxLength": 128,
@@ -1041,9 +1150,15 @@
       ]
     },
     "GuestNonce": {
-      "type": "string",
-      "maxLength": 128,
-      "minLength": 1
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 32,
+      "minItems": 32
     },
     "GuestOutputBytes": {
       "type": "array",
@@ -1337,24 +1452,16 @@
     "HelloResponse": {
       "type": "object",
       "required": [
-        "capabilitiesHash",
         "guestBootId",
         "guestNonce",
-        "health",
         "protocolVersion"
       ],
       "properties": {
-        "capabilitiesHash": {
-          "$ref": "#/definitions/CapabilitiesHash"
-        },
         "guestBootId": {
           "$ref": "#/definitions/GuestBootId"
         },
         "guestNonce": {
           "$ref": "#/definitions/GuestNonce"
-        },
-        "health": {
-          "$ref": "#/definitions/HealthResponse"
         },
         "protocolVersion": {
           "type": "integer",

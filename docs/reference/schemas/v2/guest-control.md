@@ -18,11 +18,19 @@ source lives at
   the bounded opaque `OK <decimal-local-port>\n` acknowledgement, and the
   readiness rule that socket existence alone is never readiness.
 - `limits` - bounded frame, chunk, live-buffer, detached-log, and concurrency
-  limits exposed through `Hello` / `Capabilities`.
-- `hello`, `healthRequest`, `health`, `capabilitiesRequest`, and
-  `capabilities` - readiness and version negotiation. Pre-ttRPC CONNECT /
-  Hello / auth failures are host-synthesized status, not guest-returned
-  `Health` RPC payloads.
+  limits exposed only after authentication through `Authenticate` /
+  `Capabilities`.
+- `hello` - unauthenticated challenge/discovery only. It returns a guest nonce,
+  guest boot id, and protocol version; it does not return health, capabilities,
+  or a capability fingerprint.
+- `authenticate` / `authenticated` - proof-of-possession boundary for the
+  guest-control token. `Authenticate` carries the host HMAC over the canonical
+  transcript; `authenticated` returns the guest HMAC plus bounded authenticated
+  health and capabilities.
+- `healthRequest`, `health`, `capabilitiesRequest`, and `capabilities` -
+  authenticated readiness/version/capability RPCs. Pre-ttRPC CONNECT / Hello /
+  auth failures are host-synthesized status, not guest-returned `Health` RPC
+  payloads.
 - `exec*`, `writeStdin`, `readOutput`, `closeStdin`, `ttyWinResize`, and
   signal/cancel messages - Docker-like exec lifecycle and chunked stdio.
   `controlAck` is the shared response for resize, signal, and cancel control

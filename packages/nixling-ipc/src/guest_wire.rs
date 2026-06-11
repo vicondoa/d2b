@@ -151,9 +151,14 @@ bounded_string! {
     ExecId, 128
 }
 
-bounded_string! {
-    /// Challenge nonce encoded outside protobuf bytes for schema readability.
-    GuestNonce, 128
+bounded_bytes! {
+    /// Fixed-size raw challenge nonce bytes.
+    GuestNonce, 32, 32
+}
+
+bounded_bytes! {
+    /// Fixed-size HMAC-SHA256 proof tag bytes.
+    GuestAuthTag, 32, 32
 }
 
 bounded_string! {
@@ -243,6 +248,8 @@ pub struct GuestControlSchema {
     pub limits: GuestEffectiveLimits,
     pub hello: HelloRequest,
     pub hello_ok: HelloResponse,
+    pub authenticate: AuthenticateRequest,
+    pub authenticated: AuthenticateResponse,
     pub health_request: HealthRequest,
     pub health: HealthResponse,
     pub capabilities_request: CapabilitiesRequest,
@@ -340,8 +347,27 @@ pub struct HelloResponse {
     pub guest_nonce: GuestNonce,
     pub guest_boot_id: GuestBootId,
     pub protocol_version: u32,
-    pub capabilities_hash: CapabilitiesHash,
-    pub health: HealthResponse,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticateRequest {
+    pub metadata: GuestRequestMetadata,
+    pub host_nonce: GuestNonce,
+    pub guest_nonce: GuestNonce,
+    pub guest_boot_id: GuestBootId,
+    pub transcript_version: u32,
+    pub host_auth_tag: GuestAuthTag,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthenticateResponse {
+    pub guest_auth_tag: Option<GuestAuthTag>,
+    pub capabilities_hash: Option<CapabilitiesHash>,
+    pub health: Option<HealthResponse>,
+    pub capabilities: Option<CapabilitiesResponse>,
+    pub error: Option<GuestControlError>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
