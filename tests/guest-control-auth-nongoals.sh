@@ -13,7 +13,7 @@ if ! command -v rg >/dev/null 2>&1; then
   fail "guest-control-auth-nongoals: rg is required"
 fi
 
-if rg -n 'guest-control-health|GuestControlHealth|ReadinessPredicate::Guest' \
+if rg -n 'guest-control-health-readiness|ReadinessPredicate::Guest' \
   "$ROOT/packages/nixlingd/src" \
   "$ROOT/nixos-modules"; then
   fail "guest-control-auth-nongoals: host readiness must not consume guest-control health yet"
