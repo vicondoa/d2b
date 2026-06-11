@@ -1,49 +1,19 @@
 #!/usr/bin/env bash
-# tests/tempo-budget-eval.sh — static gate for the Tempo retention +
-# sampling budget policy (``).
+# tests/tempo-budget-eval.sh — legacy gate name retained for CI wiring.
 #
-# Asserts, against
-# `nixos-modules/components/observability/stack.nix` and
-# `nixos-modules/options-observability.nix` and
-# `docs/reference/tempo-retention-sampling.md`:
-#
-#   1. The stack module pins the canonical retention + sampling
-#      defaults (`retention.traces = "7d"`,
-#      `retention.tracesCritical = "30d"`, `sampling.criticalRatio
-#      = 1.0`, `sampling.defaultRatio = 0.1`,
-#      `sampling.criticalAttribute = "kind"`,
-#      `sampling.criticalValue = "critical"`,
-#      `sampling.criticalTenant = "nixling-critical"`,
-#      `sampling.defaultTenant = "nixling-default"`).
-#   2. The host-side options mirror declares the same defaults for
-#      every option the stack-side module declares (so consumer host
-#      config sees the same surface).
-#   3. The Tempo settings block enables multitenancy AND wires the
-#      compactor ceiling to `tracesCritical` AND wires
-#      `overrides.defaults.compaction.block_retention` to `traces`
-#      AND points `per_tenant_override_config` at a generated
-#      overrides file naming `sampling.criticalTenant`.
-#   4. The Alloy traces pipeline contains a tail-sampling processor
-#      with the two policies (critical=always, default=probabilistic
-#      at `defaultRatio * 100`) and a routing connector splitting
-#      by the `criticalAttribute`/`criticalValue` pair.
-#   5. The canonical doc records the same numeric values + tenant
-#      names. Drift between the Nix constants and the doc fails the
-#      gate.
-#
-# Canonical contract: docs/reference/tempo-retention-sampling.md.
-#
-# Run via:
-#   bash tests/tempo-budget-eval.sh
+# The Tempo retention/sampling backend was replaced by the native SigNoz
+# observability backend. Keep this filename so existing workflow/static.sh
+# references do not orphan a test, but assert the new OTel-native pipeline
+# shape instead of the retired Tempo/Alloy contract.
 
-set -uo pipefail
+set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(dirname "$HERE")}
 
 STACK="$ROOT/nixos-modules/components/observability/stack.nix"
 HOST_OPTS="$ROOT/nixos-modules/options-observability.nix"
-DOC="$ROOT/docs/reference/tempo-retention-sampling.md"
+ADR="$ROOT/docs/adr/0026-native-signoz-observability.md"
 
 PASS=0
 FAIL=0
@@ -52,235 +22,129 @@ log()  { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 ok()   { log "  PASS: $*"; PASS=$((PASS+1)); }
 fail() { log "  FAIL: $*"; FAIL=$((FAIL+1)); }
 
-log "==> tests/tempo-budget-eval.sh"
+log "==> tests/tempo-budget-eval.sh (native SigNoz compatibility gate)"
 
-for f in "$STACK" "$HOST_OPTS" "$DOC"; do
-  if [[ ! -f "$f" ]]; then
-    fail "missing file: $f"
+for f in "$STACK" "$HOST_OPTS" "$ADR"; do
+  if [[ -f "$f" ]]; then
+    ok "present: ${f#$ROOT/}"
+  else
+    fail "missing file: ${f#$ROOT/}"
   fi
 done
-(( FAIL > 0 )) && { log "summary: PASS=$PASS FAIL=$FAIL"; exit 1; }
 
-# ---------------------------------------------------------------------------
-# (1) stack.nix option defaults
-# ---------------------------------------------------------------------------
+if grep -q 'services\.clickhouse' "$STACK"; then
+  ok "stack enables ClickHouse"
+else
+  fail "stack must enable ClickHouse for native SigNoz"
+fi
 
-# Each row: <option-path> <regex matching the default literal>
-declare -a STACK_DEFAULTS=(
-  'retention.traces|"7d"'
-  'retention.tracesCritical|"30d"'
-  'sampling.criticalAttribute|"kind"'
-  'sampling.criticalValue|"critical"'
-  'sampling.criticalRatio|1\.0'
-  'sampling.defaultRatio|0\.1'
-  'sampling.criticalTenant|"nixling-critical"'
-  'sampling.defaultTenant|"nixling-default"'
+if grep -q 'services\.zookeeper' "$STACK"; then
+  ok "stack enables a ClickHouse coordinator"
+else
+  fail "stack must enable ZooKeeper or a ClickHouse Keeper equivalent"
+fi
+
+for unit in signoz signoz-otel-collector signoz-schema-migrate-sync; do
+  if grep -q "systemd.services.${unit}" "$STACK"; then
+    ok "stack declares ${unit}.service"
+  else
+    fail "stack must declare ${unit}.service"
+  fi
+done
+
+for token in 'signozspanmetrics/delta' 'memory_limiter' 'batch' 'clickhousetraces' 'clickhouselogsexporter' 'signozclickhousemetrics' 'metadataexporter'; do
+  if grep -q "$token" "$STACK"; then
+    ok "collector config contains $token"
+  else
+    fail "collector config missing $token"
+  fi
+done
+
+for token in 'ingress.sources' 'sourceReceivers' 'sourceProcessors' 'sourcePipelines' 'nixling-otel-vsock-in-${sourceName}' 'resource/${sourceName}'; do
+  if grep -q "$token" "$STACK"; then
+    ok "collector uses source-specific ingress token $token"
+  else
+    fail "collector missing source-specific ingress token $token"
+  fi
+done
+
+if grep -q '} // lib.optionalAttrs cfg\.scrapeNodeMetrics {' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && ! grep -q 'hostmetrics = lib\.mkIf cfg\.scrapeNodeMetrics' "$ROOT/nixos-modules/components/observability/guest.nix"; then
+  ok "guest collector conditionals are resolved before YAML serialization"
+else
+  fail "guest collector must not serialize lib.mkIf wrappers into OTel YAML"
+fi
+
+for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel-collector' 'telemetry.metrics.address'; do
+  if grep -q "$token" "$STACK" "$ROOT/nixos-modules/components/observability/host.nix" "$ROOT/nixos-modules/components/observability/guest.nix"; then
+    ok "collector self-telemetry token present: $token"
+  else
+    fail "collector self-telemetry token missing: $token"
+  fi
+done
+
+if grep -q '"resource/self"' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && grep -q 'pipelines\."metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && ! grep -q '"pipelines.metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix"; then
+  ok "guest collector self-metrics use a dedicated resource/self pipeline"
+else
+  fail "guest collector self-metrics must not share the workload resource processor"
+fi
+
+guest_workload_resource_block=$(
+  sed -n '/resource.attributes = \[/,/\];/p' "$ROOT/nixos-modules/components/observability/guest.nix"
 )
+if [ -z "$guest_workload_resource_block" ]; then
+  fail "guest workload resource processor block was not found"
+elif grep -q 'service.name' <<<"$guest_workload_resource_block"; then
+  fail "guest workload resource processor must preserve application service.name"
+else
+  ok "guest workload resource processor preserves application service.name"
+fi
 
-# Extract option default for the given leaf name. Each option in
-# stack.nix is declared via:
-#   <leaf> = lib.mkOption {
-#     type = ...;
-#     default = <value>;
-#     ...
-#   };
-# The defaults block we care about lives inside
-# options.nixling.observability.{retention,sampling}.<leaf>.
-extract_default() {
-  local file=$1 leaf=$2
-  awk -v leaf="$leaf" '
-    $0 ~ "^[[:space:]]*" leaf "[[:space:]]*=[[:space:]]*lib\\.mkOption[[:space:]]*\\{" {
-      in_opt = 1
-      next
-    }
-    in_opt && /^[[:space:]]*default[[:space:]]*=/ {
-      # capture everything after the `=` up to the trailing `;`
-      sub(/^[[:space:]]*default[[:space:]]*=[[:space:]]*/, "")
-      sub(/;[[:space:]]*$/, "")
-      print
-      in_opt = 0
-      exit
-    }
-    in_opt && /^[[:space:]]*\}[[:space:]]*;/ {
-      in_opt = 0
-    }
-  ' "$file"
-}
+if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
+  ok "collector pipelines are source-specific, not a shared otlp receiver"
+else
+  fail "collector must route through source-specific receiver pipelines"
+fi
 
-check_stack_default() {
-  local path=$1 want_re=$2
-  local leaf=${path##*.}
-  local got
-  got=$(extract_default "$STACK" "$leaf")
-  if [[ -z "$got" ]]; then
-    fail "[$STACK] no default found for option '$path'"
-    return
-  fi
-  if [[ "$got" =~ ^$want_re$ ]]; then
-    ok "[$STACK] $path default = $got"
+if grep -q '@uri' "$STACK" \
+  && ! grep -q 'password=$pw"' "$STACK" \
+  && ! grep -q 'password=$SIGNOZ_CLICKHOUSE_PASSWORD' "$STACK"; then
+  ok "ClickHouse passwords are URL-encoded before DSN interpolation"
+else
+  fail "ClickHouse passwords embedded in DSN query strings must be URL-encoded"
+fi
+
+if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then
+  ok "backend binds are loopback-oriented and only SigNoz UI port is opened"
+else
+  fail "stack must keep backend ports loopback-only and open only the SigNoz UI port"
+fi
+
+for retired in 'services\.grafana' 'services\.prometheus' 'services\.loki' 'services\.tempo' 'services\.alloy'; do
+  if grep -q "$retired" "$STACK"; then
+    fail "stack still declares retired backend ${retired}"
   else
-    fail "[$STACK] $path default = '$got'; expected to match /^$want_re\$/"
-  fi
-}
-
-for row in "${STACK_DEFAULTS[@]}"; do
-  path=${row%%|*}
-  want=${row#*|}
-  check_stack_default "$path" "$want"
-done
-
-# ---------------------------------------------------------------------------
-# (2) host-side mirror in options-observability.nix
-# ---------------------------------------------------------------------------
-
-check_host_default() {
-  local path=$1 want_re=$2
-  local leaf=${path##*.}
-  local got
-  got=$(extract_default "$HOST_OPTS" "$leaf")
-  if [[ -z "$got" ]]; then
-    fail "[$HOST_OPTS] no default found for option '$path'"
-    return
-  fi
-  if [[ "$got" =~ ^$want_re$ ]]; then
-    ok "[$HOST_OPTS] $path default = $got"
-  else
-    fail "[$HOST_OPTS] $path default = '$got'; expected /^$want_re\$/"
-  fi
-}
-
-for row in "${STACK_DEFAULTS[@]}"; do
-  path=${row%%|*}
-  want=${row#*|}
-  check_host_default "$path" "$want"
-done
-
-# ---------------------------------------------------------------------------
-# (3) Tempo settings — multitenancy + per-tenant overrides
-# ---------------------------------------------------------------------------
-
-if grep -qE '^[[:space:]]*multitenancy_enabled[[:space:]]*=[[:space:]]*true;' "$STACK"; then
-  ok "[$STACK] Tempo multitenancy_enabled = true"
-else
-  fail "[$STACK] Tempo multitenancy_enabled must be set to true"
-fi
-
-if grep -qE 'block_retention[[:space:]]*=[[:space:]]*cfg\.retention\.tracesCritical;' "$STACK"; then
-  ok "[$STACK] compactor.block_retention pinned to cfg.retention.tracesCritical"
-else
-  fail "[$STACK] compactor.block_retention must reference cfg.retention.tracesCritical (the global ceiling)"
-fi
-
-if grep -qE 'block_retention[[:space:]]*=[[:space:]]*cfg\.retention\.traces;' "$STACK"; then
-  ok "[$STACK] overrides.defaults.compaction.block_retention pinned to cfg.retention.traces"
-else
-  fail "[$STACK] overrides.defaults.compaction.block_retention must reference cfg.retention.traces"
-fi
-
-if grep -qE 'per_tenant_override_config[[:space:]]*=[[:space:]]*toString[[:space:]]+tempoPerTenantOverrides;' "$STACK"; then
-  ok "[$STACK] per_tenant_override_config wired to generated overrides file"
-else
-  fail "[$STACK] per_tenant_override_config must be wired to the generated tempoPerTenantOverrides file"
-fi
-
-if grep -qE 'tempoPerTenantOverrides[[:space:]]*=[[:space:]]*pkgs\.writeText' "$STACK"; then
-  ok "[$STACK] tempoPerTenantOverrides is generated via pkgs.writeText"
-else
-  fail "[$STACK] tempoPerTenantOverrides must be generated via pkgs.writeText"
-fi
-
-if grep -qE '"\$\{cfg\.sampling\.criticalTenant\}"[[:space:]]*=' "$STACK"; then
-  ok "[$STACK] tempoPerTenantOverrides keys on cfg.sampling.criticalTenant"
-else
-  fail "[$STACK] tempoPerTenantOverrides must key on cfg.sampling.criticalTenant"
-fi
-
-# ---------------------------------------------------------------------------
-# (4) Alloy pipeline — tail_sampling + routing connector
-# ---------------------------------------------------------------------------
-
-if grep -q 'otelcol.processor.tail_sampling "tempo_budget"' "$STACK"; then
-  ok "[$STACK] Alloy declares otelcol.processor.tail_sampling.tempo_budget"
-else
-  fail "[$STACK] Alloy must declare otelcol.processor.tail_sampling.tempo_budget"
-fi
-
-if grep -q 'otelcol.connector.routing "tempo_tenant"' "$STACK"; then
-  ok "[$STACK] Alloy declares otelcol.connector.routing.tempo_tenant"
-else
-  fail "[$STACK] Alloy must declare otelcol.connector.routing.tempo_tenant"
-fi
-
-if grep -q 'otelcol.exporter.otlp "traces_critical"' "$STACK" \
-  && grep -q 'otelcol.exporter.otlp "traces_default"' "$STACK"; then
-  ok "[$STACK] Alloy declares both traces_critical and traces_default exporters"
-else
-  fail "[$STACK] Alloy must declare both traces_{critical,default} OTLP exporters"
-fi
-
-# The receiver must forward to the tail-sampling processor (not the
-# pre- single exporter).
-if grep -qE 'traces[[:space:]]*=[[:space:]]*\[otelcol\.processor\.tail_sampling\.tempo_budget\.input\]' "$STACK"; then
-  ok "[$STACK] Alloy otlp ingress forwards traces to tail_sampling.tempo_budget"
-else
-  fail "[$STACK] Alloy otlp ingress must forward traces to tail_sampling.tempo_budget.input"
-fi
-
-# Sampling percentage in the default-probabilistic policy must match
-# defaultRatio * 100. Computed from extract_default (1.0/0.1 form).
-default_ratio=$(extract_default "$STACK" defaultRatio)
-default_pct=""
-case "$default_ratio" in
-  0.1)  default_pct="10" ;;
-  1.0)  default_pct="100" ;;
-  0.0)  default_pct="0" ;;
-  *)    default_pct=$(awk -v r="$default_ratio" 'BEGIN { printf "%g", r * 100 }') ;;
-esac
-if grep -qE "sampling_percentage[[:space:]]*=[[:space:]]*\\\$\\{samplingPercentageDefault\\}" "$STACK"; then
-  ok "[$STACK] default_probabilistic policy interpolates samplingPercentageDefault (= $default_pct)"
-else
-  fail "[$STACK] default_probabilistic policy must use \${samplingPercentageDefault} (computed = $default_pct)"
-fi
-
-# ---------------------------------------------------------------------------
-# (5) Doc drift — the canonical doc must record the same numeric
-#     values + tenant names + attribute pair.
-# ---------------------------------------------------------------------------
-
-declare -a DOC_TOKENS=(
-  '7 days'
-  '30 days'
-  '100 %'
-  '10 %'
-  'nixling-critical'
-  'nixling-default'
-  'kind="critical"'
-  'retention.tracesCritical'
-  'retention.traces'
-  'sampling.criticalAttribute'
-  'sampling.criticalValue'
-  'sampling.criticalRatio'
-  'sampling.defaultRatio'
-  'sampling.criticalTenant'
-  'sampling.defaultTenant'
-  'multitenancy_enabled'
-  'per_tenant_override_config'
-  'tail_sampling.tempo_budget'
-  'routing.tempo_tenant'
-  'tempo-critical'
-)
-
-for tok in "${DOC_TOKENS[@]}"; do
-  if grep -qF -- "$tok" "$DOC"; then
-    ok "[$DOC] mentions '$tok'"
-  else
-    fail "[$DOC] must mention '$tok' (drift between Nix policy + doc)"
+    ok "stack does not declare retired backend ${retired}"
   fi
 done
 
-# ---------------------------------------------------------------------------
+for option in 'signoz = {' 'listenPort' 'otlpGrpcPort' 'otlpHttpPort' 'adminEmail'; do
+  if grep -q "$option" "$HOST_OPTS"; then
+    ok "host options expose $option"
+  else
+    fail "host options missing $option"
+  fi
+done
+
+if grep -q 'Spec corrections' "$ADR" && grep -q 'manifestVersion' "$ADR"; then
+  ok "ADR records manifestVersion Spec corrections"
+else
+  fail "ADR must record manifestVersion Spec corrections"
+fi
+
 log "summary: PASS=$PASS FAIL=$FAIL"
 if (( FAIL > 0 )); then
   exit 1
 fi
-exit 0

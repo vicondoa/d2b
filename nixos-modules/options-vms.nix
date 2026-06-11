@@ -457,16 +457,17 @@
         };
 
         observability.enable = lib.mkEnableOption ''
-          guest Alloy agent + reverse OTLP tunnel from the
+          guest OpenTelemetry collector + reverse OTLP tunnel to the
           observability stack VM
         '';
 
         observability.scrapeJournal = lib.mkOption {
           type = lib.types.bool;
-          default = true;
+          default = false;
           description = ''
-            Whether the future observability guest component should
-            scrape this VM's journald stream.
+            Reserved compatibility toggle for guest journald/audit log
+            collection. The native SigNoz path does not scrape journald
+            yet; setting this to true currently emits a warning.
           '';
         };
 
@@ -474,8 +475,8 @@
           type = lib.types.bool;
           default = true;
           description = ''
-            Whether the future observability guest component should
-            scrape this VM's node/system metrics.
+            Whether the guest OpenTelemetry collector scrapes this VM's
+            node/system metrics.
           '';
         };
 

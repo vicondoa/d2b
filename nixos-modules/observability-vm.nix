@@ -8,6 +8,37 @@
 
 let
   cfg = config.nixling.observability;
+  observedVmNames = lib.attrNames (lib.filterAttrs
+    (name: vm: vm.enable && name != cfg.vmName && vm.observability.enable)
+    config.nixling.vms);
+  hostVsockPort = 14317;
+  hostGrpcPort = cfg.signoz.otlpGrpcPort;
+  observedSources = lib.listToAttrs (lib.imap0
+    (i: name:
+      let
+        vm = config.nixling.vms.${name};
+      in {
+        inherit name;
+        value = {
+          vmName = name;
+          envName = if vm.env == null then "none" else vm.env;
+          role = "workload";
+          vsockPort = hostVsockPort + 1 + i;
+          receiverGrpcPort = hostGrpcPort + 2 + i;
+          receiverHttpPort = null;
+        };
+      })
+    observedVmNames);
+  obsIngressSources = {
+    host = {
+      vmName = "host";
+      envName = "host";
+      role = "host";
+      vsockPort = hostVsockPort;
+      receiverGrpcPort = hostGrpcPort;
+      receiverHttpPort = cfg.signoz.otlpHttpPort;
+    };
+  } // observedSources;
 in
 {
   config = lib.mkIf cfg.enable {
@@ -16,7 +47,7 @@ in
       uplinkSubnet = lib.mkDefault cfg.uplinkSubnet;
     };
 
-    # `cfg.vmName` defaults to `sys-obs-stack`, matching the framework's
+    # `cfg.vmName` defaults to `sys-obs`, matching the framework's
     # `sys-<env>-<role>` namespace for auto-declared system VMs. The current
     # reserved-prefix exemption in assertions.nix only whitelists the per-env
     # net VMs; the matching carve-out for this observability VM belongs with
@@ -39,18 +70,52 @@ in
         nixling.observability = {
           retention = lib.mkDefault cfg.retention;
           grafana = lib.mkDefault cfg.grafana;
+          signoz = lib.mkDefault cfg.signoz;
           transport.relayPackage = lib.mkDefault cfg.transport.relayPackage;
+          ingress.sources = lib.mkDefault obsIngressSources;
           alerts = lib.mkDefault cfg.alerts;
         };
 
-        # Grafana + Prometheus + Loki + Tempo + Alloy in one VM at
-        # microvm.nix's 512M default OOM-kills grafana within seconds
-        # of boot. 2 GiB is the minimum that lets the whole stack
-        # come up with retention windows in the default range
-        # (metrics 30d, logs 14d, traces 7d) and ~tens of monitored
-        # VMs. Use `lib.mkDefault` so site operators can override if
-        # they're scraping more or want to trim memory.
-        microvm.mem = lib.mkDefault 2048;
+        # SigNoz + ClickHouse is materially heavier than the retired
+        # Grafana/Prometheus/Loki/Tempo stack. Keep these defaults
+        # overrideable, but make the auto-declared VM viable out of the
+        # box for a single-node telemetry store.
+        microvm.vcpu = lib.mkDefault 4;
+        microvm.mem = lib.mkDefault 8192;
+        microvm.volumes = lib.mkDefault [
+          {
+            image = "clickhouse.img";
+            mountPoint = "/var/lib/clickhouse";
+            size = 32768;
+            fsType = "ext4";
+            serial = "obs-clickhouse";
+            direct = true;
+          }
+          {
+            image = "zookeeper.img";
+            mountPoint = "/var/lib/zookeeper";
+            size = 2048;
+            fsType = "ext4";
+            serial = "obs-zookeeper";
+            direct = true;
+          }
+          {
+            image = "signoz.img";
+            mountPoint = "/var/lib/signoz";
+            size = 4096;
+            fsType = "ext4";
+            serial = "obs-signoz";
+            direct = true;
+          }
+          {
+            image = "signoz-otel.img";
+            mountPoint = "/var/lib/signoz-otel-collector";
+            size = 2048;
+            fsType = "ext4";
+            serial = "obs-otel";
+            direct = true;
+          }
+        ];
       };
     };
   };

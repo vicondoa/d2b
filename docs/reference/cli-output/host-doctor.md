@@ -29,6 +29,7 @@ Every entry in `checks[]` has `name`, `status` (`pass`/`warn`/`fail`),
 | `broker-ready`            | Connects to the broker `SOCK_SEQPACKET` socket (default `/run/nixling/broker.sock`).                       | `pass` on accept; `fail` on connect error (broker is the privileged dispatch path).         | `socket`                                                     |
 | `daemon-ready`            | Connects to the public daemon socket (default `/run/nixling/public.sock`).                                 | `pass` on accept; `warn` on connect error (degraded but doctor is best-effort).             | `socket`                                                     |
 | `metrics-endpoint`        | Loopback HTTP GET against the Prometheus scrape URL (default `http://127.0.0.1:9101/metrics`).             | `pass` on `200`; `warn` on non-200 / unreachable / non-loopback URL. **v1.2 status:** scrapable endpoint deferred to a later release (see [`daemon-metrics.md`](../daemon-metrics.md)); expected to report `warn` in v1.2. | `url`, `status` (optional)                                   |
+| `signoz-ui-endpoint`      | When observability is enabled, reads `_observability.signozUrl` from `vms.json` and probes `/api/v1/health`. | `pass` on `200`; `warn` when manifest/URL/probe is unavailable. Observability remains optional. | `url`, `status` (optional)                                   |
 | `otel-host-bridge-runner` | Looks for a `role: "otel-host-bridge"` entry in `pidfd-table.json`.                                        | `pass` when ≥1 entry; `warn` when absent (observability is optional).                       | `count`, `entries[]`                                         |
 | `usbipd-runners`          | Counts `role: "usbip"` entries (one per env that owns USB).                                                | `pass` (zero or more); `data.count` + per-runner `vm`/`pid`/`startTimeTicks` snapshot.       | `count`, `entries[]`                                         |
 | `kernel-module-matrix`    | Reads `kernel-module-report.json` written by the daemon on startup.                                       | `pass` clean; `warn` if optional missing or the report file is absent; `fail` if required missing. | `requiredMissing[]`, `optionalMissing[]`                     |
@@ -67,14 +68,16 @@ remains usable on fresh hosts.
   "broker_ready": true,
   "findings": [
     "metrics-endpoint: unreachable: http://127.0.0.1:9101/metrics",
+    "signoz-ui-endpoint: unreachable: http://10.40.0.10:8080/api/v1/health",
     "autostart-status: 1 VM(s) degraded"
   ],
-  "summary": { "pass": 5, "warn": 2, "fail": 0 },
+  "summary": { "pass": 5, "warn": 3, "fail": 0 },
   "exitCode": 1,
   "checks": [
     { "name": "broker-ready",            "status": "pass", "detail": "broker socket accepted connection", "data": { "socket": "/run/nixling/broker.sock" } },
     { "name": "daemon-ready",            "status": "pass", "detail": "daemon public socket accepted connection", "data": { "socket": "/run/nixling/public.sock" } },
     { "name": "metrics-endpoint",        "status": "warn", "detail": "unreachable: http://127.0.0.1:9101/metrics", "data": { "url": "http://127.0.0.1:9101/metrics" } },
+    { "name": "signoz-ui-endpoint",      "status": "warn", "detail": "SigNoz health endpoint at http://10.40.0.10:8080/api/v1/health unreachable: connect: timed out", "data": { "url": "http://10.40.0.10:8080/api/v1/health" } },
     { "name": "otel-host-bridge-runner", "status": "pass", "detail": "1 OtelHostBridge runner registered", "data": { "count": 1, "entries": [{ "vm": "obs-net", "pid": 1001, "startTimeTicks": 5 }] } },
     { "name": "usbipd-runners",          "status": "pass", "detail": "2 per-env usbipd runner(s) registered", "data": { "count": 2, "entries": [{ "vm": "corp-net", "pid": 1002, "startTimeTicks": 5 }, { "vm": "work-net", "pid": 1003, "startTimeTicks": 5 }] } },
     { "name": "kernel-module-matrix",    "status": "pass", "detail": "all required kernel modules present", "data": { "requiredMissing": [], "optionalMissing": [] } },

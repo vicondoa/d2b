@@ -10,13 +10,14 @@ use std::{collections::BTreeMap, path::Path};
 
 /// Daemon-only end-state: the single supported `_manifest.manifestVersion`.
 ///
-/// Bumped from `2` to `3` to mark the daemon-only break: per-VM systemd
-/// unit reference fields that became
-/// meaningless once supervisor-mode shipped are removed from the
-/// consumer-facing shape. There is no legacy compatibility window —
+/// Bumped from `3` to `4` to mark the native SigNoz observability
+/// backend: Grafana / Cloud Hypervisor exporter metadata in
+/// `_observability` is replaced by SigNoz UI and collector-ingress
+/// metadata while the vsock transport contract remains. There is no
+/// legacy compatibility window —
 /// the broker / daemon refuse to load a bundle whose `vms.json` does
 /// not pin this exact integer (`manifest-version-mismatch` typed error).
-pub const MANIFEST_VERSION_CURRENT: u32 = 3;
+pub const MANIFEST_VERSION_CURRENT: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ManifestV04 {
@@ -144,18 +145,13 @@ pub struct ManifestMeta {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservabilityMeta {
-    pub ch_exporter: ChExporterMeta,
     pub enabled: bool,
-    pub grafana_url: String,
     pub obs_vsock_cid: u32,
     pub obs_vsock_host_socket: String,
+    pub signoz_otlp_grpc_port: u16,
+    pub signoz_otlp_http_port: u16,
+    pub signoz_url: String,
     pub vm_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChExporterMeta {
-    pub listen_port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -233,11 +229,10 @@ mod tests {
 
     // Embed the golden fixtures via `include_str!` so the rust-tests
     // sandbox does not need to read outside its `src` set.
-    // The historical `vms.json-91d69b0` fixture pins
-    // `manifestVersion = 2`
-    // and is retained as the frozen v2 baseline for the vms-json
-    // parity gate. The current v3 baseline lives alongside it.
-    const BASELINE_VMS_JSON: &str = include_str!("../../../tests/golden/vms.json-p2-v3");
+    // Historical `vms.json-*` fixtures remain frozen for the
+    // vms-json-parity gate. This fixture tracks the current manifest
+    // version and is byte-identical with the Nix-rendered smoke manifest.
+    const BASELINE_VMS_JSON: &str = include_str!("../../../tests/golden/vms.json-signoz-v4");
     const NETWORKING_FIXTURE: &str =
         include_str!("../../../tests/golden/manifest_v04/baseline-vms.json");
 
@@ -285,7 +280,7 @@ mod tests {
     #[test]
     fn unknown_reserved_keys_fail_closed() {
         let error = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":3},"_observability":{"enabled":false,"vmName":"sys-obs-stack","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","grafanaUrl":"http://10.40.0.10:3000","chExporter":{"listenPort":9101}},"_future":{}}"#,
+            br#"{"_manifest":{"manifestVersion":4},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"_future":{}}"#,
         )
         .expect_err("reserved keys are closed in v0.4.0 parser");
         assert_eq!(error.kind().as_str(), "manifest-parse-error");
@@ -295,7 +290,7 @@ mod tests {
     #[test]
     fn mismatched_vm_name_is_rejected() {
         let error = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":3},"_observability":{"enabled":false,"vmName":"sys-obs-stack","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","grafanaUrl":"http://10.40.0.10:3000","chExporter":{"listenPort":9101}},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"wrong-name","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
+            br#"{"_manifest":{"manifestVersion":4},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"corp-vm":{"apiSocket":"/var/lib/nixling/vms/corp-vm/corp-vm.sock","audio":false,"audioService":"nixling-corp-vm-snd.service","audioStateFile":"/var/lib/nixling/vms/corp-vm/state/audio-state.json","bridge":"br-work-lan","env":"work","gpuSocket":"/var/lib/nixling/vms/corp-vm/corp-vm-gpu.sock","graphics":false,"isNetVm":false,"name":"wrong-name","netVm":"sys-work-net","observability":{"agentSocket":"/run/nixling/otlp.sock","enabled":false,"vsockCid":110,"vsockHostSocket":"/var/lib/nixling/vms/corp-vm/vsock.sock"},"sshUser":"alice","stateDir":"/var/lib/nixling/vms/corp-vm","staticIp":"10.20.0.10","tap":"work-l10","tpm":false,"tpmSocket":"/run/swtpm/corp-vm/sock","usbipYubikey":false,"usbipdHostIp":"192.0.2.1"}}"#,
         )
         .expect_err("name mismatch fails");
         assert_eq!(error.kind().as_str(), "manifest-parse-error");
@@ -310,9 +305,9 @@ mod tests {
     #[test]
     fn legacy_manifest_version_is_rejected() {
         let error = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":2},"_observability":{"chExporter":{"listenPort":9101},"enabled":false,"grafanaUrl":"http://10.40.0.10:3000","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","vmName":"sys-obs-stack"}}"#,
+            br#"{"_manifest":{"manifestVersion":3},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
         )
-        .expect_err("legacy v2 manifest must be rejected after the P2 bump");
+        .expect_err("legacy v3 manifest must be rejected after the SigNoz manifest bump");
         assert_eq!(error.kind().as_str(), "manifest-version-mismatch");
         assert!(
             error
@@ -326,7 +321,7 @@ mod tests {
     #[test]
     fn current_manifest_version_loads() {
         let manifest = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":3},"_observability":{"chExporter":{"listenPort":9101},"enabled":false,"grafanaUrl":"http://10.40.0.10:3000","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","vmName":"sys-obs-stack"}}"#,
+            br#"{"_manifest":{"manifestVersion":4},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
         )
         .expect("current manifest version parses");
         assert_eq!(
@@ -338,7 +333,7 @@ mod tests {
     #[test]
     fn future_manifest_version_is_rejected() {
         let error = ManifestV04::from_slice(
-            br#"{"_manifest":{"manifestVersion":99},"_observability":{"chExporter":{"listenPort":9101},"enabled":false,"grafanaUrl":"http://10.40.0.10:3000","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","vmName":"sys-obs-stack"}}"#,
+            br#"{"_manifest":{"manifestVersion":99},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#,
         )
         .expect_err("future manifest version must fail closed");
         assert_eq!(error.kind().as_str(), "manifest-version-mismatch");

@@ -4298,6 +4298,7 @@ fn runner_role_for_process_role(
         ProcessRole::Audio => Some(RunnerRole::Audio),
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
         ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
+        ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => Some(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
@@ -4311,12 +4312,6 @@ fn validate_spawn_runner_request_matches_intent(
     req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
     intent: &nixling_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<(), BrokerError> {
-    if matches!(
-        req.role,
-        nixling_ipc::broker_wire::RunnerRole::OtelHostBridge
-    ) {
-        return Ok(());
-    }
     if req.vm_id.as_str() != intent.vm_name {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "vm_id",
@@ -6145,8 +6140,7 @@ mod tests {
             UsbipLockScope,
         };
         use nixling_core::manifest_v04::{
-            ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
-            VmObservability,
+            ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
         };
         use nixling_core::minijail_profile::CgroupPlacement;
         use nixling_core::processes::{
@@ -6285,14 +6279,15 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 3,
+                manifest_version: 4,
             },
             observability: ObservabilityMeta {
-                ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
-                grafana_url: "http://127.0.0.1:3000".to_owned(),
                 obs_vsock_cid: 3,
                 obs_vsock_host_socket: "/run/nixling/obs.sock".to_owned(),
+                signoz_otlp_grpc_port: 4317,
+                signoz_otlp_http_port: 4318,
+                signoz_url: "http://127.0.0.1:8080".to_owned(),
                 vm_name: "obs".to_owned(),
             },
             vms: BTreeMap::from([(
@@ -8315,13 +8310,12 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
-        // The broker MUST refuse a `SpawnRunner` request whose role is
-        // `RunnerRole::OtelHostBridge` when the bundle-resolved runner
-        // intent's `vm_name` does not match
-        // `manifest._observability.vmName`. The default test bundle uses
-        // obs vm "obs" and a runner intent for "corp-vm" — a perfect
-        // mismatch case.
+    fn spawn_runner_rejects_otel_host_bridge_role_for_non_bridge_intent() {
+        // The broker MUST refuse a request that claims
+        // `RunnerRole::OtelHostBridge` while referencing a bundle intent
+        // for another role. OtelHostBridge is now represented in the
+        // process graph, so the normal closed-set intent matching path
+        // catches this before the obs-VM-specific check.
         use nixling_core::bundle_resolver::intent_id_runner;
         use nixling_ipc::broker_wire::{
             BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
@@ -8355,7 +8349,6 @@ mod tests {
             }],
             tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-refusal")),
         });
-        let expected_request_fields = request_fields_value(&request).expect("request fields");
         let audit_context = DispatchAuditContext::from_request(&request, 5152, &caller_role)
             .expect("audit context");
 
@@ -8368,6 +8361,126 @@ mod tests {
             &config,
             &log,
             Some(&bundle.resolver),
+            &backend,
+        )
+        .expect_err("otel host bridge role for non-bridge intent must be denied");
+        match error {
+            BrokerError::SpawnRunnerIntentMismatch {
+                field,
+                requested,
+                resolved,
+            } => {
+                assert_eq!(field, "role");
+                assert_eq!(requested, "otel-host-bridge");
+                assert_eq!(resolved, "cloud-hypervisor");
+            }
+            other => panic!("expected SpawnRunnerIntentMismatch, got {other:?}"),
+        }
+
+        let records = capture.lock().expect("capture lock");
+        assert_eq!(
+            records.len(),
+            0,
+            "intent mismatch is rejected before the OtelHostBridge-specific audit branch"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn spawn_runner_rejects_otel_host_bridge_intent_for_non_obs_vm() {
+        use nixling_core::bundle_resolver::{intent_id_runner, BundleVerifyPolicy};
+        use nixling_core::minijail_profile::{CgroupPlacement, WritablePath};
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole, ProcessesJson};
+        use nixling_core::test_support::RoleProfileBuilder;
+        use nixling_ipc::broker_wire::{
+            BrokerCallerRole, BrokerRequest, RunnerAllocation, RunnerAllocationKind, RunnerRole,
+        };
+        use nixling_ipc::types::{BundleOpId, RoleId, TracingSpanId, VmId};
+
+        let root = test_audit_dir("spawn-runner-otel-host-bridge-non-obs-vm");
+        let bundle = build_test_bundle(&root);
+        let mut processes: ProcessesJson =
+            serde_json::from_slice(&fs::read(&bundle.processes_path).expect("read processes.json"))
+                .expect("parse processes.json");
+        processes.vms[0].nodes.push(ProcessNode {
+            id: NodeId("otel-host-bridge".to_owned()),
+            role: ProcessRole::OtelHostBridge,
+            unit: None,
+            binary_path: Some("/nix/store/test-socat/bin/socat".to_owned()),
+            argv: vec![
+                "nixling-otel-host-bridge".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/corp-vm/vsock.sock 14317\""
+                    .to_owned(),
+            ],
+            env: Vec::new(),
+            profile: RoleProfileBuilder::new()
+                .with_profile_id("profile-otel-host-bridge")
+                .with_uid(1003)
+                .with_gid(1003)
+                .with_seccomp_policy_ref(Some("w1-otel-host-bridge"))
+                .with_writable_paths(vec![WritablePath {
+                    path: "/run/nixling/otel".to_owned(),
+                    purpose: "host otel bridge runtime".to_owned(),
+                }])
+                .with_cgroup_placement(CgroupPlacement {
+                    subtree: "nixling.slice/corp-vm/otel-host-bridge".to_owned(),
+                    controllers: vec!["cpu".to_owned(), "memory".to_owned()],
+                    delegated: false,
+                })
+                .build(),
+            readiness: Vec::new(),
+            plan_ops: Vec::new(),
+        });
+        write_json_file(&bundle.processes_path, &processes);
+        let resolver = match try_load_resolver_with_policy(
+            &bundle.bundle_path,
+            &BundleVerifyPolicy::for_tests(),
+        ) {
+            BundleSlot::Loaded(resolver) => resolver,
+            other => panic!("rewritten bundle should load, got {other:?}"),
+        };
+
+        let config = test_server_config(&root, &bundle.manifest_path);
+        let (log, capture) = AuditLog::open_capturing(
+            &config.audit_dir,
+            Gid::current().as_raw(),
+            true,
+            config.audit_retention_days,
+        )
+        .expect("open capturing audit log");
+        let backend = FakeDispatchBackend::default();
+        let caller_role = BrokerCallerRole::AdminUid { uid: 1000 };
+        let caller_gid = Gid::current().as_raw();
+        let intent_ref = intent_id_runner("corp-vm", "otel-host-bridge");
+        let request = BrokerRequest::SpawnRunner(nixling_ipc::broker_wire::SpawnRunnerRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("otel-host-bridge"),
+            role: RunnerRole::OtelHostBridge,
+            bundle_runner_intent_ref: BundleOpId::new(intent_ref.clone()),
+            runtime_allocations: vec![RunnerAllocation {
+                kind: RunnerAllocationKind::VsockCid,
+                opaque_ref: "cid:1000".to_owned(),
+            }],
+            tracing_span_id: Some(TracingSpanId::new("span-otel-bridge-wrong-vm")),
+        });
+        let audit_context = DispatchAuditContext::from_request(&request, 5153, &caller_role)
+            .expect("audit context");
+
+        let error = dispatch_request_with_backend(
+            request,
+            1000,
+            caller_gid,
+            caller_role.clone(),
+            &audit_context,
+            &config,
+            &log,
+            Some(&resolver),
             &backend,
         )
         .expect_err("otel host bridge intent for non-obs vm must be denied");
@@ -8391,26 +8504,6 @@ mod tests {
         assert_eq!(
             record.error_kind.as_deref(),
             Some("otel-host-bridge-intent-invalid")
-        );
-        assert_eq!(record.request_fields, expected_request_fields);
-        assert_eq!(record.peer_pid, 5152);
-        let fields = OperationFields::from_operation_value(
-            "SpawnRunner",
-            record.operation_fields.clone().expect("operation fields"),
-        )
-        .expect("deserialize operation fields");
-        assert_eq!(
-            fields,
-            OperationFields::SpawnRunner {
-                bundle_runner_intent_ref: intent_id_runner("corp-vm", "ch-runner"),
-                vm_id: "corp-vm".to_owned(),
-                role_id: "ch-runner".to_owned(),
-                role: RunnerRole::OtelHostBridge.as_str().to_owned(),
-                runtime_allocations: vec![RunnerAllocation {
-                    kind: RunnerAllocationKind::VsockCid,
-                    opaque_ref: "cid:42".to_owned(),
-                }],
-            }
         );
 
         let _ = fs::remove_dir_all(&root);

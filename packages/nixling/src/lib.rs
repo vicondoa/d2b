@@ -5191,6 +5191,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::Audio => "audio",
         nixling_core::processes::ProcessRole::CloudHypervisorRunner => "cloud-hypervisor-runner",
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
+        nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
         nixling_core::processes::ProcessRole::Usbip => "usbip",
         nixling_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",

@@ -55,6 +55,10 @@
           install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
         '';
+
+        signoz = import ./pkgs/signoz { inherit pkgs; };
+        signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
+        signozSchemaMigrator = import ./pkgs/signoz-schema-migrator { inherit pkgs; };
       });
 
       apps = forAllSystems (system: { });

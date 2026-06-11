@@ -1,1 +1,1 @@
-{"_manifest":{"manifestVersion":3},"_observability":{"chExporter":{"listenPort":9101},"enabled":false,"grafanaUrl":"http://10.40.0.10:3000","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs-stack/vsock.sock","vmName":"sys-obs-stack"},"_future":{"enabled":true}}
+{"_manifest":{"manifestVersion":4},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318},"_future":{"enabled":true}}

@@ -405,6 +405,8 @@ in
             wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            otel_host_bridge_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            otel_obs_connect_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | .nodes[] | select(.role == "vsock-relay" or .role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
@@ -423,6 +425,15 @@ in
                 --size-mib "$overlay_size_mib" \
                 2>/dev/null || true
             fi
+            if [ "${name}" = "${cfg.observability.vmName}" ]; then
+              obs_vsock="/var/lib/nixling/vms/${name}/vsock.sock"
+              if [ -S "$obs_vsock" ]; then
+                for obs_uid in $otel_obs_connect_uids; do
+                  [ "$obs_uid" = "0" ] && continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:rw" "$obs_vsock" 2>/dev/null || true
+                done
+              fi
+            fi
             for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /var/lib/nixling 2>/dev/null || true
@@ -433,6 +444,13 @@ in
               # via its own pivot_root + CAP_SYS_ADMIN; other
               # sidecars need explicit ACL.
               ${pkgs.acl}/bin/setfacl -m "u:$uid:x" /run/nixling 2>/dev/null || true
+              if echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/otel 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/otel 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/otel 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
+              fi
               # panel-security R2 must-fix B: /dev/kvm
               # + /dev/vhost-net only for Hypervisor/Gpu UIDs.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
@@ -449,8 +467,10 @@ in
               # broker-spawned CH re-creates disk-image-shaped
               # files with the inherited ACL. Documented in the
               # migration-guide section.
-              ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
-              ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+              if ! echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+              fi
               # panel-security R4 critical must-fix
               # the per-subdir setfacl loop used to do
               # `[ -d "$vm_dir/$sub" ] && setfacl...` on paths
@@ -464,13 +484,15 @@ in
               # passes /proc/self/fd/<N> to setfacl so the
               # syscall operates on the inode the helper holds.
               for sub in state sshd-host-keys host-keys; do
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/vms/${name}/$sub" \
-                  --acl-spec "u:$uid:rx" \
-                  --also-spec "mask:r-x" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
+                if ! echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                  ${activationHelper} setfacl-on-path \
+                    --path "/var/lib/nixling/vms/${name}/$sub" \
+                    --acl-spec "u:$uid:rx" \
+                    --also-spec "mask:r-x" \
+                    --require-kind directory \
+                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                    2>/dev/null || true
+                fi
               done
 
               # + v1.1.2fu23

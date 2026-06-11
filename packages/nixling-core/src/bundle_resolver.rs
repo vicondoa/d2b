@@ -2121,6 +2121,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::Audio => Some("audio"),
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
+        ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
         ProcessRole::Usbip => Some("usbip"),
         ProcessRole::WaylandProxy => Some("wayland-proxy"),
     }
@@ -2149,6 +2150,9 @@ fn legacy_runner_spec(
         ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
         ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
         ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
+        // OtelHostBridge must always carry the closed argv from
+        // processes.json; it has no legacy singleton fallback.
+        ProcessRole::OtelHostBridge => return None,
         // USBIP proxy runners must bind their own listen socket in the
         // daemon-owned SpawnRunner path. The retired socket-activated
         // systemd-socket-proxyd shape is not a safe legacy fallback.
@@ -2616,8 +2620,7 @@ mod tests {
         UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     };
     use crate::manifest_v04::{
-        ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
-        VmObservability,
+        ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
     };
     use crate::minijail_profile::WritablePath;
     use crate::processes::{
@@ -2870,14 +2873,15 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 3,
+                manifest_version: 4,
             },
             observability: ObservabilityMeta {
-                ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
-                grafana_url: "http://127.0.0.1:3000".to_owned(),
                 obs_vsock_cid: 3,
                 obs_vsock_host_socket: "/run/nixling/obs.sock".to_owned(),
+                signoz_otlp_grpc_port: 4317,
+                signoz_otlp_http_port: 4318,
+                signoz_url: "http://127.0.0.1:8080".to_owned(),
                 vm_name: "obs".to_owned(),
             },
             vms: BTreeMap::from([(

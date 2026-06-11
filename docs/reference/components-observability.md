@@ -1,351 +1,192 @@
 # `nixling.observability.*` / `nixling.vms.<vm>.observability.*`
 
-> Reference for the `observability` component surface.
-> Option source: [`nixos-modules/options-observability.nix`](../../nixos-modules/options-observability.nix), [`nixos-modules/options-vms.nix`](../../nixos-modules/options-vms.nix)
-> Manifest contract: [manifest schema](./manifest-schema.md)
-> Implementation modules: [`nixos-modules/observability-vm.nix`](../../nixos-modules/observability-vm.nix), [`nixos-modules/components/observability/{host,guest,stack}.nix`](../../nixos-modules/components/observability/)
+Reference for the bundled native SigNoz observability component.
+
+Option sources:
+
+- [`nixos-modules/options-observability.nix`](../../nixos-modules/options-observability.nix)
+- [`nixos-modules/options-vms.nix`](../../nixos-modules/options-vms.nix)
+
+Implementation modules:
+
+- [`nixos-modules/observability-vm.nix`](../../nixos-modules/observability-vm.nix)
+- [`nixos-modules/components/observability/{host,guest,stack}.nix`](../../nixos-modules/components/observability/)
 
 ## Overview
 
-nixling observability is an opt-in telemetry subsystem: set `nixling.observability.enable = true` to turn on the host-side forwarding/exporter layer and reserve the auto-declared `sys-obs-stack` VM, then set `nixling.vms.<vm>.observability.enable = true` on each monitored workload VM to attach that VM's guest Alloy agent and OTLP relay path into the stack. The default-off invariant is part of the public surface: when the host flag is left at `false`, the observability env, stack VM, and per-VM telemetry sidecars are out of scope; when the host flag is `true`, the subsystem spans the host, the auto-declared `sys-obs-stack` VM, and one per-monitored-VM guest Alloy agent.
+Set `nixling.observability.enable = true` to auto-declare the `obs` env
+and the `sys-obs` observability VM. Set
+`nixling.vms.<vm>.observability.enable = true` on each workload VM that
+should send telemetry.
 
-## Architecture diagram
+The bundled backend is native SigNoz:
+
+- ClickHouse stores telemetry.
+- ZooKeeper coordinates the single-node ClickHouse cluster used by
+  SigNoz's replicated schema.
+- SigNoz serves the UI and API.
+- SigNoz OTel Collector ingests OTLP and writes logs, metrics, traces,
+  and metadata to ClickHouse.
+
+No Docker, Podman, Kubernetes, Helm, or compose deployment is emitted.
+
+## Data path
 
 ```text
-workload VM <vm>
-┌──────────────────────────────────────────────────────────────────────┐
-│ guest Alloy                                                         │
-│   │                                                                  │
-│   ▼                                                                  │
-│ /run/nixling/otlp.sock            guest-local OTLP receiver          │
-│   │                                                                  │
-│   ▼                                                                  │
-│ /run/nixling/otlp-egress.sock     guest relay handoff               │
-│   │                                                                  │
-│   ▼                                                                  │
-│ nixling-otel-vsock-out.service    socat                             │
-└───┬───────────────────────────────────────────────────────────────────┘
-    │ AF_VSOCK: CID 2, port 14317
-    ▼
-host
-┌──────────────────────────────────────────────────────────────────────┐
-│ nixling-otel-relay@<vm>.service   socat                             │
-│   │                                                                  │
-│   ├─ workload backend: /var/lib/nixling/vms/<vm>/vsock.sock         │
-│   └─ obs backend:      /var/lib/nixling/vms/sys-obs-stack/vsock.sock│
-└───┬───────────────────────────────────────────────────────────────────┘
-    │
-    ▼
-obs VM: sys-obs-stack
-┌──────────────────────────────────────────────────────────────────────┐
-│ nixling-otel-vsock-in.service     socat                             │
-│   │                                                                  │
-│   ▼                                                                  │
-│ /run/nixling/obs-ingress.sock                                        │
-│   │                                                                  │
-│   ▼                                                                  │
-│ obs Alloy                                                            │
-│   ├─▶ Prometheus                                                     │
-│   ├─▶ Loki                                                           │
-│   └─▶ Tempo                                                          │
-└──────────────────────────────────────────────────────────────────────┘
+workload VM
+  nixling-otel-collector.service
+    -> /run/nixling/otel/otlp-egress.sock
+    -> nixling-otel-vsock-out.service
+    -> host CH-vsock relay
+    -> sys-obs nixling-otel-vsock-in-<vm>.service
+    -> signoz-otel-collector.service
+    -> ClickHouse
 
-parallel host path
-┌──────────────────────────────────────────────────────────────────────┐
-│ host Alloy                                                           │
-│   │                                                                  │
-│   ▼                                                                  │
-│ /run/nixling/host-otlp.sock                                          │
-│   │                                                                  │
-│   ▼                                                                  │
-│ /run/nixling/host-egress.sock                                        │
-│   │                                                                  │
-│   ▼                                                                  │
-│ nixling-otel-host-bridge.service                                     │
-└───┬───────────────────────────────────────────────────────────────────┘
-    │ same obs-VM backend socket on the host
-    ▼
-/var/lib/nixling/vms/sys-obs-stack/vsock.sock
-    │
-    ▼
-nixling-otel-vsock-in.service → /run/nixling/obs-ingress.sock → obs Alloy
+host
+  nixling-host-otel-collector.service
+    -> /run/nixling/otel/host-egress.sock
+    -> broker-spawned OtelHostBridge
+    -> sys-obs nixling-otel-vsock-in-host.service
+    -> signoz-otel-collector.service
+    -> ClickHouse
 ```
 
-The observability data path is vsock and Unix sockets end-to-end. It does not traverse `network.nix`'s IP routing path.
+Telemetry uses Unix sockets and vsock. It does not traverse workload env
+LAN routing.
 
-## Option reference
+## Host-level options
 
-The tables below copy the live committed schema. Types, defaults, and descriptions follow the current option declarations.
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `nixling.observability.enable` | bool | `false` | Enable the bundled observability stack. |
+| `nixling.observability.env` | str | `"obs"` | Auto-declared observability env name. |
+| `nixling.observability.vmName` | str | `"sys-obs"` | Auto-declared observability VM name. |
+| `nixling.observability.index` | int | `10` | LAN index for `sys-obs`. |
+| `nixling.observability.lanSubnet` | str | `"10.40.0.0/24"` | Observability LAN CIDR. |
+| `nixling.observability.uplinkSubnet` | str | `"203.0.113.0/30"` | Host↔obs point-to-point CIDR. |
+| `nixling.observability.signoz.listenAddress` | str | derived obs IP | SigNoz UI bind address. |
+| `nixling.observability.signoz.listenPort` | port | `8080` | SigNoz UI port. |
+| `nixling.observability.signoz.otlpGrpcPort` | port | `4317` | SigNoz collector loopback OTLP gRPC port. |
+| `nixling.observability.signoz.otlpHttpPort` | port | `4318` | SigNoz collector loopback OTLP HTTP port. |
+| `nixling.observability.signoz.adminEmail` | str | `"admin@nixling.local"` | Root SigNoz admin email. |
+| `nixling.observability.signoz.jwtSecretFile` | path or string or null | `null` | Optional host path for the SigNoz JWT/tokenizer secret. |
+| `nixling.observability.signoz.rootPasswordFile` | path or string or null | `null` | Optional host path for the SigNoz root password. |
+| `nixling.observability.signoz.clickhousePasswordFile` | path or string or null | `null` | Optional host path for the ClickHouse password used by SigNoz services. |
+| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Socat-compatible relay package for vsock bridges. |
 
-### Host-level options under `nixling.observability.*`
+Legacy Grafana/Tempo/Loki/Prometheus-specific options are retired or
+kept only as migration shims. Do not use them for new configurations.
+`retention.*` and `sampling.*` currently warn when changed and do not
+configure SigNoz/ClickHouse TTL.
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `nixling.observability.enable` | bool | `false` | Enable the auto-declared observability VM, host forwarders/exporters, and per-VM guest telemetry sidecars. |
-| `nixling.observability.env` | str | `"obs"` | Name of the auto-declared observability env. When observability is enabled, the framework materialises `nixling.envs.<env>` from this value. |
-| `nixling.observability.vmName` | str | `"sys-obs-stack"` | VM name reserved for the auto-declared observability stack VM. |
-| `nixling.observability.index` | int | `10` | Workload-style LAN index reserved for the observability stack VM inside `lanSubnet`. |
-| `nixling.observability.lanSubnet` | str | `"10.40.0.0/24"` | LAN CIDR for the auto-declared observability env. |
-| `nixling.observability.uplinkSubnet` | str | `"203.0.113.0/30"` | Host↔observability-stack point-to-point CIDR for the auto-declared observability env. |
-| `nixling.observability.retention.metrics` | str | `"30d"` | Retention window for metrics in the observability stack. |
-| `nixling.observability.retention.logs` | str | `"14d"` | Retention window for logs in the observability stack. |
-| `nixling.observability.retention.traces` | str | `"7d"` | Retention window for traces in the observability stack. |
-| `nixling.observability.grafana.listenAddress` | str | `"10.40.0.10"` | Address Grafana binds inside the observability env. The default tracks the observability VM's derived IP (`lanSubnet` + `index`). |
-| `nixling.observability.grafana.listenPort` | port | `3000` | TCP port Grafana listens on inside the observability env. |
-| `nixling.observability.grafana.secretKeyFile` | path or null | `null` | Optional file containing Grafana's session signing secret. When null, framework generates a per-install secret on the **host** at `${nixling.site.stateDir}/observability/grafana-secret-key` (mode 0400 root:root) and shares it read-only into `sys-obs-stack` at `/run/nixling-obs-secrets/grafana-secret-key`. When set, the path is loaded via systemd LoadCredential. Use this to source the secret from sops-nix, agenix, or another declarative secrets framework. |
-| `nixling.observability.grafana.adminPasswordFile` | path or null | `null` | Optional file containing Grafana's `nixling-admin` user password. When null, framework generates a per-install password on the **host** at `${nixling.site.stateDir}/observability/grafana-admin-password` (mode 0400 root:root) and shares it read-only into `sys-obs-stack` at `/run/nixling-obs-secrets/grafana-admin-password`. Host operators can read it directly via `sudo cat <path>` — no cross-VM SSH required. When set, the path is loaded via systemd LoadCredential. Use this to source the password from sops-nix, agenix, or another declarative secrets framework. |
-| `nixling.observability.grafana.anonymousViewer.enable` | bool | `false` | Opt-in: allow unauthenticated Viewer access to Grafana. **Only use on trusted single-host LAN deployments** — anyone reachable to the obs VM's Grafana port can read all telemetry without authentication. Default is `false` (auth required as `nixling-admin`). |
-| `nixling.observability.ch.exporter.enable` | bool | `true` | Enable the host-side Cloud Hypervisor metrics exporter. |
-| `nixling.observability.ch.exporter.listenPort` | port | `9101` | Loopback port the host-side Cloud Hypervisor metrics exporter listens on. |
-| `nixling.observability.ch.exporter.includeTopologyLabels` | bool | `false` | Opt-in: include `bridge`, `tap`, `tpm`, `graphics`, `audio`, `usbip_yubikey` labels on emitted CH metrics. Default `false` to keep the security-posture surface narrow; enable for debug. |
-| `nixling.observability.alerts.<name>.enable` | bool | `true` | Per-alert toggle. The 8 default alerts (NixlingVMDown, NixlingNetVMDownWithRunningWorkloads, NixlingObsVMUnreachableFromHost, NixlingVsockRelayDown, NixlingCHAPISocketMissing, NixlingStoreSyncFailure, NixlingGuestTelemetryMissing, NixlingObsVMStackUnhealthy) can be individually disabled by setting `<name>.enable = false`. Disabled alerts are omitted from the generated rule file entirely. |
-| `nixling.observability.cli.traces.enable` | bool | `true` | Include OpenTelemetry trace helpers in the `nixling` CLI. |
-| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. A future stable relay interface may replace this contract, but the socat-compatible path will stay supported for at least one minor release after that lands. |
-| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. v0.3.0 will define a stable relay-binary interface. |
-| `nixling.observability.transport.relayPackage` | package | `pkgs.socat` | Package providing the observability byte-relay binary. Must expose a `bin/socat`-compatible CLI because nixling passes socat-specific arguments today; defaults to `pkgs.socat`. That compatibility requirement remains in force for the current transport. When `nixling-otel-relay` lands, nixling will add a dedicated relay interface first and keep `bin/socat` compatibility for at least one minor release with CHANGELOG-guided migration notes before removal. |
+## Per-VM options
 
-### Per-VM options under `nixling.vms.<vm>.observability.*`
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `nixling.vms.<vm>.observability.enable` | bool | `false` | Enable telemetry collection for this VM. |
+| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `false` | Compatibility toggle reserved for future guest journald collection. |
+| `nixling.vms.<vm>.observability.scrapeNodeMetrics` | bool | `true` | Enable guest hostmetrics collection. |
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `nixling.vms.<vm>.observability.enable` | bool | `false` | Enable the guest Alloy agent and reverse OTLP tunnel for this workload VM. |
-| `nixling.vms.<vm>.observability.scrapeJournal` | bool | `true` | Whether the observability guest component should scrape this VM's journald stream. |
-| `nixling.vms.<vm>.observability.scrapeNodeMetrics` | bool | `true` | Whether the observability guest component should scrape this VM's node/system metrics. |
+## Runtime services
 
-### Per-VM audit forwarding under `nixling.vms.<vm>.audit.*`
+Host:
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `nixling.vms.<vm>.audit.enable` | bool | `false` | Enable guest-side `auditd` forwarding for this VM. Requires `nixling.vms.<vm>.observability.enable = true` on the same VM. |
-| `nixling.vms.<vm>.audit.rules` | list of strings | curated ruleset | Guest audit rules passed to `security.audit.rules`. The default watches `/etc/passwd`, `/etc/shadow`, and `/etc/sudoers`; it intentionally omits syscall-heavy rules such as `execve`/`connect` because those records frequently carry command-line secrets and executable paths. |
+- `nixling-host-otel-collector.service`
+- broker-spawned `RunnerRole::OtelHostBridge` with process role
+  `otel-host-bridge`
 
-When audit forwarding is enabled, the guest path is:
+Workload VM:
 
-1. `auditd` runs in the workload VM with `audisp-syslog` active.
-2. `audisp-syslog` forwards audit events into journald.
-3. The guest Alloy config tails journald with
-   `_TRANSPORT=syslog SYSLOG_IDENTIFIER=audisp-syslog` and labels the
-   stream `source="audit"`, `unit="audisp-syslog"`, `vm`, and `env`.
-4. The existing reverse OTLP/vsock transport carries that stream into
-   the observability stack VM and on to Loki.
+- `nixling-otel-collector.service`
+- `nixling-otel-vsock-out.service`
 
-### Host StoreSync observability export
+`sys-obs`:
 
-The privileged broker (`nixling-priv-broker`) emits a host-side,
-StoreSync-only telemetry export that host Alloy tails as a file source.
-This is independent of the per-VM guest journald/audit path above.
+- `clickhouse.service`
+- `zookeeper.service`
+- `signoz-schema-migrate-sync.service`
+- `signoz-schema-migrate-async.service`
+- `signoz.service`
+- `signoz-otel-collector.service`
+- `nixling-otel-vsock-in-host.service`
+- `nixling-otel-vsock-in-<vm>.service` for each observed workload
 
-1. On every terminal StoreSync attempt the broker writes one JSON line
-   to `<stateDir>/observability/store-sync/store-sync-<utc-date>.jsonl`
-   (`0640`, daily-rotated). The line is a positive-allow-list projection
-   of the terminal audit record — host-only fields (`caller_principal`,
-   `retained_generations`, host/store paths, `db.dump`, marker payloads)
-   are redacted **by construction** in the broker. The target VM/env are
-   carried as JSON content (`target_vm`/`target_env`), never as labels.
-   See [`store-sync.md`](./store-sync.md) § "Observability export".
-2. Host Alloy tails the daily-rotated glob with a `local.file_match` +
-   `loki.source.file` pair (following rotation and newly-created files)
-   and forwards it through the same host→stack OTLP/Loki receiver as the
-   journal sources.
-3. The Loki stream labels are host singletons: `vm="host"`,
-   `env="host"`, `role="host"`, `source="store-sync-audit"`.
-4. The `alloy` identity is granted **focused** read/traverse ACLs to the
-   export directory only (`u:alloy:--x` traverse on `<stateDir>` and
-   `<stateDir>/observability`, `u:alloy:r-x` + a `default:u:alloy:r--`
-   ACL on the export dir so rotated files inherit read). Alloy is **not**
-   added to the `nixlingd` group and gets **no** access to the unified
-   broker audit log (`<stateDir>/audit/broker-*.jsonl`), the privileged
-   daemon socket, or any other broker state. Static gates:
-   [`tests/store-sync-export-eval.sh`](../../tests/store-sync-export-eval.sh)
-   and [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh).
+## Host StoreSync observability export
 
-## Port and CID allocation
+The privileged broker emits a StoreSync-only telemetry export at:
 
-The observability transport has its own CID/port/path contract. Host-side vsock backend sockets follow the live manifest layout under `/var/lib/nixling/vms/<vm>/...`.
+```text
+${nixling.site.stateDir}/observability/store-sync/store-sync-<utc-date>.jsonl
+```
 
-| Resource | Value | Owner |
-|---|---|---|
-| Host vsock CID | `2` (kernel-fixed) | kernel |
-| Obs VM vsock CID | `1000` | framework |
-| Workload VM observability vsock CID | `100 + envIndex * 100 + vm.index` (`envIndex` = 0-based lexicographic position in `lib.attrNames config.nixling.envs`) | framework |
-| Vsock service port | `14317` | host relay listener / obs receiver |
-| Grafana TCP | `cfg.grafana.listenPort` (default `3000`), bound to `cfg.grafana.listenAddress` | obs VM |
-| CH exporter TCP | `cfg.ch.exporter.listenPort` (default `9101`), bound to `127.0.0.1` | host |
-| Guest OTLP UDS | `/run/nixling/otlp.sock` | guest |
-| Guest OTLP egress UDS | `/run/nixling/otlp-egress.sock` | guest |
-| Host OTLP UDS | `/run/nixling/host-otlp.sock` | host |
-| Host egress UDS | `/run/nixling/host-egress.sock` | host |
-| Obs VM ingress UDS | `/run/nixling/obs-ingress.sock` | obs VM |
-| Workload VM vsock backend socket | `/var/lib/nixling/vms/<vm>/vsock.sock` | host (Cloud Hypervisor creates it) |
-| Obs VM vsock backend socket | `/var/lib/nixling/vms/<cfg.vmName>/vsock.sock` | host (Cloud Hypervisor creates it) |
+The host OTel collector tails `store-sync-*.jsonl` with a `filelog`
+receiver and forwards those records through the same host→`sys-obs`
+OTLP bridge as host metrics. This export is a positive allow-list
+projection, not the broker audit log. Host-confidential fields
+(`caller_principal`, retained generation lists, host/store paths,
+`db.dump`, marker payloads) are redacted by construction in the broker.
+The target VM/env stay in JSON content (`target_vm` / `target_env`) and
+are not promoted to resource attributes.
 
-Manifest v2 also keeps a deterministic md5-based fallback CID for env-less legacy VMs so the always-emitted `observability` block stays populated, but env-backed workload VMs use the formula above.
+The collector identity gets focused read/traverse ACLs on the StoreSync
+export directory only. It is not added to the `nixlingd` group and gets
+no access to the unified broker audit log, privileged daemon socket, or
+other broker state. Static gates:
 
-## Naming conventions
+- [`tests/store-sync-export-eval.sh`](../../tests/store-sync-export-eval.sh)
+- [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh)
 
-| Kind | Pattern | Example |
-|---|---|---|
-| System-declared VM | `sys-<env>-<role>` | `sys-obs-stack` |
-| Per-VM templated host unit | `nixling-<role>@<vm>.service` | `nixling-otel-relay@work-aad.service` |
-| Global host singleton unit | `nixling-<role>.service` | `nixling-ch-exporter.service`, `nixling-otel-host-bridge.service` |
-| In-VM unit (guest or obs) | plain `nixling-<role>.service` | `nixling-otel-vsock-out.service`, `nixling-otel-vsock-in.service` |
-| Per-VM state | `/var/lib/nixling/vms/<vm>/...` | `/var/lib/nixling/vms/work-aad/vsock.sock` |
-| Per-VM runtime (in-VM) | `/run/nixling/...` | `/run/nixling/otlp.sock` |
+## Socket and port contract
 
-**Service names**: nixling-defined services use `nixling-<role>.service`
-(templated: `nixling-<role>@<vm>.service`). Services declared via
-upstream NixOS modules (`services.alloy`, `services.grafana`, etc.)
-keep their upstream names. This matches the existing precedent for
-`pipewire.service` (audio), `swtpm@<vm>.service`, and
-`microvm@<vm>.service`.
+| Resource | Value |
+| --- | --- |
+| Obs VM vsock CID | `1000` |
+| Workload observability CID | `100 + envIndex * 100 + vm.index` |
+| Host obs ingress vsock port | `14317` |
+| Workload obs ingress vsock ports | `14318+`, one per observed VM |
+| Host collector egress | `/run/nixling/otel/host-egress.sock` |
+| Guest local OTLP | `/run/nixling/otel/otlp.sock` with compatibility symlink `/run/nixling/otlp.sock` |
+| Guest relay handoff | `/run/nixling/otel/otlp-egress.sock` |
+| SigNoz UI | `signoz.listenAddress:signoz.listenPort` |
+| SigNoz OTLP gRPC | loopback `signoz.otlpGrpcPort` inside `sys-obs` |
+| SigNoz OTLP HTTP | loopback `signoz.otlpHttpPort` inside `sys-obs` |
 
-## Systemd units
+Only the SigNoz UI port is opened through the obs VM firewall by default.
+ClickHouse, ZooKeeper, OTLP, health, pprof, and zpages listeners stay
+loopback or Unix-socket scoped.
 
-nixling-defined observability sidecars follow the v0.1.7 H7 lifecycle
-rule: `restartIfChanged = false` is set at the top level of the service
-definition, not as `unitConfig.X-RestartIfChanged`. That invariant does
-not extend to upstream NixOS services. `alloy.service`,
-`grafana.service`, `prometheus.service`, `loki.service`, and
-`tempo.service` keep their upstream nixpkgs defaults (currently
-`restartIfChanged = true`).
+## Secrets
 
-| Unit | Scope | Restart | `restartIfChanged` | What it does |
-|---|---|---|---|---|
-| `nixling-otel-relay@<vm>.service` | host | `on-failure` | `false` (top-level) | Bridges one monitored workload VM's host-side vsock backend socket to the obs VM's host-side vsock backend socket. |
-| `nixling-otel-host-bridge.service` | host | `on-failure` | `false` (top-level) | Bridges the host Alloy egress path into the obs VM without using IP transport. |
-| `nixling-ch-exporter.service` | host | `on-failure` | `false` (top-level) | Polls each VM's Cloud Hypervisor API socket and exposes Prometheus text on loopback for host Alloy to scrape. |
-| `alloy.service` | host | `always` | `true` (upstream default) | Host forwarder that scrapes host journald, node metrics, and selected systemd-unit metrics, then forwards upstream to the obs stack. |
-| `nixling-otel-vsock-out.service` | workload guest | `on-failure` | `false` (top-level) | Bridges the guest-side OTLP Unix socket into AF_VSOCK toward host CID `2`, port `14317`. |
-| `alloy.service` | workload guest | `always` | `true` (upstream default) | Guest-local Alloy agent that scrapes journald and node metrics and receives in-guest OTLP traffic. |
-| `nixling-otel-vsock-in.service` | obs VM | `on-failure` | `false` (top-level) | Receives AF_VSOCK traffic on port `14317` and forwards it to the obs VM's ingress UDS. |
-| `alloy.service` | obs VM | `always` | `true` (upstream default) | Central Alloy receiver for workload-VM and host telemetry. |
-| `grafana.service` | obs VM | `on-failure` | `true` (upstream default) | Dashboard and query UI backed by provisioned Prometheus, Loki, and Tempo datasources. |
-| `prometheus.service` | obs VM | `always` | `true` (upstream default) | Metrics storage and query engine. |
-| `loki.service` | obs VM | `always` | `true` (upstream default) | Log storage and query engine. |
-| `tempo.service` | obs VM | `always` | `true` (upstream default) | Trace storage and query backend. |
+Nixling generates SigNoz and ClickHouse credentials on the host under:
 
-> Note: The H7 invariant applies to nixling-defined sidecars only;
-> upstream services follow nixpkgs conventions.
+```text
+/var/lib/nixling/observability/
+```
 
-## Security boundaries
+Files are root-owned `0400` and shared read-only into `sys-obs` at
+`/run/nixling-obs-secrets`. Secrets are consumed through systemd
+credentials or environment files, not embedded as literals in the Nix
+store.
 
-### Vsock attack surface
+## Default resources
 
-The additional device surface is the kernel virtio-vsock path. That is not a new trust class for nixling: the framework already relies on other virtio devices (`net`, `blk`, `fs`, `snd`, `gpu`). The observability vsock device is treated as the same kind of host-mediated paravirtual device, not a qualitatively different exposure.
+`sys-obs` defaults are sized for a single-node SigNoz store:
 
-### Host as trust broker
+| Resource | Default |
+| --- | --- |
+| vCPU | `4` |
+| RAM | `8192` MiB |
+| ClickHouse volume | `32768` MiB |
+| ZooKeeper volume | `2048` MiB |
+| SigNoz volume | `4096` MiB |
+| SigNoz collector volume | `2048` MiB |
 
-The host is already the trust broker for VM-adjacent sidecars such as `virtiofsd`, `swtpm`, and audio mediation. The observability relays keep that posture: they add a byte relay on the host, but they do not create a new trust tier. Compromise of the host already implies compromise of every VM; observability does not change that baseline.
+## Migration notes
 
-### No cross-VM credentials
+The old auto-declared VM name was `sys-obs-stack`; the new name is
+`sys-obs`. If a host used the old default, upgrading creates a new VM
+state directory. The old state is preserved for rollback and must be
+retired intentionally.
 
-The observability stack VM holds no credentials that grant access to monitored workload VMs. There is no reverse SSH tunnel, no per-VM `authorized_keys` material for telemetry transport, and no workload-VM credential copied into the stack. Compromise of the obs VM therefore does not itself grant access to workload VMs.
-
-### Network policy unchanged
-
-`network.nix` stays untouched. Existing `hostBlocklist` handling and deny-by-default outbound policy continue to apply exactly as before. The observability transport bypasses IP entirely by using vsock plus Unix sockets, so no new LAN/uplink firewall exception is part of the design.
-
-The auto-declared `obs` env (lanSubnet `10.40.0.0/24`, uplinkSubnet `203.0.113.0/30`) and the framework-owned `sys-obs-net` VM nevertheless go through the same per-env net-VM contract as user-declared envs. `tests/net-vm-network-eval.sh` pins that contract end to end (see the case-10 block in its header doc): `sys-obs-net` must derive its `10-uplink`/`10-lan` static addresses from the env CIDRs, must drop every peer env LAN/uplink CIDR before the broad LAN -> uplink accept (and reciprocally, peer envs must drop the obs CIDRs), must keep `30-lan-obs` bridge `Isolated = true`, and must NOT acquire the MSS-clamp or LAN-to-LAN forward rules — enabling observability cannot become a hidden east-west tunnel between previously-isolated envs.
-
-### Attribute hygiene
-
-Telemetry labels and attributes are an explicit allowlist. Permitted examples are `vm.name`, `vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`, `bridge`, `static_ip`, and `generation`. Forbidden payload includes SSH key paths, command output, Nix derivation paths, and any Entra-, TPM-, or audio-user-specific data.
-
-### StoreSync export confinement
-
-The host StoreSync export (above) is the only path by which broker
-audit-adjacent data reaches the observability plane, and it is a
-redacted projection, not the audit record itself. `alloy` is scoped by
-POSIX ACL to read the export directory and nothing else under
-`<stateDir>`: it cannot read the unified broker audit log, cannot reach
-the privileged daemon socket, and is never a member of the `nixlingd`
-group. Compromise of host Alloy therefore exposes only the allow-listed
-StoreSync fields already destined for Loki, not the host-confidential
-audit stream.
-
-## Label conventions
-
-### Prometheus
-
-Prometheus labels use `snake_case`: for example `vm`, `env`, `role`, `usbip_yubikey`, `bridge`, and `tap`.
-
-### Journal / Loki disambiguation
-
-Host Alloy, each workload-VM guest Alloy, and the obs-VM Alloy all log
-as `unit=alloy.service` because nixling preserves the upstream unit
-name. When querying logs, filter on both `host` and `vm` labels to
-separate the host forwarder, workload-VM guest agents, and the
-`sys-obs-stack` receiver; the `loki.source.journal` pipelines attach
-those labels alongside `unit`.
-
-### OTel span/trace attributes
-
-OpenTelemetry span and trace attributes use dot-notation aligned with OTel semantic-convention style: for example `vm.name`, `vm.env`, `vm.role`, `nixling.subcommand`, and `systemd.unit`.
-
-## Retention defaults
-
-| Signal | Default | Notes |
-|---|---|---|
-| Metrics | `30d` | Mirrors `nixling.observability.retention.metrics`. |
-| Logs | `14d` | Mirrors `nixling.observability.retention.logs`. |
-| Traces | `7d` | Mirrors `nixling.observability.retention.traces`. |
-| Profiles | not enabled | Profiles are not part of v0.2.0. |
-
-## Dashboard inventory
-
-`sys-obs-stack` provisions 6 dashboards in Grafana's **Nixling** folder:
-
-| Title | UID | Folder | Refresh | Purpose |
-|---|---|---|---|---|
-| Nixling Overview | `nixling-overview` | Nixling | `30s` | VM state, CH API up, vsock relay health |
-| VM Resources | `nixling-vm-resources` | Nixling | `30s` | Per-VM CPU/mem/FS/net + CH counters |
-| Lifecycle Traces | `nixling-lifecycle-traces` | Nixling | `30s` | Reserved Tempo dashboard for `nixling vm start/down/switch/...`; populated only when `otel-cli` is pointed at a reachable OTLP endpoint. |
-| Logs | `nixling-logs` | Nixling | `30s` | Loki filtered by vm/env/unit/severity |
-| Per-VM Store | `nixling-per-vm-store` | Nixling | `30s` | Generation, sync result, path count |
-| Obs VM Health | `nixling-obs-vm-health` | Nixling | `30s` | Stack self-health, disk, ingestion rates |
-
-## Alerting
-
-`sys-obs-stack` provisions 8 default Prometheus alert rules via `services.prometheus.ruleFiles`:
-
-| Name | Severity | Expr summary | Threshold |
-|---|---|---|---|
-| `NixlingVMDown` | warning | `up == 0` | `for 5m` |
-| `NixlingNetVMDownWithRunningWorkloads` | critical | net VM down + workload up | composite |
-| `NixlingObsVMUnreachableFromHost` | warning | obs VM CH API unreachable | `for 10m` |
-| `NixlingVsockRelayDown` | warning | `nixling-otel-relay@` failing | `for 3m` |
-| `NixlingCHAPISocketMissing` | warning | VM running but CH API down | `for 2m` |
-| `NixlingStoreSyncFailure` | warning | Loki: store-sync FAIL in 10m | rate-based |
-| `NixlingGuestTelemetryMissing` | info | absent scrape timestamp | `for 10m` |
-| `NixlingObsVMStackUnhealthy` | critical | `up{job=...} == 0` for any stack service | `for 5m` |
-
-The shipped rules combine host-side CH-exporter gauges, host Alloy's `systemd-units` collector, guest telemetry heartbeat metrics, and local self-scrapes of Grafana/Prometheus/Loki/Tempo/Alloy inside the obs VM.
-
-Notification channels are deliberately left unconfigured. Operators decide whether to route alerts through Alertmanager, Grafana contact points, or another downstream system.
-
-Disable individual default alerts by setting
-`nixling.observability.alerts.<AlertName>.enable = false`. The
-toggle is honored at rule-file generation time, so disabled
-alerts are absent from the rendered Prometheus rule file
-entirely. The 8 default alerts are listed in the Alerts table
-above.
-
-### Deferred
-
-`NixlingVMStuckWithoutSSH` is deferred to v0.3.0; the host exporter does not yet expose the proposed `nixling_vm_ssh_ready` metric.
-
-## Disabling individual signals
-
-- Disable guest journald scraping per VM with `nixling.vms.<vm>.observability.scrapeJournal = false`.
-- Disable guest node/system metrics per VM with `nixling.vms.<vm>.observability.scrapeNodeMetrics = false`.
-- Disable CLI lifecycle traces host-wide with `nixling.observability.cli.traces.enable = false`.
-- Disable the host Cloud Hypervisor exporter with `nixling.observability.ch.exporter.enable = false`.
-
-## See also
-
-- `docs/how-to/enable-observability.md` — step-by-step enablement,
-  verification, and troubleshooting for the shipped v0.2.0 stack.
-- [design.md](../explanation/design.md) — design rationale for the
-  shipped single-host observability path, including vsock vs
-  reverse-SSH.
-- [manifest schema](./manifest-schema.md)
+Historical Prometheus/Loki/Tempo data and Grafana dashboard/alert state
+do not automatically migrate to SigNoz.

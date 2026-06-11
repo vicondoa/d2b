@@ -7,11 +7,21 @@ let
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  observedVmNames = lib.attrNames (lib.filterAttrs
+    (name: vm: vm.enable && name != cfg.observability.vmName && vm.observability.enable)
+    cfg.vms);
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
     (lib.attrValues cfg.vms)));
   usbipMeta = lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) cfg._envMeta;
   obsOtlpPort = 14317;
+  obsSourcePortMap = lib.listToAttrs (lib.imap0
+    (i: name: {
+      inherit name;
+      value = obsOtlpPort + 1 + i;
+    })
+    observedVmNames);
+  obsSourcePort = name: obsSourcePortMap.${name} or obsOtlpPort;
   waylandUid =
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
@@ -76,7 +86,10 @@ EOF
   };
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
-  profileFor = name: nodeId: cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
+  profileFor = name: nodeId:
+    if nodeId == "otel-host-bridge"
+    then cfg._bundle.minijailProfiles."host-otel-host-bridge".roleProfile
+    else cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
   shareSocketPath = name: share: "/run/nixling/vms/${name}/${clean share.tag}.sock";
@@ -717,7 +730,18 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "-d"
       "-d"
       "UNIX-LISTEN:${vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort},fork,max-children=16,reuseaddr,mode=0660"
-      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString obsOtlpPort}"
+      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
+    ];
+  };
+
+  otelHostBridgeRunner = manifest: {
+    binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
+    argv = [
+      "nixling-otel-host-bridge"
+      "-d"
+      "-d"
+      "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+      ''EXEC:"${chVsockConnect}/bin/nixling-ch-vsock-connect ${manifest.observability.vsockHostSocket} ${toString obsOtlpPort}"''
     ];
   };
 
@@ -938,6 +962,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         unit = "nixling-otel-relay@${name}.service";
         readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
       } // vsockRelayRunner name manifest))
+      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (node name ({
+        id = "otel-host-bridge";
+        role = "otel-host-bridge";
+        unit = "nixling-otel-host-bridge.service";
+        readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
+      } // otelHostBridgeRunner manifest))
       ++ lib.optional guestSshEnabled (node name {
         id = "guest-ssh-readiness";
         role = "guest-ssh-readiness";
@@ -953,6 +983,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ lib.optionals vm.observability.enable (
         edgesFromNodes preOptionalNodeIds "vsock-relay" "The vsock relay starts only after runtime/state dirs, taps, cgroup setup, and earlier sidecars are ready."
+      )
+      ++ lib.optionals (cfg.observability.enable && name == cfg.observability.vmName) (
+        [
+          (edge "cloud-hypervisor" "otel-host-bridge" "The host OTel bridge starts only after the obs VM Cloud Hypervisor runner creates the base vsock socket.")
+        ]
       )
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")

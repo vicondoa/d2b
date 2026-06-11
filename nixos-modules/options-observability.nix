@@ -8,6 +8,21 @@ let
   inherit (nl) subnetIp;
   defaultGrafanaListenAddress =
     subnetIp config.nixling.observability.lanSubnet config.nixling.observability.index;
+  defaultRetention = {
+    metrics = "30d";
+    logs = "14d";
+    traces = "7d";
+    tracesCritical = "30d";
+  };
+  defaultSampling = {
+    criticalAttribute = "kind";
+    criticalValue = "critical";
+    criticalRatio = 1.0;
+    defaultRatio = 0.1;
+    criticalTenant = "nixling-critical";
+    defaultTenant = "nixling-default";
+  };
+  cfg = config.nixling.observability;
 in
 {
   options.nixling.observability = {
@@ -29,7 +44,7 @@ in
 
     vmName = lib.mkOption {
       type = lib.types.str;
-      default = "sys-obs-stack";
+      default = "sys-obs";
       description = ''
         VM name of the auto-declared observability stack VM.
       '';
@@ -64,34 +79,34 @@ in
     retention = {
       metrics = lib.mkOption {
         type = lib.types.str;
-        default = "30d";
-        description = "Retention window for metrics in the observability stack.";
+        default = defaultRetention.metrics;
+        description = "Compatibility option from the retired stack; native SigNoz retention is configured in SigNoz/ClickHouse and this option currently emits a warning when changed.";
       };
 
       logs = lib.mkOption {
         type = lib.types.str;
-        default = "14d";
-        description = "Retention window for logs in the observability stack.";
+        default = defaultRetention.logs;
+        description = "Compatibility option from the retired stack; native SigNoz retention is configured in SigNoz/ClickHouse and this option currently emits a warning when changed.";
       };
 
       traces = lib.mkOption {
         type = lib.types.str;
-        default = "7d";
+        default = defaultRetention.traces;
         description = ''
-          Default retention window for traces (default Tempo
-          tenant). Mirror of `nixling.observability.retention.traces`
-          on the stack VM.
+          Compatibility option from the retired Tempo stack. Native
+          SigNoz retention is configured in SigNoz/ClickHouse and this
+          option currently emits a warning when changed.
         '';
       };
 
       tracesCritical = lib.mkOption {
         type = lib.types.str;
-        default = "30d";
+        default = defaultRetention.tracesCritical;
         description = ''
-          Retention window for the critical Tempo tenant (spans
-          tagged `kind=critical`). Mirror of
-          `nixling.observability.retention.tracesCritical` on the
-          stack VM.
+          Compatibility option from the retired Tempo critical-tenant
+          path. Native SigNoz retention is configured in
+          SigNoz/ClickHouse and this option currently emits a warning
+          when changed.
         '';
       };
     };
@@ -99,55 +114,55 @@ in
     sampling = {
       criticalAttribute = lib.mkOption {
         type = lib.types.str;
-        default = "kind";
+        default = defaultSampling.criticalAttribute;
         description = ''
-          Span attribute key inspected to decide whether a span
-          belongs to the critical Tempo tenant.
+          Compatibility option from the retired Tempo sampling path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
 
       criticalValue = lib.mkOption {
         type = lib.types.str;
-        default = "critical";
+        default = defaultSampling.criticalValue;
         description = ''
-          Span attribute value that pins a span into the critical
-          Tempo tenant.
+          Compatibility option from the retired Tempo sampling path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
 
       criticalRatio = lib.mkOption {
         type = lib.types.float;
-        default = 1.0;
+        default = defaultSampling.criticalRatio;
         description = ''
-          Sampling ratio for critical spans (0.0–1.0). Pinned to
-          1.0 by the canonical policy.
+          Compatibility option from the retired Tempo sampling path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
 
       defaultRatio = lib.mkOption {
         type = lib.types.float;
-        default = 0.1;
+        default = defaultSampling.defaultRatio;
         description = ''
-          Head-consistent sampling ratio for non-critical spans
-          (0.0–1.0). Pinned to 0.1 by the canonical policy.
+          Compatibility option from the retired Tempo sampling path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
 
       criticalTenant = lib.mkOption {
         type = lib.types.str;
-        default = "nixling-critical";
+        default = defaultSampling.criticalTenant;
         description = ''
-          Tempo tenant id (`X-Scope-OrgID`) that critical spans
-          are routed to.
+          Compatibility option from the retired Tempo tenant path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
 
       defaultTenant = lib.mkOption {
         type = lib.types.str;
-        default = "nixling-default";
+        default = defaultSampling.defaultTenant;
         description = ''
-          Tempo tenant id (`X-Scope-OrgID`) that non-critical
-          spans are routed to.
+          Compatibility option from the retired Tempo tenant path.
+          Native SigNoz sampling is not configured from this value.
         '';
       };
     };
@@ -186,17 +201,11 @@ in
         type = lib.types.nullOr lib.types.path;
         default = null;
         description = ''
-          Optional path to a file containing the Grafana session/signing
-          secret key. When null (the default), the framework generates a
-          per-install secret on the **host** at
-          `${"$"}{nixling.site.stateDir}/observability/grafana-secret-key`
-          (mode 0400 root:root) and shares it read-only into
-          `sys-obs-stack` at
-          `/run/nixling-obs-secrets/grafana-secret-key`. When set,
-          this path is loaded via systemd LoadCredential instead, and
-          the framework's host-side generator leaves the secret alone.
-          Use this option to source the secret from sops-nix, agenix,
-          or any other declarative secrets framework.
+          Retired Grafana stack compatibility option. It no longer
+          affects native SigNoz authentication. Use
+          `nixling.observability.signoz.jwtSecretFile` and
+          `nixling.observability.signoz.rootPasswordFile` for native
+          SigNoz credentials.
         '';
       };
 
@@ -204,20 +213,10 @@ in
         type = lib.types.nullOr lib.types.path;
         default = null;
         description = ''
-          Optional path to a file containing the Grafana admin password.
-          When null (the default), the framework generates a per-install
-          password on the **host** at
-          `${"$"}{nixling.site.stateDir}/observability/grafana-admin-password`
-          (default `/var/lib/nixling/observability/grafana-admin-password`,
-          mode 0400 root:root) and shares it read-only into
-          `sys-obs-stack` at
-          `/run/nixling-obs-secrets/grafana-admin-password`. Host
-          operators read it directly via `sudo cat <path>` — no
-          cross-VM SSH required. When set, this path is loaded via
-          systemd LoadCredential instead, and the framework's
-          host-side generator leaves the secret alone. Use this
-          option to source the admin password from sops-nix, agenix,
-          or any other declarative secrets framework.
+          Retired Grafana stack compatibility option. It no longer
+          affects native SigNoz authentication. Use
+          `nixling.observability.signoz.rootPasswordFile` for the
+          native SigNoz root password.
         '';
       };
 
@@ -228,6 +227,91 @@ in
           Re-enable Grafana's anonymous Viewer mode for trusted
           single-host LAN deployments. Disabled by default so Grafana
           requires an authenticated login.
+        '';
+      };
+    };
+
+    signoz = {
+      listenAddress = lib.mkOption {
+        type = lib.types.str;
+        default = defaultGrafanaListenAddress;
+        description = ''
+          Address SigNoz binds inside the observability env. Default
+          tracks the observability VM's derived IP (`lanSubnet` +
+          `index`).
+        '';
+      };
+
+      listenPort = lib.mkOption {
+        type = lib.types.port;
+        default = 8080;
+        description = ''
+          TCP port SigNoz listens on inside the observability env.
+        '';
+      };
+
+      otlpGrpcPort = lib.mkOption {
+        type = lib.types.port;
+        default = 4317;
+        description = ''
+          Loopback port used by the SigNoz OTel Collector for local OTLP
+          gRPC ingress inside the observability VM.
+        '';
+      };
+
+      otlpHttpPort = lib.mkOption {
+        type = lib.types.port;
+        default = 4318;
+        description = ''
+          Loopback port used by the SigNoz OTel Collector for local OTLP
+          HTTP ingress inside the observability VM.
+        '';
+      };
+
+      adminEmail = lib.mkOption {
+        type = lib.types.str;
+        default = "admin@nixling.local";
+        description = ''
+          Root SigNoz admin email used for first-run bootstrap.
+        '';
+      };
+
+      jwtSecretFile = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
+        default = null;
+        description = ''
+          Optional host path containing SigNoz's JWT/tokenizer secret.
+          When null, nixling generates
+          `${"$"}{nixling.site.stateDir}/observability/signoz-jwt-secret`
+          at activation. When set, activation copies this file into that
+          host-secret path with `0400 root:root` before sharing it
+          read-only into `sys-obs`.
+        '';
+      };
+
+      rootPasswordFile = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
+        default = null;
+        description = ''
+          Optional host path containing the SigNoz root user's password.
+          When null, nixling generates
+          `${"$"}{nixling.site.stateDir}/observability/signoz-root-password`
+          at activation. When set, activation copies this file into that
+          host-secret path with `0400 root:root` before sharing it
+          read-only into `sys-obs`.
+        '';
+      };
+
+      clickhousePasswordFile = lib.mkOption {
+        type = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
+        default = null;
+        description = ''
+          Optional host path containing the ClickHouse password used by
+          SigNoz services. When null, nixling generates
+          `${"$"}{nixling.site.stateDir}/observability/clickhouse-password`
+          at activation. When set, activation copies this file into that
+          host-secret path with `0400 root:root` before sharing it
+          read-only into `sys-obs`.
         '';
       };
     };
@@ -286,4 +370,25 @@ in
       '';
     };
   };
+
+  config.warnings = lib.mkIf cfg.enable (
+    lib.optional (cfg.retention != defaultRetention) ''
+      nixling.observability.retention.* is a compatibility surface for
+      the retired Tempo/Loki stack. Native SigNoz/ClickHouse retention is
+      not configured from these options yet; use SigNoz/ClickHouse
+      retention controls and size `sys-obs` volumes explicitly.
+    ''
+    ++ lib.optional (cfg.sampling != defaultSampling) ''
+      nixling.observability.sampling.* is a compatibility surface for
+      the retired Tempo stack. Native SigNoz sampling is not configured
+      from these options yet.
+    ''
+    ++ lib.optional (cfg.grafana.secretKeyFile != null || cfg.grafana.adminPasswordFile != null) ''
+      nixling.observability.grafana.{secretKeyFile,adminPasswordFile}
+      are retired Grafana-stack compatibility options and do not affect
+      native SigNoz authentication. Use
+      nixling.observability.signoz.{jwtSecretFile,rootPasswordFile}
+      instead.
+    ''
+  );
 }

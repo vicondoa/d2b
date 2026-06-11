@@ -1271,24 +1271,23 @@ healthy", so even routine troubleshooting becomes archaeological work.
 
 The design answers that by making observability a framework subsystem,
 not a consumer afterthought. Every workload VM that opts in gets an
-in-guest Alloy agent, the host gets its own forwarder plus a Cloud
-Hypervisor exporter, and the framework auto-declares a dedicated
-`sys-obs-stack` VM on its own `obs` env to run Grafana, Prometheus,
-Loki, Tempo, and the central Alloy receiver. The important design move
-is that the observability stack is materialised the same way nixling
-already materialises other cross-cutting infrastructure: as a declared
-VM with explicit boundaries, stable naming, and host-owned sidecars.
+in-guest OpenTelemetry Collector, the host gets its own OTel collector
+plus a broker-spawned host bridge, and the framework auto-declares a
+dedicated `sys-obs` VM on its own `obs` env to run native SigNoz,
+ClickHouse, ZooKeeper, schema migrations, and the SigNoz OTel Collector.
+The important design move is that the observability stack is materialised
+the same way nixling already materialises other cross-cutting
+infrastructure: as a declared VM with explicit boundaries, stable naming,
+and host-owned sidecars.
 
 That split keeps each signal close to the place where it originates.
-Workload metrics and logs are collected inside the guest, host-only
-facts such as Cloud Hypervisor counters are collected on the host, and
-CLI lifecycle metadata is emitted by the existing shell wrapper rather
-than by some second orchestration path. The result is not "one big
-agent everywhere"; it is a composed system where the operator can open
-Grafana and see guest telemetry and host telemetry in one place, while
-lifecycle traces remain an optional follow-up once `otel-cli` has a
-reachable OTLP endpoint to export to. The concrete option surface, unit
-inventory, ports, and retention knobs live in the
+Workload metrics and logs are collected inside the guest, host-only facts
+are collected on the host, and the central SigNoz collector owns durable
+ingestion and ClickHouse writes. The result is not "one big agent
+everywhere"; it is a composed system where edge collectors normalize and
+batch telemetry while the `sys-obs` backend owns storage, query, and UI.
+The concrete option surface, unit inventory, ports, and retention knobs
+live in the
 [observability component reference](../reference/components-observability.md),
 while the operator workflow for turning this design on and verifying it
 lives in the
@@ -1316,14 +1315,18 @@ not remove the core problem: compromise of the obs VM would still hand
 an attacker authenticated reach into every monitored workload VM.
 
 **Option C**, the design that lands, is vsock. Each monitored VM gets a
-virtio-vsock device backed by a host Unix socket, and a small host-side
-`nixling-otel-relay@<vm>.service` bridges the workload VM's vsock
-backend socket to the obs VM's vsock backend socket. Telemetry never
-needs an IP hop, never asks the obs VM to hold SSH credentials for
-other guests, and never asks `network.nix` to make a policy exception
-for cross-env traffic. The host is a stateless byte broker, which is
-already the trust posture nixling accepts for virtiofsd, swtpm, audio,
-and the other sidecars that mediate devices into guests.
+virtio-vsock device backed by a host Unix socket. Inside the workload,
+`nixling-otel-vsock-out.service` forwards the guest collector's Unix
+socket to host vsock port `14317`; the host-side broker-spawned relay
+then connects that stream to a source-specific `sys-obs` vsock port.
+The host's own collector uses `/run/nixling/otel/host-egress.sock` and
+the broker-spawned `OtelHostBridge` runner to reach the host source
+port. Telemetry never needs an IP hop, never asks the obs VM to hold SSH
+credentials for other guests, and never asks `network.nix` to make a
+policy exception for cross-env traffic. The host is a constrained byte
+broker, which is already the trust posture nixling accepts for
+virtiofsd, swtpm, audio, and the other sidecars that mediate devices
+into guests.
 
 That does not make vsock "free"; it concentrates more importance in the
 host's virtio boundary. But the attack surface here is the kernel's
@@ -1333,24 +1336,22 @@ already relies on. The design goal was not zero trust in the host —
 that is impossible in this architecture — but to avoid inventing a new
 cross-VM trust path on top of the host-mediated one we already have.
 
-### Why two socat bridges instead of one.
+### Why relays still exist.
 
-Two bridges exist because two different gaps exist. Inside the guest,
-Alloy speaks `AF_INET` and `AF_UNIX`, not `AF_VSOCK`, so a small UDS ↔
-vsock shim translates between the agent's local Unix socket and the
-virtio-vsock device. On the host, a second bridge is still required
-because vsock is point-to-point between one guest and the host. There
-is no native guest-to-guest vsock path, so nothing in the hypervisor can
-magically connect a workload VM's vsock device straight to the obs VM's
-vsock device without the host stitching those two backend sockets
-together.
+The OpenTelemetry Collector speaks OTLP over TCP and Unix sockets; it
+does not give nixling a native guest-to-guest vsock transport. A small
+guest relay bridges the collector's Unix socket to the VM's vsock device,
+and a broker-spawned host relay bridges the workload backend socket to
+the `sys-obs` backend socket. `sys-obs` runs one source-specific
+`nixling-otel-vsock-in-*` listener per host/workload source, each
+forwarding to a distinct loopback receiver in the SigNoz collector.
 
-A zero-bridge design would therefore need native vsock support in Alloy
-or the upstream OpenTelemetry Collector, plus the plumbing to use it on
-both the workload side and the obs-VM side. That is the right long-term
-shape, but it is a multi-month upstream feature project, not a
-v0.2.0-sized module change. Until that exists, two tiny relays are the
-honest price of keeping the transport non-IP and credential-free.
+That extra relay layer is also where the trust boundary is made
+observable. The central collector stamps `vm.name`, `vm.env`, and
+`vm.role` based on the source-specific listener, not on client-supplied
+attributes. A workload can add misleading resource attributes to its own
+OTLP payload, but the `sys-obs` receiver path overwrites the trusted
+identity before storage.
 
 ### Alternatives considered (and rejected).
 
@@ -1360,60 +1361,43 @@ honest price of keeping the transport non-IP and credential-free.
   up the backpressure and acknowledgement semantics OTLP already has.
   Rejected for v0.2.0; worth revisiting later for high-cardinality,
   low-rate signals where file semantics may be good enough.
-- **Custom Rust binary instead of `socat`**: same topology, smaller
-  closure, and easier to instrument in its own right. Deferred to
-  a future release. v0.2.0 ships `socat` behind
-  `cfg.transport.relayPackage` specifically so consumers can swap the
-  implementation with a one-line change when the Rust relay exists.
-  When that interface lands, the socat-compatible contract should stay
-  supported for at least one minor release so custom relayPackage
-  overrides get a clean migration window.
-  closure, and easier to instrument in its own right. Deferred to
-  v0.3.0. v0.2.0 ships `socat` behind
-  `cfg.transport.relayPackage` specifically so consumers can swap the
-  implementation with a one-line change when the Rust relay exists.
+- **Custom Rust relay instead of `socat`**: same topology, smaller
   closure, and easier to instrument in its own right. Deferred until a
   dedicated relay interface exists. The current transport keeps
   `cfg.transport.relayPackage` on a `bin/socat`-compatible contract;
-  when `nixling-otel-relay` lands, nixling will ship the new interface
-  first and keep `bin/socat` compatibility for at least one minor
-  release with migration notes before removal.
+  when a native relay lands, nixling should ship the new interface first
+  and keep `bin/socat` compatibility for at least one minor release with
+  migration notes before removal.
 - **systemd socket activation**: not wrong, just empty ceremony here.
   `socat` with `UNIX-LISTEN:...,fork` already recreates its listener on
   restart, so a paired `.socket` unit would add more nouns without
   buying resilience.
-- **Native vsock support in Alloy / OTel Collector upstream**: the
-  correct long-term answer, because it deletes the in-guest bridge. It
-  remains an external dependency and an aspiration for a future release
-  rather than a prerequisite for v0.2.0.
-  remains an external dependency and a v0.3.0+ aspiration rather than a
-  prerequisite for v0.2.0.
-  remains an external dependency and a future aspiration rather than a
-  prerequisite for v0.2.0.
+- **Native vsock support in OpenTelemetry Collector upstream**: the
+  correct long-term answer, because it could delete the in-guest bridge.
+  It remains an external dependency and a future aspiration rather than
+  a prerequisite for the bundled stack.
 
 ### CLI lifecycle metadata — labels, not strings.
 
 The lifecycle-metadata design is intentionally austere about attributes.
-Optional spans and the structured journald events emitted by the CLI
-carry labels such as `vm.name`, `vm.env`, `vm.role`,
-`nixling.subcommand`, `systemd.unit`, `tap`, `bridge`, `static_ip`, and
-`generation` because those values are stable, indexable, and useful for
-correlation. They do **not** carry SSH key paths, command output, Nix
-derivation paths, or user data from Entra, TPM, or audio flows. That
-hygiene is not cosmetic. Tempo and Loki store what they are given; if
-the CLI emits high-cardinality strings or sensitive paths, disk usage
-and privacy risk both grow silently.
+Optional spans and structured events carry labels such as `vm.name`,
+`vm.env`, `vm.role`, `nixling.subcommand`, `systemd.unit`, `tap`,
+`bridge`, `static_ip`, and `generation` because those values are stable,
+indexable, and useful for correlation. They do **not** carry SSH key
+paths, command output, Nix derivation paths, or user data from Entra,
+TPM, or audio flows. That hygiene is not cosmetic. SigNoz stores data in
+ClickHouse; if nixling emits high-cardinality strings or sensitive paths,
+disk usage and privacy risk both grow silently.
 
-In the stock v0.2.0 wiring, those structured lifecycle events stay in
-the host journal and the Tempo dashboard remains empty unless an
-operator points `otel-cli` at a reachable OTLP endpoint. The host Alloy
-forwarder only scrapes selected systemd-unit journal streams by default.
+The host and guest OTel collectors stamp bounded resource attributes at
+the edge, and `sys-obs` overwrites trusted source identity at the
+per-source receiver. Lifecycle tracing remains useful only when the
+attributes answer routing questions and nothing more: which VM, which
+env, which unit, which generation, which lifecycle step.
 
-Observability works best when the labels answer routing questions and
-nothing more: which VM, which env, which unit, which generation, which
-lifecycle step. The moment a trace turns into a dumping ground for raw
-strings, it stops being a durable operations signal and starts being an
-unbounded data-retention liability.
+The moment a trace turns into a dumping ground for raw strings, it stops
+being a durable operations signal and starts being an unbounded
+data-retention liability.
 
 ### Trust concentration: the obs VM is privileged infrastructure.
 
@@ -1437,9 +1421,9 @@ this infrastructure tier is operationally serious.
 
 This design is not multi-host, not distributed, and not highly
 available. It is one host, one auto-declared observability VM, and one
-operator-facing Grafana surface for that host. That narrow scope is not
+operator-facing SigNoz surface for that host. That narrow scope is not
 an oversight; it is what keeps the transport and trust model simple
-enough to reason about in v0.2.0.
+enough to reason about.
 
 If nixling ever grows into a multi-host framework, the scaling shape is
 not "stretch this obs VM across the fleet". It is "run one obs VM per

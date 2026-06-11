@@ -168,12 +168,13 @@ fn minimal_processes_json() -> Vec<u8> {
 fn minimal_vms_json() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "_manifest": {
-            "manifestVersion": 3
+            "manifestVersion": 4
         },
         "_observability": {
-            "chExporter": { "listenPort": 9100 },
             "enabled": false,
-            "grafanaUrl": "",
+            "signozUrl": "http://127.0.0.1:8080",
+            "signozOtlpGrpcPort": 4317,
+            "signozOtlpHttpPort": 4318,
             "obsVsockCid": 0,
             "obsVsockHostSocket": "",
             "vmName": ""

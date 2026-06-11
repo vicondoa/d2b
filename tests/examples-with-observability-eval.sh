@@ -10,9 +10,9 @@
 #     --no-write-lock-file` passes against the in-tree framework
 #     (the example pins `nixling.url = "path:../.."`);
 #   * `configuration.nix` sets the documented host/per-VM
-#     observability toggles and pins `vmName = "sys-obs-stack"`;
+#     observability toggles and uses the canonical `sys-obs` VM name;
 #   * the resolved NixOS configuration auto-declares
-#     `nixling.envs.obs` and the `sys-obs-stack` VM, and the
+#     `nixling.envs.obs` and the `sys-obs` VM, and the
 #     workload VM `work-app` has per-VM observability enabled.
 #
 # Skips with SKIP=75 if `nix` is unavailable. Fails closed on any
@@ -77,8 +77,6 @@ config_grep() {
 
 config_grep 'nixling\.observability[[:space:]]*=|nixling\.observability\.enable[[:space:]]*=[[:space:]]*true' \
   'nixling.observability.enable = true'
-config_grep 'vmName[[:space:]]*=[[:space:]]*"sys-obs-stack"' \
-  'nixling.observability.vmName = "sys-obs-stack"'
 config_grep 'nixling\.envs\.work[[:space:]]*=' \
   'workload env nixling.envs.work'
 config_grep 'nixling\.vms\.work-app[[:space:]]*=' \
@@ -151,7 +149,7 @@ if eval_json=$(nix --no-warn-dirty eval --json --no-write-lock-file \
   }
 
   check_json_field obsEnable          true
-  check_json_field obsVmName          '"sys-obs-stack"'
+  check_json_field obsVmName          '"sys-obs"'
   check_json_field obsEnvName         '"obs"'
   check_json_field obsEnvDeclared     true
   check_json_field obsVmDeclared      true

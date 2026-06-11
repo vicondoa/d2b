@@ -719,7 +719,7 @@ let
   # in-jail profile MUST NOT permit AF_VSOCK / AF_UNIX socket
   # creation (kernel-r2-4 closed-set + seccomp policy
   # `w1-otel-host-bridge`). Caps: empty per plan kernel-r2-4
-  # matrix. Bind set: alloy runtime dir (RW for host-egress.sock
+  # matrix. Bind set: nixling OTel runtime dir (RW for host-egress.sock
   # listen), the obs VM's CH vsock UDS dir (RW for the textual
   # CONNECT handshake). No `/dev` binds.
   obsCfg = config.nixling.observability;
@@ -731,7 +731,7 @@ let
       capabilities = [ ];
       seccompPolicyRef = "w1-otel-host-bridge";
       writablePaths = [
-        (mkWritablePath "/run/alloy" "Host alloy runtime dir; the bridge binds host-egress.sock here for alloy → vsock OTLP forwarding.")
+        (mkWritablePath "/run/nixling/otel" "Host OTel runtime dir; the bridge binds host-egress.sock here for host → vsock OTLP forwarding.")
         (mkWritablePath "${toString cfg.store.stateDir}/${obsCfg.vmName}" "Reach the obs VM base CH vsock UDS for the textual CONNECT handshake into the obs VM's OTLP listener.")
       ];
       cgroupSubtree = "nixling.slice/host/otel-host-bridge";

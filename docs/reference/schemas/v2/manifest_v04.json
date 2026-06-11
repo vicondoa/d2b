@@ -22,20 +22,6 @@
   },
   "additionalProperties": false,
   "definitions": {
-    "ChExporterMeta": {
-      "type": "object",
-      "required": [
-        "listenPort"
-      ],
-      "properties": {
-        "listenPort": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        }
-      },
-      "additionalProperties": false
-    },
     "ManifestMeta": {
       "type": "object",
       "required": [
@@ -53,22 +39,17 @@
     "ObservabilityMeta": {
       "type": "object",
       "required": [
-        "chExporter",
         "enabled",
-        "grafanaUrl",
         "obsVsockCid",
         "obsVsockHostSocket",
+        "signozOtlpGrpcPort",
+        "signozOtlpHttpPort",
+        "signozUrl",
         "vmName"
       ],
       "properties": {
-        "chExporter": {
-          "$ref": "#/definitions/ChExporterMeta"
-        },
         "enabled": {
           "type": "boolean"
-        },
-        "grafanaUrl": {
-          "type": "string"
         },
         "obsVsockCid": {
           "type": "integer",
@@ -76,6 +57,19 @@
           "minimum": 0.0
         },
         "obsVsockHostSocket": {
+          "type": "string"
+        },
+        "signozOtlpGrpcPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "signozOtlpHttpPort": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "signozUrl": {
           "type": "string"
         },
         "vmName": {
