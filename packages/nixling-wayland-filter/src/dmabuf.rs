@@ -274,6 +274,12 @@ struct DmabufBufferParamsHandler {
     planes: Vec<DmabufPlane>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DmabufCreateAction {
+    Forward,
+    Deny { denied: Vec<String> },
+}
+
 impl DmabufBufferParamsHandler {
     fn new(filters: Arc<DmabufFilterList>) -> Self {
         Self {
@@ -282,10 +288,24 @@ impl DmabufBufferParamsHandler {
         }
     }
 
-    fn all_planes_allowed(&self, format: u32) -> bool {
-        self.planes
+    fn create_action(&self, format: u32) -> DmabufCreateAction {
+        let denied: Vec<String> = self
+            .planes
             .iter()
-            .all(|plane| self.filters.allowed(format, plane.modifier()))
+            .filter(|plane| !self.filters.allowed(format, plane.modifier()))
+            .map(|plane| {
+                format!(
+                    "plane={} modifier=0x{:016x}",
+                    plane.plane_idx,
+                    plane.modifier()
+                )
+            })
+            .collect();
+        if denied.is_empty() {
+            DmabufCreateAction::Forward
+        } else {
+            DmabufCreateAction::Deny { denied }
+        }
     }
 
     fn forward_planes(&self, slf: &Rc<ZwpLinuxBufferParamsV1>) {
@@ -301,19 +321,7 @@ impl DmabufBufferParamsHandler {
         }
     }
 
-    fn deny_create(&self, slf: &Rc<ZwpLinuxBufferParamsV1>, format: u32) {
-        let denied: Vec<String> = self
-            .planes
-            .iter()
-            .filter(|plane| !self.filters.allowed(format, plane.modifier()))
-            .map(|plane| {
-                format!(
-                    "plane={} modifier=0x{:016x}",
-                    plane.plane_idx,
-                    plane.modifier()
-                )
-            })
-            .collect();
+    fn deny_create(&self, slf: &Rc<ZwpLinuxBufferParamsV1>, format: u32, denied: &[String]) {
         log::warn!(
             "dmabuf buffer creation denied: format=0x{format:08x} denied=[{}]",
             denied.join(", ")
@@ -351,11 +359,12 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
-        if self.all_planes_allowed(format) {
-            self.forward_planes(slf);
-            slf.send_create(width, height, format, flags);
-        } else {
-            self.deny_create(slf, format);
+        match self.create_action(format) {
+            DmabufCreateAction::Forward => {
+                self.forward_planes(slf);
+                slf.send_create(width, height, format, flags);
+            }
+            DmabufCreateAction::Deny { denied } => self.deny_create(slf, format, &denied),
         }
     }
 
@@ -368,11 +377,12 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
-        if self.all_planes_allowed(format) {
-            self.forward_planes(slf);
-            slf.send_create_immed(buffer_id, width, height, format, flags);
-        } else {
-            self.deny_create(slf, format);
+        match self.create_action(format) {
+            DmabufCreateAction::Forward => {
+                self.forward_planes(slf);
+                slf.send_create_immed(buffer_id, width, height, format, flags);
+            }
+            DmabufCreateAction::Deny { denied } => self.deny_create(slf, format, &denied),
         }
     }
 }
@@ -426,6 +436,15 @@ impl ZwpLinuxDmabufFeedbackV1Handler for DmabufFeedbackHandler {
             }
         }
         if offset == table.len() {
+            if !format_table_is_well_formed(&table) {
+                log::warn!(
+                    "dmabuf feedback format table has malformed size {}; filtering to empty",
+                    table.len()
+                );
+                self.table_invalid = true;
+                self.send_empty_format_table(slf);
+                return;
+            }
             self.send_filtered_format_table(slf, table);
         } else {
             log::warn!(
@@ -480,13 +499,6 @@ impl DmabufFeedbackHandler {
 
     fn send_filtered_format_table(&mut self, slf: &Rc<ZwpLinuxDmabufFeedbackV1>, table: Vec<u8>) {
         let (filtered, index_map) = filter_format_table(&table, &self.filters);
-        if !table.len().is_multiple_of(16) {
-            log::warn!(
-                "dmabuf feedback format table has trailing {} bytes; dropping incomplete entry",
-                table.len() % 16
-            );
-        }
-
         match table_fd(&filtered) {
             Ok(fd) => {
                 let size = filtered.len() as u32;
@@ -529,6 +541,10 @@ fn filter_format_table(table: &[u8], filters: &DmabufFilterList) -> (Vec<u8>, Ve
         }
     }
     (filtered, index_map)
+}
+
+fn format_table_is_well_formed(table: &[u8]) -> bool {
+    table.len().is_multiple_of(16)
 }
 
 fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
@@ -579,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn buffer_params_enforcement_uses_create_format_with_plane_modifiers() {
+    fn buffer_params_create_decision_denies_filtered_modifier() {
         let format = 0x3432_5258u32;
         let filters = Arc::new(DmabufFilterList::new(
             &[],
@@ -598,7 +614,35 @@ mod tests {
             modifier_lo: 0,
         });
 
-        assert!(!handler.all_planes_allowed(format));
+        assert_eq!(
+            handler.create_action(format),
+            DmabufCreateAction::Deny {
+                denied: vec!["plane=0 modifier=0x0000000000000000".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn buffer_params_create_decision_forwards_allowed_modifier() {
+        let format = 0x3432_5258u32;
+        let filters = Arc::new(DmabufFilterList::new(
+            &[],
+            &[DmabufFilter {
+                format: None,
+                modifier: Some(LINEAR_MODIFIER),
+            }],
+        ));
+        let mut handler = DmabufBufferParamsHandler::new(filters);
+        handler.planes.push(DmabufPlane {
+            fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
+            plane_idx: 0,
+            offset: 0,
+            stride: 1280,
+            modifier_hi: 0x0100_0000,
+            modifier_lo: 0x0000_0001,
+        });
+
+        assert_eq!(handler.create_action(format), DmabufCreateAction::Forward);
     }
 
     #[test]
@@ -626,6 +670,13 @@ mod tests {
         assert_eq!(index_map, vec![None, Some(0)]);
         assert_eq!(filtered[0..4], format.to_ne_bytes());
         assert_eq!(filtered[8..16], allowed_modifier.to_ne_bytes());
+    }
+
+    #[test]
+    fn malformed_feedback_table_has_no_prefix_entries() {
+        let malformed = vec![0u8; 17];
+
+        assert!(!format_table_is_well_formed(&malformed));
     }
 
     #[test]
