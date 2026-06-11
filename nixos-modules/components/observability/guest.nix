@@ -1,156 +1,81 @@
 # Per-workload observability guest component.
 #
-# Imported into the GUEST config by host.nix whenever a VM sets
-# `nixling.vms.<name>.observability.enable = true`.
+# Runs an OpenTelemetry Collector edge agent inside each opted-in guest
+# and forwards OTLP over the existing guest→host vsock relay.
 { lib, pkgs, config, ... }:
 
 let
   cfg = config.nixling.observability;
-  alloyPort = 12345;
-  alloyRuntimeDir = "/run/nixling/alloy";
-  guestOtlpSocket = "${alloyRuntimeDir}/otlp.sock";
-  guestOtlpEgressSocket = "${alloyRuntimeDir}/otlp-egress.sock";
-  quote = builtins.toJSON;
+  collectorMetricsPort = 12345;
+  otelRuntimeDir = "/run/nixling/otel";
+  guestOtlpSocket = "${otelRuntimeDir}/otlp.sock";
+  guestOtlpEgressSocket = "${otelRuntimeDir}/otlp-egress.sock";
   auditEnabled = config.nixling.audit.enable or false;
 
-  alloyConfig = lib.concatStringsSep "\n\n" (
-    [
-      ''
-        otelcol.exporter.otlp "vsock" {
-          client {
-            endpoint = "unix://${guestOtlpEgressSocket}"
-            compression = "none"
-
-            tls {
-              insecure = true
-            }
-          }
-        }
-
-        otelcol.receiver.otlp "local" {
-          grpc {
-            endpoint  = "${guestOtlpSocket}"
-            transport = "unix"
-          }
-
-          output {
-            metrics = [otelcol.exporter.otlp.vsock.input]
-            logs    = [otelcol.exporter.otlp.vsock.input]
-            traces  = [otelcol.exporter.otlp.vsock.input]
-          }
-        }
-      ''
-
-      ''
-        discovery.relabel "self_targets" {
-          targets = [{
-            "__address__" = "127.0.0.1:${toString alloyPort}",
-          }]
-
-          rule {
-            target_label = "vm"
-            replacement  = ${quote cfg.identity.vmName}
-          }
-
-          rule {
-            target_label = "env"
-            replacement  = ${quote cfg.identity.envName}
-          }
-
-          rule {
-            target_label = "role"
-            replacement  = "workload"
-          }
-
-          rule {
-            target_label = "instance"
-            replacement  = ${quote cfg.identity.vmName}
-          }
-        }
-
-        otelcol.receiver.prometheus "self" {
-          output {
-            metrics = [otelcol.exporter.otlp.vsock.input]
-          }
-        }
-
-        prometheus.scrape "self" {
-          job_name   = "nixling-vm-telemetry"
-          targets    = discovery.relabel.self_targets.output
-          forward_to = [otelcol.receiver.prometheus.self.receiver]
-        }
-      ''
-    ]
-    ++ lib.optional cfg.scrapeNodeMetrics ''
-      prometheus.exporter.unix "node" {
-      }
-
-      discovery.relabel "node_targets" {
-        targets = prometheus.exporter.unix.node.targets
-
-        rule {
-          target_label = "vm"
-          replacement  = ${quote cfg.identity.vmName}
-        }
-
-        rule {
-          target_label = "env"
-          replacement  = ${quote cfg.identity.envName}
-        }
-
-        rule {
-          target_label = "role"
-          replacement  = "workload"
-        }
-
-        rule {
-          target_label = "instance"
-          replacement  = ${quote cfg.identity.vmName}
-        }
-      }
-
-      otelcol.receiver.prometheus "node" {
-        output {
-          metrics = [otelcol.exporter.otlp.vsock.input]
-        }
-      }
-
-      prometheus.scrape "node" {
-        job_name   = "nixling-vm-node"
-        targets    = discovery.relabel.node_targets.output
-        forward_to = [otelcol.receiver.prometheus.node.receiver]
-      }
-    ''
-    ++ lib.optional (cfg.scrapeJournal || auditEnabled) ''
-      otelcol.receiver.loki "journal" {
-        output {
-          logs = [otelcol.exporter.otlp.vsock.input]
-        }
-      }
-    ''
-    ++ lib.optional cfg.scrapeJournal ''
-      loki.source.journal "journal" {
-        forward_to = [otelcol.receiver.loki.journal.receiver]
-        labels = {
-          vm     = ${quote cfg.identity.vmName},
-          env    = ${quote cfg.identity.envName},
-          role   = "workload",
-          source = "journal",
-        }
-      }
-    ''
-    ++ lib.optional auditEnabled ''
-      loki.source.journal "audit" {
-        forward_to = [otelcol.receiver.loki.journal.receiver]
-        matches    = "_TRANSPORT=syslog SYSLOG_IDENTIFIER=audisp-syslog"
-        labels = {
-          vm     = ${quote cfg.identity.vmName},
-          env    = ${quote cfg.identity.envName},
-          role   = "workload",
-          source = "audit",
-        }
-      }
-    ''
+  collectorConfig = pkgs.writeText "nixling-guest-otel-collector.yaml" (
+    lib.generators.toYAML { } {
+      receivers = {
+        otlp.protocols.grpc = {
+          endpoint = guestOtlpSocket;
+          transport = "unix";
+        };
+        hostmetrics = lib.mkIf cfg.scrapeNodeMetrics {
+          collection_interval = "30s";
+          scrapers = {
+            cpu = { };
+            disk = { };
+            filesystem = { };
+            load = { };
+            memory = { };
+            network = { };
+            paging = { };
+            processes = { };
+          };
+        };
+      };
+      processors = {
+        memory_limiter = {
+          check_interval = "1s";
+          limit_mib = 128;
+          spike_limit_mib = 32;
+        };
+        resource.attributes = [
+          { key = "vm.name"; value = cfg.identity.vmName; action = "upsert"; }
+          { key = "vm.env"; value = cfg.identity.envName; action = "upsert"; }
+          { key = "vm.role"; value = "workload"; action = "upsert"; }
+          { key = "service.name"; value = "nixling-guest-otel-collector"; action = "upsert"; }
+        ];
+        batch = {
+          send_batch_size = 2048;
+          timeout = "1s";
+        };
+      };
+      exporters.otlp = {
+        endpoint = "unix://${guestOtlpEgressSocket}";
+        compression = "none";
+        tls.insecure = true;
+        sending_queue.enabled = true;
+        retry_on_failure.enabled = true;
+      };
+      service = {
+        telemetry.metrics.address = "127.0.0.1:${toString collectorMetricsPort}";
+        pipelines.metrics = {
+          receivers = [ "otlp" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
+          processors = [ "memory_limiter" "resource" "batch" ];
+          exporters = [ "otlp" ];
+        };
+        pipelines.traces = {
+          receivers = [ "otlp" ];
+          processors = [ "memory_limiter" "resource" "batch" ];
+          exporters = [ "otlp" ];
+        };
+        pipelines.logs = {
+          receivers = [ "otlp" ];
+          processors = [ "memory_limiter" "resource" "batch" ];
+          exporters = [ "otlp" ];
+        };
+      };
+    }
   );
 in
 {
@@ -158,123 +83,101 @@ in
     scrapeJournal = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = ''
-        Whether the guest Alloy agent scrapes this VM's journald
-        stream. Intended to be populated by
-        `nixling.vms.<name>.observability.scrapeJournal`.
-      '';
+      description = "Compatibility toggle; journald collection is not yet wired in the native OTel collector path.";
     };
 
     scrapeNodeMetrics = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = ''
-        Whether the guest Alloy agent scrapes this VM's node/system
-        metrics. Intended to be populated by
-        `nixling.vms.<name>.observability.scrapeNodeMetrics`.
-      '';
+      description = "Whether the guest OTel collector scrapes this VM's hostmetrics receiver.";
     };
 
     identity = {
       vmName = lib.mkOption {
         type = lib.types.str;
         default = config.networking.hostName;
-        description = ''
-          Internal VM label injected into guest telemetry targets.
-        '';
+        description = "Internal VM resource attribute injected into guest telemetry.";
       };
 
       envName = lib.mkOption {
         type = lib.types.str;
         default = "none";
-        description = ''
-          Internal env label injected into guest telemetry targets.
-        '';
+        description = "Internal env resource attribute injected into guest telemetry.";
       };
     };
 
     transport.relayPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.socat;
-      description = ''
-        Package providing the guest-side observability relay binary.
-        Defaults to `pkgs.socat`.
-      '';
+      description = "Package providing the guest-side observability relay binary.";
     };
   };
 
   config = {
     microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
-    # Static alloy user/group inside the workload VM. The
-    # nixling-otel-vsock-out sidecar runs as User=alloy and needs
-    # the user to exist outside of alloy.service's lifecycle.
-    users.users.alloy = {
+    users.users.otel = {
       isSystemUser = true;
-      group = "alloy";
-      home = "/var/lib/alloy";
+      group = "otel";
+      home = "/var/lib/otel";
       createHome = false;
-      description = "Grafana Alloy (nixling-managed static account)";
+      description = "Guest OpenTelemetry collector user";
     };
-    users.groups.alloy = { };
+    users.groups.otel = { };
 
-    services.alloy = {
-      enable = true;
-      extraFlags = [ "--server.http.listen-addr=127.0.0.1:${toString alloyPort}" ];
-    };
-    systemd.services.alloy.serviceConfig = {
-      DynamicUser = lib.mkForce false;
-      User = lib.mkForce "alloy";
-      Group = lib.mkForce "alloy";
-      SupplementaryGroups = lib.optional (cfg.scrapeJournal || auditEnabled) "systemd-journal";
-
-      StateDirectory = lib.mkAfter [ "alloy" ];
-      StateDirectoryMode = "0750";
-
-      RuntimeDirectory = lib.mkAfter [ "nixling/alloy" ];
-      RuntimeDirectoryMode = "0710";
-      RuntimeDirectoryPreserve = "yes";
-    };
-    environment.etc."alloy/config.alloy".text = alloyConfig;
-
-    # Keep the documented /run/nixling/*.sock paths stable for clients,
-    # but place the actual Alloy-owned sockets under a private subdirectory.
-    # /run/nixling/alloy itself is created by alloy.service's
-    # `RuntimeDirectory=nixling/alloy` directive (set above), not via
-    # tmpfiles, because we want it to vanish on service stop.
     systemd.tmpfiles.rules = [
-      "d /run/nixling 0755 root root -"
+      "d ${otelRuntimeDir} 0710 otel otel -"
       "L+ /run/nixling/otlp.sock - - - - ${guestOtlpSocket}"
       "L+ /run/nixling/otlp-egress.sock - - - - ${guestOtlpEgressSocket}"
     ];
 
+    systemd.services.nixling-otel-collector = {
+      description = "nixling guest OpenTelemetry collector";
+      wantedBy = [ "multi-user.target" ];
+      restartIfChanged = false;
+      serviceConfig = {
+        Type = "exec";
+        User = "otel";
+        Group = "otel";
+        ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config=file:${collectorConfig}";
+        Restart = "on-failure";
+        RestartSec = "3s";
+        StateDirectory = "otel";
+        RuntimeDirectory = "nixling/otel";
+        RuntimeDirectoryMode = "0710";
+        RuntimeDirectoryPreserve = "yes";
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+        CapabilityBoundingSet = "";
+        AmbientCapabilities = "";
+      };
+    };
+
     systemd.services.nixling-otel-vsock-out = {
       description = "Bridge guest OTLP UDS to host vsock port 14317.";
       wantedBy = [ "multi-user.target" ];
-      after = [ "alloy.service" ];
-      bindsTo = [ "alloy.service" ];
+      after = [ "nixling-otel-collector.service" ];
+      wants = [ "nixling-otel-collector.service" ];
       restartIfChanged = false;
 
       serviceConfig = {
-        User = "alloy";
-        Group = "alloy";
+        User = "otel";
+        Group = "otel";
         ExecStartPre = [
-          # Clean up any stale UNIX-LISTEN socket from a prior crashed
-          # instance. socat's own unlink-early option segfaulted in
-          # socat 1.8.1.1 under our service hardening; rm -f is
-          # simpler and unambiguous. Runs with privilege (+) so it
-          # is not subject to ProtectSystem=strict on the service.
           "+${pkgs.coreutils}/bin/rm -f ${guestOtlpEgressSocket}"
         ];
         ExecStart = "${cfg.transport.relayPackage}/bin/socat -d -d UNIX-LISTEN:${guestOtlpEgressSocket},fork,max-children=16,reuseaddr,mode=0660 VSOCK-CONNECT:2:14317";
-
         Restart = "on-failure";
         RestartSec = "3s";
         StartLimitIntervalSec = "300s";
         StartLimitBurst = 20;
-
-        # alloy user is declared statically above; DynamicUser=false
-        # so the User= directive is honored.
         DynamicUser = false;
         TasksMax = 32;
         MemoryMax = "64M";
