@@ -3,9 +3,7 @@ use std::{collections::HashMap, os::fd::OwnedFd, rc::Rc, sync::Arc};
 use nix::sys::uio::pread;
 use wl_proxy::protocols::{
     linux_dmabuf_v1::{
-        zwp_linux_dmabuf_feedback_v1::{
-            ZwpLinuxDmabufFeedbackV1, ZwpLinuxDmabufFeedbackV1Handler,
-        },
+        zwp_linux_dmabuf_feedback_v1::{ZwpLinuxDmabufFeedbackV1, ZwpLinuxDmabufFeedbackV1Handler},
         zwp_linux_dmabuf_v1::{ZwpLinuxDmabufV1, ZwpLinuxDmabufV1Handler},
     },
     wayland::wl_surface::WlSurface,
@@ -92,9 +90,7 @@ impl DmabufFilterList {
                 format.all_modifiers.allow = true;
             }
             if format.all_modifiers.deny_unless_allowed {
-                format
-                    .modifiers
-                    .retain(|_, disposition| disposition.allow);
+                format.modifiers.retain(|_, disposition| disposition.allow);
                 format.modifiers.shrink_to_fit();
             }
         }
@@ -157,9 +153,9 @@ pub fn parse_filter(s: &str) -> Result<DmabufFilter, String> {
         None => None,
         Some("linear") => Some(LINEAR_MODIFIER),
         Some("invalid") => Some(INVALID_MODIFIER),
-        Some(value) => Some(
-            parse_u64(value).ok_or_else(|| format!("invalid dmabuf modifier `{value}`"))?,
-        ),
+        Some(value) => {
+            Some(parse_u64(value).ok_or_else(|| format!("invalid dmabuf modifier `{value}`"))?)
+        }
     };
     Ok(DmabufFilter { format, modifier })
 }
