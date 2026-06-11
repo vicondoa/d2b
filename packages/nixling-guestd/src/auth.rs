@@ -441,11 +441,21 @@ fn validate_health(health: &pb::HealthResponse) -> Result<(), GuestAuthError> {
         || health
             .capabilities
             .iter()
-            .any(|capability| capability.enum_value().is_err())
+            .any(|capability| {
+                !matches!(
+                    capability.enum_value(),
+                    Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
+                )
+            })
         || health
             .degraded_subsystems
             .iter()
-            .any(|subsystem| subsystem.enum_value().is_err())
+            .any(|subsystem| {
+                !matches!(
+                    subsystem.enum_value(),
+                    Ok(value) if value != pb::GuestSubsystem::GUEST_SUBSYSTEM_UNSPECIFIED
+                )
+            })
     {
         return Err(GuestAuthError::InvalidHealthSnapshot);
     }
@@ -490,7 +500,12 @@ fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), 
         || capabilities
             .capabilities
             .iter()
-            .any(|capability| capability.enum_value().is_err())
+            .any(|capability| {
+                !matches!(
+                    capability.enum_value(),
+                    Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
+                )
+            })
         || capabilities.limits.is_none()
     {
         return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
@@ -850,6 +865,46 @@ mod tests {
         assert_eq!(
             core.authenticate(&context, &authenticate_request(&context)),
             Err(GuestAuthError::InvalidHealthSnapshot)
+        );
+    }
+
+    #[test]
+    fn unspecified_capability_enums_are_rejected() {
+        let context = context();
+        let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+        provider.snapshot.health.capabilities = vec![EnumOrUnknown::new(
+            pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED,
+        )];
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidHealthSnapshot)
+        );
+
+        let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+        provider.snapshot.capabilities.capabilities = vec![EnumOrUnknown::new(
+            pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED,
+        )];
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidCapabilitiesSnapshot)
         );
     }
 
