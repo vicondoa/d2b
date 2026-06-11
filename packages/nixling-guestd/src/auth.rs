@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use hmac::{Hmac, Mac};
-use nixling_ipc::{guest_proto as pb, guest_wire::GUEST_CONTROL_PROTOCOL_VERSION};
+use nixling_ipc::{
+    guest_proto as pb,
+    guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, HARD_MAX_CHUNK_BYTES, TTRPC_FRAME_CAP_BYTES},
+};
 use protobuf::{EnumOrUnknown, MessageField};
 use sha2::Sha256;
 
@@ -17,6 +20,20 @@ pub const DEFAULT_CHALLENGE_TTL_MS: u64 = 30_000;
 pub const DEFAULT_CHALLENGE_CAPACITY: usize = 128;
 pub const MAX_AUTH_HEALTH_CAPABILITIES: usize = 32;
 pub const MAX_AUTH_DEGRADED_SUBSYSTEMS: usize = 16;
+pub const MAX_CAPABILITIES_HASH_LEN: usize = 128;
+const HARD_MAX_DECODED_WRITE_STDIN_BYTES_PER_CONNECTION: u64 = 16 * 1024 * 1024;
+const HARD_MAX_WRITE_STDIN_HANDLERS_PER_CONNECTION: u32 = 4;
+const HARD_MAX_STDIN_QUEUE_CHUNKS_PER_EXEC: u32 = 1;
+const HARD_MAX_STDOUT_LIVE_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+const HARD_MAX_STDERR_LIVE_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
+const HARD_MAX_DETACHED_STDOUT_LOG_BYTES: u64 = 128 * 1024 * 1024;
+const HARD_MAX_DETACHED_STDERR_LOG_BYTES: u64 = 128 * 1024 * 1024;
+const HARD_MAX_LONG_POLL_TIMEOUT_MS: u64 = 1_000;
+const HARD_MAX_SLOW_CONSUMER_GRACE_MS: u64 = 5 * 60 * 1_000;
+const HARD_MAX_EXEC_SESSIONS_PER_VM: u32 = 256;
+const HARD_MAX_ATTACHED_SESSIONS_PER_VM: u32 = 64;
+const HARD_MAX_PENDING_READ_OUTPUT_WAITS_PER_STREAM: u32 = 512;
+const HARD_MAX_PENDING_EXEC_WAITS_PER_VM: u32 = 512;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -408,6 +425,11 @@ where
 }
 
 fn validate_snapshot(snapshot: CapabilitiesSnapshot) -> Result<CapabilitiesSnapshot, GuestAuthError> {
+    if snapshot.capabilities_hash.is_empty()
+        || snapshot.capabilities_hash.len() > MAX_CAPABILITIES_HASH_LEN
+    {
+        return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
+    }
     validate_health(&snapshot.health)?;
     validate_capabilities(&snapshot.capabilities)?;
     Ok(snapshot)
@@ -495,6 +517,9 @@ fn validate_health(health: &pb::HealthResponse) -> Result<(), GuestAuthError> {
 }
 
 fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), GuestAuthError> {
+    let Some(limits) = capabilities.limits.as_ref() else {
+        return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
+    };
     if capabilities.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
         || capabilities.capabilities.len() > MAX_AUTH_HEALTH_CAPABILITIES
         || capabilities
@@ -506,7 +531,26 @@ fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), 
                     Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
                 )
             })
-        || capabilities.limits.is_none()
+        || limits.max_chunk_bytes == 0
+        || limits.max_chunk_bytes > HARD_MAX_CHUNK_BYTES
+        || limits.max_recv_message_bytes == 0
+        || limits.max_recv_message_bytes > TTRPC_FRAME_CAP_BYTES
+        || limits.decoded_write_stdin_bytes_per_connection
+            > HARD_MAX_DECODED_WRITE_STDIN_BYTES_PER_CONNECTION
+        || limits.write_stdin_handlers_per_connection
+            > HARD_MAX_WRITE_STDIN_HANDLERS_PER_CONNECTION
+        || limits.stdin_queue_chunks_per_exec > HARD_MAX_STDIN_QUEUE_CHUNKS_PER_EXEC
+        || limits.stdout_live_buffer_bytes > HARD_MAX_STDOUT_LIVE_BUFFER_BYTES
+        || limits.stderr_live_buffer_bytes > HARD_MAX_STDERR_LIVE_BUFFER_BYTES
+        || limits.detached_stdout_log_bytes > HARD_MAX_DETACHED_STDOUT_LOG_BYTES
+        || limits.detached_stderr_log_bytes > HARD_MAX_DETACHED_STDERR_LOG_BYTES
+        || limits.long_poll_timeout_ms > HARD_MAX_LONG_POLL_TIMEOUT_MS
+        || limits.slow_consumer_grace_ms > HARD_MAX_SLOW_CONSUMER_GRACE_MS
+        || limits.exec_sessions_per_vm > HARD_MAX_EXEC_SESSIONS_PER_VM
+        || limits.attached_sessions_per_vm > HARD_MAX_ATTACHED_SESSIONS_PER_VM
+        || limits.pending_read_output_waits_per_stream
+            > HARD_MAX_PENDING_READ_OUTPUT_WAITS_PER_STREAM
+        || limits.pending_exec_waits_per_vm > HARD_MAX_PENDING_EXEC_WAITS_PER_VM
     {
         return Err(GuestAuthError::InvalidCapabilitiesSnapshot);
     }
@@ -893,6 +937,47 @@ mod tests {
         provider.snapshot.capabilities.capabilities = vec![EnumOrUnknown::new(
             pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED,
         )];
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidCapabilitiesSnapshot)
+        );
+    }
+
+    #[test]
+    fn capabilities_hash_and_limits_are_bounded_before_signing() {
+        let context = context();
+        let provider = StaticCapabilitiesProvider::healthy("x".repeat(MAX_CAPABILITIES_HASH_LEN + 1));
+        let mut core = GuestAuthCore::new(
+            SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+            FixedNonceRng(GUEST_NONCE),
+            StaticBoot("boot-1"),
+            provider,
+            InMemoryChallengeStore::default(),
+            StaticClock(1_000),
+        );
+        core.hello(&context, &hello_request()).unwrap();
+        assert_eq!(
+            core.authenticate(&context, &authenticate_request(&context)),
+            Err(GuestAuthError::InvalidCapabilitiesSnapshot)
+        );
+
+        let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+        provider
+            .snapshot
+            .capabilities
+            .limits
+            .as_mut()
+            .unwrap()
+            .max_recv_message_bytes = TTRPC_FRAME_CAP_BYTES + 1;
         let mut core = GuestAuthCore::new(
             SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
             FixedNonceRng(GUEST_NONCE),
