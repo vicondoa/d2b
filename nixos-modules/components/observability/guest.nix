@@ -81,7 +81,7 @@ let
           processors = [ "memory_limiter" "resource" "batch" ];
           exporters = [ "otlp" ];
         };
-        "pipelines.metrics/self" = {
+        pipelines."metrics/self" = {
           receivers = [ "prometheus" ];
           processors = [ "memory_limiter" "resource/self" "batch" ];
           exporters = [ "otlp" ];

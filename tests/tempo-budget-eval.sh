@@ -84,7 +84,8 @@ for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel
 done
 
 if grep -q '"resource/self"' "$ROOT/nixos-modules/components/observability/guest.nix" \
-  && grep -q '"pipelines.metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix"; then
+  && grep -q 'pipelines\."metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && ! grep -q '"pipelines.metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix"; then
   ok "guest collector self-metrics use a dedicated resource/self pipeline"
 else
   fail "guest collector self-metrics must not share the workload resource processor"
