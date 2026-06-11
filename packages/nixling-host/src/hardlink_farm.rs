@@ -66,8 +66,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+use nix::unistd::{chown, Gid, Uid};
 
 /// `EXDEV` ("Invalid cross-device link") errno. `link(2)` returns this
 /// when source and destination are on different mounts. Defined locally
@@ -1185,6 +1187,7 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
             })?;
             hardlink_tree(&entry.path(), &destination.join(entry.file_name()))?;
         }
+        mirror_metadata(source, destination, &metadata)?;
         return Ok(());
     }
     if metadata.is_file() {
@@ -1244,6 +1247,7 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                         path: destination.display().to_string(),
                         detail: format!("copy fallback after EMLINK: {ce}"),
                     })?;
+                    mirror_metadata(source, destination, &metadata)?;
                     let copied =
                         std::fs::File::open(destination).map_err(|ce| HardlinkFarmError::Io {
                             path: destination.display().to_string(),
@@ -1269,6 +1273,38 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
         path: source.display().to_string(),
         detail: "unsupported store path file type".to_owned(),
     })
+}
+
+fn mirror_metadata(
+    source: &Path,
+    destination: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<(), HardlinkFarmError> {
+    let dest_metadata =
+        std::fs::symlink_metadata(destination).map_err(|e| HardlinkFarmError::Io {
+            path: destination.display().to_string(),
+            detail: format!("stat before metadata mirror from {}: {e}", source.display()),
+        })?;
+    if dest_metadata.uid() != metadata.uid() || dest_metadata.gid() != metadata.gid() {
+        chown(
+            destination,
+            Some(Uid::from_raw(metadata.uid())),
+            Some(Gid::from_raw(metadata.gid())),
+        )
+        .map_err(|e| HardlinkFarmError::Io {
+            path: destination.display().to_string(),
+            detail: format!("mirror ownership from {}: {e}", source.display()),
+        })?;
+    }
+    std::fs::set_permissions(
+        destination,
+        std::fs::Permissions::from_mode(metadata.mode() & 0o7777),
+    )
+    .map_err(|e| HardlinkFarmError::Io {
+        path: destination.display().to_string(),
+        detail: format!("mirror mode from {}: {e}", source.display()),
+    })?;
+    Ok(())
 }
 
 /// Classification of a `link(2)` failure, used by [`hardlink_tree`] to
@@ -1666,6 +1702,7 @@ pub fn split_fast_path_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     #[test]
@@ -2372,6 +2409,25 @@ mod tests {
         assert_eq!(host.vm, "corp-vm");
         assert_eq!(host.linked_count, 2);
         assert_eq!(host.closure_count, 2);
+    }
+
+    #[test]
+    fn hardlink_tree_preserves_directory_modes() {
+        let dir = tempdir().unwrap();
+        let closure = split_closure(dir.path());
+        let source_top = &closure[0];
+        let source_bin = source_top.join("bin");
+        std::fs::set_permissions(source_top, std::fs::Permissions::from_mode(0o555)).unwrap();
+        std::fs::set_permissions(&source_bin, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let dest_root = dir.path().join("dest");
+        std::fs::create_dir_all(&dest_root).unwrap();
+        let live_top = dest_root.join("zzz-nixos-system-host");
+        hardlink_tree(source_top, &live_top).unwrap();
+
+        let live_bin = live_top.join("bin");
+        assert_eq!(std::fs::metadata(&live_top).unwrap().mode() & 0o7777, 0o555);
+        assert_eq!(std::fs::metadata(&live_bin).unwrap().mode() & 0o7777, 0o555);
     }
 
     #[test]

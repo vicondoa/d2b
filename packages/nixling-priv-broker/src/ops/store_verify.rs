@@ -488,6 +488,9 @@ fn verify_locked(intent: &ResolvedStoreViewIntent, repair: bool) -> StoreVerifyR
             if !live_meta.is_dir() {
                 return Err(());
             }
+            if (source_meta.mode() & 0o7777) != (live_meta.mode() & 0o7777) {
+                return Err(());
+            }
             let mut source_entries = std::collections::BTreeSet::new();
             for entry in std::fs::read_dir(source).map_err(|_| ())? {
                 let entry = entry.map_err(|_| ())?;
@@ -742,6 +745,7 @@ fn read_integrity_record(path: &Path) -> Option<IntegrityRecord> {
 mod tests {
     use super::*;
     use nixling_host::hardlink_farm::{GenerationMarker, StoreViewLinkCounts};
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     fn fake_closure(root: &Path, names: &[&str]) -> Vec<PathBuf> {
@@ -905,6 +909,31 @@ mod tests {
         std::fs::remove_dir_all(&live_alpha).unwrap();
         std::fs::create_dir_all(&live_alpha).unwrap();
         std::fs::write(live_alpha.join("payload"), b"drifted").unwrap();
+
+        let response = run_store_verify(&intent, false);
+        assert_eq!(response.status, StoreVerifyStatus::Drift);
+        assert_eq!(response.checked, 2);
+        assert_eq!(response.drifted, 1);
+        let raw = std::fs::read_to_string(generation_integrity_path(
+            &intent.hardlink_farm_path,
+            &generation_id,
+        ))
+        .unwrap();
+        assert!(raw.contains("aaaaaaaaaaaaaaaa-alpha"));
+    }
+
+    #[test]
+    fn live_top_level_directory_mode_drift_returns_drift() {
+        let tmp = tempdir().unwrap();
+        let closure = fake_closure(
+            tmp.path(),
+            &["aaaaaaaaaaaaaaaa-alpha", "bbbbbbbbbbbbbbbb-beta"],
+        );
+        let intent = intent(tmp.path(), "vm-a", closure);
+        let generation_id = publish(&intent);
+        let live_alpha =
+            hardlink_farm::live_dir(&intent.hardlink_farm_path).join("aaaaaaaaaaaaaaaa-alpha");
+        std::fs::set_permissions(&live_alpha, std::fs::Permissions::from_mode(0o750)).unwrap();
 
         let response = run_store_verify(&intent, false);
         assert_eq!(response.status, StoreVerifyStatus::Drift);
