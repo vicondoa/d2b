@@ -147,6 +147,7 @@ run_gate "tests/guest-control-auth-nongoals.sh" "bash '$ROOT/tests/guest-control
 run_gate "tests/guest-control-token-materializer.sh" "bash '$ROOT/tests/guest-control-token-materializer.sh'"
 run_gate "tests/guest-control-vsock-eval.sh" "bash '$ROOT/tests/guest-control-vsock-eval.sh'"
 run_gate "tests/guest-control-vsock-helper-static.sh" "bash '$ROOT/tests/guest-control-vsock-helper-static.sh'"
+run_gate "tests/guest-exec-runtime-static.sh" "bash '$ROOT/tests/guest-exec-runtime-static.sh'"
 run_gate "tests/guest-exec-policy-eval.sh" "bash '$ROOT/tests/guest-exec-policy-eval.sh'"
 run_gate "tests/guest-static-elf.sh" "bash '$ROOT/tests/guest-static-elf.sh'"
 run_gate "tests/guest-static-consumption-eval.sh" "bash '$ROOT/tests/guest-static-consumption-eval.sh'"

@@ -134,7 +134,13 @@ in
         unitConfig.RequiresMountsFor = [ "/run/nixling-guest-control-host" ];
         serviceConfig = {
           Type = "exec";
-          ExecStart = "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}";
+          ExecStart =
+            let
+              execFlags =
+                lib.optionalString cfg.exec.enable " --exec-enable"
+                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root";
+            in
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];

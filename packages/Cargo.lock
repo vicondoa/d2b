@@ -1000,6 +1000,7 @@ dependencies = [
  "hmac",
  "nixling-ipc",
  "protobuf",
+ "rustix 0.38.44",
  "sha2",
  "tokio",
  "tokio-vsock",

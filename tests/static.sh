@@ -1254,6 +1254,7 @@ if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/
 if [ -x "$HERE/guest-control-auth-nongoals.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-nongoals.sh" "$HERE/guest-control-auth-nongoals.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-control-vsock-helper-static.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-helper-static.sh" "$HERE/guest-control-vsock-helper-static.sh"; fi
+if [ -x "$HERE/guest-exec-runtime-static.sh" ]; then nl_static_parallel_script "tests/guest-exec-runtime-static.sh" "$HERE/guest-exec-runtime-static.sh"; fi
 if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script "tests/static-invariant-broad-caps.sh" "$HERE/static-invariant-broad-caps.sh"; fi
