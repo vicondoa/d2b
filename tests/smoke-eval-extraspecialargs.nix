@@ -1,12 +1,12 @@
 # tests/smoke-eval-extraspecialargs.nix — regression test for Spec
 # correction #30 (v0.1.1: `nixling.site.extraSpecialArgs` is merged
-# into the per-VM `specialArgs` in `nixos-modules/host.nix:165`).
+# into the per-VM `specialArgs` in the nixling-owned VM evaluator).
 #
 # Mirrors tests/smoke-eval.nix but declares `nixling.site.extraSpecialArgs
 # = { sentinel = "ok"; }` and a per-VM `config` module that consumes
 # `sentinel` directly via a positional-attribute argument. If
 # extraSpecialArgs ever stops flowing through (e.g. a refactor of
-# host.nix's microvm.vms translation drops the `// cfg.site.extraSpecialArgs`),
+# the per-VM evaluator drops the `// cfg.site.extraSpecialArgs`),
 # the per-VM module fails to evaluate ("anonymous function at … called
 # without required argument 'sentinel'"). An assertion inside the VM
 # config additionally pins the *value* of `sentinel`, so a future refactor
@@ -48,8 +48,8 @@ let
           # The crux of this regression test: an arbitrary extra
           # specialArg that the per-VM module below picks up by
           # positional argument. The framework MUST propagate this
-          # through host.nix's microvm.vms translation
-          # (nixos-modules/host.nix:165:
+          # through the framework's per-VM evaluator
+          # (`specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;`):
           # `specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;`).
           extraSpecialArgs = { sentinel = "ok"; };
         };
@@ -92,12 +92,12 @@ let
     ];
   };
 in
-  # Force the per-VM microvm.vms translation so the specialArgs
+  # Force the per-VM nixling-owned evaluator so the specialArgs
   # merge path is actually evaluated. Reading the per-VM
   # environment.etc sentinel file's `.text` value forces
   # both the module-argument resolution (proves `sentinel` was
   # propagated) AND the inline throw above (proves the *value*
   # is the expected one).
   builtins.deepSeq
-    nixos.config.microvm.vms.corp-vm.config.config.environment.etc."nixling-extraspecialargs-sentinel".text
+    nixos.config.nixling._computed.corp-vm.config.environment.etc."nixling-extraspecialargs-sentinel".text
     nixos.config.system.build.toplevel

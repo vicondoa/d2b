@@ -6,7 +6,7 @@
 > or high-risk.
 
 > **Status:** live for
-> `nixling.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions}`.
+> `nixling.vms.<vm>.graphics.waylandFilter.{enable,denyGlobals,allowGlobals,maxVersions,dmabufAllow,dmabufDeny,debugLogging,byteLogging}`.
 > The proxy emits these diagnostics at runtime in the
 > `nixling-wayland-filter` journal stream. They are not NixOS eval-time
 > `config.warnings`.
@@ -25,12 +25,11 @@ currently emits human-readable `PolicyWarning` messages.
 
 ### W-DENY-BASELINE
 
-**Trigger:** `denyGlobals` explicitly denies, or `maxVersions` caps below
-the usable minimum for, a global that nixling classifies as a required
-application-baseline global.
+**Trigger:** `denyGlobals` explicitly denies a global that nixling
+classifies as a required application-baseline global.
 
 **Required baseline globals:** `wl_compositor`, `wl_shm`, `xdg_wm_base`,
-`wl_seat`, `wl_output`.
+`wl_seat`, `wl_output`, `wl_subcompositor`.
 
 **Example:**
 
@@ -52,9 +51,8 @@ apps on this VM may not render or receive input.
 
 ### W-DENY-ACCEL
 
-**Trigger:** `denyGlobals` disables, or `maxVersions` version-caps, a
-dmabuf or rendering global that nixling expects for GPU-accelerated
-graphics.
+**Trigger:** `denyGlobals` disables a dmabuf or rendering global that
+nixling expects for GPU-accelerated graphics.
 
 **Affected globals:** `zwp_linux_dmabuf_v1`,
 `wp_linux_drm_syncobj_manager_v1`, `wl_eglstream_display`, and
@@ -64,9 +62,9 @@ graphics.
 fall back to software (llvmpipe) rendering, which significantly reduces
 graphics performance and may break GPU-dependent apps.
 
-**How to override intentionally:** Set the deny/version-cap option and
-accept the performance regression. The warning confirms that llvmpipe
-fallback is expected.
+**How to override intentionally:** Set the deny option and accept the
+performance regression. The warning confirms that llvmpipe fallback is
+expected.
 
 ---
 
@@ -114,28 +112,6 @@ document in the host configuration why the global is safe for this VM.
 Consider filing an issue or PR to have nixling classify the global so the
 warning is resolved upstream.
 
----
-
-### W-NIXLING-SECURITY-CRITICAL-DENY
-
-**Trigger:** `allowGlobals` includes a global that nixling marks
-`nixlingSecurityCriticalDeny`. This designation is reserved for globals
-whose forwarding would directly violate a core nixling security invariant
-(for example, a global that would allow a guest to access raw host input
-devices or bypass the filter proxy entirely).
-
-**Why it exists:** Unlike high-risk globals (which are allowed with a
-warning), security-critical-deny globals represent cases where forwarding
-is inconsistent with the threat model for any guest.
-
-**How to override intentionally:** This warning is emitted even when the
-allow entry is accepted. If a specific workload genuinely requires a
-security-critical global, document the justification and threat model
-deviation in a host configuration comment. The configuration still
-builds; the runtime warning serves as a persistent audit trail.
-
----
-
 ## Warning vs. hard assertion
 
 Warnings never become hard assertions. Every warning condition still
@@ -153,6 +129,6 @@ changed through the option surface.
 ## Secure default: zero warnings
 
 A configuration using `waylandFilter.enable = true` with no custom
-`denyGlobals`, `allowGlobals`, or `maxVersions` produces zero
+`denyGlobals` or `allowGlobals` produces zero
 `waylandFilter` warnings. If you see unexpected warnings with a stock
 configuration, please report them.
