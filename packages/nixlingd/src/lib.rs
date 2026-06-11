@@ -4678,6 +4678,11 @@ fn dispatch_broker_vm_start(
         }
     }
 
+    let runner = VmStartRunner {
+        state,
+        resolver: &resolver,
+    };
+
     let dag = resolver
         .processes
         .vms
@@ -4687,6 +4692,28 @@ fn dispatch_broker_vm_start(
             context: format!("load process DAG for {}", request.vm),
             detail: "VM not present in processes.json".to_owned(),
         })?;
+
+    // StoreSync owns the guest-served live marker
+    // (`store-view/live/.nixling-marker-<vm>`) and postures it as
+    // `nixlingd:users 0644`. Run it before ownership preflight so stale
+    // markers from older broker/activation paths are repaired before the
+    // fail-closed matrix check. The process DAG still contains the
+    // StoreVirtiofsPreflight readiness node; that second StoreSync call is
+    // idempotent and keeps the DAG contract explicit.
+    if let Err(error) = runner.sync_store_view(&request.vm) {
+        tracing::warn!(
+            vm = %request.vm,
+            error = %error,
+            "vm start: pre-ownership StoreSync failed"
+        );
+        return Ok(daemon_failure_response(
+            VERB,
+            format!(
+                "vm start {}: store-view sync failed before ownership preflight",
+                request.vm
+            ),
+        ));
+    }
 
     // Refuse VM start if any per-VM state subdirectory has drifted from
     // the typed ownership matrix
@@ -4802,10 +4829,6 @@ fn dispatch_broker_vm_start(
         ));
     }
 
-    let runner = VmStartRunner {
-        state,
-        resolver: &resolver,
-    };
     let api_timeout = Duration::from_secs(
         std::env::var("NIXLING_API_TIMEOUT_SECONDS")
             .ok()
