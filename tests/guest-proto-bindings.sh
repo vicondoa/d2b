@@ -11,6 +11,8 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 
 generated_dir="$ROOT/packages/nixling-ipc/src/generated"
 generated_file="$generated_dir/guest_control.rs"
+ipc_crate="$ROOT/packages/nixling-ipc"
+ipc_manifest="$ipc_crate/Cargo.toml"
 
 NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
   CARGO_BUILD_RUSTC_WRAPPER='' \
@@ -30,8 +32,16 @@ if rg -n 'ttrpc|service GuestControl|GuestControl\\x12|Service|Client|Server|reg
   fail "guest-proto-bindings: generated guest-control bindings must stay message-only"
 fi
 
-if rg -n 'ttrpc' "$ROOT/packages/nixling-ipc/Cargo.toml"; then
+if rg -n 'ttrpc' "$ipc_manifest"; then
   fail "guest-proto-bindings: nixling-ipc must not depend on ttrpc for message-only bindings"
+fi
+
+if [ -e "$ipc_crate/build.rs" ]; then
+  fail "guest-proto-bindings: nixling-ipc must not generate guest protobuf bindings during normal builds"
+fi
+
+if rg -n '^\[build-dependencies\]|protobuf-codegen|prost-build|tonic-build|\bprotoc\b' "$ipc_manifest"; then
+  fail "guest-proto-bindings: nixling-ipc must keep protobuf code generation in xtask only"
 fi
 
 ok "guest-proto-bindings: generated message bindings are deterministic and message-only"
