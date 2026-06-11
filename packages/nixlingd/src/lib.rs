@@ -2606,6 +2606,7 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::Audio => VmStartNodeMode::LongLived(RunnerRole::Audio),
         ProcessRole::Video => VmStartNodeMode::LongLived(RunnerRole::Video),
         ProcessRole::VsockRelay => VmStartNodeMode::LongLived(RunnerRole::VsockRelay),
+        ProcessRole::OtelHostBridge => VmStartNodeMode::LongLived(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => VmStartNodeMode::LongLived(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
@@ -6943,9 +6944,10 @@ mod broker_dispatch_tests {
             &json!({
                 "_manifest": { "manifestVersion": 3 },
                 "_observability": {
-                    "chExporter": { "listenPort": 9100 },
                     "enabled": false,
-                    "grafanaUrl": "http://127.0.0.1:3000",
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
                     "obsVsockCid": 7,
                     "obsVsockHostSocket": "/run/nixling/obs.sock",
                     "vmName": "obs"
@@ -7062,9 +7064,10 @@ mod broker_dispatch_tests {
             &json!({
                 "_manifest": { "manifestVersion": 3 },
                 "_observability": {
-                    "chExporter": { "listenPort": 9100 },
                     "enabled": false,
-                    "grafanaUrl": "http://127.0.0.1:3000",
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
                     "obsVsockCid": 7,
                     "obsVsockHostSocket": "/run/nixling/obs.sock",
                     "vmName": "obs"

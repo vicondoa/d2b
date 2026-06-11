@@ -1,8 +1,8 @@
 # Observability stack guest component for the auto-declared stack VM.
 #
 # TODO: `component-stack`.
-# This module will install Grafana, Prometheus, Loki, Tempo, and the
-# inbound vsock receiver inside `sys-obs-stack`.
+# This module will install the observability backend and inbound vsock
+# receiver inside the auto-declared `sys-obs` VM.
 { config, lib, pkgs, ... }:
 
 let
@@ -436,7 +436,7 @@ in
 
     vmName = lib.mkOption {
       type = lib.types.str;
-      default = "sys-obs-stack";
+      default = "sys-obs";
       description = ''
         VM name of the auto-declared observability stack VM.
       '';

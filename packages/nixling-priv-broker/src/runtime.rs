@@ -4015,6 +4015,7 @@ fn runner_role_for_process_role(
         ProcessRole::Audio => Some(RunnerRole::Audio),
         ProcessRole::CloudHypervisorRunner => Some(RunnerRole::CloudHypervisor),
         ProcessRole::VsockRelay => Some(RunnerRole::VsockRelay),
+        ProcessRole::OtelHostBridge => Some(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => Some(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
@@ -4028,12 +4029,6 @@ fn validate_spawn_runner_request_matches_intent(
     req: &nixling_ipc::broker_wire::SpawnRunnerRequest,
     intent: &nixling_core::bundle_resolver::ResolvedRunnerIntent,
 ) -> Result<(), BrokerError> {
-    if matches!(
-        req.role,
-        nixling_ipc::broker_wire::RunnerRole::OtelHostBridge
-    ) {
-        return Ok(());
-    }
     if req.vm_id.as_str() != intent.vm_name {
         return Err(BrokerError::SpawnRunnerIntentMismatch {
             field: "vm_id",
@@ -5847,8 +5842,7 @@ mod tests {
             UsbipLockScope,
         };
         use nixling_core::manifest_v04::{
-            ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
-            VmObservability,
+            ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
         };
         use nixling_core::minijail_profile::CgroupPlacement;
         use nixling_core::processes::{
@@ -5987,14 +5981,15 @@ mod tests {
 
         let manifest = ManifestV04 {
             manifest: ManifestMeta {
-                manifest_version: 3,
+                manifest_version: 4,
             },
             observability: ObservabilityMeta {
-                ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
-                grafana_url: "http://127.0.0.1:3000".to_owned(),
                 obs_vsock_cid: 3,
                 obs_vsock_host_socket: "/run/nixling/obs.sock".to_owned(),
+                signoz_otlp_grpc_port: 4317,
+                signoz_otlp_http_port: 4318,
+                signoz_url: "http://127.0.0.1:8080".to_owned(),
                 vm_name: "obs".to_owned(),
             },
             vms: BTreeMap::from([(

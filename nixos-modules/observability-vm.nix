@@ -16,7 +16,7 @@ in
       uplinkSubnet = lib.mkDefault cfg.uplinkSubnet;
     };
 
-    # `cfg.vmName` defaults to `sys-obs-stack`, matching the framework's
+    # `cfg.vmName` defaults to `sys-obs`, matching the framework's
     # `sys-<env>-<role>` namespace for auto-declared system VMs. The current
     # reserved-prefix exemption in assertions.nix only whitelists the per-env
     # net VMs; the matching carve-out for this observability VM belongs with

@@ -168,10 +168,9 @@ let
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
       obsVsockHostSocket = "${config.nixling.store.stateDir}/${obsCfg.vmName}/vsock.sock";
-      grafanaUrl = "http://${obsCfg.grafana.listenAddress}:${toString obsCfg.grafana.listenPort}";
-      chExporter = {
-        listenPort = obsCfg.ch.exporter.listenPort;
-      };
+      signozUrl = "http://${obsCfg.signoz.listenAddress}:${toString obsCfg.signoz.listenPort}";
+      signozOtlpGrpcPort = obsCfg.signoz.otlpGrpcPort;
+      signozOtlpHttpPort = obsCfg.signoz.otlpHttpPort;
     };
   };
 
@@ -453,7 +452,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 3;
+    default = 4;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into

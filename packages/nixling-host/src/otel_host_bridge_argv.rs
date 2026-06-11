@@ -145,8 +145,8 @@ mod tests {
     fn happy_inputs() -> OtelHostBridgeArgvInputs {
         OtelHostBridgeArgvInputs {
             socat_path: "/run/current-system/sw/bin/socat".to_owned(),
-            host_egress_socket: "/run/alloy/host-egress.sock".to_owned(),
-            obs_vsock_host_socket: "/var/lib/nixling/vms/sys-obs-stack/vsock.sock".to_owned(),
+            host_egress_socket: "/run/nixling/otel/host-egress.sock".to_owned(),
+            obs_vsock_host_socket: "/var/lib/nixling/vms/sys-obs/vsock.sock".to_owned(),
             obs_otlp_port: 14317,
             ch_vsock_connect_path: "/run/current-system/sw/bin/nixling-ch-vsock-connect".to_owned(),
         }
@@ -164,8 +164,8 @@ mod tests {
                 "/run/current-system/sw/bin/socat",
                 "-d",
                 "-d",
-                "UNIX-LISTEN:/run/alloy/host-egress.sock,fork,reuseaddr,mode=0660",
-                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs-stack/vsock.sock 14317\"",
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660",
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317\"",
             ]
         );
     }

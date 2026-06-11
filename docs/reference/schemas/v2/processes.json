@@ -336,6 +336,13 @@
           ]
         },
         {
+          "description": "Host-to-observability-VM OTLP bridge.",
+          "type": "string",
+          "enum": [
+            "otel-host-bridge"
+          ]
+        },
+        {
           "description": "Guest SSH readiness probe.",
           "type": "string",
           "enum": [

@@ -435,6 +435,7 @@ in
     "d /run/nixling             0775 root nixling -"
   ] ++ [
     "d /run/nixling/vms         0755 root root -"
+    "d /run/nixling/otel        0750 nixlingd nixling -"
     "f /run/nixling/usbipd.lock 0660 root nixling -"
     "d /run/nixling-gpu         0755 root root -"
     # security-r7-2: lock file for nixling-known-hosts-refresh@.service

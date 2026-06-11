@@ -29,7 +29,7 @@ in
 
     vmName = lib.mkOption {
       type = lib.types.str;
-      default = "sys-obs-stack";
+      default = "sys-obs";
       description = ''
         VM name of the auto-declared observability stack VM.
       '';
@@ -228,6 +228,44 @@ in
           Re-enable Grafana's anonymous Viewer mode for trusted
           single-host LAN deployments. Disabled by default so Grafana
           requires an authenticated login.
+        '';
+      };
+    };
+
+    signoz = {
+      listenAddress = lib.mkOption {
+        type = lib.types.str;
+        default = defaultGrafanaListenAddress;
+        description = ''
+          Address SigNoz binds inside the observability env. Default
+          tracks the observability VM's derived IP (`lanSubnet` +
+          `index`).
+        '';
+      };
+
+      listenPort = lib.mkOption {
+        type = lib.types.port;
+        default = 8080;
+        description = ''
+          TCP port SigNoz listens on inside the observability env.
+        '';
+      };
+
+      otlpGrpcPort = lib.mkOption {
+        type = lib.types.port;
+        default = 4317;
+        description = ''
+          Loopback port used by the SigNoz OTel Collector for local OTLP
+          gRPC ingress inside the observability VM.
+        '';
+      };
+
+      otlpHttpPort = lib.mkOption {
+        type = lib.types.port;
+        default = 4318;
+        description = ''
+          Loopback port used by the SigNoz OTel Collector for local OTLP
+          HTTP ingress inside the observability VM.
         '';
       };
     };
