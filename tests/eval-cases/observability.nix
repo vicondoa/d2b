@@ -305,6 +305,7 @@ in
   obs-stack-vm-guest-surface = mkCase {
     override = { ... }: {
       nixling.observability.enable = true;
+      nixling.vms.corp-vm.observability.enable = true;
       nixling.observability.retention.metrics = "5d";
       nixling.observability.retention.logs = "3d";
       nixling.observability.retention.traces = "1d";
@@ -313,66 +314,68 @@ in
       let
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-        grafanaDatasources = obsGuest.services.grafana.provision.datasources.settings.datasources;
-        dashboardProviders = obsGuest.services.grafana.provision.dashboards.settings.providers;
-        lokiDatasource = builtins.head (builtins.filter (ds: ds.name == "Loki") grafanaDatasources);
-        tempoDatasource = builtins.head (builtins.filter (ds: ds.name == "Tempo") grafanaDatasources);
+        services = obsGuest.systemd.services;
+        ingressSources = obsGuest.nixling.observability.ingress.sources;
       in
       {
         obsVmName = obsVm;
         manifestHasObsVm = builtins.hasAttr obsVm nixos.config.nixling.manifest;
-        grafanaEnable = obsGuest.services.grafana.enable;
-        prometheusEnable = obsGuest.services.prometheus.enable;
-        lokiEnable = obsGuest.services.loki.enable;
-        tempoEnable = obsGuest.services.tempo.enable;
-        alloyEnable = obsGuest.services.alloy.enable;
-        vsockInDeclared = builtins.hasAttr "nixling-otel-vsock-in" obsGuest.systemd.services;
-        vsockInRestartIfChanged = obsGuest.systemd.services.nixling-otel-vsock-in.restartIfChanged;
-        grafanaLoadCredentialHasSecretKey = builtins.elem
-          "secret_key:/run/nixling-obs-secrets/grafana-secret-key"
-          (obsGuest.systemd.services.grafana.serviceConfig.LoadCredential or [ ]);
-        grafanaSecretKey = obsGuest.services.grafana.settings.security.secret_key;
-        datasourceUrls = builtins.listToAttrs (map (ds: { name = ds.uid or (lib.toLower ds.name); value = ds.url; }) grafanaDatasources);
-        lokiDerivedFieldsCount = builtins.length (lokiDatasource.jsonData.derivedFields or [ ]);
-        tempoTraceToLogsDatasource = tempoDatasource.jsonData.tracesToLogsV2.datasourceUid or null;
-        dashboardProviderCount = builtins.length dashboardProviders;
-        dashboardFolder = (builtins.head dashboardProviders).folder or null;
-        dashboardPathHasDashboards = hasInfix "nixling-grafana-dashboards" ((builtins.head dashboardProviders).options.path or "");
-        prometheusRetention = obsGuest.services.prometheus.retentionTime;
-        lokiRetention = obsGuest.services.loki.configuration.limits_config.retention_period;
-        tempoRetention = obsGuest.services.tempo.settings.compactor.compaction.block_retention;
-        grafanaBindAddress = obsGuest.services.grafana.settings.server.http_addr;
-        vsockInExecStartHasShape = hasInfix
-          "bin/socat -d -d VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr UNIX-CONNECT:/run/nixling/obs-ingress.sock"
-          obsGuest.systemd.services.nixling-otel-vsock-in.serviceConfig.ExecStart;
+        clickhouseEnable = obsGuest.services.clickhouse.enable;
+        zookeeperEnable = obsGuest.services.zookeeper.enable;
+        signozDeclared = builtins.hasAttr "signoz" services;
+        signozCollectorDeclared = builtins.hasAttr "signoz-otel-collector" services;
+        signozMigrateDeclared = builtins.hasAttr "signoz-schema-migrate-sync" services;
+        retiredServicesAbsent = !(
+          builtins.hasAttr "grafana" services
+          || builtins.hasAttr "prometheus" services
+          || builtins.hasAttr "loki" services
+          || builtins.hasAttr "tempo" services
+          || builtins.hasAttr "alloy" services
+        );
+        ingressSourceNames = sortStrings (builtins.attrNames ingressSources);
+        hostIngress = ingressSources.host;
+        corpIngress = ingressSources.corp-vm;
+        hostVsockInDeclared = builtins.hasAttr "nixling-otel-vsock-in-host" services;
+        corpVsockInDeclared = builtins.hasAttr "nixling-otel-vsock-in-corp-vm" services;
+        hostVsockInExecStartHasShape = hasInfix
+          "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
+          services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
+        corpVsockInExecStartHasShape = hasInfix
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
+        signozBindAddress = obsGuest.nixling.observability.signoz.listenAddress;
       };
     expectedExtract = {
       obsVmName = "sys-obs";
       manifestHasObsVm = true;
-      grafanaEnable = true;
-      prometheusEnable = true;
-      lokiEnable = true;
-      tempoEnable = true;
-      alloyEnable = true;
-      vsockInDeclared = true;
-      vsockInRestartIfChanged = false;
-      grafanaLoadCredentialHasSecretKey = true;
-      grafanaSecretKey = "$__file{/run/credentials/grafana.service/secret_key}";
-      datasourceUrls = {
-        loki = "http://127.0.0.1:3100";
-        prometheus = "http://127.0.0.1:9090";
-        tempo = "http://127.0.0.1:3200";
+      clickhouseEnable = true;
+      zookeeperEnable = true;
+      signozDeclared = true;
+      signozCollectorDeclared = true;
+      signozMigrateDeclared = true;
+      retiredServicesAbsent = true;
+      ingressSourceNames = [ "corp-vm" "host" ];
+      hostIngress = {
+        envName = "host";
+        receiverGrpcPort = 4317;
+        receiverHttpPort = 4318;
+        role = "host";
+        vmName = "host";
+        vsockPort = 14317;
       };
-      lokiDerivedFieldsCount = 1;
-      tempoTraceToLogsDatasource = "loki";
-      dashboardProviderCount = 1;
-      dashboardFolder = "Nixling";
-      dashboardPathHasDashboards = true;
-      prometheusRetention = "5d";
-      lokiRetention = "3d";
-      tempoRetention = "1d";
-      grafanaBindAddress = "10.40.0.10";
-      vsockInExecStartHasShape = true;
+      corpIngress = {
+        envName = "work";
+        receiverGrpcPort = 4319;
+        receiverHttpPort = null;
+        role = "workload";
+        vmName = "corp-vm";
+        vsockPort = 14318;
+      };
+      hostVsockInDeclared = true;
+      corpVsockInDeclared = true;
+      hostVsockInExecStartHasShape = true;
+      corpVsockInExecStartHasShape = true;
+      signozBindAddress = "10.40.0.10";
     };
   };
 
@@ -386,35 +389,27 @@ in
         obsVm = nixos.config.nixling.observability.vmName;
         obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
         workGuest = nixos.config.microvm.vms.corp-vm.config.config;
-        ruleFiles = obsGuest.services.prometheus.ruleFiles;
-        workGuestAlloyConfig = workGuest.environment.etc."alloy/config.alloy".text;
       in
       {
-        ruleFileCount = builtins.length ruleFiles;
-        ruleFileNameMatches = ruleFiles != [ ] && hasInfix "nixling-observability.rules.yml" (toString (builtins.head ruleFiles));
-        obsPrometheusJobs = sortStrings (map (scrape: scrape.job_name) obsGuest.services.prometheus.scrapeConfigs);
-        guestAlloyHasTelemetryJob = hasInfix "job_name   = \"nixling-vm-telemetry\"" workGuestAlloyConfig;
-        guestAlloyHasNodeJob = hasInfix "job_name   = \"nixling-vm-node\"" workGuestAlloyConfig;
-        guestAlloyHasVmLabel = hasInfix "target_label = \"vm\"" workGuestAlloyConfig;
-        guestAlloyHasEnvLabel = hasInfix "target_label = \"env\"" workGuestAlloyConfig;
+        obsIngressSources = sortStrings (builtins.attrNames obsGuest.nixling.observability.ingress.sources);
+        guestOtelCollectorDeclared = builtins.hasAttr "nixling-otel-collector" workGuest.systemd.services;
+        guestVsockOutDeclared = builtins.hasAttr "nixling-otel-vsock-out" workGuest.systemd.services;
+        guestAlloyAbsent = ! builtins.hasAttr "alloy" workGuest.systemd.services;
+        guestIdentity = workGuest.nixling.observability.identity;
+        guestVsockOutHasHostPort = hasInfix "VSOCK-CONNECT:2:14317"
+          workGuest.systemd.services.nixling-otel-vsock-out.serviceConfig.ExecStart;
       };
     expectedExtract = {
-      ruleFileCount = 1;
-      ruleFileNameMatches = true;
-      obsPrometheusJobs = [ "alloy" "grafana" "loki" "prometheus" "tempo" ];
-      guestAlloyHasTelemetryJob = true;
-      guestAlloyHasNodeJob = true;
-      guestAlloyHasVmLabel = true;
-      guestAlloyHasEnvLabel = true;
-    };
-    aux = nixos:
-      let
-        obsVm = nixos.config.nixling.observability.vmName;
-        obsGuest = nixos.config.microvm.vms.${obsVm}.config.config;
-      in
-      {
-        rulesPath = toString (builtins.head obsGuest.services.prometheus.ruleFiles);
+      obsIngressSources = [ "corp-vm" "host" ];
+      guestOtelCollectorDeclared = true;
+      guestVsockOutDeclared = true;
+      guestAlloyAbsent = true;
+      guestIdentity = {
+        envName = "work";
+        vmName = "corp-vm";
       };
+      guestVsockOutHasHostPort = true;
+    };
   };
 
   obs-vm-toggle-default-off = mkCase {

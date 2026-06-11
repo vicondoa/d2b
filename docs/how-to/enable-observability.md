@@ -88,7 +88,8 @@ systemctl status zookeeper.service
 systemctl status signoz-schema-migrate-sync.service
 systemctl status signoz.service
 systemctl status signoz-otel-collector.service
-systemctl status nixling-otel-vsock-in.service
+systemctl status nixling-otel-vsock-in-host.service
+systemctl status nixling-otel-vsock-in-<vm>.service
 ```
 
 ## Step 5: Open SigNoz

@@ -27,6 +27,94 @@ let
 
   clickhouseDsn = "tcp://127.0.0.1:${toString clickhousePort}";
   clickhouseDsnEnv = "tcp://127.0.0.1:${toString clickhousePort}?username=signoz&password=$SIGNOZ_CLICKHOUSE_PASSWORD";
+  defaultIngressSources = {
+    host = {
+      vmName = "host";
+      envName = "host";
+      role = "host";
+      vsockPort = 14317;
+      receiverGrpcPort = otlpGrpcPort;
+      receiverHttpPort = otlpHttpPort;
+    };
+  };
+  ingressSources =
+    if cfg.ingress.sources == { }
+    then defaultIngressSources
+    else cfg.ingress.sources;
+  sourceNames = lib.attrNames ingressSources;
+  otlpReceiverFor = _sourceName: source: {
+    protocols.grpc.endpoint = "127.0.0.1:${toString source.receiverGrpcPort}";
+  } // lib.optionalAttrs (source.receiverHttpPort != null) {
+    protocols.http.endpoint = "127.0.0.1:${toString source.receiverHttpPort}";
+  };
+  sourceReceivers = lib.mapAttrs' (sourceName: source:
+    lib.nameValuePair "otlp/${sourceName}" (otlpReceiverFor sourceName source)
+  ) ingressSources;
+  sourceProcessors = lib.mapAttrs' (sourceName: source:
+    lib.nameValuePair "resource/${sourceName}" {
+      attributes = [
+        { key = "vm.name"; value = source.vmName; action = "upsert"; }
+        { key = "vm.env"; value = source.envName; action = "upsert"; }
+        { key = "vm.role"; value = source.role; action = "upsert"; }
+        { key = "host.name"; value = source.vmName; action = "upsert"; }
+        { key = "service.namespace"; value = source.envName; action = "upsert"; }
+        { key = "deployment.environment"; value = source.envName; action = "upsert"; }
+      ];
+    }
+  ) ingressSources;
+  sourcePipelines = lib.foldl' lib.recursiveUpdate { } (map
+    (sourceName: {
+      "traces/${sourceName}" = {
+        receivers = [ "otlp/${sourceName}" ];
+        processors = [ "resource/${sourceName}" "signozspanmetrics/delta" "memory_limiter" "batch" ];
+        exporters = [ "clickhousetraces" "metadataexporter" ];
+      };
+      "metrics/${sourceName}" = {
+        receivers = [ "otlp/${sourceName}" ];
+        processors = [ "resource/${sourceName}" "memory_limiter" "batch" ];
+        exporters = [ "metadataexporter" "signozclickhousemetrics" ];
+      };
+      "logs/${sourceName}" = {
+        receivers = [ "otlp/${sourceName}" ];
+        processors = [ "resource/${sourceName}" "memory_limiter" "batch" ];
+        exporters = [ "clickhouselogsexporter" "metadataexporter" ];
+      };
+    })
+    sourceNames);
+  vsockIngressServices = lib.mapAttrs' (sourceName: source:
+    lib.nameValuePair "nixling-otel-vsock-in-${sourceName}" {
+      description = "Receive OTLP from ${sourceName} and forward to the SigNoz collector";
+      wantedBy = [ "multi-user.target" ];
+      wants = [ "signoz-otel-collector.service" ];
+      after = [ "signoz-otel-collector.service" ];
+      restartIfChanged = false;
+      serviceConfig = {
+        Type = "exec";
+        ExecStart = "${cfg.transport.relayPackage}/bin/socat -d -d VSOCK-LISTEN:${toString source.vsockPort},fork,max-children=16,reuseaddr TCP:127.0.0.1:${toString source.receiverGrpcPort}";
+        Restart = "on-failure";
+        RestartSec = "3s";
+        TasksMax = 64;
+        MemoryMax = "128M";
+        LimitNOFILE = 2048;
+        User = "signoz";
+        Group = "signoz";
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        PrivateTmp = true;
+        PrivateDevices = false;
+        DeviceAllow = [ "/dev/vsock rw" ];
+        RestrictAddressFamilies = [ "AF_UNIX" "AF_VSOCK" "AF_INET" ];
+        SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
+        CapabilityBoundingSet = "";
+        AmbientCapabilities = "";
+        UMask = "0077";
+      };
+    }
+  ) ingressSources;
 
   signozConfig = pkgs.writeText "nixling-signoz.yaml" (
     lib.generators.toYAML { } {
@@ -98,14 +186,7 @@ let
 
   collectorConfig = pkgs.writeText "nixling-signoz-otel-collector.yaml" (
     lib.generators.toYAML { } {
-      receivers = {
-        otlp = {
-          protocols = {
-            grpc.endpoint = "127.0.0.1:${toString otlpGrpcPort}";
-            http.endpoint = "127.0.0.1:${toString otlpHttpPort}";
-          };
-        };
-      };
+      receivers = sourceReceivers;
       processors = {
         memory_limiter = {
           check_interval = "1s";
@@ -130,7 +211,7 @@ let
           ];
           aggregation_temporality = "AGGREGATION_TEMPORALITY_DELTA";
         };
-      };
+      } // sourceProcessors;
       extensions = {
         health_check.endpoint = "127.0.0.1:${toString collectorHealthPort}";
         zpages.endpoint = "127.0.0.1:55679";
@@ -161,23 +242,7 @@ let
       service = {
         telemetry.logs.encoding = "json";
         extensions = [ "health_check" "zpages" "pprof" ];
-        pipelines = {
-          traces = {
-            receivers = [ "otlp" ];
-            processors = [ "signozspanmetrics/delta" "memory_limiter" "batch" ];
-            exporters = [ "clickhousetraces" "metadataexporter" ];
-          };
-          metrics = {
-            receivers = [ "otlp" ];
-            processors = [ "memory_limiter" "batch" ];
-            exporters = [ "metadataexporter" "signozclickhousemetrics" ];
-          };
-          logs = {
-            receivers = [ "otlp" ];
-            processors = [ "memory_limiter" "batch" ];
-            exporters = [ "clickhouselogsexporter" "metadataexporter" ];
-          };
-        };
+        pipelines = sourcePipelines;
       };
     }
   );
@@ -307,9 +372,44 @@ in
       default = pkgs.socat;
       description = "Package providing the obs-VM-side vsock relay binary.";
     };
+
+    ingress.sources = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          vmName = lib.mkOption {
+            type = lib.types.str;
+            description = "Authoritative VM/source name stamped by the central collector.";
+          };
+          envName = lib.mkOption {
+            type = lib.types.str;
+            description = "Authoritative env/source name stamped by the central collector.";
+          };
+          role = lib.mkOption {
+            type = lib.types.str;
+            description = "Authoritative source role stamped by the central collector.";
+          };
+          vsockPort = lib.mkOption {
+            type = lib.types.port;
+            description = "Obs-VM AF_VSOCK listen port assigned to this source.";
+          };
+          receiverGrpcPort = lib.mkOption {
+            type = lib.types.port;
+            description = "Loopback gRPC receiver port for this source inside the SigNoz collector.";
+          };
+          receiverHttpPort = lib.mkOption {
+            type = lib.types.nullOr lib.types.port;
+            default = null;
+            description = "Optional loopback HTTP receiver port for this source.";
+          };
+        };
+      });
+      default = { };
+      description = "Internal source-specific ingress map emitted by the host module.";
+    };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
     time.timeZone = lib.mkForce "America/Los_Angeles";
 
     services.zookeeper = {
@@ -480,38 +580,6 @@ in
       };
     };
 
-    systemd.services.nixling-otel-vsock-in = {
-      description = "Receive OTLP from host relays and forward to the SigNoz collector";
-      wantedBy = [ "multi-user.target" ];
-      wants = [ "signoz-otel-collector.service" ];
-      after = [ "signoz-otel-collector.service" ];
-      serviceConfig = {
-        Type = "exec";
-        ExecStart = "${cfg.transport.relayPackage}/bin/socat -d -d VSOCK-LISTEN:14317,fork,max-children=64,reuseaddr TCP:127.0.0.1:${toString otlpGrpcPort}";
-        Restart = "on-failure";
-        RestartSec = "3s";
-        TasksMax = 128;
-        MemoryMax = "128M";
-        LimitNOFILE = 2048;
-        User = "signoz";
-        Group = "signoz";
-        NoNewPrivileges = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ProtectKernelTunables = true;
-        ProtectKernelModules = true;
-        ProtectControlGroups = true;
-        PrivateTmp = true;
-        PrivateDevices = false;
-        DeviceAllow = [ "/dev/vsock rw" ];
-        RestrictAddressFamilies = [ "AF_UNIX" "AF_VSOCK" "AF_INET" ];
-        SystemCallFilter = [ "@system-service" "~@privileged" "~@resources" ];
-        CapabilityBoundingSet = "";
-        AmbientCapabilities = "";
-        UMask = "0077";
-      };
-    };
-
     networking.firewall.allowedTCPPorts = [ cfg.signoz.listenPort ];
 
     environment.systemPackages = [
@@ -520,5 +588,7 @@ in
       signozSchemaMigrator
       pkgs.clickhouse
     ];
-  };
+  }
+    { systemd.services = vsockIngressServices; }
+  ]);
 }

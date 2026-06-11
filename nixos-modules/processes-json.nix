@@ -7,11 +7,21 @@ let
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  observedVmNames = lib.attrNames (lib.filterAttrs
+    (name: vm: vm.enable && name != cfg.observability.vmName && vm.observability.enable)
+    cfg.vms);
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
     (lib.attrValues cfg.vms)));
   usbipMeta = lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) cfg._envMeta;
   obsOtlpPort = 14317;
+  obsSourcePortMap = lib.listToAttrs (lib.imap0
+    (i: name: {
+      inherit name;
+      value = obsOtlpPort + 1 + i;
+    })
+    observedVmNames);
+  obsSourcePort = name: obsSourcePortMap.${name} or obsOtlpPort;
   waylandUid =
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
@@ -715,7 +725,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "-d"
       "-d"
       "UNIX-LISTEN:${vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort},fork,max-children=16,reuseaddr,mode=0660"
-      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString obsOtlpPort}"
+      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
     ];
   };
 

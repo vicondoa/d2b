@@ -60,6 +60,20 @@ for token in 'signozspanmetrics/delta' 'memory_limiter' 'batch' 'clickhousetrace
   fi
 done
 
+for token in 'ingress.sources' 'sourceReceivers' 'sourceProcessors' 'sourcePipelines' 'nixling-otel-vsock-in-${sourceName}' 'resource/${sourceName}'; do
+  if grep -q "$token" "$STACK"; then
+    ok "collector uses source-specific ingress token $token"
+  else
+    fail "collector missing source-specific ingress token $token"
+  fi
+done
+
+if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
+  ok "collector pipelines are source-specific, not a shared otlp receiver"
+else
+  fail "collector must route through source-specific receiver pipelines"
+fi
+
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then
   ok "backend binds are loopback-oriented and only SigNoz UI port is opened"
 else

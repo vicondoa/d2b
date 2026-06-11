@@ -117,7 +117,7 @@ in {
   "nixling-otel-host-bridge" = pull "nixling-otel-host-bridge";
   "nixling-ch-exporter" = pull "nixling-ch-exporter";
   "guest:nixling-otel-vsock-out" = pullGuest "nixling-otel-vsock-out";
-  "obs:nixling-otel-vsock-in" = pullObsGuest "nixling-otel-vsock-in";
+  "obs:nixling-otel-vsock-in-host" = pullObsGuest "nixling-otel-vsock-in-host";
 }
 EOF2
 )
@@ -183,14 +183,14 @@ check_optional "nixling-otel-relay@"   "broker SpawnRunner{OtelHostBridge}"
 check_optional "nixling-otel-host-bridge" "broker SpawnRunner{OtelHostBridge}"
 check_optional "nixling-ch-exporter"   "folded into nixlingd /metrics"
 check_optional "guest:nixling-otel-vsock-out" "guest observability relay may be absent on daemon-only hosts"
-check_optional "obs:nixling-otel-vsock-in" "observability VM relay may be absent on daemon-only hosts"
+check_optional "obs:nixling-otel-vsock-in-host" "observability VM relay may be absent on daemon-only hosts"
 
 # In-VM observability units (nixling-otel-vsock-out.service in workload
-# guests and nixling-otel-vsock-in.service in the obs VM) are out of
+# guests and nixling-otel-vsock-in-*.service in the obs VM) are out of
 # scope here: this file evaluates host systemd.services only. Future
 # in-VM tests will cover their restartIfChanged policy.
 
-# The obs VM's nixling-otel-vsock-in.service is still covered in
+# The obs VM's nixling-otel-vsock-in-*.service units are still covered in
 # observability-eval.sh, which evaluates the stack VM's guest config.
 
 # Assert that nixlingd.service

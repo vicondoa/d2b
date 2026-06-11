@@ -8,6 +8,37 @@
 
 let
   cfg = config.nixling.observability;
+  observedVmNames = lib.attrNames (lib.filterAttrs
+    (name: vm: vm.enable && name != cfg.vmName && vm.observability.enable)
+    config.nixling.vms);
+  hostVsockPort = 14317;
+  hostGrpcPort = cfg.signoz.otlpGrpcPort;
+  observedSources = lib.listToAttrs (lib.imap0
+    (i: name:
+      let
+        vm = config.nixling.vms.${name};
+      in {
+        inherit name;
+        value = {
+          vmName = name;
+          envName = if vm.env == null then "none" else vm.env;
+          role = "workload";
+          vsockPort = hostVsockPort + 1 + i;
+          receiverGrpcPort = hostGrpcPort + 2 + i;
+          receiverHttpPort = null;
+        };
+      })
+    observedVmNames);
+  obsIngressSources = {
+    host = {
+      vmName = "host";
+      envName = "host";
+      role = "host";
+      vsockPort = hostVsockPort;
+      receiverGrpcPort = hostGrpcPort;
+      receiverHttpPort = cfg.signoz.otlpHttpPort;
+    };
+  } // observedSources;
 in
 {
   config = lib.mkIf cfg.enable {
@@ -41,6 +72,7 @@ in
           grafana = lib.mkDefault cfg.grafana;
           signoz = lib.mkDefault cfg.signoz;
           transport.relayPackage = lib.mkDefault cfg.transport.relayPackage;
+          ingress.sources = lib.mkDefault obsIngressSources;
           alerts = lib.mkDefault cfg.alerts;
         };
 

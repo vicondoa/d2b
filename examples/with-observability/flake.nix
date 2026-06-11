@@ -1,5 +1,5 @@
 {
-  description = "nixling example: one workload VM plus the auto-declared observability stack (Grafana/Prometheus/Loki/Tempo/Alloy)";
+  description = "nixling example: one workload VM plus the auto-declared native SigNoz observability stack";
 
   inputs = {
     # Pin nixling to a published release tag for real-world use:

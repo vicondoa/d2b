@@ -38,7 +38,7 @@ workload VM
     -> /run/nixling/otel/otlp-egress.sock
     -> nixling-otel-vsock-out.service
     -> host CH-vsock relay
-    -> sys-obs per-source vsock ingress
+    -> sys-obs nixling-otel-vsock-in-<vm>.service
     -> signoz-otel-collector.service
     -> ClickHouse
 
@@ -46,7 +46,7 @@ host
   nixling-host-otel-collector.service
     -> /run/nixling/otel/host-egress.sock
     -> broker-spawned OtelHostBridge
-    -> sys-obs per-source vsock ingress
+    -> sys-obs nixling-otel-vsock-in-host.service
     -> signoz-otel-collector.service
     -> ClickHouse
 ```
@@ -103,7 +103,8 @@ Workload VM:
 - `signoz-schema-migrate-async.service`
 - `signoz.service`
 - `signoz-otel-collector.service`
-- `nixling-otel-vsock-in.service`
+- `nixling-otel-vsock-in-host.service`
+- `nixling-otel-vsock-in-<vm>.service` for each observed workload
 
 ## Socket and port contract
 
@@ -111,6 +112,8 @@ Workload VM:
 | --- | --- |
 | Obs VM vsock CID | `1000` |
 | Workload observability CID | `100 + envIndex * 100 + vm.index` |
+| Host obs ingress vsock port | `14317` |
+| Workload obs ingress vsock ports | `14318+`, one per observed VM |
 | Host collector egress | `/run/nixling/otel/host-egress.sock` |
 | Guest local OTLP | `/run/nixling/otel/otlp.sock` with compatibility symlink `/run/nixling/otlp.sock` |
 | Guest relay handoff | `/run/nixling/otel/otlp-egress.sock` |
