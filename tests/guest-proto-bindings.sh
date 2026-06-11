@@ -24,7 +24,7 @@ NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}" \
 
 if ! git -C "$ROOT" diff --exit-code -- "$generated_dir" >/dev/null; then
   git -C "$ROOT" --no-pager diff -- "$generated_dir" | sed -n '1,160p' >&2
-  fail "guest-proto-bindings: generated guest protobuf bindings drifted; run cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto"
+  fail "guest-proto-bindings: generated guest protobuf bindings drifted; run cargo run --locked --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto"
 fi
 
 if rg -n '\bunsafe\b|allow\(unsafe_code\)|expect\(unsafe_code\)|allow\(clippy::all\)|allow\(unknown_lints\)' "$generated_file"; then

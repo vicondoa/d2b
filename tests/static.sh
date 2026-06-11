@@ -1223,6 +1223,16 @@ nl_smoke_bundle_privileges_json >/dev/null
 # `path '//$ROOT/.vms-json-parity.XXXXXX' does not exist`.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
+if [ -x "$HERE/guest-proto-bindings.sh" ]; then
+  nl_time_begin "tests/guest-proto-bindings.sh"
+  if bash "$HERE/guest-proto-bindings.sh" >/dev/null 2>&1; then
+    ok "guest-proto-bindings"
+  else
+    bash "$HERE/guest-proto-bindings.sh" 2>&1 | tail -80 >&2 || true
+    fail "guest-proto-bindings"
+  fi
+  nl_time_end "tests/guest-proto-bindings.sh"
+fi
 if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
 if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
@@ -1231,7 +1241,6 @@ if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
-if [ -x "$HERE/guest-proto-bindings.sh" ]; then nl_static_parallel_script "tests/guest-proto-bindings.sh" "$HERE/guest-proto-bindings.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-control-vsock-helper-static.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-helper-static.sh" "$HERE/guest-control-vsock-helper-static.sh"; fi
 if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
