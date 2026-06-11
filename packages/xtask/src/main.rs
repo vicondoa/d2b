@@ -59,6 +59,7 @@ fn main() -> std::process::ExitCode {
             run_task("gen-cli-shell-artifacts", gen_cli_shell_artifacts)
         }
         (Some("gen-guest-proto"), None, None) => run_task("gen-guest-proto", gen_guest_proto),
+        (Some("gen-guest-ttrpc"), None, None) => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
         (Some("gen-daemon-api"), None, None) => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -67,11 +68,33 @@ fn main() -> std::process::ExitCode {
         }),
         _ => {
             eprintln!(
-                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-daemon-api|release-notes <version>>"
+                "usage: cargo xtask <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>>"
             );
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/nixling-ipc/proto");
+    let proto = proto_dir.join("guest_control.proto");
+    let out_dir = repo_root.join("packages/nixling-guestd/src/generated");
+    fs::create_dir_all(&out_dir)?;
+
+    ttrpc_codegen::Codegen::new()
+        .out_dir(&out_dir)
+        .input(&proto)
+        .include(&proto_dir)
+        .customize(ttrpc_codegen::Customize {
+            async_server: true,
+            ..Default::default()
+        })
+        .run()?;
+
+    let out_file = out_dir.join("guest_control_ttrpc.rs");
+    sanitize_generated_rust(&out_file)?;
+    Ok(vec![out_file])
 }
 
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -83,7 +106,10 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let out_file = out_dir.join("guest_control.rs");
     let temp_proto_dir = create_exclusive_temp_dir("nixling-guest-proto")?;
     let temp_proto = temp_proto_dir.join("guest_control.proto");
-    fs::write(&temp_proto, message_only_proto(&fs::read_to_string(&proto)?)?)?;
+    fs::write(
+        &temp_proto,
+        message_only_proto(&fs::read_to_string(&proto)?)?,
+    )?;
 
     protobuf_codegen::Codegen::new()
         .pure()
@@ -130,6 +156,11 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
     generated = generated.replace("#![allow(unknown_lints)]\n", "");
     generated = generated.replace("#![allow(clippy::all)]\n", "");
+    generated = generated.replace("#![allow(clipto_camel_casepy)]\n", "");
+    generated = generated.replace(
+        "#![cfg_attr(rustfmt, rustfmt_skip)]\n",
+        "#![cfg_attr(rustfmt, rustfmt::skip)]\n",
+    );
     generated = generated.replace(
         "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
         "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
@@ -141,9 +172,7 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
 fn create_exclusive_temp_dir(prefix: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let base = env::temp_dir();
     for attempt in 0..100_u32 {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_nanos();
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let path = base.join(format!("{prefix}-{}-{nonce}-{attempt}", std::process::id()));
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),

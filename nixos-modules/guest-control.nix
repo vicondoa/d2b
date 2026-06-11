@@ -1,4 +1,4 @@
-{ config, lib, nixlingInputs, pkgs, ... }:
+{ config, lib, name, nixlingInputs, pkgs, ... }:
 
 let
   cfg = config.nixling.guestControl;
@@ -134,7 +134,7 @@ in
         unitConfig.RequiresMountsFor = [ "/run/nixling-guest-control-host" ];
         serviceConfig = {
           Type = "exec";
-          ExecStart = "${guestPackages.nixling-guestd-static}/bin/nixling-guestd";
+          ExecStart = "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];

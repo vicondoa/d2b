@@ -1233,6 +1233,16 @@ if [ -x "$HERE/guest-proto-bindings.sh" ]; then
   fi
   nl_time_end "tests/guest-proto-bindings.sh"
 fi
+if [ -x "$HERE/guest-ttrpc-bindings.sh" ]; then
+  nl_time_begin "tests/guest-ttrpc-bindings.sh"
+  if bash "$HERE/guest-ttrpc-bindings.sh" >/dev/null 2>&1; then
+    ok "guest-ttrpc-bindings"
+  else
+    bash "$HERE/guest-ttrpc-bindings.sh" 2>&1 | tail -80 >&2 || true
+    fail "guest-ttrpc-bindings"
+  fi
+  nl_time_end "tests/guest-ttrpc-bindings.sh"
+fi
 if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
 if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi

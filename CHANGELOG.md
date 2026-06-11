@@ -72,6 +72,11 @@ deprecations ship one minor release before removal.
   with fixed-size HMAC transcript tests. No listener, readiness, or exec CLI
   behavior is enabled yet.
 
+- `nixling-guestd` now owns generated ttRPC service bindings and a dormant
+  `--serve --vm-id <vm>` service mode for authenticated Hello/Health/
+  Capabilities. The guest service remains opt-in manual-start only
+  (`wantedBy = []`) and does not enable host readiness or exec behavior.
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate exec allowlist defaults: generic exec is off by default, root
   exec is separately denied by default, and non-root users must be explicitly

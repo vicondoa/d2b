@@ -87,6 +87,8 @@ let
       service.serviceConfig.LoadCredential;
     assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
     assert service.wantedBy == [ ];
+    assert lib.hasInfix "/bin/nixling-guestd --serve --vm-id corp-vm"
+      service.serviceConfig.ExecStart;
     assert !(builtins.hasAttr "nixling-guestd" nixos.config.systemd.services);
     assert !(lib.hasInfix tokenFile serviceJson);
     assert processVm != null;

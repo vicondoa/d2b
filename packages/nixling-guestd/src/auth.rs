@@ -381,8 +381,7 @@ where
             Some(snapshot.capabilities_hash.as_bytes()),
         );
         let guest_tag = self.token.sign_tag(&guest_transcript)?;
-        self.authenticated_connections
-            .insert(context.clone());
+        self.authenticated_connections.insert(context.clone());
 
         let mut response = pb::AuthenticateResponse::new();
         response.guest_auth_tag = Some(guest_tag.to_vec());
@@ -414,10 +413,11 @@ where
         self.authenticated_connections.remove(context);
     }
 
-    fn require_authenticated(
-        &self,
-        context: &AuthConnectionContext,
-    ) -> Result<(), GuestAuthError> {
+    pub fn is_authenticated(&self, context: &AuthConnectionContext) -> bool {
+        self.authenticated_connections.contains(context)
+    }
+
+    fn require_authenticated(&self, context: &AuthConnectionContext) -> Result<(), GuestAuthError> {
         if self.authenticated_connections.contains(context) {
             Ok(())
         } else {
@@ -426,7 +426,9 @@ where
     }
 }
 
-fn validate_snapshot(snapshot: CapabilitiesSnapshot) -> Result<CapabilitiesSnapshot, GuestAuthError> {
+fn validate_snapshot(
+    snapshot: CapabilitiesSnapshot,
+) -> Result<CapabilitiesSnapshot, GuestAuthError> {
     if snapshot.capabilities_hash.is_empty()
         || snapshot.capabilities_hash.len() > MAX_CAPABILITIES_HASH_LEN
     {
@@ -462,24 +464,18 @@ fn validate_health(health: &pb::HealthResponse) -> Result<(), GuestAuthError> {
     }
     if health.capabilities.len() > MAX_AUTH_HEALTH_CAPABILITIES
         || health.degraded_subsystems.len() > MAX_AUTH_DEGRADED_SUBSYSTEMS
-        || health
-            .capabilities
-            .iter()
-            .any(|capability| {
-                !matches!(
-                    capability.enum_value(),
-                    Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
-                )
-            })
-        || health
-            .degraded_subsystems
-            .iter()
-            .any(|subsystem| {
-                !matches!(
-                    subsystem.enum_value(),
-                    Ok(value) if value != pb::GuestSubsystem::GUEST_SUBSYSTEM_UNSPECIFIED
-                )
-            })
+        || health.capabilities.iter().any(|capability| {
+            !matches!(
+                capability.enum_value(),
+                Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
+            )
+        })
+        || health.degraded_subsystems.iter().any(|subsystem| {
+            !matches!(
+                subsystem.enum_value(),
+                Ok(value) if value != pb::GuestSubsystem::GUEST_SUBSYSTEM_UNSPECIFIED
+            )
+        })
     {
         return Err(GuestAuthError::InvalidHealthSnapshot);
     }
@@ -524,23 +520,19 @@ fn validate_capabilities(capabilities: &pb::CapabilitiesResponse) -> Result<(), 
     };
     if capabilities.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
         || capabilities.capabilities.len() > MAX_AUTH_HEALTH_CAPABILITIES
-        || capabilities
-            .capabilities
-            .iter()
-            .any(|capability| {
-                !matches!(
-                    capability.enum_value(),
-                    Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
-                )
-            })
+        || capabilities.capabilities.iter().any(|capability| {
+            !matches!(
+                capability.enum_value(),
+                Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
+            )
+        })
         || limits.max_chunk_bytes == 0
         || limits.max_chunk_bytes > HARD_MAX_CHUNK_BYTES
         || limits.max_recv_message_bytes == 0
         || limits.max_recv_message_bytes > TTRPC_FRAME_CAP_BYTES
         || limits.decoded_write_stdin_bytes_per_connection
             > HARD_MAX_DECODED_WRITE_STDIN_BYTES_PER_CONNECTION
-        || limits.write_stdin_handlers_per_connection
-            > HARD_MAX_WRITE_STDIN_HANDLERS_PER_CONNECTION
+        || limits.write_stdin_handlers_per_connection > HARD_MAX_WRITE_STDIN_HANDLERS_PER_CONNECTION
         || limits.stdin_queue_chunks_per_exec > HARD_MAX_STDIN_QUEUE_CHUNKS_PER_EXEC
         || limits.stdout_live_buffer_bytes > HARD_MAX_STDOUT_LIVE_BUFFER_BYTES
         || limits.stderr_live_buffer_bytes > HARD_MAX_STDERR_LIVE_BUFFER_BYTES
@@ -626,7 +618,6 @@ pub fn encode_transcript(
     push_field(&mut out, 6, &context.protocol_version.to_be_bytes());
     push_field(&mut out, 7, &context.guest_control_port.to_be_bytes());
     push_field(&mut out, 8, &context.peer_cid.to_be_bytes());
-    push_field(&mut out, 9, &context.connection_instance);
     push_field(&mut out, 10, host_nonce);
     push_field(&mut out, 11, guest_nonce);
     push_field(&mut out, 12, guest_boot_id.as_bytes());
@@ -652,12 +643,11 @@ impl StaticCapabilitiesProvider {
         health.origin = EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
         health.state = EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_HEALTHY);
         health.reason = EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
-        health.remediation =
-            EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
+        health.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
         health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-        health
-            .capabilities
-            .push(EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_HEALTH));
+        health.capabilities.push(EnumOrUnknown::new(
+            pb::GuestCapability::GUEST_CAPABILITY_HEALTH,
+        ));
 
         let mut limits = pb::GuestEffectiveLimits::new();
         limits.max_chunk_bytes = 64 * 1024;
@@ -666,9 +656,9 @@ impl StaticCapabilitiesProvider {
 
         let mut capabilities = pb::CapabilitiesResponse::new();
         capabilities.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
-        capabilities
-            .capabilities
-            .push(EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_HEALTH));
+        capabilities.capabilities.push(EnumOrUnknown::new(
+            pb::GuestCapability::GUEST_CAPABILITY_HEALTH,
+        ));
         capabilities.limits = MessageField::some(limits);
 
         Self {
@@ -809,11 +799,22 @@ mod tests {
         let context = context();
         let mut core = new_core();
         core.hello(&context, &hello_request()).unwrap();
-        let response = core.authenticate(&context, &authenticate_request(&context)).unwrap();
-        assert_eq!(response.guest_auth_tag.as_ref().unwrap().len(), AUTH_TAG_LEN);
+        let response = core
+            .authenticate(&context, &authenticate_request(&context))
+            .unwrap();
+        assert_eq!(
+            response.guest_auth_tag.as_ref().unwrap().len(),
+            AUTH_TAG_LEN
+        );
         assert_eq!(response.capabilities_hash.as_deref(), Some("caps-sha256"));
         assert_eq!(
-            response.health.as_ref().unwrap().state.enum_value().unwrap(),
+            response
+                .health
+                .as_ref()
+                .unwrap()
+                .state
+                .enum_value()
+                .unwrap(),
             pb::HealthState::HEALTH_STATE_HEALTHY
         );
         assert!(core.health(&context).is_ok());
@@ -875,7 +876,8 @@ mod tests {
         );
 
         core.hello(&context, &hello_request()).unwrap();
-        core.authenticate(&context, &authenticate_request(&context)).unwrap();
+        core.authenticate(&context, &authenticate_request(&context))
+            .unwrap();
         assert!(core.health(&context).is_ok());
         core.close_connection(&context);
         assert_eq!(core.health(&context), Err(GuestAuthError::Unauthenticated));
@@ -888,7 +890,8 @@ mod tests {
         wrong.peer_cid = 3;
         let mut core = new_core();
         core.hello(&context, &hello_request()).unwrap();
-        core.authenticate(&context, &authenticate_request(&context)).unwrap();
+        core.authenticate(&context, &authenticate_request(&context))
+            .unwrap();
 
         assert_eq!(core.health(&wrong), Err(GuestAuthError::Unauthenticated));
         core.close_connection(&wrong);
@@ -959,7 +962,8 @@ mod tests {
     #[test]
     fn capabilities_hash_and_limits_are_bounded_before_signing() {
         let context = context();
-        let provider = StaticCapabilitiesProvider::healthy("x".repeat(MAX_CAPABILITIES_HASH_LEN + 1));
+        let provider =
+            StaticCapabilitiesProvider::healthy("x".repeat(MAX_CAPABILITIES_HASH_LEN + 1));
         let mut core = GuestAuthCore::new(
             SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
             FixedNonceRng(GUEST_NONCE),
@@ -1093,15 +1097,15 @@ mod tests {
         assert_eq!(
             token.sign_tag(&host).unwrap(),
             [
-                77, 190, 67, 86, 29, 227, 136, 126, 121, 134, 238, 112, 129, 63, 31, 149,
-                108, 116, 145, 120, 123, 84, 30, 45, 109, 13, 138, 97, 110, 59, 2, 149,
+                3, 220, 133, 211, 171, 243, 68, 134, 228, 252, 177, 161, 155, 76, 107, 100, 243,
+                228, 10, 211, 105, 247, 153, 120, 47, 219, 131, 82, 195, 62, 236, 83,
             ]
         );
         assert_eq!(
             token.sign_tag(&guest).unwrap(),
             [
-                208, 96, 39, 83, 36, 106, 167, 11, 176, 22, 149, 248, 158, 15, 134, 123,
-                108, 115, 69, 15, 89, 177, 22, 125, 235, 220, 110, 79, 46, 144, 248, 137,
+                21, 130, 211, 122, 6, 235, 185, 232, 14, 177, 46, 66, 248, 207, 187, 34, 254, 203,
+                19, 229, 11, 83, 15, 237, 241, 184, 89, 44, 166, 109, 241, 115,
             ]
         );
     }

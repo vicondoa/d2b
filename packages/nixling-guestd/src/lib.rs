@@ -1,6 +1,8 @@
 #![doc = "Guest-side nixling control daemon primitives."]
 
 pub mod auth;
+pub mod generated;
+pub mod service;
 
 use nixling_ipc::guest_wire::{
     ExecCreateRequest, ExecId, GuestBootId, GuestCapability, GuestControlErrorKind,

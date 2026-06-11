@@ -141,6 +141,7 @@ run_gate "tests/group-rename-semantic-eval.sh" "bash '$ROOT/tests/group-rename-s
 run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-migration-fresh-install-eval.sh'"
 run_gate "tests/guest-control-proto.sh" "bash '$ROOT/tests/guest-control-proto.sh'"
 run_gate "tests/guest-proto-bindings.sh" "bash '$ROOT/tests/guest-proto-bindings.sh'"
+run_gate "tests/guest-ttrpc-bindings.sh" "bash '$ROOT/tests/guest-ttrpc-bindings.sh'"
 run_gate "tests/guest-control-auth-eval.sh" "bash '$ROOT/tests/guest-control-auth-eval.sh'"
 run_gate "tests/guest-control-auth-nongoals.sh" "bash '$ROOT/tests/guest-control-auth-nongoals.sh'"
 run_gate "tests/guest-control-token-materializer.sh" "bash '$ROOT/tests/guest-control-token-materializer.sh'"

@@ -9,7 +9,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
+futures = "0.3"
 hmac = "0.12"
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 sha2 = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tokio-vsock = "0.7.2"
+ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }

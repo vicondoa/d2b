@@ -16,5 +16,6 @@ nixling = { path = "../nixling", version = "0.0.0-bootstrap" }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
 protobuf-codegen = "3.7.2"
+ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true

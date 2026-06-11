@@ -402,11 +402,16 @@ before MAC verification.
 | 6 | protocol version | negotiated guest-control protocol |
 | 7 | guest-control port (`14318`) | trusted listener/connector context |
 | 8 | observable peer/host CID, when available | trusted listener context |
-| 9 | connection instance | listener/connector session state |
 | 10 | host nonce, 32 raw bytes | `HelloRequest` validated length |
 | 11 | guest nonce, 32 raw bytes | generated challenge state |
 | 12 | guest boot id | guest boot-id source |
 | 13 | capabilities hash | guest proof only, after Authenticate |
+
+The server still tracks a private per-accepted-connection instance for
+challenge lookup, replay rejection, and cleanup. That value is not part of the
+HMAC transcript because the host cannot know it until the guest exposes a
+separate public connection nonce; the authenticated guest nonce is the
+connection-bound challenge shared over the protocol.
 
 ## Observability contract
 

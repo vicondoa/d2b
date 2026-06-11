@@ -13,10 +13,10 @@ if ! command -v rg >/dev/null 2>&1; then
   fail "guest-control-auth-nongoals: rg is required"
 fi
 
-if rg -n '\bttrpc\b|Listener::bind|Server::new|vsock://|tokio[_-]vsock|AF_VSOCK' \
-  "$ROOT/packages/nixling-guestd/src" \
-  "$ROOT/packages/nixling-guestd/Cargo.toml"; then
-  fail "guest-control-auth-nongoals: guestd auth core must not wire a ttRPC/vsock listener yet"
+if rg -n 'guest-control-health|GuestControlHealth|ReadinessPredicate::Guest' \
+  "$ROOT/packages/nixlingd/src" \
+  "$ROOT/nixos-modules"; then
+  fail "guest-control-auth-nongoals: host readiness must not consume guest-control health yet"
 fi
 
 if rg -n '^\s*Exec(\b|\()' "$ROOT/packages/nixling/src/lib.rs"; then
