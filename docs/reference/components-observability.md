@@ -22,8 +22,8 @@ should send telemetry.
 The bundled backend is native SigNoz:
 
 - ClickHouse stores telemetry.
-- ZooKeeper coordinates the single-node ClickHouse cluster used by
-  SigNoz's replicated schema.
+- ClickHouse Keeper coordinates the single-node ClickHouse cluster used
+  by SigNoz's replicated schema.
 - SigNoz serves the UI and API.
 - SigNoz OTel Collector ingests OTLP and writes logs, metrics, traces,
   and metadata to ClickHouse.
@@ -103,7 +103,7 @@ Workload VM:
 `sys-obs`:
 
 - `clickhouse.service`
-- `zookeeper.service`
+- `clickhouse-keeper.service`
 - `signoz-schema-migrate-sync.service`
 - `signoz-schema-migrate-async.service`
 - `signoz.service`
@@ -152,8 +152,8 @@ other broker state. Static gates:
 | SigNoz OTLP HTTP | loopback `signoz.otlpHttpPort` inside `sys-obs` |
 
 Only the SigNoz UI port is opened through the obs VM firewall by default.
-ClickHouse, ZooKeeper, OTLP, health, pprof, and zpages listeners stay
-loopback or Unix-socket scoped.
+ClickHouse, ClickHouse Keeper, OTLP, health, pprof, and zpages listeners
+stay loopback or Unix-socket scoped.
 
 ## Secrets
 
@@ -178,7 +178,7 @@ Nix store.
 | vCPU | `4` |
 | RAM | `8192` MiB |
 | ClickHouse volume | `32768` MiB |
-| ZooKeeper volume | `2048` MiB |
+| ClickHouse Keeper volume | `2048` MiB |
 | SigNoz volume | `4096` MiB |
 | SigNoz collector volume | `2048` MiB |
 

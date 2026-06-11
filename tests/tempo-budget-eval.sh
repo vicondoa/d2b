@@ -38,8 +38,8 @@ else
   fail "stack must enable ClickHouse for native SigNoz"
 fi
 
-if grep -q 'services\.zookeeper' "$STACK"; then
-  ok "stack enables a ClickHouse coordinator"
+if grep -q 'systemd\.services\.clickhouse-keeper' "$STACK"; then
+  ok "stack enables ClickHouse Keeper as coordinator"
 else
   fail "stack must enable ZooKeeper or a ClickHouse Keeper equivalent"
 fi

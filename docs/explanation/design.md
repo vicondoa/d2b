@@ -1274,7 +1274,8 @@ not a consumer afterthought. Every workload VM that opts in gets an
 in-guest OpenTelemetry Collector, the host gets its own OTel collector
 plus a broker-spawned host bridge, and the framework auto-declares a
 dedicated `sys-obs` VM on its own `obs` env to run native SigNoz,
-ClickHouse, ZooKeeper, schema migrations, and the SigNoz OTel Collector.
+ClickHouse, ClickHouse Keeper, schema migrations, and the SigNoz OTel
+Collector.
 The important design move is that the observability stack is materialised
 the same way nixling already materialises other cross-cutting
 infrastructure: as a declared VM with explicit boundaries, stable naming,

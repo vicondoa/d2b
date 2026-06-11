@@ -293,7 +293,7 @@ in
         obsVmName = obsVm;
         manifestHasObsVm = builtins.hasAttr obsVm nixos.config.nixling.manifest;
         clickhouseEnable = obsGuest.services.clickhouse.enable;
-        zookeeperEnable = obsGuest.services.zookeeper.enable;
+        keeperDeclared = builtins.hasAttr "clickhouse-keeper" services;
         signozDeclared = builtins.hasAttr "signoz" services;
         signozCollectorDeclared = builtins.hasAttr "signoz-otel-collector" services;
         signozMigrateDeclared = builtins.hasAttr "signoz-schema-migrate-sync" services;
@@ -321,7 +321,7 @@ in
       obsVmName = "sys-obs";
       manifestHasObsVm = true;
       clickhouseEnable = true;
-      zookeeperEnable = true;
+      keeperDeclared = true;
       signozDeclared = true;
       signozCollectorDeclared = true;
       signozMigrateDeclared = true;

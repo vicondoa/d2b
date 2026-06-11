@@ -1,7 +1,7 @@
 # Observability stack guest component for the auto-declared `sys-obs` VM.
 #
-# Native SigNoz backend: ClickHouse + ZooKeeper + SigNoz + SigNoz OTel
-# Collector. No container runtime is used.
+# Native SigNoz backend: ClickHouse + ClickHouse Keeper + SigNoz +
+# SigNoz OTel Collector. No container runtime is used.
 { config, lib, pkgs, ... }:
 
 let
@@ -15,7 +15,8 @@ let
   clickhousePort = 9000;
   clickhouseHttpPort = 8123;
   clickhouseInterserverPort = 9009;
-  zookeeperPort = 2181;
+  keeperClientPort = 2181;
+  keeperRaftPort = 9234;
   signozPort = cfg.signoz.listenPort;
   otlpGrpcPort = cfg.signoz.otlpGrpcPort;
   otlpHttpPort = cfg.signoz.otlpHttpPort;
@@ -289,6 +290,39 @@ let
     exec ${pkgs.clickhouse}/bin/clickhouse-server --config=/etc/clickhouse-server/config.xml
   '';
 
+  keeperConfig = pkgs.writeText "nixling-clickhouse-keeper.xml" ''
+    <clickhouse>
+      <logger>
+        <level>information</level>
+        <console>true</console>
+      </logger>
+      <listen_host>127.0.0.1</listen_host>
+      <keeper_server>
+        <tcp_port>${toString keeperClientPort}</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/var/lib/zookeeper/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/zookeeper/snapshots</snapshot_storage_path>
+        <coordination_settings>
+          <operation_timeout_ms>10000</operation_timeout_ms>
+          <session_timeout_ms>30000</session_timeout_ms>
+          <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+          <server>
+            <id>1</id>
+            <hostname>127.0.0.1</hostname>
+            <port>${toString keeperRaftPort}</port>
+          </server>
+        </raft_configuration>
+      </keeper_server>
+    </clickhouse>
+  '';
+
+  keeperStart = pkgs.writeShellScript "nixling-clickhouse-keeper-start" ''
+    set -eu
+    exec ${pkgs.clickhouse}/bin/clickhouse-keeper --config-file=${keeperConfig}
+  '';
+
   signozStart = pkgs.writeShellScript "nixling-signoz-start" ''
     set -eu
     export SIGNOZ_ANALYTICS_ENABLED=false
@@ -471,22 +505,6 @@ in
     {
     time.timeZone = lib.mkForce "America/Los_Angeles";
 
-    services.zookeeper = {
-      enable = true;
-      dataDir = "/var/lib/zookeeper";
-      port = zookeeperPort;
-      extraConf = ''
-        clientPortAddress=127.0.0.1
-        admin.enableServer=false
-      '';
-      extraCmdLineOptions = [
-        "-Xms256m"
-        "-Xmx512m"
-        "-Dcom.sun.management.jmxremote"
-        "-Dcom.sun.management.jmxremote.local.only=true"
-      ];
-    };
-
     services.clickhouse = {
       enable = true;
       package = pkgs.clickhouse;
@@ -517,7 +535,7 @@ in
           <zookeeper>
             <node>
               <host>127.0.0.1</host>
-              <port>${toString zookeeperPort}</port>
+              <port>${toString keeperClientPort}</port>
             </node>
           </zookeeper>
           <macros>
@@ -548,12 +566,42 @@ in
       '';
     };
 
-    systemd.services.clickhouse.serviceConfig = {
-      ExecStart = lib.mkForce clickhouseStart;
-      LoadCredential = [
-        "${clickhousePasswordCredential}:${hostSecretsGuestDir}/clickhouse-password"
-      ];
-      LimitNOFILE = 1048576;
+    systemd.tmpfiles.rules = [
+      "d /var/lib/zookeeper 0750 clickhouse clickhouse -"
+      "d /var/lib/zookeeper/log 0750 clickhouse clickhouse -"
+      "d /var/lib/zookeeper/snapshots 0750 clickhouse clickhouse -"
+      "Z /var/lib/zookeeper 0750 clickhouse clickhouse -"
+    ];
+
+    systemd.services.clickhouse-keeper = {
+      description = "ClickHouse Keeper coordinator for SigNoz";
+      wantedBy = [ "multi-user.target" ];
+      requires = [ "var-lib-zookeeper.mount" ];
+      after = [ "var-lib-zookeeper.mount" ];
+      before = [ "clickhouse.service" ];
+      serviceConfig = {
+        Type = "simple";
+        User = "clickhouse";
+        Group = "clickhouse";
+        ExecStart = keeperStart;
+        Restart = "on-failure";
+        RestartSec = "3s";
+        LimitNOFILE = 1048576;
+        NoNewPrivileges = true;
+        StateDirectoryMode = "0750";
+      };
+    };
+
+    systemd.services.clickhouse = {
+      requires = [ "clickhouse-keeper.service" ];
+      after = [ "clickhouse-keeper.service" ];
+      serviceConfig = {
+        ExecStart = lib.mkForce clickhouseStart;
+        LoadCredential = [
+          "${clickhousePasswordCredential}:${hostSecretsGuestDir}/clickhouse-password"
+        ];
+        LimitNOFILE = 1048576;
+      };
     };
 
     boot.kernel.sysctl."vm.max_map_count" = lib.mkForce 262144;
@@ -571,8 +619,8 @@ in
     systemd.services.signoz-schema-migrate-sync = {
       description = "Run SigNoz ClickHouse schema sync migrations";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "clickhouse.service" "zookeeper.service" ];
-      after = [ "clickhouse.service" "zookeeper.service" ];
+      requires = [ "clickhouse.service" "clickhouse-keeper.service" ];
+      after = [ "clickhouse.service" "clickhouse-keeper.service" ];
       before = [ "signoz.service" "signoz-otel-collector.service" ];
       serviceConfig = {
         Type = "oneshot";
@@ -588,8 +636,8 @@ in
     systemd.services.signoz-schema-migrate-async = {
       description = "Run SigNoz ClickHouse schema async migrations";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "clickhouse.service" ];
-      after = [ "clickhouse.service" "signoz-schema-migrate-sync.service" ];
+      requires = [ "clickhouse.service" "clickhouse-keeper.service" ];
+      after = [ "clickhouse.service" "clickhouse-keeper.service" "signoz-schema-migrate-sync.service" ];
       serviceConfig = {
         Type = "oneshot";
         User = "signoz";
