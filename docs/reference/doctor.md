@@ -34,7 +34,7 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 
 | Field | Value |
 |-------|-------|
-| Invariant | Prometheus scrape endpoint returns HTTP 200 |
+| Invariant | Prometheus text-format scrape endpoint returns HTTP 200 |
 | Source | `GET /metrics` to `NIXLING_METRICS_URL` (default `http://127.0.0.1:9101/metrics`) |
 | Pass | HTTP 200 |
 | Warn | Non-200 response or connection failure (scrape endpoint is optional) |
@@ -45,6 +45,15 @@ Each probe is a passive, read-only check. Exit codes: `0` = all pass,
 > expected to report `warn` — the in-process metric counters are
 > wired and correct, but no HTTP listener serves `/metrics` yet.
 > Operators can ignore `warn` on this row in v1.2.
+
+### `signoz-ui-endpoint`
+
+| Field | Value |
+|-------|-------|
+| Invariant | SigNoz health endpoint returns HTTP 200 when observability is enabled |
+| Source | `_observability.signozUrl` from `vms.json`, probed at `/api/v1/health` |
+| Pass | HTTP 200 |
+| Warn | Manifest unreadable, invalid URL, non-200 response, or connection failure |
 
 ### `otel-host-bridge-runner`
 
@@ -216,4 +225,4 @@ with a descriptive error rather than Fail.
 | `NIXLING_BROKER_SOCKET` | `/run/nixling/priv.sock` | Override broker socket path |
 | `NIXLING_PUBLIC_SOCKET` | `/run/nixling/public.sock` | Override public socket path |
 | `NIXLING_DAEMON_STATE_DIR` | `/var/lib/nixling/daemon-state` | Override daemon state directory |
-| `NIXLING_METRICS_URL` | `http://127.0.0.1:9101/metrics` | Override Prometheus scrape URL |
+| `NIXLING_METRICS_URL` | `http://127.0.0.1:9101/metrics` | Override daemon metrics scrape URL |

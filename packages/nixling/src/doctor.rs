@@ -9,6 +9,9 @@
 //!   surface as `warn`, not `fail`: the doctor is a pre-flight
 //!   diagnostic; an absent scrape endpoint must not block other
 //!   checks.
+//! - `signoz-ui-endpoint` — when observability is enabled, read
+//!   `_observability.signozUrl` from `vms.json` and probe the SigNoz
+//!   health endpoint.
 //! - `otel_host_bridge_runner` — inspect daemon-persisted
 //!   `pidfd-table.json` for a registration with role
 //!   `otel-host-bridge`.
@@ -32,6 +35,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+use nixling_core::manifest_v04::ManifestV04;
 
 use crate::{Context, SeqpacketUnixSocket};
 
@@ -148,6 +153,7 @@ pub fn run_doctor(context: &Context) -> DoctorReport {
     check_broker_socket(context, &mut report);
     check_daemon_socket(context, &mut report);
     check_metrics_endpoint(context, &mut report);
+    check_signoz_ui_endpoint(context, &mut report);
     let pidfd_entries = load_pidfd_entries(&context.daemon_state_dir);
     check_otel_host_bridge_runner(&pidfd_entries, &mut report);
     check_usbipd_runners(&pidfd_entries, &mut report);
@@ -226,6 +232,68 @@ fn check_metrics_endpoint(context: &Context, report: &mut DoctorReport) {
             format!("scrape endpoint at {url} unreachable: {detail}"),
         ),
     }
+}
+
+fn check_signoz_ui_endpoint(context: &Context, report: &mut DoctorReport) {
+    let manifest = match ManifestV04::from_path(&context.manifest_path) {
+        Ok(manifest) => manifest,
+        Err(err) => {
+            report.push(
+                "signoz-ui-endpoint",
+                DoctorStatus::Warn,
+                format!(
+                    "cannot read manifest for SigNoz endpoint probe: {}",
+                    err.message()
+                ),
+            );
+            return;
+        }
+    };
+    if !manifest.observability.enabled {
+        return;
+    }
+    let health_url = match signoz_health_url(&manifest.observability.signoz_url) {
+        Ok(url) => url,
+        Err(detail) => {
+            report.push(
+                "signoz-ui-endpoint",
+                DoctorStatus::Warn,
+                format!(
+                    "SigNoz URL {} is not probeable: {detail}",
+                    manifest.observability.signoz_url
+                ),
+            );
+            return;
+        }
+    };
+    match probe_http_metrics(&health_url) {
+        Ok(200) => report.push_with_data(
+            "signoz-ui-endpoint",
+            DoctorStatus::Pass,
+            format!("SigNoz health endpoint at {health_url} returned HTTP 200"),
+            json!({ "url": health_url }),
+        ),
+        Ok(status) => report.push_with_data(
+            "signoz-ui-endpoint",
+            DoctorStatus::Warn,
+            format!("SigNoz health endpoint at {health_url} returned HTTP {status}"),
+            json!({ "url": health_url, "status": status }),
+        ),
+        Err(detail) => report.push_with_data(
+            "signoz-ui-endpoint",
+            DoctorStatus::Warn,
+            format!("SigNoz health endpoint at {health_url} unreachable: {detail}"),
+            json!({ "url": health_url }),
+        ),
+    }
+}
+
+fn signoz_health_url(signoz_url: &str) -> Result<String, String> {
+    let parsed = parse_http_url(signoz_url)?;
+    Ok(format!(
+        "http://{}:{}/api/v1/health",
+        parsed.host, parsed.port
+    ))
 }
 
 /// Minimal HTTP/1.1 GET against the documented Prometheus scrape URL.
@@ -1306,6 +1374,22 @@ mod tests {
     #[test]
     fn parse_http_url_rejects_https() {
         assert!(parse_http_url("https://x/metrics").is_err());
+    }
+
+    #[test]
+    fn signoz_health_url_uses_api_health_path() {
+        assert_eq!(
+            signoz_health_url("http://10.40.0.10:8080").unwrap(),
+            "http://10.40.0.10:8080/api/v1/health"
+        );
+    }
+
+    #[test]
+    fn signoz_health_url_preserves_default_http_port() {
+        assert_eq!(
+            signoz_health_url("http://signoz.local").unwrap(),
+            "http://signoz.local:80/api/v1/health"
+        );
     }
 
     #[test]
