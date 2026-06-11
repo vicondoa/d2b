@@ -324,7 +324,7 @@ mod tests {
         );
 
         assert!(!filters.allowed(0x3432_5258, LINEAR_MODIFIER));
-        assert!(filters.allowed(0x3432_5258, 0x01_0000_0000_000001));
+        assert!(filters.allowed(0x3432_5258, 0x0100_0000_0000_0001));
         assert!(filters.allowed(0x3432_5258, INVALID_MODIFIER));
     }
 
