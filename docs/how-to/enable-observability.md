@@ -1,251 +1,148 @@
 # Enable observability
 
-> How-to: add metrics, logs, and traces to an existing `nixling`
+> How-to: add OTel-native SigNoz telemetry to an existing `nixling`
 > deployment without changing the network layout or introducing
 > cross-VM SSH credentials.
->
-> Reading time: ~8 minutes.
-> Difficulty: intermediate.
 
 ## Goal
 
-Add full observability (metrics, logs, and traces) to an existing
-`nixling` deployment without restructuring the network or adding
-cross-VM SSH credentials. The framework keeps the transport on vsock
-plus Unix sockets, so your existing env topology and IP routing stay as
-they are.
+Enable the bundled native SigNoz observability stack. Nixling keeps the
+transport on Unix sockets plus Cloud Hypervisor vsock; the workload env
+LANs do not carry telemetry.
 
 ## Prerequisites
 
-- A working `nixling` deployment, consumed via
-  `inputs.nixling.url = "github:vicondoa/nixling/v0.2.0"` or later.
-- Sufficient host resources for one extra microVM (roughly 2 GiB RAM
-  plus persistent storage sized for your chosen retention windows; the
-  stock v0.2.0 module does not impose a fixed obs-VM disk cap).
-- Cloud Hypervisor and the vsock kernel module, already part of the
-  nixling baseline.
+- A working nixling deployment.
+- Enough capacity for the auto-declared `sys-obs` VM. The SigNoz stack
+  includes ClickHouse and is heavier than the retired Grafana stack; use
+  the default `sys-obs` resources unless you have sized your own
+  ClickHouse memory and disk budget.
 
-## Step 1: Enable the framework
+## Step 1: Enable the framework-level stack
 
 ```nix
-{ config, ... }: {
+{ ... }: {
   nixling.observability.enable = true;
 }
 ```
 
-Rebuild. Expected outcome: `nixling list` shows a new auto-declared
-`sys-obs-stack` VM. It is headless and autostarts.
+Rebuild. Expected result: nixling auto-declares:
 
-## Step 2: Opt VMs in
+- `nixling.envs.obs`
+- `nixling.vms.sys-obs`
+
+`sys-obs` runs native NixOS services for ClickHouse, SigNoz, the SigNoz
+OTel Collector, and schema migrations. No container runtime is used.
+
+## Step 2: Opt workload VMs in
 
 ```nix
-nixling.vms.<your-vm> = {
+nixling.vms.work-app = {
   env = "work";
   index = 10;
   observability.enable = true;
 };
 ```
 
-Rebuild. Expected outcome: inside the VM, `systemctl status alloy`
-shows the guest agent; on the host,
-`systemctl status nixling-otel-relay@<vm>.service` shows the per-VM
-relay; and Cloud Hypervisor exposes the vsock path for the guest.
+Each opted-in VM runs a guest OTel collector and a relay that forwards
+OTLP over vsock. The host runs a nixling-owned OTel collector for host
+metrics and a broker-spawned host bridge into `sys-obs`.
 
-## Step 3: Verify the data path
+## Step 3: Rebuild and restart affected VMs
 
-### On the host
+On hosts where `nixling switch <vm>` is unreliable, restart VMs with:
 
 ```bash
-systemctl status nixling-otel-relay@<vm>.service     # host relay
-systemctl status nixling-otel-host-bridge.service    # host's own egress
-systemctl status nixling-ch-exporter.service         # CH metrics
-curl http://127.0.0.1:9101/metrics                   # spot-check the exporter
+nixling down <vm> --apply
+nixling up <vm> --apply
 ```
 
-### Inside a monitored VM
+When changing the nixling checkout or bundle contract, restart the daemon
+before runtime validation:
 
 ```bash
-systemctl status alloy
+sudo systemctl restart nixlingd.service
+```
+
+## Step 4: Verify the data path
+
+Host:
+
+```bash
+systemctl status nixling-host-otel-collector.service
+nixling host doctor --read-only
+```
+
+Workload VM:
+
+```bash
+systemctl status nixling-otel-collector.service
 systemctl status nixling-otel-vsock-out.service
-ls -l /run/nixling/otlp.sock                         # exists, owned by alloy
 ```
 
-### Inside `sys-obs-stack`
+Observability VM:
 
 ```bash
-systemctl status alloy grafana prometheus loki tempo
+systemctl status clickhouse.service
+systemctl status zookeeper.service
+systemctl status signoz-schema-migrate-sync.service
+systemctl status signoz.service
+systemctl status signoz-otel-collector.service
 systemctl status nixling-otel-vsock-in.service
 ```
 
-## Step 4: Open Grafana
+## Step 5: Open SigNoz
 
-- `http://10.40.0.10:3000` (the default
-  `cfg.grafana.listenAddress:cfg.grafana.listenPort`; Grafana binds to
-  the obs VM's LAN IP and is reachable from the host via the obs
-  uplink).
-- Default datasources: Prometheus (`http://localhost:9090`), Loki
-  (`http://localhost:3100`), Tempo (`http://localhost:3200`). All three
-  stay on loopback inside the obs VM.
-- The shipped dashboards live in the Grafana **Nixling** folder:
-  Nixling Overview, VM Resources, Lifecycle Traces, Logs, Per-VM
-  Store, and Obs VM Health. The Lifecycle Traces dashboard is
-  preprovisioned but stays empty on the stock setup unless you point
-  `otel-cli` at a reachable OTLP collector.
+Default URL:
 
-### Step 4b: Configure alert notifications (optional)
-
-The framework provisions 8 default alert rules but **deliberately
-does not configure notification channels**. By default, alerts
-visible in Grafana / Prometheus go nowhere when they fire — there
-is no email, Slack, Pushover, or webhook integration.
-
-To enable notifications, operators configure either:
-
-1. **Prometheus Alertmanager** as a sibling service in the obs VM
-   pointing at the provisioned rules.
-2. **Grafana contact points** + notification policies via the
-   Grafana UI or declarative provisioning.
-
-Both routes are operator-owned to allow the choice of notification
-backend without framework lock-in.
-
-## Step 5: Disable individual signals (optional)
-
-```nix
-nixling.vms.<vm>.observability.scrapeJournal     = false;  # no guest logs
-nixling.vms.<vm>.observability.scrapeNodeMetrics = false;  # no guest metrics
-nixling.observability.cli.traces.enable          = false;  # no CLI spans
-nixling.observability.ch.exporter.enable         = false;  # no CH metrics
+```text
+http://10.40.0.10:8080
 ```
 
-## Step 6: Tune retention
+The address is derived from `nixling.observability.lanSubnet` and
+`nixling.observability.index`. Only the SigNoz UI port is opened by
+default; ClickHouse, ZooKeeper, collector health, pprof, zpages, and OTLP
+ports stay on loopback or Unix sockets inside `sys-obs`.
 
-```nix
-nixling.observability.retention.metrics = "7d";
-nixling.observability.retention.logs    = "3d";
-nixling.observability.retention.traces  = "1d";
+## First-run admin
+
+The bundled stack provisions a root SigNoz admin from host-generated
+credentials. The default email is:
+
+```text
+admin@nixling.local
 ```
 
-Defaults are conservative (`30d` / `14d` / `7d`). On a small host,
-shrink them to keep the obs VM's disk usage in check.
+The root password is generated on the host at:
 
-## Step 7: Swap `socat` for a compatible relay package (optional)
-
-```nix
-nixling.observability.transport.relayPackage = pkgs.your-relay;
+```text
+/var/lib/nixling/observability/signoz-root-password
 ```
 
-Use this only if your package exposes a `bin/socat`-compatible CLI.
-The current transport still passes `socat`-specific arguments on the
-host, guest, and obs-VM relay paths. The default stays `pkgs.socat`.
-When a future stable relay interface lands, the socat-compatible path
-will remain supported for at least one minor release so custom
-`relayPackage` users have a clean migration window.
-host, guest, and obs-VM relay paths. The default stays `pkgs.socat`.
-v0.3.0 will define a stable relay-binary interface.
-host, guest, and obs-VM relay paths, so that compatibility requirement
-remains in force for now. When `nixling-otel-relay` lands, nixling
-will add a dedicated relay interface first and keep `bin/socat`
-compatibility for at least one minor release with CHANGELOG migration
-notes before removing it.
+Read it with `sudo` on the host. Do not copy it into a world-readable
+Nix store file.
 
-## Step 8: Supply Grafana's secret key from sops-nix or agenix
+## Alert notifications
 
-By default (as of v0.2.0), the framework generates a per-install
-Grafana `secret_key` at activation **on the host** and shares it
-into `sys-obs-stack` read-only at
-`/run/nixling-obs-secrets/grafana-secret-key`. The host-side
-source path is `${nixling.site.stateDir}/observability/grafana-secret-key`
-(default `/var/lib/nixling/observability/grafana-secret-key`, mode
-0400 root:root). To source the secret from a declarative secrets
-framework instead:
+Nixling may seed default SigNoz alerts, but notification channels remain
+operator-owned. Configure email, Slack, webhook, PagerDuty, or other
+SigNoz channels in the SigNoz UI or with a site-local declarative
+provisioning layer.
 
-```nix
-nixling.observability.grafana.secretKeyFile = config.sops.secrets."grafana/secret-key".path;
-```
+## Migration from the old stack
 
-When this option is set, the framework's host-side generator
-leaves that secret alone; the file you supply must be readable by
-the Grafana service inside `sys-obs-stack` (sops-nix and agenix
-guest-VM modules handle this).
+Older nixling versions used `sys-obs-stack` with
+Grafana/Prometheus/Loki/Tempo/Alloy.
 
-## Step 9: Supply Grafana's admin password from sops-nix or agenix
+The new default VM name is `sys-obs`. Historical Prometheus, Loki, Tempo,
+Grafana dashboard state, and Grafana alert state are not migrated into
+SigNoz automatically.
 
-Grafana logs in as user `nixling-admin`. By default (as of v0.2.0),
-the framework generates a per-install admin password at activation
-**on the host** at `${nixling.site.stateDir}/observability/grafana-admin-password`
-(default `/var/lib/nixling/observability/grafana-admin-password`,
-mode 0400 root:root) and shares it read-only into `sys-obs-stack`
-at `/run/nixling-obs-secrets/grafana-admin-password`. Operators on
-the host can therefore read it directly without any cross-VM SSH:
+Recommended low-risk rollout:
 
-```bash
-sudo cat /var/lib/nixling/observability/grafana-admin-password
-```
+1. Preserve `/var/lib/nixling/vms/sys-obs-stack`.
+2. Bring up `sys-obs`.
+3. Verify host and workload telemetry appears in SigNoz.
+4. Only then retire or wipe old `sys-obs-stack` state.
 
-To source the password from a declarative secrets framework
-instead:
-
-```nix
-nixling.observability.grafana.adminPasswordFile = config.sops.secrets."grafana/admin-password".path;
-```
-
-When this option is set, the framework's host-side generator
-leaves that secret alone.
-
-## Step 10: (Optional) Anonymous Viewer mode
-
-For single-host LAN deployments where unauthenticated dashboard
-access is acceptable:
-
-```nix
-nixling.observability.grafana.anonymousViewer.enable = true;
-```
-
-This enables Grafana's anonymous-Viewer role for unauthenticated
-dashboard access while **keeping the login form available** so
-operators can still sign in as `nixling-admin` for admin tasks
-(contact points, plugin install, ad-hoc query inspection).
-**Only enable on trusted LANs** — anyone reachable to
-`http://10.40.0.10:3000` from the host's primary LAN can read
-all VM telemetry without auth, including any logs/traces that
-may contain sensitive content from monitored VMs
-(`vm.observability.scrapeJournal` defaults to `true`).
-
-## Step 11: (Optional) Disable individual alerts
-
-The framework provisions 8 default Prometheus alert rules
-(see [`docs/reference/components-observability.md`](../reference/components-observability.md#alerts)).
-Disable any of them individually:
-
-```nix
-nixling.observability.alerts.NixlingGuestTelemetryMissing.enable = false;
-```
-
-Disabled alerts are omitted from the generated rule file
-entirely, so Prometheus never evaluates them.
-
-## Troubleshooting
-
-- **No data in Grafana.** Check `nixling-otel-relay@<vm>.service` and
-  `nixling-otel-vsock-in.service` first.
-- **VM won't start.** Check vsock CID assertions; `nixos-rebuild
-  switch` should fail at eval time if CIDs collide.
-- **Obs VM disk full.** Tune retention (Step 6) or wipe the obs VM
-  state with
-  `nixling vm stop sys-obs-stack --apply && rm -rf /var/lib/nixling/vms/sys-obs-stack/state`.
-- **CLI traces not appearing in Tempo.** The stock v0.2.0 host setup
-  keeps Alloy's OTLP receiver on a Unix socket, which `otel-cli`
-  cannot dial directly. The preprovisioned dashboard stays empty unless
-  you additionally point `OTEL_EXPORTER_OTLP_ENDPOINT` at a reachable
-  OTLP collector. First confirm `otel-cli` is in the CLI runtime
-  closure:
-  `nix-store -q --requisites $(which nixling) | grep otel-cli`.
-
-## See also
-
-- [`docs/reference/components-observability.md`](../reference/components-observability.md)
-  — option / port / CID reference.
-- [`docs/explanation/design.md`](../explanation/design.md) — why the
-  shipped v0.2.0 design uses vsock instead of reverse-SSH.
-- `examples/with-observability/` — turn-key consumer flake.
+Rollback is clean only while the old `sys-obs-stack` state remains.

@@ -10,14 +10,12 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
-### Fixed
-
-- TPM-enabled guests now flush stale loaded/saved TPM sessions during
-  early boot before SRK provisioning. This prevents swtpm session-handle
-  exhaustion from breaking TPM-bound credentials while preserving NVRAM
-  and persistent handles.
-
 ### Added
+
+- Native, container-free SigNoz observability backend packages and ADR.
+  The bundled observability path now targets SigNoz, the SigNoz OTel
+  Collector, schema migrator, ClickHouse, and ZooKeeper as native NixOS
+  services.
 
 - `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
   window-rule include generator. When enabled, installs a KDL file at
@@ -86,6 +84,14 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- The default observability VM name is now `sys-obs`. The old
+  `sys-obs-stack` state is not deleted automatically; keep it for
+  rollback until the new stack is validated.
+- Observability metadata in `vms.json` moves to manifest version 4 for
+  the SigNoz backend shape. Historical v3 fixtures remain frozen.
+- Host and guest telemetry collection is moving from Alloy pipelines to
+  OpenTelemetry Collector services that export OTLP over nixling's
+  broker-supervised Unix/vsock transport.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former
@@ -111,6 +117,15 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- The host OTel bridge is now represented as a daemon/broker process role
+  (`otel-host-bridge`) so readiness can track the broker-spawned runner.
+- Observability relay ACL setup now excludes the host bridge principal
+  from broad obs-VM state directory grants and uses the nixling-owned OTel
+  runtime path for the bridge egress socket.
+- TPM-enabled guests now flush stale loaded/saved TPM sessions during
+  early boot before SRK provisioning. This prevents swtpm session-handle
+  exhaustion from breaking TPM-bound credentials while preserving NVRAM
+  and persistent handles.
 - VM start (`nixling up` / `switch`) no longer aborts with
   `SpawnRunner failed ... broker-error` ("Invalid cross-device link")
   while building the per-VM store-view hardlink farm on hosts where

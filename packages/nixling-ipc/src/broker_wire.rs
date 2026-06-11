@@ -959,9 +959,9 @@ pub enum RunnerRole {
     Usbip,
     /// OTel host-bridge sidecar (vsock relay folded out of
     /// `nixling-otel-host-bridge.service` into broker SpawnRunner).
-    /// Receives pre-opened vsock fds for the obs VM and the alloy
-    /// host-egress socket; no AF_VSOCK socket creation capability in
-    /// the role profile. Broker invokes
+    /// Receives pre-opened fds for the obs VM vsock socket and the
+    /// nixling OTel host-egress socket; no AF_VSOCK socket creation
+    /// capability in the role profile. Broker invokes
     /// `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
     OtelHostBridge,
     /// Host-jailed Wayland filter proxy. Broker invokes

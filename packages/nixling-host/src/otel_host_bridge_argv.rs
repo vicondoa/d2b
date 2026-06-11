@@ -11,9 +11,9 @@
 //! - Broker rejects bundle intent whose source VM ≠ obs VM
 //!   (`observability.vmName`).
 //! - Per-role caps = empty.
-//! - Bind set in the jail: alloy runtime dir (RW), CH vsock host
-//!   socket (RW), host-egress.sock (RW listen target). No `/dev`
-//!   bind mounts.
+//! - Bind set in the jail: nixling OTel runtime dir (RW), obs VM CH
+//!   vsock socket (connect), host-egress.sock (RW listen target). No
+//!   `/dev` bind mounts.
 //!
 //! Byte-parity oracle:
 //! [`tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt`].
@@ -30,8 +30,9 @@ pub struct OtelHostBridgeArgvInputs {
     /// Path to the socat binary (resolved from the bundle's relay
     /// package). MUST be an absolute path.
     pub socat_path: String,
-    /// Path where the host's alloy egress UDS will be listened on
-    /// (`/run/alloy/host-egress.sock`). MUST be absolute + non-empty.
+    /// Path where the host OTel egress UDS will be listened on
+    /// (`/run/nixling/otel/host-egress.sock`). MUST be absolute +
+    /// non-empty.
     pub host_egress_socket: String,
     /// Path to the obs VM's base CH vsock UDS
     /// (`/var/lib/nixling/vms/<obs-vm>/vsock.sock`). MUST be

@@ -6,12 +6,12 @@
 
 The nixling daemon (`nixlingd`) and the privileged broker
 (`nixling-priv-broker`) both emit OpenTelemetry spans and structured
-`tracing` events. Those spans flow to the operator's Tempo / Loki /
-Prometheus pipeline via the `OtelHostBridge` broker role. To keep the
-backend's cardinality budget (and the host's disk budget for
-`/var/lib/tempo`) bounded **and** to prevent leaking host-layout
-identifiers into the observability plane, every `tracing` macro call
-in workspace Rust source MUST follow this allowlist.
+`tracing` events. Those spans flow to the native SigNoz backend through
+the `OtelHostBridge` broker role and the `sys-obs` collector. To keep
+the backend's ClickHouse cardinality budget bounded **and** to prevent
+leaking host-layout identifiers into the observability plane, every
+`tracing` macro call in workspace Rust source MUST follow this
+allowlist.
 
 ## TL;DR
 

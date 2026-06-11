@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/vicondoa/nixling/blob/main/docs/reference/manifest-schema.json",
   "title": "nixling JSON manifest",
-  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. The contract a future Rust CLI port consumes. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
+  "description": "Per-VM metadata manifest emitted by the nixling NixOS framework at /run/current-system/sw/share/nixling/vms.json. See docs/reference/manifest-schema.md for the prose walkthrough and compatibility policy.",
   "type": "object",
   "required": ["_manifest", "_observability"],
   "properties": {
@@ -14,8 +14,8 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 3,
-          "description": "Schema version. This document IS the v3 schema; the field is locked to `const: 3`. Future breaking schema revisions ship as a new schema document (e.g. manifest-schema-v4.json) with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v3 manifests (versions 0, 1, 2) are historical and are no longer valid under this schema — the P2 daemon-only end-state (ph2-p2-manifestversion-bump) retired v2."
+          "const": 4,
+          "description": "Schema version. This document is the v4 schema. CLI/daemon/broker consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy."
         }
       }
     },
@@ -37,7 +37,7 @@
     "observabilityMeta": {
       "type": "object",
       "description": "Reserved observability-metadata key. Always emitted so consumers can discover the observability stack wiring without looking inside any single VM entry.",
-      "required": ["enabled", "vmName", "obsVsockCid", "obsVsockHostSocket", "grafanaUrl", "chExporter"],
+      "required": ["enabled", "vmName", "obsVsockCid", "obsVsockHostSocket", "signozUrl", "signozOtlpGrpcPort", "signozOtlpHttpPort"],
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -47,7 +47,7 @@
         "vmName": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "VM name reserved for the observability stack (default: sys-obs-stack)."
+          "description": "VM name reserved for the observability stack (default: sys-obs)."
         },
         "obsVsockCid": {
           "type": "integer",
@@ -58,20 +58,21 @@
           "type": "string",
           "description": "Host-side Unix socket backing the observability stack VM's vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
         },
-        "grafanaUrl": {
+        "signozUrl": {
           "type": "string",
-          "description": "Resolved Grafana URL derived from nixling.observability.grafana.{listenAddress,listenPort}."
+          "description": "Resolved SigNoz UI URL derived from nixling.observability.signoz.{listenAddress,listenPort}."
         },
-        "chExporter": {
-          "type": "object",
-          "required": ["listenPort"],
-          "additionalProperties": false,
-          "properties": {
-            "listenPort": {
-              "type": "integer",
-              "description": "Loopback port exported by the host-side Cloud Hypervisor metrics exporter."
-            }
-          }
+        "signozOtlpGrpcPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback OTLP/gRPC port exposed by the SigNoz OTel Collector inside the observability VM."
+        },
+        "signozOtlpHttpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback OTLP/HTTP port exposed by the SigNoz OTel Collector inside the observability VM."
         }
       }
     },

@@ -1271,24 +1271,23 @@ healthy", so even routine troubleshooting becomes archaeological work.
 
 The design answers that by making observability a framework subsystem,
 not a consumer afterthought. Every workload VM that opts in gets an
-in-guest Alloy agent, the host gets its own forwarder plus a Cloud
-Hypervisor exporter, and the framework auto-declares a dedicated
-`sys-obs-stack` VM on its own `obs` env to run Grafana, Prometheus,
-Loki, Tempo, and the central Alloy receiver. The important design move
-is that the observability stack is materialised the same way nixling
-already materialises other cross-cutting infrastructure: as a declared
-VM with explicit boundaries, stable naming, and host-owned sidecars.
+in-guest OpenTelemetry Collector, the host gets its own OTel collector
+plus a broker-spawned host bridge, and the framework auto-declares a
+dedicated `sys-obs` VM on its own `obs` env to run native SigNoz,
+ClickHouse, ZooKeeper, schema migrations, and the SigNoz OTel Collector.
+The important design move is that the observability stack is materialised
+the same way nixling already materialises other cross-cutting
+infrastructure: as a declared VM with explicit boundaries, stable naming,
+and host-owned sidecars.
 
 That split keeps each signal close to the place where it originates.
-Workload metrics and logs are collected inside the guest, host-only
-facts such as Cloud Hypervisor counters are collected on the host, and
-CLI lifecycle metadata is emitted by the existing shell wrapper rather
-than by some second orchestration path. The result is not "one big
-agent everywhere"; it is a composed system where the operator can open
-Grafana and see guest telemetry and host telemetry in one place, while
-lifecycle traces remain an optional follow-up once `otel-cli` has a
-reachable OTLP endpoint to export to. The concrete option surface, unit
-inventory, ports, and retention knobs live in the
+Workload metrics and logs are collected inside the guest, host-only facts
+are collected on the host, and the central SigNoz collector owns durable
+ingestion and ClickHouse writes. The result is not "one big agent
+everywhere"; it is a composed system where edge collectors normalize and
+batch telemetry while the `sys-obs` backend owns storage, query, and UI.
+The concrete option surface, unit inventory, ports, and retention knobs
+live in the
 [observability component reference](../reference/components-observability.md),
 while the operator workflow for turning this design on and verifying it
 lives in the
