@@ -10,6 +10,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path};
 use std::time::{Duration, Instant};
 
+use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 pub const GUEST_CONTROL_CONNECT_PORT: u16 = 14_318;
@@ -28,6 +29,8 @@ pub enum GuestControlTransportFailure {
     SocketNotUnixSocket,
     SocketHardLinked,
     UnsafeDirectory,
+    PeerCredentialIo { kind: String },
+    PeerCredentialMismatch,
     ConnectIo { kind: String },
     WriteIo { kind: String },
     AckIo { kind: String },
@@ -67,6 +70,16 @@ enum DirectoryPolicy {
     AllowTestTempDirs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeerPolicy {
+    Expected {
+        uid: u32,
+        gid: u32,
+    },
+    #[cfg(test)]
+    CurrentProcess,
+}
+
 impl GuestControlTransportProbeResult {
     pub fn failure(&self) -> Option<&GuestControlTransportFailure> {
         match self {
@@ -81,6 +94,8 @@ pub fn connect_guest_control_vsock(
     state_root: impl AsRef<Path>,
     expected_state_root_uid: u32,
     expected_state_root_gid: u32,
+    expected_peer_uid: u32,
+    expected_peer_gid: u32,
     setup_timeout: Duration,
 ) -> GuestControlTransportProbeResult {
     match connect_guest_control_vsock_inner(
@@ -90,6 +105,10 @@ pub fn connect_guest_control_vsock(
         DirectoryPolicy::ProductionStateRoot {
             uid: expected_state_root_uid,
             gid: expected_state_root_gid,
+        },
+        PeerPolicy::Expected {
+            uid: expected_peer_uid,
+            gid: expected_peer_gid,
         },
     ) {
         Ok(connected) => GuestControlTransportProbeResult::Connected(connected),
@@ -108,6 +127,7 @@ fn connect_guest_control_vsock_for_tests(
         state_root.as_ref(),
         setup_timeout,
         DirectoryPolicy::AllowTestTempDirs,
+        PeerPolicy::CurrentProcess,
     ) {
         Ok(connected) => GuestControlTransportProbeResult::Connected(connected),
         Err(failure) => GuestControlTransportProbeResult::Failed(failure),
@@ -119,6 +139,7 @@ fn connect_guest_control_vsock_inner(
     state_root: &Path,
     setup_timeout: Duration,
     directory_policy: DirectoryPolicy,
+    peer_policy: PeerPolicy,
 ) -> Result<GuestControlConnectedStream, GuestControlTransportFailure> {
     validate_socket_path(socket_path, state_root, directory_policy)?;
 
@@ -127,6 +148,7 @@ fn connect_guest_control_vsock_inner(
         .map_err(|error| GuestControlTransportFailure::ConnectIo {
             kind: error.kind().to_string(),
         })?;
+    validate_peer_credentials(&socket, peer_policy)?;
     let remaining = remaining_setup_time(deadline)?;
     socket
         .set_read_timeout(Some(remaining))
@@ -161,6 +183,36 @@ fn connect_unix_socket_with_timeout(
     let addr = SockAddr::unix(socket_path)?;
     socket.connect_timeout(&addr, timeout)?;
     Ok(socket)
+}
+
+fn validate_peer_credentials(
+    socket: &Socket,
+    peer_policy: PeerPolicy,
+) -> Result<(), GuestControlTransportFailure> {
+    let peer = getsockopt(socket, PeerCredentials).map_err(|error| {
+        GuestControlTransportFailure::PeerCredentialIo {
+            kind: error.to_string(),
+        }
+    })?;
+    let (expected_uid, expected_gid) = match peer_policy {
+        PeerPolicy::Expected { uid, gid } => (uid, gid),
+        #[cfg(test)]
+        PeerPolicy::CurrentProcess => (current_uid_for_tests(), current_gid_for_tests()),
+    };
+    if peer.uid() as u32 != expected_uid || peer.gid() as u32 != expected_gid {
+        return Err(GuestControlTransportFailure::PeerCredentialMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn current_uid_for_tests() -> u32 {
+    nix::unistd::geteuid().as_raw()
+}
+
+#[cfg(test)]
+fn current_gid_for_tests() -> u32 {
+    nix::unistd::getgid().as_raw()
 }
 
 fn validate_socket_path(
@@ -463,6 +515,36 @@ mod tests {
             connect(&socket, root.path()).failure(),
             Some(&GuestControlTransportFailure::SocketNotUnixSocket)
         );
+    }
+
+    #[test]
+    fn rejects_peer_credential_mismatch() {
+        let root = state_root();
+        let socket = socket_path(&root);
+        let handle = fake_ch(&socket, |stream| {
+            stream.write_all(b"OK 7\n").expect("write ack");
+        });
+        let mismatched_uid = current_uid_for_tests().wrapping_add(1);
+        let result = connect_guest_control_vsock_inner(
+            &socket,
+            root.path(),
+            Duration::from_millis(100),
+            DirectoryPolicy::AllowTestTempDirs,
+            PeerPolicy::Expected {
+                uid: mismatched_uid,
+                gid: current_gid_for_tests(),
+            },
+        );
+        match result {
+            Err(failure) => {
+                assert_eq!(
+                    failure,
+                    GuestControlTransportFailure::PeerCredentialMismatch
+                );
+            }
+            Ok(_) => panic!("peer mismatch unexpectedly connected"),
+        }
+        let _ = handle.join();
     }
 
     #[test]
