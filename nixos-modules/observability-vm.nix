@@ -39,18 +39,51 @@ in
         nixling.observability = {
           retention = lib.mkDefault cfg.retention;
           grafana = lib.mkDefault cfg.grafana;
+          signoz = lib.mkDefault cfg.signoz;
           transport.relayPackage = lib.mkDefault cfg.transport.relayPackage;
           alerts = lib.mkDefault cfg.alerts;
         };
 
-        # Grafana + Prometheus + Loki + Tempo + Alloy in one VM at
-        # microvm.nix's 512M default OOM-kills grafana within seconds
-        # of boot. 2 GiB is the minimum that lets the whole stack
-        # come up with retention windows in the default range
-        # (metrics 30d, logs 14d, traces 7d) and ~tens of monitored
-        # VMs. Use `lib.mkDefault` so site operators can override if
-        # they're scraping more or want to trim memory.
-        microvm.mem = lib.mkDefault 2048;
+        # SigNoz + ClickHouse is materially heavier than the retired
+        # Grafana/Prometheus/Loki/Tempo stack. Keep these defaults
+        # overrideable, but make the auto-declared VM viable out of the
+        # box for a single-node telemetry store.
+        microvm.vcpu = lib.mkDefault 4;
+        microvm.mem = lib.mkDefault 8192;
+        microvm.volumes = lib.mkDefault [
+          {
+            image = "clickhouse.img";
+            mountPoint = "/var/lib/clickhouse";
+            size = 32768;
+            fsType = "ext4";
+            serial = "obs-clickhouse";
+            direct = true;
+          }
+          {
+            image = "zookeeper.img";
+            mountPoint = "/var/lib/zookeeper";
+            size = 2048;
+            fsType = "ext4";
+            serial = "obs-zookeeper";
+            direct = true;
+          }
+          {
+            image = "signoz.img";
+            mountPoint = "/var/lib/signoz";
+            size = 4096;
+            fsType = "ext4";
+            serial = "obs-signoz";
+            direct = true;
+          }
+          {
+            image = "signoz-otel.img";
+            mountPoint = "/var/lib/signoz-otel-collector";
+            size = 2048;
+            fsType = "ext4";
+            serial = "obs-otel";
+            direct = true;
+          }
+        ];
       };
     };
   };

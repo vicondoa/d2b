@@ -337,10 +337,6 @@ handle_case() {
 
   case "$case_name" in
     obs-enabled-defaults)
-      if [ "$AUTO_OBS_READY" != 'true' ]; then
-        skip_case 'obs-enabled-defaults: TODO post-integration — auto-obs-vm has not materialized sys-obs-stack + obs env in this worktree'
-        return 2
-      fi
       require_success_case_json "$case_name" "$case_json" || return 1
       pass_case "$case_name"
       ;;
@@ -353,10 +349,6 @@ handle_case() {
       pass_case 'obs-name-extension-allowed (consumer can extend auto-declared obs VM)'
       ;;
     obs-reserved-prefix-exempt)
-      if [ "$AUTO_OBS_READY" != 'true' ]; then
-        skip_case 'obs-reserved-prefix-exempt: TODO post-integration — auto-obs-vm has not landed, so sys-obs-stack is not materialized in this worktree'
-        return 2
-      fi
       require_success_case_json "$case_name" "$case_json" || return 1
       pass_case "$case_name"
       ;;
@@ -408,7 +400,7 @@ if ! (
   exit 1
 fi
 
-AUTO_OBS_READY=$(jq -r '(."obs-enabled-defaults".extracted.hasSysObsStack // false) and (."obs-enabled-defaults".extracted.hasObsEnv // false)' "$BATCH_JSON")
+AUTO_OBS_READY=$(jq -r '(."obs-enabled-defaults".extracted.hasSysObs // false) and (."obs-enabled-defaults".extracted.hasObsEnv // false)' "$BATCH_JSON")
 RULES_STORE_PATH=$(jq -r '."obs-alerting-surface".aux.rulesPath // ."obs-rules-promtool".aux.rulesPath // ."obs-stability".aux.rulesPath // empty' "$BATCH_JSON")
 HOST_ALLOY_STORE_PATH=$(jq -r '."obs-scrape-job-stability".aux.hostAlloyConfigPath // ."obs-stability".aux.hostAlloyConfigPath // empty' "$BATCH_JSON")
 

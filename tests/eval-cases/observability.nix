@@ -160,26 +160,26 @@ in
         obsEnv = lib.attrByPath [ "obs" ] { } nixos.config.nixling.envs;
       in
       {
-        hasSysObsStack = builtins.hasAttr "sys-obs-stack" nixos.config.nixling.vms;
+        hasSysObs = builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
         hasObsEnv = builtins.hasAttr "obs" nixos.config.nixling.envs;
         obsEnvLanSubnet = obsEnv.lanSubnet or null;
         obsEnvUplinkSubnet = obsEnv.uplinkSubnet or null;
         obsVmName = lib.attrByPath [ "_observability" "vmName" ] null manifestData;
         obsVsockCid = lib.attrByPath [ "_observability" "obsVsockCid" ] null manifestData;
-        grafanaListenAddress = nixos.config.nixling.observability.grafana.listenAddress;
+        signozListenAddress = nixos.config.nixling.observability.signoz.listenAddress;
         obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.nixling.manifest;
-        grafanaUrl = lib.attrByPath [ "_observability" "grafanaUrl" ] null manifestData;
+        signozUrl = lib.attrByPath [ "_observability" "signozUrl" ] null manifestData;
       };
     expectedExtract = {
-      hasSysObsStack = true;
+      hasSysObs = true;
       hasObsEnv = true;
       obsEnvLanSubnet = "10.40.0.0/24";
       obsEnvUplinkSubnet = "203.0.113.0/30";
-      obsVmName = "sys-obs-stack";
+      obsVmName = "sys-obs";
       obsVsockCid = 1000;
-      grafanaListenAddress = "10.40.0.10";
+      signozListenAddress = "10.40.0.10";
       obsVmStaticIp = "10.40.0.10";
-      grafanaUrl = "http://10.40.0.10:3000";
+      signozUrl = "http://10.40.0.10:8080";
     };
   };
 
@@ -195,26 +195,26 @@ in
         obsVm = nixos.config.nixling.observability.vmName;
       in
       {
-        grafanaListenAddress = nixos.config.nixling.observability.grafana.listenAddress;
+        signozListenAddress = nixos.config.nixling.observability.signoz.listenAddress;
         obsVmStaticIp = lib.attrByPath [ obsVm "staticIp" ] null nixos.config.nixling.manifest;
-        grafanaUrl = lib.attrByPath [ "_observability" "grafanaUrl" ] null manifestData;
+        signozUrl = lib.attrByPath [ "_observability" "signozUrl" ] null manifestData;
       };
     expectedExtract = {
-      grafanaListenAddress = "10.44.0.23";
+      signozListenAddress = "10.44.0.23";
       obsVmStaticIp = "10.44.0.23";
-      grafanaUrl = "http://10.44.0.23:3000";
+      signozUrl = "http://10.44.0.23:8080";
     };
   };
 
   obs-name-extension-allowed = mkCase {
     override = { ... }: {
       nixling.observability.enable = true;
-      nixling.vms.sys-obs-stack = {
+      nixling.vms.sys-obs = {
         ssh.user = "alice";
         config.users.users.alice = { isNormalUser = true; uid = 1000; };
       };
     };
-    extract = nixos: builtins.hasAttr "sys-obs-stack" nixos.config.nixling.vms;
+    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
     expectedExtract = true;
   };
 
@@ -347,7 +347,7 @@ in
           obsGuest.systemd.services.nixling-otel-vsock-in.serviceConfig.ExecStart;
       };
     expectedExtract = {
-      obsVmName = "sys-obs-stack";
+      obsVmName = "sys-obs";
       manifestHasObsVm = true;
       grafanaEnable = true;
       prometheusEnable = true;
@@ -493,7 +493,7 @@ in
 
   obs-reserved-prefix-exempt = mkCase {
     override = { ... }: { nixling.observability.enable = true; };
-    extract = nixos: builtins.hasAttr "sys-obs-stack" nixos.config.nixling.vms;
+    extract = nixos: builtins.hasAttr "sys-obs" nixos.config.nixling.vms;
     expectedExtract = true;
   };
 
