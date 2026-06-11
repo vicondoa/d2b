@@ -103,7 +103,7 @@ them would deadlock the auto-flip.
 | `p0` | Daemon-only foundation (socket-activated broker, bundle hash verify, canonical `/run/nixling`) | `<defaultFlipEvidenceDir>/p0.json` |
 | `p0Fu` | P0 follow-up: cgroup delegation sequence + per-artifact hash verification | `<defaultFlipEvidenceDir>/p0Fu.json` |
 | `p1` | Per-role minijail profiles + byte-parity argv generators | `<defaultFlipEvidenceDir>/p1.json` |
-| `p2` | Daemon-side host-prep + ownership matrix + `manifestVersion = 3` + daemon autostart | `<defaultFlipEvidenceDir>/p2.json` |
+| `p2` | Daemon-side host-prep + ownership matrix + `manifestVersion = 4` + daemon autostart | `<defaultFlipEvidenceDir>/p2.json` |
 | `p3` | Retire host singletons + daemon health endpoint | `<defaultFlipEvidenceDir>/p3.json` |
 | `p4` | `vm start/stop/restart/list` daemon-native end-to-end + desktop wrapper | `<defaultFlipEvidenceDir>/p4.json` |
 

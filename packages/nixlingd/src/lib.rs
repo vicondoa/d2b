@@ -6941,7 +6941,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 3 },
+                "_manifest": { "manifestVersion": 4 },
                 "_observability": {
                     "chExporter": { "listenPort": 9100 },
                     "enabled": false,
@@ -7060,7 +7060,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 3 },
+                "_manifest": { "manifestVersion": 4 },
                 "_observability": {
                     "chExporter": { "listenPort": 9100 },
                     "enabled": false,

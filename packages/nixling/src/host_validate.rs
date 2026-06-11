@@ -135,7 +135,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p2",
-        summary: "Daemon-side host-prep + ownership matrix + manifestVersion=3.",
+        summary: "Daemon-side host-prep + ownership matrix + manifestVersion=4.",
         validators: &[
             "per-vm-state-ownership-eval.sh",
             "daemon-autostart-eval.sh",

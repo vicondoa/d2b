@@ -50,6 +50,9 @@ deprecations ship one minor release before removal.
   base socket path for every VM, reserves distinct CIDs for env net VMs and
   workload VMs, and rejects consumer `--vsock` overrides so observability and
   future guest-control traffic share one authoritative per-VM vsock device.
+  This bumps the public manifest to `manifestVersion = 4` because the existing
+  `observability.vsockCid` / `observability.vsockHostSocket` fields now define
+  the base Cloud Hypervisor vsock device.
 
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate the future `nixling exec` allowlist defaults: generic exec is

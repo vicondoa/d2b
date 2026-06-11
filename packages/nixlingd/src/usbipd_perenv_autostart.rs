@@ -321,7 +321,7 @@ mod tests {
     fn manifest_with(vms: &[(&str, Option<&str>, bool, Option<&str>)]) -> ManifestV04 {
         use serde_json::{json, Value};
         let mut root = serde_json::Map::new();
-        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 3 }));
+        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 4 }));
         root.insert(
             "_observability".to_owned(),
             json!({

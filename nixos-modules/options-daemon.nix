@@ -57,7 +57,7 @@ let
       implementedDefault = false;
     };
     p2 = {
-      implementedDescription = "daemon-side host-prep + ownership matrix + manifestVersion=3 + daemon autostart shipped";
+      implementedDescription = "daemon-side host-prep + ownership matrix + manifestVersion=4 + daemon autostart shipped";
       validatedDescription = "Validated via tests/daemon-autostart-smoke.sh + tests/vms-json-parity.sh + ownership-eval";
       implementedDefault = false;
     };

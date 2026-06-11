@@ -1,6 +1,6 @@
 # nixling JSON manifest schema
 
-**Status:** stable from `manifestVersion = 3` onward.
+**Status:** stable from `manifestVersion = 4` onward.
 **Source of truth:** [`manifest-schema.json`](./manifest-schema.json)
 (JSON Schema Draft 2020-12). When this document and the JSON Schema
 disagree, the JSON Schema wins.
@@ -34,7 +34,7 @@ The legacy bash `nixling` script in `cli.nix` was retired in v1.0.
 
 Private manifest-bundle artifacts live beside this public `vms.json`
 contract. The public file remains the compatibility manifest described
-in this document, including `_manifest.manifestVersion = 3` and the
+in this document, including `_manifest.manifestVersion = 4` and the
 existing per-VM schema. The sibling bundle artifacts are private
 daemon/broker inputs documented in
 [`manifest-bundle.md`](./manifest-bundle.md).
@@ -51,7 +51,7 @@ verifying owner, mode, version, and hash.
 
 ```jsonc
 {
-  "_manifest": { "manifestVersion": 3 },
+  "_manifest": { "manifestVersion": 4 },
   "_observability": {
     "enabled": false,
     "vmName": "sys-obs-stack",
@@ -111,24 +111,23 @@ same schema version.
 
 ```jsonc
 "_manifest": {
-  "manifestVersion": 3   // unsigned integer
+  "manifestVersion": 4   // unsigned integer
 }
 ```
 
 | Field             | Type             | Required | Description                                                                                |
 |-------------------|------------------|----------|--------------------------------------------------------------------------------------------|
-| `manifestVersion` | unsigned integer | yes      | Schema version. Bumped on every breaking change. This document describes manifest v3.      |
+| `manifestVersion` | unsigned integer | yes      | Schema version. Bumped on every breaking change. This document describes manifest v4.      |
 
-v0.2.0 bumped `manifestVersion` from 1 to 2 for observability. The daemon-only end-state then bumped 2 → 3 as a clean break, with no v2 compatibility window — the daemon refuses v2 bundles with `manifest-version-mismatch` (exit code 41).
-both a new reserved top-level sentinel (`_observability`) and a new
-per-VM `observability` block. Under the compatibility policy below,
-that was a breaking schema change; under nixling's pre-v1.0 semver
-policy minor releases were still allowed to make that kind of
-public-API change when it was called out explicitly. From v1.0
-onwards (per [ADR 0015](../adr/0015-daemon-only-clean-break.md))
-manifest-schema changes follow strict semver: any breaking change
-bumps the major (manifestVersion → next integer with no compat
-window; the daemon refuses prior versions outright).
+v0.2.0 bumped `manifestVersion` from 1 to 2 for observability, adding
+the reserved top-level `_observability` sentinel and per-VM
+`observability` block. The daemon-only end-state then bumped 2 → 3 as a
+clean break, with no v2 compatibility window. Version 4 keeps the v3
+JSON shape but changes the per-VM `observability.vsockCid` /
+`observability.vsockHostSocket` semantics to be the host-owned base
+Cloud Hypervisor vsock device for observability today and guest-control
+traffic later. The daemon refuses prior bundles with
+`manifest-version-mismatch` (exit code 41).
 
 ### `_observability`
 
@@ -296,7 +295,7 @@ use the deprecated `staticIp` path.
 For `k > 0`:
 
 1. **REFUSE to operate on the manifest.** Print a clear error like
-   `nixling: manifest version 3 is newer than this CLI build (2); upgrade the CLI`.
+   `nixling: manifest version 4 is newer than this CLI build (3); upgrade the CLI`.
    Exit with status `4` (manifest-incompatible — see `cli-contract.md`).
 2. **DO NOT attempt graceful degradation.** A breaking schema change
    means at least one field's type or semantics has shifted. Best-effort
@@ -354,7 +353,7 @@ produces exactly:
 ```json
 {
   "_manifest": {
-    "manifestVersion": 3
+    "manifestVersion": 4
   },
   "_observability": {
     "chExporter": {

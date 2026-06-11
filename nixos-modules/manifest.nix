@@ -196,9 +196,11 @@ let
       vsockCid = lib.mkOption {
         type = lib.types.ints.unsigned;
         description = ''
-          Deterministic observability vsock CID for this VM. Env-backed
-          VMs use `100 + envIndex * 100 + index`; legacy env-less VMs
-          keep a deterministic fallback so the field stays a no-op when
+          Deterministic base Cloud Hypervisor vsock CID for this VM.
+          Env-backed VMs use `100 + envIndex * 1000 + slot`, where
+          slot 1 is reserved for the env net VM and workload VMs use
+          `nixling.vms.<vm>.index`; legacy env-less VMs keep a
+          deterministic fallback so the field stays a no-op when
           observability is disabled.
         '';
       };
@@ -456,7 +458,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 3;
+    default = 4;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -480,8 +482,14 @@ in
         * 3 — daemon-only end-state break. Drops per-VM systemd-unit
           reference fields that become meaningless once supervisor
           mode is retired and the daemon owns every per-VM lifecycle
-          transition. Pinned by `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`;
-          the broker / daemon refuse any other value with a
+          transition.
+        * 4 — base Cloud Hypervisor vsock semantics. Keeps the v3
+          shape, but defines per-VM `observability.vsockCid` and
+          `observability.vsockHostSocket` as the host-owned base
+          vsock device used by observability today and guest control in
+          later waves. Pinned by
+          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`; the
+          broker / daemon refuse any other value with a
           `manifest-version-mismatch` typed error (no legacy
           compatibility window).
     '';

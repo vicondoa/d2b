@@ -165,7 +165,7 @@ fn processes_json_with_runner_intents() -> Vec<u8> {
 fn minimal_vms_json() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "_manifest": {
-            "manifestVersion": 3
+            "manifestVersion": 4
         },
         "_observability": {
             "chExporter": { "listenPort": 9100 },
