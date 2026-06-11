@@ -69,13 +69,13 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-ALLOY_RUNTIME_DIR=${NL_ALLOY_RUNTIME_DIR:-$scratch/alloy}
+OTEL_RUNTIME_DIR=${NL_OTEL_RUNTIME_DIR:-$scratch/otel}
 CH_VSOCK_HOST_SOCKET=${NL_CH_VSOCK_HOST_SOCKET:-$scratch/vsock.sock}
-HOST_EGRESS_SOCKET=${NL_HOST_EGRESS_SOCKET:-$ALLOY_RUNTIME_DIR/host-egress.sock}
+HOST_EGRESS_SOCKET=${NL_HOST_EGRESS_SOCKET:-$OTEL_RUNTIME_DIR/host-egress.sock}
 PROFILE_PATH=${NL_PROFILE_PATH:-/etc/nixling/minijail-profiles/host-otel-host-bridge.json}
 SECCOMP_POLICY=${NL_SECCOMP_POLICY:-/etc/nixling/seccomp/w1-otel-host-bridge.bpf}
 
-mkdir -p "$ALLOY_RUNTIME_DIR"
+mkdir -p "$OTEL_RUNTIME_DIR"
 
 if [ ! -r "$PROFILE_PATH" ]; then
   fail "missing profile JSON: $PROFILE_PATH (rebuild the host with the P1 minijail-profiles.nix entry for host-otel-host-bridge)"
@@ -90,8 +90,8 @@ if [ -n "$caps" ]; then
 fi
 ok "caps = empty"
 
-# Bind set assertion — RW alloy runtime dir, RW obs VM CH vsock dir,
-# RW host-egress.sock target (under alloy runtime). NO /dev binds.
+# Bind set assertion — RW OTel runtime dir, RW obs VM CH vsock dir,
+# RW host-egress.sock target (under OTel runtime). NO /dev binds.
 binds=$(jq -r '.mountPolicy.writablePaths[].path' "$PROFILE_PATH")
 if printf '%s\n' "$binds" | grep -qE '^/dev'; then
   fail "profile has a /dev bind, which P1 OtelHostBridge forbids"
