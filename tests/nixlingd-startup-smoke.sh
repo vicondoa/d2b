@@ -16,10 +16,10 @@
 #
 # Wired into tests/static.sh.
 #
-# Broker CapabilityBoundingSet reproduced inline per plan.md
-# §"Canonical broker CapabilityBoundingSet" (no CAP_SYS_PTRACE):
-#   CAP_NET_ADMIN  CAP_NET_RAW       CAP_DAC_OVERRIDE  CAP_DAC_READ_SEARCH
-#   CAP_SYS_ADMIN  CAP_SETUID        CAP_SETGID        CAP_FOWNER
+# Broker CapabilityBoundingSet reproduced inline from host-broker.nix.
+# It includes the caps the broker may need to pass through to spawned
+# runners, plus CAP_KILL for the audited SignalRunner op; it still excludes
+# CAP_SYS_PTRACE.
 
 set -euo pipefail
 
@@ -204,14 +204,11 @@ check_eq "broker.serviceConfig.User"  "$(jq_get '.["broker-user"]')"  "root"
 check_eq "broker.serviceConfig.Group" "$(jq_get '.["broker-group"]')" "nixlingd"
 
 # ---------------------------------------------------------------------------
-# 9. Broker CapabilityBoundingSet — exact canonical set from plan.md.
+# 9. Broker CapabilityBoundingSet — exact canonical set from host-broker.nix.
 #    Sorted for stable comparison (Nix sortStrs matches LC_ALL=C sort).
-#    Canonical set: CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
-#                   CAP_NET_ADMIN    CAP_NET_RAW          CAP_SETGID
-#                   CAP_SETUID       CAP_SYS_ADMIN
-#    (No CAP_SYS_PTRACE, no CAP_CHOWN outside the delegation window.)
+#    No CAP_SYS_PTRACE.
 # ---------------------------------------------------------------------------
-CANONICAL_CAPS='["CAP_DAC_OVERRIDE","CAP_DAC_READ_SEARCH","CAP_FOWNER","CAP_NET_ADMIN","CAP_NET_RAW","CAP_SETGID","CAP_SETUID","CAP_SYS_ADMIN"]'
+CANONICAL_CAPS='["CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_DAC_READ_SEARCH","CAP_FOWNER","CAP_FSETID","CAP_IPC_LOCK","CAP_KILL","CAP_MKNOD","CAP_NET_ADMIN","CAP_NET_RAW","CAP_SETFCAP","CAP_SETGID","CAP_SETPCAP","CAP_SETUID","CAP_SYS_ADMIN","CAP_SYS_RESOURCE"]'
 ACTUAL_CAPS=$(jq_getc '.["broker-caps"]')
 check_eq "broker.CapabilityBoundingSet exact-set" "$ACTUAL_CAPS" "$CANONICAL_CAPS"
 

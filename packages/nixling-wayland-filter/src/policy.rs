@@ -114,6 +114,10 @@ pub struct PolicyInput {
     pub allow_globals: Vec<String>,
     /// Per-global version caps.
     pub max_versions: Vec<(String, u32)>,
+    /// dmabuf format/modifier allow filters.
+    pub dmabuf_allow: Vec<crate::dmabuf::DmabufFilter>,
+    /// dmabuf format/modifier deny filters.
+    pub dmabuf_deny: Vec<crate::dmabuf::DmabufFilter>,
     /// Emit a log line for every filtered global advertisement.
     pub log_filtered_globals: bool,
 }
@@ -125,6 +129,7 @@ pub struct FilterPolicy {
     pub app_id_prefix: String,
     pub title_prefix: String,
     pub vm_name: String,
+    pub dmabuf_filters: std::sync::Arc<crate::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
     /// Runtime advisories emitted by the filter process at startup.
     pub warnings: Vec<PolicyWarning>,
@@ -242,6 +247,10 @@ impl FilterPolicy {
             app_id_prefix,
             title_prefix,
             vm_name: vm.clone(),
+            dmabuf_filters: std::sync::Arc::new(crate::dmabuf::DmabufFilterList::new(
+                &input.dmabuf_allow,
+                &input.dmabuf_deny,
+            )),
             log_filtered_globals: input.log_filtered_globals,
             warnings,
         }
@@ -343,10 +352,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("wl_data_device_manager", Allow, AppDefault);
 
     // --- accelerated-rendering (enabled, warn if denied) ---
-    // v4/v5 dmabuf feedback/modifier negotiation is not yet safe through the
-    // host-side proxy on the crosvm cross-domain path; v3 preserves dmabuf
-    // wl_buffer creation without the corrupt feedback path.
-    entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering, max = 3);
+    entry!("zwp_linux_dmabuf_v1", Allow, AcceleratedRendering);
     entry!(
         "wp_linux_drm_syncobj_manager_v1",
         Allow,
@@ -532,11 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn dmabuf_default_caps_feedback_path_to_v3() {
+    fn dmabuf_default_preserves_feedback_path() {
         let p = policy_for("work");
 
         assert!(p.is_allowed("zwp_linux_dmabuf_v1"));
-        assert_eq!(p.advertised_version("zwp_linux_dmabuf_v1", 5), 3);
+        assert_eq!(p.advertised_version("zwp_linux_dmabuf_v1", 5), 5);
         assert_eq!(p.advertised_version("zwp_linux_dmabuf_v1", 2), 2);
     }
 

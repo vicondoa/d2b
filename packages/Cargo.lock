@@ -734,7 +734,9 @@ dependencies = [
  "env_logger",
  "libc",
  "log",
+ "nix",
  "thiserror",
+ "uapi",
  "wl-proxy",
 ]
 
@@ -1732,7 +1734,7 @@ dependencies = [
 [[package]]
 name = "wl-proxy"
 version = "0.1.2"
-source = "git+https://github.com/vicondoa/wl-proxy.git?rev=f631210faa877c4c803d3c35c21e9c52d127672e#f631210faa877c4c803d3c35c21e9c52d127672e"
+source = "git+https://github.com/vicondoa/wl-proxy.git?rev=83b0001ce6c1f8d379609b07b7bcb8528bd044cd#83b0001ce6c1f8d379609b07b7bcb8528bd044cd"
 dependencies = [
  "debug-fn",
  "error_reporter",

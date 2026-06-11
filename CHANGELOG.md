@@ -36,6 +36,12 @@ deprecations ship one minor release before removal.
   cross-domain forwarding. The filter is enabled by default when
   `graphics.crossDomainTrusted = true`, denies unknown/high-risk globals
   by default, and exposes explicit allow/deny/version-cap overrides.
+- `nixling.vms.<vm>.graphics.waylandFilter.{byteLogging,dmabufAllow,dmabufDeny}`
+  — default-off diagnostics and dmabuf format/modifier controls for the
+  host-side Wayland filter. The filter preserves compositor dmabuf
+  feedback by default and lets operators hide known-bad format/modifier
+  pairs while keeping buffer creation requests fail-closed against the
+  same policy.
 - `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
   include, customizing colors, verifying the setup, and understanding
   the `crossDomainTrusted` requirement for app-id matching.
