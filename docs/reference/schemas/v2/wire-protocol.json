@@ -4781,7 +4781,7 @@
       "additionalProperties": false
     },
     "StoreSyncRequest": {
-      "description": "Store-sync request. The broker resolves the closure intent row keyed by `vm_id` (canonical id form `\"store-view:vm:<vm>\"`) and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key — the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
+      "description": "Store-sync request. The broker resolves the closure intent row from the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key — the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
       "type": "object",
       "required": [
         "bundleClosureRef",
