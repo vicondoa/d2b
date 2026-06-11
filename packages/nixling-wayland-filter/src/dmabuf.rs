@@ -308,25 +308,103 @@ impl DmabufBufferParamsHandler {
         }
     }
 
-    fn forward_planes(&self, slf: &Rc<ZwpLinuxBufferParamsV1>) {
+    fn emit_planes(&self, sink: &mut impl DmabufCreateSink) {
         for plane in &self.planes {
-            slf.send_add(
-                &plane.fd,
-                plane.plane_idx,
-                plane.offset,
-                plane.stride,
-                plane.modifier_hi,
-                plane.modifier_lo,
-            );
+            sink.add(plane);
         }
     }
 
-    fn deny_create(&self, slf: &Rc<ZwpLinuxBufferParamsV1>, format: u32, denied: &[String]) {
+    fn handle_create_with_sink(
+        &self,
+        sink: &mut impl DmabufCreateSink,
+        width: i32,
+        height: i32,
+        format: u32,
+        flags: ZwpLinuxBufferParamsV1Flags,
+    ) {
+        match self.create_action(format) {
+            DmabufCreateAction::Forward => {
+                self.emit_planes(sink);
+                sink.create(width, height, format, flags);
+            }
+            DmabufCreateAction::Deny { denied } => sink.failed(format, &denied),
+        }
+    }
+
+    fn handle_create_immed_with_sink(
+        &self,
+        sink: &mut impl DmabufCreateSink,
+        width: i32,
+        height: i32,
+        format: u32,
+        flags: ZwpLinuxBufferParamsV1Flags,
+    ) {
+        match self.create_action(format) {
+            DmabufCreateAction::Forward => {
+                self.emit_planes(sink);
+                sink.create_immed(width, height, format, flags);
+            }
+            DmabufCreateAction::Deny { denied } => sink.failed(format, &denied),
+        }
+    }
+}
+
+trait DmabufCreateSink {
+    fn add(&mut self, plane: &DmabufPlane);
+    fn create(&mut self, width: i32, height: i32, format: u32, flags: ZwpLinuxBufferParamsV1Flags);
+    fn create_immed(
+        &mut self,
+        width: i32,
+        height: i32,
+        format: u32,
+        flags: ZwpLinuxBufferParamsV1Flags,
+    );
+    fn failed(&mut self, format: u32, denied: &[String]);
+}
+
+struct ProxyCreateSink<'a> {
+    params: &'a Rc<ZwpLinuxBufferParamsV1>,
+    buffer: Option<&'a Rc<WlBuffer>>,
+}
+
+impl DmabufCreateSink for ProxyCreateSink<'_> {
+    fn add(&mut self, plane: &DmabufPlane) {
+        self.params.send_add(
+            &plane.fd,
+            plane.plane_idx,
+            plane.offset,
+            plane.stride,
+            plane.modifier_hi,
+            plane.modifier_lo,
+        );
+    }
+
+    fn create(&mut self, width: i32, height: i32, format: u32, flags: ZwpLinuxBufferParamsV1Flags) {
+        self.params.send_create(width, height, format, flags);
+    }
+
+    fn create_immed(
+        &mut self,
+        width: i32,
+        height: i32,
+        format: u32,
+        flags: ZwpLinuxBufferParamsV1Flags,
+    ) {
+        let Some(buffer) = self.buffer else {
+            log::warn!("dmabuf create_immed requested without a wl_buffer id");
+            self.params.send_failed();
+            return;
+        };
+        self.params
+            .send_create_immed(buffer, width, height, format, flags);
+    }
+
+    fn failed(&mut self, format: u32, denied: &[String]) {
         log::warn!(
             "dmabuf buffer creation denied: format=0x{format:08x} denied=[{}]",
             denied.join(", ")
         );
-        slf.send_failed();
+        self.params.send_failed();
     }
 }
 
@@ -359,13 +437,11 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
-        match self.create_action(format) {
-            DmabufCreateAction::Forward => {
-                self.forward_planes(slf);
-                slf.send_create(width, height, format, flags);
-            }
-            DmabufCreateAction::Deny { denied } => self.deny_create(slf, format, &denied),
-        }
+        let mut sink = ProxyCreateSink {
+            params: slf,
+            buffer: None,
+        };
+        self.handle_create_with_sink(&mut sink, width, height, format, flags);
     }
 
     fn handle_create_immed(
@@ -377,13 +453,11 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     ) {
-        match self.create_action(format) {
-            DmabufCreateAction::Forward => {
-                self.forward_planes(slf);
-                slf.send_create_immed(buffer_id, width, height, format, flags);
-            }
-            DmabufCreateAction::Deny { denied } => self.deny_create(slf, format, &denied),
-        }
+        let mut sink = ProxyCreateSink {
+            params: slf,
+            buffer: Some(buffer_id),
+        };
+        self.handle_create_immed_with_sink(&mut sink, width, height, format, flags);
     }
 }
 
@@ -561,6 +635,101 @@ fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
 mod tests {
     use super::*;
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum CreateEvent {
+        Add {
+            plane_idx: u32,
+            modifier: u64,
+        },
+        Create {
+            width: i32,
+            height: i32,
+            format: u32,
+            flags: u32,
+        },
+        CreateImmed {
+            width: i32,
+            height: i32,
+            format: u32,
+            flags: u32,
+        },
+        Failed {
+            format: u32,
+            denied: Vec<String>,
+        },
+    }
+
+    #[derive(Default)]
+    struct FakeCreateSink {
+        events: Vec<CreateEvent>,
+    }
+
+    impl DmabufCreateSink for FakeCreateSink {
+        fn add(&mut self, plane: &DmabufPlane) {
+            self.events.push(CreateEvent::Add {
+                plane_idx: plane.plane_idx,
+                modifier: plane.modifier(),
+            });
+        }
+
+        fn create(
+            &mut self,
+            width: i32,
+            height: i32,
+            format: u32,
+            flags: ZwpLinuxBufferParamsV1Flags,
+        ) {
+            self.events.push(CreateEvent::Create {
+                width,
+                height,
+                format,
+                flags: flags.0,
+            });
+        }
+
+        fn create_immed(
+            &mut self,
+            width: i32,
+            height: i32,
+            format: u32,
+            flags: ZwpLinuxBufferParamsV1Flags,
+        ) {
+            self.events.push(CreateEvent::CreateImmed {
+                width,
+                height,
+                format,
+                flags: flags.0,
+            });
+        }
+
+        fn failed(&mut self, format: u32, denied: &[String]) {
+            self.events.push(CreateEvent::Failed {
+                format,
+                denied: denied.to_vec(),
+            });
+        }
+    }
+
+    fn handler_with_plane(modifier: u64) -> DmabufBufferParamsHandler {
+        let filters = Arc::new(DmabufFilterList::new(
+            &[],
+            &[DmabufFilter {
+                format: None,
+                modifier: Some(LINEAR_MODIFIER),
+            }],
+        ));
+        let mut handler = DmabufBufferParamsHandler::new(filters);
+        handler.planes.push(DmabufPlane {
+            fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
+            plane_idx: 0,
+            offset: 0,
+            stride: 1280,
+            modifier_hi: (modifier >> 32) as u32,
+            modifier_lo: modifier as u32,
+        });
+        handler
+    }
+
     #[test]
     fn deny_linear_filter_blocks_only_linear_by_default() {
         let filters = DmabufFilterList::new(
@@ -597,22 +766,7 @@ mod tests {
     #[test]
     fn buffer_params_create_decision_denies_filtered_modifier() {
         let format = 0x3432_5258u32;
-        let filters = Arc::new(DmabufFilterList::new(
-            &[],
-            &[DmabufFilter {
-                format: None,
-                modifier: Some(LINEAR_MODIFIER),
-            }],
-        ));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
-        handler.planes.push(DmabufPlane {
-            fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
-            plane_idx: 0,
-            offset: 0,
-            stride: 1280,
-            modifier_hi: 0,
-            modifier_lo: 0,
-        });
+        let handler = handler_with_plane(LINEAR_MODIFIER);
 
         assert_eq!(
             handler.create_action(format),
@@ -625,24 +779,85 @@ mod tests {
     #[test]
     fn buffer_params_create_decision_forwards_allowed_modifier() {
         let format = 0x3432_5258u32;
-        let filters = Arc::new(DmabufFilterList::new(
-            &[],
-            &[DmabufFilter {
-                format: None,
-                modifier: Some(LINEAR_MODIFIER),
-            }],
-        ));
-        let mut handler = DmabufBufferParamsHandler::new(filters);
-        handler.planes.push(DmabufPlane {
-            fd: Rc::new(OwnedFd::from(File::open("/dev/null").unwrap())),
-            plane_idx: 0,
-            offset: 0,
-            stride: 1280,
-            modifier_hi: 0x0100_0000,
-            modifier_lo: 0x0000_0001,
-        });
+        let handler = handler_with_plane(0x0100_0000_0000_0001);
 
         assert_eq!(handler.create_action(format), DmabufCreateAction::Forward);
+    }
+
+    #[test]
+    fn denied_create_emits_failed_without_forwarding_planes() {
+        let mut sink = FakeCreateSink::default();
+        handler_with_plane(LINEAR_MODIFIER).handle_create_with_sink(
+            &mut sink,
+            1280,
+            720,
+            0x3432_5258,
+            ZwpLinuxBufferParamsV1Flags(0),
+        );
+
+        assert_eq!(
+            sink.events,
+            vec![CreateEvent::Failed {
+                format: 0x3432_5258,
+                denied: vec!["plane=0 modifier=0x0000000000000000".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn allowed_create_forwards_planes_before_create() {
+        let mut sink = FakeCreateSink::default();
+        handler_with_plane(0x0100_0000_0000_0001).handle_create_with_sink(
+            &mut sink,
+            1280,
+            720,
+            0x3432_5258,
+            ZwpLinuxBufferParamsV1Flags(0),
+        );
+
+        assert_eq!(
+            sink.events,
+            vec![
+                CreateEvent::Add {
+                    plane_idx: 0,
+                    modifier: 0x0100_0000_0000_0001,
+                },
+                CreateEvent::Create {
+                    width: 1280,
+                    height: 720,
+                    format: 0x3432_5258,
+                    flags: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn allowed_create_immed_forwards_planes_before_create_immed() {
+        let mut sink = FakeCreateSink::default();
+        handler_with_plane(0x0100_0000_0000_0001).handle_create_immed_with_sink(
+            &mut sink,
+            1280,
+            720,
+            0x3432_5258,
+            ZwpLinuxBufferParamsV1Flags(0),
+        );
+
+        assert_eq!(
+            sink.events,
+            vec![
+                CreateEvent::Add {
+                    plane_idx: 0,
+                    modifier: 0x0100_0000_0000_0001,
+                },
+                CreateEvent::CreateImmed {
+                    width: 1280,
+                    height: 720,
+                    format: 0x3432_5258,
+                    flags: 0,
+                },
+            ]
+        );
     }
 
     #[test]
