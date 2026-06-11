@@ -288,8 +288,7 @@ isolated even after a workload spoofs a peer-style MAC.
   even when actively running. **Known gap:** this still needs a live
   host / higher-fidelity harness because the shell-application wrapper
   bakes `systemctl` in via `runtimeInputs`; a plain `PATH` stub is not
-  enough to exercise the strict-audit path faithfully. Deferred to
-  v0.2.0 alongside the other host-backed testing items.
+  enough to exercise the strict-audit path faithfully.
 
 > Per-example iteration is now part of the static gate:
 > `tests/static.sh` iterates every `examples/*/flake.nix` and runs

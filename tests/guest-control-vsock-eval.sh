@@ -9,8 +9,9 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-scratch=$(nl_mktemp .guest-control-vsock.XXXXXX)
-mkdir -p "$scratch"
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/guest-control-vsock.XXXXXX")
+printf -v scratch_quoted '%q' "$scratch"
+add_cleanup "rm -rf -- $scratch_quoted"
 
 eval_ok() {
   local scenario=$1
