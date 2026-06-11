@@ -1779,6 +1779,69 @@ fn env_value<'a>(plan: &'a SpawnRunnerPlan, key: &str) -> Option<&'a str> {
         .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
 }
 
+fn ch_vsock_connect_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+    plan.argv.iter().find_map(|arg| {
+        if !arg.contains("nixling-ch-vsock-connect") {
+            return None;
+        }
+        let exec = arg
+            .strip_prefix("EXEC:")
+            .unwrap_or(arg)
+            .trim_matches('"');
+        let fields: Vec<&str> = exec.split_whitespace().collect();
+        let helper_index = fields.iter().position(|field| {
+            field
+                .trim_matches('"')
+                .ends_with("/nixling-ch-vsock-connect")
+                || field.trim_matches('"') == "nixling-ch-vsock-connect"
+        })?;
+        let socket = fields.get(helper_index + 1)?.trim_matches('"');
+        socket.starts_with('/').then(|| PathBuf::from(socket))
+    })
+}
+
+fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    if !matches!(
+        plan.seccomp_policy_ref.as_deref(),
+        Some("w1-vsock-relay" | "w1-otel-host-bridge")
+    ) {
+        return Ok(());
+    }
+    let Some(socket) = ch_vsock_connect_socket_arg(plan) else {
+        return Ok(());
+    };
+    let Some(parent) = socket.parent() else {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "obs-vsock ACL refresh: socket path has no parent".to_owned(),
+        });
+    };
+    let uid = plan.uid;
+    for _ in 0..120 {
+        if socket.exists() {
+            setfacl_fd_safe(parent, &format!("u:{uid}:--x"), AclPathKind::Directory).map_err(
+                |detail| LiveHandlerError::SpawnFailed {
+                    detail: format!("refresh obs-vsock state-dir ACL for runner uid {uid}: {detail}"),
+                },
+            )?;
+            setfacl_fd_safe(&socket, &format!("u:{uid}:rw"), AclPathKind::Socket).map_err(
+                |detail| LiveHandlerError::SpawnFailed {
+                    detail: format!("refresh obs-vsock socket ACL for runner uid {uid}: {detail}"),
+                },
+            )?;
+            if socket.exists() {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    Err(LiveHandlerError::SpawnFailed {
+        detail: format!(
+            "obs-vsock ACL refresh timed out for runner uid {uid} before {} became connectable",
+            socket.display()
+        ),
+    })
+}
+
 pub(crate) fn live_grant_verified_device_acl(
     path: &Path,
     uid: u32,
@@ -1931,6 +1994,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             }
         }
     }
+    refresh_obs_vsock_acl(plan)?;
 
     Ok(())
 }
@@ -2871,6 +2935,66 @@ mod tests {
         };
         let err = live_spawn_runner(&plan).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
+    }
+
+    fn test_spawn_plan_with_argv(argv: Vec<String>, seccomp_policy_ref: &str) -> SpawnRunnerPlan {
+        SpawnRunnerPlan {
+            binary_path: PathBuf::from("/bin/socat"),
+            argv,
+            uid: 1000,
+            gid: 1000,
+            supplementary_groups: vec![],
+            env: vec![],
+            capabilities: vec![],
+            namespaces: test_namespaces(),
+            seccomp_policy_ref: Some(seccomp_policy_ref.to_owned()),
+            mount_policy: test_mount_policy(),
+            cgroup_placement: test_cgroup_placement(),
+            user_namespace: None,
+            umask: None,
+        }
+    }
+
+    #[test]
+    fn parses_quoted_otel_host_bridge_ch_vsock_socket() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "nixling-otel-host-bridge".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317\""
+                    .to_owned(),
+            ],
+            "w1-otel-host-bridge",
+        );
+
+        assert_eq!(
+            ch_vsock_connect_socket_arg(&plan),
+            Some(PathBuf::from("/var/lib/nixling/vms/sys-obs/vsock.sock"))
+        );
+    }
+
+    #[test]
+    fn parses_unquoted_vsock_relay_ch_vsock_socket() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "nixling-otel-relay@work-aad".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/var/lib/nixling/vms/work-aad/vsock.sock_14317,fork,max-children=16,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14318"
+                    .to_owned(),
+            ],
+            "w1-vsock-relay",
+        );
+
+        assert_eq!(
+            ch_vsock_connect_socket_arg(&plan),
+            Some(PathBuf::from("/var/lib/nixling/vms/sys-obs/vsock.sock"))
+        );
     }
 
     #[test]
