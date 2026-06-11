@@ -406,7 +406,7 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::io::{Read, Write};
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::thread;
@@ -484,6 +484,42 @@ mod tests {
         assert_eq!(
             connect(Path::new("/tmp/vsock.sock"), Path::new("relative-root")).failure(),
             Some(&GuestControlTransportFailure::StateRootNotAbsolute)
+        );
+    }
+
+    #[test]
+    fn production_directory_policy_rejects_wrong_owner_and_world_write() {
+        let root = state_root();
+        let metadata = fs::symlink_metadata(root.path()).expect("metadata");
+        let policy = DirectoryPolicy::ProductionStateRoot {
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+        };
+        assert_eq!(validate_directory_metadata(root.path(), policy), Ok(()));
+
+        let wrong_uid_policy = DirectoryPolicy::ProductionStateRoot {
+            uid: metadata.uid().wrapping_add(1),
+            gid: metadata.gid(),
+        };
+        assert_eq!(
+            validate_directory_metadata(root.path(), wrong_uid_policy),
+            Err(GuestControlTransportFailure::UnsafeDirectory)
+        );
+
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(metadata.mode() | 0o002);
+        fs::set_permissions(root.path(), permissions).expect("make world-writable");
+        assert_eq!(
+            validate_directory_metadata(root.path(), policy),
+            Err(GuestControlTransportFailure::UnsafeDirectory)
+        );
+    }
+
+    #[test]
+    fn production_root_ancestor_policy_rejects_world_writable_tmp() {
+        assert_eq!(
+            validate_root_owned_directory(Path::new("/tmp")),
+            Err(GuestControlTransportFailure::UnsafeDirectory)
         );
     }
 
