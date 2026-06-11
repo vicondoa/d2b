@@ -563,7 +563,7 @@ EOF
         "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
       ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
         "WL_PROXY_HEXDUMP=1"
-        "WL_PROXY_HEXDUMP_LIMIT=8192"
+        "WL_PROXY_HEXDUMP_LIMIT=256"
       ];
       argv = [
         "nixling-${vmName}-wlproxy"

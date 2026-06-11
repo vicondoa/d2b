@@ -131,6 +131,11 @@ let
   trustedWlproxyNodes = builtins.filter (n: n.id == "wayland-proxy") trustedNodes;
   trustedWlproxyArgv = if trustedWlproxyNodes == [] then [] else (builtins.head trustedWlproxyNodes).argv;
   trustedWlproxyEnv = if trustedWlproxyNodes == [] then [] else ((builtins.head trustedWlproxyNodes).env or []);
+  hasArgPair = argv: flag: value:
+    let len = builtins.length argv;
+    in len >= 2 && builtins.any
+      (i: builtins.elemAt argv i == flag && builtins.elemAt argv (i + 1) == value)
+      (lib.range 0 (len - 2));
 
   defaultDag = builtins.filter (dag: dag.vm == "demo-gfx") processes.vms;
   defaultDagRecord = if defaultDag == [] then { nodes = [ ]; edges = [ ]; } else builtins.head defaultDag;
@@ -184,23 +189,23 @@ in
     "GPU runner argv should not contain /run/user/<uid> (real compositor path)";
   assert lib.assertMsg (builtins.any (e: e.from == "wayland-proxy" && e.to == trustedGraphicsNodeId) trustedEdges)
     "trusted graphics DAG should contain wayland-proxy -> graphicsNodeId edge";
-  assert lib.assertMsg (builtins.elem "--deny-global" trustedWlproxyArgv && builtins.elem "wp_drm_lease_device_v1" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--deny-global" "wp_drm_lease_device_v1")
     "waylandFilter.denyGlobals should serialize to wayland-proxy argv";
-  assert lib.assertMsg (builtins.elem "--allow-global" trustedWlproxyArgv && builtins.elem "zwp_linux_dmabuf_v1" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--allow-global" "zwp_linux_dmabuf_v1")
     "waylandFilter.allowGlobals should serialize to wayland-proxy argv";
-  assert lib.assertMsg (builtins.elem "--max-version" trustedWlproxyArgv && builtins.elem "xdg_wm_base=3" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--max-version" "xdg_wm_base=3")
     "waylandFilter.maxVersions should serialize to wayland-proxy argv";
-  assert lib.assertMsg (builtins.elem "--dmabuf-allow" trustedWlproxyArgv && builtins.elem "XR24:linear" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--dmabuf-allow" "XR24:linear")
     "waylandFilter.dmabufAllow should serialize to wayland-proxy argv";
-  assert lib.assertMsg (builtins.elem "--dmabuf-deny" trustedWlproxyArgv && builtins.elem "all:linear" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--dmabuf-deny" "all:linear")
     "waylandFilter.dmabufDeny should serialize to wayland-proxy argv";
   assert lib.assertMsg (builtins.elem "WL_PROXY_DEBUG=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_PREFIX=nixling-demo-cd-wlproxy" trustedWlproxyEnv)
     "waylandFilter.debugLogging should serialize WL_PROXY_DEBUG/WL_PROXY_PREFIX to wayland-proxy env";
-  assert lib.assertMsg (builtins.elem "WL_PROXY_HEXDUMP=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_HEXDUMP_LIMIT=8192" trustedWlproxyEnv)
+  assert lib.assertMsg (builtins.elem "WL_PROXY_HEXDUMP=1" trustedWlproxyEnv && builtins.elem "WL_PROXY_HEXDUMP_LIMIT=256" trustedWlproxyEnv)
     "waylandFilter.byteLogging should serialize WL_PROXY_HEXDUMP/WL_PROXY_HEXDUMP_LIMIT to wayland-proxy env";
-  assert lib.assertMsg (builtins.elem "--listen" trustedWlproxyArgv && builtins.elem "/run/nixling-wlproxy/demo-cd/wayland-0" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--listen" "/run/nixling-wlproxy/demo-cd/wayland-0")
     "wayland-proxy argv should listen on the filter socket used by readiness";
-  assert lib.assertMsg (builtins.elem "--connect" trustedWlproxyArgv && builtins.elem "/run/user/1000/wayland-0" trustedWlproxyArgv)
+  assert lib.assertMsg (hasArgPair trustedWlproxyArgv "--connect" "/run/user/1000/wayland-0")
     "wayland-proxy argv should connect to the real host compositor path";
   # GPU env: no XDG_RUNTIME_DIR or WAYLAND_DISPLAY
   assert lib.assertMsg (!(builtins.any (e: lib.hasPrefix "XDG_RUNTIME_DIR=" e) trustedGpuEnv))
