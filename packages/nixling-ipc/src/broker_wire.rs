@@ -577,14 +577,60 @@ pub enum GuestControlProofRole {
     GuestProof,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestControlDirection {
+    HostToGuest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestControlAuthPurpose {
+    GuestControlAuthV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GuestBootIdWire(pub String);
+
+impl GuestBootIdWire {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl JsonSchema for GuestBootIdWire {
+    fn schema_name() -> String {
+        "GuestBootIdWire".to_owned()
+    }
+
+    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            string: Some(Box::new(schemars::schema::StringValidation {
+                min_length: Some(1),
+                max_length: Some(128),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuestControlSignRequest {
     pub vm_id: VmId,
     pub role: GuestControlProofRole,
     pub protocol_version: u32,
-    pub direction: String,
-    pub purpose: String,
+    pub direction: GuestControlDirection,
+    pub purpose: GuestControlAuthPurpose,
     pub guest_control_port: u32,
     #[serde(default)]
     pub peer_cid: Option<u32>,
@@ -592,7 +638,7 @@ pub struct GuestControlSignRequest {
     pub host_nonce: Vec<u8>,
     #[schemars(length(min = 32, max = 32))]
     pub guest_nonce: Vec<u8>,
-    pub guest_boot_id: String,
+    pub guest_boot_id: GuestBootIdWire,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities_hash: Option<String>,
     #[serde(default)]
@@ -603,12 +649,6 @@ impl GuestControlSignRequest {
     pub fn validate_shape(&self) -> Result<(), &'static str> {
         if self.host_nonce.len() != AUTH_NONCE_LEN || self.guest_nonce.len() != AUTH_NONCE_LEN {
             return Err("nonce-length");
-        }
-        if self.direction != "host-to-guest" || self.purpose != "guest-control-auth-v1" {
-            return Err("domain");
-        }
-        if self.guest_boot_id.is_empty() || self.guest_boot_id.len() > 128 {
-            return Err("guest-boot-id");
         }
         match self.role {
             GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {

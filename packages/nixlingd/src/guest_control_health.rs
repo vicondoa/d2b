@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use nixling_ipc::broker_wire::{
-    GuestControlProofRole, GuestControlSignRequest, GuestControlSignResponse,
+    GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+    GuestControlSignRequest, GuestControlSignResponse,
 };
 use nixling_ipc::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
@@ -246,13 +247,13 @@ fn sign_request(
         vm_id: nixling_ipc::types::VmId::new(vm_id),
         role,
         protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
-        direction: "host-to-guest".to_owned(),
-        purpose: "guest-control-auth-v1".to_owned(),
+        direction: GuestControlDirection::HostToGuest,
+        purpose: GuestControlAuthPurpose::GuestControlAuthV1,
         guest_control_port: GUEST_CONTROL_AUTH_PORT,
         peer_cid,
         host_nonce: host_nonce.to_vec(),
         guest_nonce: guest_nonce.to_vec(),
-        guest_boot_id: guest_boot_id.to_owned(),
+        guest_boot_id: GuestBootIdWire::new(guest_boot_id),
         capabilities_hash,
         tracing_span_id: None,
     }

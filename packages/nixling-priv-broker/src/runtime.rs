@@ -883,10 +883,10 @@ fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
             "role": format!("{:?}", req.role),
-            "purpose": req.purpose,
+            "purpose": format!("{:?}", req.purpose),
             "hostNonceLen": req.host_nonce.len(),
             "guestNonceLen": req.guest_nonce.len(),
-            "guestBootIdPresent": !req.guest_boot_id.is_empty(),
+            "guestBootIdPresent": !req.guest_boot_id.as_str().is_empty(),
             "peerCidPresent": req.peer_cid.is_some(),
             "capabilitiesHashPresent": req.capabilities_hash.is_some(),
         }));
@@ -1181,7 +1181,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
                 OperationFields::GuestControlSign {
                     vm_id: req.vm_id.as_str().to_owned(),
                     role: format!("{:?}", req.role),
-                    purpose: req.purpose.clone(),
+                    purpose: format!("{:?}", req.purpose),
                     transcript_len: guest_control_transcript_len(&req)?,
                     peer_cid_present: req.peer_cid.is_some(),
                     capabilities_hash_present: req.capabilities_hash.is_some(),
@@ -3045,7 +3045,7 @@ fn guest_control_transcript(
         peer_cid: req.peer_cid,
         host_nonce: &host_nonce,
         guest_nonce: &guest_nonce,
-        guest_boot_id: &req.guest_boot_id,
+        guest_boot_id: req.guest_boot_id.as_str(),
         capabilities_hash: req.capabilities_hash.as_deref().map(str::as_bytes),
     }))
 }
@@ -3078,7 +3078,7 @@ fn read_guest_control_token(state_dir: &Path, vm_id: &str) -> Result<Vec<u8>, Br
         })?;
     if !metadata.is_file()
         || !owner_is_safe_for_guest_control_token(metadata.uid())
-        || metadata.mode() & 0o177 != 0
+        || !matches!(metadata.mode() & 0o777, 0o400 | 0o440)
         || token.is_empty()
         || token.len() > MAX_TOKEN_BYTES
     {
@@ -6536,13 +6536,13 @@ mod tests {
             vm_id: nixling_ipc::types::VmId::new("corp-vm"),
             role,
             protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
-            direction: "host-to-guest".to_owned(),
-            purpose: "guest-control-auth-v1".to_owned(),
+            direction: nixling_ipc::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
             guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
             peer_cid: Some(2),
             host_nonce: vec![0x11; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
             guest_nonce: vec![0x22; nixling_ipc::guest_auth::AUTH_NONCE_LEN],
-            guest_boot_id: "boot-1".to_owned(),
+            guest_boot_id: nixling_ipc::broker_wire::GuestBootIdWire::new("boot-1"),
             capabilities_hash: match role {
                 nixling_ipc::broker_wire::GuestControlProofRole::HostProof => None,
                 nixling_ipc::broker_wire::GuestControlProofRole::GuestProof => {
@@ -6559,7 +6559,7 @@ mod tests {
         let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o400);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
         let response = handle_guest_control_sign(
             guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof),
             &config,
@@ -6575,7 +6575,7 @@ mod tests {
         let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("tempdir");
         let bundle = build_test_bundle(root.path());
         let config = test_server_config(root.path(), &bundle.bundle_path);
-        write_guest_control_token(&config.state_dir, "corp-vm", 0o400);
+        write_guest_control_token(&config.state_dir, "corp-vm", 0o440);
 
         let mut bad =
             guest_control_sign_request(nixling_ipc::broker_wire::GuestControlProofRole::HostProof);

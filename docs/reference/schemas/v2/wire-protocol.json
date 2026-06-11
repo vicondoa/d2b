@@ -2299,6 +2299,23 @@
       },
       "additionalProperties": false
     },
+    "GuestBootIdWire": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestControlAuthPurpose": {
+      "type": "string",
+      "enum": [
+        "guest-control-auth-v1"
+      ]
+    },
+    "GuestControlDirection": {
+      "type": "string",
+      "enum": [
+        "host-to-guest"
+      ]
+    },
     "GuestControlProofRole": {
       "type": "string",
       "enum": [
@@ -2327,10 +2344,10 @@
           ]
         },
         "direction": {
-          "type": "string"
+          "$ref": "#/definitions/GuestControlDirection"
         },
         "guestBootId": {
-          "type": "string"
+          "$ref": "#/definitions/GuestBootIdWire"
         },
         "guestControlPort": {
           "type": "integer",
@@ -2372,7 +2389,7 @@
           "minimum": 0.0
         },
         "purpose": {
-          "type": "string"
+          "$ref": "#/definitions/GuestControlAuthPurpose"
         },
         "role": {
           "$ref": "#/definitions/GuestControlProofRole"
