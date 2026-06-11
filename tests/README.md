@@ -98,11 +98,9 @@ Layer-1 script inventory:
 | --- | --- |
 | `tests/assertions-eval.sh` | Eval-time assertion regressions, including the observability collision/prefix cases. |
 | `tests/observability-eval.sh` | Eval-time observability surface checks: defaults, auto-declared env/VM, manifest fields, CLI-traces gate, and assertion auto-SKIPs. |
-| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
+| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for daemon-owned lifecycle and guest/stack observability units. |
 | `tests/usbip-gating-eval.sh` | Host-side USBIP gating: absent with no host+enabled-VM opt-in, present once both knobs are enabled, and scoped to the opted-in env only. |
 | `tests/niri-vm-borders-eval.sh` | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom outputPath. |
-| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services and observability host units. |
-| `tests/restart-policy-eval.sh` | `restartIfChanged = false` regression coverage for lifecycle services plus the host, workload-guest, and obs-guest observability relay units. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner{role=Video}` descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
 | `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
 | `tests/bridge-isolation-runtime.sh` | Hermetic runtime check that Linux bridge port isolation still blocks workload↔workload traffic while preserving workload↔net-VM reachability. |
