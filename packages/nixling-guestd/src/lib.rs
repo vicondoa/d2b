@@ -1,5 +1,7 @@
 #![doc = "Guest-side nixling control daemon primitives."]
 
+pub mod auth;
+
 use nixling_ipc::guest_wire::{
     ExecCreateRequest, ExecId, GuestBootId, GuestCapability, GuestControlErrorKind,
     GuestExecRequestMetadata, GuestSubsystem, HealthOrigin, HealthReason, HealthRemediation,
@@ -80,10 +82,11 @@ pub fn guest_reported(response: HealthResponse) -> Result<HealthResponse, GuestH
 }
 
 pub trait TokenSource {
-    fn verify_transcript(&self, transcript: &[u8], mac: &[u8]) -> Result<(), AuthError>;
+    fn verify_tag(&self, transcript: &[u8], tag: &[u8]) -> Result<(), AuthError>;
+    fn sign_tag(&self, transcript: &[u8]) -> Result<[u8; auth::AUTH_TAG_LEN], AuthError>;
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthError {
     TokenUnavailable,
     MacRejected,

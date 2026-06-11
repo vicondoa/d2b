@@ -9,5 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+hmac = "0.12"
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
-
+protobuf = "3.7.2"
+sha2 = { workspace = true }
