@@ -17,13 +17,13 @@ use wl_proxy::{
     client::{Client, ClientHandler},
     object::{Object, ObjectCoreApi, ObjectRcUtils},
     protocols::{
+        linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
         stream::{
             wl_eglstream::WlEglstreamHandleType,
             wl_eglstream_display::{
                 WlEglstreamDisplay, WlEglstreamDisplayCap, WlEglstreamDisplayHandler,
             },
         },
-        linux_dmabuf_v1::zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
         wayland::{
             wl_buffer::WlBuffer,
             wl_display::{WlDisplay, WlDisplayHandler},

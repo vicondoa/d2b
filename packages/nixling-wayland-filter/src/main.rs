@@ -37,8 +37,8 @@ use nixling_wayland_filter::filter::{
     build_state, install_client_handlers, FilterClientHandler, FilterStateHandler,
 };
 use nixling_wayland_filter::{
-    dmabuf::{parse_filter as parse_dmabuf_filter, DmabufFilter},
     diag::DiagRateLimiter,
+    dmabuf::{parse_filter as parse_dmabuf_filter, DmabufFilter},
     policy::{FilterPolicy, PolicyInput},
 };
 
