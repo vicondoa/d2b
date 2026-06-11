@@ -23,6 +23,8 @@ use wl_proxy::protocols::{
 
 pub const LINEAR_MODIFIER: u64 = 0;
 pub const INVALID_MODIFIER: u64 = 0x00ff_ffff_ffff_ffff;
+const MAX_DMABUF_PLANES: usize = 4;
+const MAX_DENIED_LOG_EXAMPLES: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DmabufFilter {
@@ -173,16 +175,18 @@ pub fn parse_filter(s: &str) -> Result<DmabufFilter, String> {
 }
 
 fn parse_u32(s: &str) -> Option<u32> {
-    if s.len() == 4 && s.is_ascii() {
+    if let Some(hex) = s.strip_prefix("0x") {
+        u32::from_str_radix(hex, 16).ok()
+    } else if s.bytes().all(|byte| byte.is_ascii_digit()) {
+        s.parse().ok()
+    } else if s.len() == 4 && s.is_ascii() {
         let mut value = 0u32;
         for &byte in s.as_bytes().iter().rev() {
             value = (value << 8) | u32::from(byte);
         }
         Some(value)
-    } else if let Some(hex) = s.strip_prefix("0x") {
-        u32::from_str_radix(hex, 16).ok()
     } else {
-        s.parse().ok()
+        None
     }
 }
 
@@ -272,12 +276,16 @@ impl DmabufPlane {
 struct DmabufBufferParamsHandler {
     filters: Arc<DmabufFilterList>,
     planes: Vec<DmabufPlane>,
+    invalid_plane_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DmabufCreateAction {
     Forward,
-    Deny { denied: Vec<String> },
+    Deny {
+        denied_count: usize,
+        examples: Vec<String>,
+    },
 }
 
 impl DmabufBufferParamsHandler {
@@ -285,27 +293,78 @@ impl DmabufBufferParamsHandler {
         Self {
             filters,
             planes: Vec::new(),
+            invalid_plane_count: 0,
         }
     }
 
     fn create_action(&self, format: u32) -> DmabufCreateAction {
-        let denied: Vec<String> = self
+        if self.invalid_plane_count > 0 {
+            return DmabufCreateAction::Deny {
+                denied_count: self.invalid_plane_count,
+                examples: vec!["invalid plane set".to_string()],
+            };
+        }
+        let denied: Vec<&DmabufPlane> = self
             .planes
             .iter()
             .filter(|plane| !self.filters.allowed(format, plane.modifier()))
-            .map(|plane| {
-                format!(
-                    "plane={} modifier=0x{:016x}",
-                    plane.plane_idx,
-                    plane.modifier()
-                )
-            })
             .collect();
         if denied.is_empty() {
             DmabufCreateAction::Forward
         } else {
-            DmabufCreateAction::Deny { denied }
+            let examples = denied
+                .iter()
+                .take(MAX_DENIED_LOG_EXAMPLES)
+                .map(|plane| {
+                    let plane = *plane;
+                    format!(
+                        "plane={} modifier=0x{:016x}",
+                        plane.plane_idx,
+                        plane.modifier()
+                    )
+                })
+                .collect();
+            DmabufCreateAction::Deny {
+                denied_count: denied.len(),
+                examples,
+            }
         }
+    }
+
+    fn store_plane(
+        &mut self,
+        fd: &Rc<OwnedFd>,
+        plane_idx: u32,
+        offset: u32,
+        stride: u32,
+        modifier_hi: u32,
+        modifier_lo: u32,
+    ) {
+        if usize::try_from(plane_idx).map_or(true, |idx| idx >= MAX_DMABUF_PLANES) {
+            self.invalid_plane_count += 1;
+            log::warn!(
+                "dmabuf buffer plane ignored: plane={plane_idx} reason=plane index out of bounds"
+            );
+            return;
+        }
+        if self.planes.iter().any(|plane| plane.plane_idx == plane_idx) {
+            self.invalid_plane_count += 1;
+            log::warn!("dmabuf buffer plane ignored: plane={plane_idx} reason=duplicate plane");
+            return;
+        }
+        if self.planes.len() >= MAX_DMABUF_PLANES {
+            self.invalid_plane_count += 1;
+            log::warn!("dmabuf buffer plane ignored: plane={plane_idx} reason=too many planes");
+            return;
+        }
+        self.planes.push(DmabufPlane {
+            fd: fd.clone(),
+            plane_idx,
+            offset,
+            stride,
+            modifier_hi,
+            modifier_lo,
+        });
     }
 
     fn emit_planes(&self, sink: &mut impl DmabufCreateSink) {
@@ -327,7 +386,10 @@ impl DmabufBufferParamsHandler {
                 self.emit_planes(sink);
                 sink.create(width, height, format, flags);
             }
-            DmabufCreateAction::Deny { denied } => sink.failed(format, &denied),
+            DmabufCreateAction::Deny {
+                denied_count,
+                examples,
+            } => sink.failed(format, denied_count, &examples),
         }
     }
 
@@ -344,7 +406,10 @@ impl DmabufBufferParamsHandler {
                 self.emit_planes(sink);
                 sink.create_immed(width, height, format, flags);
             }
-            DmabufCreateAction::Deny { denied } => sink.failed(format, &denied),
+            DmabufCreateAction::Deny {
+                denied_count,
+                examples,
+            } => sink.failed(format, denied_count, &examples),
         }
     }
 }
@@ -359,7 +424,7 @@ trait DmabufCreateSink {
         format: u32,
         flags: ZwpLinuxBufferParamsV1Flags,
     );
-    fn failed(&mut self, format: u32, denied: &[String]);
+    fn failed(&mut self, format: u32, denied_count: usize, examples: &[String]);
 }
 
 struct ProxyCreateSink<'a> {
@@ -399,10 +464,10 @@ impl DmabufCreateSink for ProxyCreateSink<'_> {
             .send_create_immed(buffer, width, height, format, flags);
     }
 
-    fn failed(&mut self, format: u32, denied: &[String]) {
+    fn failed(&mut self, format: u32, denied_count: usize, examples: &[String]) {
         log::warn!(
-            "dmabuf buffer creation denied: format=0x{format:08x} denied=[{}]",
-            denied.join(", ")
+            "dmabuf buffer creation denied: format=0x{format:08x} denied_count={denied_count} examples=[{}]",
+            examples.join(", ")
         );
         self.params.send_failed();
     }
@@ -419,14 +484,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
         modifier_hi: u32,
         modifier_lo: u32,
     ) {
-        self.planes.push(DmabufPlane {
-            fd: fd.clone(),
-            plane_idx,
-            offset,
-            stride,
-            modifier_hi,
-            modifier_lo,
-        });
+        self.store_plane(fd, plane_idx, offset, stride, modifier_hi, modifier_lo);
     }
 
     fn handle_create(
@@ -702,10 +760,10 @@ mod tests {
             });
         }
 
-        fn failed(&mut self, format: u32, denied: &[String]) {
+        fn failed(&mut self, format: u32, _denied_count: usize, examples: &[String]) {
             self.events.push(CreateEvent::Failed {
                 format,
-                denied: denied.to_vec(),
+                denied: examples.to_vec(),
             });
         }
     }
@@ -771,7 +829,8 @@ mod tests {
         assert_eq!(
             handler.create_action(format),
             DmabufCreateAction::Deny {
-                denied: vec!["plane=0 modifier=0x0000000000000000".to_string()],
+                denied_count: 1,
+                examples: vec!["plane=0 modifier=0x0000000000000000".to_string()],
             }
         );
     }
@@ -908,6 +967,36 @@ mod tests {
             DmabufFilter {
                 format: None,
                 modifier: Some(INVALID_MODIFIER),
+            }
+        );
+        assert_eq!(
+            parse_filter("0x12").unwrap(),
+            DmabufFilter {
+                format: Some(0x12),
+                modifier: None,
+            }
+        );
+        assert_eq!(
+            parse_filter("1234").unwrap(),
+            DmabufFilter {
+                format: Some(1234),
+                modifier: None,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_plane_set_fails_create_without_unbounded_examples() {
+        let format = 0x3432_5258u32;
+        let filters = Arc::new(DmabufFilterList::new(&[], &[]));
+        let mut handler = DmabufBufferParamsHandler::new(filters);
+        handler.invalid_plane_count = 100;
+
+        assert_eq!(
+            handler.create_action(format),
+            DmabufCreateAction::Deny {
+                denied_count: 100,
+                examples: vec!["invalid plane set".to_string()],
             }
         );
     }

@@ -56,9 +56,9 @@ apps on this VM may not render or receive input.
 dmabuf or rendering global that nixling expects for GPU-accelerated
 graphics.
 
-**Affected globals (examples):** `linux_dmabuf_v1`,
-`wp_linux_drm_syncobj_manager_v1`,
-`zwp_linux_explicit_synchronization_v1`.
+**Affected globals:** `zwp_linux_dmabuf_v1`,
+`wp_linux_drm_syncobj_manager_v1`, `wl_eglstream_display`, and
+`wl_eglstream_controller`.
 
 **Why it exists:** Disabling dmabuf/render globals causes guest apps to
 fall back to software (llvmpipe) rendering, which significantly reduces
