@@ -5,7 +5,7 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(dirname "$HERE")}
-PLAN_MD=${NIXLING_PLAN_MD:-/home/paydro/.copilot/session-state/0ba448af-5b81-4e94-8a98-ab5fe9675426/plan.md}
+PLAN_MD=${NIXLING_PLAN_MD:-$ROOT/docs/adr/0026-native-signoz-observability.md}
 BASE_COMMIT=${NIXLING_VMS_BASELINE_COMMIT:-91d69b0}
 BASELINE_DIR=${BASELINE_DIR:-$ROOT/tests/golden}
 BASELINE_FIXTURE=${BASELINE_FIXTURE:-$BASELINE_DIR/vms.json-$BASE_COMMIT}
