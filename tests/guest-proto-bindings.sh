@@ -31,7 +31,7 @@ if rg -n 'ttrpc|service GuestControl|GuestControl\\x12|Service|Client|Server|reg
 fi
 
 if rg -n 'ttrpc' "$ROOT/packages/nixling-ipc/Cargo.toml"; then
-  fail "guest-proto-bindings: nixling-ipc must not depend on ttrpc in the message-only binding wave"
+  fail "guest-proto-bindings: nixling-ipc must not depend on ttrpc for message-only bindings"
 fi
 
 ok "guest-proto-bindings: generated message bindings are deterministic and message-only"
