@@ -20,43 +20,29 @@
 //! `unshare(CLONE_NEWNS)` in the broker process itself (which would
 //! corrupt the mount view of a long-lived, multi-request daemon) and
 //! WITHOUT fork-then-run-Rust (async-signal-unsafe in a multithreaded
-//! process). Instead it execs a dedicated subprocess:
+//! process) and without a shell. Instead it execs a dedicated helper
+//! subprocess that performs namespace setup itself:
 //!
 //! ```text
-//! unshare --mount --propagation private \
-//!   /bin/sh -ceu 'umount -l /nix/store 2>/dev/null || true; \
-//!                  exec "$0" build-store-view-farm' \
-//!   /run/current-system/sw/bin/nixling-activation-helper
+//! /run/current-system/sw/bin/nixling-activation-helper private-store build-store-view
 //! ```
 //!
-//! `--propagation private` ensures the lazy unmount stays inside the
-//! child namespace and never detaches the host's real `/nix/store`.
-//! The `nixling-activation-helper build-store-view-farm` verb reads the
-//! [`BuildStoreViewFarmRequest`] as JSON on stdin and calls
-//! `nixling_host::hardlink_farm::build_farm`.
+//! The helper unshares its mount namespace, sets recursive private
+//! propagation, lazily detaches `/nix/store`, then reads the JSON request on
+//! stdin and calls the selected `nixling_host::hardlink_farm` primitive.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use nixling_host::hardlink_farm::{
-    self, BuildStoreViewFarmRequest, GenerationMarker, HardlinkFarmError,
+    self, BuildStoreViewFarmRequest, BuildStoreViewRequest, GenerationMarker, HardlinkFarmError,
+    ReplaceLivePathsRequest, StoreViewLinkCounts,
 };
 
-/// `unshare(1)` — already assumed present by the activation path in
-/// `exec_reconcile::run_activation_script`.
-const UNSHARE_BIN: &str = "/run/current-system/sw/bin/unshare";
-/// POSIX shell — same path the activation bind-mount step uses.
-const SH_BIN: &str = "/bin/sh";
 /// The fd-safe activation helper, installed into the system profile by
 /// `nixos-modules/host-daemon.nix`.
 const HELPER_BIN: &str = "/run/current-system/sw/bin/nixling-activation-helper";
-
-/// The shell run inside the new mount namespace: drop `/nix/store`
-/// (ignored on hosts where it is not a separate mount) then exec the
-/// helper verb. `$0` is the helper path passed as the first positional.
-const NS_SHELL_SCRIPT: &str =
-    "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view-farm";
 
 /// Build (or idempotently reconcile) one generation of the per-VM
 /// store-view hardlink farm, transparently handling the NixOS
@@ -102,19 +88,8 @@ pub fn build_farm_cross_mount_safe(
     }
 }
 
-/// Build the `unshare … sh -ceu … helper` argv (binary + args). Split
-/// out so the wiring can be asserted in a unit test without spawning.
-fn farm_build_argv(unshare_bin: &str, sh_bin: &str, helper_bin: &str) -> Vec<String> {
-    vec![
-        unshare_bin.to_owned(),
-        "--mount".to_owned(),
-        "--propagation".to_owned(),
-        "private".to_owned(),
-        sh_bin.to_owned(),
-        "-ceu".to_owned(),
-        NS_SHELL_SCRIPT.to_owned(),
-        helper_bin.to_owned(),
-    ]
+fn farm_build_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "build-store-view-farm")
 }
 
 /// Run the hardlink-farm build inside a private mount namespace where
@@ -142,7 +117,7 @@ fn build_farm_via_namespace(
         detail: format!("serialise store-view farm request: {e}"),
     })?;
 
-    let argv = farm_build_argv(UNSHARE_BIN, SH_BIN, HELPER_BIN);
+    let argv = farm_build_argv(HELPER_BIN);
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::piped())
@@ -167,15 +142,15 @@ fn build_farm_via_namespace(
         // stdin dropped here -> EOF for the helper.
     });
 
-    let output = child.wait_with_output().map_err(|e| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!("await store-view farm build: {e}"),
-    })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view farm build: {e}"),
+        })?;
     let _ = writer.join();
 
-    let generation_dir = farm_root
-        .join("generations")
-        .join(generation.to_string());
+    let generation_dir = farm_root.join("generations").join(generation.to_string());
 
     if output.status.success() {
         return Ok(generation_dir);
@@ -208,35 +183,270 @@ fn build_farm_via_namespace(
     })
 }
 
+/// Materialise one generation of the ADR 0027 **split** store view
+/// ([`hardlink_farm::build_store_view`]), transparently handling the
+/// NixOS `/nix/store` self-bind-mount exactly like
+/// [`build_farm_cross_mount_safe`].
+///
+/// Returns the top-level link/skip accounting. This materialises `live/`,
+/// `meta/generations/<id>/`, `state/generations/<id>/`, and the
+/// `gcroots/generation-<id>` root; it does NOT swap `state/current` /
+/// `meta/current` or plant the live marker — the broker performs those
+/// in-process publish steps after a successful materialisation.
+pub fn build_store_view_cross_mount_safe(
+    farm_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+    marker: &GenerationMarker,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    match hardlink_farm::build_store_view(farm_root, generation_id, closure_paths, marker) {
+        Ok(counts) => Ok(counts),
+        Err(HardlinkFarmError::CrossMountLink { .. }) => {
+            build_store_view_via_namespace(farm_root, generation_id, closure_paths, marker)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Build the `unshare … sh -ceu … helper build-store-view` argv. Split
+/// out so the wiring can be asserted without spawning.
+fn private_store_argv(helper_bin: &str, verb: &str) -> Vec<String> {
+    vec![
+        helper_bin.to_owned(),
+        "private-store".to_owned(),
+        verb.to_owned(),
+    ]
+}
+
+fn store_view_build_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "build-store-view")
+}
+
+fn replace_store_view_argv(helper_bin: &str) -> Vec<String> {
+    private_store_argv(helper_bin, "replace-store-view-live")
+}
+
+/// Run the split-layout store-view build inside a private mount namespace
+/// where `/nix/store` is lazily detached. On success the helper prints
+/// the [`StoreViewLinkCounts`] as one JSON line on stdout; on failure it
+/// prints the typed [`HardlinkFarmError`] (recovered here so the
+/// collision / different-fs / marker mapping is preserved).
+fn build_store_view_via_namespace(
+    farm_root: &Path,
+    generation_id: &str,
+    closure_paths: &[PathBuf],
+    marker: &GenerationMarker,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let request = BuildStoreViewRequest {
+        farm_root: farm_root.to_path_buf(),
+        generation_id: generation_id.to_owned(),
+        closure_paths: closure_paths.to_vec(),
+        marker: marker.clone(),
+    };
+    let payload = serde_json::to_vec(&request).map_err(|e| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!("serialise store-view request: {e}"),
+    })?;
+
+    let argv = store_view_build_argv(HELPER_BIN);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: argv[0].clone(),
+            detail: format!("spawn unshare for store-view build: {e}"),
+        })?;
+
+    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "child stdin unavailable for store-view build".to_owned(),
+    })?;
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+    });
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view build: {e}"),
+        })?;
+    let _ = writer.join();
+
+    if output.status.success() {
+        return parse_store_view_counts(&output.stdout, farm_root);
+    }
+
+    if let Some(line) = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
+            return Err(typed);
+        }
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!(
+            "store-view build helper failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    })
+}
+
+pub fn replace_live_paths_cross_mount_safe(
+    farm_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    match hardlink_farm::replace_live_top_level_paths(farm_root, stage_tag, closure_paths) {
+        Ok(counts) => Ok(counts),
+        Err(HardlinkFarmError::CrossMountLink { .. }) => {
+            replace_live_paths_via_namespace(farm_root, stage_tag, closure_paths)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+fn replace_live_paths_via_namespace(
+    farm_root: &Path,
+    stage_tag: &str,
+    closure_paths: &[PathBuf],
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    let request = ReplaceLivePathsRequest {
+        farm_root: farm_root.to_path_buf(),
+        stage_tag: stage_tag.to_owned(),
+        closure_paths: closure_paths.to_vec(),
+    };
+    let payload = serde_json::to_vec(&request).map_err(|e| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!("serialise store-view replace request: {e}"),
+    })?;
+    let argv = replace_store_view_argv(HELPER_BIN);
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: argv[0].clone(),
+            detail: format!("spawn unshare for store-view replace: {e}"),
+        })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "child stdin unavailable for store-view replace".to_owned(),
+    })?;
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&payload);
+    });
+    let output = child
+        .wait_with_output()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await store-view replace: {e}"),
+        })?;
+    let _ = writer.join();
+    if output.status.success() {
+        return parse_store_view_counts(&output.stdout, farm_root);
+    }
+    if let Some(line) = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        if let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line) {
+            return Err(typed);
+        }
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!(
+            "store-view replace helper failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    })
+}
+
+fn parse_store_view_counts(
+    stdout: &[u8],
+    farm_root: &Path,
+) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
+    if let Some(line) = String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+    {
+        return serde_json::from_str::<StoreViewLinkCounts>(line).map_err(|err| {
+            HardlinkFarmError::Io {
+                path: farm_root.display().to_string(),
+                detail: format!("parse store-view build counts: {err}"),
+            }
+        });
+    }
+    Err(HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: "store-view build helper exited successfully without link counts".to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn farm_build_argv_wires_private_namespace_and_helper_verb() {
-        let argv = farm_build_argv("/u/unshare", "/bin/sh", "/h/helper");
+        let argv = private_store_argv("/h/helper", "build-store-view-farm");
         assert_eq!(
             argv,
-            vec![
-                "/u/unshare",
-                "--mount",
-                "--propagation",
-                "private",
-                "/bin/sh",
-                "-ceu",
-                "umount -l /nix/store 2>/dev/null || true; exec \"$0\" build-store-view-farm",
-                "/h/helper",
-            ]
+            vec!["/h/helper", "private-store", "build-store-view-farm"]
         );
     }
 
     #[test]
-    fn ns_shell_script_lazy_unmounts_then_execs_helper() {
-        // Lazy unmount (so a busy /nix/store still detaches), tolerant
-        // of hosts where /nix/store is not a separate mount, then
-        // exec (no lingering shell) into the helper verb.
-        assert!(NS_SHELL_SCRIPT.contains("umount -l /nix/store"));
-        assert!(NS_SHELL_SCRIPT.contains("|| true"));
-        assert!(NS_SHELL_SCRIPT.contains("exec \"$0\" build-store-view-farm"));
+    fn private_store_argv_has_no_shell_or_unshare_binary() {
+        let argv = private_store_argv("/h/helper", "build-store-view");
+        assert_eq!(argv[0], "/h/helper");
+        assert!(!argv.iter().any(|arg| arg == "/bin/sh" || arg == "unshare"));
+        assert!(!argv.iter().any(|arg| arg.contains("umount")));
+    }
+
+    #[test]
+    fn store_view_build_argv_wires_private_namespace_and_split_verb() {
+        let argv = store_view_build_argv("/h/helper");
+        assert_eq!(argv, vec!["/h/helper", "private-store", "build-store-view"]);
+    }
+
+    #[test]
+    fn replace_store_view_argv_wires_private_namespace_and_replace_verb() {
+        let argv = replace_store_view_argv("/h/helper");
+        assert_eq!(
+            argv,
+            vec!["/h/helper", "private-store", "replace-store-view-live"]
+        );
+    }
+
+    #[test]
+    fn successful_helper_without_counts_fails_closed() {
+        let err = parse_store_view_counts(b"", Path::new("/tmp/store-view"))
+            .expect_err("missing helper counts must not become a success-shaped zero count");
+        assert!(
+            err.to_string().contains("without link counts"),
+            "unexpected error: {err}"
+        );
     }
 }

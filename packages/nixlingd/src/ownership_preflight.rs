@@ -8,16 +8,36 @@
 //!
 //! # Migration-window posture
 //!
-//! Some per-VM subdirectories are materialized lazily by the
-//! activation hook (`store-meta`) or by the first runner exec
-//! (`swtpm`). On a fresh host, or in unit tests that don't
-//! materialize the full per-VM tree, those subdirectories will be
-//! absent. We therefore treat `OwnershipMismatch::StatFailed` as a
-//! **logged warning** (state not yet provisioned), not a refusal.
-//! Real ownership drift (`Drift` / `ChildDrift`) is fail-closed.
+//! Some per-VM paths are materialized lazily: the broker StoreSync
+//! creates the `store-view` state/lock/meta tree and the live readiness
+//! marker; the swtpm runner creates `swtpm` on first exec; legacy
+//! `store`/`store-meta` exist only on migrated VMs. On a fresh host, or
+//! in unit tests that don't materialize the full per-VM tree, those
+//! paths will be absent.
+//!
+//! The enforcer distinguishes absence (`ENOENT`) from other stat
+//! errors:
+//!
+//! - **Optional entry (`required = false`) absent** → no mismatch is
+//!   emitted at all (e.g. the live marker before first sync, the
+//!   VM-level integrity-unknown record, legacy artifacts on native
+//!   VMs).
+//! - **Required entry absent (`ENOENT`)** → emitted as
+//!   `StatFailed { not_found: true }`; the preflight downgrades it to a
+//!   logged warning during the migration window (broker prep creates
+//!   these before preflight once StoreSync lands).
+//! - **Any non-`ENOENT` stat error** (`EACCES`, `EIO`, `ELOOP`, …) →
+//!   `StatFailed { not_found: false }`, fail-closed.
+//! - **Kind mismatch** (a `file` entry that is not a regular file, a
+//!   `dir` entry that is not a directory, or a symlink at the leaf) →
+//!   `KindMismatch`, fail-closed.
+//! - **Owner/group/mode drift** (`Drift` / `ChildDrift`) →
+//!   fail-closed.
 
 use nix::unistd::{Gid, Group, Uid, User};
-use nixling_host::ownership_matrix::{check_ownership_matrix, OwnershipEntry, OwnershipMismatch};
+use nixling_host::ownership_matrix::{
+    check_ownership_matrix, EntryKind, OwnershipEntry, OwnershipMismatch,
+};
 use std::path::Path;
 
 /// Specification of one matrix row in symbolic (username/group-name)
@@ -33,6 +53,8 @@ struct EntrySpec {
     owner_template: &'static str,
     group_template: &'static str,
     mode: u32,
+    kind: EntryKind,
+    required: bool,
     recursive: bool,
 }
 
@@ -42,6 +64,8 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "users",
         mode: 0o2770,
+        kind: EntryKind::Dir,
+        required: true,
         recursive: false,
     },
     EntrySpec {
@@ -49,6 +73,8 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "nixling",
         mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
         recursive: false,
     },
     EntrySpec {
@@ -56,6 +82,8 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixling-<vm>-swtpm",
         group_template: "nixling-<vm>-swtpm",
         mode: 0o0700,
+        kind: EntryKind::Dir,
+        required: true,
         recursive: false,
     },
     EntrySpec {
@@ -63,6 +91,8 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "nixling",
         mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
         recursive: false,
     },
     EntrySpec {
@@ -70,6 +100,8 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "nixling",
         mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
         recursive: false,
     },
     EntrySpec {
@@ -77,6 +109,10 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "users",
         mode: 0o0755,
+        kind: EntryKind::Dir,
+        // LEGACY RECOVERY ARTIFACT — optional (absent on native,
+        // post-cutover VMs).
+        required: false,
         // HARDLINK FARM CARVE-OUT — must stay false. The
         // `nixling_host::ownership_matrix::should_recurse` invariant
         // additionally rejects recursion into `store` regardless of
@@ -88,6 +124,106 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         owner_template: "nixlingd",
         group_template: "users",
         mode: 0o0755,
+        kind: EntryKind::Dir,
+        // LEGACY RECOVERY ARTIFACT — optional.
+        required: false,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/live",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        kind: EntryKind::Dir,
+        required: true,
+        // HARDLINK FARM CARVE-OUT — must stay false.
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/meta",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/meta/generations",
+        owner_template: "nixlingd",
+        group_template: "users",
+        mode: 0o0755,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/state",
+        owner_template: "nixlingd",
+        group_template: "nixling",
+        // HOST-ONLY — must NOT reuse the runner-readable `users 0755`
+        // store-view posture.
+        mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/state/generations",
+        owner_template: "nixlingd",
+        group_template: "nixling",
+        mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/gcroots",
+        owner_template: "nixlingd",
+        group_template: "nixling",
+        mode: 0o0750,
+        kind: EntryKind::Dir,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/sync.lock",
+        owner_template: "nixlingd",
+        group_template: "nixling",
+        // BROKER-PRIVATE lock.
+        mode: 0o0600,
+        kind: EntryKind::File,
+        required: true,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/state/integrity-unknown.json",
+        owner_template: "nixlingd",
+        group_template: "nixling",
+        mode: 0o0640,
+        kind: EntryKind::File,
+        // Lazily created by broker integrity code.
+        required: false,
+        recursive: false,
+    },
+    EntrySpec {
+        path: "store-view/live/.nixling-marker-<vm>",
+        owner_template: "nixlingd",
+        group_template: "users",
+        // Guest-readable zero-length readiness marker.
+        mode: 0o0644,
+        kind: EntryKind::File,
+        // Absent before the first successful StoreSync.
+        required: false,
         recursive: false,
     },
 ];
@@ -108,7 +244,9 @@ fn resolve_gid(name: &str) -> Option<Gid> {
 /// usernames + group names against the live host's NSS database.
 /// Entries whose principal is not provisioned (e.g. fresh host, or a
 /// `swtpm` entry for a VM with `tpm.enable = false`) are SKIPPED with
-/// a `tracing::warn!` event rather than treated as drift.
+/// a `tracing::warn!` event rather than treated as drift. The `<vm>`
+/// token is substituted in `path` as well as in the owner/group
+/// templates (e.g. the `store-view/live/.nixling-marker-<vm>` leaf).
 fn resolve_matrix(vm: &str) -> Vec<OwnershipEntry> {
     let mut out = Vec::with_capacity(CANONICAL_MATRIX.len());
     for spec in CANONICAL_MATRIX {
@@ -133,10 +271,12 @@ fn resolve_matrix(vm: &str) -> Vec<OwnershipEntry> {
             continue;
         };
         out.push(OwnershipEntry {
-            path: spec.path.to_owned(),
+            path: substitute_vm(spec.path, vm),
             expected_uid: uid.as_raw(),
             expected_gid: gid.as_raw(),
             expected_mode: spec.mode,
+            kind: spec.kind,
+            required: spec.required,
             recursive: spec.recursive,
         });
     }
@@ -178,13 +318,19 @@ pub fn preflight(vm: &str, state_dir: &Path) -> OwnershipPreflightOutcome {
     let drift: Vec<OwnershipMismatch> = mismatches
         .into_iter()
         .filter(|m| {
-            // StatFailed is treated as "state not yet provisioned"
-            // during the daemon-only migration window. The fail-closed
-            // axes are owner / group / mode drift on existing paths,
-            // which is what
-            // `OwnershipMismatch::{Drift,ChildDrift}` express.
+            // During the daemon-only migration window, an absent path
+            // (`ENOENT`) is treated as "state not yet provisioned" and
+            // skipped: the broker StoreSync / first runner exec creates
+            // the required tree before it is used. Every other failure
+            // axis — non-`ENOENT` stat errors, kind mismatches, and
+            // owner/group/mode drift on existing paths — is
+            // fail-closed.
             match m {
-                OwnershipMismatch::StatFailed { path, detail } => {
+                OwnershipMismatch::StatFailed {
+                    path,
+                    detail,
+                    not_found: true,
+                } => {
                     tracing::warn!(
                         vm = %vm,
                         path = %path.display(),
@@ -247,8 +393,29 @@ pub fn render_drift_message(vm: &str, drift: &[OwnershipMismatch]) -> String {
                     actual.mode
                 );
             }
-            OwnershipMismatch::StatFailed { path, detail } => {
-                let _ = write!(s, "{} (stat failed: {})", path.display(), detail);
+            OwnershipMismatch::KindMismatch {
+                path,
+                expected_kind,
+                actual_kind,
+            } => {
+                let _ = write!(
+                    s,
+                    "{} (kind mismatch: expected {expected_kind}, found {actual_kind})",
+                    path.display(),
+                );
+            }
+            OwnershipMismatch::StatFailed {
+                path,
+                detail,
+                not_found,
+            } => {
+                let _ = write!(
+                    s,
+                    "{} (stat failed{}: {})",
+                    path.display(),
+                    if *not_found { ", not found" } else { "" },
+                    detail
+                );
             }
         }
     }
@@ -296,6 +463,34 @@ mod tests {
         assert!(msg.contains("owner 100→0"), "message: {msg}");
         assert!(msg.contains("group 200→0"), "message: {msg}");
         assert!(msg.contains("mode 750→755"), "message: {msg}");
+    }
+
+    #[test]
+    fn render_drift_message_includes_kind_mismatch() {
+        let drift = vec![OwnershipMismatch::KindMismatch {
+            path: "/var/lib/nixling/vms/vm1/store-view/sync.lock".into(),
+            expected_kind: "file".to_owned(),
+            actual_kind: "dir".to_owned(),
+        }];
+        let msg = render_drift_message("vm1", &drift);
+        assert!(
+            msg.contains("kind mismatch: expected file, found dir"),
+            "message: {msg}"
+        );
+    }
+
+    #[test]
+    fn render_drift_message_marks_non_enoent_stat_failure() {
+        // A non-ENOENT stat failure (not_found = false) is fail-closed
+        // and rendered with its detail.
+        let drift = vec![OwnershipMismatch::StatFailed {
+            path: "/var/lib/nixling/vms/vm1/store-view/state".into(),
+            detail: "Permission denied (os error 13)".to_owned(),
+            not_found: false,
+        }];
+        let msg = render_drift_message("vm1", &drift);
+        assert!(msg.contains("stat failed:"), "message: {msg}");
+        assert!(!msg.contains("not found"), "message: {msg}");
     }
 
     /// Smoke check: with a fully-materialized state dir owned by the

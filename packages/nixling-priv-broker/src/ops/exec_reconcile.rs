@@ -1388,6 +1388,7 @@ mod tests {
                     "/var/lib/nixling/vms/vm-a/store-view/generations/1/vm-a-system",
                 ),
                 closure_paths: Vec::new(),
+                db_dump_path: PathBuf::from("/nix/store/vm-a-registration"),
             })
             .unwrap_err();
         assert!(matches!(err, ReconcileExecError::InvalidInput { .. }));
@@ -1487,8 +1488,9 @@ mod tests {
             vm: "vm-a".to_owned(),
             generation: 7,
             hardlink_farm_path: root.path().join("farm"),
-            target_view_path: root.path().join("farm/generations/7/vm-a-system"),
+            target_view_path: root.path().join("farm/live/vm-a-system"),
             closure_paths: vec![source_view.clone()],
+            db_dump_path: root.path().join("db.dump"),
         };
 
         let f = FakeReconcileExecutor::new();

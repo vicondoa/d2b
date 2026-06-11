@@ -12,8 +12,8 @@ For the audited headless `corp-vm`:
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `corp-vm-virtiofs-ro-store.sock`         | `/nix/store`                                          | RO   |
-| `nl-meta`     | `corp-vm-virtiofs-nl-meta.sock`          | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
+| `ro-store`    | `corp-vm-virtiofs-ro-store.sock`         | `/var/lib/nixling/vms/corp-vm/store-view/live`        | RO   |
+| `nl-meta`     | `corp-vm-virtiofs-nl-meta.sock`          | `/var/lib/nixling/vms/corp-vm/store-view/meta`        | RO   |
 | `nl-hkeys`    | `corp-vm-virtiofs-nl-hkeys.sock`         | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
 | `nl-ssh-host` | `corp-vm-virtiofs-nl-ssh-host.sock`      | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`         | RW   |
 
@@ -62,8 +62,10 @@ Flag semantics:
 - `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
   when the underlying filesystem supports it. Reduces the per-share
   fd budget; matches the audit shape.
-- `--readonly` — only the `ro-store` share has this in the alpha
-  shape. The other three shares are RW.
+- `--readonly` — `ro-store` and `nl-meta` are read-only. `nl-meta`
+  is rooted at `store-view/meta` and carries only guest-safe generation
+  metadata (`current`, `store-paths`, `db.dump`, allow-listed `meta.json`);
+  it never exposes `live/`, `state/`, `gcroots/`, or `sync.lock`.
 
 ## Daemon-owned uid/gid
 

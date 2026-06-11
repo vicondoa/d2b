@@ -138,7 +138,7 @@ through the daemon.
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
@@ -197,7 +197,7 @@ through the daemon.
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
@@ -263,7 +263,7 @@ through the daemon.
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented`. | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 There is no bash fallback. Daemon-unreachable returns `daemon-down`
@@ -815,7 +815,7 @@ nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-s
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling switch` exit table is preserved in this file as history.
@@ -865,7 +865,7 @@ nixling switch --apply executed via the native daemon → broker path (vm=corp-v
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling boot` exit table is preserved in this file as history.
@@ -915,7 +915,7 @@ nixling boot --apply executed via the native daemon → broker path (vm=corp-vm,
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling test` exit table is preserved in this file as history.
@@ -965,7 +965,7 @@ nixling test --apply executed via the native daemon → broker path (vm=corp-vm,
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling rollback` exit table is preserved in this file as history.
@@ -1072,6 +1072,75 @@ nixling gc --apply executed via the native daemon → broker path (retainedStore
 **Bash**
 
 - In v1.0 daemon-only, `exec_legacy_passthrough` always returns the typed `not-yet-implemented` envelope (exit 78 per ADR 0015); the historical bash-fallback shim was retired in v1.0.
+### `store verify`
+
+**Synopsis:** `nixling store verify <vm> [--repair] [--human | --json]`
+
+**Status**
+
+`store verify` is a daemon-native, broker-backed live-pool integrity
+surface for the ADR 0027 split store-view. The CLI is thin: it never reads
+`store-view/live` or `store-view/state` directly.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `--repair` | boolean | `false` | Request repair through a forced StoreSync republish, followed by a second verify before reporting success. |
+| `--json` | boolean | `false` | Emit the signed store-verify JSON envelope. |
+| `--human` | boolean | `false` | Force the human summary on stdout. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `vm` | Required VM name as declared in `nixling.vms.<name>`. |
+
+**Exit codes**
+
+| Code | Meaning | Typed error / reference |
+| --- | --- | --- |
+| `0` | Live pool is clean, or repair completed successfully. | — |
+| `1` | Daemon is unreachable. | [`daemon-down`](./error-codes.md#daemon-down) |
+| `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
+| `4` | Drift found or integrity remains unknown. | [`drift`](./error-codes.md#drift) |
+| `70` | The named VM is not declared or not visible to the caller. | [`not-found`](./error-codes.md#not-found) |
+| `78` | Broker/system failure while verifying. | [`broker-error`](./error-codes.md#broker-error) |
+
+**`--json` example** — schema: [`store-verify.schema.json`](./cli-output/store-verify.schema.json); prose companion: [`store-verify.md`](./cli-output/store-verify.md).
+
+```json
+{
+  "vm": "corp-vm",
+  "status": "ok",
+  "checked": 42,
+  "drifted": 0,
+  "repaired": 0,
+  "unknown_reason": null,
+  "audit_ref": null,
+  "remediation": null
+}
+```
+
+**Native**
+
+- Routes through `nixlingd` → broker `StoreVerify`.
+- W6 verifies the current marker/manifest and top-level `live/` basenames
+  and writes host-only integrity records.
+- `--repair` never claims success from the StoreSync attempt alone; it
+  returns `repaired` only after the post-repair verification is clean.
+
+**Human example**
+
+```text
+$ nixling store verify corp-vm
+store verify corp-vm: status=ok checked=42 drifted=0 repaired=0
+```
+
+**Bash**
+
+- There is no bash execution path for this verb.
+
 ### `trust`
 
 **Synopsis:** `nixling trust <vm> [--dry-run | --apply] [--human | --json]`
@@ -1101,7 +1170,7 @@ nixling gc --apply executed via the native daemon → broker path (retainedStore
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 The historical bash fallback was retired in v1.0 (ADR 0015); v1.0 daemon-unreachable returns exit-78. The legacy `nixling trust` exit table is preserved in this file as history.
@@ -1151,7 +1220,7 @@ nixling trust --apply executed via the native daemon → broker path (vm=corp-vm
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
@@ -1288,7 +1357,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519
 | --- | --- | --- |
 | `0` | Dry-run plan rendered or `--apply` completed successfully. | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
-| `70` | The named VM is not declared in the active manifest. | [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
+| `70` | The named VM is not declared in the active manifest. | [`not-found`](./error-codes.md#not-found) |
 | `78` | Typed `broker-error` or `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`broker-error`](./error-codes.md#broker-error), [`not-yet-implemented`](./error-codes.md#not-yet-implemented) |
 
 In v1.0 daemon-only (per ADR 0015) the historical bash fallback was retired in v1.0; the verb surfaces typed envelopes (`broker-error` exit 78, `daemon-down` exit 1) instead.
@@ -1970,6 +2039,7 @@ never perturb a `--json` stdout envelope.
 | `rollback` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunActivation` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `generations` | `rust-native` | Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash. |
 | `gc` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunGc` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `store verify` | `rust-native` | Routes through `nixlingd` → broker `StoreVerify`; the CLI never reads the store-view directly. |
 | `trust` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunHostKeyTrust` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `rotate-known-host` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunRotateKnownHost` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `keys list` | `rust-native` | Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash. |

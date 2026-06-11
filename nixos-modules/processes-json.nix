@@ -405,20 +405,20 @@ EOF
       # are dropped: /nix/store has no ACLs, and the per-VM shares
       # are nixling-managed (no foreign xattrs to preserve).
       isRoStore = share.source == "/nix/store";
+      isStoreMeta = share.tag == "nl-meta";
       # SECURITY (per-VM store isolation): the ro-store share's guest
       # `/nix/store` must expose ONLY this VM's closure, never the host's
       # full `/nix/store`. `share.source` stays `/nix/store` as the
       # eval-time sentinel that the guest-mount + overlay + readiness
       # logic keys off, but virtiofsd is pointed at the per-VM hardlink
-      # farm `<stateDir>/<vm>/store` — the canonical closure-only per-VM
-      # store (see AGENTS.md "Per-VM /nix/store hardlink farm" +
-      # nixos-modules/store.nix). virtiofsd still execs from the real host
+      # live pool `<stateDir>/<vm>/store-view/live` — the canonical
+      # closure-only per-VM store. virtiofsd still execs from the real host
       # `/nix/store` (kept mounted in its runner namespace) and only
       # *serves* the farm, so the guest sees a closure-only store. This
       # replaces the previous `--shared-dir=/nix/store`, which leaked the
       # host's entire store into every guest. Mirrors the legacy
       # `BindReadOnlyPaths /nix/store -> per-VM farm` behaviour.
-      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store";
+      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store-view/live";
       sharedDir = if isRoStore then roStoreSharedDir else toString share.source;
     in {
       binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
@@ -436,7 +436,7 @@ EOF
         "--cache=${share.cache or "auto"}"
       ]
       ++ lib.optionals (microvm.hypervisor == "crosvm") [ "--tag=${share.tag}" ]
-      ++ lib.optionals (isRoStore || (share.readOnly or false)) [ "--readonly" ]
+      ++ lib.optionals (isRoStore || isStoreMeta || (share.readOnly or false)) [ "--readonly" ]
       ++ microvm.virtiofsd.extraArgs;
     };
 
@@ -828,7 +828,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           role = "store-virtiofs-preflight";
           unit = "nixling-${name}-store-sync.service";
           readiness = [
-            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store/.nixling-marker-${name}" ])
+            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store-view/live/.nixling-marker-${name}" ])
           ];
         })
       ]

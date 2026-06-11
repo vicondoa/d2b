@@ -259,8 +259,8 @@ let
     ];
   };
   cliPkg = lib.findFirst
-    (p: ((p.pname or "") == "nixling") || lib.hasPrefix "nixling" (p.name or ""))
-    (throw "nixling package not found in systemPackages")
+    (p: (p.pname or "") == "nixling")
+    (throw "nixling CLI package not found in systemPackages")
     nixos.config.environment.systemPackages;
 in
   cliPkg

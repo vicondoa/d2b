@@ -20,7 +20,10 @@ use nixling_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use nixling_ipc::{
-    broker_wire::ExportBrokerAuditResponse,
+    broker_wire::{
+        ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
+        StoreVerifyStatus as IpcStoreVerifyStatus,
+    },
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
@@ -121,6 +124,21 @@ pub struct StatusVmOutputV2 {
     pub api_ready: Option<ApiReadyStatusV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity: Option<RunnerParityOutputV2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_pool_integrity: Option<LivePoolIntegrityOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LivePoolIntegrityOutputV1 {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_ref: Option<String>,
+    pub repair_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -407,6 +425,8 @@ enum NativeCommand {
     Rollback(RollbackArgs),
     /// Garbage-collect the per-VM /nix/store hardlink farm.
     Gc(GcArgs),
+    /// Store-view maintenance and verification.
+    Store(StoreArgs),
     /// Managed-key lifecycle (list / show / rotate).
     Keys(KeysArgs),
     /// Trust a VM's host key on first use (TOFU).
@@ -878,6 +898,29 @@ struct GcArgs {
     human: bool,
 }
 
+#[derive(Debug, Args)]
+struct StoreArgs {
+    #[command(subcommand)]
+    command: StoreCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum StoreCommand {
+    /// Verify a VM's hardlink-backed live store-view.
+    Verify(StoreVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct StoreVerifyArgs {
+    vm: String,
+    #[arg(long)]
+    repair: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
 // ---- keys + trust verbs ----
 
 #[derive(Debug, Args)]
@@ -1311,6 +1354,28 @@ struct UsbipProbeResponseFrame {
     entries: Vec<IpcUsbipProbeEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreVerifyResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: IpcStoreVerifyResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreVerifyOutputV2 {
+    pub vm: String,
+    pub status: IpcStoreVerifyStatus,
+    pub checked: u32,
+    pub drifted: u32,
+    pub repaired: u32,
+    pub unknown_reason: Option<String>,
+    pub audit_ref: Option<String>,
+    pub remediation: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 enum AuditSocketOutcome {
     Unreachable,
@@ -1328,6 +1393,12 @@ enum KeysSocketOutcome {
 enum UsbProbeSocketOutcome {
     Unavailable,
     Entries(Vec<IpcUsbipProbeEntry>),
+}
+
+#[derive(Debug, Clone)]
+enum StoreVerifySocketOutcome {
+    Unavailable,
+    Response(IpcStoreVerifyResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -1585,6 +1656,9 @@ fn dispatch(
         NativeCommand::Test(args) => cmd_test(context, args, original_args),
         NativeCommand::Rollback(args) => cmd_rollback(context, args, original_args),
         NativeCommand::Gc(args) => cmd_gc(context, args, original_args),
+        NativeCommand::Store(args) => match &args.command {
+            StoreCommand::Verify(args) => cmd_store_verify(context, args),
+        },
         NativeCommand::Keys(args) => match &args.command {
             KeysCommand::List(args) => cmd_keys_list(context, args, original_args),
             KeysCommand::Show(args) => cmd_keys_show(context, args, original_args),
@@ -3061,12 +3135,12 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
     let exit_code = emit_host_error(
         &host_error_envelope(
             &format!("vm '{vm}' is not declared in the loaded manifest"),
-            "not-yet-implemented",
+            "not-found",
             70,
             "Whether the VM name appears in `nixling.vms.<name>` in the active manifest.",
             "VM name unknown",
             "Run `nixling list` to see declared VMs, then re-run with a name from that list.",
-            "docs/reference/error-codes.md#not-yet-implemented",
+            "docs/reference/error-codes.md#not-found",
         ),
         json,
     )?;
@@ -3729,6 +3803,90 @@ fn cmd_gc(
         print_stdout("nixling gc --dry-run: would prune unreachable store paths in /var/lib/nixling/vms/<vm>/store/\n");
     }
     Ok(0)
+}
+
+fn cmd_store_verify(context: &Context, args: &StoreVerifyArgs) -> Result<i32, CliFailure> {
+    let json_mode = if args.human { false } else { args.json };
+    let manifest = context.load_manifest()?;
+    if !manifest.vms().iter().any(|vm| vm.name == args.vm) {
+        let response = IpcStoreVerifyResponse {
+            vm: args.vm.clone(),
+            status: IpcStoreVerifyStatus::NotFound,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some("check the VM name, declaration, and authorization".to_owned()),
+        };
+        if json_mode {
+            let envelope = store_verify_cli_envelope(&response);
+            print_json(&envelope)?;
+        } else {
+            print_stdout(&render_store_verify_human(&response));
+        }
+        return Ok(70);
+    }
+    let response = match try_store_verify_via_socket(context, &args.vm, args.repair)? {
+        StoreVerifySocketOutcome::Response(response) => response,
+        StoreVerifySocketOutcome::Unavailable => {
+            return emit_host_error(&daemon_down_envelope("store verify"), json_mode);
+        }
+    };
+    if json_mode {
+        let envelope = store_verify_cli_envelope(&response);
+        print_json(&envelope)?;
+    } else {
+        print_stdout(&render_store_verify_human(&response));
+    }
+    Ok(store_verify_exit_code(response.status))
+}
+
+fn store_verify_exit_code(status: IpcStoreVerifyStatus) -> i32 {
+    match status {
+        IpcStoreVerifyStatus::Ok | IpcStoreVerifyStatus::Repaired => 0,
+        IpcStoreVerifyStatus::Drift | IpcStoreVerifyStatus::Unknown => 4,
+        IpcStoreVerifyStatus::NotFound => 70,
+        IpcStoreVerifyStatus::Failed => 78,
+    }
+}
+
+fn store_verify_cli_envelope(response: &IpcStoreVerifyResponse) -> StoreVerifyOutputV2 {
+    StoreVerifyOutputV2 {
+        vm: response.vm.clone(),
+        status: response.status,
+        checked: response.checked,
+        drifted: response.drifted,
+        repaired: response.repaired,
+        unknown_reason: response
+            .unknown_reason
+            .map(|reason| serde_json::to_value(reason).unwrap_or(Value::Null))
+            .and_then(|value| value.as_str().map(str::to_owned)),
+        audit_ref: response.audit_ref.clone(),
+        remediation: response.remediation.clone(),
+    }
+}
+
+fn render_store_verify_human(response: &IpcStoreVerifyResponse) -> String {
+    let status = serde_json::to_value(response.status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "failed".to_owned());
+    let mut out = format!(
+        "store verify {}: status={status} checked={} drifted={} repaired={}\n",
+        response.vm, response.checked, response.drifted, response.repaired
+    );
+    if let Some(reason) = response.unknown_reason {
+        let reason = serde_json::to_value(reason)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned());
+        let _ = writeln!(out, "unknown_reason={reason}");
+    }
+    if let Some(remediation) = &response.remediation {
+        let _ = writeln!(out, "remediation={remediation}");
+    }
+    out
 }
 
 // ---- native usb CLI ----
@@ -4659,6 +4817,178 @@ fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyS
     }
 }
 
+fn live_pool_integrity_unknown(reason: &str, remediation: String) -> LivePoolIntegrityOutputV1 {
+    LivePoolIntegrityOutputV1 {
+        status: "unknown".to_owned(),
+        unknown_reason: Some(reason.to_owned()),
+        audit_ref: None,
+        repair_attempted: false,
+        remediation: Some(remediation),
+    }
+}
+
+fn live_pool_integrity_suspect(
+    repair_attempted: bool,
+    audit_ref: Option<String>,
+    remediation: String,
+) -> LivePoolIntegrityOutputV1 {
+    LivePoolIntegrityOutputV1 {
+        status: "suspect".to_owned(),
+        unknown_reason: None,
+        audit_ref,
+        repair_attempted,
+        remediation: Some(remediation),
+    }
+}
+
+fn marker_status_for_integrity(store_root: &Path, vm: &str) -> Result<(), &'static str> {
+    let marker = store_root
+        .join("live")
+        .join(format!(".nixling-marker-{vm}"));
+    match std::fs::symlink_metadata(&marker) {
+        Ok(meta) if meta.is_file() && meta.len() == 0 => Ok(()),
+        Ok(_) => Err("suspect"),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err("marker_or_manifest_missing"),
+        Err(_) => Err("marker_or_manifest_unreadable"),
+    }
+}
+
+fn read_live_pool_integrity(
+    context: &Context,
+    vm: &ManifestVm,
+) -> Option<LivePoolIntegrityOutputV1> {
+    let store_root = vm_state_dir(context, vm).join("store-view");
+    let state_dir = store_root.join("state");
+    let generation_id = match std::fs::read_link(state_dir.join("current")) {
+        Ok(target) => target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "generation_identity_unavailable",
+                "restore state/current or activate a new generation, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let Some(generation_id) = generation_id else {
+        let vm_unknown = state_dir.join("integrity-unknown.json");
+        if let Ok(raw) = std::fs::read_to_string(&vm_unknown) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                if value.get("state").and_then(Value::as_str) == Some("unknown") {
+                    let reason = value
+                        .get("unknown_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("generation_identity_unavailable");
+                    return Some(live_pool_integrity_unknown(
+                        reason,
+                        "restore state/current or activate a new generation, then rerun verify"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        return Some(live_pool_integrity_unknown(
+            "generation_identity_unavailable",
+            "restore state/current or activate a new generation, then rerun verify".to_owned(),
+        ));
+    };
+
+    let integrity_path = state_dir
+        .join("generations")
+        .join(&generation_id)
+        .join("integrity.json");
+    let raw = match std::fs::read_to_string(&integrity_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_missing",
+                format!(
+                    "run `nixling store verify {}` to establish live-pool integrity",
+                    vm.name
+                ),
+            ));
+        }
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_unreadable",
+                "fix permissions or storage errors, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let value: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_unreadable",
+                "fix permissions or storage errors, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let audit_ref = value
+        .get("audit_ref")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let repair_attempted = value
+        .get("repair_attempted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match value.get("state").and_then(Value::as_str) {
+        Some("ok") => match marker_status_for_integrity(&store_root, &vm.name) {
+            Ok(()) => Some(LivePoolIntegrityOutputV1 {
+                status: "ok".to_owned(),
+                unknown_reason: None,
+                audit_ref,
+                repair_attempted,
+                remediation: None,
+            }),
+            Err("suspect") => Some(live_pool_integrity_suspect(
+                repair_attempted,
+                audit_ref,
+                format!("run `nixling store verify {} --repair`", vm.name),
+            )),
+            Err(reason) => Some(live_pool_integrity_unknown(
+                reason,
+                format!(
+                    "run `nixling store verify {}` to re-establish live-pool integrity",
+                    vm.name
+                ),
+            )),
+        },
+        Some("suspect") => {
+            let remediation = if repair_attempted {
+                if audit_ref.is_some() {
+                    "repair already attempted; inspect audit_ref and broker logs".to_owned()
+                } else {
+                    "repair already attempted; inspect broker logs".to_owned()
+                }
+            } else {
+                format!("run `nixling store verify {} --repair`", vm.name)
+            };
+            Some(live_pool_integrity_suspect(
+                repair_attempted,
+                audit_ref,
+                remediation,
+            ))
+        }
+        Some("unknown") => {
+            let reason = value
+                .get("unknown_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("marker_or_manifest_unreadable");
+            Some(live_pool_integrity_unknown(
+                reason,
+                format!("run `nixling store verify {}`", vm.name),
+            ))
+        }
+        _ => Some(live_pool_integrity_unknown(
+            "marker_or_manifest_unreadable",
+            "fix permissions or storage errors, then rerun verify".to_owned(),
+        )),
+    }
+}
+
 fn build_vm_status_output(
     context: &Context,
     vm: &ManifestVm,
@@ -4710,6 +5040,7 @@ fn build_vm_status_output(
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
         runner_parity,
+        live_pool_integrity: read_live_pool_integrity(context, vm),
     }
 }
 
@@ -4990,6 +5321,15 @@ fn render_status_vm_human(
             },
             runner_parity.runner_parity_path,
         );
+    }
+    if let Some(integrity) = &output.live_pool_integrity {
+        let _ = writeln!(text, "live-pool integrity: {}", integrity.status);
+        if let Some(reason) = &integrity.unknown_reason {
+            let _ = writeln!(text, "live-pool unknown reason: {reason}");
+        }
+        if let Some(remediation) = &integrity.remediation {
+            let _ = writeln!(text, "live-pool remediation: {remediation}");
+        }
     }
     text.push_str("\n=== Bridge health ===\n");
     text.push_str("BRIDGE               STATE      ADMIN   EXPECTED     RESULT\n");
@@ -5991,6 +6331,29 @@ fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, 
     }
 }
 
+fn try_store_verify_via_socket(
+    context: &Context,
+    vm: &str,
+    repair: bool,
+) -> Result<StoreVerifySocketOutcome, CliFailure> {
+    let request = encode_type_tagged_message(
+        "storeVerify",
+        &nixling_ipc::public_wire::StoreVerifyRequest {
+            vm: vm.to_owned(),
+            repair,
+        },
+        "storeVerify request",
+    )?;
+    match try_public_socket_request(context, &request, "storeVerify")? {
+        PublicSocketOutcome::Reply(response) => {
+            parse_store_verify_reply(&response).map(StoreVerifySocketOutcome::Response)
+        }
+        PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
+            Ok(StoreVerifySocketOutcome::Unavailable)
+        }
+    }
+}
+
 fn try_public_socket_request(
     context: &Context,
     request: &[u8],
@@ -6100,6 +6463,22 @@ fn parse_usb_probe_reply(bytes: &[u8]) -> Result<Vec<IpcUsbipProbeEntry>, CliFai
         _ => Err(CliFailure::new(
             1,
             "daemon returned an unexpected reply to usbipProbe".to_owned(),
+        )),
+    }
+}
+
+fn parse_store_verify_reply(bytes: &[u8]) -> Result<IpcStoreVerifyResponse, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse storeVerify reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("storeVerifyResponse") => serde_json::from_value::<StoreVerifyResponseFrame>(value)
+            .map(|frame| frame.payload)
+            .map_err(|err| {
+                CliFailure::new(1, format!("failed to decode storeVerify reply: {err}"))
+            }),
+        _ => Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to storeVerify".to_owned(),
         )),
     }
 }
@@ -6921,6 +7300,69 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn vm_status_reports_live_pool_integrity_ok() {
+        let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!(
+                "vm-status-live-pool-{}-{counter}",
+                std::process::id()
+            ));
+        let manifest_path = root.join("vms.json");
+        std::fs::create_dir_all(&root).expect("create status root");
+        write_test_manifest(&manifest_path, "vm-a");
+        let vm_root = root.join("vm-a");
+        let store_view = vm_root.join("store-view");
+        let generation_id = "g-test";
+        std::fs::create_dir_all(store_view.join("state/generations").join(generation_id))
+            .expect("create state generation");
+        std::fs::create_dir_all(store_view.join("live")).expect("create live");
+        std::os::unix::fs::symlink(
+            format!("generations/{generation_id}"),
+            store_view.join("state/current"),
+        )
+        .expect("state current symlink");
+        std::fs::write(store_view.join("live/.nixling-marker-vm-a"), b"")
+            .expect("write zero marker");
+        std::fs::write(
+            store_view
+                .join("state/generations")
+                .join(generation_id)
+                .join("integrity.json"),
+            br#"{"generation_id":"g-test","state":"ok","repair_attempted":false}"#,
+        )
+        .expect("write integrity");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: Some(root.clone()),
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: root.join("daemon-state"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let manifest_bytes = std::fs::read(&manifest_path).expect("read manifest");
+        let manifest: std::collections::BTreeMap<String, super::ManifestVm> =
+            serde_json::from_slice(&manifest_bytes).expect("parse manifest");
+        let vm = manifest.get("vm-a").expect("vm-a in manifest");
+        let output = super::build_vm_status_output(&context, vm, None);
+
+        let integrity = output
+            .live_pool_integrity
+            .expect("live pool integrity is reported");
+        assert_eq!(integrity.status, "ok");
+        assert_eq!(integrity.remediation, None);
+        let value = serde_json::to_value(integrity).expect("serialize integrity");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("ok"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn status_human_redacts_ssh_target_details() {
         let output = super::StatusVmOutputV2 {
             name: "vm-a".to_owned(),
@@ -6942,6 +7384,7 @@ mod host_install_dispatch_tests {
             readiness: Vec::new(),
             api_ready: None,
             runner_parity: None,
+            live_pool_integrity: None,
         };
         let manifest_vm = super::ManifestVm {
             name: "vm-a".to_owned(),

@@ -174,9 +174,181 @@ extract_blocks() {
   ' "$file"
 }
 
+# Extract local.file_match stanzas as (source_name, path_targets_body)
+# pairs. File sources (loki.source.file) carry their Loki stream
+# labels in the `local.file_match` `path_targets = [{ … }]` map rather
+# than in a `labels = { … }` block, alongside the Alloy meta key
+# `__path__` (the glob). Emit the inner map body so the SAME contract
+# checks apply — in particular so target_vm/target_env can never be
+# smuggled in as stream labels.
+extract_file_match_blocks() {
+  local file=$1
+  awk -v RS='\0' '
+    function extract_path_targets_body(body,   i, n, two, c, inner, subinner, start) {
+      if (!match(body, /path_targets[[:space:]]*=[[:space:]]*\[[[:space:]]*\{/)) return ""
+      start = RSTART + RLENGTH
+      n = length(body)
+      i = start
+      inner = 1
+      while (i <= n && inner > 0) {
+        two = substr(body, i, 2)
+        if (two == "${") {
+          i += 2
+          subinner = 1
+          while (i <= n && subinner > 0) {
+            c = substr(body, i, 1)
+            if (c == "{") subinner++
+            else if (c == "}") subinner--
+            i++
+          }
+        } else {
+          c = substr(body, i, 1)
+          if (c == "{") inner++
+          else if (c == "}") inner--
+          i++
+        }
+      }
+      return substr(body, start, i - start - 1)
+    }
+    {
+      src = $0
+      n = length(src)
+      i = 1
+      while (i <= n) {
+        rest = substr(src, i)
+        if (match(rest, /^local\.file_match[[:space:]]+"[^"]+"[[:space:]]*\{/)) {
+          outer_rstart = RSTART
+          outer_rlength = RLENGTH
+          hdr = substr(rest, outer_rstart, outer_rlength)
+          if (match(hdr, /"[^"]+"/)) {
+            source_name = substr(hdr, RSTART+1, RLENGTH-2)
+          }
+          i += outer_rstart - 1 + outer_rlength
+          depth = 1
+          start = i
+          while (i <= n && depth > 0) {
+            two = substr(src, i, 2)
+            if (two == "${") {
+              i += 2
+              inner = 1
+              while (i <= n && inner > 0) {
+                c = substr(src, i, 1)
+                if (c == "{") inner++
+                else if (c == "}") inner--
+                i++
+              }
+            } else {
+              c = substr(src, i, 1)
+              if (c == "{") depth++
+              else if (c == "}") depth--
+              i++
+            }
+          }
+          body = substr(src, start, i - start - 1)
+          pt = extract_path_targets_body(body)
+          printf("%s\t%s%c", source_name, pt, 0)
+        } else {
+          i++
+        }
+      }
+    }
+  ' "$file"
+}
+
 declare -a ALL_LITERAL_ROLE=()
 declare -a ALL_LITERAL_SEVERITY=()
 declare -a ALL_LITERAL_SOURCE=()
+
+# Validate one (source_name, labels_body) record against the contract.
+# Shared by the `loki.source.*` (labels = { … }) extractor and the
+# `local.file_match` (path_targets = [{ … }]) extractor so both label
+# carriers are held to the same allowlist + cardinality rules.
+process_label_record() {
+  local file=$1 source_name=$2 labels_body=$3
+  local line key raw literal qvar
+
+  # Parse `key = <value>,` lines from labels_body.
+  while IFS= read -r line; do
+    line=${line%%#*}                     # strip inline comments
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    # Accept both bare (`vm = …`, journal sources) and quoted
+    # (`"vm" = …`, file_match path_targets) keys.
+    if [[ ! "$line" =~ ^[[:space:]]*\"?([a-zA-Z_][a-zA-Z0-9_]*)\"?[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      continue
+    fi
+    key=${BASH_REMATCH[1]}
+    raw=${BASH_REMATCH[2]}
+    raw=${raw%,}
+    raw=${raw%"${raw##*[![:space:]]}"}  # rtrim
+
+    # Alloy file-discovery meta keys carry the path glob itself, not a
+    # Loki stream label. Path-like by design; excluded from the
+    # contract (the glob lives in JSON-adjacent config, not labels).
+    if [[ "$key" == "__path__" || "$key" == "__path_exclude__" ]]; then
+      continue
+    fi
+
+    # (1) key allowlist
+    if ! in_list "$key" "${ALLOWED_KEYS[@]}"; then
+      fail "[$file::$source_name] label key '$key' not in allowlist {${ALLOWED_KEYS[*]}}"
+      continue
+    fi
+
+    # Classify value: literal "..." or ${quote VAR} or "${VAR}"
+    literal=""
+    qvar=""
+    if [[ "$raw" =~ ^\"([^\"\$]*)\"$ ]]; then
+      literal=${BASH_REMATCH[1]}
+    elif [[ "$raw" =~ ^\"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}\"$ ]]; then
+      # `"${var}"` — a Nix string with a single interpolation. The
+      # rendered Alloy output is a literal, but the value is set by
+      # the call site. We allow this shape; the literal-budget pass
+      # below tallies call-site values separately.
+      : "${BASH_REMATCH[1]}"
+    elif [[ "$raw" =~ ^\$\{quote[[:space:]]+([^}]+)\}$ ]]; then
+      qvar=${BASH_REMATCH[1]}
+      qvar=${qvar%"${qvar##*[![:space:]]}"}
+    else
+      fail "[$file::$source_name] label '$key' has unrecognized value shape: $raw"
+      continue
+    fi
+
+    # (2) path-like value rejection on literals
+    if [[ -n "$literal" ]]; then
+      if [[ "$literal" == */* ]] || [[ "$literal" == /* ]]; then
+        fail "[$file::$source_name] label '$key' has path-like literal value: '$literal'"
+        continue
+      fi
+    fi
+
+    # Per-key value-shape rules. Tallying of literals for closed-enum
+    # labels happens in a second pass below so call-site literals
+    # (passed to helpers like mkJournalSource) are accounted for.
+    case "$key" in
+      role|severity|source)
+        if [[ -n "$qvar" ]]; then
+          fail "[$file::$source_name] label '$key' must be a literal string or pass-through interpolation; got \${quote $qvar}"
+          continue
+        fi
+        if [[ -n "$literal" ]]; then
+          case "$key" in
+            role)     ALL_LITERAL_ROLE+=("$literal") ;;
+            severity) ALL_LITERAL_SEVERITY+=("$literal") ;;
+            source)   ALL_LITERAL_SOURCE+=("$literal") ;;
+          esac
+        fi
+        ;;
+      vm|env)
+        # Open-enum labels; runtime cardinality is operator-bounded.
+        # Accept any shape that passed (literal already path-checked
+        # above; ${quote VAR} unrestricted; "${var}" pass-through).
+        :
+        ;;
+    esac
+  done <<< "$labels_body"
+
+  ok "[$file::$source_name] labels conform to contract"
+}
 
 for file in "${FILES[@]}"; do
   if [[ ! -f "$file" ]]; then
@@ -189,80 +361,14 @@ for file in "${FILES[@]}"; do
   while IFS= read -r -d '' record; do
     source_name=${record%%	*}
     labels_body=${record#*	}
-
-    # Parse `key = <value>,` lines from labels_body.
-    while IFS= read -r line; do
-      line=${line%%#*}                     # strip inline comments
-      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-      if [[ ! "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
-        continue
-      fi
-      key=${BASH_REMATCH[1]}
-      raw=${BASH_REMATCH[2]}
-      raw=${raw%,}
-      raw=${raw%"${raw##*[![:space:]]}"}  # rtrim
-
-      # (1) key allowlist
-      if ! in_list "$key" "${ALLOWED_KEYS[@]}"; then
-        fail "[$file::$source_name] label key '$key' not in allowlist {${ALLOWED_KEYS[*]}}"
-        continue
-      fi
-
-      # Classify value: literal "..." or ${quote VAR} or "${VAR}"
-      literal=""
-      qvar=""
-      if [[ "$raw" =~ ^\"([^\"\$]*)\"$ ]]; then
-        literal=${BASH_REMATCH[1]}
-      elif [[ "$raw" =~ ^\"\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}\"$ ]]; then
-        # `"${var}"` — a Nix string with a single interpolation. The
-        # rendered Alloy output is a literal, but the value is set by
-        # the call site. We allow this shape; the literal-budget pass
-        # below tallies call-site values separately.
-        : "${BASH_REMATCH[1]}"
-      elif [[ "$raw" =~ ^\$\{quote[[:space:]]+([^}]+)\}$ ]]; then
-        qvar=${BASH_REMATCH[1]}
-        qvar=${qvar%"${qvar##*[![:space:]]}"}
-      else
-        fail "[$file::$source_name] label '$key' has unrecognized value shape: $raw"
-        continue
-      fi
-
-      # (2) path-like value rejection on literals
-      if [[ -n "$literal" ]]; then
-        if [[ "$literal" == */* ]] || [[ "$literal" == /* ]]; then
-          fail "[$file::$source_name] label '$key' has path-like literal value: '$literal'"
-          continue
-        fi
-      fi
-
-      # Per-key value-shape rules. Tallying of literals for closed-enum
-      # labels happens in a second pass below so call-site literals
-      # (passed to helpers like mkJournalSource) are accounted for.
-      case "$key" in
-        role|severity|source)
-          if [[ -n "$qvar" ]]; then
-            fail "[$file::$source_name] label '$key' must be a literal string or pass-through interpolation; got \${quote $qvar}"
-            continue
-          fi
-          if [[ -n "$literal" ]]; then
-            case "$key" in
-              role)     ALL_LITERAL_ROLE+=("$literal") ;;
-              severity) ALL_LITERAL_SEVERITY+=("$literal") ;;
-              source)   ALL_LITERAL_SOURCE+=("$literal") ;;
-            esac
-          fi
-          ;;
-        vm|env)
-          # Open-enum labels; runtime cardinality is operator-bounded.
-          # Accept any shape that passed (literal already path-checked
-          # above; ${quote VAR} unrestricted; "${var}" pass-through).
-          :
-          ;;
-      esac
-    done <<< "$labels_body"
-
-    ok "[$file::$source_name] labels conform to contract"
+    process_label_record "$file" "$source_name" "$labels_body"
   done < <(extract_blocks "$file")
+
+  while IFS= read -r -d '' record; do
+    source_name=${record%%	*}
+    labels_body=${record#*	}
+    process_label_record "$file" "$source_name" "$labels_body"
+  done < <(extract_file_match_blocks "$file")
 done
 
 # Second pass: collect call-site literals for `role` from the
