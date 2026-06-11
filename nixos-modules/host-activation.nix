@@ -427,10 +427,14 @@ in
             fi
             if [ "${name}" = "${cfg.observability.vmName}" ]; then
               obs_vsock="/var/lib/nixling/vms/${name}/vsock.sock"
+              obs_state_dir="/var/lib/nixling/vms/${name}"
               if [ -S "$obs_vsock" ]; then
                 for obs_uid in $otel_obs_connect_uids; do
                   [ "$obs_uid" = "0" ] && continue
-                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:rw" "$obs_vsock" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:x" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -d -m "u:$obs_uid:rw" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -d -m "m::rw" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:rw,m::rw" "$obs_vsock" 2>/dev/null || true
                 done
               fi
             fi

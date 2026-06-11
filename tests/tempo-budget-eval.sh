@@ -137,6 +137,14 @@ else
   fail "observability secrets must be readable through the read-only virtiofs share"
 fi
 
+if grep -q 'otel_obs_connect_uids=.*vsock-relay' "$ROOT/nixos-modules/host-activation.nix" \
+  && grep -q 'setfacl -d -m "u:$obs_uid:rw" "$obs_state_dir"' "$ROOT/nixos-modules/host-activation.nix" \
+  && grep -q 'setfacl -m "u:$obs_uid:rw,m::rw" "$obs_vsock"' "$ROOT/nixos-modules/host-activation.nix"; then
+  ok "workload OTLP relays inherit/connect to the obs VM vsock socket"
+else
+  fail "observed workload relay UIDs must get effective obs vsock socket ACLs"
+fi
+
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then
   ok "backend binds are loopback-oriented and only SigNoz UI port is opened"
 else

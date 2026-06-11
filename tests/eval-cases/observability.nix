@@ -550,7 +550,7 @@ in
           "VSOCK-LISTEN:14317,fork,max-children=16,reuseaddr TCP:127.0.0.1:4317"
           services.nixling-otel-vsock-in-host.serviceConfig.ExecStart;
         corpIngressExecHasShape = hasInfix
-          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:4319"
+          "VSOCK-LISTEN:14318,fork,max-children=16,reuseaddr TCP:127.0.0.1:14318"
           services.nixling-otel-vsock-in-corp-vm.serviceConfig.ExecStart;
         hostIngressRestartIfChanged = services.nixling-otel-vsock-in-host.restartIfChanged;
         corpIngressRestartIfChanged = services.nixling-otel-vsock-in-corp-vm.restartIfChanged;

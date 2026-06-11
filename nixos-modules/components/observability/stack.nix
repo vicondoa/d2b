@@ -42,9 +42,11 @@ let
     else cfg.ingress.sources;
   sourceNames = lib.attrNames ingressSources;
   otlpReceiverFor = _sourceName: source: {
-    protocols.grpc.endpoint = "127.0.0.1:${toString source.receiverGrpcPort}";
-  } // lib.optionalAttrs (source.receiverHttpPort != null) {
-    protocols.http.endpoint = "127.0.0.1:${toString source.receiverHttpPort}";
+    protocols = {
+      grpc.endpoint = "127.0.0.1:${toString source.receiverGrpcPort}";
+    } // lib.optionalAttrs (source.receiverHttpPort != null) {
+      http.endpoint = "127.0.0.1:${toString source.receiverHttpPort}";
+    };
   };
   sourceReceivers = lib.mapAttrs' (sourceName: source:
     lib.nameValuePair "otlp/${sourceName}" (otlpReceiverFor sourceName source)
