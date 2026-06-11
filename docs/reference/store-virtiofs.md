@@ -30,7 +30,7 @@ Each share renders to one virtiofsd process:
 ```text
 virtiofsd \
   --socket-path=/run/nixling/vms/<vm>/<tag>.sock \
-  --socket-group=kvm \
+  [--socket-group=<group>] \
   --shared-dir=<host-path> \
   --thread-pool-size=<N> \
   --sandbox=chroot \
@@ -45,13 +45,12 @@ Flag semantics:
   the broker places normal share sockets under
   `/run/nixling/vms/<vm>/<tag>.sock`; `nl-gctl` uses the isolated
   `/run/nixling/vms/<vm>/guest-control/nl-gctl.sock` path.
-- `--socket-group=kvm` — UDS group ownership. The daemon-owned
-  broker may move this to a dedicated `nixling-virtiofs` group as
-  part of the ADR-0003 minijail split; the generator accepts any
-  group string.
+- `--socket-group=<group>` — optional UDS group ownership. It is emitted
+  only when `microvm.virtiofsd.group` is non-null.
 - `--shared-dir` — host path the guest sees through the tag.
-- `--thread-pool-size` — integer. The daemon caller resolves
-  `nproc` at spawn time.
+- `--thread-pool-size` — integer resolved from
+  `microvm.virtiofsd.threadPoolSize`, falling back to the VM vCPU count
+  (or `1` when vCPU is unset/zero).
 - `--sandbox=chroot`, `--inode-file-handles=never` — ADR 0021
   broker-pre-established user namespace shape. Reintroducing
   `--sandbox=namespace` or file handles requires a new ADR/update.
