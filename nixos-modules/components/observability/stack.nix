@@ -658,7 +658,7 @@ in
         Type = "simple";
         User = "signoz";
         Group = "signoz";
-        WorkingDirectory = "${signoz}";
+        WorkingDirectory = "/var/lib/signoz";
         ExecStart = signozStart;
         Restart = "on-failure";
         StateDirectory = "signoz";
