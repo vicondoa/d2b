@@ -55,10 +55,10 @@ deprecations ship one minor release before removal.
   the base Cloud Hypervisor vsock device.
 
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
-  now validate the future `nixling exec` allowlist defaults: generic exec is
-  off by default, root exec is separately denied by default, and non-root users
-  must be explicitly listed. This is dormant policy wiring only; the exec
-  runtime/CLI implementation lands in a later step.
+  now validate exec allowlist defaults: generic exec is off by default, root
+  exec is separately denied by default, and non-root users must be explicitly
+  listed. This is dormant policy wiring only; no exec runtime/CLI behavior is
+  enabled by these options yet.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
@@ -1546,7 +1546,7 @@ seam.
   the two trees meet at `nixling.vms.<vm>.config.imports`
   without either flake depending on the other.
 - **`templates/default/`** — `nix flake init` scaffold with
-  seven numbered `TODO:` markers and a matching
+  seven numbered placeholder markers and a matching
   `assertions = [ … ]` block. `nix flake check` on an un-edited
   scaffold fails with actionable messages until each sentinel is
   replaced.

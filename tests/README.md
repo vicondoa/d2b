@@ -2,16 +2,16 @@
 
 Three layers of validation, ordered cheapest-to-most-expensive.
 
-## W2 naming expectations
+## Naming expectations
 
-Tests reference systemd unit names directly. After the W2 rename pass,
+Tests reference systemd unit names directly. On a daemon-owned host,
 the units you should see on a host with nixling installed are:
 
 | Resource                       | Unit name                                |
 | ------------------------------ | ---------------------------------------- |
 | User-facing per-VM             | `nixling@<vm>.service`                   |
 | Backend (microvm.nix template) | `microvm@<vm>.service`                   |
-| Per-VM virtiofsd               | `microvm-virtiofsd@<vm>.service` *(W2 rename to `nixling-<vm>-virtiofsd` deferred)* |
+| Per-VM virtiofsd               | `microvm-virtiofsd@<vm>.service` |
 | Per-VM GPU sidecar             | `nixling-<vm>-gpu.service`               |
 | Per-VM video sidecar           | `nixling-<vm>-video.service`             |
 | Per-VM audio sidecar           | `nixling-<vm>-snd.service`               |
@@ -32,8 +32,8 @@ State directories follow the matching pattern:
     state/audio-state.json
     swtpm/
     store/, store-meta/
-    host-keys/host.pub                 (Phase 2b reserved)
-  keys/                                (Phase 2b reserved)
+    host-keys/host.pub
+  keys/
 ```
 
 The per-VM manifest baked into the CLI generation lives at
@@ -54,7 +54,7 @@ per-VM closure evaluation regressions.
 tests/static.sh
 ```
 
-Layer-1 gates exercised (W4):
+Layer-1 gates exercised:
 
 - `nix-instantiate --parse` for every framework `.nix` file.
 - `shellcheck --severity=warning` for every shell script under
@@ -71,7 +71,7 @@ Layer-1 gates exercised (W4):
   builder's system (typically x86_64-linux).
 - `tests/smoke-eval-aarch64.nix` — same shape, cross-evaluated on
   aarch64-linux to verify the headless workload eval graph stays
-  multi-arch clean (Phase 4 W4 gate).
+  multi-arch clean.
 - `tests/smoke-eval-tpm.nix` — TPM host-surface regression gate:
   swtpm parent-dir ACL, swtpm ExecStartPre stale-session flush,
   and `nixlingMigrateOwnership` invariants.
@@ -86,7 +86,7 @@ Layer-1 gates exercised (W4):
   usbipd services/sockets/firewall rules stay absent until both
   `site.yubikey.enable` and an enabled VM `usbip.yubikey` opt-in are
   set, and stay scoped to envs that actually have an opted-in VM.
-- **Manifest contract gate** (Phase 5 W4): renders the smoke
+- **Manifest contract gate**: renders the smoke
   manifest, then runs a 5-check sequence:
   1. Manifest renders without errors.
   2. `docs/reference/manifest-schema.json` is syntactically valid JSON.
@@ -94,7 +94,7 @@ Layer-1 gates exercised (W4):
   4. Every per-VM field in the manifest is documented in the schema's
      `$defs.vmEntry.required` list (catches manifest gaining a field
      without a schema update).
-  5. **md ↔ json drift detection** (W4 followup): the prose Per-VM-
+  5. **md ↔ json drift detection**: the prose Per-VM-
      entry table in `docs/reference/manifest-schema.md` and the
      schema's `properties` keys must list the same field set.
   6. `_manifest.manifestVersion` is present and `>= 1`.
@@ -233,7 +233,7 @@ tests/audio.sh --list
 | `test_cloud_hypervisor_capabilities`  | The CH binary actually used by the runner is **v52 or newer** (CVE-2026-45782 fixed), has `--generic-vhost-user` (audio attach), AND has `--gpu` (spectrum graphics patches present). |
 | `test_guest_sees_virtio_snd`          | (auto-SKIP if no audio-enabled VM is running): SSH into the running VM and verify `/proc/asound/cards` reports the virtio-snd device. |
 
-> **TODO (Phase 8c)**: the "Why this exists" paragraph below is a
+> **Maintenance note**: the "Why this exists" paragraph below is a
 > personal-host war story rather than user-facing documentation;
 > rewrite as a generic "audio surface is fragile across CH upgrades —
 > run these after any rebuild touching audio packages" note.
@@ -268,15 +268,15 @@ that the Linux bridge semantics nixling relies on match the documented
 threat model: the net-VM port stays reachable while workload ports stay
 isolated even after a workload spoofs a peer-style MAC.
 
-## Future tests (Phase 7a / v0.2.0)
+## Planned runtime tests
 
-- **USBIP live isolation `nixosTest`** (Phase 6 follow-up). The
+- **USBIP live isolation `nixosTest`**. The
   Layer-1 eval gate now proves host-side USBIP units, sockets, and
   firewall rules only materialize for envs with an enabled
   `usbip.yubikey` VM, but it still does not exercise live systemd
   socket materialization, iptables enforcement, or cleanup against a
   running guest. Lift that adversarial cross-env attach/isolation path
-  into the eventual Phase 6 `nixosTest` suite.
+  into the runtime `nixosTest` suite.
 
 - **Audit `--strict` graphics-VM running-check mock test** (Spec
   correction #38 / v0.1.6 follow-up Test-H8). The v0.1.6 fix in
@@ -362,7 +362,7 @@ should be Layer-2-dispatched after review. See
 [`CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted
 runner"](../CONTRIBUTING.md) for runner setup.
 
-## Phase-6 nixosTest follow-ups
+## Runtime nixosTest follow-ups
 
 Layer-3 nixosTest coverage should add these invariants:
 
@@ -378,4 +378,5 @@ Layer-3 nixosTest coverage should add these invariants:
 - ECHILD recovery instrumentation: a distinct metric or structured-log
   dimension distinguishing `wait_terminated_with_broker_poll` ECHILD
   recovery from normal stops. The minimal structured log already ships
-  as `outcome="echild-broker-recovered"`; Phase 6 adds the metric arm.
+  as `outcome="echild-broker-recovered"`; add the metric arm alongside
+  the runtime regression test.

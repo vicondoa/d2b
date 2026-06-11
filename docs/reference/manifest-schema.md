@@ -508,7 +508,7 @@ jq -r --arg n corp-vm '.[$n].apiSocket' "$MANIFEST"
 jq -r '._manifest.manifestVersion' "$MANIFEST"
 ```
 
-### From Rust (future, sketch)
+### From Rust
 
 ```rust
 #[derive(Deserialize)]

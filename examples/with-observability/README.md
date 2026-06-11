@@ -40,7 +40,7 @@ work-app guest Alloy/journald/node exporter
 | Item | Value | Notes |
 |---|---|---|
 | Grafana URL | `http://10.40.0.10:3000` | Default `nixling.observability.grafana.{listenAddress,listenPort}`. |
-| `work-app` observability vsock CID | `210` | `lib.attrNames config.nixling.envs = [ "obs" "work" ]`, so `work` is `envIndex = 1` and the manifest formula is `100 + 1*100 + 10`. |
+| `work-app` observability vsock CID | `1110` | `lib.attrNames config.nixling.envs = [ "obs" "work" ]`, so `work` is `envIndex = 1` and the manifest formula is `100 + 1*1000 + 10`. |
 | Observability stack obs-vsock CID | `1000` | Fixed framework-reserved obs-stack CID from `_observability.obsVsockCid`, used by `sys-obs-stack`. |
 | Vsock service port | `14317` | Guest→host→obs relay port. |
 | CH exporter | `127.0.0.1:9101` | Default host-loopback exporter port. |
