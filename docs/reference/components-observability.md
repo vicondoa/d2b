@@ -163,10 +163,11 @@ Nixling generates SigNoz and ClickHouse credentials on the host under:
 /var/lib/nixling/observability/
 ```
 
-Files are root-owned `0400` and shared read-only into `sys-obs` at
-`/run/nixling-obs-secrets`. Secrets are consumed through systemd
-credentials or environment files, not embedded as literals in the Nix
-store.
+The host directory is root-owned `0700`; files are root-owned `0444` so
+guest-side systemd can read them through the read-only virtiofs secret
+share at `/run/nixling-obs-secrets`. Secrets are consumed through
+systemd credentials or environment files, not embedded as literals in the
+Nix store.
 
 ## Default resources
 

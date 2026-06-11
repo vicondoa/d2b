@@ -315,7 +315,7 @@ let
     export SIGNOZ_CLICKHOUSE_METADATA_DSN="tcp://127.0.0.1:${toString clickhousePort}/signoz_metadata?username=signoz&password=$pw_uri"
     exec ${signozOtelCollector}/bin/signoz-otel-collector \
       --config ${collectorConfig} \
-      --manager-config ${signozOtelCollector}/conf/opamp.yaml \
+      --manager-config ${signozOtelCollector}/conf/manager.yaml \
       --copy-path /var/lib/signoz-otel-collector/config.yaml
   '';
 

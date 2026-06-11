@@ -124,6 +124,19 @@ else
   fail "ClickHouse default user must not be left without an auth method"
 fi
 
+if grep -q 'conf/manager.yaml' "$STACK" && ! grep -q 'conf/opamp.yaml' "$STACK"; then
+  ok "SigNoz OTel collector uses the packaged manager config"
+else
+  fail "SigNoz OTel collector manager config path must match the package"
+fi
+
+if grep -q 'chmod 0444 "$file"' "$ROOT/nixos-modules/observability-host-secrets.nix" \
+  && grep -q 'root:root 0700' "$ROOT/nixos-modules/observability-host-secrets.nix"; then
+  ok "observability secrets are readable inside read-only virtiofs but protected by host parent dir"
+else
+  fail "observability secrets must be readable through the read-only virtiofs share"
+fi
+
 if grep -q '127\.0\.0\.1' "$STACK" && grep -q 'networking\.firewall\.allowedTCPPorts = \[ cfg\.signoz\.listenPort \]' "$STACK"; then
   ok "backend binds are loopback-oriented and only SigNoz UI port is opened"
 else
