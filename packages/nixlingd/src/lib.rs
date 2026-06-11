@@ -72,6 +72,7 @@ use supervisor::pidfd_table::{
 use uzers::{get_user_by_uid, get_user_groups};
 
 pub mod guest_control_vsock;
+pub mod guest_control_health;
 pub mod supervisor;
 pub mod typed_error;
 pub mod wire;

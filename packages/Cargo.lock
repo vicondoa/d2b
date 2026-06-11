@@ -1074,6 +1074,7 @@ dependencies = [
  "nixling-host",
  "nixling-ipc",
  "parking_lot",
+ "protobuf",
  "regex",
  "rustix 0.38.44",
  "semver",
@@ -1085,6 +1086,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ttrpc",
  "uzers",
 ]
 
