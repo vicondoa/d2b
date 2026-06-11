@@ -55,7 +55,7 @@ inventory. Private bundle artifacts live beside it and are documented in
       "enabled": true,
       "vsockCid": 110,
       "vsockHostSocket": "/var/lib/nixling/vms/work/vsock.sock",
-      "agentSocket": "/run/nixling/otel/otlp.sock"
+      "agentSocket": "/run/nixling/otlp.sock"
     },
     "staticIp": "10.50.0.10" | null,
     "sshUser": "alice" | null

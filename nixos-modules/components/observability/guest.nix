@@ -55,6 +55,11 @@ let
           { key = "vm.name"; value = cfg.identity.vmName; action = "upsert"; }
           { key = "vm.env"; value = cfg.identity.envName; action = "upsert"; }
           { key = "vm.role"; value = "workload"; action = "upsert"; }
+        ];
+        "resource/self".attributes = [
+          { key = "vm.name"; value = cfg.identity.vmName; action = "upsert"; }
+          { key = "vm.env"; value = cfg.identity.envName; action = "upsert"; }
+          { key = "vm.role"; value = "workload"; action = "upsert"; }
           { key = "service.name"; value = "nixling-guest-otel-collector"; action = "upsert"; }
         ];
         batch = {
@@ -72,8 +77,13 @@ let
       service = {
         telemetry.metrics.address = "127.0.0.1:${toString collectorMetricsPort}";
         pipelines.metrics = {
-          receivers = [ "otlp" "prometheus" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
+          receivers = [ "otlp" ] ++ lib.optional cfg.scrapeNodeMetrics "hostmetrics";
           processors = [ "memory_limiter" "resource" "batch" ];
+          exporters = [ "otlp" ];
+        };
+        "pipelines.metrics/self" = {
+          receivers = [ "prometheus" ];
+          processors = [ "memory_limiter" "resource/self" "batch" ];
           exporters = [ "otlp" ];
         };
         pipelines.traces = {

@@ -83,6 +83,22 @@ for token in 'prometheus/self' 'nixling-host-otel-collector' 'nixling-guest-otel
   fi
 done
 
+if grep -q '"resource/self"' "$ROOT/nixos-modules/components/observability/guest.nix" \
+  && grep -q '"pipelines.metrics/self"' "$ROOT/nixos-modules/components/observability/guest.nix"; then
+  ok "guest collector self-metrics use a dedicated resource/self pipeline"
+else
+  fail "guest collector self-metrics must not share the workload resource processor"
+fi
+
+guest_workload_resource_block=$(
+  sed -n '/resource.attributes = \\[/,/\\];/p' "$ROOT/nixos-modules/components/observability/guest.nix"
+)
+if grep -q 'service.name' <<<"$guest_workload_resource_block"; then
+  fail "guest workload resource processor must preserve application service.name"
+else
+  ok "guest workload resource processor preserves application service.name"
+fi
+
 if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
   ok "collector pipelines are source-specific, not a shared otlp receiver"
 else
