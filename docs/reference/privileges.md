@@ -110,6 +110,7 @@ The currently implemented broker operation catalog. Every row carries
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PrepareStoreView` | fs (store view) | per VM | live | yes | no | `nixling-launcher` + `nixling-admin` | yes | deny | `generation`, `hardlink_farm_path`, `target_view_path` |
 | `StoreSync` | fs (hardlink farm) | per VM | live | yes (atomic `current` symlink swap) | no | `nixling-launcher` + `nixling-admin` | yes | deny | `bundle_closure_ref`, `generation`, `closure_count`, `hardlink_farm_path` |
+| `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `nixlingd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `nixling-launcher` + `nixling-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `nixling-launcher` + `nixling-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
 

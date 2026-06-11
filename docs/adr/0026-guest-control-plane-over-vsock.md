@@ -369,6 +369,10 @@ for failing a must-pass row.
 - Guestd consumes its token through systemd `LoadCredential`.
 - The guest-control token is never sent over vsock. Authentication is
   proof-of-possession only.
+- Host-side proof generation goes through `nixling-priv-broker`'s structured
+  guest-control signer. `nixlingd` sends typed transcript fields and receives
+  only a fixed-size HMAC tag; the broker keeps token bytes confined to the
+  privileged process and audits only bounded metadata.
 - The guest-verified auth transcript includes only values both sides can
   obtain from trusted local context: host nonce, guest nonce, VM identity,
   guest-control port, observable peer/host CID when available, protocol

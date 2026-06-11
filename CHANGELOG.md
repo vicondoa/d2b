@@ -77,6 +77,11 @@ deprecations ship one minor release before removal.
   authenticated Health/Capabilities. The guest service remains opt-in manual-start only
   (`wantedBy = []`) and does not enable host readiness or exec behavior.
 
+- The privileged broker now exposes a structured guest-control HMAC signer, and
+  `nixlingd` has a host-side authenticated Health probe helper. The helper
+  produces daemon-local health evidence only; it does not replace SSH readiness
+  or enable exec.
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate exec allowlist defaults: generic exec is off by default, root
   exec is separately denied by default, and non-root users must be explicitly
