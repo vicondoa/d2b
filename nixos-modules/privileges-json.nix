@@ -338,6 +338,19 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "exec",
+    "subject": "VM/process",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-launcher",
+      "nixling-admin"
+    ],
+    "destructive": false,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "switch",
     "subject": "VM",
     "scope": "per-VM",

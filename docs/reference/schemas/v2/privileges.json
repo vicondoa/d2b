@@ -211,6 +211,7 @@
             "console",
             "debug bundle",
             "down",
+            "exec",
             "gc",
             "generations",
             "hello",
