@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 pub mod broker_wire;
 pub mod generated;
+pub mod guest_auth;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
 }

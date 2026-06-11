@@ -3,6 +3,7 @@ use std::fmt;
 
 use hmac::{Hmac, Mac};
 use nixling_ipc::{
+    guest_auth::{self, GuestAuthTranscript},
     guest_proto as pb,
     guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, HARD_MAX_CHUNK_BYTES, TTRPC_FRAME_CAP_BYTES},
 };
@@ -11,11 +12,11 @@ use sha2::Sha256;
 
 use crate::{AuthError, TokenSource};
 
-pub const AUTH_TRANSCRIPT_VERSION: u32 = 1;
-pub const AUTH_NONCE_LEN: usize = 32;
-pub const AUTH_TAG_LEN: usize = 32;
+pub use nixling_ipc::guest_auth::{
+    AuthDirection, AuthPurpose, ProofRole, AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION,
+    GUEST_CONTROL_AUTH_PORT,
+};
 pub const CONNECTION_INSTANCE_LEN: usize = 16;
-pub const GUEST_CONTROL_AUTH_PORT: u32 = 14_318;
 pub const DEFAULT_CHALLENGE_TTL_MS: u64 = 30_000;
 pub const DEFAULT_CHALLENGE_CAPACITY: usize = 128;
 pub const MAX_AUTH_HEALTH_CAPABILITIES: usize = 32;
@@ -65,32 +66,6 @@ impl From<AuthError> for GuestAuthError {
         match error {
             AuthError::TokenUnavailable => Self::TokenUnavailable,
             AuthError::MacRejected => Self::MacRejected,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AuthDirection {
-    HostToGuest,
-}
-
-impl AuthDirection {
-    fn label(self) -> &'static [u8] {
-        match self {
-            Self::HostToGuest => b"host-to-guest",
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AuthPurpose {
-    GuestControlAuthV1,
-}
-
-impl AuthPurpose {
-    fn label(self) -> &'static [u8] {
-        match self {
-            Self::GuestControlAuthV1 => b"guest-control-auth-v1",
         }
     }
 }
@@ -586,21 +561,6 @@ fn fixed_tag(value: &[u8]) -> Result<[u8; AUTH_TAG_LEN], GuestAuthError> {
     Ok(out)
 }
 
-#[derive(Clone, Copy)]
-pub enum ProofRole {
-    Host,
-    Guest,
-}
-
-impl ProofRole {
-    fn label(self) -> &'static [u8] {
-        match self {
-            Self::Host => b"host-proof",
-            Self::Guest => b"guest-proof",
-        }
-    }
-}
-
 pub fn encode_transcript(
     role: ProofRole,
     context: &AuthConnectionContext,
@@ -609,28 +569,19 @@ pub fn encode_transcript(
     guest_boot_id: &str,
     capabilities_hash: Option<&[u8]>,
 ) -> Vec<u8> {
-    let mut out = Vec::new();
-    push_field(&mut out, 1, b"guest-control-auth-v1");
-    push_field(&mut out, 2, role.label());
-    push_field(&mut out, 3, context.direction.label());
-    push_field(&mut out, 4, context.purpose.label());
-    push_field(&mut out, 5, context.vm_id.as_bytes());
-    push_field(&mut out, 6, &context.protocol_version.to_be_bytes());
-    push_field(&mut out, 7, &context.guest_control_port.to_be_bytes());
-    push_field(&mut out, 8, &context.peer_cid.to_be_bytes());
-    push_field(&mut out, 10, host_nonce);
-    push_field(&mut out, 11, guest_nonce);
-    push_field(&mut out, 12, guest_boot_id.as_bytes());
-    if let Some(capabilities_hash) = capabilities_hash {
-        push_field(&mut out, 13, capabilities_hash);
-    }
-    out
-}
-
-fn push_field(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
-    out.push(tag);
-    out.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    out.extend_from_slice(value);
+    guest_auth::encode_transcript(&GuestAuthTranscript {
+        role,
+        direction: context.direction,
+        purpose: context.purpose,
+        vm_id: &context.vm_id,
+        protocol_version: context.protocol_version,
+        guest_control_port: context.guest_control_port,
+        peer_cid: Some(context.peer_cid),
+        host_nonce,
+        guest_nonce,
+        guest_boot_id,
+        capabilities_hash,
+    })
 }
 
 pub struct StaticCapabilitiesProvider {
