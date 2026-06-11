@@ -273,9 +273,10 @@ per-share systemd template/watchdog combination
 - [Daemon API reference](../reference/daemon-api.md) — wire
   envelope shapes and typed-error catalog.
 - [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs)
-  / [`virtiofsd_argv`](../../packages/nixling-host/src/virtiofsd_argv.rs)
   / [`swtpm_argv`](../../packages/nixling-host/src/swtpm_argv.rs) —
   pure argv generators feeding the broker `SpawnRunner` op.
+  virtiofsd argv is emitted from `nixos-modules/processes-json.nix`
+  because each share is already resolved during the VM eval.
 - [`nixlingd::supervisor::dag`](../../packages/nixlingd/src/supervisor/dag.rs)
   / [`state`](../../packages/nixlingd/src/supervisor/state.rs)
   / [`pidfd`](../../packages/nixlingd/src/supervisor/pidfd.rs) — the

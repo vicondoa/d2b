@@ -461,6 +461,10 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if meta.file_type().is_symlink() {
+        eprintln!("refusing: {} fstat says symlink", path.display());
+        return ExitCode::from(2);
+    }
     match require_kind {
         "regular" if !meta.file_type().is_file() => {
             eprintln!(
@@ -562,6 +566,10 @@ fn cmd_clear_acl_on_path(args: &Args) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if meta.file_type().is_symlink() {
+        eprintln!("refusing: {} fstat says symlink", path.display());
+        return ExitCode::from(2);
+    }
     match require_kind {
         "regular" if !meta.file_type().is_file() => {
             eprintln!("refusing: {} fstat says non-regular", path.display());

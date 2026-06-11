@@ -940,8 +940,8 @@ pub enum RunnerRole {
     /// Cloud Hypervisor headless / hybrid VM. Broker invokes
     /// `nixling_host::ch_argv::generate_ch_argv`.
     CloudHypervisor,
-    /// virtiofsd sidecar; one per `microvm.shares` row. Broker invokes
-    /// `nixling_host::virtiofsd_argv::generate_virtiofsd_argv`.
+    /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
+    /// provides argv from `nixos-modules/processes-json.nix`.
     Virtiofsd,
     /// swtpm sidecar (long-lived `swtpm socket ...` process).
     Swtpm,
