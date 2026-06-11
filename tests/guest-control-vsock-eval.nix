@@ -186,8 +186,8 @@ let
     assert assertChVsock "alpha-vm";
     assert assertChVsock "alpha-high";
     assert assertChVsock "beta-vm";
-    assert assertManifestVsock "sys-alpha-net";
-    assert assertManifestVsock "sys-beta-net";
+    assert assertChVsock "sys-alpha-net";
+    assert assertChVsock "sys-beta-net";
     assert assertChVsock "sys-obs-stack";
     assert assertChVsock "legacy-vm";
     assert manifest.alpha-vm.observability.vsockCid == 110;

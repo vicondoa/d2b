@@ -381,7 +381,7 @@ produces exactly:
     "observability": {
       "agentSocket": "/run/nixling/otlp.sock",
       "enabled": false,
-      "vsockCid": 101,
+      "vsockCid": 110,
       "vsockHostSocket": "/var/lib/nixling/vms/corp-vm/vsock.sock"
     },
     "sshUser": "alice",
@@ -408,7 +408,7 @@ produces exactly:
     "observability": {
       "agentSocket": "/run/nixling/otlp.sock",
       "enabled": false,
-      "vsockCid": 110,
+      "vsockCid": 101,
       "vsockHostSocket": "/var/lib/nixling/vms/sys-work-net/vsock.sock"
     },
     "sshUser": null,

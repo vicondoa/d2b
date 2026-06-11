@@ -12,7 +12,7 @@
 #     outs that make the per-env isolation policy real.
 #   - dnsmasq on eth1 with DHCP host-reservations for every workload
 #     VM declared in this env, plus public-resolver forwarding.
-#   - microvm.* hypervisor block (qemu, two tap interfaces named
+#   - microvm.* hypervisor block (cloud-hypervisor, two tap interfaces named
 #     `<env>-u2` (uplink-side) / `<env>-l1` (LAN-side), small VM,
 #     no graphics).
 { envMeta, config, pkgs, lib, ... }:
@@ -378,7 +378,7 @@ in
   # injected by modules/nixling/store.nix as a per-VM hardlink farm so
   # this net VM only sees its own closure.
   microvm = {
-    hypervisor = lib.mkDefault "qemu";
+    hypervisor = lib.mkDefault "cloud-hypervisor";
     vcpu = 1;
     mem = 512;
 
