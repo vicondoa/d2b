@@ -650,6 +650,9 @@ impl GuestControlSignRequest {
         if self.host_nonce.len() != AUTH_NONCE_LEN || self.guest_nonce.len() != AUTH_NONCE_LEN {
             return Err("nonce-length");
         }
+        if self.guest_boot_id.as_str().is_empty() || self.guest_boot_id.as_str().len() > 128 {
+            return Err("guest-boot-id");
+        }
         match self.role {
             GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {
                 Err("host-proof-capabilities-hash")

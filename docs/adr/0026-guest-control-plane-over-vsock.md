@@ -382,8 +382,9 @@ for failing a must-pass row.
   precondition combined with the guest proof. Replays are rejected, nonces are
   single-use per connection, and MAC verification is constant-time.
 - Operator-supplied token files must pass runtime safety validation:
-  regular file, no symlink, not under `/nix/store`, root-owned, not
-  group/world readable, and safe parents.
+  regular file, no symlink, not under `/nix/store`, root-owned, mode `0400` or
+  the materialized `0440 root:nixling-<vm>-gctlfs` share-reader posture, and
+  safe parents.
 - The token value is never written to the Nix store, public manifest,
   CLI JSON, logs, metrics, CH argv, or user-facing health text.
 - Auth failure paths must not log or expose raw tokens, HMAC material,

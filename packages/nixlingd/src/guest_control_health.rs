@@ -154,6 +154,7 @@ where
     if hello.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
         || hello.guest_nonce.len() != AUTH_NONCE_LEN
         || hello.guest_boot_id.is_empty()
+        || hello.guest_boot_id.len() > 128
     {
         return Err(GuestControlHealthError::Protocol);
     }
@@ -217,6 +218,7 @@ where
     let mut health_req = pb::HealthRequest::new();
     health_req.metadata = MessageField::some(request_metadata(vm_id));
     let health = client.health(health_req).await?;
+    validate_health_evidence(&health)?;
     Ok(GuestControlHealthEvidence {
         vm_id: vm_id.to_owned(),
         guest_boot_id: hello.guest_boot_id,
@@ -224,6 +226,79 @@ where
         capabilities_hash,
         health,
     })
+}
+
+fn validate_health_evidence(health: &pb::HealthResponse) -> Result<(), GuestControlHealthError> {
+    let origin = health
+        .origin
+        .enum_value()
+        .map_err(|_| GuestControlHealthError::Protocol)?;
+    let state = health
+        .state
+        .enum_value()
+        .map_err(|_| GuestControlHealthError::Protocol)?;
+    let reason = health
+        .reason
+        .enum_value()
+        .map_err(|_| GuestControlHealthError::Protocol)?;
+    let remediation = health
+        .remediation
+        .enum_value()
+        .map_err(|_| GuestControlHealthError::Protocol)?;
+    if origin != pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED
+        || health.protocol_version != GUEST_CONTROL_PROTOCOL_VERSION
+    {
+        return Err(GuestControlHealthError::Protocol);
+    }
+    if health.capabilities.len() > 32
+        || health.degraded_subsystems.len() > 16
+        || health.capabilities.iter().any(|capability| {
+            !matches!(
+                capability.enum_value(),
+                Ok(value) if value != pb::GuestCapability::GUEST_CAPABILITY_UNSPECIFIED
+            )
+        })
+        || health.degraded_subsystems.iter().any(|subsystem| {
+            !matches!(
+                subsystem.enum_value(),
+                Ok(value) if value != pb::GuestSubsystem::GUEST_SUBSYSTEM_UNSPECIFIED
+            )
+        })
+    {
+        return Err(GuestControlHealthError::Protocol);
+    }
+    match state {
+        pb::HealthState::HEALTH_STATE_HEALTHY => {
+            if reason != pb::HealthReason::HEALTH_REASON_NONE
+                || remediation != pb::HealthRemediation::HEALTH_REMEDIATION_NONE
+                || !health.degraded_subsystems.is_empty()
+            {
+                return Err(GuestControlHealthError::Protocol);
+            }
+        }
+        pb::HealthState::HEALTH_STATE_DEGRADED => {
+            let valid_reason = matches!(
+                reason,
+                pb::HealthReason::HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE
+                    | pb::HealthReason::HEALTH_REASON_LOG_STORAGE_UNAVAILABLE
+                    | pb::HealthReason::HEALTH_REASON_QUOTA_EXCEEDED
+                    | pb::HealthReason::HEALTH_REASON_RATE_LIMITED
+                    | pb::HealthReason::HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED
+            );
+            let valid_remediation = matches!(
+                remediation,
+                pb::HealthRemediation::HEALTH_REMEDIATION_RETRY
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_INSPECT_GUEST_LOGS
+                    | pb::HealthRemediation::HEALTH_REMEDIATION_RESTART_VM
+            );
+            if !valid_reason || !valid_remediation || health.degraded_subsystems.is_empty() {
+                return Err(GuestControlHealthError::Protocol);
+            }
+        }
+        _ => return Err(GuestControlHealthError::Protocol),
+    }
+    Ok(())
 }
 
 fn request_metadata(vm_id: &str) -> pb::RequestMetadata {
@@ -285,6 +360,8 @@ mod tests {
 
     struct FakeClient {
         bad_guest_tag: bool,
+        overlong_boot_id: bool,
+        invalid_health: bool,
     }
 
     #[async_trait]
@@ -295,7 +372,11 @@ mod tests {
         ) -> Result<pb::HelloResponse, GuestControlHealthError> {
             let mut response = pb::HelloResponse::new();
             response.guest_nonce = vec![0x22; AUTH_NONCE_LEN];
-            response.guest_boot_id = "boot-1".to_owned();
+            response.guest_boot_id = if self.overlong_boot_id {
+                "b".repeat(129)
+            } else {
+                "boot-1".to_owned()
+            };
             response.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
             Ok(response)
         }
@@ -315,7 +396,11 @@ mod tests {
             _request: pb::HealthRequest,
         ) -> Result<pb::HealthResponse, GuestControlHealthError> {
             let mut health = pb::HealthResponse::new();
-            health.origin = protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
+            health.origin = protobuf::EnumOrUnknown::new(if self.invalid_health {
+                pb::HealthOrigin::HEALTH_ORIGIN_HOST_SYNTHESIZED
+            } else {
+                pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED
+            });
             health.state = protobuf::EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_HEALTHY);
             health.reason = protobuf::EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
             health.remediation = protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
@@ -330,7 +415,11 @@ mod tests {
             "corp-vm",
             Some(2),
             [0x11; AUTH_NONCE_LEN],
-            &FakeClient { bad_guest_tag: false },
+            &FakeClient {
+                bad_guest_tag: false,
+                overlong_boot_id: false,
+                invalid_health: false,
+            },
             &FakeSigner,
         )
         .await
@@ -343,11 +432,47 @@ mod tests {
                 "corp-vm",
                 Some(2),
                 [0x11; AUTH_NONCE_LEN],
-                &FakeClient { bad_guest_tag: true },
+                &FakeClient {
+                    bad_guest_tag: true,
+                    overlong_boot_id: false,
+                    invalid_health: false,
+                },
                 &FakeSigner,
             )
             .await,
             Err(GuestControlHealthError::AuthFailed)
+        ));
+
+        assert!(matches!(
+            probe_guest_control_health(
+                "corp-vm",
+                Some(2),
+                [0x11; AUTH_NONCE_LEN],
+                &FakeClient {
+                    bad_guest_tag: false,
+                    overlong_boot_id: true,
+                    invalid_health: false,
+                },
+                &FakeSigner,
+            )
+            .await,
+            Err(GuestControlHealthError::Protocol)
+        ));
+
+        assert!(matches!(
+            probe_guest_control_health(
+                "corp-vm",
+                Some(2),
+                [0x11; AUTH_NONCE_LEN],
+                &FakeClient {
+                    bad_guest_tag: false,
+                    overlong_boot_id: false,
+                    invalid_health: true,
+                },
+                &FakeSigner,
+            )
+            .await,
+            Err(GuestControlHealthError::Protocol)
         ));
     }
 }
