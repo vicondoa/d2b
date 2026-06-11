@@ -41,6 +41,7 @@ reattaching to an unrelated reused exec id.
 ```protobuf
 service GuestControl {
   rpc Hello(HelloRequest) returns (HelloResponse);
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
   rpc Capabilities(CapabilitiesRequest) returns (CapabilitiesResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 
@@ -57,6 +58,14 @@ service GuestControl {
   rpc ExecCancel(ExecCancelRequest) returns (ControlAck);
 }
 ```
+
+`Hello` is unauthenticated challenge/discovery only: it returns the guest
+nonce, guest boot id, and protocol version, but no health, capabilities, or
+capability fingerprint. `Authenticate` is the proof-of-possession boundary:
+the host sends a fixed-size HMAC-SHA256 tag over the canonical transcript and
+the guest returns its HMAC plus bounded authenticated Health and Capabilities.
+All later `Health`, `Capabilities`, and exec RPC handlers require the
+authenticated per-connection session.
 
 `ExecLogs` is a convenience wrapper for old/detached execs. Attached
 clients use `ReadOutput(stream=stdout|stderr)` directly so polling state,
@@ -357,7 +366,8 @@ Default design limits:
 | pending `ExecWait` calls | 1 per exec/connection, 64 per VM | 512 per VM | Duplicate waits are superseded or rejected. |
 | RPC rate budget | 200/s per connection, 1000/s per VM burst | policy-defined | Excess calls return `rate-limited` with bounded retry-after. |
 
-The hard maximums are capability values negotiated at `Hello` time and
+The hard maximums are capability values returned by `Authenticate` and
+`Capabilities` after the guest-control token proof succeeds. They
 may be lowered by VM policy. Raising them requires updating tests and
 memory-budget documentation.
 
@@ -461,7 +471,7 @@ sidecar directory.
 Guest-control audit records are allowlist-only. They may contain:
 
 - bounded operation kind from the closed guest-control operation enum: `hello`,
-  `capabilities`, `health`, `exec-create`, `exec-inspect`, `exec-wait`,
+  `authenticate`, `capabilities`, `health`, `exec-create`, `exec-inspect`, `exec-wait`,
   `exec-logs`, `write-stdin`, `read-output`,
   `close-stdin`, `tty-win-resize`, `exec-signal`, `exec-cancel`, and
   `framework-guest-op`;
@@ -773,10 +783,10 @@ guest-reported, while `unavailable-old-generation`, `listener-absent`,
 `transport-unreachable`, `auth-failed`, `protocol-mismatch`, and
 `stale-session` are host-synthesized readiness/status results.
 
-`healthy` requires CH `CONNECT`, Hello/auth, and Health to succeed on the
-same post-CONNECT stream. `degraded` means guestd is authenticated and
-serving Health but one bounded subsystem check failed; callers may proceed
-only with operations whose capability bit remains healthy. Every other
+`healthy` requires CH `CONNECT`, Hello challenge, Authenticate, and Health to
+succeed on the same post-CONNECT stream. `degraded` means guestd is
+authenticated and serving Health but one bounded subsystem check failed;
+callers may proceed only with operations whose capability bit remains healthy. Every other
 state is unavailable for new exec work. Health, status JSON, logs,
 metrics, spans, and audit records must carry only the bounded state,
 reason, remediation, protocol version, and capability names; they must not
@@ -960,7 +970,8 @@ Before implementation exits design hardening, add at least:
 14a. Health state/reason/remediation matrix tests enumerating every
      Health state, reason, and remediation, rejecting invalid combinations
      such as `healthy` plus an error reason, and proving CONNECT,
-     Hello/auth, and Health failures map to the documented bounded states
+     Hello challenge, Authenticate, and Health failures map to the documented
+     bounded states
      without leaking socket paths, tokens, transcripts, guest text, or
      unbounded IDs;
 15. retained-log storage security tests covering guest-local path roots,

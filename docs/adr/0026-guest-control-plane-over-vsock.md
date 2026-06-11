@@ -301,8 +301,9 @@ for failing a must-pass row.
   `0660` or stricter and owned so only nixlingd/runner authority can
   open it.
 - CLI users never receive the CH base UDS path.
-- Cross-VM reuse is rejected by VM ID, socket path, CID, and HMAC VM
-  binding.
+- Cross-VM reuse is rejected by host-side CH socket selection and peer checks,
+  plus guest-side HMAC binding over the shared guest-observable VM/CID/port
+  transcript.
 - The port registry owns all guest-control ports. Reserve at least a
   guestd control port and, only if needed, a separate exec stream port:
   `14318` is the host-to-guest `nixling-guestd` ttRPC control port and
@@ -311,7 +312,8 @@ for failing a must-pass row.
   `14319`. Existing guest-to-host observability port `14317` remains
   separate: it is owned by OTLP/Alloy relay traffic, uses the
   guest-to-host direction, and must not carry guest-control RPCs.
-- Guest-control readiness requires CONNECT, Hello/auth, and Health.
+- Guest-control readiness requires CONNECT, unauthenticated Hello challenge,
+  Authenticate proof-of-possession, and authenticated Health.
   Socket existence alone is never readiness.
 - Health returns a bounded state enum plus bounded reason/remediation
   enums, never guest-derived free-form text or transport/socket paths.
@@ -321,11 +323,11 @@ for failing a must-pass row.
   W0 reserves these states for the implementing schema: `healthy`,
   `degraded`, `unavailable-old-generation`, `listener-absent`,
   `transport-unreachable`, `auth-failed`, `protocol-mismatch`, and
-  `stale-session`. `healthy` requires CONNECT + Hello/auth + Health to
-  complete on the same post-CONNECT stream. `degraded` means guestd is
-  authenticated and serving Health but one bounded subsystem check
-  failed; callers may continue only operations whose capability bit is
-  still healthy. The other states are unavailable and map to bounded
+  `stale-session`. `healthy` requires CONNECT + Hello challenge +
+  Authenticate + Health to complete on the same post-CONNECT stream.
+  `degraded` means guestd is authenticated and serving Health but one bounded
+  subsystem check failed; callers may continue only operations whose capability
+  bit is still healthy. The other states are unavailable and map to bounded
   remediation enums such as `restart-vm`, `retry`, `upgrade-guest`, or
   `check-auth-token`.
 - No host proxy daemon or per-VM host systemd unit may be introduced
@@ -367,10 +369,14 @@ for failing a must-pass row.
 - Guestd consumes its token through systemd `LoadCredential`.
 - The guest-control token is never sent over vsock. Authentication is
   proof-of-possession only.
-- The transcript includes host nonce, guest nonce, VM identity, CID and
-  socket identity, protocol version, connection purpose, direction,
-  guest boot ID, and capabilities hash. Replays are rejected, nonces
-  are single-use per connection, and MAC verification is constant-time.
+- The guest-verified auth transcript includes only values both sides can
+  obtain from trusted local context: host nonce, guest nonce, VM identity,
+  guest-control port, observable peer/host CID when available, protocol
+  version, connection purpose, direction, guest boot ID, and, for the guest
+  proof, the authenticated capabilities hash. Host-local Cloud Hypervisor base
+  socket identity is not in the guest HMAC; it remains a host connector
+  precondition combined with the guest proof. Replays are rejected, nonces are
+  single-use per connection, and MAC verification is constant-time.
 - Operator-supplied token files must pass runtime safety validation:
   regular file, no symlink, not under `/nix/store`, root-owned, not
   group/world readable, and safe parents.
@@ -380,6 +386,27 @@ for failing a must-pass row.
   transcript bytes containing secrets, credential file paths, or
   derived MACs in logs, metrics, CLI JSON, health text, or typed error
   envelopes.
+
+Canonical transcript encoding is binary and versioned. Each field is encoded
+as one tag byte, a four-byte big-endian length, then the exact byte value.
+Malformed, duplicate, missing, overlong, or alternate encodings are rejected
+before MAC verification.
+
+| Tag | Field | Source |
+| ---: | --- | --- |
+| 1 | `guest-control-auth-v1` domain label | constant |
+| 2 | proof role (`host-proof` or `guest-proof`) | local verifier/signer |
+| 3 | direction (`host-to-guest`) | trusted connection context |
+| 4 | purpose (`guest-control-auth-v1`) | trusted connection context |
+| 5 | VM id | guest configuration / host manifest |
+| 6 | protocol version | negotiated guest-control protocol |
+| 7 | guest-control port (`14318`) | trusted listener/connector context |
+| 8 | observable peer/host CID, when available | trusted listener context |
+| 9 | connection instance | listener/connector session state |
+| 10 | host nonce, 32 raw bytes | `HelloRequest` validated length |
+| 11 | guest nonce, 32 raw bytes | generated challenge state |
+| 12 | guest boot id | guest boot-id source |
+| 13 | capabilities hash | guest proof only, after Authenticate |
 
 ## Observability contract
 

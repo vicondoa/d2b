@@ -28,9 +28,9 @@ source lives at
   transcript; `authenticated` returns the guest HMAC plus bounded authenticated
   health and capabilities.
 - `healthRequest`, `health`, `capabilitiesRequest`, and `capabilities` -
-  authenticated readiness/version/capability RPCs. Pre-ttRPC CONNECT / Hello /
-  auth failures are host-synthesized status, not guest-returned `Health` RPC
-  payloads.
+  authenticated readiness/version/capability RPCs. Pre-ttRPC CONNECT, Hello
+  challenge, and Authenticate failures are host-synthesized status, not
+  guest-returned `Health` RPC payloads.
 - `exec*`, `writeStdin`, `readOutput`, `closeStdin`, `ttyWinResize`, and
   signal/cancel messages - Docker-like exec lifecycle and chunked stdio.
   `controlAck` is the shared response for resize, signal, and cancel control

@@ -66,6 +66,12 @@ deprecations ship one minor release before removal.
   `tests/guest-proto-bindings.sh` gate verifies the generated bindings are
   deterministic, unsafe-free, and message-only (no ttRPC runtime stubs).
 
+- Guest-control protobuf now has an authenticated `Authenticate` handshake:
+  `Hello` is challenge-only, authenticated health/capabilities are returned
+  only after proof-of-possession, and `nixling-guestd` has a pure auth core
+  with fixed-size HMAC transcript tests. No listener, readiness, or exec CLI
+  behavior is enabled yet.
+
 - Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
   now validate exec allowlist defaults: generic exec is off by default, root
   exec is separately denied by default, and non-root users must be explicitly
