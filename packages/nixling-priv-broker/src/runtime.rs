@@ -1,8 +1,12 @@
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
+#[cfg(not(feature = "layer1-bootstrap"))]
+use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
+#[cfg(not(feature = "layer1-bootstrap"))]
+use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -907,6 +911,12 @@ impl DispatchAuditContext {
 }
 
 fn request_fields_value(request: &BrokerRequest) -> Result<Value, BrokerError> {
+    // GuestControlSign carries auth secret material (nonces, token-derived
+    // tag inputs); emit only redacted lengths/presence, never the values.
+    // This branch is real-wire-only: under the `layer1-bootstrap` feature
+    // `BrokerRequest` aliases to the bootstrap `BootstrapCall`, which has no
+    // GuestControlSign variant, so gate it out of the bootstrap build.
+    #[cfg(not(feature = "layer1-bootstrap"))]
     if let BrokerRequest::GuestControlSign(req) = request {
         return Ok(serde_json::json!({
             "vmId": req.vm_id.as_str(),
