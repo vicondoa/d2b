@@ -446,7 +446,16 @@ impl TtyState {
     /// stale/dup seq, or on an invalid geometry. The control surface resolves
     /// `SIGWINCH` to the foreground PG at delivery.
     pub fn resize(&self, seq: u64, rows: u32, cols: u32) -> Result<(), ExecError> {
-        if self.is_closing() {
+        // Hold the phase lock across the phase-check AND the side-effect
+        // dispatch so admission is atomic w.r.t. `begin_closing`: either this
+        // wins the lock, observes `Running`, and applies the resize before
+        // `begin_closing` can transition (and only then `take_control`), or
+        // `begin_closing` wins, sets `Closing`, and this returns `ExecClosing`
+        // with no side effect. `begin_closing` and `take_control` are ordered
+        // (take_control runs only after begin_closing wins), so no `SIGWINCH`
+        // can be delivered once `Closing` is set.
+        let phase = self.lock_phase();
+        if !matches!(*phase, TtyPhase::Running) {
             return Err(ExecError::ExecClosing);
         }
         self.lock_seq().admit(seq)?;
@@ -461,7 +470,12 @@ impl TtyState {
     /// foreground process group (validated by the caller). Rejects when closing,
     /// on a stale/dup seq, or on a signal outside the allowlist.
     pub fn signal(&self, seq: u64, signal: u32) -> Result<(), ExecError> {
-        if self.is_closing() {
+        // Hold the phase lock across the phase-check AND the side-effect
+        // dispatch (see `resize`): once `Closing` is set this returns
+        // `ExecClosing` with no signal delivered, and a signal that wins the
+        // lock completes before `begin_closing` can transition + `take_control`.
+        let phase = self.lock_phase();
+        if !matches!(*phase, TtyPhase::Running) {
             return Err(ExecError::ExecClosing);
         }
         // Validate the signal against the allowlist BEFORE consuming the control
@@ -562,10 +576,6 @@ async fn writer_loop(
     phase: Arc<Mutex<TtyPhase>>,
 ) {
     while let Some(op) = rx.recv().await {
-        let closing = !matches!(
-            *phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
-            TtyPhase::Running
-        );
         match op {
             WriteOp::Write {
                 offset,
@@ -573,19 +583,12 @@ async fn writer_loop(
                 close_after,
                 ack,
             } => {
-                let result = if closing {
-                    Err(ExecError::StdinClosed)
-                } else {
-                    process_write(&mut sink, &stdin, offset, &data, close_after).await
-                };
+                let result =
+                    process_write(&mut sink, &stdin, &phase, offset, &data, close_after).await;
                 let _ = ack.send(result);
             }
             WriteOp::Close { offset, ack } => {
-                let result = if closing {
-                    Err(ExecError::StdinClosed)
-                } else {
-                    process_close(&mut sink, &stdin, offset).await
-                };
+                let result = process_close(&mut sink, &stdin, &phase, offset).await;
                 let _ = ack.send(result);
             }
         }
@@ -598,15 +601,37 @@ fn lock_stdin_logic(stdin: &Arc<Mutex<StdinLogic>>) -> std::sync::MutexGuard<'_,
     stdin.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// True iff the session phase is still `Running`. The admission/commit gate for
+/// the writer task; read under the SAME phase lock `begin_closing` writes so a
+/// write is admitted and committed only while the session has not entered
+/// `Closing`.
+fn phase_is_running(phase: &Arc<Mutex<TtyPhase>>) -> bool {
+    matches!(
+        *phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        TtyPhase::Running
+    )
+}
+
 /// Validate the offset, write what can be written, and advance the cursor by
-/// exactly the bytes that landed (partial-write accounting — G2).
+/// exactly the bytes that landed (partial-write accounting — G2). Admission and
+/// the offset-machine commit are both gated on the session still being
+/// `Running`, so the committed side effect (offset advance + success ack) is
+/// atomic w.r.t. `begin_closing`: a write that loses the race to `Closing`
+/// surfaces `StdinClosed` and does NOT advance the offset (H1).
 async fn process_write(
     sink: &mut Box<dyn AsyncWrite + Send + Unpin>,
     stdin: &Arc<Mutex<StdinLogic>>,
+    phase: &Arc<Mutex<TtyPhase>>,
     offset: u64,
     data: &[u8],
     close_after: bool,
 ) -> Result<StdinWriteOk, ExecError> {
+    // Admission: refuse before touching the master once the session has left
+    // `Running`, then validate the offset. `begin_closing` never mutates the
+    // stdin machine, so the phase check + admit need not share one lock.
+    if !phase_is_running(phase) {
+        return Err(ExecError::StdinClosed);
+    }
     lock_stdin_logic(stdin).admit(offset)?;
     let (written, write_res) = write_counting(sink, data).await;
     let full = written == data.len();
@@ -616,7 +641,22 @@ async fn process_write(
         let (veof_written, _veof_res) = write_counting(sink, &[VEOF]).await;
         closed = veof_written == 1;
     }
+    // A write that made zero progress on a non-empty payload is a hard failure
+    // (the master is gone); a partial or full write is accepted for the bytes
+    // that landed, and the client retries any remainder from `next_offset`.
+    if written == 0 && !data.is_empty() {
+        return Err(write_res.err().unwrap_or(ExecError::StdinClosed));
+    }
+    // Commit: advance the offset machine + report success ONLY while still
+    // `Running`, holding the phase lock across the check + advance so it is
+    // atomic w.r.t. `begin_closing`. If `Closing` raced in during the (awaited)
+    // write, the offset is left untouched and the op surfaces `StdinClosed` —
+    // no offset advance / success ack after `Closing`.
     let next_offset = {
+        let phase_guard = phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !matches!(*phase_guard, TtyPhase::Running) {
+            return Err(ExecError::StdinClosed);
+        }
         let mut logic = lock_stdin_logic(stdin);
         logic.advance(written as u64);
         if closed {
@@ -624,12 +664,6 @@ async fn process_write(
         }
         logic.next_offset()
     };
-    // A write that made zero progress on a non-empty payload is a hard failure
-    // (the master is gone); a partial or full write is accepted for the bytes
-    // that landed, and the client retries any remainder from `next_offset`.
-    if written == 0 && !data.is_empty() {
-        return Err(write_res.err().unwrap_or(ExecError::StdinClosed));
-    }
     Ok(StdinWriteOk {
         accepted_len: written as u64,
         next_offset,
@@ -639,13 +673,18 @@ async fn process_write(
 
 /// Inject VEOF and mark closed (idempotent). `offset` must match the current
 /// next-offset. The cursor is NOT advanced (VEOF is a control byte, not part of
-/// the stdin byte stream).
+/// the stdin byte stream). Admission and the close commit are gated on the
+/// session still being `Running` (atomic w.r.t. `begin_closing` — H1).
 async fn process_close(
     sink: &mut Box<dyn AsyncWrite + Send + Unpin>,
     stdin: &Arc<Mutex<StdinLogic>>,
+    phase: &Arc<Mutex<TtyPhase>>,
     offset: u64,
 ) -> Result<(u64, bool), ExecError> {
     {
+        if !phase_is_running(phase) {
+            return Err(ExecError::StdinClosed);
+        }
         let logic = lock_stdin_logic(stdin);
         if logic.is_closed() {
             return Ok((logic.next_offset(), true));
@@ -658,9 +697,18 @@ async fn process_close(
     if veof_written != 1 {
         return Err(ExecError::StdinClosed);
     }
-    let mut logic = lock_stdin_logic(stdin);
-    logic.close();
-    Ok((logic.next_offset(), false))
+    // Commit: mark closed only while still `Running` (atomic w.r.t.
+    // `begin_closing` via the phase lock).
+    let next_offset = {
+        let phase_guard = phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !matches!(*phase_guard, TtyPhase::Running) {
+            return Err(ExecError::StdinClosed);
+        }
+        let mut logic = lock_stdin_logic(stdin);
+        logic.close();
+        logic.next_offset()
+    };
+    Ok((next_offset, false))
 }
 
 /// Write as many bytes of `data` as reach the sink, returning the count that
@@ -1229,6 +1277,19 @@ mod tests {
         state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Unpause a paused [`FakeSink`] and wake any parked writer so the stuck
+    /// `poll_write` re-polls and completes.
+    fn resume_sink(state: &Arc<Mutex<FakeSinkState>>) {
+        let waker = {
+            let mut st = lock_sink(state);
+            st.paused = false;
+            st.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
     impl AsyncWrite for FakeSink {
         fn poll_write(
             self: Pin<&mut Self>,
@@ -1404,6 +1465,42 @@ mod tests {
         // No stdin bytes, and the control seq was never advanced.
         assert!(lock_sink(&sink).written.is_empty());
         assert_eq!(tty.last_control_seq(), 0);
+    }
+
+    #[tokio::test]
+    async fn write_that_lands_after_begin_closing_does_not_commit_offset() {
+        // H1 commit-gate: a write admitted while Running parks mid-flight on a
+        // paused master; begin_closing then wins the race and the parked write
+        // resumes and physically lands its bytes. The committed protocol state
+        // (offset advance + success ack) MUST still be atomic w.r.t.
+        // begin_closing: the op surfaces StdinClosed and the offset machine does
+        // NOT advance, even though the bytes reached the master before the abort
+        // could fire.
+        let (tty, sink) = tty_state_with_sink(0, None);
+        let tty = Arc::new(tty);
+        lock_sink(&sink).paused = true;
+        let writer = {
+            let tty = Arc::clone(&tty);
+            tokio::spawn(async move { tty.write_stdin(0, b"late", false).await })
+        };
+        // Let the writer task pass admission (still Running) and park on the
+        // paused sink mid-write.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Enter Closing while the write is parked in flight.
+        assert!(tty.begin_closing());
+        // Resume the sink so the parked write completes and reaches the commit
+        // gate, which now observes Closing.
+        resume_sink(&sink);
+        let result = tokio::time::timeout(Duration::from_secs(5), writer)
+            .await
+            .expect("write must complete")
+            .unwrap();
+        assert_eq!(result, Err(ExecError::StdinClosed));
+        // The bytes physically landed on the master (the write was in flight)...
+        assert_eq!(lock_sink(&sink).written, b"late");
+        // ...but the committed offset machine did NOT advance: no protocol-level
+        // side effect is reported after Closing.
+        assert_eq!(tty.stdin_next_offset(), 0);
     }
 
     #[tokio::test]
