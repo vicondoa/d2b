@@ -12,6 +12,22 @@ deprecations ship one minor release before removal.
 
 ### Fixed
 
+- The privileged broker now compiles under the `layer1-bootstrap`
+  feature (and thus `--all-features`): the guest-control `GuestControlSign`
+  audit-redaction arm in `request_fields_value` is gated to the real-wire
+  build, since under `layer1-bootstrap` `BrokerRequest` aliases to the
+  bootstrap `BootstrapCall`, which has no such variant. The `Read` and
+  `FileTypeExt` imports it uses are gated the same way so the bootstrap
+  build stays warning-clean.
+
+- The broker's non-socket-activated (test-mode / legacy) self-bind path
+  now constrains the creation umask so the socket is materialized at
+  `0o660` directly. `fchmod()` on an `AF_UNIX` socket fd does not change
+  the bound path's mode on some kernels/filesystems, so the prior
+  `fchmod`-only approach could leave the socket world-traversable
+  (`0o755`). Production is unaffected (it uses socket activation, where
+  systemd owns the socket mode).
+
 - Guest-control chunked stdio docs now account for protobuf `bytes`
   allocation before handler entry by specifying ttRPC receive caps,
   bounded post-decode byte semaphores, and per-exec stdin permits for
