@@ -111,7 +111,7 @@ impl StreamMeta {
 }
 
 /// Result of a ring read. Field-for-field compatible with guestd's `RingChunk`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RingChunk {
     pub data: Vec<u8>,
     pub start_offset: u64,
@@ -122,6 +122,23 @@ pub struct RingChunk {
     pub eof: bool,
 }
 
+// Redacted Debug: the captured `data` bytes are NEVER printed (they would leak
+// child stdout/stderr into any log/panic/test-failure message). Only the
+// bounded length and metadata are surfaced.
+impl std::fmt::Debug for RingChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RingChunk")
+            .field("data_len", &self.data.len())
+            .field("start_offset", &self.start_offset)
+            .field("end_offset", &self.end_offset)
+            .field("next_offset", &self.next_offset)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("eof", &self.eof)
+            .finish()
+    }
+}
+
 /// Typed FileRing failure. Carries no payload bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileRingError {
@@ -130,6 +147,9 @@ pub enum FileRingError {
     OffsetExpired,
     OffsetInFuture,
     CapMismatch,
+    /// The sidecar metadata is internally inconsistent or inconsistent with the
+    /// data file (corrupt/tampered pair); never serve bytes from it.
+    Corrupt,
     /// The reader could not obtain a stable (un-torn) read within the retry
     /// budget; the caller should treat this as an expired offset.
     Busy,
@@ -153,6 +173,8 @@ fn open_nofollow_write(path: &Path) -> io::Result<File> {
         .read(true)
         .write(true)
         .truncate(false)
+        // Privileged captured output; create 0600 explicitly, never umask.
+        .mode(crate::atomicio::FILE_MODE_0600)
         .custom_flags(O_NOFOLLOW)
         .open(path)
 }
@@ -165,6 +187,37 @@ fn persist_meta(sidecar_path: &Path, meta: &StreamMeta) -> io::Result<()> {
 fn read_meta(sidecar_path: &Path) -> Result<StreamMeta, FileRingError> {
     let bytes = read_file_nofollow(sidecar_path)?;
     StreamMeta::decode(&bytes).map_err(FileRingError::from)
+}
+
+/// Validate a decoded sidecar before any byte is served from the ring. Rejects
+/// a corrupt/tampered pair (offsets ahead of data, impossible cap,
+/// dropped/start drift) so the reader never indexes an invalid ring region.
+fn validate_meta(meta: &StreamMeta, data_len: u64) -> Result<(), FileRingError> {
+    // cap must be positive and within the largest cap the framework ever
+    // reserves (a per-stream retained-log cap). Test rings use much smaller
+    // caps, all well under this ceiling.
+    if meta.cap == 0 || meta.cap > crate::DETACHED_STREAM_LOG_BYTES {
+        return Err(FileRingError::Corrupt);
+    }
+    // Monotonic offsets: start never exceeds end.
+    if meta.start_offset > meta.end_offset {
+        return Err(FileRingError::Corrupt);
+    }
+    // The retained span can never exceed the ring capacity.
+    if meta.end_offset - meta.start_offset > meta.cap {
+        return Err(FileRingError::Corrupt);
+    }
+    // dropped_bytes is, by construction, exactly the advanced start offset.
+    if meta.dropped_bytes != meta.start_offset {
+        return Err(FileRingError::Corrupt);
+    }
+    // The physical data file must cover every cell we could index: the live
+    // region is `min(end_offset, cap)` bytes (the file only grows to `cap`).
+    let required_physical = meta.end_offset.min(meta.cap);
+    if data_len < required_physical {
+        return Err(FileRingError::Corrupt);
+    }
+    Ok(())
 }
 
 /// The writer side of a stream's ring (owned by the runner).
@@ -306,8 +359,20 @@ impl FileRingReader {
         })
     }
 
+    /// Read the sidecar and validate it is internally consistent and consistent
+    /// with the actual data-file length before any byte is served. A corrupt or
+    /// tampered sidecar (offsets ahead of data, impossible cap, dropped/start
+    /// drift) is rejected as [`FileRingError::Corrupt`] rather than used to read
+    /// from an invalid ring region.
+    fn read_validated_meta(&self) -> Result<StreamMeta, FileRingError> {
+        let meta = read_meta(&self.sidecar_path)?;
+        let data_len = self.data.metadata().map(|m| m.len()).map_err(FileRingError::from)?;
+        validate_meta(&meta, data_len)?;
+        Ok(meta)
+    }
+
     pub fn meta(&self) -> Result<StreamMeta, FileRingError> {
-        read_meta(&self.sidecar_path)
+        self.read_validated_meta()
     }
 
     /// Read up to `max_len` bytes starting at logical `offset`. Mirrors
@@ -316,7 +381,7 @@ impl FileRingReader {
     pub fn read(&self, offset: u64, max_len: u64) -> Result<RingChunk, FileRingError> {
         let mut last_err = FileRingError::Busy;
         for _ in 0..READ_RETRIES {
-            let meta = read_meta(&self.sidecar_path)?;
+            let meta = self.read_validated_meta()?;
             if offset < meta.start_offset {
                 return Err(FileRingError::OffsetExpired);
             }
@@ -335,7 +400,7 @@ impl FileRingReader {
 
             // Torn-read detection: if the writer advanced start past our offset
             // during the read, the physical region may have been overwritten.
-            let after = read_meta(&self.sidecar_path)?;
+            let after = self.read_validated_meta()?;
             if after.start_offset > offset {
                 last_err = FileRingError::OffsetExpired;
                 continue;
@@ -609,5 +674,103 @@ mod tests {
         };
         let decoded = StreamMeta::decode(&meta.encode()).unwrap();
         assert_eq!(meta, decoded);
+    }
+
+    #[test]
+    fn reader_rejects_sidecar_end_ahead_of_data() {
+        let dir = scratch_dir();
+        let (data, side) = paths(&dir);
+        let mut ring = FileRing::create(&data, &side, 64).unwrap();
+        ring.append(b"abc").unwrap();
+        // Tamper: claim more bytes than the data file actually holds.
+        let corrupt = StreamMeta {
+            cap: 64,
+            start_offset: 0,
+            end_offset: 1000,
+            dropped_bytes: 0,
+            truncated: false,
+            eof: false,
+            lost: false,
+        };
+        persist_meta(&side, &corrupt).unwrap();
+        let reader = FileRingReader::open(&data, &side).unwrap();
+        assert_eq!(reader.meta(), Err(FileRingError::Corrupt));
+        assert_eq!(reader.read(0, 64), Err(FileRingError::Corrupt));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reader_rejects_inconsistent_dropped_and_impossible_cap() {
+        let dir = scratch_dir();
+        let (data, side) = paths(&dir);
+        let mut ring = FileRing::create(&data, &side, 64).unwrap();
+        ring.append(b"hello").unwrap();
+        let reader = FileRingReader::open(&data, &side).unwrap();
+
+        // dropped_bytes drifts from start_offset.
+        persist_meta(
+            &side,
+            &StreamMeta {
+                cap: 64,
+                start_offset: 0,
+                end_offset: 5,
+                dropped_bytes: 3,
+                truncated: false,
+                eof: false,
+                lost: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(reader.read(0, 64), Err(FileRingError::Corrupt));
+
+        // start > end.
+        persist_meta(
+            &side,
+            &StreamMeta {
+                cap: 64,
+                start_offset: 9,
+                end_offset: 5,
+                dropped_bytes: 9,
+                truncated: true,
+                eof: false,
+                lost: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(reader.read(0, 64), Err(FileRingError::Corrupt));
+
+        // Impossible cap (above the per-stream retained ceiling).
+        persist_meta(
+            &side,
+            &StreamMeta {
+                cap: crate::DETACHED_STREAM_LOG_BYTES + 1,
+                start_offset: 0,
+                end_offset: 5,
+                dropped_bytes: 0,
+                truncated: false,
+                eof: false,
+                lost: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(reader.read(0, 64), Err(FileRingError::Corrupt));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ring_chunk_debug_redacts_payload_bytes() {
+        let chunk = RingChunk {
+            data: b"super secret stdout".to_vec(),
+            start_offset: 3,
+            end_offset: 22,
+            next_offset: 22,
+            dropped_bytes: 3,
+            truncated: true,
+            eof: true,
+        };
+        let rendered = format!("{chunk:?}");
+        assert!(!rendered.contains("secret"), "payload must never appear: {rendered}");
+        assert!(rendered.contains("data_len"));
+        assert!(rendered.contains("19"));
     }
 }
