@@ -566,9 +566,10 @@ mod tests {
     use nixling_exec_runner::RunnerEnv;
 
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
-        let base = std::env::var_os("TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
+        // Always place test scratch under the system temp dir (respects TMPDIR,
+        // falls back to /tmp) — never the repo-relative "." which leaks
+        // runner-svc-* dirs into the worktree.
+        let base = std::env::temp_dir();
         let dir = base.join(format!(
             "runner-svc-{}-{}",
             std::process::id(),
