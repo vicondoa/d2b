@@ -1105,9 +1105,27 @@ fn rpc_status(code: ttrpc::Code, message: &'static str) -> ttrpc::Error {
 }
 
 fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
+    use pb::GuestControlErrorKind as K;
+    use pb::HealthRemediation as R;
     let mut error = pb::GuestControlError::new();
     error.kind = EnumOrUnknown::new(kind);
-    error.remediation = EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_RETRY);
+    // Per-kind operator remediation (F10). A blind RETRY is wrong for the two
+    // detached retained-log faults: a quota breach is shed by the periodic
+    // reaper (advise REDUCE_LOAD + a concrete retry window), while an unsafe
+    // retained-log path is an internal guestd storage fault (advise checking
+    // the guestd service — a caller retry cannot fix it).
+    let (remediation, retry_after_ms) = match kind {
+        K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED => (
+            R::HEALTH_REMEDIATION_REDUCE_LOAD,
+            Some(DETACHED_REAPER_INTERVAL_MS),
+        ),
+        K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
+        _ => (R::HEALTH_REMEDIATION_RETRY, None),
+    };
+    error.remediation = EnumOrUnknown::new(remediation);
+    error.retry_after_ms = retry_after_ms;
     error
 }
 
@@ -1583,6 +1601,7 @@ mod tests {
                 .exec_cancel(&ctx, pb::ExecCancelRequest::new())
                 .await,
         );
+        assert_unauthenticated(service.exec_list(&ctx, pb::ExecListRequest::new()).await);
     }
 
     #[tokio::test]
@@ -1639,6 +1658,15 @@ mod tests {
         assert_disabled(
             service
                 .exec_cancel(&ctx, pb::ExecCancelRequest::new())
+                .await
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap(),
+        );
+        assert_disabled(
+            service
+                .exec_list(&ctx, pb::ExecListRequest::new())
                 .await
                 .unwrap()
                 .error
@@ -1820,5 +1848,41 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(wire_error_kind(*error), *expected, "mapping for {error:?}");
         }
+    }
+
+    #[test]
+    fn detached_retained_log_faults_have_actionable_remediation() {
+        use pb::GuestControlErrorKind as K;
+        use pb::HealthRemediation as R;
+
+        // Quota breach: shed load and retry after one reaper interval (the
+        // periodic GC frees retained-log space) — NOT a generic blind RETRY.
+        let quota = guest_error_kind(ExecError::RetainedLogQuotaExceeded);
+        assert_eq!(
+            quota.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_REDUCE_LOAD
+        );
+        assert_eq!(quota.retry_after_ms, Some(DETACHED_REAPER_INTERVAL_MS));
+        assert_eq!(
+            quota.kind.enum_value().unwrap(),
+            K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED
+        );
+
+        // Unsafe retained-log path: an internal storage fault — advise checking
+        // the guestd service, and DO NOT advertise a retry window.
+        let unsafe_path = guest_error_kind(ExecError::RetainedLogPathUnsafe);
+        assert_eq!(
+            unsafe_path.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE
+        );
+        assert_eq!(unsafe_path.retry_after_ms, None);
+
+        // A representative caller-retryable fault keeps the generic RETRY shape.
+        let not_found = guest_error_kind(ExecError::ExecNotFound);
+        assert_eq!(
+            not_found.remediation.enum_value().unwrap(),
+            R::HEALTH_REMEDIATION_RETRY
+        );
+        assert_eq!(not_found.retry_after_ms, None);
     }
 }
