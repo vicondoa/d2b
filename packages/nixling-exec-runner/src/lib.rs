@@ -4,6 +4,7 @@
 #![doc = "the guest-static dependency-policy gate stays green; the binary may use"]
 #![doc = "rustix for the privileged service-mode syscalls."]
 
+pub mod atomicio;
 pub mod codec;
 pub mod filering;
 pub mod limits;

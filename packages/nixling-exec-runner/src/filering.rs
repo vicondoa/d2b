@@ -27,15 +27,8 @@ use std::io;
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
+use crate::atomicio::{atomic_write, open_read_nofollow, read_file_nofollow, O_NOFOLLOW};
 use crate::codec::{DecodeError, Reader, Writer};
-
-/// `O_NOFOLLOW` for Linux (the only guest target). Octal `0o400000`; identical
-/// on x86_64 and aarch64. Refusing to follow a symlink at open time is
-/// defense-in-depth on top of the runner's root-owned 0700 slot dir.
-#[cfg(target_os = "linux")]
-const O_NOFOLLOW: i32 = 0o0_400_000;
-#[cfg(not(target_os = "linux"))]
-const O_NOFOLLOW: i32 = 0;
 
 const META_MAGIC: u32 = 0x4e4c_534d; // "NLSM"
 const META_VERSION: u32 = 1;
@@ -164,61 +157,14 @@ fn open_nofollow_write(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-fn open_nofollow_read(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
-}
-
-/// fsync the directory that contains `path` so a rename is durable.
-fn fsync_parent_dir(path: &Path) -> io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let handle = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(dir)?;
-    handle.sync_all()
-}
-
 /// Atomically replace the sidecar at `sidecar_path` with `meta`.
 fn persist_meta(sidecar_path: &Path, meta: &StreamMeta) -> io::Result<()> {
-    let bytes = meta.encode();
-    let tmp = sidecar_tmp_path(sidecar_path);
-    {
-        let tmp_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .custom_flags(O_NOFOLLOW)
-            .open(&tmp)?;
-        tmp_file.write_all_at(&bytes, 0)?;
-        tmp_file.set_len(bytes.len() as u64)?;
-        tmp_file.sync_all()?;
-    }
-    std::fs::rename(&tmp, sidecar_path)?;
-    fsync_parent_dir(sidecar_path)
-}
-
-fn sidecar_tmp_path(sidecar_path: &Path) -> PathBuf {
-    let mut name = sidecar_path
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    name.push(".tmp");
-    sidecar_path.with_file_name(name)
+    atomic_write(sidecar_path, &meta.encode())
 }
 
 fn read_meta(sidecar_path: &Path) -> Result<StreamMeta, FileRingError> {
-    let bytes = read_small_file(sidecar_path)?;
+    let bytes = read_file_nofollow(sidecar_path)?;
     StreamMeta::decode(&bytes).map_err(FileRingError::from)
-}
-
-fn read_small_file(path: &Path) -> Result<Vec<u8>, FileRingError> {
-    let mut file = open_nofollow_read(path)?;
-    let mut buf = Vec::new();
-    io::Read::read_to_end(&mut file, &mut buf)?;
-    Ok(buf)
 }
 
 /// The writer side of a stream's ring (owned by the runner).
@@ -353,7 +299,7 @@ pub struct FileRingReader {
 
 impl FileRingReader {
     pub fn open(data_path: &Path, sidecar_path: &Path) -> Result<Self, FileRingError> {
-        let data = open_nofollow_read(data_path)?;
+        let data = open_read_nofollow(data_path)?;
         Ok(Self {
             data,
             sidecar_path: sidecar_path.to_path_buf(),
