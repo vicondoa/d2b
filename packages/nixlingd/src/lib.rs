@@ -2141,6 +2141,89 @@ fn broker_socket_path(state: &ServerState) -> PathBuf {
     }
 }
 
+/// Canonical group owning the per-VM state directory `<stateDir>/vms/<vm>`.
+/// The tmpfiles seed line uses `microvm:kvm`, but host activation chowns the
+/// per-VM directory to `<daemon-user>:users` mode 2770, so the runtime owner
+/// is `nixlingd:users`. Existing-code-is-canon: the probe reconciles its
+/// `expected_state_root_uid/gid` to the actual runtime owner; the tmpfiles vs
+/// activation divergence is confirmed live at W19.
+const GUEST_CONTROL_STATE_ROOT_GROUP: &str = "users";
+
+/// Resolve the canonical runtime owner `(uid, gid)` of the per-VM state
+/// directory for the guest-control probe's `expected_state_root_uid/gid`.
+/// Derived independently of the peer-credential identity. Fails CLOSED if
+/// either identity is unresolvable.
+fn resolve_guest_control_state_root_owner(state: &ServerState) -> Result<(u32, u32), String> {
+    let uid = User::from_name(&state.config.daemon_user)
+        .ok()
+        .flatten()
+        .map(|user| user.uid.as_raw())
+        .ok_or_else(|| {
+            format!(
+                "guest-control-probe:unresolved-state-root-user:{}",
+                state.config.daemon_user
+            )
+        })?;
+    let gid = Group::from_name(GUEST_CONTROL_STATE_ROOT_GROUP)
+        .ok()
+        .flatten()
+        .map(|group| group.gid.as_raw())
+        .ok_or_else(|| {
+            format!("guest-control-probe:unresolved-state-root-group:{GUEST_CONTROL_STATE_ROOT_GROUP}")
+        })?;
+    Ok((uid, gid))
+}
+
+/// Extract the cloud-hypervisor `--vsock socket=<path>` argument from a CH
+/// runner argv. Returns the resolved socket path, or `None` if absent.
+fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
+    argv.windows(2).find_map(|pair| {
+        if pair[0] != "--vsock" {
+            return None;
+        }
+        pair[1]
+            .split(',')
+            .find_map(|field| field.strip_prefix("socket=").map(PathBuf::from))
+    })
+}
+
+/// Resolve the guest-control probe parameters for `vm` from the trusted
+/// bundle: the per-VM vsock socket path + its parent state-root, the
+/// cloud-hypervisor runner's peer credentials (principal
+/// `nixling-<vm>-runner`), and the canonical state-root owner. Fails CLOSED if
+/// any identity is unresolvable.
+fn resolve_guest_control_probe_params(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Result<guest_control_bridge::ProbeParams, String> {
+    let dag = resolver
+        .find_process_vm(vm)
+        .ok_or_else(|| "guest-control-probe:no-process-dag".to_owned())?;
+    let ch = dag
+        .nodes
+        .iter()
+        .find(|node| node.role == ProcessRole::CloudHypervisorRunner)
+        .ok_or_else(|| "guest-control-probe:no-cloud-hypervisor-node".to_owned())?;
+    let socket_path = cloud_hypervisor_vsock_socket(&ch.argv)
+        .ok_or_else(|| "guest-control-probe:no-vsock-socket".to_owned())?;
+    let state_root = socket_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "guest-control-probe:vsock-socket-no-parent".to_owned())?;
+    let (expected_state_root_uid, expected_state_root_gid) =
+        resolve_guest_control_state_root_owner(state)?;
+    Ok(guest_control_bridge::ProbeParams {
+        vm_id: vm.to_owned(),
+        socket_path,
+        state_root,
+        expected_state_root_uid,
+        expected_state_root_gid,
+        expected_peer_uid: ch.profile.uid,
+        expected_peer_gid: ch.profile.gid,
+    })
+}
+
 fn dispatch_broker_request(
     state: &ServerState,
     request: BrokerRequest,
@@ -2899,6 +2982,69 @@ impl VmStartRunner<'_> {
         }
         Ok(())
     }
+
+    /// State-aware readiness for a `GuestControlHealth` node. Resolves the
+    /// per-VM probe parameters from the trusted bundle and runs the
+    /// authenticated Health probe on a dedicated current-thread runtime
+    /// inside `spawn_blocking` (BR13 runtime boundary: no `Handle::current`,
+    /// `block_in_place`, or nested runtime; nothing borrowed from
+    /// `ServerState` crosses the boundary). The retry loop is bounded by
+    /// `budget.readiness`; `guest_control_health_ready` decides ready.
+    async fn wait_for_guest_control_health(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        budget: supervisor::dag::NodeBudget,
+    ) -> Result<(), String> {
+        let params = resolve_guest_control_probe_params(self.state, self.resolver, vm)?;
+        let broker_path = broker_socket_path(self.state);
+        let deadline = budget.readiness;
+        let node_id = node.id.0.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let probe = guest_control_bridge::RealGuestControlProbe::new(broker_path);
+            let clock = guest_control_bridge::RealProbeClock::new();
+            guest_control_bridge::run_guest_control_readiness_loop(
+                &probe,
+                &params,
+                deadline,
+                guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+                guest_control_bridge::GUEST_CONTROL_RETRY_BACKOFF,
+                &clock,
+            )
+        })
+        .await
+        .map_err(|error| format!("guest-control-readiness-join:{error}"))?;
+
+        let ready = guest_control_health::guest_control_health_ready(&outcome);
+        match &outcome {
+            Ok(evidence) => tracing::info!(
+                kind = "critical",
+                subsystem = "guest-control-health",
+                outcome = if ready { "ready" } else { "not-ready" },
+                health_state = guest_control_bridge::health_state_label(evidence),
+                "guest-control readiness probe completed"
+            ),
+            Err(error) => tracing::warn!(
+                kind = "critical",
+                subsystem = "guest-control-health",
+                outcome = "not-ready",
+                error_kind = guest_control_bridge::error_kind_label(error),
+                "guest-control readiness probe failed"
+            ),
+        }
+
+        if ready {
+            tracing::info!(
+                vm = %vm,
+                node = %node_id,
+                role_id = %tracked_role_id(node),
+                "guest-control-health node ready"
+            );
+            Ok(())
+        } else {
+            Err(format!("guest-control-health-not-ready:{node_id}"))
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -2910,6 +3056,14 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         budget: supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
+        // The authenticated guest-control Health node is readiness-only but
+        // needs daemon state (per-VM vsock socket, peer credentials, the
+        // broker-backed signer), so it cannot go through the stateless
+        // `wait_for_readiness` path. Intercept it here; this also covers the
+        // `spawn_and_check_process_alive` fall-through, which delegates here.
+        if node.role == ProcessRole::GuestControlHealth {
+            return self.wait_for_guest_control_health(vm, node, budget).await;
+        }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {
                 if node.role == ProcessRole::StoreVirtiofsPreflight {
@@ -3016,12 +3170,14 @@ fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, Str
         // The authenticated guest-control Health probe is evaluated through a
         // daemon-state-aware path (it needs the per-VM vsock socket, peer
         // credentials, and a broker-backed signer that this stateless helper
-        // cannot reach). Fail CLOSED here: a generic evaluation never reports a
-        // guest-control-health node ready. The state-aware probe result is
-        // mapped to a readiness decision by
-        // `guest_control_health::guest_control_health_ready`, which the daemon
-        // readiness loop invokes with live probe evidence.
-        ReadinessPredicate::GuestControlHealth { .. } => Ok(false),
+        // cannot reach). The live readiness path intercepts
+        // `GuestControlHealth` nodes in `VmStartRunner::spawn_and_wait_ready`
+        // before this generic evaluation is reached, so hitting this arm means
+        // the state-aware routing regressed. Fail LOUD rather than silently
+        // never-ready so the regression surfaces immediately.
+        ReadinessPredicate::GuestControlHealth { .. } => {
+            Err("guest-control-health-needs-state-aware-path".to_owned())
+        }
     }
 }
 
@@ -10071,5 +10227,60 @@ mod broker_dispatch_tests {
             node_requires_disk_init_dispatch(&node),
             "plan_ops contains DiskInit → MUST dispatch BrokerRequest::DiskInit before SpawnRunner; otherwise CH boots without overlay file and fatals with NotFound (the original D9 hole — closed by fu46, regression-pinned by this test)"
         );
+    }
+
+    #[test]
+    fn stateless_readiness_for_guest_control_health_fails_loud() {
+        use super::readiness_predicate_ready;
+        use nixling_core::processes::ReadinessPredicate;
+
+        // The live readiness path intercepts `GuestControlHealth` nodes in
+        // `VmStartRunner::spawn_and_wait_ready` and never reaches the stateless
+        // helper. If the stateless arm is ever hit, the state-aware routing
+        // regressed, so it MUST fail loud (not silently never-ready).
+        let predicate = ReadinessPredicate::GuestControlHealth {
+            vm: "work".to_owned(),
+        };
+        let result = readiness_predicate_ready(&predicate);
+        assert_eq!(
+            result,
+            Err("guest-control-health-needs-state-aware-path".to_owned()),
+            "stateless guest-control readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
+        );
+    }
+
+    #[test]
+    fn guest_control_health_is_readiness_only_node_mode() {
+        use super::{vm_start_node_mode, VmStartNodeMode};
+        use nixling_core::processes::ProcessRole;
+
+        // GuestControlHealth must remain a readiness-only node (no runner is
+        // spawned for it); the state-aware probe is driven by the readiness
+        // interception, not by a long-lived/one-shot spawn.
+        assert!(matches!(
+            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            VmStartNodeMode::ReadinessOnly
+        ));
+    }
+
+    #[test]
+    fn cloud_hypervisor_vsock_socket_extracts_socket_field() {
+        use super::cloud_hypervisor_vsock_socket;
+        use std::path::PathBuf;
+
+        let argv = vec![
+            "cloud-hypervisor".to_owned(),
+            "--vsock".to_owned(),
+            "cid=42,socket=/var/lib/nixling/vms/work/vsock.sock".to_owned(),
+            "--api-socket".to_owned(),
+            "/var/lib/nixling/vms/work/api.sock".to_owned(),
+        ];
+        assert_eq!(
+            cloud_hypervisor_vsock_socket(&argv),
+            Some(PathBuf::from("/var/lib/nixling/vms/work/vsock.sock"))
+        );
+
+        let no_vsock = vec!["cloud-hypervisor".to_owned(), "--api-socket".to_owned()];
+        assert_eq!(cloud_hypervisor_vsock_socket(&no_vsock), None);
     }
 }

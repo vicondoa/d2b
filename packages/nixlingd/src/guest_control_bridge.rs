@@ -324,6 +324,37 @@ pub fn run_guest_control_readiness_loop(
     }
 }
 
+/// Closed-enum label for the guest-reported health state of a probe
+/// outcome. Used as a metric/span label, so the range is a small fixed
+/// vocabulary — never free-form text and never guest-supplied content.
+pub fn health_state_label(evidence: &GuestControlHealthEvidence) -> &'static str {
+    use nixling_ipc::guest_proto::HealthState;
+    match evidence.health.state.enum_value() {
+        Ok(HealthState::HEALTH_STATE_HEALTHY) => "healthy",
+        Ok(HealthState::HEALTH_STATE_DEGRADED) => "degraded",
+        Ok(HealthState::HEALTH_STATE_UNAVAILABLE_OLD_GENERATION) => "unavailable-old-generation",
+        Ok(HealthState::HEALTH_STATE_LISTENER_ABSENT) => "listener-absent",
+        Ok(HealthState::HEALTH_STATE_TRANSPORT_UNREACHABLE) => "transport-unreachable",
+        Ok(HealthState::HEALTH_STATE_AUTH_FAILED) => "auth-failed",
+        Ok(HealthState::HEALTH_STATE_PROTOCOL_MISMATCH) => "protocol-mismatch",
+        Ok(HealthState::HEALTH_STATE_STALE_SESSION) => "stale-session",
+        Ok(HealthState::HEALTH_STATE_UNSPECIFIED) | Err(_) => "unspecified",
+    }
+}
+
+/// Closed-enum label for a guest-control probe error. Used as a
+/// metric/span label, so the range is a small fixed vocabulary.
+pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
+    match error {
+        GuestControlHealthError::TransportIo => "transport-io",
+        GuestControlHealthError::Ttrpc => "ttrpc",
+        GuestControlHealthError::Signer => "signer",
+        GuestControlHealthError::Protocol => "protocol",
+        GuestControlHealthError::AuthFailed => "auth-failed",
+        GuestControlHealthError::StaleSession => "stale-session",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
