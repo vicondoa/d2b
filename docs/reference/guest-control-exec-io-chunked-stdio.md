@@ -107,8 +107,11 @@ Request fields:
 - `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
 - `detached`: bool. Detached execs persist bounded logs after caller
   disconnect.
-- `initial_terminal_size`: optional `{rows, cols}` required for `tty`, with
-  each dimension in the Linux `winsize` range `1..65535`.
+- `initial_terminal_size`: optional `{rows, cols}`. When absent it defaults to
+  `24` rows by `80` cols; when present each dimension must be in the Linux
+  `winsize` range `1..65535`. A present `0` or out-of-range value is rejected
+  with `invalid-terminal-size` (it is never silently defaulted). Ignored for
+  non-`tty` execs.
 - `output_policy`: `{max_chunk_bytes, max_stdout_log_bytes,
   max_stderr_log_bytes, slow_consumer_timeout_ms, wait_timeout_ms}`. The
   server clamps each value to the VM capability maximum.
@@ -283,14 +286,21 @@ Rules:
 - For pipe-backed non-TTY execs, the server schedules EOF and closes the
   child's stdin fd only after all already accepted stdin bytes through the
   final offset have drained from the bounded queue.
-- For TTY execs, close means host input is closed; it does not synthesize
-  Ctrl-D. If the CLI wants Ctrl-D semantics it sends the terminal byte
-  through `WriteStdin` before close.
-- TTY close is protocol-side only: guestd marks future host input writes
-  rejected, but it does not close the PTY master, drop the writer handle,
-  send SIGHUP, or stop the output reader. Output already buffered or
-  produced later by the foreground program remains readable until PTY
-  output EOF.
+- For TTY execs, `CloseStdin` injects the line-discipline `VEOF` byte
+  (`Ctrl-D` / `0x04`) into the PTY master once all accepted stdin bytes
+  through the final offset have landed, then marks stdin closed. A PTY master
+  has no true write half-close (closing it would `SIGHUP` output and control),
+  so guestd models stdin half-close as this single `VEOF` inject and keeps the
+  master open. Under canonical mode the foreground reader observes EOF; in raw
+  mode `Ctrl-D` is ordinary input. `WriteStdin(close_after=true)` writes the
+  payload and then performs the same `VEOF` inject.
+- TTY close keeps the PTY master open: guestd does not drop the writer handle,
+  send `SIGHUP`, or stop the output reader on `CloseStdin`. The master is closed
+  only on caller disconnect, cancel, or a terminal state. Subsequent
+  `WriteStdin` calls are rejected with `stdin-closed`; a duplicate `CloseStdin`
+  at the same final offset is an idempotent no-op success that does not inject a
+  second `VEOF`. Output already buffered or produced later by the foreground
+  program remains readable until PTY output EOF.
 - A child closing its read side transitions to `closed-by-process`; later
   writes get `stdin-closed-by-process`.
 
@@ -651,11 +661,17 @@ require a future explicit API flag.
 ### Signal
 
 `ExecSignal` includes a numeric signal and a `target` enum:
-`foreground_process_group` for TTY and `process_tree` for non-TTY. The
-default CLI termination behavior maps to foreground process group in TTY
-and process tree in non-TTY. A signal accepted after process exit is
-idempotent no-op only for duplicate `request_id`; otherwise it returns
-`exec-already-exited`.
+`foreground_process_group` for TTY and `process_tree` for non-TTY. In the
+current implementation only `foreground_process_group` is accepted: guestd
+rejects any other target (`process_tree`, unspecified, or unknown) with
+`invalid-signal` *before* the control sequence is consumed, so the client may
+retry with a valid target at the same seq. Non-TTY `process_tree` signalling is
+deferred — the W14 surface is TTY foreground-process-group only. The signal
+number is matched against the frozen TTY allowlist (`HUP`, `INT`, `QUIT`,
+`KILL`, `USR1`, `USR2`, `TERM`, `CONT`, `TSTP`, `WINCH`); any other number is
+rejected with `invalid-signal`, also before the seq is consumed. A signal
+accepted after process exit is idempotent no-op only for duplicate
+`request_id`; otherwise it returns `exec-already-exited`.
 
 For TTY execs, guestd resolves `foreground_process_group` from the PTY
 foreground owner (`tcgetpgrp` semantics), not from the root shell PID.
@@ -672,6 +688,15 @@ state `cancelled`, wakes all waiters/readers, and preserves retained logs
 according to detached/attached retention. Transport disconnect does not
 cancel detached execs. It cancels attached non-detached execs after a
 small grace period unless another authorized attach takes ownership.
+
+Attached **TTY** execs are non-durable and not re-ownable: on caller
+disconnect (or cancel) guestd tears the session down by dropping all
+PTY-master-owning tasks (output reader, stdin writer, control), which
+closes the master and delivers `SIGHUP` to the foreground process group,
+then escalates to `SIGKILL` after the grace window and reaps the session.
+A TTY session's identity does not survive disconnect; a later attach
+cannot resume it. Non-TTY attached re-ownership above does not apply to
+TTY execs.
 
 ## EOF, close, and half-close semantics
 
@@ -829,6 +854,15 @@ include socket paths, token/MAC material, transcripts, argv/env/cwd,
 payload bytes, or guest free-form error text.
 
 ## CLI behavior
+
+> **Scope note.** The guest-control exec *RPC/service* surface
+> (`ExecCreate`/`WriteStdin`/`CloseStdin`/`ReadOutput`/`TtyWinResize`/
+> `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
+> contract. The `nixling vm exec` **CLI** described below — including the
+> `--interactive`, `--tty`, and `--detach` flags and the interactive
+> `exec -it` flow — is the planned operator front-end and is **not yet
+> shipped** (tracked as W15). The behaviors below specify the intended CLI
+> mapping onto the existing RPC surface, not a currently available command.
 
 ### Attached exec
 

@@ -6,6 +6,12 @@ section of [ADR 0028](../adr/0028-guest-control-plane-over-vsock.md) and
 builds on the non-interactive contract in the
 [chunked stdio reference](./guest-control-exec-io-chunked-stdio.md).
 
+> **Scope note.** This document specifies the interactive TTY exec
+> *RPC/service* surface served by `nixling-guestd`. The operator-facing
+> `nixling vm exec -it` / `--tty` **CLI** front-end is planned but **not yet
+> shipped** (tracked as W15); the contract below is the service behavior the
+> future CLI will drive, not a currently available command.
+
 ## Mode selection
 
 `exec_create` selects the interactive path from two request fields:
@@ -75,9 +81,18 @@ lock is held across an `await`.
 
 `CloseStdin` **injects VEOF (`0x04`)** into the PTY line discipline and keeps
 the master open. It is **not** a master-close half-close (the master is closed
-only on disconnect, cancel, or terminal teardown). `CloseStdin` is idempotent,
-and any subsequent `WriteStdin` is rejected with a typed **stdin-closed** error.
-`WriteStdin` with `close_after=true` writes the data, then injects VEOF.
+only on disconnect, cancel, or terminal teardown). `CloseStdin` is idempotent
+(a duplicate `CloseStdin` at the same final offset is a no-op success that does
+**not** inject a second VEOF), and any subsequent `WriteStdin` is rejected with
+a typed **stdin-closed** error. `WriteStdin` with `close_after=true` writes the
+data, then injects VEOF.
+
+A `0x04` byte sent through `WriteStdin` is **ordinary stdin data**, not a
+protocol close: guestd forwards it to the PTY like any other input. In raw mode
+the foreground program receives the literal `0x04`; under canonical mode the
+line discipline interprets it (as the `VEOF` control char) exactly as a real
+terminal would. Only the explicit `CloseStdin` RPC (or `close_after=true`)
+performs the protocol-level stdin close.
 
 ## Resize and signal ordering
 
@@ -92,6 +107,9 @@ allowed.
   `SignalTarget` is rejected with a `ProtocolError` **before** the sequence is
   consumed. The foreground process group is resolved via `tcgetpgrp(master)`
   **at delivery time** (so it tracks job-control changes inside the session).
+  Non-TTY `PROCESS_TREE` signalling is **deferred** — it is not implemented in
+  this surface, so a `PROCESS_TREE` (or unspecified/unknown) target is rejected
+  with the same typed error.
 - **Signal allowlist.** The delivered signal must be one of
   `INT`, `TERM`, `HUP`, `QUIT`, `WINCH`, `USR1`, `USR2`, `KILL`, `TSTP`,
   `CONT`. An out-of-allowlist signal number is rejected **after** sequence
