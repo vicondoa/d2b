@@ -2498,10 +2498,13 @@ fn finish_config_sync_from_reply(
 
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
     config_validate_vm_name(&args.vm)?;
-    config_validate_remote_path(&args.guest_path)?;
     require_known_vm(context, &args.vm, args.json)?;
 
     if !vm_uses_guest_control(context, &args.vm)? {
+        // Operator SSH-compatibility transport (wired in a later wave):
+        // the in-guest path is meaningful there, so validate it before
+        // reporting that the guest-control transport is unavailable.
+        config_validate_remote_path(&args.guest_path)?;
         return Err(guest_control_config_failure(
             "guest-control-unavailable-old-generation",
             "selecting the config-sync transport for the VM",
@@ -2515,6 +2518,11 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
         ));
     }
 
+    // Guest-control VMs: SSH-only flags (including a non-default
+    // --guest-path) are rejected with the stable
+    // guest-control-ssh-flag-rejected envelope (exit 2) BEFORE any generic
+    // unsafe-path validation, so flag-rejection wins on the guest-control
+    // path rather than collapsing to the exit-1 unsafe-path error.
     reject_ssh_only_flags_on_guest_control(args)?;
 
     let staging = config_staging_path(&args.vm);
