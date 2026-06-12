@@ -2075,10 +2075,11 @@ mod tests {
             .expect("exec_list ok");
         assert!(response.error.is_none(), "no error on same-boot list");
         assert_eq!(response.entries.len(), 3, "every seeded record is listed");
-        // The bounded set never exceeds the retained-per-VM cap, and each entry
-        // exposes the argv DIGEST only — the wire entry structurally has no raw
-        // argv/env/cwd field, so no command bytes can leak through ExecList.
-        assert!(response.entries.len() as u32 <= DETACHED_RETAINED_PER_VM as u32);
+        // Each entry exposes the argv DIGEST only — the wire entry structurally
+        // has no raw argv/env/cwd field, so no command bytes can leak through
+        // ExecList. The retained-cap bound is exercised non-vacuously by
+        // `exec_list_is_bounded_at_the_retained_cap` (this list of 3 is far
+        // below the cap, so asserting the bound here would be vacuous).
         let mut ids: Vec<String> = Vec::new();
         for entry in &response.entries {
             assert_eq!(entry.argv_sha256.len(), 64, "argv_sha256 is a 32-byte hex digest");
@@ -2092,6 +2093,65 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 3, "exec ids are distinct");
+    }
+
+    #[tokio::test]
+    async fn exec_list_is_bounded_at_the_retained_cap() {
+        let ctx = ttrpc_context();
+        // Fill the registry to the retained-per-VM cap. Each seeded create
+        // resolves terminal (SpawnFailed) and releases its active count, so the
+        // active cap never blocks reaching the retained cap.
+        let detached = seeded_detached("boot-A", DETACHED_RETAINED_PER_VM as u32).await;
+
+        // The registry refuses to retain MORE than the cap: every slot in
+        // `0..DETACHED_RETAINED_PER_VM` is occupied, so a create past the cap is
+        // rejected with capacity-exceeded. This is what makes the registry
+        // structurally unable to hold more than the cap.
+        let over_cap = detached
+            .create(
+                "boot-A",
+                svc_command(DETACHED_RETAINED_PER_VM as u32),
+                DetachedCaps::standard(0),
+            )
+            .await;
+        assert!(
+            matches!(over_cap, Err(ExecError::ExecCapacityExceeded)),
+            "creating past the retained cap must be rejected, got {over_cap:?}"
+        );
+
+        let service = service_with_detached(7, detached);
+        authenticate(&service).await;
+
+        let response = service
+            .exec_list(&ctx, exec_list_request("boot-A"))
+            .await
+            .expect("exec_list ok");
+        assert!(response.error.is_none(), "no error on same-boot list");
+        // Non-vacuous bound: the registry is full, so the handler returns
+        // EXACTLY the cap. A regression that let the registry grow past the cap
+        // (or the handler emit more than the cap) would trip these assertions.
+        assert_eq!(
+            response.entries.len(),
+            DETACHED_RETAINED_PER_VM,
+            "a full registry lists exactly the retained-per-VM cap"
+        );
+        assert!(
+            response.entries.len() <= DETACHED_RETAINED_PER_VM,
+            "ExecList response is bounded at the retained-per-VM cap"
+        );
+        // Every listed slot is in-range and unique — no slot leaks past the cap.
+        let mut slots: Vec<u32> = response.entries.iter().map(|e| e.slot).collect();
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(
+            slots.len(),
+            DETACHED_RETAINED_PER_VM,
+            "every retained slot is listed exactly once"
+        );
+        assert!(
+            slots.iter().all(|&slot| (slot as usize) < DETACHED_RETAINED_PER_VM),
+            "every listed slot is within the retained-per-VM range"
+        );
     }
 
     #[tokio::test]
