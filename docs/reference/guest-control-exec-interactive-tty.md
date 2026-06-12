@@ -35,7 +35,11 @@ controlling terminal. The full guest stack keeps `unsafe_code = "forbid"`.
 
 1. guestd allocates the PTY master with `posix_openpt(O_RDWR|O_NOCTTY|
    O_CLOEXEC)`, then `grantpt` / `unlockpt` / `ptsname`, and opens the slave
-   `O_RDWR|O_NOCTTY`.
+   `O_RDWR|O_NOCTTY|O_CLOEXEC`. The slave's `O_CLOEXEC` is intentional: a
+   concurrent fork/exec elsewhere in guestd cannot inherit the slave and keep
+   the PTY alive (preserving the HUP/EOF contract). `Stdio::from(slave)` still
+   hands fd 0 to the helper because `Command`'s `dup2` clears `CLOEXEC` on the
+   duplicate.
 2. guestd spawns the static `nixling-exec-runner` in its `--tty-exec` mode via
    `Command`, with the slave on **stdin** (`Stdio::from(OwnedFd)`) and an
    `O_CLOEXEC` status pipe on **stdout**. There are no arbitrary `pass_fds`,
@@ -112,8 +116,10 @@ allowed.
   with the same typed error.
 - **Signal allowlist.** The delivered signal must be one of
   `INT`, `TERM`, `HUP`, `QUIT`, `WINCH`, `USR1`, `USR2`, `KILL`, `TSTP`,
-  `CONT`. An out-of-allowlist signal number is rejected **after** sequence
-  admission.
+  `CONT`. An out-of-allowlist signal number is rejected **before** the
+  sequence is consumed — the `control_seq` is not advanced, so it stays
+  available for a subsequent valid control message — and maps to a typed
+  `ProtocolError`. There is no dedicated invalid-signal wire kind.
 
 ## Runtime ceiling: indefinite, scoped to TTY
 

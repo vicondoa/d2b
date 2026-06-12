@@ -107,11 +107,12 @@ Request fields:
 - `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
 - `detached`: bool. Detached execs persist bounded logs after caller
   disconnect.
-- `initial_terminal_size`: optional `{rows, cols}`. When absent it defaults to
-  `24` rows by `80` cols; when present each dimension must be in the Linux
-  `winsize` range `1..65535`. A present `0` or out-of-range value is rejected
-  with `invalid-terminal-size` (it is never silently defaulted). Ignored for
-  non-`tty` execs.
+- `initial_terminal_size`: optional `{rows, cols}`, valid **only** for
+  `tty=true` execs. When absent it defaults to `24` rows by `80` cols; when
+  present each dimension must be in the Linux `winsize` range `1..=65535`. A
+  present `0` or out-of-range value is rejected with `protocol-error` (it is
+  never silently defaulted). Presence on a non-`tty` exec is **rejected** with
+  `protocol-error` (unsupported mode) — it is never silently ignored.
 - `output_policy`: `{max_chunk_bytes, max_stdout_log_bytes,
   max_stderr_log_bytes, slow_consumer_timeout_ms, wait_timeout_ms}`. The
   server clamps each value to the VM capability maximum.
@@ -261,6 +262,24 @@ Rules:
    without closing the PTY master/writer or stopping output reads. If the
    chunk cannot be accepted, stdin remains open and the caller retries or
    calls `CloseStdin`.
+
+**Interactive TTY carve-out.** The TTY path does **not** use the
+all-or-nothing + `request_id`-replay model of rules 2–4. Instead:
+
+- **Partial accepted_len.** A TTY `WriteStdin` reports `accepted_len` equal to
+  the bytes durably written to the PTY master, which may be **less than**
+  `data.len()` (a partial kernel write), and advances `next_offset` by exactly
+  that count. The caller retries the remainder from `next_offset`; no byte is
+  re-delivered. A write that makes **zero** progress on a non-empty payload
+  (the master is gone) returns `stdin-closed`, leaving `next_offset` unchanged.
+- **Strict contiguous offset, no dedupe.** A TTY write is admitted only when
+  `offset` equals the next expected offset. There is **no** `request_id` dedupe
+  entry on the TTY path, so a duplicate or out-of-order offset (including a
+  replay of an already-accepted chunk) is rejected with `stdin-offset-mismatch`
+  and the expected offset — it is never silently absorbed as a duplicate.
+- **VEOF is not counted.** `close_after=true` (and `CloseStdin`) inject `VEOF`
+  only once the full payload has landed; the injected `VEOF` control byte does
+  not advance `next_offset`.
 
 ### `CloseStdin`
 
