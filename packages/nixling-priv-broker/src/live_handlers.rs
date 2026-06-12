@@ -1620,6 +1620,21 @@ enum AclPathKind {
 }
 
 fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(), String> {
+    setfacl_fd_safe_op(path, "-m", acl_spec, kind).map(|_| ())
+}
+
+/// Like [`setfacl_fd_safe`] but parameterised on the setfacl operation
+/// flag (`-m` to add/modify, `-x` to remove) and returns the resolved
+/// `(dev, ino)` of the target the ACL was applied to (`None` if the
+/// path was absent). The returned identity is consumed by path-free
+/// audit hashing so audit records never carry raw socket/state-dir
+/// paths.
+fn setfacl_fd_safe_op(
+    path: &Path,
+    op: &str,
+    acl_spec: &str,
+    kind: AclPathKind,
+) -> Result<Option<(u64, u64)>, String> {
     let fd = match rustix::fs::openat2(
         CWD,
         path,
@@ -1628,7 +1643,7 @@ fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(),
         ResolveFlags::NO_SYMLINKS,
     ) {
         Ok(fd) => fd,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(format!(
                 "openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
@@ -1655,8 +1670,10 @@ fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(),
         ));
     }
 
-    crate::sys::pidfd_sys::run_setfacl_on_fd(file.as_fd(), acl_spec)
-        .map_err(|err| format!("setfacl {acl_spec} on {}: {err}", path.display()))
+    crate::sys::pidfd_sys::run_setfacl_op_on_fd(file.as_fd(), op, acl_spec)
+        .map_err(|err| format!("setfacl {op} {acl_spec} on {}: {err}", path.display()))?;
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(Some((metadata.dev(), metadata.ino())))
 }
 
 fn setfacl_verified_device(
@@ -2001,6 +2018,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
         }
     }
     refresh_obs_vsock_acl(plan)?;
+    refresh_guest_control_vsock_acl(plan)?;
 
     Ok(())
 }
@@ -2036,6 +2054,183 @@ fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
             "cloud-hypervisor api socket ACL refresh timed out",
         );
     });
+}
+
+/// The system principal the framework grants daemon-side guest-control
+/// vsock access to. The `nixlingd` daemon owns the per-VM lifecycle DAG
+/// and is the only host process that connects to the guest-control
+/// vsock socket for the readiness probe / config-sync over the bridge.
+const GUEST_CONTROL_DAEMON_PRINCIPAL: &str = "nixlingd";
+
+/// Extract the cloud-hypervisor `--vsock socket=<path>` argument for a
+/// CH runner plan. Gated on the CH runner's seccomp policy ref so the
+/// daemon-vsock ACL is only ever attached to a real cloud-hypervisor
+/// runner's vsock socket, never to any other role's argv.
+fn cloud_hypervisor_vsock_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-cloud-hypervisor-runner") {
+        return None;
+    }
+    plan.argv.windows(2).find_map(|pair| {
+        if pair[0] != "--vsock" {
+            return None;
+        }
+        pair[1]
+            .split(',')
+            .find_map(|field| field.strip_prefix("socket=").map(PathBuf::from))
+    })
+}
+
+/// Path-free digest of a guest-control vsock ACL mutation, for audit.
+///
+/// Returns `sha256:<hex>` over the operation, the target class, and the
+/// target's resolved `(dev, ino)` — never the raw socket / state-dir
+/// path. The guest-control observability contract forbids raw vsock /
+/// socket / state-dir paths in spans, logs, metrics, and audit.
+fn guest_control_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"guest-control-vsock-acl\0");
+    hasher.update(op.as_bytes());
+    hasher.update([0]);
+    hasher.update(target_class.as_bytes());
+    hasher.update([0]);
+    hasher.update(dev.to_le_bytes());
+    hasher.update(ino.to_le_bytes());
+    let digest: [u8; 32] = hasher.finalize().into();
+    let mut out = String::from("sha256:");
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Emit a hash-only audit event for a guest-control vsock ACL mutation.
+/// Closed-enum labels only; no raw paths, uids-by-value, or content.
+fn audit_guest_control_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = "guest-control-health",
+        op = op,
+        daemon_principal = GUEST_CONTROL_DAEMON_PRINCIPAL,
+        target_class = target_class,
+        acl_diff_hash = %guest_control_acl_diff_hash(op, target_class, dev, ino),
+        result = "ok",
+        "guest-control vsock daemon ACL mutation",
+    );
+}
+
+/// Grant the `nixlingd` daemon principal the minimum ACL needed to
+/// reach the per-VM guest-control vsock socket: `--x` (traverse only)
+/// on the enclosing state directory and `rw` on the socket itself.
+///
+/// Grants exactly one named user entry (`u:nixlingd:...`); never a
+/// group, default, or blanket entry. Each `setfacl` is applied to an
+/// `openat2(O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS)` fd, so the mutation
+/// targets the exact inode resolved at grant time — if the socket is
+/// replaced mid-grant the fresh inode (the live CH socket) is the one
+/// the daemon must reach anyway. Returns `Ok(false)` while the socket
+/// has not yet been created by cloud-hypervisor so the caller retries.
+fn grant_guest_control_vsock_acl_once(socket: &Path) -> Result<bool, String> {
+    if !socket.exists() {
+        return Ok(false);
+    }
+    let Some(parent) = socket.parent() else {
+        return Err("guest-control vsock path has no parent".to_owned());
+    };
+    if let Some((dev, ino)) = setfacl_fd_safe_op(
+        parent,
+        "-m",
+        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:--x"),
+        AclPathKind::Directory,
+    )? {
+        audit_guest_control_vsock_acl("grant", "state-dir", dev, ino);
+    }
+    match setfacl_fd_safe_op(
+        socket,
+        "-m",
+        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:rw"),
+        AclPathKind::Socket,
+    )? {
+        Some((dev, ino)) => {
+            audit_guest_control_vsock_acl("grant", "vsock-socket", dev, ino);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Revoke the daemon-principal guest-control vsock ACL from the socket
+/// and its enclosing state directory. Best-effort and idempotent: a
+/// missing path is a no-op. Provided for explicit teardown; the primary
+/// revocation mechanism is structural — `cleanup_cloud_hypervisor_stale_sockets`
+/// unlinks the prior vsock socket inode before each CH respawn, so a
+/// stale grant can never survive a generation change.
+#[cfg_attr(not(test), allow(dead_code))]
+fn revoke_guest_control_vsock_acl(socket: &Path) -> Result<(), String> {
+    if let Some(parent) = socket.parent() {
+        if let Some((dev, ino)) = setfacl_fd_safe_op(
+            parent,
+            "-x",
+            &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}"),
+            AclPathKind::Directory,
+        )? {
+            audit_guest_control_vsock_acl("revoke", "state-dir", dev, ino);
+        }
+    }
+    if let Some((dev, ino)) = setfacl_fd_safe_op(
+        socket,
+        "-x",
+        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}"),
+        AclPathKind::Socket,
+    )? {
+        audit_guest_control_vsock_acl("revoke", "vsock-socket", dev, ino);
+    }
+    Ok(())
+}
+
+/// Retry the daemon-vsock ACL grant in a background thread until the
+/// cloud-hypervisor process has created the vsock socket (bounded to
+/// ~30s, matching the obs-vsock precedent). Logs are path-free.
+fn spawn_guest_control_vsock_acl_retry(socket: PathBuf) {
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            match grant_guest_control_vsock_acl_once(&socket) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(_) => {
+                    tracing::debug!(
+                        subsystem = "guest-control-health",
+                        "guest-control vsock daemon ACL refresh not ready yet",
+                    );
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        tracing::warn!(
+            subsystem = "guest-control-health",
+            "guest-control vsock daemon ACL refresh timed out",
+        );
+    });
+}
+
+/// Refresh the daemon-vsock ACL for a CH runner plan. No-op for any
+/// non-CH runner (no `--vsock socket=` arg). Grants immediately if the
+/// socket already exists, otherwise spawns a bounded retry thread.
+fn refresh_guest_control_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    let Some(socket) = cloud_hypervisor_vsock_socket_arg(plan) else {
+        return Ok(());
+    };
+    match grant_guest_control_vsock_acl_once(&socket) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            spawn_guest_control_vsock_acl_retry(socket);
+            Ok(())
+        }
+        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+            detail: format!("refresh guest-control vsock daemon ACL: {detail}"),
+        }),
+    }
 }
 
 /// Live broker `SpawnRunner` handler.
@@ -2962,6 +3157,85 @@ mod tests {
             user_namespace: None,
             umask: None,
         }
+    }
+
+    #[test]
+    fn parses_cloud_hypervisor_vsock_socket_for_ch_runner() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--api-socket".to_owned(),
+                "/var/lib/nixling/vms/corp-vm/api.sock".to_owned(),
+                "--vsock".to_owned(),
+                "cid=42,socket=/var/lib/nixling/vms/corp-vm/vsock.sock".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(
+            cloud_hypervisor_vsock_socket_arg(&plan),
+            Some(PathBuf::from("/var/lib/nixling/vms/corp-vm/vsock.sock"))
+        );
+    }
+
+    #[test]
+    fn cloud_hypervisor_vsock_socket_gated_on_ch_runner_policy() {
+        // Same argv shape but a non-CH seccomp policy: the daemon-vsock
+        // ACL must never attach to a non-cloud-hypervisor runner.
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--vsock".to_owned(),
+                "cid=42,socket=/var/lib/nixling/vms/corp-vm/vsock.sock".to_owned(),
+            ],
+            "w1-vsock-relay",
+        );
+
+        assert_eq!(cloud_hypervisor_vsock_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn cloud_hypervisor_vsock_socket_absent_without_vsock_arg() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--api-socket".to_owned(),
+                "/var/lib/nixling/vms/corp-vm/api.sock".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(cloud_hypervisor_vsock_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn guest_control_acl_diff_hash_is_path_free_and_stable() {
+        let h1 = guest_control_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
+        let h2 = guest_control_acl_diff_hash("grant", "vsock-socket", 0x10, 0x20);
+        let h3 = guest_control_acl_diff_hash("revoke", "vsock-socket", 0x10, 0x20);
+        assert_eq!(h1, h2, "hash must be deterministic for identical inputs");
+        assert_ne!(h1, h3, "op must affect the hash");
+        assert!(h1.starts_with("sha256:"));
+        assert_eq!(h1.len(), "sha256:".len() + 64);
+        // The digest must not embed any raw path component.
+        assert!(!h1.contains('/'));
+    }
+
+    #[test]
+    fn guest_control_acl_grant_not_ready_for_absent_socket() {
+        // Hermetic: before cloud-hypervisor creates the vsock socket,
+        // the grant must report not-ready (Ok(false)) so the caller
+        // retries — never erroring and never touching a foreign inode.
+        let dir = TestDir::new("gc-vsock-acl");
+        let socket = dir.join("vsock.sock");
+        assert!(!socket.exists());
+        assert_eq!(
+            grant_guest_control_vsock_acl_once(&socket),
+            Ok(false),
+            "absent socket must report not-ready",
+        );
+        // Revoke against an absent socket (and its parent) is a no-op.
+        revoke_guest_control_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
     }
 
     #[test]

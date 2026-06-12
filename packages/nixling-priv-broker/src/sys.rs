@@ -1512,9 +1512,22 @@ pub mod pidfd_sys {
     /// spawns inherit the target fd.
     #[allow(unsafe_code)]
     pub fn run_setfacl_on_fd(fd: BorrowedFd<'_>, acl_spec: &str) -> io::Result<()> {
+        run_setfacl_op_on_fd(fd, "-m", acl_spec)
+    }
+
+    /// Run `setfacl <op> <acl_spec> /proc/self/fd/<fd>` in a forked
+    /// child while keeping the target fd CLOEXEC in the broker parent.
+    ///
+    /// `op` is the setfacl operation flag, e.g. `-m` to add/modify an
+    /// entry or `-x` to remove one. See [`run_setfacl_on_fd`] for the
+    /// CLOEXEC rationale.
+    #[allow(unsafe_code)]
+    pub fn run_setfacl_op_on_fd(fd: BorrowedFd<'_>, op: &str, acl_spec: &str) -> io::Result<()> {
         let setfacl = std::ffi::CString::new("/run/current-system/sw/bin/setfacl")
             .expect("static setfacl path has no NUL");
-        let dash_m = std::ffi::CString::new("-m").expect("static arg has no NUL");
+        let dash_m = std::ffi::CString::new(op).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "setfacl op contains NUL byte")
+        })?;
         let acl = std::ffi::CString::new(acl_spec).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidInput, "acl spec contains NUL byte")
         })?;
