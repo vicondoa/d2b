@@ -21,7 +21,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
-use crate::detached::{unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager};
+use crate::detached::{
+    parse_exec_start, unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
+};
 use crate::exec::{ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream, ValidatedCommand};
 
 use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
@@ -591,35 +593,82 @@ impl DetachedRegistry {
         match units.iter().find(|u| u.slot == slot) {
             None => SlotLiveness::Absent,
             Some(unit) => {
-                if unit.active && self.unit_identity_ok(unit, slot) {
-                    SlotLiveness::Live
-                } else {
-                    // Loaded-but-inactive/failed, or an identity mismatch: not a
-                    // unit we may adopt as our live runner.
-                    SlotLiveness::Foreign
+                if !unit.active {
+                    // Loaded-but-inactive/failed: never our live runner. Tearing
+                    // down an INACTIVE unit is non-destructive (nothing runs), so
+                    // it is `Foreign` regardless of whether identity was queried.
+                    return SlotLiveness::Foreign;
+                }
+                // ACTIVE unit: its identity decides Live vs Foreign vs Unknown.
+                match &unit.identity {
+                    // The `systemctl show` identity query failed for an active
+                    // unit: liveness is UNKNOWN. A transient query failure must
+                    // NOT drive destructive reconciliation of a possibly-live
+                    // runner — skip and retry later (F1).
+                    UnitIdentity::Unqueried => SlotLiveness::Unknown,
+                    // Identity was successfully read: only an actual mismatch
+                    // (wrong slice / wrong runner exe / wrong slot) is `Foreign`.
+                    UnitIdentity::Queried { slice, exec_start } => {
+                        if self.identity_matches(slice.as_deref(), exec_start.as_deref(), slot) {
+                            SlotLiveness::Live
+                        } else {
+                            SlotLiveness::Foreign
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Verify an adopted unit really is THIS slot's runner: it must live in the
-    /// dedicated `nixling-exec.slice` and its `ExecStart` must invoke the
-    /// expected runner binary with `--serve-exec --slot NN` (F1).
-    fn unit_identity_ok(&self, unit: &ManagedUnit, slot: u32) -> bool {
-        if unit.slice.as_deref() != Some("nixling-exec.slice") {
+    /// Verify a QUERIED unit identity really is THIS slot's runner. The check
+    /// is STRUCTURAL, never substring-based (F1): the unit must live in the
+    /// dedicated `nixling-exec.slice`, the resolved `ExecStart` executable path
+    /// must EQUAL the configured runner abs path, and the argv token sequence
+    /// must contain `--serve-exec` and an adjacent `--slot <NN>` (this slot's
+    /// zero-padded NN) as DISTINCT argv tokens. An impostor that merely embeds
+    /// those strings inside an unrelated argument, or runs a different
+    /// executable / a different slot, is rejected.
+    fn identity_matches(
+        &self,
+        slice: Option<&str>,
+        exec_start: Option<&str>,
+        slot: u32,
+    ) -> bool {
+        if slice != Some("nixling-exec.slice") {
             return false;
         }
-        let Some(exec_start) = unit.exec_start.as_deref() else {
+        let Some(exec_start) = exec_start else {
+            return false;
+        };
+        let Some(parsed) = parse_exec_start(exec_start) else {
             return false;
         };
         let runner = self.config.paths.exec_runner_path.to_string_lossy();
-        let slot_arg = format!("--slot {slot:02}");
-        exec_start.contains(runner.as_ref())
-            && exec_start.contains("--serve-exec")
-            && exec_start.contains(&slot_arg)
+        // Exact executable-path equality, not a substring containment.
+        if parsed.exe != runner.as_ref() {
+            return false;
+        }
+        // `--serve-exec` must be a standalone argv token.
+        let has_serve_exec = parsed.argv.iter().any(|t| t == "--serve-exec");
+        // `--slot` must be immediately followed by THIS slot's zero-padded NN
+        // as a distinct token (not a substring of an unrelated argument).
+        let slot_token = format!("{slot:02}");
+        let has_slot = parsed
+            .argv
+            .windows(2)
+            .any(|w| w[0] == "--slot" && w[1] == slot_token);
+        has_serve_exec && has_slot
     }
 
     // ---- read-side ops ---------------------------------------------------
+
+    /// Test-only accessor for the active-concurrency counter
+    /// (`DETACHED_ACTIVE_PER_VM` reservation). Lets reconciliation tests assert
+    /// the counter is released precisely (not merely that a record is retained).
+    #[cfg(test)]
+    pub(crate) fn active_count(&self) -> u32 {
+        self.lock().active
+    }
 
     pub async fn inspect(&self, exec_id: &str, boot_id: &str) -> Result<ExecSnapshot, ExecError> {
         if boot_id != self.config.boot_id {
@@ -1012,11 +1061,16 @@ impl DetachedRegistry {
     }
 
     /// A held dispatch never registered a unit within its deadline: delete the
-    /// slot dir + release the reservation. No id was ever externally visible.
+    /// slot dir + release the reservation — but ONLY once the on-disk dir is
+    /// actually gone. If the unlink fails, keep the (hidden) dispatch-hold
+    /// entry so the slot is never freed for reuse with stale files on disk; a
+    /// later reaper pass retries the unlink (consistent with the GC
+    /// retain-on-failure path, F12). No id was ever externally visible.
     async fn delete_dispatch_hold(&self, slot: u32) {
-        let _ = self.store.delete_slot_dir(slot);
-        let mut state = self.lock();
-        state.remove_entry(slot);
+        if self.store.delete_slot_dir(slot).is_ok() {
+            let mut state = self.lock();
+            state.remove_entry(slot);
+        }
     }
 
     // ---- startup re-adoption --------------------------------------------
@@ -1139,7 +1193,8 @@ impl DetachedRegistry {
     /// Adopt a record with NO terminal status and NO live unit (definitive).
     /// Distinguishes "never ran" from "was running, runner vanished":
     /// - Dispatching within deadline → dispatch hold (F2; reaper resolves).
-    /// - Dispatching past deadline → delete + release (never ran).
+    /// - Dispatching past deadline → delete + release (never ran); on an unlink
+    ///   failure, keep a hidden retryable hold so the slot is not reused (F12).
     /// - any other live state (e.g. Running) → mark lost, RETAIN slot+logs+
     ///   quota (F3): the runner was up while guestd was down.
     fn adopt_no_unit(&self, slot: u32, record: DurableRecord) {
@@ -1147,8 +1202,14 @@ impl DetachedRegistry {
             if self.clock.now_ms() < record.dispatch_deadline_unix {
                 self.insert_adopted(slot, record, AdoptKind::DispatchHold);
             } else {
-                // Past the dispatch deadline, never ran → delete + release.
-                let _ = self.store.delete_slot_dir(slot);
+                // Past the dispatch deadline, never ran → delete + release. If
+                // the unlink fails, keep a hidden retryable dispatch-hold entry
+                // so the slot is NOT reused with stale files on disk; a later
+                // reaper pass retries the unlink (consistent with the GC and
+                // dispatch-hold retain-on-failure paths, F12).
+                if self.store.delete_slot_dir(slot).is_err() {
+                    self.insert_adopted(slot, record, AdoptKind::DispatchHold);
+                }
             }
         } else {
             // F3: persisted Running (or other non-Dispatching live) with no unit
@@ -1808,6 +1869,15 @@ mod tests {
                 .records
                 .insert(slot, record.encode());
         }
+        /// Seed an undecodable record so `read_record` fails (re-adoption must
+        /// quarantine the slot rather than trusting corrupt bytes).
+        fn seed_corrupt_record(&self, slot: u32) {
+            self.inner
+                .lock()
+                .unwrap()
+                .records
+                .insert(slot, b"not-a-valid-durable-record".to_vec());
+        }
         fn scrubbed(&self) -> Vec<u32> {
             self.inner.lock().unwrap().scrubbed.clone()
         }
@@ -1990,6 +2060,13 @@ mod tests {
         inactive: std::collections::HashSet<u32>,
         /// Live slots forced to report a non-matching identity (→ Foreign).
         mismatch: std::collections::HashSet<u32>,
+        /// Live slots whose `systemctl show` identity enrichment FAILED: the
+        /// unit is reported active but its identity is `Unqueried` (→ Unknown,
+        /// never Foreign — G1/F1).
+        show_fail: std::collections::HashSet<u32>,
+        /// Explicit per-slot identity overrides (active unit). Used by the
+        /// structural-identity tests to inject impostor argv shapes.
+        identity_override: HashMap<u32, UnitIdentity>,
         /// Runner binary path used to synthesize a matching `ExecStart`.
         runner_path: String,
     }
@@ -2004,6 +2081,8 @@ mod tests {
                 fail_list: false,
                 inactive: std::collections::HashSet::new(),
                 mismatch: std::collections::HashSet::new(),
+                show_fail: std::collections::HashSet::new(),
+                identity_override: HashMap::new(),
                 runner_path: RUNNER_PATH.to_owned(),
             }
         }
@@ -2034,6 +2113,26 @@ mod tests {
         }
         fn set_mismatch(&self, slot: u32) {
             self.inner.lock().unwrap().mismatch.insert(slot);
+        }
+        /// Simulate a `systemctl show` identity-enrichment failure for an
+        /// otherwise-active unit (identity `Unqueried`).
+        fn set_show_fail(&self, slot: u32) {
+            self.inner.lock().unwrap().show_fail.insert(slot);
+        }
+        /// Inject an explicit identity for an active unit (structural tests).
+        fn set_identity(&self, slot: u32, identity: UnitIdentity) {
+            self.inner
+                .lock()
+                .unwrap()
+                .identity_override
+                .insert(slot, identity);
+        }
+        /// Build the authentic systemd-rendered `ExecStart` for a slot.
+        fn authentic_exec_start(runner_path: &str, slot: u32) -> String {
+            format!(
+                "{{ path={runner_path} ; argv[]={runner_path} --serve-exec --slot {slot:02} ; \
+                 ignore_errors=no }}"
+            )
         }
     }
 
@@ -2070,20 +2169,30 @@ mod tests {
             Ok(s.live
                 .iter()
                 .map(|slot| {
-                    let exec_start = if s.mismatch.contains(slot) {
-                        // Plausible-but-foreign command at our slot.
-                        Some(format!("/usr/bin/evil --serve-exec --slot {slot:02}"))
+                    let identity = if let Some(identity) = s.identity_override.get(slot) {
+                        identity.clone()
+                    } else if s.show_fail.contains(slot) {
+                        // `systemctl show` enrichment failed: identity unknown.
+                        UnitIdentity::Unqueried
+                    } else if s.mismatch.contains(slot) {
+                        // Plausible-but-foreign command (different exe) at our slot.
+                        UnitIdentity::Queried {
+                            slice: Some("nixling-exec.slice".to_owned()),
+                            exec_start: Some(format!(
+                                "{{ path=/usr/bin/evil ; argv[]=/usr/bin/evil --serve-exec \
+                                 --slot {slot:02} ; ignore_errors=no }}"
+                            )),
+                        }
                     } else {
-                        Some(format!(
-                            "{} --serve-exec --slot {slot:02}",
-                            s.runner_path
-                        ))
+                        UnitIdentity::Queried {
+                            slice: Some("nixling-exec.slice".to_owned()),
+                            exec_start: Some(Self::authentic_exec_start(&s.runner_path, *slot)),
+                        }
                     };
                     crate::detached::ManagedUnit {
                         slot: *slot,
                         active: !s.inactive.contains(slot),
-                        slice: Some("nixling-exec.slice".to_owned()),
-                        exec_start,
+                        identity,
                     }
                 })
                 .collect())
@@ -2634,6 +2743,136 @@ mod tests {
         assert!(h.units.stopped(0), "impostor unit at our slot is stopped");
     }
 
+    // G1/F1: an ACTIVE unit whose `systemctl show` identity enrichment FAILED
+    // is UNKNOWN, never Foreign — a transient identity-query failure must NOT
+    // stop the unit or mark a possibly-live exec lost. Covers both the
+    // on-access and the periodic-reaper reconciliation paths.
+    #[tokio::test]
+    async fn g1_active_unit_with_show_failure_is_unknown_not_lost() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        // The unit stays active/live, but its identity can no longer be read.
+        h.units.set_show_fail(0);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(
+            snap.state,
+            ExecState::Running,
+            "active unit + show-failure ⇒ Unknown (retain), never Foreign (lost)"
+        );
+        assert!(
+            !h.units.stopped(0),
+            "an unqueried-identity unit must NOT be torn down"
+        );
+        assert_eq!(h.registry.active_count(), 1, "active reservation retained");
+        // The periodic reaper path must behave identically (no destructive
+        // reconciliation on a query failure).
+        h.registry.reap_once().await;
+        assert_eq!(
+            h.registry.inspect(&id, "boot-A").await.unwrap().state,
+            ExecState::Running
+        );
+        assert!(!h.units.stopped(0));
+        assert_eq!(h.registry.active_count(), 1);
+    }
+
+    // G2/F1: identity verification is STRUCTURAL, not substring-based. An
+    // impostor that merely embeds the runner path / `--serve-exec` / `--slot
+    // NN` as substrings of unrelated args — while running a DIFFERENT exe or a
+    // DIFFERENT slot — is rejected (Foreign), where a naive `contains` check
+    // would wrongly accept it. An authentic argv is accepted (Live).
+    #[tokio::test]
+    async fn g2_structural_identity_rejects_substring_impostor() {
+        // Case 1: wrong executable, but the runner path is embedded as a decoy
+        // argument so a substring check would falsely match. (create allocates
+        // the lowest free slot — 0 — on a fresh harness.)
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.units.set_identity(
+            0,
+            UnitIdentity::Queried {
+                slice: Some("nixling-exec.slice".to_owned()),
+                exec_start: Some(format!(
+                    "{{ path=/usr/bin/evil ; argv[]=/usr/bin/evil --decoy={RUNNER_PATH} \
+                     --serve-exec --slot 00 ; ignore_errors=no }}"
+                )),
+            },
+        );
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd, "wrong-exe impostor rejected");
+        assert!(h.units.stopped(0), "impostor unit is stopped");
+
+        // Case 2: correct executable, but the slot token only appears as a
+        // substring of an unrelated arg; the real `--slot` is a DIFFERENT slot.
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.units.set_identity(
+            0,
+            UnitIdentity::Queried {
+                slice: Some("nixling-exec.slice".to_owned()),
+                exec_start: Some(format!(
+                    "{{ path={RUNNER_PATH} ; argv[]={RUNNER_PATH} --serve-exec \
+                     --decoy=--slot 00 --slot 99 ; ignore_errors=no }}"
+                )),
+            },
+        );
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd, "wrong-slot impostor rejected");
+        assert!(h.units.stopped(0));
+
+        // Authentic argv (exe == runner, distinct --serve-exec + --slot NN
+        // tokens) is accepted as Live.
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(
+            snap.state,
+            ExecState::Running,
+            "authentic structural identity is accepted"
+        );
+        assert!(!h.units.stopped(0));
+    }
+
+    // Live reconciliation must RELEASE the active-concurrency counter (not just
+    // retain the record/logs) on access — otherwise active capacity leaks until
+    // a guestd restart. After the vanish, a full fresh batch of active execs
+    // must fit.
+    #[tokio::test]
+    async fn live_reconciliation_on_access_releases_active_counter() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        assert_eq!(h.registry.active_count(), 1);
+        h.units.set_live(0, false);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+        assert_eq!(
+            h.registry.active_count(),
+            0,
+            "active counter released on access (slot+logs retained)"
+        );
+        // A full active batch fits because the lost exec freed its active slot.
+        for slot in 1..=DETACHED_ACTIVE_PER_VM as u32 {
+            create_live_running(&h, slot).await;
+        }
+        assert_eq!(h.registry.active_count(), DETACHED_ACTIVE_PER_VM as u32);
+    }
+
+    // Same invariant via the PERIODIC reaper path.
+    #[tokio::test]
+    async fn periodic_reaper_releases_active_counter() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        assert_eq!(h.registry.active_count(), 1);
+        h.units.set_live(0, false);
+        h.registry.reap_once().await;
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+        assert_eq!(
+            h.registry.active_count(),
+            0,
+            "active counter released by the reaper (slot+logs retained)"
+        );
+    }
+
     // F2: a crash-recovered Dispatching record within its deadline is held —
     // non-listable, non-inspectable — but the slot dir is retained.
     #[tokio::test]
@@ -2695,6 +2934,55 @@ mod tests {
         for slot in 0..DETACHED_ACTIVE_PER_VM as u32 {
             create_live_running(&h, slot).await;
         }
+    }
+
+    // G3/F12: a past-deadline dispatch hold whose slot-dir unlink FAILS must NOT
+    // free the slot for reuse with stale files on disk. It stays a hidden
+    // retryable hold; once the unlink succeeds a later reaper pass frees it.
+    #[tokio::test]
+    async fn g3_held_dispatch_delete_failure_retains_hidden_entry_for_retry() {
+        let h = harness();
+        h.store
+            .seed_record(3, &rec(3, 24, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.registry.reconcile_on_startup().await;
+        h.now
+            .store(1_000 + DISPATCH_DEADLINE_MS + 1, Ordering::SeqCst);
+        // The unlink fails: the slot must remain reserved (hidden), NOT freed.
+        h.store.set_fail_delete(true);
+        h.registry.reap_once().await;
+        assert!(h.store.slot_exists(3), "stale files retained on delete failure");
+        // Still hidden (never externally visible).
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+        // A retry frees the slot once the unlink succeeds.
+        h.store.set_fail_delete(false);
+        h.registry.reap_once().await;
+        assert!(!h.store.slot_exists(3), "slot freed once unlink succeeds");
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+    }
+
+    // G3/F12: a startup re-adoption of a past-deadline Dispatching record whose
+    // unlink FAILS keeps a hidden retryable entry (slot not freed with stale
+    // files); when the unlink later succeeds, the reaper frees the slot.
+    #[tokio::test]
+    async fn g3_readoption_past_deadline_delete_failure_retains_then_frees() {
+        let h = harness();
+        // Past the dispatch deadline at adoption time, no unit, no status.
+        h.store
+            .seed_record(3, &rec(3, 24, RecordState::Dispatching, 500));
+        h.now.store(1_000, Ordering::SeqCst);
+        h.store.set_fail_delete(true);
+        h.registry.reconcile_on_startup().await;
+        assert!(
+            h.store.slot_exists(3),
+            "stale slot retained when re-adoption unlink fails"
+        );
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty(), "hidden hold");
+        // Once the unlink works, the reaper frees the slot.
+        h.store.set_fail_delete(false);
+        h.now
+            .store(1_000 + DISPATCH_DEADLINE_MS + 1, Ordering::SeqCst);
+        h.registry.reap_once().await;
+        assert!(!h.store.slot_exists(3), "slot freed once unlink succeeds");
     }
 
     // F3: a persisted Running record with no unit + no terminal status is marked
@@ -2783,6 +3071,20 @@ mod tests {
         assert!(!h.store.slot_exists(2), "unsafe slot deleted");
         assert!(h.units.stopped(2), "unit for unsafe slot stopped");
         assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+    }
+
+    // Re-adoption matrix: a durable `record` that passes the authenticity gate
+    // but cannot be DECODED (corrupt/unreadable bytes) is quarantined — the
+    // slot dir is deleted and nothing is adopted, never trusting corrupt bytes.
+    #[tokio::test]
+    async fn readoption_corrupt_record_is_quarantined() {
+        let h = harness();
+        // Authenticity passes (not in the fail set), but read_record → Err.
+        h.store.seed_corrupt_record(1);
+        h.registry.reconcile_on_startup().await;
+        assert!(!h.store.slot_exists(1), "corrupt record slot deleted");
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+        assert_eq!(h.registry.active_count(), 0, "nothing reserved for a corrupt slot");
     }
 
     // F6: a `read_status` error during create resolution must tear the create

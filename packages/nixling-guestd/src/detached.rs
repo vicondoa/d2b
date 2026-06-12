@@ -36,11 +36,76 @@ pub struct ManagedUnit {
     pub slot: u32,
     /// True when the unit is loaded and active/activating.
     pub active: bool,
-    /// The unit's `Slice` (identity verification); `None` if unknown.
-    pub slice: Option<String>,
-    /// The unit's rendered `ExecStart` (identity verification); `None` if
-    /// unknown. Compared against the expected runner path + `--slot NN`.
-    pub exec_start: Option<String>,
+    /// The unit's identity (`Slice` + `ExecStart`) as resolved by
+    /// `systemctl show`, or [`UnitIdentity::Unqueried`] when that query could
+    /// not be performed/parsed. The distinction is load-bearing: an ACTIVE
+    /// unit whose identity is `Unqueried` classifies as `Unknown` (retry),
+    /// never `Foreign` (destructive) — only a queried identity that actually
+    /// mismatches is `Foreign` (F1).
+    pub identity: UnitIdentity,
+}
+
+/// The result of querying a unit's identity (`Slice` + `ExecStart`) via
+/// `systemctl show`. A *queried-but-empty* identity (systemd reported empty
+/// `Slice=`/`ExecStart=`) is a genuine mismatch, NOT a query failure; an
+/// *unqueried* identity means the `show` step never produced a usable value
+/// (spawn failed, non-zero exit, unparsable, or no block for this unit). Only
+/// the queried case can drive a `Foreign` classification (F1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnitIdentity {
+    /// `systemctl show` was read for this unit. `slice`/`exec_start` carry
+    /// exactly what systemd reported (either may be `None` for an empty value).
+    Queried {
+        slice: Option<String>,
+        exec_start: Option<String>,
+    },
+    /// The identity query failed or produced no block for this unit; its
+    /// identity is unknown.
+    Unqueried,
+}
+
+/// The structural decomposition of a systemd-rendered `ExecStart` value
+/// (`{ path=<exe> ; argv[]=<t0> <t1> ... ; ... }`): the resolved executable
+/// path and the argv token sequence. Used for the structural identity check
+/// so an impostor cannot pass by merely embedding the expected substrings in
+/// an unrelated argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedExecStart {
+    pub exe: String,
+    pub argv: Vec<String>,
+}
+
+/// Parse a systemd-rendered `ExecStart` value of the form
+/// `{ path=<exe> ; argv[]=<t0> <t1> ... ; ignore_errors=... ; ... }` into its
+/// executable path and argv token sequence. Fields are `;`-separated; argv
+/// tokens are whitespace-separated. Returns `None` when the value lacks the
+/// expected `path=`/`argv[]=` structure (so the caller treats it as a
+/// mismatch, never a match).
+pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
+    let inner = value.trim().strip_prefix('{')?;
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    let mut exe: Option<String> = None;
+    let mut argv: Option<Vec<String>> = None;
+    for field in inner.split(';') {
+        let field = field.trim();
+        if let Some(v) = field.strip_prefix("path=") {
+            if exe.is_none() {
+                exe = Some(v.trim().to_owned());
+            }
+        } else if let Some(v) = field.strip_prefix("argv[]=") {
+            if argv.is_none() {
+                argv = Some(v.split_whitespace().map(|t| t.to_owned()).collect());
+            }
+        }
+    }
+    let exe = exe?;
+    if exe.is_empty() {
+        return None;
+    }
+    Some(ParsedExecStart {
+        exe,
+        argv: argv.unwrap_or_default(),
+    })
 }
 
 /// Absolute, controlled paths the manager needs to launch a runner unit. All
@@ -185,10 +250,12 @@ impl TransientUnitManager for SystemdRunUnitManager {
         if units.is_empty() {
             return Ok(units);
         }
-        // Enrich with Slice + ExecStart for identity verification. A failure
-        // here leaves slice/exec_start as None so the caller treats the unit as
-        // unverifiable (Foreign) rather than crashing — it must never widen
-        // liveness, only narrow it.
+        // Enrich with Slice + ExecStart for identity verification. The `show`
+        // step is best-effort for LIVENESS but load-bearing for IDENTITY: a
+        // failure (spawn error, non-zero exit, or a unit with no returned
+        // block) leaves that unit's identity `Unqueried`, so an ACTIVE unit
+        // classifies as `Unknown` (retry) rather than `Foreign` (destructive).
+        // Only a successfully-read identity that mismatches is `Foreign` (F1).
         let mut show = tokio::process::Command::new(&self.systemctl_path);
         show.arg("show")
             .arg("--no-pager")
@@ -205,8 +272,10 @@ impl TransientUnitManager for SystemdRunUnitManager {
                 for unit in &mut units {
                     let name = unit_name(unit.slot);
                     if let Some(block) = blocks.iter().find(|b| b.id == name) {
-                        unit.slice = block.slice.clone();
-                        unit.exec_start = block.exec_start.clone();
+                        unit.identity = UnitIdentity::Queried {
+                            slice: block.slice.clone(),
+                            exec_start: block.exec_start.clone(),
+                        };
                     }
                 }
             }
@@ -226,7 +295,8 @@ struct ShowEntry {
 /// Parse `systemctl show --property=Id,Slice,ExecStart UNIT...` output. Blocks
 /// for distinct units are separated by a blank line. `ExecStart` renders as
 /// `{ path=... ; argv[]=<abs> --serve-exec --slot NN ; ... }`; the raw value is
-/// kept verbatim for a `contains`-based identity check upstream.
+/// kept verbatim and decomposed structurally upstream (see
+/// [`parse_exec_start`]) for the identity check.
 fn parse_show_blocks(text: &str) -> Vec<ShowEntry> {
     let mut out = Vec::new();
     for block in text.split("\n\n") {
@@ -286,8 +356,7 @@ fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
         out.push(ManagedUnit {
             slot,
             active,
-            slice: None,
-            exec_start: None,
+            identity: UnitIdentity::Unqueried,
         });
     }
     out
@@ -451,20 +520,17 @@ other.service           loaded active   running Unrelated
                 ManagedUnit {
                     slot: 0,
                     active: true,
-                    slice: None,
-                    exec_start: None
+                    identity: UnitIdentity::Unqueried
                 },
                 ManagedUnit {
                     slot: 1,
                     active: false,
-                    slice: None,
-                    exec_start: None
+                    identity: UnitIdentity::Unqueried
                 },
                 ManagedUnit {
                     slot: 2,
                     active: true,
-                    slice: None,
-                    exec_start: None
+                    identity: UnitIdentity::Unqueried
                 },
             ]
         );
@@ -479,8 +545,7 @@ other.service           loaded active   running Unrelated
             vec![ManagedUnit {
                 slot: 5,
                 active: false,
-                slice: None,
-                exec_start: None
+                identity: UnitIdentity::Unqueried
             }]
         );
     }
@@ -520,5 +585,33 @@ ExecStart=
         assert_eq!(blocks[0].id, "nixling-exec-00.service");
         assert_eq!(blocks[0].slice, None);
         assert_eq!(blocks[0].exec_start, None);
+    }
+
+    #[test]
+    fn parse_exec_start_extracts_exe_and_argv_tokens() {
+        let parsed = parse_exec_start(
+            "{ path=/nix/store/abc/bin/nixling-exec-runner ; \
+             argv[]=/nix/store/abc/bin/nixling-exec-runner --serve-exec --slot 07 ; \
+             ignore_errors=no }",
+        )
+        .expect("structured ExecStart parses");
+        assert_eq!(parsed.exe, "/nix/store/abc/bin/nixling-exec-runner");
+        assert_eq!(
+            parsed.argv,
+            vec![
+                "/nix/store/abc/bin/nixling-exec-runner".to_owned(),
+                "--serve-exec".to_owned(),
+                "--slot".to_owned(),
+                "07".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_exec_start_rejects_unstructured_or_empty() {
+        // No `path=` field at all.
+        assert_eq!(parse_exec_start("/usr/bin/evil --serve-exec --slot 07"), None);
+        // Empty executable path.
+        assert_eq!(parse_exec_start("{ path= ; argv[]=x ; ignore_errors=no }"), None);
     }
 }
