@@ -3067,7 +3067,7 @@ impl VmStartRunner<'_> {
         let broker_path = broker_socket_path(self.state);
         let deadline = budget.readiness;
         let node_id = node.id.0.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
+        let run = tokio::task::spawn_blocking(move || {
             let probe = guest_control_bridge::RealGuestControlProbe::new(broker_path);
             let clock = guest_control_bridge::RealProbeClock::new();
             guest_control_bridge::run_guest_control_readiness_loop(
@@ -3082,22 +3082,31 @@ impl VmStartRunner<'_> {
         .await
         .map_err(|error| format!("guest-control-readiness-join:{error}"))?;
 
-        let ready = guest_control_health::guest_control_health_ready(&outcome);
-        match &outcome {
-            Ok(evidence) => tracing::info!(
+        let ready = guest_control_health::guest_control_health_ready(&run.outcome);
+        let obs = guest_control_bridge::ReadinessObservation::from_run(&run);
+        if ready {
+            tracing::info!(
                 kind = "critical",
-                subsystem = "guest-control-health",
-                outcome = if ready { "ready" } else { "not-ready" },
-                health_state = guest_control_bridge::health_state_label(evidence),
+                subsystem = obs.subsystem,
+                outcome = obs.outcome,
+                health_state = obs.health_state,
+                health_reason = obs.health_reason,
+                attempt_count = obs.attempt_count,
+                duration_ms = obs.duration_ms,
                 "guest-control readiness probe completed"
-            ),
-            Err(error) => tracing::warn!(
+            );
+        } else {
+            tracing::warn!(
                 kind = "critical",
-                subsystem = "guest-control-health",
-                outcome = "not-ready",
-                error_kind = guest_control_bridge::error_kind_label(error),
+                subsystem = obs.subsystem,
+                outcome = obs.outcome,
+                error_kind = obs.error_kind,
+                health_state = obs.health_state,
+                health_reason = obs.health_reason,
+                attempt_count = obs.attempt_count,
+                duration_ms = obs.duration_ms,
                 "guest-control readiness probe failed"
-            ),
+            );
         }
 
         if ready {

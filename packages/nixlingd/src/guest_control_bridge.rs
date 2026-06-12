@@ -308,12 +308,23 @@ impl ProbeClock for RealProbeClock {
     }
 }
 
+/// Terminal result of a readiness loop: the last probe outcome plus
+/// bounded-retry observability (attempt count and elapsed wall time).
+/// `attempts`/`elapsed` are intended as tracing FIELDS / histogram
+/// buckets — never metric labels (they are unbounded-ish / per-run).
+pub struct ReadinessProbeRun {
+    pub outcome: Result<GuestControlHealthEvidence, GuestControlHealthError>,
+    pub attempts: u32,
+    pub elapsed: Duration,
+}
+
 /// State-aware guest-control readiness loop. Retries the authenticated
 /// Health probe until [`guest_control_health_ready`] returns true or the
 /// `deadline` elapses, applying a per-attempt timeout of
 /// `min(attempt_cap, remaining_deadline)` to connect / CONNECT-ACK /
 /// ttRPC / broker-sign. Fails CLOSED: on deadline it returns the last
-/// (not-ready) outcome.
+/// (not-ready) outcome, the number of attempts made, and the elapsed
+/// wall time.
 pub fn run_guest_control_readiness_loop(
     probe: &dyn GuestControlProbe,
     params: &ProbeParams,
@@ -321,24 +332,90 @@ pub fn run_guest_control_readiness_loop(
     attempt_cap: Duration,
     retry_backoff: Duration,
     clock: &dyn ProbeClock,
-) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
+) -> ReadinessProbeRun {
+    let start = clock.elapsed();
+    let mut attempts: u32 = 0;
     loop {
         let remaining = deadline.saturating_sub(clock.elapsed());
         let attempt_timeout = attempt_cap
             .min(remaining)
             .max(Duration::from_millis(1));
+        attempts = attempts.saturating_add(1);
         let outcome = probe.probe_health(params, attempt_timeout);
         if guest_control_health_ready(&outcome) {
-            return outcome;
+            return ReadinessProbeRun {
+                outcome,
+                attempts,
+                elapsed: clock.elapsed().saturating_sub(start),
+            };
         }
         // Stop if there is no room for another attempt + backoff before
         // the deadline. Returns the last not-ready outcome.
         if clock.elapsed().saturating_add(retry_backoff) >= deadline {
-            return outcome;
+            return ReadinessProbeRun {
+                outcome,
+                attempts,
+                elapsed: clock.elapsed().saturating_sub(start),
+            };
         }
         clock.sleep(retry_backoff);
     }
 }
+
+/// Leak-safe observability projection of a readiness run. Every string
+/// field is a CLOSED-ENUM label drawn from a small fixed vocabulary;
+/// `attempt_count`/`duration_ms` are numeric FIELDS. By construction this
+/// struct can never carry guest content, store/socket/state-dir paths,
+/// nonces, tokens, auth tags, raw signer requests/responses,
+/// `guest_boot_id`, or `capabilities_hash`.
+pub struct ReadinessObservation {
+    pub subsystem: &'static str,
+    pub outcome: &'static str,
+    pub health_state: &'static str,
+    pub health_reason: &'static str,
+    pub error_kind: &'static str,
+    pub attempt_count: u32,
+    pub duration_ms: u64,
+}
+
+impl ReadinessObservation {
+    /// Project a readiness run onto the closed-enum observability fields.
+    pub fn from_run(run: &ReadinessProbeRun) -> Self {
+        let ready = guest_control_health_ready(&run.outcome);
+        let (health_state, health_reason, error_kind) = match &run.outcome {
+            Ok(evidence) => (
+                health_state_label(evidence),
+                health_reason_label(evidence),
+                "none",
+            ),
+            Err(error) => ("unavailable", "unspecified", error_kind_label(error)),
+        };
+        Self {
+            subsystem: "guest-control-health",
+            outcome: if ready { "ready" } else { "not-ready" },
+            health_state,
+            health_reason,
+            error_kind,
+            attempt_count: run.attempts,
+            duration_ms: u64::try_from(run.elapsed.as_millis()).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// The closed set of LABEL keys this subsystem contributes to
+    /// metrics/spans. Deliberately excludes `vm`, `env`, `attempt_count`,
+    /// `duration_ms`, and any path/error-message key: those are span
+    /// attributes / fields / buckets, never metric labels.
+    pub fn label_keys() -> &'static [&'static str] {
+        &[
+            "subsystem",
+            "outcome",
+            "health_state",
+            "health_reason",
+            "error_kind",
+        ]
+    }
+}
+
 
 /// Closed-enum label for the guest-reported health state of a probe
 /// outcome. Used as a metric/span label, so the range is a small fixed
@@ -370,6 +447,41 @@ pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
         GuestControlHealthError::StaleSession => "stale-session",
     }
 }
+
+/// Closed-enum label for the guest-reported health REASON of a probe
+/// outcome. Used as a metric/span label, so the range is the fixed
+/// `HealthReason` vocabulary — never free-form text and never
+/// guest-supplied content.
+pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static str {
+    use nixling_ipc::guest_proto::HealthReason;
+    match evidence.health.reason.enum_value() {
+        Ok(HealthReason::HEALTH_REASON_NONE) => "none",
+        Ok(HealthReason::HEALTH_REASON_OLD_GENERATION) => "old-generation",
+        Ok(HealthReason::HEALTH_REASON_LISTENER_ABSENT) => "listener-absent",
+        Ok(HealthReason::HEALTH_REASON_CONNECT_REFUSED) => "connect-refused",
+        Ok(HealthReason::HEALTH_REASON_CONNECT_TIMEOUT) => "connect-timeout",
+        Ok(HealthReason::HEALTH_REASON_EOF_BEFORE_ACK) => "eof-before-ack",
+        Ok(HealthReason::HEALTH_REASON_MALFORMED_ACK) => "malformed-ack",
+        Ok(HealthReason::HEALTH_REASON_ACK_TOO_LONG) => "ack-too-long",
+        Ok(HealthReason::HEALTH_REASON_TRANSPORT_IO) => "transport-io",
+        Ok(HealthReason::HEALTH_REASON_AUTH_TOKEN_REJECTED) => "auth-token-rejected",
+        Ok(HealthReason::HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED) => {
+            "protocol-version-unsupported"
+        }
+        Ok(HealthReason::HEALTH_REASON_SESSION_GENERATION_MISMATCH) => {
+            "session-generation-mismatch"
+        }
+        Ok(HealthReason::HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE) => "exec-subsystem-unavailable",
+        Ok(HealthReason::HEALTH_REASON_LOG_STORAGE_UNAVAILABLE) => "log-storage-unavailable",
+        Ok(HealthReason::HEALTH_REASON_QUOTA_EXCEEDED) => "quota-exceeded",
+        Ok(HealthReason::HEALTH_REASON_RATE_LIMITED) => "rate-limited",
+        Ok(HealthReason::HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED) => {
+            "internal-health-check-failed"
+        }
+        Ok(HealthReason::HEALTH_REASON_UNSPECIFIED) | Err(_) => "unspecified",
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -594,7 +706,7 @@ mod tests {
             Ok(healthy_evidence()),
         ]);
         let clock = FakeClock::new();
-        let outcome = run_guest_control_readiness_loop(
+        let run = run_guest_control_readiness_loop(
             &probe,
             &test_params(),
             Duration::from_secs(30),
@@ -602,9 +714,10 @@ mod tests {
             GUEST_CONTROL_RETRY_BACKOFF,
             &clock,
         );
-        assert!(guest_control_health_ready(&outcome));
+        assert!(guest_control_health_ready(&run.outcome));
         // Three attempts: two transient, one healthy.
         assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 3);
+        assert_eq!(run.attempts, 3);
     }
 
     #[test]
@@ -630,7 +743,7 @@ mod tests {
         // Empty script -> ScriptedProbe yields persistent TransportIo.
         let probe = ScriptedProbe::new(vec![]);
         let clock = FakeClock::new();
-        let outcome = run_guest_control_readiness_loop(
+        let run = run_guest_control_readiness_loop(
             &probe,
             &test_params(),
             Duration::from_secs(2),
@@ -638,11 +751,12 @@ mod tests {
             GUEST_CONTROL_RETRY_BACKOFF,
             &clock,
         );
-        assert!(!guest_control_health_ready(&outcome));
+        assert!(!guest_control_health_ready(&run.outcome));
         // The fake clock advanced past the deadline via backoff sleeps.
         assert!(clock.elapsed() >= Duration::from_secs(2) - GUEST_CONTROL_RETRY_BACKOFF);
         // Many attempts occurred before giving up (2s / 250ms backoff).
         assert!(probe.attempt_timeouts.lock().unwrap().len() >= 5);
+        assert!(run.attempts >= 5);
     }
 
     #[tokio::test]
@@ -893,7 +1007,7 @@ mod tests {
             Ok(healthy_evidence()),
         ]);
         let clock = FakeClock::new();
-        let outcome = run_guest_control_readiness_loop(
+        let run = run_guest_control_readiness_loop(
             &probe,
             &test_params(),
             Duration::from_secs(30),
@@ -901,7 +1015,7 @@ mod tests {
             GUEST_CONTROL_RETRY_BACKOFF,
             &clock,
         );
-        assert!(guest_control_health_ready(&outcome));
+        assert!(guest_control_health_ready(&run.outcome));
         assert!(
             !trap.ssh_was_spawned(),
             "the readiness path must never spawn an SSH client"
@@ -909,5 +1023,147 @@ mod tests {
 
         drop(trap);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Build evidence whose every guest-controlled string carries a
+    /// sentinel, so a leak into the observability projection is detectable.
+    fn sentinel_evidence(
+        state: nixling_ipc::guest_proto::HealthState,
+        reason: nixling_ipc::guest_proto::HealthReason,
+    ) -> GuestControlHealthEvidence {
+        use nixling_ipc::guest_proto as pb;
+        let sentinel = "SENTINEL-LEAK-7b3f";
+        let mut health = pb::HealthResponse::new();
+        health.origin =
+            protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
+        health.state = protobuf::EnumOrUnknown::new(state);
+        health.reason = protobuf::EnumOrUnknown::new(reason);
+        health.remediation =
+            protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
+        health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        GuestControlHealthEvidence {
+            vm_id: sentinel.to_owned(),
+            guest_boot_id: sentinel.to_owned(),
+            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            capabilities_hash: sentinel.to_owned(),
+            health,
+        }
+    }
+
+    /// The closed health-state / health-reason / error-kind vocabularies
+    /// the observability projection is allowed to emit. Any value outside
+    /// these sets would be an unbounded-cardinality or leaky label.
+    const APPROVED_HEALTH_STATES: &[&str] = &[
+        "healthy",
+        "degraded",
+        "unavailable-old-generation",
+        "listener-absent",
+        "transport-unreachable",
+        "auth-failed",
+        "protocol-mismatch",
+        "stale-session",
+        "unspecified",
+        "unavailable",
+    ];
+    const APPROVED_OUTCOMES: &[&str] = &["ready", "not-ready"];
+
+    #[test]
+    fn readiness_observation_carries_no_guest_bytes_and_uses_closed_enums() {
+        use nixling_ipc::guest_proto::{HealthReason, HealthState};
+
+        // Success projection: guest-reported strings (vm_id, guest_boot_id,
+        // capabilities_hash) must NEVER reach the observation fields.
+        let run_ok = ReadinessProbeRun {
+            outcome: Ok(sentinel_evidence(
+                HealthState::HEALTH_STATE_DEGRADED,
+                HealthReason::HEALTH_REASON_QUOTA_EXCEEDED,
+            )),
+            attempts: 4,
+            elapsed: Duration::from_millis(1234),
+        };
+        let obs = ReadinessObservation::from_run(&run_ok);
+        for field in [
+            obs.subsystem,
+            obs.outcome,
+            obs.health_state,
+            obs.health_reason,
+            obs.error_kind,
+        ] {
+            assert!(!field.contains("SENTINEL"), "guest content leaked: {field}");
+        }
+        assert_eq!(obs.subsystem, "guest-control-health");
+        assert_eq!(obs.health_state, "degraded");
+        assert_eq!(obs.health_reason, "quota-exceeded");
+        assert_eq!(obs.error_kind, "none");
+        assert!(APPROVED_HEALTH_STATES.contains(&obs.health_state));
+        assert!(APPROVED_OUTCOMES.contains(&obs.outcome));
+        // attempt_count/duration are numeric FIELDS, not labels.
+        assert_eq!(obs.attempt_count, 4);
+        assert_eq!(obs.duration_ms, 1234);
+
+        // Error projection: closed error_kind, neutral state/reason.
+        let run_err = ReadinessProbeRun {
+            outcome: Err(GuestControlHealthError::AuthFailed),
+            attempts: 2,
+            elapsed: Duration::from_millis(50),
+        };
+        let obs_err = ReadinessObservation::from_run(&run_err);
+        assert_eq!(obs_err.outcome, "not-ready");
+        assert_eq!(obs_err.error_kind, "auth-failed");
+        assert_eq!(obs_err.health_state, "unavailable");
+        assert_eq!(obs_err.health_reason, "unspecified");
+        assert!(APPROVED_HEALTH_STATES.contains(&obs_err.health_state));
+    }
+
+    #[test]
+    fn guest_control_fields_never_become_metric_labels() {
+        // The guest-control readiness path emits closed-enum tracing
+        // labels + numeric fields, never Prometheus metric labels. Assert
+        // the closed LABEL vocabulary excludes every forbidden / high-
+        // cardinality / per-run key.
+        let forbidden = [
+            "vm",
+            "env",
+            "attempt",
+            "attempt_count",
+            "duration",
+            "duration_ms",
+            "size",
+            "sha256",
+            "path",
+            "socket",
+            "state_dir",
+            "store_path",
+            "error",
+            "error_message",
+            "nonce",
+            "token",
+            "auth_tag",
+            "guest_boot_id",
+            "capabilities_hash",
+            "content",
+        ];
+        for key in ReadinessObservation::label_keys() {
+            assert!(
+                !forbidden.contains(key),
+                "forbidden guest-control metric label key: {key}"
+            );
+        }
+        // The daemon declares no guest-control Prometheus metric, so none
+        // of its closed-enum field names may surface in the rendered
+        // exposition as a metric label.
+        let rendered = crate::metrics::Registry::new().render();
+        for leaked in [
+            "health_state",
+            "health_reason",
+            "guest_boot_id",
+            "capabilities_hash",
+            "SENTINEL",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "guest-control field leaked into rendered metrics: {leaked}"
+            );
+        }
     }
 }
