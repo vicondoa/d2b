@@ -1434,14 +1434,17 @@ nl_static_gate_end "tests/harness-ubuntu-eval.sh"
 
 # -----------------------------------------------------------------------------
 # 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`
-# pins `nixling.url = "path:../.."` so this runs the in-tree framework
-# without a network fetch. Eval-only (`--no-build --all-systems`); a
-# build-level gate already lives in the root flake's
-# `checks.<system>.*` (also 7b). `--no-write-lock-file` keeps the
-# gate read-only so validation never rewrites an example's pinned lock.
-# Adds templates/default/ to the same check surface. Skips gracefully
-# if examples/ or templates/default/ don't exist (some downstream consumers
-# may strip them).
+# pins `nixling.url = "path:../.."`, but we `--override-input nixling`
+# to `git+file://$ROOT` so the check runs the in-tree framework WITHOUT
+# copying the whole working tree (incl. the multi-GiB cargo `target/`)
+# into the store on every run — `git+file://` only ships git-tracked
+# files. Eval-only (`--no-build --all-systems`); a build-level gate
+# already lives in the root flake's `checks.<system>.*` (also 7b).
+# `--no-write-lock-file` keeps the gate read-only so validation never
+# rewrites an example's pinned lock. Adds templates/default/ to the
+# same check surface. Skips gracefully if examples/ or
+# templates/default/ don't exist (some downstream consumers may strip
+# them).
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
 if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
@@ -1458,7 +1461,7 @@ if [ -d "$ROOT/examples" ]; then
     if [ "$name" = "with-entra-id" ]; then
       continue
     fi
-    nl_static_parallel_spawn "example flake check: $name" bash -lc "cd '$ex' && nix flake check --no-build --all-systems --no-write-lock-file"
+    nl_static_parallel_spawn "example flake check: $name" bash -lc "cd '$ex' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
   done
   shopt -u nullglob
 else
@@ -1526,7 +1529,7 @@ NIX
   # wiring, not only the root eval-template check. The copied scratch
   # flake differs only by adding a test-only module that neutralizes
   # intentional TODO sentinels and by overriding nixling to this tree.
-  nl_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'path:$ROOT'"
+  nl_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
 else
   log "  (no templates/default/flake.nix — skipping)"
 fi

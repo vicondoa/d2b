@@ -53,7 +53,7 @@ eval_failing_messages() {
   cat > "$tmp" <<NIX
 let
   system = builtins.currentSystem;
-  flake = builtins.getFlake "${ROOT}";
+  flake = builtins.getFlake "git+file://${ROOT}";
   nixos = flake.inputs.nixpkgs.lib.nixosSystem {
     inherit system;
     modules = [
