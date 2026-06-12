@@ -49,6 +49,28 @@ nl_repo_root() {
   printf '%s\n' "${ROOT:-${FLAKE:-$(dirname "$_LIB_HERE")}}"
 }
 
+# Resolve the flake source as a `git+file://` reference instead of a bare
+# path. ALWAYS use this (or the equivalent `git+file://` form) in test eval
+# expressions — never `builtins.getFlake (toString $root)`.
+#
+# Why: a bare path makes Nix use the `path:` fetcher, which copies the
+# ENTIRE working tree into the store, including the multi-GiB
+# `packages/target` cargo artifacts (measured: ~36 GB / 5+ min per cold
+# eval, re-triggered every time a cargo build churns target/). `git+file://`
+# copies only git-tracked files (target/ is gitignored), turning a
+# 5-minute eval into <1 s.
+#
+# Semantics: uncommitted edits to TRACKED files are still evaluated
+# (dirty-tree). UNTRACKED (never `git add`ed) files are invisible — the
+# same contract `nix flake check` already enforces, so "commit before
+# building" remains the rule (AGENTS.md "Edit -> commit -> validate").
+#
+# Purity: `nix-instantiate --eval` is impure by default (works as-is);
+# `nix eval` is pure by default and callers MUST pass --impure.
+nl_flake_ref() {
+  printf 'git+file://%s\n' "${1:-$(nl_repo_root)}"
+}
+
 nl_cargo_config_path() {
   case "${1:-workspace}" in
     workspace) printf '%s\n' "$(nl_repo_root)/packages/.cargo/config.toml" ;;
@@ -660,10 +682,11 @@ nl_smoke_vms_json() {
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
   local modules; modules=$(_nl_smoke_config_modules)
+  local flake_ref; flake_ref=$(nl_flake_ref "$root")
   : > "$err"
   if ! nix-instantiate --eval --strict --json --expr "
     let
-      flake = builtins.getFlake (toString $root);
+      flake = builtins.getFlake \"$flake_ref\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -693,10 +716,11 @@ nl_smoke_bundle_privileges_json() {
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
   local modules; modules=$(_nl_smoke_config_modules)
+  local flake_ref; flake_ref=$(nl_flake_ref "$root")
   : > "$err"
   if ! nix eval --impure --raw --expr "
     let
-      flake = builtins.getFlake (toString $root);
+      flake = builtins.getFlake \"$flake_ref\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -729,10 +753,11 @@ nl_smoke_bundle_host_json() {
   fi
   local root="${FLAKE:-${ROOT:-$(pwd)}}"
   local modules; modules=$(_nl_smoke_config_modules)
+  local flake_ref; flake_ref=$(nl_flake_ref "$root")
   : > "$err"
   if ! nix eval --impure --raw --expr "
     let
-      flake = builtins.getFlake (toString $root);
+      flake = builtins.getFlake \"$flake_ref\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;

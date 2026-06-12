@@ -61,7 +61,7 @@ evaluate_minijail_profile_caps() {
   local expr
   expr=$(cat <<NIXEOF
 let
-  flake   = builtins.getFlake (toString ${ROOT});
+  flake   = builtins.getFlake "git+file://${ROOT}";
   lib     = flake.inputs.nixpkgs.lib;
   nixpkgs = flake.inputs.nixpkgs;
   nixos   = lib.nixosSystem {

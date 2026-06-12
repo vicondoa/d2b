@@ -37,7 +37,7 @@ log "==> tests/store-overlay-emit-eval.sh"
 # ---------------------------------------------------------------------------
 EXPR_ENABLED=$(cat <<'NIXEOF'
 let
-  flake = builtins.getFlake (toString ROOTPLACEHOLDER);
+  flake = builtins.getFlake "git+file://ROOTPLACEHOLDER";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -170,7 +170,7 @@ fi
 # ---------------------------------------------------------------------------
 EXPR_DISABLED=$(cat <<'NIXEOF'
 let
-  flake = builtins.getFlake (toString ROOTPLACEHOLDER);
+  flake = builtins.getFlake "git+file://ROOTPLACEHOLDER";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

@@ -914,7 +914,7 @@ if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/smoke
     let
       pkgs = import <nixpkgs> {};
       lib = pkgs.lib;
-      flake = builtins.getFlake (toString $ROOT);
+      flake = builtins.getFlake "git+file://$ROOT";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;

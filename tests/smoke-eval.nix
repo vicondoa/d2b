@@ -37,7 +37,7 @@ let
 
   # Import the flake-as-source via getFlake. Path relative to this
   # file so the test works regardless of caller cwd.
-  flake = builtins.getFlake (toString ./..);
+  flake = builtins.getFlake "git+file://${toString ./..}";
 
   # `nixosSystem` lives on the nixpkgs flake's `lib`, not on
   # `pkgs.lib`. Pull it from the flake graph; this keeps the smoke

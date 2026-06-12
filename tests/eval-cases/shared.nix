@@ -28,7 +28,7 @@
 }:
 
 let
-  flake = builtins.getFlake (toString flakeRoot);
+  flake = builtins.getFlake "git+file://${toString flakeRoot}";
   nixpkgs = flake.inputs.nixpkgs;
   lib = nixpkgs.lib;
   defaultSystem = "x86_64-linux";

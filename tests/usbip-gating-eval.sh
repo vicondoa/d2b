@@ -20,7 +20,7 @@ eval_case() {
   local name="$1" override="$2" expr
   expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -183,7 +183,7 @@ eval_multi_env_case() {
   local expr
   expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

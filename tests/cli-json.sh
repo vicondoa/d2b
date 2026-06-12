@@ -23,7 +23,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$SCRATCH/keys/corp-vm_ed25519" >/dev/null
 
 cat > "$SCRATCH/cli-json-test.nix" <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   lib = flake.inputs.nixpkgs.lib;
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   keysDir = builtins.path {

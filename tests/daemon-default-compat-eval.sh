@@ -95,7 +95,7 @@ ALL_TRUE_BUT_ONE_VALIDATED=$(
 # times.
 EXPR=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
   baseModule = { lib, ... }: {
@@ -185,7 +185,7 @@ in {
 EOF
 )
 
-OUT=$(nix-instantiate --eval --strict --json --expr "$EXPR" 2>&1) || {
+OUT=$(nix-instantiate --quiet --eval --strict --json --no-warn-dirty --expr "$EXPR" 2>&1) || {
   printf '%s\n' "$OUT" >&2
   fail "eval failed; cannot inspect daemon default compatibility"
 }

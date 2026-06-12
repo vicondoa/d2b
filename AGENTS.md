@@ -723,6 +723,23 @@ by-release history.
 
 ## Disk hygiene contract
 
+- Test eval expressions MUST resolve the flake via `git+file://$ROOT`
+  (use the `nl_flake_ref` helper in `tests/lib.sh`), **never**
+  `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
+  `path:` fetcher, which copies the ENTIRE working tree into the store —
+  including the multi-GiB `packages/target` cargo artifacts (measured:
+  ~36 GB / 5+ min per cold eval, re-triggered every time a cargo build
+  churns `target/`). `git+file://` copies only git-tracked files
+  (`target/` is gitignored), turning a 5-minute eval into <1 s. Caveats:
+  (a) `nix eval` is pure by default and needs `--impure` with git+file;
+  `nix-instantiate --eval` is impure by default and needs no flag.
+  (b) When a script captures eval output via `2>&1` into a variable it
+  then parses (jq, etc.), add `--quiet --no-warn-dirty` so the git+file
+  `fetching git input` / `Git tree is dirty` stderr diagnostics don't
+  corrupt the parsed JSON. (c) git+file sees uncommitted edits to
+  TRACKED files but NOT untracked files — identical to `nix flake check`,
+  so "commit before building" still holds (see "Edit -> commit ->
+  validate").
 - Every test script that creates repo-local scratch state MUST use
   `nl_mktemp` from `tests/lib.sh`; do not call raw
   `mktemp -d -p "$ROOT"`.

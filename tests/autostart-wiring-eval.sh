@@ -44,7 +44,7 @@ log "==> tests/autostart-wiring-eval.sh"
 
 EXPR=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

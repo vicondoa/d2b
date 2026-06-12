@@ -70,7 +70,7 @@ eval_case() {
   local name="$1" override="$2" expr
   expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -171,7 +171,7 @@ fi
 log "-- case: custom outputPath"
 custom_path_expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

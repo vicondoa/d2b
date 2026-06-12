@@ -78,7 +78,7 @@ _nl_cli_smoke_eval_raw() {
   : > "$out.stderr"
   if ! nix eval --impure --raw --expr "
     let
-      flake = builtins.getFlake (toString $flake_root);
+      flake = builtins.getFlake "git+file://$flake_root";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -135,7 +135,7 @@ nl_cli_smoke_bundle_tree() {
   flake_root=$(nl_cli_flake_source_root)
   bundle_path=$(nix build --impure --no-link --print-out-paths --expr "
     let
-      flake = builtins.getFlake (toString $flake_root);
+      flake = builtins.getFlake "git+file://$flake_root";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -161,7 +161,7 @@ nl_cli_smoke_bundle_tree() {
     local path
     path=$(nix build --impure --no-link --print-out-paths --expr "
       let
-        flake = builtins.getFlake (toString $flake_root);
+        flake = builtins.getFlake "git+file://$flake_root";
         nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
         nixos = nixosSystem {
           system = builtins.currentSystem;
@@ -216,7 +216,7 @@ nl_legacy_cli_bin() {
 
   cat > "$expr" <<EOF2
 let
-  flake = builtins.getFlake (toString $flake_root);
+  flake = builtins.getFlake "git+file://$flake_root";
   lib = flake.inputs.nixpkgs.lib;
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   keysDir = builtins.path {

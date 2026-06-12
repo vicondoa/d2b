@@ -103,7 +103,7 @@ ok "daemon-api.md cross-references daemon-autostart.md"
 # ---------------------------------------------------------------
 EXPR=$(cat <<'EOF'
 let
-  flake = builtins.getFlake (toString @ROOT@);
+  flake = builtins.getFlake "git+file://@ROOT@";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   mkSystem = extra: nixosSystem {
     system = "x86_64-linux";

@@ -2,7 +2,7 @@
 
 let
   shared = import ./shared.nix { inherit flakeRoot; };
-  flake = builtins.getFlake (toString flakeRoot);
+  flake = builtins.getFlake "git+file://${toString flakeRoot}";
   nixpkgs = flake.inputs.nixpkgs;
   lib = nixpkgs.lib;
 
