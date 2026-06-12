@@ -5197,6 +5197,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
+        nixling_core::processes::ProcessRole::GuestControlHealth => "guest-control-health",
         nixling_core::processes::ProcessRole::Usbip => "usbip",
         nixling_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
     }
@@ -5225,6 +5226,9 @@ fn readiness_name(readiness: &nixling_core::processes::ReadinessPredicate) -> St
         }
         nixling_core::processes::ReadinessPredicate::ComponentSpecific(value) => {
             format!("component-specific:{value}")
+        }
+        nixling_core::processes::ReadinessPredicate::GuestControlHealth { vm } => {
+            format!("guest-control-health:{vm}")
         }
     }
 }

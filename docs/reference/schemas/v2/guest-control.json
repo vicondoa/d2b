@@ -30,6 +30,8 @@
     "limits",
     "outputChunk",
     "protocolVersion",
+    "readGuestFile",
+    "readGuestFileResult",
     "readOutput",
     "schemaVersion",
     "transport",
@@ -120,6 +122,12 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
+    },
+    "readGuestFile": {
+      "$ref": "#/definitions/ReadGuestFileRequest"
+    },
+    "readGuestFileResult": {
+      "$ref": "#/definitions/ReadGuestFileResponse"
     },
     "readOutput": {
       "$ref": "#/definitions/ReadOutputRequest"
@@ -1008,7 +1016,8 @@
         "exec-tty",
         "exec-logs",
         "tty-resize",
-        "signals"
+        "signals",
+        "read-guest-file"
       ]
     },
     "GuestConnectAckLine": {
@@ -1090,7 +1099,11 @@
         "guest-control-unavailable-old-generation",
         "auth-failed",
         "transport-unreachable",
-        "exec-expired"
+        "exec-expired",
+        "file-not-found",
+        "file-too-large",
+        "path-unsafe",
+        "read-denied"
       ]
     },
     "GuestCwd": {
@@ -1244,6 +1257,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "GuestFileBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 524288,
+      "minItems": 0
+    },
+    "GuestFileId": {
+      "description": "Closed set of host-declared guest files readable via `ReadGuestFile`. W15 ships only `GuestConfig` (the in-guest editable config working copy).",
+      "type": "string",
+      "enum": [
+        "guest-config"
+      ]
     },
     "GuestHostConnectShape": {
       "type": "object",
@@ -1637,6 +1668,60 @@
         "stdout",
         "stderr"
       ]
+    },
+    "ReadGuestFileRequest": {
+      "description": "W15 framework read of a host-declared guest file, keyed by a closed enum (NOT a free-form path). guestd maps the key to the host-declared target.",
+      "type": "object",
+      "required": [
+        "fileId",
+        "metadata"
+      ],
+      "properties": {
+        "fileId": {
+          "$ref": "#/definitions/GuestFileId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadGuestFileResponse": {
+      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only — the host recomputes both from the received bytes.",
+      "type": "object",
+      "required": [
+        "content",
+        "fileId",
+        "sha256",
+        "sizeBytes"
+      ],
+      "properties": {
+        "content": {
+          "$ref": "#/definitions/GuestFileBytes"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileId": {
+          "$ref": "#/definitions/GuestFileId"
+        },
+        "sha256": {
+          "$ref": "#/definitions/ArgvSha256"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "ReadOutputRequest": {
       "type": "object",

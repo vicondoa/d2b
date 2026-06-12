@@ -4568,7 +4568,8 @@ fn runner_role_for_process_role(
         ProcessRole::WaylandProxy => Some(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness => None,
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth => None,
     }
 }
 

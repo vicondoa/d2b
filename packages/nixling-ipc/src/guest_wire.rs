@@ -10,11 +10,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
-pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 2;
+pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 3;
 pub const GUEST_CONTROL_VSOCK_PORT: u32 = 14_318;
 pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
+
+/// Maximum raw byte size of a single-shot `ReadGuestFile` payload (W15).
+///
+/// Deliberately set BELOW both the public.sock 1 MiB frame
+/// (`nixling_ipc::MAX_FRAME_SIZE`) and the ttRPC frame cap, with margin for the
+/// base64 + JSON envelope a public.sock response adds: 512 KiB raw base64-encodes
+/// to ~699 KiB, which still fits a 1 MiB frame with envelope overhead. A guest
+/// file larger than this fails with `FileTooLarge` BEFORE any read/allocation.
+pub const READ_GUEST_FILE_MAX_BYTES: u64 = 512 * 1024;
 
 macro_rules! bounded_string {
     ($(#[$meta:meta])* $name:ident, $max:literal) => {
@@ -121,6 +130,13 @@ bounded_bytes! {
     GuestOutputBytes, 0, 1048576
 }
 
+bounded_bytes! {
+    /// Single-shot `ReadGuestFile` content bytes. Capped at
+    /// `READ_GUEST_FILE_MAX_BYTES` (512 KiB) so the encoded response fits
+    /// inside both the public.sock and ttRPC frame caps.
+    GuestFileBytes, 0, 524288
+}
+
 bounded_string! {
     /// Guest-control schema version token.
     GuestSchemaVersion, 32
@@ -212,6 +228,15 @@ pub enum GuestCapability {
     ExecLogs,
     TtyResize,
     Signals,
+    ReadGuestFile,
+}
+
+/// Closed set of host-declared guest files readable via `ReadGuestFile`.
+/// W15 ships only `GuestConfig` (the in-guest editable config working copy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestFileId {
+    GuestConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -279,6 +304,8 @@ pub struct GuestControlSchema {
     pub exec_signal: ExecSignalRequest,
     pub exec_cancel: ExecCancelRequest,
     pub control_ack: ControlAck,
+    pub read_guest_file: ReadGuestFileRequest,
+    pub read_guest_file_result: ReadGuestFileResponse,
     pub error: GuestControlError,
 }
 
@@ -830,6 +857,29 @@ pub struct ControlAck {
     pub error: Option<GuestControlError>,
 }
 
+/// W15 framework read of a host-declared guest file, keyed by a closed enum
+/// (NOT a free-form path). guestd maps the key to the host-declared target.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestFileRequest {
+    pub metadata: GuestRequestMetadata,
+    pub file_id: GuestFileId,
+}
+
+/// Single-shot bounded response. `content` is capped at
+/// `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE
+/// any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics
+/// only — the host recomputes both from the received bytes.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestFileResponse {
+    pub file_id: GuestFileId,
+    pub size_bytes: u64,
+    pub content: GuestFileBytes,
+    pub sha256: ArgvSha256,
+    pub error: Option<GuestControlError>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputStream {
@@ -957,6 +1007,10 @@ pub enum GuestControlErrorKind {
     AuthFailed,
     TransportUnreachable,
     ExecExpired,
+    FileNotFound,
+    FileTooLarge,
+    PathUnsafe,
+    ReadDenied,
 }
 
 #[cfg(test)]

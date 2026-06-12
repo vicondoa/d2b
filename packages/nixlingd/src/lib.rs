@@ -2616,7 +2616,8 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness => VmStartNodeMode::ReadinessOnly,
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth => VmStartNodeMode::ReadinessOnly,
     }
 }
 
@@ -2993,6 +2994,13 @@ fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, Str
         ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
         ReadinessPredicate::Command(command) => command_ready(command),
         ReadinessPredicate::ComponentSpecific(_) => Ok(true),
+        // The authenticated guest-control Health probe is evaluated through a
+        // daemon-state-aware path (it needs the per-VM vsock socket, peer
+        // credentials, and a broker-backed signer that this stateless helper
+        // cannot reach). Fail CLOSED here: a generic evaluation never reports a
+        // guest-control-health node ready. The state-aware evaluation is wired
+        // into the readiness loop by the W15 readiness DAG migration.
+        ReadinessPredicate::GuestControlHealth { .. } => Ok(false),
     }
 }
 

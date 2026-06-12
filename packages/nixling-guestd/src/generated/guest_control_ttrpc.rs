@@ -116,6 +116,12 @@ impl GuestControlClient {
         ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ExecCancel", cres);
         Ok(cres)
     }
+
+    pub fn read_guest_file(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ReadGuestFileRequest) -> ::ttrpc::Result<super::guest_control::ReadGuestFileResponse> {
+        let mut cres = super::guest_control::ReadGuestFileResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ReadGuestFile", cres);
+        Ok(cres)
+    }
 }
 
 struct HelloMethod {
@@ -283,6 +289,17 @@ impl ::ttrpc::r#async::MethodHandler for ExecCancelMethod {
     }
 }
 
+struct ReadGuestFileMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ReadGuestFileMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ReadGuestFileRequest, read_guest_file);
+    }
+}
+
 #[async_trait]
 pub trait GuestControl: Sync {
     async fn hello(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::HelloRequest) -> ::ttrpc::Result<super::guest_control::HelloResponse> {
@@ -329,6 +346,9 @@ pub trait GuestControl: Sync {
     }
     async fn exec_cancel(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ExecCancelRequest) -> ::ttrpc::Result<super::guest_control::ControlAck> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ExecCancel is not supported".to_string())))
+    }
+    async fn read_guest_file(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ReadGuestFileRequest) -> ::ttrpc::Result<super::guest_control::ReadGuestFileResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ReadGuestFile is not supported".to_string())))
     }
 }
 
@@ -381,6 +401,9 @@ pub fn create_guest_control(service: Arc<dyn GuestControl + Send + Sync>) -> Has
 
     methods.insert("ExecCancel".to_string(),
                     Box::new(ExecCancelMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ReadGuestFile".to_string(),
+                    Box::new(ReadGuestFileMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     ret.insert("nixling.guest.v1.GuestControl".to_string(), ::ttrpc::r#async::Service{ methods, streams });
     ret

@@ -203,6 +203,7 @@ pub fn regenerate_argv(
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
         | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth
         | ProcessRole::SwtpmPreStartFlush => {
             Err(RegenerateArgvError::NotYetWired(intent.role.clone()))
         }

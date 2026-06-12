@@ -23,6 +23,12 @@ service GuestControl {
   rpc TtyWinResize(TtyWinResizeRequest) returns (ControlAck);
   rpc ExecSignal(ExecSignalRequest) returns (ControlAck);
   rpc ExecCancel(ExecCancelRequest) returns (ControlAck);
+
+  // Framework op (W15): read a host-declared, enum-keyed guest file in a
+  // single bounded shot. Auth-gated like the exec RPCs; available whenever
+  // guest-control is enabled (not gated on exec.enable). The request carries a
+  // closed file-id enum, never a free-form path.
+  rpc ReadGuestFile(ReadGuestFileRequest) returns (ReadGuestFileResponse);
 }
 
 message RequestMetadata {
@@ -313,6 +319,24 @@ message ControlAck {
   GuestControlError error = 3;
 }
 
+// W15 framework read of a host-declared guest file. The request is keyed by a
+// closed enum (NOT a free-form path); guestd maps the key to the host-declared
+// target path. The response is a single bounded payload; oversize files fail
+// with FileTooLarge BEFORE any read/allocation. The guest-reported size/sha256
+// are diagnostics only — the host recomputes both from the received bytes.
+message ReadGuestFileRequest {
+  RequestMetadata metadata = 1;
+  GuestFileId file_id = 2;
+}
+
+message ReadGuestFileResponse {
+  GuestFileId file_id = 1;
+  uint64 size_bytes = 2;
+  bytes content = 3;
+  string sha256 = 4;
+  GuestControlError error = 5;
+}
+
 message TerminalStatus {
   oneof outcome {
     int32 exit_code = 1;
@@ -338,6 +362,7 @@ enum GuestCapability {
   GUEST_CAPABILITY_EXEC_LOGS = 6;
   GUEST_CAPABILITY_TTY_RESIZE = 7;
   GUEST_CAPABILITY_SIGNALS = 8;
+  GUEST_CAPABILITY_READ_GUEST_FILE = 9;
 }
 
 enum GuestSubsystem {
@@ -348,6 +373,13 @@ enum GuestSubsystem {
   GUEST_SUBSYSTEM_LOG_STORAGE = 4;
   GUEST_SUBSYSTEM_TOKEN = 5;
   GUEST_SUBSYSTEM_VSOCK = 6;
+}
+
+// Closed set of host-declared guest files readable via ReadGuestFile.
+// W15 ships only GuestConfig (the in-guest editable config working copy).
+enum GuestFileId {
+  GUEST_FILE_ID_UNSPECIFIED = 0;
+  GUEST_FILE_ID_GUEST_CONFIG = 1;
 }
 
 enum HealthOrigin {
@@ -489,4 +521,8 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_AUTH_FAILED = 35;
   GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE = 36;
   GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED = 37;
+  GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND = 38;
+  GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE = 39;
+  GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE = 40;
+  GUEST_CONTROL_ERROR_KIND_READ_DENIED = 41;
 }
