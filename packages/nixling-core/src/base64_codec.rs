@@ -65,14 +65,19 @@ pub fn decode(input: &str) -> Result<Vec<u8>, DecodeError> {
     if !bytes.len().is_multiple_of(4) {
         return Err(DecodeError);
     }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for quad in bytes.chunks(4) {
+    let quad_count = bytes.len() / 4;
+    let mut out = Vec::with_capacity(quad_count * 3);
+    for (quad_idx, quad) in bytes.chunks(4).enumerate() {
+        let is_last = quad_idx + 1 == quad_count;
         let mut buf = [0u8; 4];
         let mut pad = 0usize;
         for (i, &b) in quad.iter().enumerate() {
             if b == PAD {
-                // Padding is only valid in the last one or two positions.
-                if i < 2 {
+                // Padding is only valid in the last one or two positions of
+                // the FINAL quad. A padded quad anywhere before the end (e.g.
+                // `Zg==AAAA`) is malformed: it would silently splice a short
+                // group into the middle of the stream.
+                if i < 2 || !is_last {
                     return Err(DecodeError);
                 }
                 pad += 1;
@@ -89,6 +94,13 @@ pub fn decode(input: &str) -> Result<Vec<u8>, DecodeError> {
             | ((buf[1] as u32) << 12)
             | ((buf[2] as u32) << 6)
             | (buf[3] as u32);
+        // Reject non-canonical padding: the bits that the dropped output
+        // byte(s) would carry MUST be zero, so each padded input has exactly
+        // one canonical encoding (e.g. `Zh==` and `Zm9=` are rejected even
+        // though they are alphabet-valid).
+        if (pad == 1 && triple & 0xff != 0) || (pad == 2 && triple & 0xffff != 0) {
+            return Err(DecodeError);
+        }
         out.push((triple >> 16) as u8);
         if pad < 2 {
             out.push((triple >> 8) as u8);
@@ -140,5 +152,48 @@ mod tests {
         assert_eq!(decode("====").err(), Some(DecodeError)); // pad at pos 0
         assert_eq!(decode("Zm9 v").err(), Some(DecodeError)); // whitespace
         assert_eq!(decode("Z!=="), Err(DecodeError)); // non-alphabet
+    }
+
+    #[test]
+    fn rejects_padding_before_final_quad() {
+        // A padded quad must be the LAST quad. `Zg==` alone decodes to "f",
+        // but `Zg==AAAA` must be rejected rather than decode "f" + 3 bytes:
+        // padding in a non-final quad would splice a short group mid-stream.
+        assert_eq!(encode(b"f"), "Zg==");
+        assert_eq!(decode("Zg=="), Ok(b"f".to_vec()));
+        assert_eq!(decode("Zg==AAAA"), Err(DecodeError));
+        // Two-char padding mid-stream.
+        assert_eq!(decode("Zm8=AAAA"), Err(DecodeError)); // "fo" + ...
+        // One-char padding mid-stream.
+        assert_eq!(decode("Zm9vYg==Zm9v"), Err(DecodeError));
+        // A long run with a padded interior quad.
+        assert_eq!(decode("Zm9vZg==Zm9v"), Err(DecodeError));
+    }
+
+    #[test]
+    fn rejects_non_canonical_padding() {
+        // `Zg==` is the canonical encoding of "f"; `Zh==` carries the same
+        // leading symbol but non-zero discarded bits and MUST be rejected.
+        assert_eq!(decode("Zg=="), Ok(b"f".to_vec()));
+        assert_eq!(decode("Zh=="), Err(DecodeError));
+        assert_eq!(decode("ZP=="), Err(DecodeError));
+        // `Zm8=` is canonical for "fo"; `Zm9=` mutates the dropped low bits.
+        assert_eq!(decode("Zm8="), Ok(b"fo".to_vec()));
+        assert_eq!(decode("Zm9="), Err(DecodeError));
+        // Every non-canonical two-pad variant of a single byte must fail;
+        // only the four canonical second symbols (low nibble zero: A/Q/g/w)
+        // decode (each to its own distinct byte).
+        for second in b'A'..=b'z' {
+            if !second.is_ascii_alphanumeric() {
+                continue;
+            }
+            let candidate = format!("Z{}==", second as char);
+            let expected = decode_symbol(second).unwrap() % 16 == 0;
+            assert_eq!(
+                decode(&candidate).is_ok(),
+                expected,
+                "non-canonical pad acceptance for {candidate}"
+            );
+        }
     }
 }
