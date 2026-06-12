@@ -91,7 +91,13 @@ def synth(s):
         return False
     if typ == "array":
         item = synth(s.get("items", {"type": "string"}))
-        return [item] if int(s.get("minItems", 0) or 0) > 0 else []
+        # Honor the actual minItems count, not just presence: fixed-size
+        # byte arrays like the 32-byte GuestNonce/GuestAuthTag declare
+        # minItems == maxItems == 32, so a single-element fixture is "too
+        # short". Emit exactly minItems copies (still <= maxItems for any
+        # valid schema).
+        min_items = int(s.get("minItems", 0) or 0)
+        return [item] * min_items if min_items > 0 else []
     return "fixture"
 
 
@@ -154,7 +160,6 @@ def assert_guest_control_string_bounds():
         "GuestVmId": 128,
         "RequestId": 128,
         "ExecId": 128,
-        "GuestNonce": 128,
         "GuestBootId": 128,
         "CapabilitiesHash": 128,
         "GuestArg": 4096,
