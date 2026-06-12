@@ -34,7 +34,9 @@ use tokio::{
 
 use nixling_ipc::guest_wire::GuestControlErrorKind as WireErrorKind;
 
-use crate::exec_pty::{PtyProcessSpawner, SpawnedPtyProcess, TerminalSize, TtyState};
+use crate::exec_pty::{
+    PtyProcessSpawner, SpawnedPtyProcess, StdinWriteOk, TerminalSize, TtyState,
+};
 
 /// Maximum retained live-buffer bytes per output stream (drop-oldest cap).
 pub const STDOUT_LIVE_BUFFER_BYTES: usize = 1024 * 1024;
@@ -399,6 +401,22 @@ struct ExecEntry {
 
 impl ExecEntry {
     fn snapshot(&self) -> ExecSnapshot {
+        // Resolve the TTY stdin disposition + last control seq WITHOUT holding
+        // the shared lock (these are independent short std mutexes on TtyState;
+        // computing them first avoids any cross-lock ordering concern).
+        let (stdin, last_control_seq) = match self.tty.as_ref() {
+            None => (TtyStdinSnapshot::NotInteractive, 0),
+            Some(tty) => {
+                let disposition = if tty.stdin_closed() {
+                    TtyStdinSnapshot::Closed
+                } else if tty.is_closing() {
+                    TtyStdinSnapshot::Closing
+                } else {
+                    TtyStdinSnapshot::Open
+                };
+                (disposition, tty.last_control_seq())
+            }
+        };
         let shared = self.lock_shared();
         ExecSnapshot {
             state: shared.state,
@@ -412,6 +430,8 @@ impl ExecEntry {
             stderr_dropped_bytes: shared.stderr.dropped_bytes,
             stdout_truncated: shared.stdout.truncated,
             stderr_truncated: shared.stderr.truncated,
+            stdin,
+            last_control_seq,
         }
     }
 
@@ -459,6 +479,19 @@ impl ExecEntry {
     }
 }
 
+/// Interactive (TTY) stdin disposition carried in an [`ExecSnapshot`] so
+/// `ExecInspect` is TTY-aware: a live TTY exec accepting `WriteStdin` shows
+/// `Open`, a closed (VEOF-injected) one shows `Closed`, a tearing-down one shows
+/// `Closing`. Non-TTY execs report `NotInteractive` (their stdin is never
+/// writable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TtyStdinSnapshot {
+    NotInteractive,
+    Open,
+    Closing,
+    Closed,
+}
+
 /// Public snapshot of an exec's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecSnapshot {
@@ -473,6 +506,10 @@ pub struct ExecSnapshot {
     pub stderr_dropped_bytes: u64,
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
+    /// Interactive stdin disposition (TTY-aware inspect).
+    pub stdin: TtyStdinSnapshot,
+    /// Highest admitted resize/signal control sequence (0 for non-TTY execs).
+    pub last_control_seq: u64,
 }
 
 /// Stable identity of an authenticated connection that owns its execs.
@@ -996,7 +1033,8 @@ where
     }
 
     /// WriteStdin to an owned TTY exec at `offset` (optionally injecting VEOF
-    /// via `close_after`). Returns the new next-offset.
+    /// via `close_after`). Returns the accepted-byte count, the new next-offset,
+    /// and whether stdin is now closed (partial-write-aware — see [`StdinWriteOk`]).
     pub async fn write_stdin(
         &self,
         owner: &ConnectionKey,
@@ -1005,7 +1043,7 @@ where
         offset: u64,
         data: &[u8],
         close_after: bool,
-    ) -> Result<u64, ExecError> {
+    ) -> Result<StdinWriteOk, ExecError> {
         let tty = self.lookup_tty_stdin(owner, exec_id, guest_boot_id)?;
         tty.write_stdin(offset, data, close_after).await
     }
@@ -1431,11 +1469,25 @@ fn spawn_tty_supervisor(
 
 /// Idempotent interactive-exec teardown. The first caller to win the
 /// `Running → Closing` race owns the teardown: it releases the master write
-/// half and control surface, aborts the merged-output reader (dropping the last
-/// master reference sends `SIGHUP` to the session), waits a bounded grace, then
-/// SIGKILLs every process remaining in the session and publishes the terminal
-/// state. `outcome = None` => the session was cancelled (disconnect / ceiling);
-/// `Some(_)` => the child exited on its own.
+/// half and control surface, then drops the merged-output reader (dropping the
+/// last master reference sends `SIGHUP` to the session), waits a bounded grace,
+/// then SIGKILLs every process remaining in the session and publishes the
+/// terminal state. `outcome = None` => the session was cancelled (disconnect /
+/// ceiling); `Some(_)` => the child exited on its own.
+///
+/// G1 ordering: ALL tasks that hold a master clone (the abortable writer task
+/// AND the merged-output reader task) are dropped/awaited BEFORE the
+/// SIGHUP→grace→KILL window, so the master `OwnedFd` is actually closed and the
+/// kernel delivers `SIGHUP` to the foreground session within the grace. The
+/// writer is released by aborting its task (never by contending for the lock a
+/// blocked PTY write holds), so a child that stopped reading stdin cannot
+/// deadlock teardown.
+///
+/// G9 drain: on a normal child exit (`outcome = Some`) the slave is gone, so the
+/// master read returns EOF/EIO on its own — the reader is given a bounded grace
+/// to drain trailing output before being aborted. On cancel/disconnect
+/// (`outcome = None`) the child may still be running, so the reader is aborted
+/// immediately to drop its master clone and force `SIGHUP`.
 ///
 /// Both the supervisor (on child exit) and `close_connection` (on disconnect)
 /// call this; the loser of the `begin_closing` race early-returns, so the state
@@ -1451,20 +1503,42 @@ async fn teardown_tty(
         return;
     }
     // Entering Closing has already rejected new stdin/control RPCs. Release the
-    // master write half + control clone and abort the reader so the last master
-    // reference is dropped (SIGHUP to the foreground session).
+    // master write half (abort+await the writer task — never lock-contend) and
+    // the control clone so two of the three master references are gone.
     tty.release_writer().await;
     let _ = tty.take_control();
-    {
+    // Take the reader task(s) out of the entry and drop their master clone
+    // BEFORE the grace window: on a normal exit, drain to natural EOF within a
+    // bounded grace (capturing trailing output) then abort if still running; on
+    // cancel/disconnect, abort immediately so the last master clone drops and
+    // SIGHUP is delivered.
+    let reader_tasks: Vec<JoinHandle<()>> = {
         let mut tasks = entry
             .tasks
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for task in tasks.drain(..) {
-            task.abort();
+        tasks.drain(..).collect()
+    };
+    for mut handle in reader_tasks {
+        if outcome.is_some() {
+            match tokio::time::timeout(grace, &mut handle).await {
+                // Reader finished on its own (natural EOF). The JoinHandle
+                // future already completed here — must NOT be awaited again.
+                Ok(_joined) => {}
+                Err(_elapsed) => {
+                    handle.abort();
+                    let _ = handle.await;
+                }
+            }
+        } else {
+            handle.abort();
+            let _ = handle.await;
         }
     }
-    // Bounded grace for SIGHUP to take effect before the SIGKILL sweep.
+    // All three master references (writer task, control, reader task) are now
+    // dropped → the master OwnedFd is closed → the kernel delivers SIGHUP to the
+    // foreground session. Bounded grace for SIGHUP to take effect before the
+    // SIGKILL sweep.
     tokio::time::sleep(grace).await;
     // SIGKILL every process still in the session (repeats until empty). The
     // no-orphan guarantee is scoped to in-session processes; a setsid/double
@@ -2467,10 +2541,23 @@ mod tests {
 
     /// Multi-spawn fake PTY spawner for capacity tests: every spawn yields a
     /// fresh never-exiting session (leaked test-side duplex ends keep the master
-    /// halves open).
+    /// halves open). `allocs` counts how many times a PTY was actually
+    /// allocated, so a capacity test can assert an over-cap create fails BEFORE
+    /// any PTY/helper allocation.
     struct MultiPtySpawner {
         kills: Arc<AtomicU64>,
         reaped: Arc<AtomicU64>,
+        allocs: Arc<AtomicU64>,
+    }
+
+    impl MultiPtySpawner {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                kills: Arc::new(AtomicU64::new(0)),
+                reaped: Arc::new(AtomicU64::new(0)),
+                allocs: Arc::new(AtomicU64::new(0)),
+            })
+        }
     }
 
     #[async_trait]
@@ -2480,6 +2567,7 @@ mod tests {
             _command: ValidatedCommand,
             _initial_size: TerminalSize,
         ) -> Result<SpawnedPtyProcess, ExecError> {
+            self.allocs.fetch_add(1, Ordering::SeqCst);
             let (test_o, guest_o) = duplex(1024);
             let (guest_i, test_i) = duplex(1024);
             std::mem::forget(test_o);
@@ -2591,11 +2679,13 @@ mod tests {
         let mut stdin_r = hooks.stdin_r.take().unwrap();
 
         // Contiguous write at offset 0.
-        let next = rt
+        let out = rt
             .write_stdin(&owner, &exec_id, "boot-1", 0, b"abc", false)
             .await
             .unwrap();
-        assert_eq!(next, 3);
+        assert_eq!(out.accepted_len, 3);
+        assert_eq!(out.next_offset, 3);
+        assert!(!out.closed);
         // Replayed / stale offset is rejected.
         assert_eq!(
             rt.write_stdin(&owner, &exec_id, "boot-1", 0, b"x", false)
@@ -2611,11 +2701,13 @@ mod tests {
             ExecError::StdinOffsetMismatch
         );
         // close_after writes the data then injects VEOF.
-        let next = rt
+        let out = rt
             .write_stdin(&owner, &exec_id, "boot-1", 3, b"de", true)
             .await
             .unwrap();
-        assert_eq!(next, 5);
+        assert_eq!(out.accepted_len, 2);
+        assert_eq!(out.next_offset, 5);
+        assert!(out.closed);
         // Any further write after close is rejected.
         assert_eq!(
             rt.write_stdin(&owner, &exec_id, "boot-1", 5, b"z", false)
@@ -2656,6 +2748,16 @@ mod tests {
         let mut one = [0u8; 1];
         stdin_r.read_exact(&mut one).await.unwrap();
         assert_eq!(one[0], VEOF);
+
+        // The idempotent duplicate close must NOT inject a second VEOF: a bounded
+        // read for another byte times out (nothing more is on the master).
+        let mut extra = [0u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), stdin_r.read_exact(&mut extra))
+                .await
+                .is_err(),
+            "a duplicate CloseStdin must not write a second VEOF"
+        );
 
         // A WriteStdin after close is rejected.
         assert_eq!(
@@ -2809,11 +2911,10 @@ mod tests {
             allow_root: true,
         };
         let (base, _hooks) = FakeSpawner::new();
+        let spawner = MultiPtySpawner::new();
+        let allocs = Arc::clone(&spawner.allocs);
         let rt = ExecRuntime::new(base, SeqIds::new(), policy)
-            .with_pty_spawner(Arc::new(MultiPtySpawner {
-                kills: Arc::new(AtomicU64::new(0)),
-                reaped: Arc::new(AtomicU64::new(0)),
-            }))
+            .with_pty_spawner(spawner)
             .with_tty_grace(Duration::from_millis(1));
         let owner = b"c1".to_vec();
         for _ in 0..ATTACHED_SESSIONS_PER_VM {
@@ -2821,6 +2922,7 @@ mod tests {
                 .await
                 .unwrap();
         }
+        assert_eq!(allocs.load(Ordering::SeqCst), ATTACHED_SESSIONS_PER_VM as u64);
         // The interactive path shares the attached-session capacity.
         assert_eq!(
             rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
@@ -2828,5 +2930,249 @@ mod tests {
                 .unwrap_err(),
             ExecError::AttachCapacityExceeded
         );
+        // The over-cap create fails BEFORE any PTY/helper allocation: the
+        // spawn-count is unchanged, so there is no half-created session.
+        assert_eq!(allocs.load(Ordering::SeqCst), ATTACHED_SESSIONS_PER_VM as u64);
+    }
+
+    #[tokio::test]
+    async fn tty_inspect_is_tty_aware_for_stdin_and_control_seq() {
+        // G8: a live TTY exec reports OPEN stdin + the highest admitted control
+        // seq; after CloseStdin it reports CLOSED. (Non-TTY execs keep CLOSED +
+        // seq 0, covered by the detached/attached paths.)
+        let (rt, _hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+
+        let snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        assert_eq!(snap.stdin, TtyStdinSnapshot::Open);
+        assert_eq!(snap.last_control_seq, 0);
+
+        rt.tty_resize(&owner, &exec_id, "boot-1", 7, 40, 80).unwrap();
+        let snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        assert_eq!(snap.stdin, TtyStdinSnapshot::Open);
+        assert_eq!(snap.last_control_seq, 7);
+
+        rt.close_stdin(&owner, &exec_id, "boot-1", 0).await.unwrap();
+        let snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        assert_eq!(snap.stdin, TtyStdinSnapshot::Closed);
+        assert_eq!(snap.last_control_seq, 7);
+    }
+
+    #[tokio::test]
+    async fn tty_terminal_size_inclusive_boundaries() {
+        // Initial size at the inclusive boundaries 1 and 65535 is accepted.
+        for size in [(1u32, 1u32), (65535u32, 65535u32)] {
+            let (rt, hooks) = tty_runtime(None);
+            let owner = b"c1".to_vec();
+            let mut input = tty_input();
+            input.has_terminal_size = true;
+            rt.create_tty(owner, "boot-1".to_owned(), input, Some(size))
+                .await
+                .unwrap();
+            assert_eq!(
+                hooks.control.initial(),
+                Some(TerminalSize {
+                    rows: size.0 as u16,
+                    cols: size.1 as u16
+                })
+            );
+        }
+
+        // Resize at the inclusive boundaries is accepted; just outside is rejected.
+        let (rt, hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        rt.tty_resize(&owner, &exec_id, "boot-1", 1, 1, 1).unwrap();
+        rt.tty_resize(&owner, &exec_id, "boot-1", 2, 65535, 65535)
+            .unwrap();
+        assert_eq!(
+            rt.tty_resize(&owner, &exec_id, "boot-1", 3, 0, 80)
+                .unwrap_err(),
+            ExecError::InvalidTerminalSize
+        );
+        assert_eq!(
+            rt.tty_resize(&owner, &exec_id, "boot-1", 4, 65536, 80)
+                .unwrap_err(),
+            ExecError::InvalidTerminalSize
+        );
+        assert_eq!(
+            hooks.control.resizes(),
+            vec![
+                TerminalSize { rows: 1, cols: 1 },
+                TerminalSize {
+                    rows: 65535,
+                    cols: 65535
+                }
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tty_rpcs_from_non_owner_are_rejected_with_no_side_effect() {
+        // An authenticated-but-not-owner connection cannot drive another
+        // connection's TTY exec: every RPC is ExecNotFound with NO PTY/VEOF/
+        // resize/signal side effect.
+        let (rt, mut hooks) = tty_runtime(None);
+        let owner = b"owner".to_vec();
+        let intruder = b"intruder".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        let mut stdin_r = hooks.stdin_r.take().unwrap();
+
+        assert_eq!(
+            rt.write_stdin(&intruder, &exec_id, "boot-1", 0, b"x", false)
+                .await
+                .unwrap_err(),
+            ExecError::ExecNotFound
+        );
+        assert_eq!(
+            rt.close_stdin(&intruder, &exec_id, "boot-1", 0)
+                .await
+                .unwrap_err(),
+            ExecError::ExecNotFound
+        );
+        assert_eq!(
+            rt.tty_resize(&intruder, &exec_id, "boot-1", 1, 40, 80)
+                .unwrap_err(),
+            ExecError::ExecNotFound
+        );
+        assert_eq!(
+            rt.tty_signal(&intruder, &exec_id, "boot-1", 1, 2)
+                .unwrap_err(),
+            ExecError::ExecNotFound
+        );
+
+        // No side effects: no resize/signal recorded, and no stdin bytes/VEOF.
+        assert!(hooks.control.resizes().is_empty());
+        assert!(hooks.control.signals().is_empty());
+        let owner_snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        assert_eq!(owner_snap.last_control_seq, 0);
+        assert_eq!(owner_snap.stdin, TtyStdinSnapshot::Open);
+        // The owner can still write at offset 0 (the intruder never advanced it).
+        let out = rt
+            .write_stdin(&owner, &exec_id, "boot-1", 0, b"ok", false)
+            .await
+            .unwrap();
+        assert_eq!(out.next_offset, 2);
+        let mut buf = [0u8; 2];
+        stdin_r.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ok");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tty_default_session_runs_past_the_non_tty_runtime_ceiling() {
+        // A default interactive session has NO runtime ceiling (None): it must
+        // stay Running well past the W12 non-TTY MAX_EXEC_RUNTIME_MS (6h).
+        let (rt, _hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        tokio::time::advance(Duration::from_millis(MAX_EXEC_RUNTIME_MS * 2)).await;
+        // Let any (erroneously scheduled) ceiling timer fire.
+        tokio::task::yield_now().await;
+        let snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        assert_eq!(
+            snap.state,
+            ExecState::Running,
+            "an unlimited TTY session must outlive the non-TTY 6h ceiling"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn non_tty_session_is_still_cancelled_at_the_6h_ceiling() {
+        // The W12 non-TTY wall-clock ceiling (MAX_EXEC_RUNTIME_MS) must still
+        // fire: a non-TTY exec whose child never exits on its own is Cancelled
+        // once 6h elapse. This guards against the interactive-ceiling work
+        // accidentally loosening the attached ceiling.
+        //
+        // A dedicated spawner models a real child: its `wait()` parks until the
+        // ceiling's `kill_group()` fires, after which it reports `Signaled` — so
+        // the supervisor's post-kill `wait()` actually returns (the generic
+        // FakeWaiter would pend forever on the second wait).
+        use tokio::sync::Notify;
+
+        struct CeilingProbe {
+            killed: Notify,
+        }
+        struct CeilingKiller(Arc<CeilingProbe>);
+        impl ProcessKiller for CeilingKiller {
+            fn kill_group(&self) {
+                self.0.killed.notify_waiters();
+                // Also store a permit for a waiter that has not yet parked.
+                self.0.killed.notify_one();
+            }
+        }
+        struct CeilingWaiter(Arc<CeilingProbe>);
+        #[async_trait]
+        impl ProcessWaiter for CeilingWaiter {
+            async fn wait(&mut self) -> ExitOutcome {
+                self.0.killed.notified().await;
+                ExitOutcome::Signaled(9)
+            }
+        }
+        struct CeilingSpawner {
+            probe: Arc<CeilingProbe>,
+        }
+        #[async_trait]
+        impl ProcessSpawner for CeilingSpawner {
+            async fn spawn(
+                &self,
+                _command: ValidatedCommand,
+            ) -> Result<SpawnedProcess, ExecError> {
+                let (_t_o, g_o) = duplex(1024);
+                let (_t_e, g_e) = duplex(1024);
+                std::mem::forget(_t_o);
+                std::mem::forget(_t_e);
+                Ok(SpawnedProcess {
+                    stdout: Box::new(g_o),
+                    stderr: Box::new(g_e),
+                    killer: Arc::new(CeilingKiller(Arc::clone(&self.probe))),
+                    waiter: Box::new(CeilingWaiter(Arc::clone(&self.probe))),
+                })
+            }
+        }
+
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let spawner = CeilingSpawner {
+            probe: Arc::new(CeilingProbe {
+                killed: Notify::new(),
+            }),
+        };
+        let rt = ExecRuntime::new(spawner, SeqIds::new(), policy);
+        let owner = b"c1".to_vec();
+        let (exec_id, _snap) = rt
+            .create(owner.clone(), "boot-1".to_owned(), good_input())
+            .await
+            .unwrap();
+        // Let the supervisor task run so it arms its 6h timeout BEFORE advancing
+        // (a paused clock only fires already-registered timers).
+        tokio::task::yield_now().await;
+        // Advance just past the ceiling, then let the supervisor timeout fire and
+        // teardown publish the terminal state (graces are on the mock clock too).
+        tokio::time::advance(Duration::from_millis(MAX_EXEC_RUNTIME_MS + 1)).await;
+        let mut snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        for _ in 0..200 {
+            if !matches!(snap.state, ExecState::Running) {
+                break;
+            }
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_millis(1_000)).await;
+            snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        }
+        assert_eq!(snap.state, ExecState::Cancelled);
     }
 }

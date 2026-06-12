@@ -36,7 +36,7 @@ use crate::{
     },
     exec::{
         ExecCreateInput, ExecError, ExecPolicy, ExecRuntime, ExecSnapshot,
-        ExecState as RtExecState, ExitOutcome, Stream as RtStream,
+        ExecState as RtExecState, ExitOutcome, Stream as RtStream, TtyStdinSnapshot,
     },
     exec_linux::LinuxProcessSpawner,
     exec_pty::linux::LinuxPtyProcessSpawner,
@@ -708,8 +708,16 @@ fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     let mut response = pb::ExecInspectResponse::new();
     response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
     response.visible_terminal_status = wire_terminal_status(snapshot);
-    // Non-interactive execs run with stdin closed.
-    response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_CLOSED);
+    // TTY-aware stdin disposition (G8): a live interactive exec accepting
+    // WriteStdin reports OPEN, a tearing-down one CLOSING, a VEOF-closed one
+    // CLOSED. Non-interactive execs have no writable stdin and keep the
+    // historical CLOSED report.
+    response.stdin_state = EnumOrUnknown::new(match snapshot.stdin {
+        TtyStdinSnapshot::NotInteractive => pb::StdinState::STDIN_STATE_CLOSED,
+        TtyStdinSnapshot::Open => pb::StdinState::STDIN_STATE_OPEN,
+        TtyStdinSnapshot::Closing => pb::StdinState::STDIN_STATE_CLOSING,
+        TtyStdinSnapshot::Closed => pb::StdinState::STDIN_STATE_CLOSED,
+    });
     response.stdout_start_offset = snapshot.stdout_start_offset;
     response.stdout_end_offset = snapshot.stdout_end_offset;
     response.stderr_start_offset = snapshot.stderr_start_offset;
@@ -719,6 +727,8 @@ fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     response.stdout_truncated_for_retention = snapshot.stdout_truncated;
     response.stderr_truncated_for_retention = snapshot.stderr_truncated;
     response.state_generation = snapshot.state_generation;
+    // Highest admitted resize/signal control sequence (0 for non-TTY execs).
+    response.last_control_seq = snapshot.last_control_seq;
     response
 }
 
@@ -882,6 +892,18 @@ impl GuestControl for GuestControlService {
             .map_err(|_| rpc_status(ttrpc::Code::INTERNAL, "guest-control-internal-error"))?;
 
         if input.detached {
+            // `tty && detached` is an unsupported mode regardless of whether
+            // detached exec is configured on this host: reject it deterministically
+            // here so the documented mode error does not depend on the detached
+            // registry's availability (a missing registry would otherwise mask it
+            // as GuestExecDisabled).
+            if input.tty {
+                let mut response = pb::ExecCreateResponse::new();
+                response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+                response.error =
+                    MessageField::some(guest_error_kind(ExecError::UnsupportedMode));
+                return Ok(response);
+            }
             return self.exec_create_detached(input, &guest_boot_id).await;
         }
 
@@ -1130,12 +1152,15 @@ impl GuestControl for GuestControlService {
             )
             .await
         {
-            Ok(next_offset) => {
+            Ok(out) => {
                 let mut response = pb::WriteStdinResponse::new();
                 response.accepted_offset = request.offset;
-                response.accepted_len = len;
-                response.next_offset = next_offset;
-                response.stdin_state = EnumOrUnknown::new(if request.close_after {
+                // Partial-write-aware (G2): report the bytes that actually
+                // landed, not the requested length. A client retries any
+                // remainder from `next_offset`.
+                response.accepted_len = out.accepted_len;
+                response.next_offset = out.next_offset;
+                response.stdin_state = EnumOrUnknown::new(if out.closed {
                     pb::StdinState::STDIN_STATE_CLOSED
                 } else {
                     pb::StdinState::STDIN_STATE_OPEN
@@ -2151,6 +2176,48 @@ mod tests {
                 ExecError::ExecExpired,
                 Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
             ),
+            // Interactive TTY exec (W14) variants — none collapse silently; the
+            // mode/validation faults map to ProtocolError deliberately.
+            (
+                ExecError::InvalidTerminalSize,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::TtyStderrUnavailable,
+                Pb::GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE,
+            ),
+            (
+                ExecError::TtyRequired,
+                Pb::GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED,
+            ),
+            (
+                ExecError::StdinClosed,
+                Pb::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED,
+            ),
+            (
+                ExecError::StdinOffsetMismatch,
+                Pb::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH,
+            ),
+            (
+                ExecError::StdinByteBudgetExhausted,
+                Pb::GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED,
+            ),
+            (
+                ExecError::StdinBackpressure,
+                Pb::GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE,
+            ),
+            (
+                ExecError::ControlSeqMismatch,
+                Pb::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH,
+            ),
+            (
+                ExecError::InvalidSignal,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::ExecClosing,
+                Pb::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED,
+            ),
             (
                 ExecError::Internal,
                 Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
@@ -2502,5 +2569,59 @@ mod tests {
             }
             other => panic!("expected invalid-argument status, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn write_stdin_handler_budget_sheds_then_releases_on_drop() {
+        // G11: the per-connection WriteStdin handler budget sheds the
+        // (N+1)th concurrent handler with StdinBackpressure, and dropping a
+        // guard returns the slot so a subsequent acquire succeeds.
+        let service = test_service(42);
+        let mut held = Vec::new();
+        for _ in 0..WRITE_STDIN_HANDLERS_PER_CONNECTION {
+            held.push(service.acquire_write_stdin_slot(1).expect("slot within budget"));
+        }
+        assert!(
+            matches!(
+                service.acquire_write_stdin_slot(1),
+                Err(ExecError::StdinBackpressure)
+            ),
+            "the handler over the ceiling is shed"
+        );
+        // Releasing one guard frees exactly one slot.
+        drop(held.pop());
+        let reclaimed = service
+            .acquire_write_stdin_slot(1)
+            .expect("a slot frees up after a guard drops");
+        // ...and we are back at the ceiling.
+        assert!(matches!(
+            service.acquire_write_stdin_slot(1),
+            Err(ExecError::StdinBackpressure)
+        ));
+        drop(reclaimed);
+        drop(held);
+    }
+
+    #[test]
+    fn write_stdin_byte_budget_exhaustion_releases_the_handler_slot() {
+        // G11: when the decoded-byte budget is exhausted, the acquire fails with
+        // StdinByteBudgetExhausted AND must roll back the handler-count bump it
+        // made first, so the connection is not left with a leaked handler slot.
+        let service = test_service(43);
+        let over = DECODED_WRITE_STDIN_BYTES_PER_CONNECTION + 1;
+        assert!(matches!(
+            service.acquire_write_stdin_slot(over),
+            Err(ExecError::StdinByteBudgetExhausted)
+        ));
+        // The handler slot was rolled back: all N handlers are available again.
+        let mut held = Vec::new();
+        for _ in 0..WRITE_STDIN_HANDLERS_PER_CONNECTION {
+            held.push(
+                service
+                    .acquire_write_stdin_slot(1)
+                    .expect("handler slot was not leaked by the byte-budget rejection"),
+            );
+        }
+        drop(held);
     }
 }

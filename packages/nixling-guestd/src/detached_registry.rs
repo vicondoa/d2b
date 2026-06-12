@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use crate::detached::{
     parse_exec_start, unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
 };
-use crate::exec::{ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream, ValidatedCommand};
+use crate::exec::{ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream, TtyStdinSnapshot, ValidatedCommand};
 
 use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
 use nixling_exec_runner::paths::{RunnerPaths, Stream as RunnerStream};
@@ -1348,6 +1348,9 @@ impl DetachedRegistry {
             stderr_dropped_bytes: stderr.dropped_bytes,
             stdout_truncated: stdout.truncated || stdout.lost,
             stderr_truncated: stderr.truncated || stderr.lost,
+            // Detached execs are never interactive (TTY requires non-detached).
+            stdin: TtyStdinSnapshot::NotInteractive,
+            last_control_seq: 0,
         })
     }
 }
