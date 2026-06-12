@@ -1885,4 +1885,251 @@ mod tests {
         );
         assert_eq!(not_found.retry_after_ms, None);
     }
+
+    // ---- ExecList service-path fakes -------------------------------------
+    //
+    // Minimal in-memory backends so the `exec_list` handler can be exercised
+    // against a real `DetachedRegistry` without spawning processes or units.
+    // These are intentionally self-contained (a little duplicated shape from
+    // the registry's own test fakes) so the service tests stay decoupled from
+    // the registry's private test module. A seeded record always resolves
+    // terminal (spawn-failed) so `list` returns a bounded, stable set.
+    use crate::detached::{ManagedUnit, TransientUnitManager, UnitError};
+    use crate::detached_registry::{DetachedCaps, Sleeper, SlotStore, WallClock};
+    use crate::exec::{ExecIdSource, ValidatedCommand};
+    use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
+    use nixling_exec_runner::paths::Stream as RunnerStream;
+    use nixling_exec_runner::record::{DurableRecord, StatusPhase};
+    use nixling_exec_runner::spec::ExecSpec;
+    use nixling_exec_runner::DETACHED_RETAINED_PER_VM;
+    use std::sync::atomic::AtomicU64;
+
+    #[derive(Default)]
+    struct SvcStore;
+
+    impl SlotStore for SvcStore {
+        fn prepare_slot_dir(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn write_record(&self, _slot: u32, _record: &DurableRecord) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn read_record(&self, _slot: u32) -> Result<DurableRecord, ExecError> {
+            Err(ExecError::ExecNotFound)
+        }
+        fn write_spec(&self, _slot: u32, _spec: &ExecSpec) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn write_cancel(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn read_status(&self, _slot: u32) -> Result<Option<StatusPhase>, ExecError> {
+            // Every seeded create resolves immediately to a terminal,
+            // retained record.
+            Ok(Some(StatusPhase::SpawnFailed))
+        }
+        fn read_log_meta(
+            &self,
+            _slot: u32,
+            _stream: RunnerStream,
+        ) -> Result<Option<StreamMeta>, ExecError> {
+            Ok(None)
+        }
+        fn read_log(
+            &self,
+            _slot: u32,
+            _stream: RunnerStream,
+            _offset: u64,
+            _max_len: u64,
+        ) -> Result<RingChunk, FileRingError> {
+            Err(FileRingError::OffsetInFuture)
+        }
+        fn mark_lost(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn delete_slot_dir(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn scrub_slot_files(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn validate_authenticity(&self, _slot: u32) -> Result<(), ExecError> {
+            Ok(())
+        }
+        fn list_slot_dirs(&self) -> Result<Vec<u32>, ExecError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Default)]
+    struct SvcUnits;
+
+    #[async_trait]
+    impl TransientUnitManager for SvcUnits {
+        async fn start_transient_unit(
+            &self,
+            _slot: u32,
+            _ceiling_sec: u64,
+            _paths: &RunnerUnitPaths,
+        ) -> Result<(), UnitError> {
+            Ok(())
+        }
+        async fn stop_unit(&self, _slot: u32) -> Result<(), UnitError> {
+            Ok(())
+        }
+        async fn reset_failed(&self, _slot: u32) -> Result<(), UnitError> {
+            Ok(())
+        }
+        async fn list_managed_units(&self) -> Result<Vec<ManagedUnit>, UnitError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct SvcClock;
+    impl WallClock for SvcClock {
+        fn now_ms(&self) -> u64 {
+            1_000
+        }
+    }
+
+    struct SvcSleeper;
+    #[async_trait]
+    impl Sleeper for SvcSleeper {
+        async fn sleep_ms(&self, _ms: u64) {}
+    }
+
+    struct SvcIds {
+        next: AtomicU64,
+    }
+    impl ExecIdSource for SvcIds {
+        fn next_exec_id(&self) -> Result<String, ExecError> {
+            let n = self.next.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("{n:032x}"))
+        }
+    }
+
+    fn svc_command(index: u32) -> ValidatedCommand {
+        ValidatedCommand {
+            program: "/bin/echo".into(),
+            args: vec![format!("entry-{index}")],
+            cwd: "/".into(),
+            env: Vec::new(),
+        }
+    }
+
+    /// Build a `DetachedRegistry` bound to `boot_id` and seed `count` terminal
+    /// (retained) records, each with a distinct opaque id and argv hash.
+    async fn seeded_detached(boot_id: &str, count: u32) -> Arc<DetachedRegistry> {
+        let registry = DetachedRegistry::new(
+            Arc::new(SvcUnits),
+            Arc::new(SvcStore),
+            Arc::new(SvcClock),
+            Arc::new(SvcSleeper),
+            Arc::new(SvcIds {
+                next: AtomicU64::new(1),
+            }),
+            RegistryConfig {
+                paths: RunnerUnitPaths::new("/run/current-system/sw/bin/nixling-exec-runner"),
+                boot_id: boot_id.to_owned(),
+                max_runtime_sec: 0,
+            },
+        );
+        for index in 0..count {
+            registry
+                .create(boot_id, svc_command(index), DetachedCaps::standard(0))
+                .await
+                .expect("seed detached record");
+        }
+        Arc::new(registry)
+    }
+
+    fn exec_list_request(guest_boot_id: &str) -> pb::ExecListRequest {
+        let mut request = pb::ExecListRequest::new();
+        request.metadata = metadata();
+        request.guest_boot_id = guest_boot_id.to_owned();
+        request
+    }
+
+    fn service_with_detached(instance: u8, detached: Arc<DetachedRegistry>) -> GuestControlService {
+        GuestControlService::new(test_auth(), test_exec(), Some(detached), test_context(instance))
+    }
+
+    #[tokio::test]
+    async fn exec_list_requires_auth_before_touching_registry() {
+        let ctx = ttrpc_context();
+        let detached = seeded_detached("boot-A", 1).await;
+        let service = service_with_detached(7, detached);
+        assert_unauthenticated(service.exec_list(&ctx, exec_list_request("boot-A")).await);
+    }
+
+    #[tokio::test]
+    async fn exec_list_same_boot_returns_bounded_argv_hash_only_entries() {
+        let ctx = ttrpc_context();
+        let detached = seeded_detached("boot-A", 3).await;
+        let service = service_with_detached(7, detached);
+        authenticate(&service).await;
+
+        let response = service
+            .exec_list(&ctx, exec_list_request("boot-A"))
+            .await
+            .expect("exec_list ok");
+        assert!(response.error.is_none(), "no error on same-boot list");
+        assert_eq!(response.entries.len(), 3, "every seeded record is listed");
+        // The bounded set never exceeds the retained-per-VM cap, and each entry
+        // exposes the argv DIGEST only — the wire entry structurally has no raw
+        // argv/env/cwd field, so no command bytes can leak through ExecList.
+        assert!(response.entries.len() as u32 <= DETACHED_RETAINED_PER_VM as u32);
+        let mut ids: Vec<String> = Vec::new();
+        for entry in &response.entries {
+            assert_eq!(entry.argv_sha256.len(), 64, "argv_sha256 is a 32-byte hex digest");
+            assert!(
+                entry.argv_sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+                "argv_sha256 is hex"
+            );
+            assert!(!entry.exec_id.is_empty());
+            ids.push(entry.exec_id.clone());
+        }
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 3, "exec ids are distinct");
+    }
+
+    #[tokio::test]
+    async fn exec_list_boot_mismatch_is_stale_session() {
+        let ctx = ttrpc_context();
+        // Registry bound to a DIFFERENT boot than the request asks for.
+        let detached = seeded_detached("boot-A", 2).await;
+        let service = service_with_detached(7, detached);
+        authenticate(&service).await;
+
+        let response = service
+            .exec_list(&ctx, exec_list_request("boot-B"))
+            .await
+            .expect("exec_list returns a typed error envelope, not a transport error");
+        assert!(response.entries.is_empty(), "no entries leak across a boot mismatch");
+        let error = response.error.as_ref().expect("stale-session error envelope");
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_STALE_SESSION
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_list_rejects_empty_guest_boot_id() {
+        let ctx = ttrpc_context();
+        let detached = seeded_detached("boot-A", 1).await;
+        let service = service_with_detached(7, detached);
+        authenticate(&service).await;
+
+        let result = service.exec_list(&ctx, exec_list_request("")).await;
+        match result {
+            Err(ttrpc::Error::RpcStatus(status)) => {
+                assert_eq!(
+                    status.code.enum_value().unwrap(),
+                    ttrpc::Code::INVALID_ARGUMENT
+                );
+            }
+            other => panic!("expected invalid-argument status, got {other:?}"),
+        }
+    }
 }
