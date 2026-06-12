@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
     },
     task::{Context, Poll},
@@ -39,6 +39,7 @@ use crate::{
         ExecState as RtExecState, ExitOutcome, Stream as RtStream,
     },
     exec_linux::LinuxProcessSpawner,
+    exec_pty::linux::LinuxPtyProcessSpawner,
     generated::guest_control_ttrpc::{create_guest_control, GuestControl},
 };
 
@@ -71,6 +72,12 @@ const MAX_TOKEN_BYTES: usize = 4096;
 /// Cadence of the periodic detached-exec reaper (live reconciliation of
 /// vanished units + terminal-record TTL/GC).
 const DETACHED_REAPER_INTERVAL_MS: u64 = 30_000;
+/// Maximum concurrent in-flight `WriteStdin` handlers per connection. A
+/// fifth concurrent handler is shed with `StdinBackpressure`.
+const WRITE_STDIN_HANDLERS_PER_CONNECTION: u64 = 4;
+/// In-flight decoded `WriteStdin` byte budget per connection. Exceeding it
+/// (concurrently) is shed with `StdinByteBudgetExhausted`.
+const DECODED_WRITE_STDIN_BYTES_PER_CONNECTION: u64 = 16 * 1024 * 1024;
 
 type RuntimeAuthCore = GuestAuthCore<
     SharedSecretToken,
@@ -253,6 +260,9 @@ pub struct CapabilitiesConfig {
     pub exec_attached: bool,
     pub exec_detached: bool,
     pub exec_logs: bool,
+    /// Interactive TTY exec (WriteStdin/CloseStdin/TtyWinResize/ExecSignal over a
+    /// PTY). Advertised only when exec is enabled AND a PTY helper is usable.
+    pub exec_tty: bool,
 }
 
 pub fn build_runtime_auth_core(
@@ -297,22 +307,42 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         _ => None,
     };
 
+    // Interactive TTY exec usability: exec must be enabled+root and the
+    // first-party PTY helper (the `nixling-exec-runner` binary, shared with the
+    // detached path) must be present. The interactive path needs only the
+    // runner binary — not systemd-run or the detached slot dir — so it is gated
+    // on the runner path alone.
+    let interactive_helper: Option<PathBuf> = match (&config.detached, exec_enabled_root) {
+        (Some(detached_cfg), true) if detached_cfg.exec_runner_path.is_file() => {
+            Some(detached_cfg.exec_runner_path.clone())
+        }
+        _ => None,
+    };
+
+    let mut exec_runtime = ExecRuntime::new(LinuxProcessSpawner, OsExecIds, config.exec_policy);
+    if let Some(helper) = interactive_helper.clone() {
+        // 0 means unlimited (the interactive default); a non-zero value caps the
+        // per-session runtime. Non-TTY attached execs keep MAX_EXEC_RUNTIME_MS.
+        let ceiling = (config.interactive_max_runtime_sec != 0)
+            .then(|| Duration::from_secs(config.interactive_max_runtime_sec));
+        exec_runtime = exec_runtime
+            .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(helper)))
+            .with_interactive_ceiling(ceiling);
+    }
+    let exec: SharedExec = Arc::new(exec_runtime);
+
     let capabilities = CapabilitiesConfig {
         exec_attached: exec_enabled_root,
         exec_detached: detached.is_some(),
         // Retained logs share the detached store + quota.
         exec_logs: detached.is_some(),
+        exec_tty: exec.tty_usable(),
     };
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
         config.token,
         capabilities,
     )?));
-    let exec: SharedExec = Arc::new(ExecRuntime::new(
-        LinuxProcessSpawner,
-        OsExecIds,
-        config.exec_policy,
-    ));
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, GUEST_CONTROL_AUTH_PORT))
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
@@ -431,6 +461,11 @@ pub struct GuestControlService {
     exec: SharedExec,
     detached: SharedDetached,
     context: AuthConnectionContext,
+    // Per-connection interactive-stdin backpressure budgets (shared across the
+    // Arc-cloned service for this connection): the count of in-flight
+    // WriteStdin handlers and the in-flight decoded stdin byte budget.
+    write_stdin_handlers: Arc<AtomicU64>,
+    write_stdin_bytes: Arc<AtomicU64>,
 }
 
 impl GuestControlService {
@@ -445,6 +480,8 @@ impl GuestControlService {
             exec,
             detached,
             context,
+            write_stdin_handlers: Arc::new(AtomicU64::new(0)),
+            write_stdin_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -452,6 +489,30 @@ impl GuestControlService {
         self.auth
             .lock()
             .map_err(|_| rpc_status(ttrpc::Code::INTERNAL, "guest-control-internal-error"))
+    }
+
+    /// Acquire a per-connection WriteStdin budget slot: at most
+    /// `WRITE_STDIN_HANDLERS_PER_CONNECTION` concurrent handlers and at most
+    /// `DECODED_WRITE_STDIN_BYTES_PER_CONNECTION` decoded bytes in flight.
+    /// Returns a guard that releases both on drop. Sheds with
+    /// `StdinBackpressure` / `StdinByteBudgetExhausted` rather than blocking.
+    fn acquire_write_stdin_slot(&self, len: u64) -> Result<WriteStdinBudgetGuard, ExecError> {
+        let prev_handlers = self.write_stdin_handlers.fetch_add(1, Ordering::SeqCst);
+        if prev_handlers >= WRITE_STDIN_HANDLERS_PER_CONNECTION {
+            self.write_stdin_handlers.fetch_sub(1, Ordering::SeqCst);
+            return Err(ExecError::StdinBackpressure);
+        }
+        let prev_bytes = self.write_stdin_bytes.fetch_add(len, Ordering::SeqCst);
+        if prev_bytes.saturating_add(len) > DECODED_WRITE_STDIN_BYTES_PER_CONNECTION {
+            self.write_stdin_bytes.fetch_sub(len, Ordering::SeqCst);
+            self.write_stdin_handlers.fetch_sub(1, Ordering::SeqCst);
+            return Err(ExecError::StdinByteBudgetExhausted);
+        }
+        Ok(WriteStdinBudgetGuard {
+            handlers: Arc::clone(&self.write_stdin_handlers),
+            bytes: Arc::clone(&self.write_stdin_bytes),
+            len,
+        })
     }
 
     fn require_authenticated(&self) -> Result<(), ttrpc::Error> {
@@ -613,6 +674,36 @@ fn guest_error_kind(error: ExecError) -> pb::GuestControlError {
     guest_error(wire_error_kind(error))
 }
 
+/// RAII release of a per-connection WriteStdin budget slot (handler count +
+/// in-flight decoded bytes), held for the lifetime of a single WriteStdin RPC.
+struct WriteStdinBudgetGuard {
+    handlers: Arc<AtomicU64>,
+    bytes: Arc<AtomicU64>,
+    len: u64,
+}
+
+impl Drop for WriteStdinBudgetGuard {
+    fn drop(&mut self) {
+        self.bytes.fetch_sub(self.len, Ordering::SeqCst);
+        self.handlers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Build a rejected `WriteStdinResponse` for a typed runtime/budget error. A
+/// closed stdin reports `STDIN_STATE_CLOSED`; every other rejection leaves the
+/// stream `OPEN` so the client may retry at the same offset.
+fn write_stdin_error(error: ExecError) -> pb::WriteStdinResponse {
+    let stdin_state = match error {
+        ExecError::StdinClosed => pb::StdinState::STDIN_STATE_CLOSED,
+        _ => pb::StdinState::STDIN_STATE_OPEN,
+    };
+    let mut response = pb::WriteStdinResponse::new();
+    response.stdin_state = EnumOrUnknown::new(stdin_state);
+    response.disposition = EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+    response.error = MessageField::some(guest_error_kind(error));
+    response
+}
+
 fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     let mut response = pb::ExecInspectResponse::new();
     response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
@@ -687,8 +778,8 @@ pub fn effective_limits() -> pb::GuestEffectiveLimits {
     let mut limits = pb::GuestEffectiveLimits::new();
     limits.max_chunk_bytes = 64 * 1024;
     limits.max_recv_message_bytes = 4 * 1024 * 1024;
-    limits.decoded_write_stdin_bytes_per_connection = 16 * 1024 * 1024;
-    limits.write_stdin_handlers_per_connection = 4;
+    limits.decoded_write_stdin_bytes_per_connection = DECODED_WRITE_STDIN_BYTES_PER_CONNECTION;
+    limits.write_stdin_handlers_per_connection = WRITE_STDIN_HANDLERS_PER_CONNECTION as u32;
     limits.stdin_queue_chunks_per_exec = 1;
     limits.stdout_live_buffer_bytes = crate::exec::STDOUT_LIVE_BUFFER_BYTES as u64;
     limits.stderr_live_buffer_bytes = crate::exec::STDERR_LIVE_BUFFER_BYTES as u64;
@@ -792,6 +883,39 @@ impl GuestControl for GuestControlService {
 
         if input.detached {
             return self.exec_create_detached(input, &guest_boot_id).await;
+        }
+
+        // Interactive TTY exec: tty=true && !detached routes to the PTY-backed,
+        // connection-owned attached path. `tty && detached` is an unsupported
+        // mode (no new wire kind) — it is rejected by the detached validator
+        // above; this branch only handles the supported interactive create.
+        if input.tty {
+            let initial_size = request
+                .initial_terminal_size
+                .as_ref()
+                .map(|size| (size.rows, size.cols));
+            return match self
+                .exec
+                .create_tty(self.connection_key(), guest_boot_id, input, initial_size)
+                .await
+            {
+                Ok((exec_id, snapshot, control_seq)) => {
+                    let mut response = pb::ExecCreateResponse::new();
+                    response.exec_id = Some(exec_id);
+                    response.control_seq = control_seq;
+                    response.stdout_cursor = snapshot.stdout_start_offset;
+                    response.stderr_cursor = snapshot.stderr_start_offset;
+                    response.effective_limits = MessageField::some(effective_limits());
+                    response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
+                    Ok(response)
+                }
+                Err(error) => {
+                    let mut response = pb::ExecCreateResponse::new();
+                    response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+                    response.error = MessageField::some(guest_error_kind(error));
+                    Ok(response)
+                }
+            };
         }
 
         match self
@@ -982,12 +1106,46 @@ impl GuestControl for GuestControlService {
     async fn write_stdin(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::WriteStdinRequest,
+        request: pb::WriteStdinRequest,
     ) -> ttrpc::Result<pb::WriteStdinResponse> {
         self.require_authenticated()?;
-        let mut response = pb::WriteStdinResponse::new();
-        response.error = MessageField::some(exec_disabled_error());
-        Ok(response)
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        let len = request.data.len() as u64;
+        // Per-connection backpressure budgets (handler cap + in-flight byte
+        // budget). Acquired before the runtime write; the guard releases both on
+        // every return.
+        let _budget = match self.acquire_write_stdin_slot(len) {
+            Ok(guard) => guard,
+            Err(error) => return Ok(write_stdin_error(error)),
+        };
+        match self
+            .exec
+            .write_stdin(
+                &self.connection_key(),
+                exec_id,
+                guest_boot_id,
+                request.offset,
+                &request.data,
+                request.close_after,
+            )
+            .await
+        {
+            Ok(next_offset) => {
+                let mut response = pb::WriteStdinResponse::new();
+                response.accepted_offset = request.offset;
+                response.accepted_len = len;
+                response.next_offset = next_offset;
+                response.stdin_state = EnumOrUnknown::new(if request.close_after {
+                    pb::StdinState::STDIN_STATE_CLOSED
+                } else {
+                    pb::StdinState::STDIN_STATE_OPEN
+                });
+                response.disposition =
+                    EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_ACCEPTED);
+                Ok(response)
+            }
+            Err(error) => Ok(write_stdin_error(error)),
+        }
     }
 
     async fn read_output(
@@ -1046,30 +1204,98 @@ impl GuestControl for GuestControlService {
     async fn close_stdin(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::CloseStdinRequest,
+        request: pb::CloseStdinRequest,
     ) -> ttrpc::Result<pb::CloseStdinResponse> {
         self.require_authenticated()?;
-        let mut response = pb::CloseStdinResponse::new();
-        response.error = MessageField::some(exec_disabled_error());
-        Ok(response)
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        match self
+            .exec
+            .close_stdin(
+                &self.connection_key(),
+                exec_id,
+                guest_boot_id,
+                request.offset,
+            )
+            .await
+        {
+            Ok((final_offset, duplicate)) => {
+                let mut response = pb::CloseStdinResponse::new();
+                response.stdin_state =
+                    EnumOrUnknown::new(pb::StdinState::STDIN_STATE_CLOSED);
+                response.final_offset = final_offset;
+                response.disposition = EnumOrUnknown::new(if duplicate {
+                    pb::WriteDisposition::WRITE_DISPOSITION_DUPLICATE
+                } else {
+                    pb::WriteDisposition::WRITE_DISPOSITION_ACCEPTED
+                });
+                Ok(response)
+            }
+            Err(error) => {
+                let mut response = pb::CloseStdinResponse::new();
+                response.disposition =
+                    EnumOrUnknown::new(pb::WriteDisposition::WRITE_DISPOSITION_REJECTED);
+                response.error = MessageField::some(guest_error_kind(error));
+                Ok(response)
+            }
+        }
     }
 
     async fn tty_win_resize(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::TtyWinResizeRequest,
+        request: pb::TtyWinResizeRequest,
     ) -> ttrpc::Result<pb::ControlAck> {
         self.require_authenticated()?;
-        Ok(control_ack_disabled())
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        let mut ack = pb::ControlAck::new();
+        ack.control_seq = request.control_seq;
+        if let Err(error) = self.exec.tty_resize(
+            &self.connection_key(),
+            exec_id,
+            guest_boot_id,
+            request.control_seq,
+            request.rows,
+            request.cols,
+        ) {
+            ack.error = MessageField::some(guest_error_kind(error));
+        }
+        Ok(ack)
     }
 
     async fn exec_signal(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::ExecSignalRequest,
+        request: pb::ExecSignalRequest,
     ) -> ttrpc::Result<pb::ControlAck> {
         self.require_authenticated()?;
-        Ok(control_ack_disabled())
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        let mut ack = pb::ControlAck::new();
+        ack.control_seq = request.control_seq;
+        // Only the foreground process group is a valid signal target. Any other
+        // target (PROCESS_TREE / UNSPECIFIED / unknown) is rejected before the
+        // control sequence is consumed, so the client can retry with a valid
+        // target at the same seq.
+        let target = request
+            .target
+            .enum_value()
+            .unwrap_or(pb::SignalTarget::SIGNAL_TARGET_UNSPECIFIED);
+        if !matches!(
+            target,
+            pb::SignalTarget::SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP
+        ) {
+            ack.error = MessageField::some(guest_error_kind(ExecError::InvalidSignal));
+            return Ok(ack);
+        }
+        if let Err(error) = self.exec.tty_signal(
+            &self.connection_key(),
+            exec_id,
+            guest_boot_id,
+            request.control_seq,
+            request.signal,
+        ) {
+            ack.error = MessageField::some(guest_error_kind(error));
+        }
+        Ok(ack)
     }
 
     async fn exec_cancel(
@@ -1336,6 +1562,20 @@ impl RuntimeCapabilitiesProvider {
                 pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS,
             ));
         }
+        // Interactive TTY exec advertises the stdin/resize/signal control
+        // surface as a unit: it is only usable when exec is enabled AND a PTY
+        // helper is present.
+        if config.exec_tty {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY,
+            ));
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE,
+            ));
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_SIGNALS,
+            ));
+        }
         capabilities.limits = MessageField::some(limits);
 
         let mut health = pb::HealthResponse::new();
@@ -1449,6 +1689,14 @@ mod tests {
         metadata.request_id = "req-1".to_owned();
         metadata.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
         MessageField::some(metadata)
+    }
+
+    fn exec_metadata(exec_id: &str) -> MessageField<pb::ExecRequestMetadata> {
+        let mut exec_meta = pb::ExecRequestMetadata::new();
+        exec_meta.common = metadata();
+        exec_meta.exec_id = exec_id.to_owned();
+        exec_meta.guest_boot_id = "boot-1".to_owned();
+        MessageField::some(exec_meta)
     }
 
     fn health_request() -> pb::HealthRequest {
@@ -1630,50 +1878,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_rpcs_stay_disabled_after_auth() {
+    async fn detached_dependent_rpcs_disabled_without_registry() {
         let ctx = ttrpc_context();
         let service = test_service(5);
         authenticate(&service).await;
-        // Out-of-scope RPCs remain typed-disabled even once authenticated.
+        // Detached-registry-gated RPCs remain typed-disabled when no detached
+        // store is configured (these short-circuit before metadata validation).
         assert_disabled(
             service
                 .exec_logs(&ctx, pb::ExecLogsRequest::new())
-                .await
-                .unwrap()
-                .error
-                .as_ref()
-                .unwrap(),
-        );
-        assert_disabled(
-            service
-                .write_stdin(&ctx, pb::WriteStdinRequest::new())
-                .await
-                .unwrap()
-                .error
-                .as_ref()
-                .unwrap(),
-        );
-        assert_disabled(
-            service
-                .close_stdin(&ctx, pb::CloseStdinRequest::new())
-                .await
-                .unwrap()
-                .error
-                .as_ref()
-                .unwrap(),
-        );
-        assert_disabled(
-            service
-                .tty_win_resize(&ctx, pb::TtyWinResizeRequest::new())
-                .await
-                .unwrap()
-                .error
-                .as_ref()
-                .unwrap(),
-        );
-        assert_disabled(
-            service
-                .exec_signal(&ctx, pb::ExecSignalRequest::new())
                 .await
                 .unwrap()
                 .error
@@ -1697,6 +1910,79 @@ mod tests {
                 .error
                 .as_ref()
                 .unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_rpcs_reject_unknown_exec_and_bad_signal_target() {
+        let ctx = ttrpc_context();
+        let service =
+            GuestControlService::new(test_auth(), test_exec_root_enabled(), None, test_context(15));
+        authenticate(&service).await;
+
+        // WriteStdin / CloseStdin against an unknown exec map to a typed
+        // not-found error (no PTY helper is wired in this unit config, so no
+        // interactive exec can exist).
+        let mut write = pb::WriteStdinRequest::new();
+        write.metadata = exec_metadata("exec-unknown");
+        write.data = b"hi".to_vec();
+        let write_response = service.write_stdin(&ctx, write).await.unwrap();
+        assert_eq!(
+            write_response.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
+        );
+        assert_eq!(
+            write_response.disposition.enum_value().unwrap(),
+            pb::WriteDisposition::WRITE_DISPOSITION_REJECTED
+        );
+
+        let mut close = pb::CloseStdinRequest::new();
+        close.metadata = exec_metadata("exec-unknown");
+        let close_response = service.close_stdin(&ctx, close).await.unwrap();
+        assert_eq!(
+            close_response.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
+        );
+
+        // TtyWinResize against an unknown exec acks with a typed error.
+        let mut resize = pb::TtyWinResizeRequest::new();
+        resize.metadata = exec_metadata("exec-unknown");
+        resize.control_seq = 1;
+        resize.rows = 24;
+        resize.cols = 80;
+        let resize_ack = service.tty_win_resize(&ctx, resize).await.unwrap();
+        assert_eq!(resize_ack.control_seq, 1);
+        assert_eq!(
+            resize_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
+        );
+
+        // ExecSignal with a non-foreground target is rejected before the exec is
+        // even looked up (the control_seq is not consumed).
+        let mut bad_target = pb::ExecSignalRequest::new();
+        bad_target.metadata = exec_metadata("exec-unknown");
+        bad_target.control_seq = 1;
+        bad_target.signal = 2;
+        bad_target.target =
+            EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_PROCESS_TREE);
+        let bad_target_ack = service.exec_signal(&ctx, bad_target).await.unwrap();
+        assert_eq!(
+            bad_target_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR
+        );
+
+        // ExecSignal with the foreground target against an unknown exec maps to
+        // a typed not-found error.
+        let mut signal = pb::ExecSignalRequest::new();
+        signal.metadata = exec_metadata("exec-unknown");
+        signal.control_seq = 1;
+        signal.signal = 2;
+        signal.target =
+            EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP);
+        let signal_ack = service.exec_signal(&ctx, signal).await.unwrap();
+        assert_eq!(
+            signal_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
         );
     }
 

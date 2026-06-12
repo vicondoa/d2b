@@ -3,9 +3,9 @@
 #
 # Asserts the ATTACHED non-interactive exec runtime stays inside its scope:
 # guestd-local process execution only, with no userd runtime call path, no
-# TTY/PTY, no detached retained-log writes in the attached path, no extra
-# vsock listeners, no CH CONNECT/relay/host-network surface, no readiness
-# wiring, and no `nixling exec` CLI.
+# low-level TTY/PTY syscalls, no detached retained-log writes in the attached
+# path, no extra vsock listeners, no CH CONNECT/relay/host-network surface, no
+# readiness wiring, and no `nixling exec` CLI.
 #
 # It also asserts the DETACHED path (W13) is present-and-bounded: the
 # detached registry, transient-unit manager, and exec-runner exist; units
@@ -15,6 +15,15 @@
 # that retained-log file writes are allowed ONLY in the detached log-store
 # (detached_registry.rs) and the exec-runner, never in the attached
 # exec.rs/exec_linux.rs path.
+#
+# Finally it asserts the INTERACTIVE TTY path (W14) is present-and-confined:
+# the guestd-side PTY mechanism (master allocation) lives in exec_pty.rs and
+# the controlling-terminal handshake (setsid + TIOCSCTTY) lives ONLY in the
+# static `--tty-exec` helper of the exec-runner. exec.rs/exec_linux.rs may
+# reference the PtyProcessSpawner/SpawnedPtyProcess/TtyState *type names* (the
+# runtime drives the spawner trait) but must never perform a PTY syscall or
+# the controlling-terminal handshake themselves — guestd NEVER acquires a
+# controlling tty (the no-first-party-unsafe crux of the W14 design).
 
 set -euo pipefail
 
@@ -44,9 +53,16 @@ if rg -n 'userd|nixling-userd' "$EXEC_SRC" "$EXEC_LINUX_SRC"; then
   fail "guest-exec-runtime-static: exec runtime must not reference userd"
 fi
 
-# No interactive TTY/PTY allocation.
-if rg -n 'openpty|forkpty|login_tty|set_controlling|\bpty\b|Pty' "$EXEC_SRC" "$EXEC_LINUX_SRC"; then
-  fail "guest-exec-runtime-static: attached exec must not allocate a TTY/PTY"
+# No LOW-LEVEL TTY/PTY syscalls in the ATTACHED exec runtime. The interactive
+# (W14) PTY mechanism lives entirely in exec_pty.rs (the guestd-side spawner)
+# and the exec-runner `--tty-exec` helper; exec.rs/exec_linux.rs may reference
+# the PtyProcessSpawner/SpawnedPtyProcess/TtyState *type names* (the runtime
+# drives the spawner trait) but must never allocate a PTY or perform the
+# controlling-terminal handshake themselves. The `\bsetsid\(` / `openpt\(` call
+# forms keep prose mentions (e.g. the no-orphan limitation comment) from
+# tripping the guard.
+if rg -n 'openpty|forkpty|login_tty|set_controlling|openpt\(|grantpt\(|unlockpt\(|ptsname\(|ioctl_tiocsctty|\bsetsid\(' "$EXEC_SRC" "$EXEC_LINUX_SRC"; then
+  fail "guest-exec-runtime-static: attached exec must not perform low-level TTY/PTY syscalls (the PTY mechanism lives in exec_pty.rs + the --tty-exec helper)"
 fi
 
 # No detached retained-log file writes from the ATTACHED exec runtime.
@@ -141,4 +157,42 @@ if ! rg -q 'nixling-exec' "$ROOT/nixos-modules/guest-control.nix"; then
   fail "guest-exec-runtime-static: guest module must declare the nixling-exec slice"
 fi
 
-ok "guest-exec-runtime-static: attached scope held; detached path present-and-bounded"
+# --- Interactive TTY path (W14): present-and-confined, not absent. ---
+
+EXEC_PTY_SRC="$GUESTD_SRC/exec_pty.rs"
+TTY_HELPER_SRC="$RUNNER_SRC/tty_helper.rs"
+
+for required in "$EXEC_PTY_SRC" "$TTY_HELPER_SRC"; do
+  if [ ! -f "$required" ]; then
+    fail "guest-exec-runtime-static: missing interactive TTY source $required"
+  fi
+done
+
+# The guestd-side PTY spawner owns master allocation (openpt/grantpt/unlockpt/
+# ptsname). Confining it to exec_pty.rs is what keeps exec.rs PTY-syscall-free.
+if ! rg -q 'openpt\(' "$EXEC_PTY_SRC"; then
+  fail "guest-exec-runtime-static: exec_pty.rs must own PTY master allocation (openpt)"
+fi
+
+# The controlling-terminal handshake (setsid + TIOCSCTTY) lives ONLY in the
+# static --tty-exec helper. This is the no-first-party-unsafe crux of W14:
+# guestd never acquires a controlling tty.
+if ! rg -q '\bsetsid\b' "$TTY_HELPER_SRC" || ! rg -q 'ioctl_tiocsctty' "$TTY_HELPER_SRC"; then
+  fail "guest-exec-runtime-static: --tty-exec helper must perform the setsid + TIOCSCTTY handshake"
+fi
+
+# guestd (exec_pty.rs) must NOT perform that handshake itself. Strip line
+# comments first so the design-rationale prose that *names* setsid/TIOCSCTTY
+# does not trip the guard.
+exec_pty_code=$(rg -v '^\s*//' "$EXEC_PTY_SRC")
+if printf '%s\n' "$exec_pty_code" | rg -n 'ioctl_tiocsctty|\bsetsid\b'; then
+  fail "guest-exec-runtime-static: guestd must not perform the controlling-terminal handshake (it routes through the --tty-exec helper)"
+fi
+
+# The TTY merged-output contract surfaces a typed stderr-unavailable error;
+# the wire mapping must be wired in the service layer.
+if ! rg -q 'TtyStderrUnavailable' "$GUESTD_SRC/service.rs"; then
+  fail "guest-exec-runtime-static: TTY stderr-unavailable wire mapping missing from service.rs"
+fi
+
+ok "guest-exec-runtime-static: attached scope held; detached path present-and-bounded; interactive TTY path present-and-confined"

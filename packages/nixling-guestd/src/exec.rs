@@ -34,6 +34,8 @@ use tokio::{
 
 use nixling_ipc::guest_wire::GuestControlErrorKind as WireErrorKind;
 
+use crate::exec_pty::{PtyProcessSpawner, SpawnedPtyProcess, TerminalSize, TtyState};
+
 /// Maximum retained live-buffer bytes per output stream (drop-oldest cap).
 pub const STDOUT_LIVE_BUFFER_BYTES: usize = 1024 * 1024;
 pub const STDERR_LIVE_BUFFER_BYTES: usize = 1024 * 1024;
@@ -51,6 +53,9 @@ pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
 pub const HARD_MAX_LONG_POLL_TIMEOUT_MS: u64 = 1_000;
 /// Wall-clock ceiling for a single attached exec, in milliseconds.
 pub const MAX_EXEC_RUNTIME_MS: u64 = 6 * 60 * 60 * 1_000;
+/// Bounded grace, in milliseconds, between releasing the PTY master (`SIGHUP`)
+/// and the SIGKILL session sweep on interactive-exec teardown.
+pub const TTY_TEARDOWN_GRACE_MS: u64 = 2_000;
 /// Maximum argv entries accepted by the runtime.
 pub const MAX_ARGV: usize = 128;
 /// Maximum bytes for a single argv entry.
@@ -387,6 +392,9 @@ struct ExecEntry {
     tasks: Mutex<Vec<JoinHandle<()>>>,
     // Pending ReadOutput long-polls, counted per stream (stdout, stderr).
     pending_reads: [AtomicU64; 2],
+    // Interactive TTY session state, present iff this exec is a PTY-backed
+    // interactive exec (tty=true, non-detached). Non-TTY execs leave this None.
+    tty: Option<Arc<TtyState>>,
 }
 
 impl ExecEntry {
@@ -550,6 +558,42 @@ pub fn validate_and_authorize_detached(
     Ok(command)
 }
 
+/// Validate + authorize an **interactive TTY** create (`tty = true`,
+/// non-detached). Permits `tty`, `stdin_open`, and an initial terminal size
+/// while still rejecting `detached` (the interactive path is connection-owned
+/// and non-durable; `tty && detached` is an unsupported mode). The merged PTY
+/// output is delivered through the same chunk policy as attached non-TTY exec,
+/// so the `max_chunk_bytes` bound is enforced here too.
+pub fn validate_and_authorize_tty(
+    input: &ExecCreateInput,
+    policy: ExecPolicy,
+) -> Result<ValidatedCommand, ExecError> {
+    if !policy.enabled {
+        return Err(ExecError::ExecDisabled);
+    }
+    // `tty && detached` and a non-TTY request routed here are unsupported.
+    if input.detached || !input.tty {
+        return Err(ExecError::UnsupportedMode);
+    }
+    if input.max_chunk_bytes == 0 || input.max_chunk_bytes > HARD_MAX_CHUNK_BYTES {
+        return Err(ExecError::MaxChunkExceeded);
+    }
+
+    // Root-only gate. Omitted users fail closed; non-root is unsupported.
+    match input.user.as_deref() {
+        Some("root") => {
+            if !policy.allow_root {
+                return Err(ExecError::RootDenied);
+            }
+        }
+        Some(_) => return Err(ExecError::UserDenied),
+        None => return Err(ExecError::RootDenied),
+    }
+
+    let command = validate_command(input)?;
+    Ok(command)
+}
+
 fn validate_command(input: &ExecCreateInput) -> Result<ValidatedCommand, ExecError> {
     if input.argv.is_empty() || input.argv.len() > MAX_ARGV {
         return Err(ExecError::InvalidArgv);
@@ -626,6 +670,17 @@ pub struct ExecRuntime<Sp, Id> {
     reservations: AtomicU64,
     // Pending ExecWait long-polls, counted at VM scope.
     pending_exec_waits: AtomicU64,
+    // Interactive TTY support. The PTY spawner is a trait object so the
+    // generic `Sp`/`Id` shape (and every test/ctor) is unchanged; it defaults
+    // to a null spawner that reports the mode unsupported. `tty_usable` is set
+    // only when a real PTY spawner is wired in (and gates the advertised
+    // capability). `interactive_ceiling` is the per-session runtime ceiling for
+    // tty execs (None = unlimited); non-TTY attached execs keep
+    // `MAX_EXEC_RUNTIME_MS`.
+    pty_spawner: Arc<dyn PtyProcessSpawner>,
+    tty_usable: bool,
+    interactive_ceiling: Option<Duration>,
+    tty_grace: Duration,
 }
 
 impl<Sp, Id> ExecRuntime<Sp, Id>
@@ -641,7 +696,40 @@ where
             execs: Mutex::new(BTreeMap::new()),
             reservations: AtomicU64::new(0),
             pending_exec_waits: AtomicU64::new(0),
+            pty_spawner: Arc::new(crate::exec_pty::NullPtySpawner),
+            tty_usable: false,
+            interactive_ceiling: None,
+            tty_grace: Duration::from_millis(TTY_TEARDOWN_GRACE_MS),
         }
+    }
+
+    /// Wire in a production PTY spawner, enabling the interactive TTY path and
+    /// allowing the `exec_tty` capability to be advertised. Consumes self.
+    pub fn with_pty_spawner(mut self, spawner: Arc<dyn PtyProcessSpawner>) -> Self {
+        self.pty_spawner = spawner;
+        self.tty_usable = true;
+        self
+    }
+
+    /// Set the per-session runtime ceiling for interactive (TTY) execs.
+    /// `None` means unlimited. Non-TTY attached execs are unaffected.
+    pub fn with_interactive_ceiling(mut self, ceiling: Option<Duration>) -> Self {
+        self.interactive_ceiling = ceiling;
+        self
+    }
+
+    /// Override the teardown grace window between the `SIGHUP` (master release)
+    /// and the SIGKILL session sweep. Test-only.
+    #[cfg(test)]
+    pub fn with_tty_grace(mut self, grace: Duration) -> Self {
+        self.tty_grace = grace;
+        self
+    }
+
+    /// True when the interactive TTY path is usable (a real PTY spawner is
+    /// wired in). The service layer advertises `exec_tty` only when this holds.
+    pub fn tty_usable(&self) -> bool {
+        self.tty_usable
     }
 
     /// The effective exec policy (read-only; used by the detached path to
@@ -770,6 +858,199 @@ where
         Ok((exec_id, snapshot))
     }
 
+    /// Create-and-start an **interactive TTY** exec (`tty = true`,
+    /// non-detached). Allocates a PTY pair, spawns the first-party helper as the
+    /// session leader with the slave as its controlling terminal, drains the
+    /// merged master output into the stdout ring, and wires a TTY supervisor +
+    /// teardown. Returns the id, the initial snapshot, and the initial
+    /// `control_seq` (0). Capacity is shared with attached non-TTY execs.
+    pub async fn create_tty(
+        &self,
+        owner: ConnectionKey,
+        guest_boot_id: String,
+        input: ExecCreateInput,
+        initial_size: Option<(u32, u32)>,
+    ) -> Result<(String, ExecSnapshot, u64), ExecError> {
+        let command = validate_and_authorize_tty(&input, self.policy)?;
+        // The capability is advertised only when usable; a create that reaches
+        // here without a real PTY spawner fails closed.
+        if !self.tty_usable {
+            return Err(ExecError::UnsupportedMode);
+        }
+        let size = TerminalSize::resolve_initial(initial_size)?;
+
+        // Reserve a capacity slot under the execs lock (shared caps with the
+        // attached non-TTY path).
+        let reservation = {
+            let execs = self.lock_execs();
+            let reserved = self.reservations.load(Ordering::SeqCst) as usize;
+            if execs.len() + reserved >= EXEC_SESSIONS_PER_VM {
+                return Err(ExecError::ExecCapacityExceeded);
+            }
+            let running = execs.values().filter(|entry| !entry.is_terminal()).count();
+            if running + reserved >= ATTACHED_SESSIONS_PER_VM {
+                return Err(ExecError::AttachCapacityExceeded);
+            }
+            self.reservations.fetch_add(1, Ordering::SeqCst);
+            CounterGuard {
+                counter: &self.reservations,
+            }
+        };
+
+        let exec_id = self.ids.next_exec_id()?;
+        if exec_id.is_empty() || exec_id.len() > EXEC_ID_BYTES {
+            return Err(ExecError::Internal);
+        }
+
+        let placeholder =
+            new_exec_entry(owner.clone(), guest_boot_id.clone(), Arc::new(NoopKiller));
+        self.lock_execs()
+            .insert(exec_id.clone(), Arc::clone(&placeholder));
+        drop(reservation);
+
+        let spawned = match self.pty_spawner.spawn(command, size).await {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                self.lock_execs().remove(&exec_id);
+                return Err(error);
+            }
+        };
+        let SpawnedPtyProcess {
+            reader,
+            writer,
+            control,
+            waiter,
+            reaper,
+        } = spawned;
+
+        let tty = Arc::new(TtyState::new(writer, control, reaper));
+        // The entry killer SIGKILLs the whole session (so an accidental
+        // `cancel()` path still reaps the interactive session).
+        let killer: Arc<dyn ProcessKiller> = Arc::new(SessionKiller { tty: Arc::clone(&tty) });
+        let entry = new_exec_entry_with_tty(owner, guest_boot_id, killer, Some(Arc::clone(&tty)));
+        // Merged output: stderr is folded into the PTY, so the stderr stream is
+        // never produced. Mark it EOF up front; ReadOutput(Stderr) on a TTY exec
+        // is rejected with TtyStderrUnavailable before it reaches the ring.
+        {
+            let mut shared = entry.lock_shared();
+            shared.stderr.mark_eof();
+        }
+        let reader_task = spawn_reader(Arc::clone(&entry), Stream::Stdout, reader);
+        {
+            let mut tasks = entry
+                .tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            tasks.push(reader_task);
+        }
+        spawn_tty_supervisor(
+            Arc::clone(&entry),
+            Arc::clone(&tty),
+            waiter,
+            self.interactive_ceiling,
+            self.tty_grace,
+        );
+
+        let committed = {
+            let mut execs = self.lock_execs();
+            if execs.remove(&exec_id).is_some() {
+                execs.insert(exec_id.clone(), Arc::clone(&entry));
+                true
+            } else {
+                false
+            }
+        };
+        if !committed {
+            // The connection vanished during spawn; tear the session down.
+            let grace = self.tty_grace;
+            tokio::spawn(teardown_tty(entry, tty, None, grace));
+            return Err(ExecError::ExecNotFound);
+        }
+
+        let snapshot = entry.snapshot();
+        Ok((exec_id, snapshot, 0))
+    }
+
+    /// Look up an owned TTY exec, returning its session state. Non-TTY execs
+    /// yield `TtyRequired`; an unknown/foreign exec yields `ExecNotFound`.
+    fn lookup_tty(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+    ) -> Result<Arc<TtyState>, ExecError> {
+        let entry = self.lookup_owned(owner, exec_id, guest_boot_id)?;
+        entry.tty.clone().ok_or(ExecError::TtyRequired)
+    }
+
+    /// Look up an owned exec's TTY state for a stdin RPC. A non-TTY exec has no
+    /// writable stdin, so WriteStdin/CloseStdin map to `StdinClosed`.
+    fn lookup_tty_stdin(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+    ) -> Result<Arc<TtyState>, ExecError> {
+        let entry = self.lookup_owned(owner, exec_id, guest_boot_id)?;
+        entry.tty.clone().ok_or(ExecError::StdinClosed)
+    }
+
+    /// WriteStdin to an owned TTY exec at `offset` (optionally injecting VEOF
+    /// via `close_after`). Returns the new next-offset.
+    pub async fn write_stdin(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+        offset: u64,
+        data: &[u8],
+        close_after: bool,
+    ) -> Result<u64, ExecError> {
+        let tty = self.lookup_tty_stdin(owner, exec_id, guest_boot_id)?;
+        tty.write_stdin(offset, data, close_after).await
+    }
+
+    /// CloseStdin on an owned TTY exec: inject VEOF, keep the master open, and
+    /// mark stdin closed (idempotent). Returns `(final_offset, duplicate)`.
+    pub async fn close_stdin(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+        offset: u64,
+    ) -> Result<(u64, bool), ExecError> {
+        let tty = self.lookup_tty_stdin(owner, exec_id, guest_boot_id)?;
+        tty.close_stdin(offset).await
+    }
+
+    /// Apply a TtyWinResize to an owned TTY exec (control_seq-ordered).
+    pub fn tty_resize(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+        control_seq: u64,
+        rows: u32,
+        cols: u32,
+    ) -> Result<(), ExecError> {
+        let tty = self.lookup_tty(owner, exec_id, guest_boot_id)?;
+        tty.resize(control_seq, rows, cols)
+    }
+
+    /// Deliver an ExecSignal to an owned TTY exec's foreground process group
+    /// (control_seq-ordered; allowlisted signals only).
+    pub fn tty_signal(
+        &self,
+        owner: &ConnectionKey,
+        exec_id: &str,
+        guest_boot_id: &str,
+        control_seq: u64,
+        signal: u32,
+    ) -> Result<(), ExecError> {
+        let tty = self.lookup_tty(owner, exec_id, guest_boot_id)?;
+        tty.signal(control_seq, signal)
+    }
+
     /// Snapshot an owned exec's current state.
     pub fn inspect(
         &self,
@@ -848,6 +1129,11 @@ where
         timeout_ms: u64,
     ) -> Result<(RingChunk, bool), ExecError> {
         let entry = self.lookup_owned(owner, exec_id, guest_boot_id)?;
+        // A TTY exec merges stderr into the PTY master (delivered as stdout), so
+        // there is no separate stderr stream to read.
+        if entry.tty.is_some() && matches!(stream, Stream::Stderr) {
+            return Err(ExecError::TtyStderrUnavailable);
+        }
         let max_len = if max_len == 0 {
             return Err(ExecError::MaxChunkExceeded);
         } else {
@@ -915,6 +1201,10 @@ where
     /// entry (and removes/cancels it with its real killer). There is no window
     /// in which the real entry is removed from tracking without its group being
     /// signalled.
+    ///
+    /// A TTY exec is torn down via the async `Running → Closing → Terminal`
+    /// teardown (release master → SIGHUP → bounded grace → SIGKILL the session)
+    /// rather than the synchronous group-kill `cancel()` path.
     pub fn close_connection(&self, owner: &ConnectionKey) {
         let owned: Vec<Arc<ExecEntry>> = {
             let mut execs = self.lock_execs();
@@ -926,7 +1216,13 @@ where
             ids.iter().filter_map(|id| execs.remove(id)).collect()
         };
         for entry in owned {
-            entry.cancel();
+            match entry.tty.clone() {
+                Some(tty) => {
+                    let grace = self.tty_grace;
+                    tokio::spawn(teardown_tty(entry, tty, None, grace));
+                }
+                None => entry.cancel(),
+            }
         }
     }
 
@@ -955,11 +1251,34 @@ impl ProcessKiller for NoopKiller {
     fn kill_group(&self) {}
 }
 
+/// Killer for a TTY exec entry: SIGKILLs the whole interactive session via the
+/// session reaper. Used so an accidental `cancel()` on a TTY entry still reaps
+/// the session (the normal teardown path is `teardown_tty`).
+struct SessionKiller {
+    tty: Arc<TtyState>,
+}
+
+impl ProcessKiller for SessionKiller {
+    fn kill_group(&self) {
+        self.tty.reaper().kill_session();
+    }
+}
+
 /// Build a fresh running exec entry with empty output rings.
 fn new_exec_entry(
     owner: ConnectionKey,
     guest_boot_id: String,
     killer: Arc<dyn ProcessKiller>,
+) -> Arc<ExecEntry> {
+    new_exec_entry_with_tty(owner, guest_boot_id, killer, None)
+}
+
+/// Build a fresh running exec entry, optionally carrying interactive TTY state.
+fn new_exec_entry_with_tty(
+    owner: ConnectionKey,
+    guest_boot_id: String,
+    killer: Arc<dyn ProcessKiller>,
+    tty: Option<Arc<TtyState>>,
 ) -> Arc<ExecEntry> {
     Arc::new(ExecEntry {
         owner,
@@ -975,6 +1294,7 @@ fn new_exec_entry(
         killer,
         tasks: Mutex::new(Vec::new()),
         pending_reads: [AtomicU64::new(0), AtomicU64::new(0)],
+        tty,
     })
 }
 
@@ -1075,6 +1395,97 @@ fn spawn_supervisor(
         }
         entry.notify.notify_waiters();
     });
+}
+
+/// Supervise an interactive TTY exec: await the direct child (helper → target),
+/// bounded by an optional interactive runtime ceiling (`None` = unlimited), then
+/// run the idempotent `Running → Closing → Terminal` teardown. On ceiling
+/// exceed the session is torn down (SIGHUP + SIGKILL) and the killed child is
+/// reaped so it never lingers as a zombie.
+fn spawn_tty_supervisor(
+    entry: Arc<ExecEntry>,
+    tty: Arc<TtyState>,
+    mut waiter: Box<dyn ProcessWaiter>,
+    ceiling: Option<Duration>,
+    grace: Duration,
+) {
+    tokio::spawn(async move {
+        let outcome = match ceiling {
+            Some(limit) => tokio::time::timeout(limit, waiter.wait()).await.ok(),
+            None => Some(waiter.wait().await),
+        };
+        match outcome {
+            Some(outcome) => {
+                teardown_tty(Arc::clone(&entry), Arc::clone(&tty), Some(outcome), grace).await;
+            }
+            // Ceiling exceeded: tear down (SIGHUP + SIGKILL the session), then
+            // reap the now-killed direct child so it is not left as a zombie.
+            None => {
+                teardown_tty(Arc::clone(&entry), Arc::clone(&tty), None, grace).await;
+                let _ = waiter.wait().await;
+            }
+        }
+        drop(waiter);
+    });
+}
+
+/// Idempotent interactive-exec teardown. The first caller to win the
+/// `Running → Closing` race owns the teardown: it releases the master write
+/// half and control surface, aborts the merged-output reader (dropping the last
+/// master reference sends `SIGHUP` to the session), waits a bounded grace, then
+/// SIGKILLs every process remaining in the session and publishes the terminal
+/// state. `outcome = None` => the session was cancelled (disconnect / ceiling);
+/// `Some(_)` => the child exited on its own.
+///
+/// Both the supervisor (on child exit) and `close_connection` (on disconnect)
+/// call this; the loser of the `begin_closing` race early-returns, so the state
+/// is published exactly once and the disconnect (Cancelled) wins a race with a
+/// late child-exit.
+async fn teardown_tty(
+    entry: Arc<ExecEntry>,
+    tty: Arc<TtyState>,
+    outcome: Option<ExitOutcome>,
+    grace: Duration,
+) {
+    if !tty.begin_closing() {
+        return;
+    }
+    // Entering Closing has already rejected new stdin/control RPCs. Release the
+    // master write half + control clone and abort the reader so the last master
+    // reference is dropped (SIGHUP to the foreground session).
+    tty.release_writer().await;
+    let _ = tty.take_control();
+    {
+        let mut tasks = entry
+            .tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for task in tasks.drain(..) {
+            task.abort();
+        }
+    }
+    // Bounded grace for SIGHUP to take effect before the SIGKILL sweep.
+    tokio::time::sleep(grace).await;
+    // SIGKILL every process still in the session (repeats until empty). The
+    // no-orphan guarantee is scoped to in-session processes; a setsid/double
+    // fork escapee is a documented trusted-root limitation.
+    tty.reaper().kill_session();
+    {
+        let mut shared = entry.lock_shared();
+        if matches!(shared.state, ExecState::Running) {
+            shared.state = match outcome {
+                None => ExecState::Cancelled,
+                Some(ExitOutcome::Exited(_)) => ExecState::Exited,
+                Some(ExitOutcome::Signaled(_)) => ExecState::Signaled,
+            };
+            shared.outcome = outcome;
+            shared.stdout.mark_eof();
+            shared.stderr.mark_eof();
+            shared.bump();
+        }
+    }
+    tty.mark_terminal();
+    entry.notify.notify_waiters();
 }
 
 #[cfg(test)]
@@ -1896,5 +2307,526 @@ mod tests {
         assert_eq!(rt.tracked_len(), 0);
         // The just-spawned process group was torn down.
         assert!(killed.load(Ordering::SeqCst) >= 1);
+    }
+
+    // ---- W14 interactive TTY exec: fake-driven runtime matrix ----
+
+    use crate::exec_pty::{PtyControl, SessionReaper, TtySignal, VEOF};
+    use tokio::io::AsyncReadExt;
+
+    /// Fake control surface recording the resize geometries, foreground signals,
+    /// and the initial geometry the helper would have applied at spawn.
+    struct FakePtyControl {
+        resizes: Mutex<Vec<TerminalSize>>,
+        signals: Mutex<Vec<TtySignal>>,
+        initial: Mutex<Option<TerminalSize>>,
+    }
+
+    impl FakePtyControl {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                resizes: Mutex::new(Vec::new()),
+                signals: Mutex::new(Vec::new()),
+                initial: Mutex::new(None),
+            })
+        }
+
+        fn resizes(&self) -> Vec<TerminalSize> {
+            self.resizes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        }
+
+        fn signals(&self) -> Vec<TtySignal> {
+            self.signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        }
+
+        fn initial(&self) -> Option<TerminalSize> {
+            *self.initial.lock().unwrap_or_else(|p| p.into_inner())
+        }
+    }
+
+    impl PtyControl for FakePtyControl {
+        fn resize(&self, size: TerminalSize) {
+            self.resizes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(size);
+        }
+
+        fn signal_foreground(&self, signal: TtySignal) {
+            self.signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(signal);
+        }
+    }
+
+    struct FakeSessionReaper {
+        kills: Arc<AtomicU64>,
+    }
+
+    impl SessionReaper for FakeSessionReaper {
+        fn kill_session(&self) {
+            self.kills.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct PtySpawnControls {
+        reader: DuplexStream,
+        writer: DuplexStream,
+        exit_rx: tokio::sync::oneshot::Receiver<ExitOutcome>,
+    }
+
+    /// Single-shot fake PTY spawner backing the deterministic TTY runtime tests:
+    /// the master read/write halves are duplex streams the test drives directly.
+    struct FakePtySpawner {
+        controls: Mutex<Option<PtySpawnControls>>,
+        control: Arc<FakePtyControl>,
+        kills: Arc<AtomicU64>,
+        reaped: Arc<AtomicU64>,
+    }
+
+    /// Test-side handles for a [`FakePtySpawner`] session.
+    struct PtyHooks {
+        /// Test writes merged PTY output here; the runtime reads it as `reader`.
+        output_w: Option<DuplexStream>,
+        /// Test reads the stdin bytes the runtime wrote to the master here.
+        stdin_r: Option<DuplexStream>,
+        /// Drives the direct child's exit.
+        exit_tx: Option<tokio::sync::oneshot::Sender<ExitOutcome>>,
+        control: Arc<FakePtyControl>,
+        kills: Arc<AtomicU64>,
+    }
+
+    impl FakePtySpawner {
+        fn new() -> (Arc<Self>, PtyHooks) {
+            let (test_output, guest_output) = duplex(64 * 1024);
+            let (guest_stdin, test_stdin) = duplex(64 * 1024);
+            let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+            let control = FakePtyControl::new();
+            let kills = Arc::new(AtomicU64::new(0));
+            let reaped = Arc::new(AtomicU64::new(0));
+            let spawner = Arc::new(Self {
+                controls: Mutex::new(Some(PtySpawnControls {
+                    reader: guest_output,
+                    writer: guest_stdin,
+                    exit_rx,
+                })),
+                control: Arc::clone(&control),
+                kills: Arc::clone(&kills),
+                reaped,
+            });
+            let hooks = PtyHooks {
+                output_w: Some(test_output),
+                stdin_r: Some(test_stdin),
+                exit_tx: Some(exit_tx),
+                control,
+                kills,
+            };
+            (spawner, hooks)
+        }
+    }
+
+    #[async_trait]
+    impl PtyProcessSpawner for FakePtySpawner {
+        async fn spawn(
+            &self,
+            _command: ValidatedCommand,
+            initial_size: TerminalSize,
+        ) -> Result<SpawnedPtyProcess, ExecError> {
+            *self
+                .control
+                .initial
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = Some(initial_size);
+            let controls = self
+                .controls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+                .expect("spawn called once");
+            Ok(SpawnedPtyProcess {
+                reader: Box::new(controls.reader),
+                writer: Box::new(controls.writer),
+                control: Arc::clone(&self.control) as Arc<dyn PtyControl>,
+                waiter: Box::new(FakeWaiter {
+                    exit_rx: Some(controls.exit_rx),
+                    reaped: Arc::clone(&self.reaped),
+                }),
+                reaper: Arc::new(FakeSessionReaper {
+                    kills: Arc::clone(&self.kills),
+                }),
+            })
+        }
+    }
+
+    /// Multi-spawn fake PTY spawner for capacity tests: every spawn yields a
+    /// fresh never-exiting session (leaked test-side duplex ends keep the master
+    /// halves open).
+    struct MultiPtySpawner {
+        kills: Arc<AtomicU64>,
+        reaped: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl PtyProcessSpawner for MultiPtySpawner {
+        async fn spawn(
+            &self,
+            _command: ValidatedCommand,
+            _initial_size: TerminalSize,
+        ) -> Result<SpawnedPtyProcess, ExecError> {
+            let (test_o, guest_o) = duplex(1024);
+            let (guest_i, test_i) = duplex(1024);
+            std::mem::forget(test_o);
+            std::mem::forget(test_i);
+            Ok(SpawnedPtyProcess {
+                reader: Box::new(guest_o),
+                writer: Box::new(guest_i),
+                control: FakePtyControl::new(),
+                waiter: Box::new(FakeWaiter {
+                    exit_rx: None,
+                    reaped: Arc::clone(&self.reaped),
+                }),
+                reaper: Arc::new(FakeSessionReaper {
+                    kills: Arc::clone(&self.kills),
+                }),
+            })
+        }
+    }
+
+    fn tty_input() -> ExecCreateInput {
+        ExecCreateInput {
+            argv: vec!["/bin/sh".to_owned()],
+            user: Some("root".to_owned()),
+            cwd: None,
+            env: vec![],
+            tty: true,
+            stdin_open: true,
+            detached: false,
+            has_terminal_size: false,
+            max_chunk_bytes: 64 * 1024,
+        }
+    }
+
+    fn tty_runtime(ceiling: Option<Duration>) -> (ExecRuntime<FakeSpawner, SeqIds>, PtyHooks) {
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let (pty, hooks) = FakePtySpawner::new();
+        let (base, _non_tty_hooks) = FakeSpawner::new();
+        let rt = ExecRuntime::new(base, SeqIds::new(), policy)
+            .with_pty_spawner(pty)
+            .with_interactive_ceiling(ceiling)
+            .with_tty_grace(Duration::from_millis(1));
+        (rt, hooks)
+    }
+
+    #[tokio::test]
+    async fn tty_create_streams_merged_output_and_rejects_stderr() {
+        let (rt, mut hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, snap, seq) = rt
+            .create_tty(
+                owner.clone(),
+                "boot-1".to_owned(),
+                tty_input(),
+                Some((40, 120)),
+            )
+            .await
+            .expect("create_tty");
+        assert_eq!(seq, 0);
+        assert_eq!(snap.state, ExecState::Running);
+        assert_eq!(
+            hooks.control.initial(),
+            Some(TerminalSize {
+                rows: 40,
+                cols: 120
+            })
+        );
+
+        let mut output = hooks.output_w.take().unwrap();
+        output.write_all(b"merged-out").await.unwrap();
+
+        let (chunk, _timed_out) = rt
+            .read_output(&owner, &exec_id, "boot-1", Stream::Stdout, 0, 1024, true, 500)
+            .await
+            .unwrap();
+        assert_eq!(chunk.data, b"merged-out");
+
+        // Stderr is never produced for a TTY exec; the merged stream is stdout.
+        assert_eq!(
+            rt.read_output(&owner, &exec_id, "boot-1", Stream::Stderr, 0, 1024, false, 0)
+                .await
+                .unwrap_err(),
+            ExecError::TtyStderrUnavailable
+        );
+        // Keep the output writer alive until the assertions complete.
+        drop(output);
+    }
+
+    #[tokio::test]
+    async fn tty_create_defaults_terminal_size_when_absent() {
+        let (rt, hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        rt.create_tty(owner, "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        assert_eq!(hooks.control.initial(), Some(TerminalSize::defaulted()));
+    }
+
+    #[tokio::test]
+    async fn tty_write_stdin_offset_machine_and_close_after_veof() {
+        let (rt, mut hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        let mut stdin_r = hooks.stdin_r.take().unwrap();
+
+        // Contiguous write at offset 0.
+        let next = rt
+            .write_stdin(&owner, &exec_id, "boot-1", 0, b"abc", false)
+            .await
+            .unwrap();
+        assert_eq!(next, 3);
+        // Replayed / stale offset is rejected.
+        assert_eq!(
+            rt.write_stdin(&owner, &exec_id, "boot-1", 0, b"x", false)
+                .await
+                .unwrap_err(),
+            ExecError::StdinOffsetMismatch
+        );
+        // Future / out-of-order offset is rejected.
+        assert_eq!(
+            rt.write_stdin(&owner, &exec_id, "boot-1", 5, b"x", false)
+                .await
+                .unwrap_err(),
+            ExecError::StdinOffsetMismatch
+        );
+        // close_after writes the data then injects VEOF.
+        let next = rt
+            .write_stdin(&owner, &exec_id, "boot-1", 3, b"de", true)
+            .await
+            .unwrap();
+        assert_eq!(next, 5);
+        // Any further write after close is rejected.
+        assert_eq!(
+            rt.write_stdin(&owner, &exec_id, "boot-1", 5, b"z", false)
+                .await
+                .unwrap_err(),
+            ExecError::StdinClosed
+        );
+
+        let mut buf = vec![0u8; 6];
+        stdin_r.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"abcde\x04");
+    }
+
+    #[tokio::test]
+    async fn tty_close_stdin_injects_veof_and_is_idempotent() {
+        let (rt, mut hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        let mut stdin_r = hooks.stdin_r.take().unwrap();
+
+        let (final_offset, duplicate) = rt
+            .close_stdin(&owner, &exec_id, "boot-1", 0)
+            .await
+            .unwrap();
+        assert_eq!(final_offset, 0);
+        assert!(!duplicate);
+        // Second close is an idempotent duplicate (no second VEOF).
+        let (final_offset2, duplicate2) = rt
+            .close_stdin(&owner, &exec_id, "boot-1", 0)
+            .await
+            .unwrap();
+        assert_eq!(final_offset2, 0);
+        assert!(duplicate2);
+
+        let mut one = [0u8; 1];
+        stdin_r.read_exact(&mut one).await.unwrap();
+        assert_eq!(one[0], VEOF);
+
+        // A WriteStdin after close is rejected.
+        assert_eq!(
+            rt.write_stdin(&owner, &exec_id, "boot-1", 0, b"z", false)
+                .await
+                .unwrap_err(),
+            ExecError::StdinClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn tty_resize_and_signal_respect_control_seq_and_allowlist() {
+        let (rt, hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+
+        // resize at seq=1 is applied.
+        rt.tty_resize(&owner, &exec_id, "boot-1", 1, 50, 100).unwrap();
+        // A stale/duplicate seq on the shared dispatcher is rejected.
+        assert_eq!(
+            rt.tty_resize(&owner, &exec_id, "boot-1", 1, 10, 10)
+                .unwrap_err(),
+            ExecError::ControlSeqMismatch
+        );
+        // signal at seq=2 (SIGINT) is delivered.
+        rt.tty_signal(&owner, &exec_id, "boot-1", 2, 2).unwrap();
+        // Replayed seq=2 is rejected.
+        assert_eq!(
+            rt.tty_signal(&owner, &exec_id, "boot-1", 2, 15).unwrap_err(),
+            ExecError::ControlSeqMismatch
+        );
+        // Out-of-allowlist signal at a fresh seq is rejected.
+        assert_eq!(
+            rt.tty_signal(&owner, &exec_id, "boot-1", 3, 11).unwrap_err(),
+            ExecError::InvalidSignal
+        );
+        // Invalid geometry at a fresh seq is rejected.
+        assert_eq!(
+            rt.tty_resize(&owner, &exec_id, "boot-1", 4, 0, 80)
+                .unwrap_err(),
+            ExecError::InvalidTerminalSize
+        );
+
+        assert_eq!(
+            hooks.control.resizes(),
+            vec![TerminalSize {
+                rows: 50,
+                cols: 100
+            }]
+        );
+        assert_eq!(hooks.control.signals(), vec![TtySignal::Int]);
+    }
+
+    #[tokio::test]
+    async fn tty_create_without_spawner_is_unsupported() {
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let (base, _hooks) = FakeSpawner::new();
+        let rt = ExecRuntime::new(base, SeqIds::new(), policy);
+        assert!(!rt.tty_usable());
+        let owner = b"c1".to_vec();
+        let err = rt
+            .create_tty(owner, "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, ExecError::UnsupportedMode);
+    }
+
+    #[tokio::test]
+    async fn tty_child_exit_publishes_terminal_and_reaps_session() {
+        let (rt, mut hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+
+        hooks
+            .exit_tx
+            .take()
+            .unwrap()
+            .send(ExitOutcome::Exited(3))
+            .unwrap();
+
+        let mut snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        for _ in 0..200 {
+            if !matches!(snap.state, ExecState::Running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        }
+        assert_eq!(snap.state, ExecState::Exited);
+        assert_eq!(snap.outcome, Some(ExitOutcome::Exited(3)));
+        assert!(hooks.kills.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn tty_disconnect_cancels_session() {
+        let (rt, hooks) = tty_runtime(None);
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        rt.close_connection(&owner);
+        // The entry is forgotten from tracking immediately on disconnect.
+        assert_eq!(
+            rt.inspect(&owner, &exec_id, "boot-1").unwrap_err(),
+            ExecError::ExecNotFound
+        );
+        // Teardown is spawned; wait for the session SIGKILL sweep.
+        for _ in 0..200 {
+            if hooks.kills.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(hooks.kills.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn tty_runtime_ceiling_tears_down_when_exceeded() {
+        let (rt, _hooks) = tty_runtime(Some(Duration::from_millis(10)));
+        let owner = b"c1".to_vec();
+        let (exec_id, ..) = rt
+            .create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+            .await
+            .unwrap();
+        // The child never exits; the per-session ceiling fires teardown.
+        let mut snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        for _ in 0..400 {
+            if !matches!(snap.state, ExecState::Running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
+        }
+        assert_eq!(snap.state, ExecState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn tty_create_shares_attached_capacity() {
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let (base, _hooks) = FakeSpawner::new();
+        let rt = ExecRuntime::new(base, SeqIds::new(), policy)
+            .with_pty_spawner(Arc::new(MultiPtySpawner {
+                kills: Arc::new(AtomicU64::new(0)),
+                reaped: Arc::new(AtomicU64::new(0)),
+            }))
+            .with_tty_grace(Duration::from_millis(1));
+        let owner = b"c1".to_vec();
+        for _ in 0..ATTACHED_SESSIONS_PER_VM {
+            rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+                .await
+                .unwrap();
+        }
+        // The interactive path shares the attached-session capacity.
+        assert_eq!(
+            rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+                .await
+                .unwrap_err(),
+            ExecError::AttachCapacityExceeded
+        );
     }
 }
