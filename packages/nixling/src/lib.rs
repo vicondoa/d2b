@@ -7260,7 +7260,17 @@ mod host_install_dispatch_tests {
     fn write_guest_control_bundle(bundle_path: &std::path::Path, vm: &str) {
         let base_dir = bundle_path.parent().expect("bundle parent");
         std::fs::create_dir_all(base_dir).expect("create bundle dir");
-        let processes_path = base_dir.join(format!("{vm}.processes.json"));
+        // Derive EVERY sibling artifact path from the unique bundle file
+        // name. The bundle path is unique per test (a monotonic counter);
+        // sharing a `<vm>.processes.json` across the parallel config-sync
+        // tests caused torn reads (one test truncating the file while
+        // another parsed it), so the file name MUST be per-bundle, not
+        // per-vm.
+        let unique = bundle_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("bundle file name");
+        let processes_path = base_dir.join(format!("{unique}.processes.json"));
         let processes = nixling_core::processes::ProcessesJson {
             schema_version: "v2".to_owned(),
             vms: vec![nixling_core::processes::VmProcessDag {
@@ -7293,10 +7303,10 @@ mod host_install_dispatch_tests {
         let bundle = json!({
             "bundleVersion": 4,
             "schemaVersion": "v2",
-            "publicManifestPath": base_dir.join("vms.json").to_string_lossy(),
-            "hostPath": base_dir.join("host.json").to_string_lossy(),
+            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
+            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
             "processesPath": processes_path.to_string_lossy(),
-            "privilegesPath": base_dir.join("privileges.json").to_string_lossy(),
+            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
             "closures": [],
             "minijailProfiles": [],
             "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
@@ -7404,6 +7414,11 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
         let _ = std::fs::remove_file(&bundle_path);
+        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str()) {
+            if let Some(parent) = bundle_path.parent() {
+                let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
+            }
+        }
         let _ = std::fs::remove_dir_all(&staging_dir);
         (result, recorded, stdout)
     }
