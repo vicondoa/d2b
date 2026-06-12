@@ -119,7 +119,11 @@ fn open_ring(paths: &RunnerPaths, stream: Stream, cap: u64) -> Result<FileRing, 
     FileRing::create(&paths.data(stream), &paths.sidecar(stream), cap).map_err(|_| ())
 }
 
-fn spawn_drain(mut reader: Box<dyn Read + Send>, ring: Arc<Mutex<FileRing>>) -> JoinHandle<()> {
+fn spawn_drain(
+    mut reader: Box<dyn Read + Send>,
+    ring: Arc<Mutex<FileRing>>,
+    done: std::sync::mpsc::Sender<()>,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; DRAIN_CHUNK];
         let mut lost = false;
@@ -142,9 +146,40 @@ fn spawn_drain(mut reader: Box<dyn Read + Send>, ring: Arc<Mutex<FileRing>>) -> 
                 Err(_) => break,
             }
         }
-        let mut guard = ring.lock().expect("ring poisoned");
-        let _ = guard.mark_eof();
+        {
+            let mut guard = ring.lock().expect("ring poisoned");
+            let _ = guard.mark_eof();
+        }
+        // Signal clean completion so the supervisor can bound its wait. A send
+        // failure (supervisor already moved on) is benign.
+        let _ = done.send(());
     })
+}
+
+/// Wait up to `grace` for the drain threads to finish naturally. In the normal
+/// case the direct child's exit closed the only pipe write-ends, so the drains
+/// EOF and finish at once (capturing all output + a clean stream EOF). If a
+/// leaked descendant inherited a pipe write-end the drains can block
+/// indefinitely; this bounded wait then returns so the terminal status is
+/// still published and the runner never hangs. Returns the number of drains
+/// that finished within the grace.
+fn await_drains_bounded(
+    done_rx: &std::sync::mpsc::Receiver<()>,
+    expected: usize,
+    grace: Duration,
+) -> usize {
+    let deadline = std::time::Instant::now() + grace;
+    let mut finished = 0;
+    while finished < expected {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            break;
+        };
+        match done_rx.recv_timeout(remaining) {
+            Ok(()) => finished += 1,
+            Err(_) => break,
+        }
+    }
+    finished
 }
 
 /// Supervise one detached exec. Writes spawn-failed/infra-failed/terminal
@@ -194,13 +229,21 @@ pub fn supervise(
     }
 
     // Drain stdout/stderr concurrently so the child never blocks on a full pipe.
+    // Each drain signals clean completion on `done_tx`; the supervisor uses it
+    // to bound its post-reap wait so a leaked descendant holding a pipe
+    // write-end can never stall the terminal status (F4).
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut drains = Vec::new();
     if let Some(reader) = child.take_stdout() {
-        drains.push(spawn_drain(reader, Arc::clone(&stdout_ring)));
+        drains.push(spawn_drain(reader, Arc::clone(&stdout_ring), done_tx.clone()));
     }
     if let Some(reader) = child.take_stderr() {
-        drains.push(spawn_drain(reader, Arc::clone(&stderr_ring)));
+        drains.push(spawn_drain(reader, Arc::clone(&stderr_ring), done_tx.clone()));
     }
+    let drain_count = drains.len();
+    // Drop our own sender so the channel disconnects once every drain thread
+    // has finished (lets `recv_timeout` observe disconnect promptly).
+    drop(done_tx);
 
     let reaped = Arc::new(AtomicBool::new(false));
     let cancel_requested = Arc::new(AtomicBool::new(false));
@@ -221,14 +264,14 @@ pub fn supervise(
     let outcome = child.wait();
     reaped.store(true, Ordering::SeqCst);
 
+    // The watcher exits as soon as it observes `reaped`; join it so
+    // `cancel_requested` is final before we decide the terminal phase.
     let _ = watcher.join();
-    for drain in drains {
-        let _ = drain.join();
-    }
 
-    // Exactly-once terminal status: cancellation (sentinel or ceiling) wins iff
-    // it was requested before the child was reaped; otherwise the natural exit
-    // status wins.
+    // Decide the terminal phase NOW, before any (possibly unbounded) wait on the
+    // drains. Exactly-once terminal status: cancellation (sentinel or ceiling)
+    // wins iff it was requested before the child was reaped; otherwise the
+    // natural exit status wins.
     let phase = if cancel_requested.load(Ordering::SeqCst) {
         StatusPhase::Cancelled
     } else {
@@ -237,6 +280,17 @@ pub fn supervise(
             ChildOutcome::Signaled(signal) => StatusPhase::Signaled(signal),
         }
     };
+
+    // Best-effort: give the drains a bounded grace to flush their tails and mark
+    // EOF. In the normal case the child's exit closed the only write-ends and
+    // they finish immediately. If a leaked descendant inherited a write-end the
+    // drains may block forever — we stop waiting and publish the terminal status
+    // anyway. Any still-blocked drain thread is detached (dropping its
+    // `JoinHandle`) and reclaimed at process exit; the streams simply lack a
+    // clean EOF, which readers already tolerate.
+    let _finished = await_drains_bounded(&done_rx, drain_count, cfg.grace);
+    drop(drains);
+
     match write_status(paths, phase) {
         Ok(()) => RunnerResult::Done,
         Err(()) => RunnerResult::StatusUnwritable,
@@ -673,6 +727,31 @@ mod tests {
         }
     }
 
+    /// Spawner whose child stdout is the read end of a real pipe. The test
+    /// keeps the write end open to simulate a leaked descendant that inherited
+    /// the pipe, so the drain thread can never observe EOF.
+    struct PipeStdoutSpawner {
+        proc: Arc<FakeProc>,
+        read_fd: StdMutex<Option<std::os::fd::OwnedFd>>,
+    }
+
+    impl Spawner for PipeStdoutSpawner {
+        fn spawn(&self, _spec: &ExecSpec) -> Result<Box<dyn ChildHandle>, SpawnFailure> {
+            let fd = self
+                .read_fd
+                .lock()
+                .unwrap()
+                .take()
+                .expect("PipeStdoutSpawner spawned more than once");
+            let file = std::fs::File::from(fd);
+            Ok(Box::new(FakeChild {
+                proc: Arc::clone(&self.proc),
+                stdout: Some(Box::new(file)),
+                stderr: None,
+            }))
+        }
+    }
+
     // ---- Tests -----------------------------------------------------------
 
     #[test]
@@ -912,6 +991,51 @@ mod tests {
         );
         // No status file could be written (no dir) => unit must fail.
         assert_eq!(result, RunnerResult::StatusUnwritable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn terminal_status_published_even_with_lingering_pipe_holder() {
+        let (dir, paths) = scratch_slot();
+        // A real pipe: the read end becomes the child's stdout, and we hold the
+        // write end open for the duration of supervise() to mimic a leaked
+        // descendant that inherited the child's stdout write-end. The drain
+        // thread can never observe EOF, so an unbounded drain join would hang
+        // forever and the terminal status would never be published (F4).
+        let (read_fd, write_fd) = rustix::pipe::pipe().expect("pipe");
+        let proc = FakeProc::new(None);
+        // The direct child exits immediately; only the leaked pipe lingers.
+        proc.set_exit(ChildOutcome::Exited(0));
+        let spawner = PipeStdoutSpawner {
+            proc: Arc::clone(&proc),
+            read_fd: StdMutex::new(Some(read_fd)),
+        };
+        let start = std::time::Instant::now();
+        let result = supervise(
+            &spec("/bin/true", 0),
+            &paths,
+            &spawner,
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
+            &fast_cfg(),
+        );
+        // The bounded drain wait must let supervise return promptly even though
+        // the pipe write-end is still held open.
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "supervise hung on a lingering pipe holder"
+        );
+        assert_eq!(result, RunnerResult::Done);
+        assert_eq!(read_phase(&paths), StatusPhase::Exited(0));
+        // Releasing the write end lets the detached drain thread finish cleanly.
+        drop(write_fd);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
