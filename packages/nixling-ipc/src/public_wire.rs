@@ -77,6 +77,14 @@ pub enum PublicRequest {
     /// `nixling host reconcile --network --apply`.
     #[serde(rename = "host reconcile")]
     HostReconcile(HostReconcileRequest),
+    /// Read the editable guest config working copy of `vm` over the
+    /// authenticated guest-control bridge and return it as a base64 string.
+    /// ADMIN-ONLY (it crosses into the guest over the authenticated
+    /// transport): the daemon enforces `PeerRole::Admin` BEFORE any probe /
+    /// sign / read. The CLI's `config sync` uses this on guest-control VMs
+    /// instead of an SSH transfer.
+    #[serde(rename = "read guest config")]
+    ReadGuestConfig(ReadGuestConfigRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -104,6 +112,8 @@ pub enum PublicResponse {
     StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
+    #[serde(rename = "read guest config")]
+    ReadGuestConfig(ReadGuestConfigResponse),
     #[serde(rename = "error")]
     Error(Error),
 }
@@ -244,6 +254,27 @@ pub struct StoreVerifyRequest {
 }
 
 pub type StoreVerifyResponse = crate::broker_wire::StoreVerifyResponse;
+
+/// `read guest config` request payload. The daemon resolves the per-VM vsock
+/// socket + peer credentials from the trusted bundle; the client supplies only
+/// the VM name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestConfigRequest {
+    pub vm: String,
+}
+
+/// `read guest config` response payload. `contentBase64` is the standard
+/// padded base64 of the RAW guest config bytes. The encoded payload is bounded
+/// by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from
+/// `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and
+/// ttRPC frames. The CLI decodes it and computes size + sha256 from the
+/// DECODED bytes — never from any guest-reported value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestConfigResponse {
+    pub content_base64: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

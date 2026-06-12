@@ -53,6 +53,7 @@ pub enum Request {
     HostDestroy(public_wire::HostDestroyRequest),
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
+    ReadGuestConfig(public_wire::ReadGuestConfigRequest),
 }
 
 impl Request {
@@ -85,6 +86,7 @@ impl Request {
             Self::HostDestroy(_) => "hostDestroy",
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
+            Self::ReadGuestConfig(_) => "readGuestConfig",
         }
     }
 }
@@ -277,6 +279,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "hostReconcile" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostReconcile)
             .map_err(map_parse_error),
+        "readGuestConfig" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::ReadGuestConfig)
+            .map_err(map_parse_error),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
 }
@@ -425,8 +430,21 @@ pub fn mutating_verb_response(payload: public_wire::MutatingVerbResponse) -> Val
     value
 }
 
-pub fn auth_status_response(payload: AuthStatusResponse) -> AuthStatusResponseFrame {
-    AuthStatusResponseFrame {
+/// Serialize a `ReadGuestConfigResponse` as the daemon wire frame the CLI
+/// `config sync` client expects. The `contentBase64` field is the standard
+/// padded base64 of the raw guest config bytes.
+pub fn read_guest_config_response(payload: public_wire::ReadGuestConfigResponse) -> Value {
+    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("readGuestConfigResponse".to_owned()),
+        );
+    }
+    value
+}
+
+pub fn auth_status_response(payload: AuthStatusResponse) -> AuthStatusResponseFrame {    AuthStatusResponseFrame {
         type_name: "authStatusResponse",
         auth: payload,
     }

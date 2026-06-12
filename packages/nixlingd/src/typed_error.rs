@@ -1,5 +1,92 @@
 use std::path::PathBuf;
 
+/// Closed enum of guest-control config-read failure classes. Each maps to a
+/// distinct wire `kind` slug; the daemon never attaches a path, byte, or
+/// guest-supplied string to the failure, so the public envelope is leak-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestControlReadErrorKind {
+    /// Connect / CONNECT-ACK / handshake transport failure (incl. unreachable,
+    /// old-generation listener, broker signer error).
+    Transport,
+    /// Authenticated handshake rejected (token / nonce / stale session).
+    AuthFailed,
+    /// Malformed or out-of-contract guest response.
+    Protocol,
+    /// The guest authenticated but does not advertise `ReadGuestFile`.
+    CapabilityUnavailable,
+    /// The guest config working copy does not exist.
+    FileNotFound,
+    /// The guest config exceeds the read cap.
+    FileTooLarge,
+    /// The resolved guest path was unsafe (symlink / non-regular / `..`).
+    PathUnsafe,
+    /// The guest denied the read (no path wired, or permission denied).
+    ReadDenied,
+    /// The probe deadline elapsed before a ready outcome.
+    Timeout,
+}
+
+impl GuestControlReadErrorKind {
+    pub fn wire_kind(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control-transport-unavailable",
+            Self::AuthFailed => "guest-control-auth-failed",
+            Self::Protocol => "guest-control-protocol-error",
+            Self::CapabilityUnavailable => "guest-control-capability-unavailable",
+            Self::FileNotFound => "guest-control-file-not-found",
+            Self::FileTooLarge => "guest-control-file-too-large",
+            Self::PathUnsafe => "guest-control-path-unsafe",
+            Self::ReadDenied => "guest-control-read-denied",
+            Self::Timeout => "guest-control-timeout",
+        }
+    }
+
+    fn human_message(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control transport to the VM is unavailable",
+            Self::AuthFailed => "guest-control authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed guest-control response",
+            Self::CapabilityUnavailable => {
+                "the guest does not advertise the read-guest-file capability"
+            }
+            Self::FileNotFound => "the guest config working copy does not exist",
+            Self::FileTooLarge => "the guest config exceeds the read size cap",
+            Self::PathUnsafe => "the guest config path failed the guest-side safety check",
+            Self::ReadDenied => "the guest denied the config read",
+            Self::Timeout => "the guest-control config read timed out",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::Transport | Self::Timeout => {
+                "confirm the VM is running and guest-control-health is ready (`nixling vm status <vm>`), then retry"
+            }
+            Self::AuthFailed => {
+                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+            }
+            Self::Protocol => {
+                "the guest-control protocol versions are skewed; rebuild the guest with a matching nixling generation"
+            }
+            Self::CapabilityUnavailable => {
+                "rebuild the guest with the read-guest-file capability enabled (current nixling generation)"
+            }
+            Self::FileNotFound => {
+                "create the editable guest config working copy inside the VM before syncing"
+            }
+            Self::FileTooLarge => {
+                "shrink the guest config below the read size cap before syncing"
+            }
+            Self::PathUnsafe => {
+                "ensure the guest config path is a regular file with no symlink or parent-escape component"
+            }
+            Self::ReadDenied => {
+                "grant the guest-control reader access to the guest config path inside the VM"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedError {
     AuthzNotALauncher {
@@ -146,6 +233,12 @@ pub enum TypedError {
         step: crate::usbip_state_machine::UsbipBusidStep,
         reason: String,
     },
+    /// Authenticated guest-control config read failed. The closed-enum `kind`
+    /// is the ONLY payload — never a path, byte, or guest-supplied string — so
+    /// the public envelope cannot leak guest content.
+    GuestControlReadFailed {
+        kind: GuestControlReadErrorKind,
+    },
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -199,6 +292,7 @@ impl TypedError {
             Self::OtelHostBridgeReadinessTimeout { .. } => "otel-host-bridge-readiness-timeout",
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
+            Self::GuestControlReadFailed { kind } => kind.wire_kind(),
         }
     }
 
@@ -236,6 +330,9 @@ impl TypedError {
             // (64), otel-bridge (65), or net-route-degraded (66)
             // adjacent surfaces.
             Self::UsbipStepFailed { .. } => 67,
+            // Guest-control config read failures share one exit code; the
+            // distinct `kind` slug carries the sub-class.
+            Self::GuestControlReadFailed { .. } => 70,
         }
     }
 
@@ -320,6 +417,7 @@ impl TypedError {
                     "usbip per-busid state machine refused at step '{step}' for busid '{busid}': {reason}"
                 )
             }
+            Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
         }
     }
 
@@ -396,6 +494,7 @@ impl TypedError {
                     "the per-busid USBIP state machine refused at step '{step}'. The canonical bring-up order is `modprobe → lock → withhold → firewall → backend → bind → proxy`; the stop path reverses it. Inspect the daemon log for the typed `usbip-step-failed` record (carries busid + step + reason) and re-run the lifecycle verb that triggered the bring-up. If `modprobe` failed, confirm `usbip-host` is in the trusted-bundle kernel-module matrix and that `ModprobeIfAllowed` is permitted. If `lock` failed, another env already owns `/run/nixling/locks/usbip/<busid>` — stop the owner first. If `firewall` failed, re-render the trusted bundle so `UsbipBindFirewallRule` exists for this env/busid. See docs/reference/usbip-state-machine.md."
                 )
             }
+            Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
         }
     }
 
@@ -507,7 +606,8 @@ impl TypedError {
             | Self::HostKernelModulesMissing { .. }
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
-            | Self::UsbipStepFailed { .. } => "internalError",
+            | Self::UsbipStepFailed { .. }
+            | Self::GuestControlReadFailed { .. } => "internalError",
         }
     }
 }
@@ -586,6 +686,33 @@ mod tests {
         };
         assert_eq!(err.kind(), "wire-ifname-invalid");
         assert_no_path_leak("WireIfNameInvalid", &err.message());
+    }
+
+    #[test]
+    fn guest_control_read_failed_kinds_are_distinct_and_leak_free() {
+        let kinds = [
+            (GuestControlReadErrorKind::Transport, "guest-control-transport-unavailable"),
+            (GuestControlReadErrorKind::AuthFailed, "guest-control-auth-failed"),
+            (GuestControlReadErrorKind::Protocol, "guest-control-protocol-error"),
+            (
+                GuestControlReadErrorKind::CapabilityUnavailable,
+                "guest-control-capability-unavailable",
+            ),
+            (GuestControlReadErrorKind::FileNotFound, "guest-control-file-not-found"),
+            (GuestControlReadErrorKind::FileTooLarge, "guest-control-file-too-large"),
+            (GuestControlReadErrorKind::PathUnsafe, "guest-control-path-unsafe"),
+            (GuestControlReadErrorKind::ReadDenied, "guest-control-read-denied"),
+            (GuestControlReadErrorKind::Timeout, "guest-control-timeout"),
+        ];
+        for (kind, slug) in kinds {
+            let err = TypedError::GuestControlReadFailed { kind };
+            assert_eq!(err.kind(), slug);
+            assert_eq!(err.exit_code(), 70);
+            // Neither the human message nor the remediation may leak a host or
+            // guest path / byte / string.
+            assert_no_path_leak(slug, &err.message());
+            assert_no_path_leak(slug, &err.remediation());
+        }
     }
 
     #[test]

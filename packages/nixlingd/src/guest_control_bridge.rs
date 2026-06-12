@@ -256,6 +256,22 @@ pub fn run_config_read_once(
     })
 }
 
+/// Run a single config read on a DEDICATED OS thread so the probe's
+/// current-thread runtime is never nested inside a caller's Tokio runtime
+/// (the public.sock dispatch path runs synchronously on a multi-threaded
+/// runtime worker; calling `Runtime::block_on` there would panic). This is the
+/// BR13 runtime boundary for the synchronous verb path: nothing is borrowed
+/// across the thread, and the spawned thread starts with no runtime context.
+pub fn run_config_read_on_dedicated_thread(
+    params: ProbeParams,
+    broker_socket_path: PathBuf,
+    timeout: Duration,
+) -> Result<Vec<u8>, GuestFileReadError> {
+    std::thread::spawn(move || run_config_read_once(&params, &broker_socket_path, timeout))
+        .join()
+        .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::TransportIo))?
+}
+
 /// Injectable clock for deterministic retry-loop tests. The real
 /// implementation uses a monotonic `Instant` and `thread::sleep`; fakes
 /// advance a logical clock on `sleep`.

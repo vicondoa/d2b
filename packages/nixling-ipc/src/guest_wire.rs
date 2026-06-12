@@ -25,6 +25,50 @@ pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
 /// file larger than this fails with `FileTooLarge` BEFORE any read/allocation.
 pub const READ_GUEST_FILE_MAX_BYTES: u64 = 512 * 1024;
 
+/// Standard padded base64 expansion of `raw_len` bytes: `ceil(raw_len/3)*4`.
+pub const fn base64_encoded_len(raw_len: usize) -> usize {
+    raw_len.div_ceil(3) * 4
+}
+
+/// Maximum base64-encoded length of a single-shot guest-config read payload,
+/// DERIVED from [`READ_GUEST_FILE_MAX_BYTES`]. Used by the daemon's
+/// `ReadGuestConfig` verb to fail closed (`FileTooLarge`) before it serializes
+/// an oversize response. The const assertion below proves the encoded payload
+/// — plus a JSON-envelope margin — fits under BOTH the public.sock frame
+/// (`crate::MAX_FRAME_SIZE`) and the ttRPC frame ([`TTRPC_FRAME_CAP_BYTES`]).
+pub const READ_GUEST_CONFIG_ENCODED_MAX_BYTES: usize =
+    base64_encoded_len(READ_GUEST_FILE_MAX_BYTES as usize);
+
+/// Reserve for the JSON envelope wrapped around the base64 content in a
+/// public.sock response frame (`{"kind":"...","payload":{"contentBase64":...}}`).
+pub const READ_GUEST_CONFIG_ENVELOPE_MARGIN: usize = 8 * 1024;
+
+// Static proof that the derived encoded cap (plus envelope margin) fits within
+// both transport frames. If a future cap bump breaks either framing, this fails
+// to compile rather than overflowing a frame at runtime.
+#[allow(clippy::assertions_on_constants)]
+const _: () = {
+    assert!(
+        READ_GUEST_CONFIG_ENCODED_MAX_BYTES + READ_GUEST_CONFIG_ENVELOPE_MARGIN
+            < crate::MAX_FRAME_SIZE,
+        "base64 guest-config payload + envelope must fit the public.sock frame"
+    );
+    assert!(
+        (READ_GUEST_CONFIG_ENCODED_MAX_BYTES as u64) < TTRPC_FRAME_CAP_BYTES,
+        "base64 guest-config payload must fit the ttRPC frame"
+    );
+};
+
+/// Fail-closed check that a base64-encoded guest-config payload fits within
+/// BOTH transport frames. Returns `true` iff the encoded length is within the
+/// derived cap (which is statically proven to fit the public.sock and ttRPC
+/// frames). The daemon calls this on the encoded payload before responding.
+pub fn guest_config_encoded_within_frame_caps(encoded_len: usize) -> bool {
+    encoded_len <= READ_GUEST_CONFIG_ENCODED_MAX_BYTES
+        && encoded_len + READ_GUEST_CONFIG_ENVELOPE_MARGIN < crate::MAX_FRAME_SIZE
+        && (encoded_len as u64) < TTRPC_FRAME_CAP_BYTES
+}
+
 macro_rules! bounded_string {
     ($(#[$meta:meta])* $name:ident, $max:literal) => {
         $(#[$meta])*
@@ -1016,6 +1060,41 @@ pub enum GuestControlErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_encoded_len_matches_standard_padded_expansion() {
+        assert_eq!(base64_encoded_len(0), 0);
+        assert_eq!(base64_encoded_len(1), 4);
+        assert_eq!(base64_encoded_len(2), 4);
+        assert_eq!(base64_encoded_len(3), 4);
+        assert_eq!(base64_encoded_len(4), 8);
+        // 512 KiB raw → 699 KiB encoded, comfortably under the 1 MiB frame.
+        assert_eq!(base64_encoded_len(512 * 1024), 699_052);
+    }
+
+    #[test]
+    fn guest_config_encoded_cap_boundaries_for_both_framings() {
+        let cap = READ_GUEST_CONFIG_ENCODED_MAX_BYTES;
+        // cap-1 and cap fit; cap+1 fails closed.
+        assert!(guest_config_encoded_within_frame_caps(cap - 1));
+        assert!(guest_config_encoded_within_frame_caps(cap));
+        assert!(!guest_config_encoded_within_frame_caps(cap + 1));
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn guest_config_encoded_cap_fits_public_sock_and_ttrpc_frames() {
+        // The derived encoded cap (plus envelope margin) must sit under the
+        // public.sock frame and the ttRPC frame — the binding cap is the
+        // smaller public.sock frame.
+        assert!(
+            READ_GUEST_CONFIG_ENCODED_MAX_BYTES + READ_GUEST_CONFIG_ENVELOPE_MARGIN
+                < crate::MAX_FRAME_SIZE
+        );
+        assert!((READ_GUEST_CONFIG_ENCODED_MAX_BYTES as u64) < TTRPC_FRAME_CAP_BYTES);
+        // A payload at the public.sock frame size must be rejected by the cap.
+        assert!(!guest_config_encoded_within_frame_caps(crate::MAX_FRAME_SIZE));
+    }
 
     #[test]
     fn health_mappings_are_closed() {

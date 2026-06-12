@@ -1726,6 +1726,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostDestroy"
             | "hostInstall"
             | "hostReconcile"
+            | "readGuestConfig"
     )
 }
 
@@ -1781,6 +1782,7 @@ fn dispatch_request(
         wire::Request::HostDestroy(req) => dispatch_broker_host_destroy(state, req),
         wire::Request::HostInstall(req) => dispatch_broker_run_host_install(state, req),
         wire::Request::HostReconcile(req) => dispatch_broker_host_reconcile(state, req),
+        wire::Request::ReadGuestConfig(req) => dispatch_read_guest_config(state, req),
     }
 }
 
@@ -2222,6 +2224,71 @@ fn resolve_guest_control_probe_params(
         expected_peer_uid: ch.profile.uid,
         expected_peer_gid: ch.profile.gid,
     })
+}
+
+/// Map a guest-control config read error to the closed-enum daemon error kind.
+/// The mapping is exhaustive and never embeds a path, byte, or guest string.
+fn map_guest_file_read_error(error: guest_control_health::GuestFileReadError) -> TypedError {
+    use crate::typed_error::GuestControlReadErrorKind as K;
+    use guest_control_health::{GuestControlHealthError as H, GuestFileReadError as E};
+    let kind = match error {
+        E::Probe(H::TransportIo) | E::Probe(H::Signer) => K::Transport,
+        E::Probe(H::Ttrpc) => K::Transport,
+        E::Probe(H::AuthFailed) => K::AuthFailed,
+        E::Probe(H::StaleSession) => K::AuthFailed,
+        E::Probe(H::Protocol) => K::Protocol,
+        E::CapabilityUnavailable => K::CapabilityUnavailable,
+        E::FileNotFound => K::FileNotFound,
+        E::FileTooLarge => K::FileTooLarge,
+        E::PathUnsafe => K::PathUnsafe,
+        E::ReadDenied => K::ReadDenied,
+        E::Protocol => K::Protocol,
+    };
+    TypedError::GuestControlReadFailed { kind }
+}
+
+/// ADMIN-ONLY public.sock verb: read the editable guest config working copy of
+/// `vm` over the authenticated guest-control bridge and return it as a base64
+/// string. The admin authorization gate runs in `dispatch_request` BEFORE this
+/// handler. The orchestration runs on a dedicated OS thread (BR13 runtime
+/// boundary). The encoded payload is bounded so it fits both transport frames;
+/// any guest content is never echoed into an error.
+fn dispatch_read_guest_config(
+    state: &ServerState,
+    request: public_wire::ReadGuestConfigRequest,
+) -> Result<Value, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let params = resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(
+        |detail| {
+            tracing::warn!(
+                kind = "critical",
+                subsystem = "guest-control-health",
+                error_kind = "transport-io",
+                "guest-control config read: probe params unresolved: {detail}"
+            );
+            TypedError::GuestControlReadFailed {
+                kind: crate::typed_error::GuestControlReadErrorKind::Transport,
+            }
+        },
+    )?;
+    let broker_path = broker_socket_path(state);
+    let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
+        params,
+        broker_path,
+        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
+    )
+    .map_err(map_guest_file_read_error)?;
+    let encoded = nixling_core::base64_codec::encode(&bytes);
+    if !nixling_ipc::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
+        return Err(TypedError::GuestControlReadFailed {
+            kind: crate::typed_error::GuestControlReadErrorKind::FileTooLarge,
+        });
+    }
+    Ok(wire::read_guest_config_response(
+        public_wire::ReadGuestConfigResponse {
+            content_base64: encoded,
+        },
+    ))
 }
 
 fn dispatch_broker_request(
@@ -10282,5 +10349,44 @@ mod broker_dispatch_tests {
 
         let no_vsock = vec!["cloud-hypervisor".to_owned(), "--api-socket".to_owned()];
         assert_eq!(cloud_hypervisor_vsock_socket(&no_vsock), None);
+    }
+
+    #[test]
+    fn read_guest_config_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // The verb crosses into the guest over the authenticated transport, so
+        // a launcher / non-admin peer MUST be denied BEFORE any probe / sign /
+        // read runs (the gate is enforced in `dispatch_request`).
+        assert!(verb_requires_admin("readGuestConfig"));
+    }
+
+    #[test]
+    fn guest_file_read_error_maps_to_closed_daemon_kinds() {
+        use super::map_guest_file_read_error;
+        use crate::guest_control_health::{GuestControlHealthError as H, GuestFileReadError as E};
+        use crate::typed_error::GuestControlReadErrorKind as K;
+
+        let cases = [
+            (E::Probe(H::TransportIo), K::Transport),
+            (E::Probe(H::Signer), K::Transport),
+            (E::Probe(H::Ttrpc), K::Transport),
+            (E::Probe(H::AuthFailed), K::AuthFailed),
+            (E::Probe(H::StaleSession), K::AuthFailed),
+            (E::Probe(H::Protocol), K::Protocol),
+            (E::CapabilityUnavailable, K::CapabilityUnavailable),
+            (E::FileNotFound, K::FileNotFound),
+            (E::FileTooLarge, K::FileTooLarge),
+            (E::PathUnsafe, K::PathUnsafe),
+            (E::ReadDenied, K::ReadDenied),
+            (E::Protocol, K::Protocol),
+        ];
+        for (input, expected) in cases {
+            match map_guest_file_read_error(input) {
+                crate::typed_error::TypedError::GuestControlReadFailed { kind } => {
+                    assert_eq!(kind, expected);
+                }
+                other => panic!("expected GuestControlReadFailed, got {other:?}"),
+            }
+        }
     }
 }

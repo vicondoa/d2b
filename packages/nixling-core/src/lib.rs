@@ -2,6 +2,7 @@
 
 pub mod bundle;
 pub mod bundle_resolver;
+pub mod base64_codec;
 pub mod closures;
 pub mod error;
 pub mod host;
