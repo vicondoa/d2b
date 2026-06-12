@@ -16,22 +16,15 @@ mkdir -p "$NL_STATIC_CACHE"
 nl_activate_rust_toolchain_path || true
 
 nl_cli_flake_source_root() {
-  local tree="$NL_STATIC_CACHE/cli-flake-source"
-  local stamp="$tree/.ready"
-  if [ -f "$stamp" ]; then
-    printf '%s\n' "$tree"
-    return 0
-  fi
-
-  rm -rf -- "$tree"
-  mkdir -p "$tree"
-  while IFS= read -r -d '' path; do
-    [ -e "$ROOT/$path" ] || continue
-    mkdir -p "$tree/$(dirname "$path")"
-    cp -a "$ROOT/$path" "$tree/$path"
-  done < <(git -C "$ROOT" ls-files -z --cached --others --exclude-standard)
-  : > "$stamp"
-  printf '%s\n' "$tree"
+  # The cli-rust-native eval sites resolve the framework flake as
+  # `git+file://$(nl_cli_flake_source_root)`. Return $ROOT directly:
+  # git+file fetches only git-tracked files straight from the repo
+  # (target/ is gitignored), matching `nix flake check` semantics, so
+  # there is no working-tree copy. (Earlier this pre-copied a clean
+  # tracked-only tree for the `path:` fetcher; git+file makes that
+  # indirection unnecessary, and a copied tree is not a git repo so
+  # git+file cannot fetch from it.)
+  printf '%s\n' "$ROOT"
 }
 
 nl_cli_toolchain_shell() {
@@ -78,7 +71,7 @@ _nl_cli_smoke_eval_raw() {
   : > "$out.stderr"
   if ! nix eval --impure --raw --expr "
     let
-      flake = builtins.getFlake "git+file://$flake_root";
+      flake = builtins.getFlake \"git+file://$flake_root\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -135,7 +128,7 @@ nl_cli_smoke_bundle_tree() {
   flake_root=$(nl_cli_flake_source_root)
   bundle_path=$(nix build --impure --no-link --print-out-paths --expr "
     let
-      flake = builtins.getFlake "git+file://$flake_root";
+      flake = builtins.getFlake \"git+file://$flake_root\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -161,7 +154,7 @@ nl_cli_smoke_bundle_tree() {
     local path
     path=$(nix build --impure --no-link --print-out-paths --expr "
       let
-        flake = builtins.getFlake "git+file://$flake_root";
+        flake = builtins.getFlake \"git+file://$flake_root\";
         nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
         nixos = nixosSystem {
           system = builtins.currentSystem;

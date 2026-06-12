@@ -104,7 +104,7 @@ modules=$(_nl_smoke_config_modules)
 NIXLING_HOST_RUNTIME_PATH="$runtime_path" \
   nix eval --impure --raw --expr "
     let
-      flake = builtins.getFlake "git+file://$ROOT";
+      flake = builtins.getFlake \"git+file://$ROOT\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;

@@ -54,7 +54,7 @@ eval_processes_json() {
   nix eval --json --impure --no-warn-dirty \
     --expr "
       let
-        root = builtins.getFlake "git+file://${ROOT}";
+        root = builtins.getFlake \"git+file://${ROOT}\";
         nixos = root.inputs.nixpkgs.lib.nixosSystem {
           system = \"x86_64-linux\";
           modules = [
