@@ -38,14 +38,20 @@ export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 # sees one Layer-1 evaluator at a time.
 #
 # Implementation note (flock-fd fix): we use `flock(1)` as an exec
-# wrapper around a re-entry of this script ($0 --internal-locked). That
-# way the lock fd is OWNED BY THE flock(1) PROCESS, not by the inner
-# bash. Children spawned inside the gate (broker test daemons, etc.) do
-# NOT inherit the lock fd via fork+exec, so a leaked-child daemon can't
-# keep the lock alive past its parent's exit. The prior in-shell
-# `exec {fd}>file; flock -x $fd` pattern leaked fd 10 into every child
-# and caused multi-minute deadlocks when test broker daemons outlived
-# their spawning shell.
+# wrapper around a re-entry of this script ($0 --internal-locked), and
+# we pass `-o`/`--close` so flock closes the lock fd in the spawned
+# child before it runs. flock(1) itself stays alive as the parent
+# holding the lock for the duration of the run, while the inner bash
+# and EVERY descendant (broker test daemons, sccache, parallel-gate
+# test subprocesses, nix/crosvm grandchildren, etc.) run WITHOUT the
+# lock fd. That is what actually prevents a leaked/orphaned child from
+# keeping the lock alive past static.sh's exit — and it holds even if
+# static.sh is SIGKILLed, since no descendant ever owned the fd. The
+# prior in-shell `exec {fd}>file; flock -x $fd` pattern leaked fd 10
+# into every child; an earlier `flock` wrapper WITHOUT `-o` still
+# leaked the inherited lock fd (fd 3) into every descendant and caused
+# recurring multi-minute deadlocks when an orphaned parallel-gate test
+# (or test broker daemon) outlived its spawning shell.
 #
 # Bypass the lock with NL_STATIC_NO_LOCK=1 when known-safe (e.g. CI
 # already isolates the worktree).
@@ -54,16 +60,16 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
    && command -v flock >/dev/null 2>&1; then
   _STATIC_LOCK="$ROOT/.static-sh.lock"
   : > "$_STATIC_LOCK"
-  # Leaked-sccache safety net. Cargo's `sccache` server
-  # daemonises off the bash that ran cargo and inherits the gate's
-  # flock fd (fd 3). If a previous gate run didn't run `sccache
-  # --stop-server` at exit, that sccache is still alive holding fd
-  # 3 → our new flock blocks indefinitely on a phantom holder. Scan
-  # for any sccache that has the lock file open and kill it before
-  # we even try to acquire. The post-gate cleanup at the bottom
-  # of static.sh now also runs `sccache --stop-server` so this
-  # safety net is normally a no-op; it's here for the recovery
-  # path when an older static.sh exited without stopping sccache.
+  # Leaked-holder safety net (recovery path for pre-`-o` runs and any
+  # other process that still has the lock file open). With the `-o`
+  # flag below, descendants of THIS run never inherit the lock fd, so
+  # going forward sccache/daemons cannot leak it. But an sccache server
+  # daemonised by an OLDER static.sh that ran without `-o` may still be
+  # alive holding the inherited fd 3 → a fresh flock would block on that
+  # phantom holder. Scan for any sccache that has the lock file open and
+  # kill it before we try to acquire. The post-gate cleanup at the
+  # bottom of static.sh also runs `sccache --stop-server`, so this is
+  # normally a no-op; it's the cross-version recovery path.
   if command -v sccache >/dev/null 2>&1; then
     _sccache_inode=$(stat -c '%i' "$_STATIC_LOCK" 2>/dev/null || true)
     if [ -n "$_sccache_inode" ]; then
@@ -89,7 +95,7 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
       unset _sccache_inode _candidate_pid _pid _fd _target
     fi
   fi
-  exec flock -x "$_STATIC_LOCK" "$0" --internal-locked "$@"
+  exec flock -o -x "$_STATIC_LOCK" "$0" --internal-locked "$@"
 fi
 # When we reach here we are either NL_STATIC_NO_LOCK=1 or we are the
 # inner locked re-entry. In the latter case, strip the sentinel arg.

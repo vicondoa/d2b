@@ -52,9 +52,12 @@ export NL_STATIC_CACHE="$ROOT/.static-fast-cache.bootstrap"
 # static-fast.sh invocations don't trample the nix-daemon socket.
 # Use a separate lock file from tests/static.sh so the two gates can
 # run concurrently if needed (e.g. running static.sh in one terminal
-# and static-fast.sh in another).
+# and static-fast.sh in another). `-o`/`--close` closes the lock fd in
+# the spawned child so no descendant (sccache, broker daemons, nix
+# evals) inherits it and can leak the lock past our exit; see the
+# longer note in tests/static.sh.
 if [ -z "${NL_STATIC_NO_LOCK:-}" ] && [ "${1:-}" != "--internal-locked" ]; then
-  exec flock -x -E 0 -w 5 "$ROOT/.static-fast.lock" "$0" --internal-locked
+  exec flock -o -x -E 0 -w 5 "$ROOT/.static-fast.lock" "$0" --internal-locked
 fi
 # Drop the --internal-locked arg before downstream gates see it.
 if [ "${1:-}" = "--internal-locked" ]; then
