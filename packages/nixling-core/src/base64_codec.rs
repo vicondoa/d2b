@@ -188,7 +188,7 @@ mod tests {
                 continue;
             }
             let candidate = format!("Z{}==", second as char);
-            let expected = decode_symbol(second).unwrap() % 16 == 0;
+            let expected = decode_symbol(second).unwrap().is_multiple_of(16);
             assert_eq!(
                 decode(&candidate).is_ok(),
                 expected,
