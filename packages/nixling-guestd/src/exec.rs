@@ -841,18 +841,27 @@ where
     }
 
     /// Terminate and forget every exec owned by a disconnecting connection.
+    ///
+    /// Removal and collection happen atomically under the execs lock, so the
+    /// entry that is cancelled is exactly the entry that was removed. This is
+    /// consistent with create()'s single-locked commit: close either observes
+    /// the placeholder (and removes/cancels it, so create's later commit finds
+    /// it gone and tears the real process down) or observes the committed real
+    /// entry (and removes/cancels it with its real killer). There is no window
+    /// in which the real entry is removed from tracking without its group being
+    /// signalled.
     pub fn close_connection(&self, owner: &ConnectionKey) {
-        let owned: Vec<(String, Arc<ExecEntry>)> = {
-            let execs = self.lock_execs();
-            execs
+        let owned: Vec<Arc<ExecEntry>> = {
+            let mut execs = self.lock_execs();
+            let ids: Vec<String> = execs
                 .iter()
                 .filter(|(_, entry)| &entry.owner == owner)
-                .map(|(id, entry)| (id.clone(), Arc::clone(entry)))
-                .collect()
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.iter().filter_map(|id| execs.remove(id)).collect()
         };
-        for (id, entry) in owned {
+        for entry in owned {
             entry.cancel();
-            self.lock_execs().remove(&id);
         }
     }
 
@@ -952,7 +961,10 @@ fn spawn_supervisor(
     entry: Arc<ExecEntry>,
     mut waiter: Box<dyn ProcessWaiter>,
     killer: Arc<dyn ProcessKiller>,
-) -> JoinHandle<()> {
+) {
+    // Detached on purpose: the task holds an Arc to the entry and finishes on
+    // its own once the child is reaped. The JoinHandle is intentionally
+    // dropped.
     tokio::spawn(async move {
         let ceiling = Duration::from_millis(MAX_EXEC_RUNTIME_MS);
         let waited = tokio::time::timeout(ceiling, waiter.wait()).await;
@@ -993,7 +1005,7 @@ fn spawn_supervisor(
             }
         }
         entry.notify.notify_waiters();
-    })
+    });
 }
 
 #[cfg(test)]
