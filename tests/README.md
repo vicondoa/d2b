@@ -107,6 +107,36 @@ Layer-1 script inventory:
 | `tests/network-isolation.sh` | Optional live-host datapath checks for same-env east-west and cross-env isolation. |
 | `tests/audit-forwarding.sh` | Optional live-host end-to-end check for auditd -> journald -> Alloy -> Loki delivery. |
 
+### Layer-1 gates that assume a clean CI host
+
+A handful of Layer-1 gates are written for the clean, hermetic CI
+environment (no running `nixlingd`/broker, no real
+`/var/lib/nixling/daemon-state`, no real host network/posture) and are
+**expected to fail when `static.sh` is run on a developer machine that
+has live nixling VMs and a running daemon**. They pass in CI; treat a
+failure on a live host as environment-dependent, not a regression,
+unless it also reproduces in CI.
+
+| Gate | Why it is host-dependent |
+| --- | --- |
+| `tests/cli-rust-native-list.sh`, `tests/cli-rust-native-status.sh`, `tests/cli-rust-native-host-check.sh`, `tests/cli-json-drift.sh` | `systemctl_state` shells out to the real `systemctl is-active nixlingd.service` when the unit is absent from the test fixture, and the tests do not sandbox `NIXLING_DAEMON_STATE_DIR`, so VM status reflects the real host's running VMs / `pidfd-table.json` instead of the fixture. |
+| `tests/daemon-socket-acl.sh`, `tests/daemon-version-negotiation.sh`, `tests/daemon-state-persistence.sh` | Spawn a transient test `nixlingd`; flaky/failing alongside a real running daemon on a live host. |
+| `tests/cli-contract-coverage.sh` | The `host check` flag-acceptance probe treats any `rc == 2` as "flag rejected", but `host check` returns a non-zero posture/`internal-io` exit when `nft` is absent or the real host posture is imperfect. (It also has a genuine, CI-visible dispatch-table doc-drift for the merge-added `usb`/`audio` verbs — see below.) |
+| `tests/examples-with-observability-eval.sh` | The example's `flake.lock` carries a mutable `path:../..` lock that `nix eval` rejects in this checkout layout. |
+
+### Layer-1 gates with pre-existing breakage inherited from `main`
+
+These gates fail independently of host environment (i.e. on CI too)
+because of drift that predates the guest-control work and lives in the
+store-view / broker-infra domain. They are **identical to `main`** and
+require the original authors' intent to fix correctly; they are not
+guest-control regressions:
+
+| Gate | Pre-existing issue |
+| --- | --- |
+| `tests/broker-enum-disposition.sh` | `docs/reference/broker-w2-dispositions.md` lacks rows for store-view ops (`StoreSync`, `StoreVerify`, `BindMountFromHardlinkFarm`, `DiskInit`, …) that are in the schema enum, and the gate has no handler for the doc's existing `promoted-live` disposition. Needs the W2-snapshot→live migration intent. (Only `GuestControlSign` is guest-control's; the other 9 are not.) |
+| `tests/broker-validate-bundle.sh` | Forbids **all** `serde_json::from_str`/`from_value` under the broker `src/` to prevent duplicate bundle parsing, but the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output) in `ops/{store_view_farm,route,tap,store_sync_*}.rs`. The over-broad assertion needs narrowing. |
+
 ## Layer 2 — `nixling-store.sh`
 
 Integration tests that exercise the per-VM nix store and the
