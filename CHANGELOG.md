@@ -16,11 +16,16 @@ deprecations ship one minor release before removal.
   collector now tails the guest journal through the contrib `journald`
   receiver and forwards it to SigNoz as logs tagged with the VM's
   `vm.name` / `vm.env` resource attributes, with the journal `PRIORITY`
-  mapped to OTel severity and a `file_storage` cursor so a collector
-  restart resumes without dropping entries.
-  `nixling.vms.<vm>.observability.scrapeJournal` now defaults to `true`
-  (previously a reserved no-op) and the guest collector user is granted
-  `systemd-journal` read access plus `journalctl` on its unit PATH.
+  mapped to a readable OTel severity (`INFO`/`WARN`/`ERROR`/…) and a
+  `file_storage` cursor so a collector restart resumes without dropping
+  entries. `nixling.vms.<vm>.observability.scrapeJournal` now defaults
+  to `true` (previously a reserved no-op) and the guest collector user
+  is granted `systemd-journal` read access plus `journalctl` on its
+  unit PATH. Ingested telemetry's `deployment.environment` resource
+  attribute is the physical host machine name (from the host's
+  `networking.hostName`, settable via `nixling.observability.hostName`)
+  so SigNoz groups VMs by the host they run on; the per-VM env stays on
+  `vm.env` / `service.namespace`.
 
 - Native, container-free SigNoz observability backend packages and ADR.
   The bundled observability path now targets SigNoz, the SigNoz OTel
