@@ -3453,8 +3453,9 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
-    // → ssh-ready) we summarize the node ids and the topological edges.
-    // The full per-role argv preview is a follow-up gate.
+    // → guest-control-health) we summarize the node ids and the
+    // topological edges. The full per-role argv preview is a follow-up
+    // gate.
     //
     // `vm stop` walks the DAG in REVERSE topo order (terminate ch first,
     // then virtiofsd, etc).
@@ -3467,16 +3468,16 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
         serde_json::json!({"id": "store-preflight",       "role": "store-virtiofs-preflight"}),
         serde_json::json!({"id": "virtiofsd-ro-store",    "role": "virtiofsd"}),
         serde_json::json!({"id": "ch",                    "role": "cloud-hypervisor-runner"}),
-        serde_json::json!({"id": "ssh-ready",             "role": "guest-ssh-readiness"}),
+        serde_json::json!({"id": "guest-control-health",  "role": "guest-control-health"}),
     ];
     let forward_edges = serde_json::json!([
         {"from": "host-reconcile",     "to": "store-preflight"},
         {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
         {"from": "virtiofsd-ro-store", "to": "ch"},
-        {"from": "ch",                 "to": "ssh-ready"},
+        {"from": "ch",                 "to": "guest-control-health"},
     ]);
     let stop_order = serde_json::json!([
-        "ssh-ready",
+        "guest-control-health",
         "ch",
         "virtiofsd-ro-store",
         "store-preflight",
@@ -3542,7 +3543,7 @@ fn cmd_vm_lifecycle_verb(
         print_stdout(&rendered);
     } else {
         print_stdout(&format!(
-            "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → ssh-ready)\n"
+            "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
         ));
     }
     Ok(0)
@@ -5536,8 +5537,8 @@ fn readiness_name(readiness: &nixling_core::processes::ReadinessPredicate) -> St
         nixling_core::processes::ReadinessPredicate::ComponentSpecific(value) => {
             format!("component-specific:{value}")
         }
-        nixling_core::processes::ReadinessPredicate::GuestControlHealth { vm } => {
-            format!("guest-control-health:{vm}")
+        nixling_core::processes::ReadinessPredicate::GuestControlHealth { .. } => {
+            "guest-control-health".to_owned()
         }
     }
 }
