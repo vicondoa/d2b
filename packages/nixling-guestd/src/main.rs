@@ -29,6 +29,9 @@ fn run(args: Vec<OsString>) -> Result<(), nixling_guestd::service::GuestdService
             }
             config =
                 config.with_interactive_max_runtime_sec(parsed.interactive_max_runtime_sec);
+            if let Some(guest_config_path) = parsed.guest_config_path {
+                config = config.with_guest_config_path(guest_config_path);
+            }
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -45,6 +48,7 @@ struct ServeArgs {
     exec_policy: ExecPolicy,
     detached: Option<DetachedRuntimeConfig>,
     interactive_max_runtime_sec: u64,
+    guest_config_path: Option<PathBuf>,
 }
 
 /// Parse `--serve` arguments: the required `--vm-id <name>` plus the optional
@@ -61,6 +65,7 @@ fn parse_serve_args(
     let mut exec_runner_path: Option<PathBuf> = None;
     let mut detached_max_runtime_sec: u64 = 0;
     let mut interactive_max_runtime_sec: u64 = 0;
+    let mut guest_config_path: Option<PathBuf> = None;
     while let Some(arg) = iter.next() {
         match arg.to_str() {
             Some("--vm-id") => {
@@ -76,6 +81,9 @@ fn parse_serve_args(
             }
             Some("--exec-runner-path") => {
                 exec_runner_path = Some(parse_abs_path(iter.next())?);
+            }
+            Some("--guest-config-path") => {
+                guest_config_path = Some(parse_abs_path(iter.next())?);
             }
             Some("--detached-max-runtime-sec") => {
                 detached_max_runtime_sec = iter
@@ -119,6 +127,7 @@ fn parse_serve_args(
         exec_policy: policy,
         detached,
         interactive_max_runtime_sec,
+        guest_config_path,
     })
 }
 

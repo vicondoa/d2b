@@ -15,7 +15,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures::stream;
-use nixling_ipc::{guest_proto as pb, guest_wire::GUEST_CONTROL_PROTOCOL_VERSION};
+use nixling_ipc::{
+    guest_proto as pb,
+    guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES},
+};
 use protobuf::{EnumOrUnknown, Message, MessageField};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -126,6 +129,11 @@ pub struct GuestdServeConfig {
     /// non-detached) attached execs; 0 means unlimited. Non-TTY attached execs
     /// keep the fixed `MAX_EXEC_RUNTIME_MS` ceiling regardless of this value.
     pub interactive_max_runtime_sec: u64,
+    /// Absolute host-declared path to the in-guest editable config working copy.
+    /// `Some` => the guest advertises `GuestCapability::ReadGuestFile` and serves
+    /// `ReadGuestFile { GuestConfig }` from this path via a fail-closed safe open.
+    /// `None` => the capability is not advertised and `ReadGuestFile` is denied.
+    pub guest_config_path: Option<PathBuf>,
 }
 
 /// Host-supplied, controlled-constant runtime configuration for detached exec.
@@ -160,6 +168,7 @@ impl GuestdServeConfig {
             exec_policy,
             detached: None,
             interactive_max_runtime_sec: 0,
+            guest_config_path: None,
         })
     }
 
@@ -173,6 +182,14 @@ impl GuestdServeConfig {
     /// 0 (the default) means unlimited; non-TTY attached execs are unaffected.
     pub fn with_interactive_max_runtime_sec(mut self, seconds: u64) -> Self {
         self.interactive_max_runtime_sec = seconds;
+        self
+    }
+
+    /// Attach the host-declared guest config working-copy path. Setting it makes
+    /// the guest advertise `GuestCapability::ReadGuestFile` and serve the config
+    /// over the typed `ReadGuestFile` RPC.
+    pub fn with_guest_config_path(mut self, path: PathBuf) -> Self {
+        self.guest_config_path = Some(path);
         self
     }
 }
@@ -263,6 +280,10 @@ pub struct CapabilitiesConfig {
     /// Interactive TTY exec (WriteStdin/CloseStdin/TtyWinResize/ExecSignal over a
     /// PTY). Advertised only when exec is enabled AND a PTY helper is usable.
     pub exec_tty: bool,
+    /// `ReadGuestFile`. Advertised when the host wired a guest config path into
+    /// the guest unit. The RPC itself returns a typed file error (`FileNotFound`
+    /// etc.) rather than gating the capability on the file currently existing.
+    pub read_guest_file: bool,
 }
 
 pub fn build_runtime_auth_core(
@@ -337,12 +358,14 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         // Retained logs share the detached store + quota.
         exec_logs: detached.is_some(),
         exec_tty: exec.tty_usable(),
+        read_guest_file: config.guest_config_path.is_some(),
     };
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
         config.token,
         capabilities,
     )?));
+    let guest_config_path = config.guest_config_path.clone();
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, GUEST_CONTROL_AUTH_PORT))
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
@@ -355,9 +378,18 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         let exec = Arc::clone(&exec);
         let detached = detached.clone();
         let vm_id = config.vm_id.clone();
+        let guest_config_path = guest_config_path.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
-                let _ = run_single_connection(stream, auth, exec, detached, context).await;
+                let _ = run_single_connection(
+                    stream,
+                    auth,
+                    exec,
+                    detached,
+                    context,
+                    guest_config_path,
+                )
+                .await;
             }
         });
     }
@@ -431,6 +463,7 @@ pub async fn run_single_connection<S>(
     exec: SharedExec,
     detached: SharedDetached,
     context: AuthConnectionContext,
+    guest_config_path: Option<PathBuf>,
 ) -> Result<(), GuestdServiceError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -441,7 +474,10 @@ where
     let listener = ttrpc::r#async::transport::Listener::new(stream::once(async move {
         Ok::<_, std::io::Error>(wrapped)
     }));
-    let service = Arc::new(GuestControlService::new(auth, exec, detached, context));
+    let service = Arc::new(
+        GuestControlService::new(auth, exec, detached, context)
+            .with_guest_config_path(guest_config_path),
+    );
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
         .register_service(create_guest_control(service));
@@ -466,6 +502,11 @@ pub struct GuestControlService {
     // WriteStdin handlers and the in-flight decoded stdin byte budget.
     write_stdin_handlers: Arc<AtomicU64>,
     write_stdin_bytes: Arc<AtomicU64>,
+    // Host-declared absolute path to the in-guest editable config working copy,
+    // served by `ReadGuestFile { GuestConfig }`. `None` => no path was wired, the
+    // `ReadGuestFile` capability is not advertised, and the RPC returns
+    // `ReadDenied`.
+    guest_config_path: Option<PathBuf>,
 }
 
 impl GuestControlService {
@@ -482,13 +523,45 @@ impl GuestControlService {
             context,
             write_stdin_handlers: Arc::new(AtomicU64::new(0)),
             write_stdin_bytes: Arc::new(AtomicU64::new(0)),
+            guest_config_path: None,
         }
+    }
+
+    /// Attach the host-declared guest config working-copy path used to serve
+    /// `ReadGuestFile { GuestConfig }`.
+    pub fn with_guest_config_path(mut self, path: Option<PathBuf>) -> Self {
+        self.guest_config_path = path;
+        self
     }
 
     fn lock_auth(&self) -> Result<MutexGuard<'_, RuntimeAuthCore>, ttrpc::Error> {
         self.auth
             .lock()
             .map_err(|_| rpc_status(ttrpc::Code::INTERNAL, "guest-control-internal-error"))
+    }
+
+    /// Resolve a `ReadGuestFile` enum key to the host-declared path and read it
+    /// with the fail-closed safe-open algorithm. Returns the file bytes or a
+    /// typed `GuestControlErrorKind`. W15 supports only `GuestConfig`; any other
+    /// (or `Unspecified`/unknown) key maps to `PathUnsafe` because it names no
+    /// safe target.
+    fn read_guest_file_inner(
+        &self,
+        file_id: pb::GuestFileId,
+    ) -> Result<Vec<u8>, pb::GuestControlErrorKind> {
+        use pb::GuestControlErrorKind as K;
+        match file_id {
+            pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG => {
+                let path = self
+                    .guest_config_path
+                    .as_deref()
+                    // No path wired => the capability was never advertised; a
+                    // caller reaching here anyway is denied (not "not found").
+                    .ok_or(K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
+                read_guest_file_safely(path)
+            }
+            _ => Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
+        }
     }
 
     /// Acquire a per-connection WriteStdin budget slot: at most
@@ -854,6 +927,40 @@ impl GuestControl for GuestControlService {
         self.lock_auth()?
             .health(&self.context)
             .map_err(map_auth_rpc_error)
+    }
+
+    async fn read_guest_file(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        request: pb::ReadGuestFileRequest,
+    ) -> ttrpc::Result<pb::ReadGuestFileResponse> {
+        // Auth is enforced BEFORE any path resolution, stat, or read (D20): an
+        // unauthenticated caller never learns whether a config file exists.
+        self.require_authenticated()?;
+        self.validate_metadata(request.metadata.as_ref())?;
+
+        let file_id = request.file_id.enum_value_or_default();
+        let outcome = self.read_guest_file_inner(file_id);
+
+        let mut response = pb::ReadGuestFileResponse::new();
+        // Echo the requested key so the host can correlate; on error this is the
+        // requested id, on success the resolved one (identical for W15).
+        response.file_id = EnumOrUnknown::new(file_id);
+        match outcome {
+            Ok(bytes) => {
+                // The guest reports size+sha256 for convenience, but the host
+                // recomputes both from the received bytes and never trusts these
+                // as integrity evidence (D4).
+                response.sha256 = sha256_hex(&bytes);
+                response.size_bytes = bytes.len() as u64;
+                response.content = bytes;
+            }
+            Err(kind) => {
+                // Fail closed: no content, no size, no hash leak on error.
+                response.error = MessageField::some(guest_error(kind));
+            }
+        }
+        Ok(response)
     }
 
     async fn exec_create(
@@ -1380,6 +1487,99 @@ fn rpc_status(code: ttrpc::Code, message: &'static str) -> ttrpc::Error {
     ttrpc::Error::RpcStatus(ttrpc::get_status(code, message.to_owned()))
 }
 
+/// Read the host-declared guest config working copy with a fail-closed safe
+/// open (D2, HARD invariant): resolve the absolute path component-by-component
+/// from `/` using `openat` + `O_NOFOLLOW` (no symlink traversal at ANY level,
+/// reject `.`/`..`/prefix components), open the leaf `O_RDONLY|O_NOFOLLOW|
+/// O_CLOEXEC`, `fstat` the OPENED fd, reject non-regular, enforce the size cap
+/// BEFORE any allocation/read, then read ONLY from that fd. There is no TOCTOU
+/// (size and identity come from the opened fd, not a pre-open `stat`) and no fd
+/// leak (rustix owns every fd and closes it on drop). The read loop re-checks
+/// the cap so a file that grows after `fstat` cannot exceed the bound.
+fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorKind> {
+    use pb::GuestControlErrorKind as K;
+    use rustix::fs::{fstat, open, openat, FileType, Mode, OFlags};
+    use rustix::io::Errno;
+    use std::path::Component;
+
+    fn map_open_err(err: Errno) -> pb::GuestControlErrorKind {
+        match err {
+            Errno::NOENT => K::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND,
+            // ELOOP (a symlink component under O_NOFOLLOW) or a non-directory
+            // ancestor component is an unsafe path, not a missing/denied file.
+            Errno::LOOP | Errno::NOTDIR => K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
+            Errno::ACCESS | Errno::PERM => K::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
+            _ => K::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
+        }
+    }
+
+    if !path.is_absolute() {
+        return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE);
+    }
+
+    // Collect the normal (named) path components. Reject `.`/`..`/prefix: the
+    // path is host-fixed, so anything other than a plain rooted chain of names
+    // is a misconfiguration or a traversal attempt.
+    let mut names: Vec<&std::ffi::OsStr> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => names.push(name),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE);
+            }
+        }
+    }
+    let Some((leaf, dirs)) = names.split_last() else {
+        // The path was `/` — not a file.
+        return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE);
+    };
+
+    let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+
+    // Open `/` then descend each ancestor directory via `openat`+`O_NOFOLLOW`
+    // so no symlink is traversed at any level.
+    let mut dir = open("/", dir_flags, Mode::empty()).map_err(map_open_err)?;
+    for name in dirs {
+        dir = openat(&dir, *name, dir_flags, Mode::empty()).map_err(map_open_err)?;
+    }
+    let file = openat(&dir, *leaf, file_flags, Mode::empty()).map_err(map_open_err)?;
+
+    // `fstat` the OPENED fd; reject anything that is not a regular file. A
+    // symlink leaf would already have failed the `O_NOFOLLOW` open with ELOOP.
+    let st = fstat(&file).map_err(|_| K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+        return Err(K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE);
+    }
+
+    // Enforce the cap BEFORE allocating/reading. A negative or absurd size
+    // (should not occur for a regular file) saturates to the cap+ and fails
+    // closed as too-large.
+    let declared_size = u64::try_from(st.st_size).unwrap_or(u64::MAX);
+    if declared_size > READ_GUEST_FILE_MAX_BYTES {
+        return Err(K::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE);
+    }
+
+    // Read only from the opened fd, bounding total bytes at the cap. The cap is
+    // re-checked per chunk so a concurrent growth past `fstat` cannot exceed it.
+    let cap = READ_GUEST_FILE_MAX_BYTES as usize;
+    let mut buf: Vec<u8> = Vec::with_capacity(declared_size as usize);
+    let mut chunk = [0_u8; 65536];
+    loop {
+        let n =
+            rustix::io::read(&file, &mut chunk).map_err(|_| K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > cap {
+            return Err(K::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE);
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok(buf)
+}
+
 fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
     use pb::GuestControlErrorKind as K;
     use pb::HealthRemediation as R;
@@ -1398,6 +1598,16 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
         K::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE => {
             (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
         }
+        // ReadGuestFile faults are NOT retryable (D12): a missing/unsafe config
+        // working copy or a denied read is fixed by guest-side setup, not by a
+        // caller retry; an oversize config carries no in-enum remediation so the
+        // host surfaces the actionable "shrink below the cap" message instead.
+        K::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND
+        | K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE
+        | K::GUEST_CONTROL_ERROR_KIND_READ_DENIED => {
+            (R::HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE, None)
+        }
+        K::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE => (R::HEALTH_REMEDIATION_NONE, None),
         _ => (R::HEALTH_REMEDIATION_RETRY, None),
     };
     error.remediation = EnumOrUnknown::new(remediation);
@@ -1599,6 +1809,15 @@ impl RuntimeCapabilitiesProvider {
             ));
             capabilities.capabilities.push(EnumOrUnknown::new(
                 pb::GuestCapability::GUEST_CAPABILITY_SIGNALS,
+            ));
+        }
+        // ReadGuestFile is advertised when the host wired a guest config path.
+        // `config sync` REQUIRES this capability before any read attempt, so an
+        // old/partial guest that authenticates but never advertises it fails
+        // closed host-side instead of being probed for a config file.
+        if config.read_guest_file {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE,
             ));
         }
         capabilities.limits = MessageField::some(limits);
@@ -2623,5 +2842,248 @@ mod tests {
             );
         }
         drop(held);
+    }
+
+    // ---- ReadGuestFile (W15) ------------------------------------------------
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        // Repo convention for guest-crate tests: scratch under the system temp
+        // dir (respects TMPDIR), never the repo-relative ".".
+        let base = std::env::temp_dir();
+        let dir = base.join(format!(
+            "guestd-rgf-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn service_with_config(instance: u8, path: Option<PathBuf>) -> GuestControlService {
+        GuestControlService::new(test_auth(), test_exec(), None, test_context(instance))
+            .with_guest_config_path(path)
+    }
+
+    fn read_guest_file_request(file_id: pb::GuestFileId) -> pb::ReadGuestFileRequest {
+        let mut request = pb::ReadGuestFileRequest::new();
+        request.metadata = metadata();
+        request.file_id = EnumOrUnknown::new(file_id);
+        request
+    }
+
+    fn assert_file_error(response: &pb::ReadGuestFileResponse, kind: pb::GuestControlErrorKind) {
+        // Fail-closed shape: NO content/size/hash on error (D7/D10 no-leak).
+        assert!(response.content.is_empty(), "content must not leak on error");
+        assert_eq!(response.size_bytes, 0, "size must not leak on error");
+        assert!(response.sha256.is_empty(), "sha256 must not leak on error");
+        let error = response.error.as_ref().expect("error set");
+        assert_eq!(error.kind.enum_value().unwrap(), kind);
+        // D12: file faults are never advertised as blindly retryable.
+        assert_ne!(
+            error.remediation.enum_value().unwrap(),
+            pb::HealthRemediation::HEALTH_REMEDIATION_RETRY
+        );
+    }
+
+    fn config_request() -> pb::ReadGuestFileRequest {
+        read_guest_file_request(pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG)
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_requires_authentication() {
+        let dir = scratch_dir("auth");
+        let path = dir.join("config");
+        std::fs::write(&path, b"data").unwrap();
+        let service = service_with_config(50, Some(path));
+        let ctx = ttrpc_context();
+        // No authenticate(): must fail UNAUTHENTICATED before any stat/read.
+        assert_unauthenticated(service.read_guest_file(&ctx, config_request()).await);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_enforces_size_cap_at_boundary() {
+        let dir = scratch_dir("cap");
+        let ctx = ttrpc_context();
+        let cap = READ_GUEST_FILE_MAX_BYTES as usize;
+        for (tag, size, expect_ok) in [
+            ("cap-minus-1", cap - 1, true),
+            ("cap", cap, true),
+            ("cap-plus-1", cap + 1, false),
+        ] {
+            let path = dir.join(tag);
+            std::fs::write(&path, vec![0x61_u8; size]).unwrap();
+            let service = service_with_config(51, Some(path));
+            authenticate(&service).await;
+            let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+            if expect_ok {
+                assert!(response.error.is_none(), "{tag} should succeed");
+                assert_eq!(response.size_bytes as usize, size, "{tag} size");
+                assert_eq!(response.content.len(), size, "{tag} content len");
+            } else {
+                assert_file_error(
+                    &response,
+                    pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE,
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_returns_content_and_recomputed_hash() {
+        let dir = scratch_dir("ok");
+        let path = dir.join("config");
+        let body = b"hostname = corp-vm\n".to_vec();
+        std::fs::write(&path, &body).unwrap();
+        let service = service_with_config(52, Some(path));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        assert!(response.error.is_none());
+        assert_eq!(response.content, body);
+        assert_eq!(response.size_bytes as usize, body.len());
+        assert_eq!(response.sha256, sha256_hex(&body));
+        assert_eq!(
+            response.file_id.enum_value().unwrap(),
+            pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_missing_file_is_file_not_found() {
+        let dir = scratch_dir("missing");
+        let path = dir.join("does-not-exist");
+        let service = service_with_config(53, Some(path));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        assert_file_error(
+            &response,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND,
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_symlink_leaf_is_path_unsafe() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch_dir("symlink");
+        let target = dir.join("real");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = dir.join("config");
+        symlink(&target, &link).unwrap();
+        let service = service_with_config(54, Some(link));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        // O_NOFOLLOW on the leaf rejects the symlink (ELOOP) -> PathUnsafe; the
+        // symlink target bytes never leave the guest.
+        assert_file_error(
+            &response,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_directory_is_path_unsafe() {
+        let dir = scratch_dir("isdir");
+        let path = dir.join("config-dir");
+        std::fs::create_dir(&path).unwrap();
+        let service = service_with_config(55, Some(path));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        // A non-regular target (directory) is rejected after fstat.
+        assert_file_error(
+            &response,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_without_configured_path_is_read_denied() {
+        let service = service_with_config(56, None);
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        assert_file_error(
+            &response,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
+        );
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_unspecified_id_is_path_unsafe() {
+        let dir = scratch_dir("unspec");
+        let path = dir.join("config");
+        std::fs::write(&path, b"data").unwrap();
+        let service = service_with_config(57, Some(path));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service
+            .read_guest_file(
+                &ctx,
+                read_guest_file_request(pb::GuestFileId::GUEST_FILE_ID_UNSPECIFIED),
+            )
+            .await
+            .unwrap();
+        assert_file_error(
+            &response,
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_guest_file_cap_response_fits_ttrpc_frame() {
+        // D20a: a cap-sized ReadGuestFile response, protobuf-encoded for the
+        // ttRPC frame, must stay below the ttRPC frame cap.
+        let dir = scratch_dir("ttrpc-frame");
+        let path = dir.join("config");
+        std::fs::write(&path, vec![0x62_u8; READ_GUEST_FILE_MAX_BYTES as usize]).unwrap();
+        let service = service_with_config(58, Some(path));
+        authenticate(&service).await;
+        let ctx = ttrpc_context();
+        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        assert!(response.error.is_none());
+        let encoded = response.write_to_bytes().unwrap();
+        assert!(
+            (encoded.len() as u64) < nixling_ipc::guest_wire::TTRPC_FRAME_CAP_BYTES,
+            "encoded cap response {} must fit ttRPC frame cap {}",
+            encoded.len(),
+            nixling_ipc::guest_wire::TTRPC_FRAME_CAP_BYTES
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_guest_file_capability_advertised_only_when_path_configured() {
+        let with = RuntimeCapabilitiesProvider::new(CapabilitiesConfig {
+            read_guest_file: true,
+            ..CapabilitiesConfig::default()
+        })
+        .snapshot()
+        .unwrap();
+        let advertised = |caps: &[EnumOrUnknown<pb::GuestCapability>]| {
+            caps.iter().any(|c| {
+                c.enum_value().unwrap() == pb::GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE
+            })
+        };
+        assert!(advertised(&with.capabilities.capabilities));
+        // The negotiated cap is mirrored into the Health snapshot + hash.
+        assert!(advertised(&with.health.capabilities));
+
+        let without = RuntimeCapabilitiesProvider::new(CapabilitiesConfig::default())
+            .snapshot()
+            .unwrap();
+        assert!(!advertised(&without.capabilities.capabilities));
+        assert!(!advertised(&without.health.capabilities));
     }
 }
