@@ -395,9 +395,9 @@ impl ExecEntry {
 
     /// Idempotent cancellation. The process-group signal goes first and is
     /// lock-free, so it always reaches the group even while the supervisor is
-    /// mid-`wait`; this guarantees descendants are torn down before the reader
-    /// and supervisor tasks (which would otherwise reap the direct child via
-    /// `kill_on_drop`) are aborted.
+    /// mid-`wait`. The reader tasks are aborted; the supervisor task is left to
+    /// run free — once `kill_group` makes the child exit, the supervisor reaps
+    /// it via its owned waiter and finishes on its own.
     fn cancel(&self) {
         self.killer.kill_group();
         let mut tasks = self
@@ -607,6 +607,12 @@ where
 
     /// Create-and-start an attached exec. Validates, authorizes, allocates a
     /// server-generated id, spawns, and registers reader/supervisor tasks.
+    ///
+    /// A placeholder entry is inserted under the execs lock before the spawn
+    /// await so that a concurrent `close_connection` for the owning connection
+    /// observes and cancels the in-flight exec; if the placeholder is gone when
+    /// the spawn completes, the just-spawned process is torn down rather than
+    /// left running for a closed connection.
     pub async fn create(
         &self,
         owner: ConnectionKey,
@@ -616,8 +622,8 @@ where
         let command = validate_and_authorize(&input, self.policy)?;
 
         // Reserve a capacity slot under the execs lock so concurrent creates
-        // cannot collectively exceed the caps. The reservation is released by
-        // the guard on every early return and committed once the entry lands.
+        // cannot collectively exceed the caps. The guard releases the slot on
+        // every early return; it is dropped once the placeholder occupies it.
         let reservation = {
             let execs = self.lock_execs();
             let reserved = self.reservations.load(Ordering::SeqCst) as usize;
@@ -632,8 +638,8 @@ where
                 return Err(ExecError::AttachCapacityExceeded);
             }
             self.reservations.fetch_add(1, Ordering::SeqCst);
-            ReservationGuard {
-                reservations: &self.reservations,
+            CounterGuard {
+                counter: &self.reservations,
             }
         };
 
@@ -642,7 +648,20 @@ where
             return Err(ExecError::Internal);
         }
 
-        let spawned = self.spawner.spawn(command).await?;
+        // Insert a placeholder so close_connection can see this in-flight exec.
+        let placeholder = new_exec_entry(owner.clone(), guest_boot_id.clone(), Arc::new(NoopKiller));
+        self.lock_execs()
+            .insert(exec_id.clone(), Arc::clone(&placeholder));
+        // The placeholder now occupies the slot; release the reservation.
+        drop(reservation);
+
+        let spawned = match self.spawner.spawn(command).await {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                self.lock_execs().remove(&exec_id);
+                return Err(error);
+            }
+        };
         let SpawnedProcess {
             stdout,
             stderr,
@@ -650,28 +669,9 @@ where
             waiter,
         } = spawned;
 
-        let notify = Arc::new(Notify::new());
-        let shared = Mutex::new(ExecShared {
-            state: ExecState::Running,
-            outcome: None,
-            stdout: OutputRing::new(STDOUT_LIVE_BUFFER_BYTES),
-            stderr: OutputRing::new(STDERR_LIVE_BUFFER_BYTES),
-            state_generation: 1,
-        });
-
-        let entry = Arc::new(ExecEntry {
-            owner,
-            guest_boot_id,
-            shared,
-            notify: Arc::clone(&notify),
-            killer: Arc::clone(&killer),
-            tasks: Mutex::new(Vec::new()),
-            pending_reads: [AtomicU64::new(0), AtomicU64::new(0)],
-        });
-
+        let entry = new_exec_entry(owner, guest_boot_id, Arc::clone(&killer));
         let stdout_task = spawn_reader(Arc::clone(&entry), Stream::Stdout, stdout);
         let stderr_task = spawn_reader(Arc::clone(&entry), Stream::Stderr, stderr);
-        let supervisor = spawn_supervisor(Arc::clone(&entry), waiter, killer);
         {
             let mut tasks = entry
                 .tasks
@@ -679,13 +679,29 @@ where
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             tasks.push(stdout_task);
             tasks.push(stderr_task);
-            tasks.push(supervisor);
+        }
+        // The supervisor owns the waiter exclusively and runs free; it reaps
+        // the child and finishes on its own (it holds an Arc to the entry).
+        spawn_supervisor(Arc::clone(&entry), waiter, Arc::clone(&killer));
+
+        // Commit: swap the placeholder for the real entry iff it is still
+        // present. If close_connection removed it during spawn, the connection
+        // is gone — tear the process down instead of tracking it.
+        let committed = {
+            let mut execs = self.lock_execs();
+            if execs.remove(&exec_id).is_some() {
+                execs.insert(exec_id.clone(), Arc::clone(&entry));
+                true
+            } else {
+                false
+            }
+        };
+        if !committed {
+            entry.cancel();
+            return Err(ExecError::ExecNotFound);
         }
 
         let snapshot = entry.snapshot();
-        self.lock_execs().insert(exec_id.clone(), entry);
-        // The entry is now tracked; release the reservation slot.
-        drop(reservation);
         Ok((exec_id, snapshot))
     }
 
@@ -716,11 +732,11 @@ where
             self.pending_exec_waits.fetch_sub(1, Ordering::SeqCst);
             return Err(ExecError::WaitCapacityExceeded);
         }
-        let result = self
-            .wait_inner(&entry, known_generation, timeout_ms)
-            .await;
-        self.pending_exec_waits.fetch_sub(1, Ordering::SeqCst);
-        result
+        // Guard releases the slot even if this future is cancelled mid-await.
+        let _guard = CounterGuard {
+            counter: &self.pending_exec_waits,
+        };
+        self.wait_inner(&entry, known_generation, timeout_ms).await
     }
 
     async fn wait_inner(
@@ -788,11 +804,12 @@ where
             entry.pending_reads(stream).fetch_sub(1, Ordering::SeqCst);
             return Err(ExecError::ReadWaitCapacityExceeded);
         }
-        let result = self
-            .read_wait_inner(&entry, stream, offset, max_len, timeout_ms)
-            .await;
-        entry.pending_reads(stream).fetch_sub(1, Ordering::SeqCst);
-        result
+        // Guard releases the slot even if this future is cancelled mid-await.
+        let _guard = CounterGuard {
+            counter: entry.pending_reads(stream),
+        };
+        self.read_wait_inner(&entry, stream, offset, max_len, timeout_ms)
+            .await
     }
 
     async fn read_wait_inner(
@@ -845,15 +862,46 @@ where
     }
 }
 
-/// Releases a create reservation slot on drop unless explicitly committed.
-struct ReservationGuard<'a> {
-    reservations: &'a AtomicU64,
+/// Decrements an atomic counter on drop, so capacity counters are released
+/// even if the holding future is cancelled mid-await.
+struct CounterGuard<'a> {
+    counter: &'a AtomicU64,
 }
 
-impl Drop for ReservationGuard<'_> {
+impl Drop for CounterGuard<'_> {
     fn drop(&mut self) {
-        self.reservations.fetch_sub(1, Ordering::SeqCst);
+        self.counter.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// No-op killer used for the pre-spawn placeholder entry (no process yet).
+struct NoopKiller;
+
+impl ProcessKiller for NoopKiller {
+    fn kill_group(&self) {}
+}
+
+/// Build a fresh running exec entry with empty output rings.
+fn new_exec_entry(
+    owner: ConnectionKey,
+    guest_boot_id: String,
+    killer: Arc<dyn ProcessKiller>,
+) -> Arc<ExecEntry> {
+    Arc::new(ExecEntry {
+        owner,
+        guest_boot_id,
+        shared: Mutex::new(ExecShared {
+            state: ExecState::Running,
+            outcome: None,
+            stdout: OutputRing::new(STDOUT_LIVE_BUFFER_BYTES),
+            stderr: OutputRing::new(STDERR_LIVE_BUFFER_BYTES),
+            state_generation: 1,
+        }),
+        notify: Arc::new(Notify::new()),
+        killer,
+        tasks: Mutex::new(Vec::new()),
+        pending_reads: [AtomicU64::new(0), AtomicU64::new(0)],
+    })
 }
 
 /// Continuously drain a child output stream into its ring buffer until EOF or
@@ -910,12 +958,13 @@ fn spawn_supervisor(
         let waited = tokio::time::timeout(ceiling, waiter.wait()).await;
         let (outcome, ceiling_exceeded) = match waited {
             Ok(outcome) => (outcome, false),
-            // Runtime ceiling hit: force-terminate the group and drop the
-            // waiter so kill_on_drop reaps the (still-unreaped) direct child.
+            // Runtime ceiling hit: force-terminate the group, then explicitly
+            // wait the (still-unreaped) direct child so it is reaped rather
+            // than left to best-effort kill_on_drop cleanup.
             Err(_) => {
                 killer.kill_group();
-                drop(waiter);
-                (ExitOutcome::Signaled(9), true)
+                let outcome = waiter.wait().await;
+                (outcome, true)
             }
         };
         // Clean up any descendants left in the group.
@@ -923,6 +972,9 @@ fn spawn_supervisor(
         // Bounded drain grace: give readers a chance to observe trailing
         // output before forcing terminal accounting.
         tokio::time::sleep(Duration::from_millis(POST_EXIT_DRAIN_GRACE_MS)).await;
+        // Keep the waiter owned until here so the child is never reaped via a
+        // best-effort drop path.
+        drop(waiter);
         {
             let mut shared = entry.lock_shared();
             if matches!(shared.state, ExecState::Running) {
@@ -1550,5 +1602,114 @@ mod tests {
             .unwrap();
         assert!(chunk.data.is_empty());
         assert!(timed_out);
+    }
+
+    #[tokio::test]
+    async fn cancelled_wait_releases_capacity() {
+        let rt = pending_runtime();
+        let owner = b"conn-1".to_vec();
+        let (exec_id, snap) = rt
+            .create(owner.clone(), "boot-1".to_owned(), good_input())
+            .await
+            .unwrap();
+        let gen = snap.state_generation;
+        // Cancel many in-flight waits by dropping the future mid-park. Passing
+        // the current generation makes each wait actually park (the state is
+        // unchanged), so the timeout cancels a parked future. Without the
+        // CounterGuard the VM-scoped counter would leak and exhaust capacity;
+        // with it, capacity is always released.
+        for _ in 0..(PENDING_EXEC_WAITS_PER_VM + 5) {
+            let fut = rt.wait(&owner, &exec_id, "boot-1", Some(gen), 1000);
+            let _ = tokio::time::timeout(Duration::from_millis(1), fut).await;
+        }
+        // A fresh wait must still be admitted (it times out, not capacity-fails).
+        let (_snap, timed_out) = rt
+            .wait(&owner, &exec_id, "boot-1", Some(gen), 30)
+            .await
+            .unwrap();
+        assert!(timed_out);
+    }
+
+    /// Spawner that parks inside `spawn` until released, so a test can drive a
+    /// disconnect that races an in-flight create.
+    struct GatedSpawner {
+        entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        killed: Arc<AtomicU64>,
+    }
+
+    #[async_trait]
+    impl ProcessSpawner for GatedSpawner {
+        async fn spawn(&self, _command: ValidatedCommand) -> Result<SpawnedProcess, ExecError> {
+            if let Some(tx) = self
+                .entered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                let _ = tx.send(());
+            }
+            let rx = self.release.lock().await.take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+            let (_w_out, r_out) = duplex(1024);
+            let (_w_err, r_err) = duplex(1024);
+            std::mem::forget(_w_out);
+            std::mem::forget(_w_err);
+            Ok(SpawnedProcess {
+                stdout: Box::new(r_out),
+                stderr: Box::new(r_err),
+                killer: Arc::new(FakeKiller {
+                    killed: Arc::clone(&self.killed),
+                }),
+                waiter: Box::new(FakeWaiter {
+                    exit_rx: None,
+                    reaped: Arc::new(AtomicU64::new(0)),
+                }),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn create_during_disconnect_is_torn_down() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let killed = Arc::new(AtomicU64::new(0));
+        let rt = Arc::new(ExecRuntime::new(
+            GatedSpawner {
+                entered: Mutex::new(Some(entered_tx)),
+                release: tokio::sync::Mutex::new(Some(release_rx)),
+                killed: Arc::clone(&killed),
+            },
+            SeqIds::new(),
+            ExecPolicy {
+                enabled: true,
+                allow_root: true,
+            },
+        ));
+        let owner = b"conn-1".to_vec();
+
+        let rt_task = Arc::clone(&rt);
+        let owner_task = owner.clone();
+        let create = tokio::spawn(async move {
+            rt_task
+                .create(owner_task, "boot-1".to_owned(), good_input())
+                .await
+        });
+
+        // Wait until create is parked inside spawn (placeholder inserted).
+        entered_rx.await.unwrap();
+        assert_eq!(rt.tracked_len(), 1);
+        // Disconnect mid-create: the placeholder is cancelled and removed.
+        rt.close_connection(&owner);
+        // Let spawn finish; create must observe the closed connection.
+        release_tx.send(()).unwrap();
+
+        let result = create.await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(rt.tracked_len(), 0);
+        // The just-spawned process group was torn down.
+        assert!(killed.load(Ordering::SeqCst) >= 1);
     }
 }
