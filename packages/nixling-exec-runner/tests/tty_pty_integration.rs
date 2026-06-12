@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use rustix::fs::{open, Mode, OFlags};
 use rustix::io::{ioctl_fionbio, read};
 use rustix::pipe::{pipe_with, PipeFlags};
-use rustix::process::{kill_process, test_kill_process, Pid, Signal};
+use rustix::process::{kill_process, kill_process_group, test_kill_process, Pid, Signal};
 use rustix::pty::{grantpt, openpt, ptsname, unlockpt, OpenptFlags};
-use rustix::termios::{tcgetsid, tcsetwinsize, Winsize};
+use rustix::termios::{tcgetpgrp, tcgetsid, tcsetwinsize, Winsize};
 
 /// Allocate a PTY master/slave pair the way the spawner does: master AND slave
 /// both `O_RDWR|O_NOCTTY|O_CLOEXEC`. The slave is `O_CLOEXEC` (matching the G4
@@ -267,6 +267,158 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
         reaped,
         "in-session background child {bg_pid} was not reaped by the sid-scoped sweep"
     );
+}
+
+/// Parse a labelled decimal pid (`<label><pid>`) from the accumulated
+/// transcript, e.g. `SHELL:` or `CHILD:`.
+fn parse_labelled_pid(transcript: &str, label: &str) -> Option<i32> {
+    transcript
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(label))
+        .and_then(|pid| pid.trim().parse().ok())
+}
+
+/// Poll `tcgetpgrp(master)` until the terminal's foreground process group moves
+/// off `session_leader` (job control's `tcsetpgrp` has placed a child group in
+/// the foreground) or the deadline elapses.
+fn wait_for_fg_pgrp_off(master: &OwnedFd, session_leader: i32, deadline: Duration) -> Option<i32> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if let Ok(pgid) = tcgetpgrp(master) {
+            let pgid = pgid.as_raw_nonzero().get();
+            if pgid != session_leader {
+                return Some(pgid);
+            }
+        }
+        sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
+    // ExecSignal resolves its target via `tcgetpgrp(master)` AT DELIVERY TIME
+    // (exec_pty.rs `ProcPtyControl::signal_foreground`), so a signal follows the
+    // job-control shell's *current* foreground process group rather than the
+    // session leader's group. Prove that end to end against a real PTY + a real
+    // job-control shell:
+    //
+    //   1. The helper execs `/bin/sh` with `set -m` (job control on). The shell
+    //      is the session leader; its process group == the session id.
+    //   2. The shell runs a FOREGROUND child in its OWN process group (job
+    //      control's `tcsetpgrp`), moving the terminal's foreground PG OFF the
+    //      session leader and ONTO the child's group.
+    //   3. Delivering the allowlisted signal exactly as guestd does —
+    //      `tcgetpgrp(master)` then `kill_process_group` — reaches the CHILD (a
+    //      different PG than the session leader). Had delivery used the session
+    //      leader's PG, the child (different PG) would never receive it.
+    let bin = env!("CARGO_BIN_EXE_nixling-exec-runner");
+    let (master, slave) = open_pty();
+    // CLOEXEC status pipe (helper protocol). We do not need the failure byte
+    // here; success is observed via the controlling-terminal handshake below.
+    let (status_r, status_w) = pipe_with(PipeFlags::CLOEXEC).expect("status pipe");
+
+    // `set -m`: each foreground external command runs in its own PG and is made
+    // the terminal's foreground PG. The child reports its pid, traps SIGUSR1
+    // (allowlisted: signal 10), prints CHILDREADY, then loops. On SIGUSR1 it
+    // prints GOTUSR1 and exits, after which the shell prints SHELLRESUMED.
+    let script = "set -m; \
+         echo \"SHELL:$$\"; \
+         sh -c 'echo \"CHILD:$$\"; trap \"echo GOTUSR1; exit 7\" USR1; echo CHILDREADY; while :; do sleep 1; done'; \
+         echo SHELLRESUMED";
+
+    let mut child = Command::new(bin)
+        .args([
+            "--tty-exec", "--rows", "30", "--cols", "100", "--", "/bin/sh", "-c", script,
+        ])
+        // Safe fd handoff mirroring the production spawner.
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::from(status_w))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn --tty-exec helper");
+    let helper_pid = child.id() as i32;
+    // The status read end closes on a successful exec; we keep it open (drop at
+    // end of scope) so a possible failure byte has somewhere to go.
+    ioctl_fionbio(&master, true).expect("master O_NONBLOCK");
+
+    // The helper exec'd /bin/sh and bound the slave as its controlling terminal:
+    // the session id resolves to the helper/shell pid (setsid made pid == sid).
+    let sid = wait_for_ctty_sid(&master, Duration::from_secs(5))
+        .expect("controlling-terminal session id");
+    assert_eq!(sid, helper_pid, "the shell is the session leader");
+
+    // The shell prints SHELL:<pid> and the foreground child prints CHILD:<pid>
+    // then CHILDREADY. The child is a DIFFERENT process from the shell.
+    let mut transcript = String::new();
+    assert!(
+        drain_until(&master, &mut transcript, "CHILDREADY", Duration::from_secs(5)),
+        "foreground child did not become ready, saw: {transcript:?}"
+    );
+    let shell_pid = parse_labelled_pid(&transcript, "SHELL:")
+        .unwrap_or_else(|| panic!("expected SHELL:<pid>, saw: {transcript:?}"));
+    let child_pid = parse_labelled_pid(&transcript, "CHILD:")
+        .unwrap_or_else(|| panic!("expected CHILD:<pid>, saw: {transcript:?}"));
+    assert_eq!(shell_pid, sid, "the shell pid is the session leader / session id");
+    assert_ne!(child_pid, shell_pid, "the foreground child is a distinct process");
+
+    // The terminal's foreground PG moved OFF the session leader and ONTO the
+    // child's own process group (job control). This is the precondition the
+    // delivery-time `tcgetpgrp` exists to track.
+    let fg_pgrp = wait_for_fg_pgrp_off(&master, sid, Duration::from_secs(5))
+        .expect("foreground PG must move off the session leader");
+    assert_ne!(
+        fg_pgrp, sid,
+        "the foreground PG must not be the session leader's group at delivery time"
+    );
+    assert_eq!(
+        fg_pgrp, child_pid,
+        "the foreground PG should be the child's own process group"
+    );
+
+    // Deliver SIGUSR1 EXACTLY as guestd's signal_foreground does: resolve the
+    // foreground PG via tcgetpgrp(master) at delivery time, then signal that
+    // group. The resolution must reflect the CURRENT foreground (the child),
+    // not a value captured at session start.
+    let pgid = tcgetpgrp(&master).expect("tcgetpgrp at delivery time");
+    assert_eq!(
+        pgid.as_raw_nonzero().get(),
+        child_pid,
+        "delivery-time tcgetpgrp must resolve to the child's foreground group"
+    );
+    let sig = Signal::from_raw(10).expect("SIGUSR1 is a valid signal");
+    kill_process_group(pgid, sig).expect("deliver SIGUSR1 to the foreground PG");
+
+    // The child (in the foreground PG, distinct from the session leader)
+    // received SIGUSR1, ran its trap, and exited — and only then does the shell
+    // resume. Observing both markers proves the signal reached the child's group
+    // and NOT merely the session leader.
+    assert!(
+        drain_until(&master, &mut transcript, "GOTUSR1", Duration::from_secs(5)),
+        "SIGUSR1 was not delivered to the foreground child, saw: {transcript:?}"
+    );
+    assert!(
+        drain_until(&master, &mut transcript, "SHELLRESUMED", Duration::from_secs(5)),
+        "shell did not resume after the foreground child exited, saw: {transcript:?}"
+    );
+
+    // Teardown: hang up the terminal and sid-scoped reap any survivors, exactly
+    // as guestd's no-orphan teardown would.
+    drop(master);
+    drop(status_r);
+    for _ in 0..50 {
+        let pids = pids_in_session(sid);
+        if pids.is_empty() {
+            break;
+        }
+        for pid in pids {
+            if let Some(pid) = Pid::from_raw(pid) {
+                let _ = kill_process(pid, Signal::Kill);
+            }
+        }
+        sleep(Duration::from_millis(10));
+    }
+    let _ = child.wait();
 }
 
 /// Mirror of guestd's `ProcSessionReaper` enumeration: every pid in `/proc`

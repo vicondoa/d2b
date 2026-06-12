@@ -2936,6 +2936,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn total_exec_cap_counts_terminal_execs_and_blocks_both_paths() {
+        // The EXEC_SESSIONS_PER_VM ceiling is the TOTAL retained-session cap and
+        // counts terminal (exited/cancelled) execs too — distinct from the
+        // ATTACHED_SESSIONS_PER_VM cap, which counts only running sessions. Fill
+        // the runtime with exactly EXEC_SESSIONS_PER_VM terminal entries so the
+        // running count stays 0 (well under the attached cap): the next create —
+        // TTY or non-TTY — must fail with ExecCapacityExceeded, NOT
+        // AttachCapacityExceeded, and the rejected TTY create must allocate no
+        // PTY (it fails before the spawner is reached).
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let (base, _hooks) = FakeSpawner::new();
+        let spawner = MultiPtySpawner::new();
+        let allocs = Arc::clone(&spawner.allocs);
+        let rt = ExecRuntime::new(base, SeqIds::new(), policy)
+            .with_pty_spawner(spawner)
+            .with_tty_grace(Duration::from_millis(1));
+        let owner = b"c1".to_vec();
+
+        // Directly seat EXEC_SESSIONS_PER_VM terminal entries (no spawner, no
+        // PTY): they occupy the total cap while contributing 0 to the running
+        // count.
+        {
+            let mut execs = rt.lock_execs();
+            for i in 0..EXEC_SESSIONS_PER_VM {
+                let entry =
+                    new_exec_entry(owner.clone(), "boot-1".to_owned(), Arc::new(NoopKiller));
+                entry.lock_shared().state = ExecState::Exited;
+                execs.insert(format!("term-{i}"), entry);
+            }
+        }
+        assert_eq!(rt.tracked_len(), EXEC_SESSIONS_PER_VM);
+
+        // Non-TTY create trips the TOTAL cap (running is 0, so it is NOT the
+        // attached cap that fires).
+        assert_eq!(
+            rt.create(owner.clone(), "boot-1".to_owned(), good_input())
+                .await
+                .unwrap_err(),
+            ExecError::ExecCapacityExceeded
+        );
+        // TTY create trips the same total cap and allocates no PTY.
+        assert_eq!(
+            rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+                .await
+                .unwrap_err(),
+            ExecError::ExecCapacityExceeded
+        );
+        assert_eq!(allocs.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn attached_cap_is_shared_across_mixed_tty_and_non_tty_execs() {
+        // The attached-session cap is shared: a mix of running non-TTY execs and
+        // running interactive TTY sessions counts against ONE ceiling. Interleave
+        // 4 non-TTY + 4 TTY running sessions to exactly fill
+        // ATTACHED_SESSIONS_PER_VM (8), then prove the 9th — of either kind —
+        // fails with AttachCapacityExceeded, and the rejected TTY create
+        // allocates no PTY.
+        assert_eq!(ATTACHED_SESSIONS_PER_VM, 8, "test interleave assumes cap 8");
+        let policy = ExecPolicy {
+            enabled: true,
+            allow_root: true,
+        };
+        let killed = Arc::new(AtomicU64::new(0));
+        let base = PendingSpawner {
+            killed: Arc::clone(&killed),
+        };
+        let spawner = MultiPtySpawner::new();
+        let allocs = Arc::clone(&spawner.allocs);
+        let rt = ExecRuntime::new(base, SeqIds::new(), policy)
+            .with_pty_spawner(spawner)
+            .with_tty_grace(Duration::from_millis(1));
+        let owner = b"c1".to_vec();
+
+        // 4 non-TTY + 4 TTY, interleaved → 8 running sessions.
+        for _ in 0..4 {
+            rt.create(owner.clone(), "boot-1".to_owned(), good_input())
+                .await
+                .unwrap();
+            rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(rt.tracked_len(), ATTACHED_SESSIONS_PER_VM);
+        assert_eq!(allocs.load(Ordering::SeqCst), 4, "exactly the 4 TTY sessions");
+
+        // The 9th attached session is refused regardless of kind, and the TTY
+        // refusal allocates no PTY.
+        assert_eq!(
+            rt.create(owner.clone(), "boot-1".to_owned(), good_input())
+                .await
+                .unwrap_err(),
+            ExecError::AttachCapacityExceeded
+        );
+        assert_eq!(
+            rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
+                .await
+                .unwrap_err(),
+            ExecError::AttachCapacityExceeded
+        );
+        assert_eq!(allocs.load(Ordering::SeqCst), 4, "over-cap TTY create did not alloc");
+    }
+
+    #[tokio::test]
     async fn tty_inspect_is_tty_aware_for_stdin_and_control_seq() {
         // G8: a live TTY exec reports OPEN stdin + the highest admitted control
         // seq; after CloseStdin it reports CLOSED. (Non-TTY execs keep CLOSED +
