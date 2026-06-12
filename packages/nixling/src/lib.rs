@@ -2013,6 +2013,7 @@ fn config_sync_ssh_argv(
     ssh_target: &str,
     guest_path: &str,
 ) -> Vec<String> {
+    // nixling-ssh-allowlist begin: operator SSH compatibility transport
     vec![
         "ssh".to_owned(),
         "-i".to_owned(),
@@ -2027,6 +2028,7 @@ fn config_sync_ssh_argv(
         "cat".to_owned(),
         guest_path.to_owned(),
     ]
+    // nixling-ssh-allowlist end
 }
 
 /// Atomically publish `bytes` to `target`: write a UNIQUE sibling temp
@@ -3810,6 +3812,7 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
     let terminal = &args.terminal;
     let ssh_target = format!("{user}@{host}");
     let key_arg = key_path.display().to_string();
+    // nixling-ssh-allowlist begin: interactive konsole/terminal convenience
     let argv: Vec<String> = vec![
         terminal.clone(),
         "-e".to_owned(),
@@ -3822,6 +3825,7 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
         "UserKnownHostsFile=/dev/null".to_owned(),
         ssh_target.clone(),
     ];
+    // nixling-ssh-allowlist end
 
     // fu15 panel-product must-fix: validate the key file BEFORE
     // emitting any --json output. A consumer parsing the JSON would
@@ -4358,6 +4362,7 @@ fn usb_guest_attach_ssh_argv(
     usbip_host: &str,
     bus_id: &str,
 ) -> Vec<String> {
+    // nixling-ssh-allowlist begin: usb-connect guest attach convenience
     vec![
         "ssh".to_owned(),
         "-i".to_owned(),
@@ -4380,6 +4385,7 @@ fn usb_guest_attach_ssh_argv(
         "-b".to_owned(),
         bus_id.to_owned(),
     ]
+    // nixling-ssh-allowlist end
 }
 
 fn usb_attach_cli_failure(
@@ -8873,5 +8879,231 @@ mod config_cmd_tests {
             .expect_err("unexpected type must be rejected");
         assert_eq!(err.message, "guest-control-protocol-error");
         assert!(!staging.exists());
+    }
+}
+
+/// Fail-closed source gate: `ssh`/`scp` may only be launched from sanctioned
+/// convenience/compatibility sites, each delimited by
+/// `// nixling-ssh-allowlist begin/end`. The guest-control transport (config
+/// sync, readiness) MUST NOT spawn an SSH client. This module scans the crate
+/// source for SSH/SCP argv tokens outside the allowlist and proves at runtime
+/// that the guest-control config path spawns no SSH client.
+#[cfg(test)]
+mod ssh_spawn_gate {
+    use std::ffi::OsString;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use super::{
+        finish_config_sync_from_reply, read_guest_config_via_socket, Context,
+        GuestConfigReadOutcome,
+    };
+
+    /// Allowlist comment markers. Built so this scanner's own source never
+    /// contains the literal SSH/SCP argv tokens it searches for.
+    const ALLOW_BEGIN: &str = "nixling-ssh-allowlist begin";
+    const ALLOW_END: &str = "nixling-ssh-allowlist end";
+
+    /// Construct the quoted argv tokens (`"ssh"`, `"scp"`) without embedding the
+    /// bare literal in this file, so the scanner is robust even if the
+    /// test-module skip ever regresses.
+    fn forbidden_tokens() -> [String; 2] {
+        let ssh: String = ['s', 's', 'h'].iter().collect();
+        let scp: String = ['s', 'c', 'p'].iter().collect();
+        [format!("\"{ssh}\""), format!("\"{scp}\"")]
+    }
+
+    /// Return the 1-based line numbers that launch an SSH/SCP client outside an
+    /// allowlist region. `#[cfg(test)] mod` blocks are skipped wholesale (test
+    /// fixtures legitimately mention SSH); only column-0 `}` closes such a
+    /// block, matching rustfmt's indentation of nested items.
+    fn scan_ssh_argv_violations(src: &str) -> Vec<usize> {
+        let [ssh_tok, scp_tok] = forbidden_tokens();
+        let lines: Vec<&str> = src.lines().collect();
+        let mut violations = Vec::new();
+        let mut allow_depth: usize = 0;
+        let mut in_test_mod = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+            if !in_test_mod && trimmed == "#[cfg(test)]" {
+                let next_is_mod = lines[i + 1..]
+                    .iter()
+                    .find(|candidate| !candidate.trim().is_empty())
+                    .map(|candidate| candidate.trim_start().starts_with("mod "))
+                    .unwrap_or(false);
+                if next_is_mod {
+                    in_test_mod = true;
+                }
+            }
+            if in_test_mod {
+                if line == "}" {
+                    in_test_mod = false;
+                }
+                i += 1;
+                continue;
+            }
+            if trimmed.contains(ALLOW_BEGIN) {
+                allow_depth += 1;
+                i += 1;
+                continue;
+            }
+            if trimmed.contains(ALLOW_END) {
+                allow_depth = allow_depth.saturating_sub(1);
+                i += 1;
+                continue;
+            }
+            if allow_depth == 0 && (line.contains(&ssh_tok) || line.contains(&scp_tok)) {
+                violations.push(i + 1);
+            }
+            i += 1;
+        }
+        violations
+    }
+
+    #[test]
+    fn crate_source_launches_ssh_only_from_allowlisted_sites() {
+        let src = include_str!("lib.rs");
+        let violations = scan_ssh_argv_violations(src);
+        assert!(
+            violations.is_empty(),
+            "found SSH/SCP argv tokens outside the allowlist at lines {violations:?}; \
+             wrap legitimate convenience/compat sites in nixling-ssh-allowlist markers"
+        );
+    }
+
+    #[test]
+    fn gate_flags_illicit_ssh_and_passes_allowlisted_and_test_blocks() {
+        let [ssh_tok, _] = forbidden_tokens();
+        // Illicit: a bare SSH argv in production code must be flagged.
+        let illicit = format!("fn run() {{\n    let argv = vec![{ssh_tok}.to_owned()];\n}}\n");
+        assert_eq!(scan_ssh_argv_violations(&illicit), vec![2]);
+
+        // Sanctioned: the same call inside allowlist markers must pass.
+        let sanctioned = format!(
+            "fn run() {{\n    // {ALLOW_BEGIN}: x\n    let argv = vec![{ssh_tok}.to_owned()];\n    // {ALLOW_END}\n}}\n"
+        );
+        assert!(scan_ssh_argv_violations(&sanctioned).is_empty());
+
+        // Test fixtures: an SSH token inside a `#[cfg(test)] mod` is skipped.
+        let in_test = format!(
+            "#[cfg(test)]\nmod t {{\n    fn f() {{ let _ = {ssh_tok}; }}\n}}\n"
+        );
+        assert!(scan_ssh_argv_violations(&in_test).is_empty());
+    }
+
+    /// Serialize PATH mutation across this module's runtime tests.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Prepend a sentinel `bin/` (holding `ssh`/`scp` scripts that touch a
+    /// marker file when invoked) to PATH for the guard's lifetime. Prepending
+    /// keeps every other PATH-resolved tool reachable for concurrent tests.
+    struct SshTrapGuard {
+        old_path: Option<OsString>,
+        marker: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl SshTrapGuard {
+        fn install(dir: &std::path::Path) -> Self {
+            let lock = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).expect("create trap bin");
+            let marker = dir.join("ssh-spawned.marker");
+            for tool in ["ssh", "scp"] {
+                let script = bin.join(tool);
+                let mut f = std::fs::File::create(&script).expect("create trap script");
+                writeln!(
+                    f,
+                    "#!/bin/sh\necho spawned > {}\nexit 0",
+                    marker.display()
+                )
+                .expect("write trap script");
+                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod trap script");
+            }
+            let old_path = std::env::var_os("PATH");
+            let mut entries = vec![bin];
+            if let Some(existing) = &old_path {
+                entries.extend(std::env::split_paths(existing));
+            }
+            let joined = std::env::join_paths(entries).expect("join PATH");
+            std::env::set_var("PATH", joined);
+            Self {
+                old_path,
+                marker,
+                _lock: lock,
+            }
+        }
+
+        fn ssh_was_spawned(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    impl Drop for SshTrapGuard {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!("ssh-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch");
+        dir
+    }
+
+    #[test]
+    fn guest_control_config_path_never_spawns_ssh() {
+        let dir = scratch("config-no-spawn");
+        let trap = SshTrapGuard::install(&dir);
+
+        // The connection branch with a missing socket must not spawn SSH.
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: dir.join("absent-public.sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let outcome = read_guest_config_via_socket(&context, "work")
+            .expect("missing socket collapses to Unavailable");
+        assert!(matches!(outcome, GuestConfigReadOutcome::Unavailable));
+
+        // The success/staging branch must stage from received bytes, no SSH.
+        let payload = b"{ services.foo.enable = true; }\n";
+        let reply = serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": nixling_core::base64_codec::encode(payload),
+        }))
+        .expect("serialize reply");
+        let staging = dir.join("staged.nix");
+        let staged = finish_config_sync_from_reply(&reply, &staging, false)
+            .expect("staging succeeds for a valid reply");
+        assert_eq!(staged.bytes, payload.len());
+        assert!(staging.exists());
+
+        assert!(
+            !trap.ssh_was_spawned(),
+            "the guest-control config path must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

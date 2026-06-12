@@ -749,4 +749,165 @@ mod tests {
             Ok(nixling_ipc::guest_proto::ReadGuestFileResponse::new())
         }
     }
+
+    /// Quoted argv tokens (`"ssh"`, `"scp"`) constructed without embedding the
+    /// bare literals in this file, so the daemon-source scan never trips on its
+    /// own search strings.
+    fn forbidden_argv_tokens() -> [String; 2] {
+        let ssh: String = ['s', 's', 'h'].iter().collect();
+        let scp: String = ['s', 'c', 'p'].iter().collect();
+        [format!("\"{ssh}\""), format!("\"{scp}\"")]
+    }
+
+    /// True if `src` launches an SSH/SCP client outside a `#[cfg(test)] mod`
+    /// block. The daemon hosts the guest-control readiness path and MUST NOT
+    /// spawn an SSH client anywhere; there is no allowlist on the daemon side.
+    fn source_launches_ssh(src: &str) -> bool {
+        let [ssh_tok, scp_tok] = forbidden_argv_tokens();
+        let lines: Vec<&str> = src.lines().collect();
+        let mut in_test_mod = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+            if !in_test_mod && trimmed == "#[cfg(test)]" {
+                let next_is_mod = lines[i + 1..]
+                    .iter()
+                    .find(|candidate| !candidate.trim().is_empty())
+                    .map(|candidate| candidate.trim_start().starts_with("mod "))
+                    .unwrap_or(false);
+                if next_is_mod {
+                    in_test_mod = true;
+                }
+            }
+            if in_test_mod {
+                if line == "}" {
+                    in_test_mod = false;
+                }
+                i += 1;
+                continue;
+            }
+            if line.contains(&ssh_tok) || line.contains(&scp_tok) {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn collect_rs_sources(dir: &std::path::Path, out: &mut Vec<(PathBuf, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read daemon src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                collect_rs_sources(&path, out);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                let body = std::fs::read_to_string(&path).expect("read daemon source file");
+                out.push((path, body));
+            }
+        }
+    }
+
+    #[test]
+    fn daemon_source_launches_no_ssh_client() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        collect_rs_sources(&src_dir, &mut sources);
+        assert!(!sources.is_empty(), "expected daemon source files");
+        let offenders: Vec<&PathBuf> = sources
+            .iter()
+            .filter(|(_, body)| source_launches_ssh(body))
+            .map(|(path, _)| path)
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "the daemon must never launch an SSH/SCP client; offenders: {offenders:?}"
+        );
+    }
+
+    /// Serialize PATH mutation across this module's runtime spawn tests.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    struct SshTrapGuard {
+        old_path: Option<std::ffi::OsString>,
+        marker: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl SshTrapGuard {
+        fn install(dir: &std::path::Path) -> Self {
+            let lock = PATH_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).expect("create trap bin");
+            let marker = dir.join("ssh-spawned.marker");
+            for tool in ["ssh", "scp"] {
+                let script = bin.join(tool);
+                std::fs::write(
+                    &script,
+                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
+                )
+                .expect("write trap script");
+                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod trap script");
+            }
+            let old_path = std::env::var_os("PATH");
+            let mut entries = vec![bin];
+            if let Some(existing) = &old_path {
+                entries.extend(std::env::split_paths(existing));
+            }
+            let joined = std::env::join_paths(entries).expect("join PATH");
+            std::env::set_var("PATH", joined);
+            Self {
+                old_path,
+                marker,
+                _lock: lock,
+            }
+        }
+
+        fn ssh_was_spawned(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    impl Drop for SshTrapGuard {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    #[test]
+    fn readiness_loop_spawns_no_ssh_client() {
+        let dir = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!("readiness-no-ssh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch");
+        let trap = SshTrapGuard::install(&dir);
+
+        let probe = ScriptedProbe::new(vec![
+            Err(GuestControlHealthError::TransportIo),
+            Ok(healthy_evidence()),
+        ]);
+        let clock = FakeClock::new();
+        let outcome = run_guest_control_readiness_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(30),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(guest_control_health_ready(&outcome));
+        assert!(
+            !trap.ssh_was_spawned(),
+            "the readiness path must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
