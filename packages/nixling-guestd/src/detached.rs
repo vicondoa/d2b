@@ -6,6 +6,8 @@
 //! this trait. Only the abstraction + production manager shape live here so the
 //! registry can be unit-tested against an in-memory fake.
 
+use std::ffi::OsString;
+use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -121,37 +123,8 @@ impl TransientUnitManager for SystemdRunUnitManager {
         ceiling_sec: u64,
         paths: &RunnerUnitPaths,
     ) -> Result<(), UnitError> {
-        let unit = format!("nixling-exec-{slot:02}");
-        let slot_arg = format!("{slot:02}");
-        let timeout_stop = format!("TimeoutStopSec={}", crate::detached_registry::TIMEOUT_STOP_SEC);
-
         let mut cmd = tokio::process::Command::new(&self.systemd_run_path);
-        cmd.arg(format!("--unit={unit}"))
-            .arg("--slice=nixling-exec.slice")
-            .arg("-p")
-            .arg("User=root")
-            .arg("-p")
-            .arg("StandardInput=null")
-            .arg("-p")
-            .arg("StandardOutput=null")
-            .arg("-p")
-            .arg("StandardError=null")
-            .arg("-p")
-            .arg("KillMode=mixed")
-            .arg("-p")
-            .arg(&timeout_stop)
-            .arg("-p")
-            .arg("Type=exec");
-        // Optional indefinite-runtime ceiling: only emit RuntimeMaxSec when the
-        // operator opted in (> 0), and it is strictly larger than the runner's
-        // own control-watcher ceiling by construction (the runner cancels first).
-        if ceiling_sec > 0 {
-            cmd.arg("-p").arg(format!("RuntimeMaxSec={ceiling_sec}"));
-        }
-        cmd.arg(&paths.exec_runner_path)
-            .arg("--serve-exec")
-            .arg("--slot")
-            .arg(&slot_arg)
+        cmd.args(systemd_run_argv(slot, ceiling_sec, &paths.exec_runner_path))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -256,6 +229,49 @@ pub fn unit_name(slot: u32) -> String {
     format!("nixling-exec-{slot:02}.service")
 }
 
+/// Build the full `systemd-run` argv (excluding the `systemd-run` binary
+/// itself) for a slot's runner unit. The argv carries only controlled
+/// constants: a slot-keyed `--unit`, the dedicated slice, fail-closed
+/// stdio, and the runner invocation. The opaque exec id never appears. The
+/// optional indefinite-runtime ceiling emits `RuntimeMaxSec` ONLY when the
+/// operator opted in (`ceiling_sec > 0`); a value of 0 emits no such flag.
+fn systemd_run_argv(slot: u32, ceiling_sec: u64, exec_runner_path: &Path) -> Vec<OsString> {
+    let unit = format!("nixling-exec-{slot:02}");
+    let slot_arg = format!("{slot:02}");
+    let timeout_stop = format!("TimeoutStopSec={}", crate::detached_registry::TIMEOUT_STOP_SEC);
+
+    let mut argv: Vec<OsString> = vec![
+        OsString::from(format!("--unit={unit}")),
+        OsString::from("--slice=nixling-exec.slice"),
+        OsString::from("-p"),
+        OsString::from("User=root"),
+        OsString::from("-p"),
+        OsString::from("StandardInput=null"),
+        OsString::from("-p"),
+        OsString::from("StandardOutput=null"),
+        OsString::from("-p"),
+        OsString::from("StandardError=null"),
+        OsString::from("-p"),
+        OsString::from("KillMode=mixed"),
+        OsString::from("-p"),
+        OsString::from(timeout_stop),
+        OsString::from("-p"),
+        OsString::from("Type=exec"),
+    ];
+    // Optional indefinite-runtime ceiling: only emit RuntimeMaxSec when the
+    // operator opted in (> 0), and it is strictly larger than the runner's
+    // own control-watcher ceiling by construction (the runner cancels first).
+    if ceiling_sec > 0 {
+        argv.push(OsString::from("-p"));
+        argv.push(OsString::from(format!("RuntimeMaxSec={ceiling_sec}")));
+    }
+    argv.push(exec_runner_path.as_os_str().to_owned());
+    argv.push(OsString::from("--serve-exec"));
+    argv.push(OsString::from("--slot"));
+    argv.push(OsString::from(slot_arg));
+    argv
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +280,38 @@ mod tests {
     fn unit_name_is_slot_keyed_and_id_free() {
         assert_eq!(unit_name(0), "nixling-exec-00.service");
         assert_eq!(unit_name(31), "nixling-exec-31.service");
+    }
+
+    #[test]
+    fn systemd_run_argv_is_slot_keyed_and_id_free() {
+        let runner = PathBuf::from("/nix/store/abc-nixling-exec-runner/bin/nixling-exec-runner");
+        let argv = systemd_run_argv(7, 0, &runner);
+        let joined: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(joined.contains(&"--unit=nixling-exec-07".to_string()));
+        assert!(joined.contains(&"--slice=nixling-exec.slice".to_string()));
+        assert!(joined.contains(&"--serve-exec".to_string()));
+        // Slot is the only per-exec discriminator; no opaque id leaks in.
+        let slot_idx = joined.iter().position(|a| a == "--slot").unwrap();
+        assert_eq!(joined[slot_idx + 1], "07");
+        assert!(joined.iter().all(|a| !a.contains("exec_id")));
+    }
+
+    #[test]
+    fn systemd_run_argv_emits_runtime_max_sec_only_when_set() {
+        let runner = PathBuf::from("/nix/store/abc/bin/nixling-exec-runner");
+        // ceiling 0 => indefinite => no RuntimeMaxSec flag.
+        let none = systemd_run_argv(3, 0, &runner);
+        assert!(none
+            .iter()
+            .all(|a| !a.to_string_lossy().starts_with("RuntimeMaxSec=")));
+        // ceiling > 0 => the backstop is emitted with the exact value.
+        let some = systemd_run_argv(3, 3600, &runner);
+        assert!(some
+            .iter()
+            .any(|a| a.to_string_lossy() == "RuntimeMaxSec=3600"));
     }
 
     #[test]

@@ -12,6 +12,10 @@ let
     in
     builtins.hasAttr user config.users.users
     && ((userCfg.isNormalUser or false) || (userCfg.isSystemUser or false));
+  # Detached exec is served only when root exec is allowed; the guest
+  # mirror gates it on exec.enable && exec.allowRoot, matching guestd's
+  # own usability check (both abs flags present => detached runtime).
+  detachedEnabled = cfg.exec.enable && cfg.exec.allowRoot;
   userdServices =
     if cfg.exec.enable then
       lib.listToAttrs (map (user: lib.nameValuePair "nixling-userd-${user}" {
@@ -61,7 +65,6 @@ in
 
       detachedMaxRuntimeSec = lib.mkOption {
         type = lib.types.ints.unsigned;
-        default = 0;
         internal = true;
         readOnly = true;
         description = ''
@@ -159,13 +162,34 @@ in
               execFlags =
                 lib.optionalString cfg.exec.enable " --exec-enable"
                 + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root";
+              detachedFlags =
+                lib.optionalString detachedEnabled (
+                  " --systemd-run-path ${pkgs.systemd}/bin/systemd-run"
+                  + " --exec-runner-path ${guestPackages.nixling-exec-runner-static}/bin/nixling-exec-runner"
+                  + " --detached-max-runtime-sec ${toString cfg.exec.detachedMaxRuntimeSec}"
+                );
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${detachedFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];
         };
       };
     } // userdServices;
+
+    # Detached exec parent dir: root-owned, 0700, boot-scoped so it
+    # survives a guestd restart for re-adoption (D = clear at boot, NOT
+    # on every guestd restart). Do NOT make this guestd's RuntimeDirectory
+    # without RuntimeDirectoryPreserve, else a restart wipes adoptable state.
+    systemd.tmpfiles.rules = lib.mkIf detachedEnabled [
+      "D /run/nixling-exec 0700 root root -"
+    ];
+
+    # Guest-internal slice that scopes every per-exec transient unit
+    # (nixling-exec-NN.service). Slot-keyed unit names bound metadata
+    # cardinality to <=32 stable values that carry no exec id.
+    systemd.slices."nixling-exec" = lib.mkIf detachedEnabled {
+      description = "nixling detached guest exec slice";
+    };
   };
 }

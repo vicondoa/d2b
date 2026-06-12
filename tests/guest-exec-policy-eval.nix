@@ -75,6 +75,14 @@ let
         allowRoot = true;
       };
     };
+    allow-root-ceiling = {
+      controlEnable = true;
+      exec = {
+        enable = true;
+        allowRoot = true;
+        detachedMaxRuntimeSec = 3600;
+      };
+    };
     internal-override = {
       controlEnable = true;
       exec = {
@@ -168,6 +176,17 @@ let
   sideUserdNames = userdNames sideGuest;
   hostUserdNames = userdNames nixos.config;
 
+  # Detached-runtime surface, all in the COMPUTED GUEST config.
+  guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart;
+  guestHasExecSlice = builtins.hasAttr "nixling-exec" corpGuest.systemd.slices;
+  guestTmpfilesRules = corpGuest.systemd.tmpfiles.rules or [ ];
+  guestHasRunDir = lib.any (r: lib.hasInfix "/run/nixling-exec" r) guestTmpfilesRules;
+  # Host systemd attrs must never carry the guest-internal slice/dir
+  # (legacy-unit-denylist parity).
+  hostHasExecSlice = builtins.hasAttr "nixling-exec" (nixos.config.systemd.slices or { });
+  hostTmpfilesRules = nixos.config.systemd.tmpfiles.rules or [ ];
+  hostHasRunDir = lib.any (r: lib.hasInfix "/run/nixling-exec" r) hostTmpfilesRules;
+
   positiveEnabled =
     assert corpGuest.nixling.guestControl.enable == true;
     assert corpGuest.nixling.guestControl.exec.enable == true;
@@ -181,6 +200,12 @@ let
     assert corpGuest.systemd.services.nixling-userd-alice.wantedBy == [ ];
     assert corpGuest.systemd.services.nixling-userd-alice.serviceConfig.User == "alice";
     assert corpGuest.systemd.services.nixling-userd-alice.serviceConfig.RuntimeDirectory == "nixling-userd-alice";
+    # Detached availability follows exec.enable && allowRoot, NOT merely
+    # guestControl.enable: with allowRoot = false the detached surface is absent.
+    assert !guestHasExecSlice;
+    assert !guestHasRunDir;
+    assert !(lib.hasInfix "--systemd-run-path" guestdExecStart);
+    assert !(lib.hasInfix "--exec-runner-path" guestdExecStart);
     builtins.toJSON {
       scenario = "enabled";
       userd = corpUserdNames;
@@ -210,11 +235,37 @@ let
     assert sideUserdNames == [ ];
     assert hostUserdNames == [ ];
     assert !(builtins.hasAttr "nixling-userd-root" corpGuest.systemd.services);
+    # Detached surface present in the GUEST config only.
+    assert guestHasExecSlice;
+    assert guestHasRunDir;
+    assert !hostHasExecSlice;
+    assert !hostHasRunDir;
+    # guestd ExecStart carries absolute store paths for both helpers.
+    assert lib.hasInfix "--systemd-run-path /nix/store/" guestdExecStart;
+    assert lib.hasInfix "--exec-runner-path /nix/store/" guestdExecStart;
+    assert lib.hasInfix "/bin/systemd-run" guestdExecStart;
+    assert lib.hasInfix "/bin/nixling-exec-runner" guestdExecStart;
+    # detachedMaxRuntimeSec defaults to 0 (indefinite).
+    assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
     builtins.toJSON {
       scenario = "allow-root-only";
       userd = corpUserdNames;
       sideUserd = sideUserdNames;
       hostUserd = hostUserdNames;
+    };
+
+  positiveAllowRootCeiling =
+    assert corpGuest.nixling.guestControl.exec.enable == true;
+    assert corpGuest.nixling.guestControl.exec.allowRoot == true;
+    assert corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec == 3600;
+    # A nonzero ceiling propagates as the guestd flag; still no host-side unit.
+    assert lib.hasInfix "--detached-max-runtime-sec 3600" guestdExecStart;
+    assert guestHasExecSlice;
+    assert !hostHasExecSlice;
+    assert !hostHasRunDir;
+    builtins.toJSON {
+      scenario = "allow-root-ceiling";
+      maxRuntimeSec = corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec;
     };
 in
 if scenario == "enabled" then
@@ -223,6 +274,8 @@ else if scenario == "default" then
   positiveDefault
 else if scenario == "allow-root-only" then
   positiveAllowRoot
+else if scenario == "allow-root-ceiling" then
+  positiveAllowRootCeiling
 else
   builtins.seq
     (builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath)

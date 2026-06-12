@@ -40,7 +40,37 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- `docs/reference/schemas/v2/guest-control.json` and
+- Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
+  command that outlives the originating connection, supervised by the root
+  guest daemon through slot-based `systemd-run` transient units
+  (`nixling-exec-<NN>.service`, scoped to a guest-internal `nixling-exec`
+  slice). Unit names and argv carry only the slot index — never the exec id,
+  argv, environment, or cwd. stdout/stderr are retained in slot-keyed files
+  under a root-owned, 0700, boot-scoped `/run/nixling-exec` parent with
+  drop-oldest truncation accounting: 4 MiB per stream, an exact 256 MiB
+  VM-global quota (32 retained slots × 2 streams × 4 MiB), and 8 active
+  execs per VM. Detached execs run indefinitely by default
+  (`guest.exec.detachedMaxRuntimeSec = 0`), with an optional per-VM runtime
+  ceiling. Cancellation is a two-phase, control-file mechanism with no
+  in-process signal handler. Terminal records are retained for 30 minutes
+  then garbage-collected; a running detached job is never reaped. guestd
+  re-adopts live detached execs across a guestd restart within one boot.
+
+- `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
+  discovery call that enumerates the caller's detached execs for the same
+  VM token + boot (bounded ≤32). Each entry carries the exec id, slot,
+  state, create time, an argv SHA-256 hash (never raw argv), and per-stream
+  truncation/dropped-byte counters.
+
+- `ExecExpired` guest-control error kind, distinguishing a retention-evicted
+  detached record from `StaleSession` (boot mismatch) and `ExecNotFound`
+  (unknown id).
+
+- Host VM option `nixling.vms.<vm>.guest.exec.detachedMaxRuntimeSec`
+  (unsigned, default 0 = indefinite) plumbed through to the guest exec
+  runtime as a per-exec `RuntimeMaxSec` backstop when non-zero.
+
+
   `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
   protobuf source for the ADR 0028 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health

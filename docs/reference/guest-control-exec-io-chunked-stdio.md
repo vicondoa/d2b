@@ -49,6 +49,7 @@ service GuestControl {
   rpc ExecInspect(ExecInspectRequest) returns (ExecInspectResponse);
   rpc ExecWait(ExecWaitRequest) returns (ExecWaitResponse);
   rpc ExecLogs(ExecLogsRequest) returns (ExecLogsResponse);
+  rpc ExecList(ExecListRequest) returns (ExecListResponse);
 
   rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
   rpc ReadOutput(ReadOutputRequest) returns (ReadOutputResponse);
@@ -70,6 +71,26 @@ authenticated per-connection session.
 `ExecLogs` is a convenience wrapper for old/detached execs. Attached
 clients use `ReadOutput(stream=stdout|stderr)` directly so polling state,
 cursors, and backpressure are identical for attached and detached sessions.
+
+`ExecList` is a minimal, read-only discovery RPC for detached execs. It
+enumerates the caller's detached records for the same VM token + boot
+(bounded ≤32) so a host caller whose `ExecCreate` reply was lost
+(crash-after-dispatch, re-adopted) can still find and operate on the exec by
+id. Each `ExecListEntry` carries `exec_id`, `slot`, `state`,
+`create_time_unix`, an **`argv_sha256`** hex digest (never raw argv,
+environment, or cwd), and the per-stream `stdout_truncated`/`stderr_truncated`
+booleans plus `dropped_bytes`. `ExecList` reconciles on access (a listed
+vanished job shows `cancelled`/lost, not stale `running`), authenticates
+before any side effect, and never lists attached execs.
+
+A detached exec lookup distinguishes three not-available conditions with
+distinct typed error kinds:
+
+- `stale-session` — the request's `guest_boot_id` does not match the current
+  boot (re-adoption is bounded to a single boot);
+- `exec-expired` — the record existed for this caller but was evicted by the
+  retention TTL / GC (tombstoned);
+- `exec-not-found` — no such exec id exists for this caller.
 
 ## Exec lifecycle messages
 
@@ -355,8 +376,8 @@ Default design limits:
 | concurrent WriteStdin handlers per connection | 4 | 4 | Bounds protobuf `bytes` allocations even for malicious fan-in. |
 | stdout live buffer per stream | 1 MiB | 8 MiB | Attached sessions; producer blocks before exceeding it. |
 | stderr live buffer per stream | 1 MiB | 8 MiB | Not used for TTY execs. |
-| detached stdout log | 16 MiB | 128 MiB | Ring-retained by offset with truncation accounting. |
-| detached stderr log | 16 MiB | 128 MiB | Separate in non-TTY mode. |
+| detached stdout log | 4 MiB | 4 MiB | Per-stream slot-keyed file, drop-oldest by offset with truncation accounting. |
+| detached stderr log | 4 MiB | 4 MiB | Separate in non-TTY mode; same per-stream cap. |
 | long-poll read timeout | 100 ms | 1 s | CLI can immediately re-poll for interactive use. |
 | slow-consumer grace | 30 s | 5 min | Must satisfy the slow-consumer proof. |
 | concurrent exec sessions per VM | 32 | 256 | New sessions fail before spawn with `exec-capacity-exceeded`. |
@@ -450,11 +471,17 @@ and EOF markers.
 
 Attached execs keep live logs at least until the process reaches a
 terminal state and all attached readers have consumed EOF. Detached execs
-persist logs until the retention policy expires, the operator explicitly
-removes the exec record, or the VM reboots. Guestd restart loses only
-non-persisted runtime state; host callers observe `lost-guestd` or
-`stale-session` and must not attach to an exec whose guest-side session
-identity no longer matches.
+persist logs until the retention TTL expires for a terminal record, the
+operator explicitly removes the exec record, or the VM reboots.
+
+Detached execs survive a guestd restart **within one boot**: guestd
+persists each exec's lifecycle record and reconciles (re-adopts) live
+transient units on startup, so a host caller can re-discover and continue
+operating on a detached exec by id after a guestd restart. A boot-id
+mismatch is rejected as `stale-session`; a record evicted by retention is
+reported as `exec-expired`. Attached execs are unchanged: their live
+runtime state does not survive a guestd restart, and a host caller observes
+`stale-session` rather than reattaching to a reused identity.
 
 ### Retained-log storage security
 
@@ -472,7 +499,7 @@ Guest-control audit records are allowlist-only. They may contain:
 
 - bounded operation kind from the closed guest-control operation enum: `hello`,
   `authenticate`, `capabilities`, `health`, `exec-create`, `exec-inspect`, `exec-wait`,
-  `exec-logs`, `write-stdin`, `read-output`,
+  `exec-logs`, `exec-list`, `write-stdin`, `read-output`,
   `close-stdin`, `tty-win-resize`, `exec-signal`, `exec-cancel`, and
   `framework-guest-op`;
 - VM/environment identifiers, caller role/uid where already authorized,
@@ -497,21 +524,25 @@ If retained logs are file-backed, they live below guestd-owned guest
 paths, never below `/nix/store`, a host-shared mount, or a virtiofs export:
 
 - live attached state: `/run/nixling/guest-control/exec/<uid>/<exec-id>/`;
-- detached retained state:
-  `/var/lib/nixling/guest-control/exec/<uid>/<exec-id>/`.
+- detached retained state: `/run/nixling-exec/slot-<NN>/` — a root-owned,
+  `0700`, boot-scoped slot-keyed directory. Detached state is **not**
+  per-user and **not** keyed by the opaque exec id: it is keyed by the
+  fixed slot index, and is owned by the root guestd service, not a target
+  workload user or `nixling-userd`.
 
 The path components above are design-level names; implementations may use
 different leaves only if they preserve the same security properties:
 
-1. The top-level runtime/state parents are created by guest activation as
-   `root:nixling-guestd`, mode `0750` or stricter. Per-exec directories
-   and log segments are `0700` directories and `0600` files, owned by the
-   in-guest `nixling-guestd` service account (or an equivalently isolated
-   service principal), not by the target workload user.
-2. Per-user isolation is enforced before opening a log object. Guestd
-   maps every exec to the authenticated target user and hands any
-   append/read capability to the matching `nixling-userd` over already-open
-   file descriptors; userd never resolves another user's retained-log path.
+1. The top-level runtime/state parents are created by guest activation (or
+   a tmpfiles rule) as root-owned, mode `0700`, boot-scoped. Per-exec
+   directories and log segments are `0700` directories and `0600` files,
+   owned by the root `nixling-guestd` service account, not by the target
+   workload user.
+2. Detached exec is served entirely by the root guestd; there is no
+   `nixling-userd` involvement and no per-user retained-log path to resolve.
+   Attached non-root exec still maps every exec to the authenticated target
+   user and hands any append/read capability to the matching
+   `nixling-userd` over already-open file descriptors.
 3. Every open is rooted at the pre-opened runtime/state directory and uses
    symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
    surprises, non-regular log segments, world/group-writable parents, and
@@ -520,24 +551,28 @@ different leaves only if they preserve the same security properties:
 4. File-backed segments are created with exclusive create semantics and
    restrictive mode before any child output is accepted. Cleanup must
    unlink by directory file descriptor, not by re-parsing a string path.
-5. Quotas are enforced at three levels: per-stream/per-exec
-   `max_*_log_bytes`, per-guest-user retained-log bytes, and a VM-global
-   guest-control retained-log budget. `ExecCreate(detached=true)` fails
-   with a bounded `retained-log-quota-exceeded` error if admitting the exec
-   would exceed either aggregate quota.
+5. Detached quotas are exact and VM-global: each stream is capped at
+   **4 MiB**, each exec retains **2 streams**, and the VM-global retained-log
+   budget is **256 MiB** (32 retained slots × 2 streams × 4 MiB). Concurrency
+   is bounded to **8 active** execs and **32 retained** slots per VM.
+   `ExecCreate(detached=true)` fails with a bounded
+   `retained-log-quota-exceeded` error if admitting the exec would exceed
+   the active, retained-slot, or log-byte budget; the
+   `quota == slots × 2 × stream_cap` invariant is asserted.
 6. Cleanup is deterministic. Attached non-detached logs are removed after
    all readers have observed EOF, or after a short terminal-state grace
-   period if the client disappears. Detached logs expire at the earlier of
-   explicit operator removal, VM reboot, or the configured TTL; the default
-   TTL is 24 hours and implementations must support a lower site policy.
-   Startup cleanup removes expired, orphaned, partially-created, and
-   path-unsafe records before serving `ExecLogs`.
+   period if the client disappears. A detached **terminal** record expires
+   at the earlier of explicit operator removal, VM reboot, or the retention
+   TTL; the default TTL is **30 minutes** and applies to terminal records
+   only — a detached `Running` job runs **indefinitely** and is never
+   reaped by TTL/GC. Startup reconciliation removes expired, orphaned,
+   partially-created, and path-unsafe records before serving `ExecLogs`.
 
 Guestd may keep small live rings in memory instead of files for attached
-execs, but detached retained logs still count against the same per-user and
-VM quotas. In-memory implementations must prove that reboot/restart loss
-is surfaced as `lost-guestd`/`stale-session` rather than silently serving
-partial output as durable retained logs.
+execs, but detached retained logs are file-backed and count against the
+exact VM-global quota above. In-memory attached implementations must prove
+that restart loss is surfaced as `stale-session` rather than silently
+serving partial output as durable retained logs.
 
 Output reader tasks append bytes from the child fd into the log only
 while the log has capacity. When the retained window is full:
@@ -711,7 +746,7 @@ locks.
 | concurrent sessions/fairness | Per-exec caps and short polling prevent one stalled exec from owning global queues. |
 | cancellation/disconnect cleanup | `ExecCancel` plus attached/detached disconnect policy. |
 | half-close behavior | `CloseStdin` is independent of output reads and wait. |
-| guestd restart / VM reboot | Session identity, inspect state, and stale-session errors reject unsafe reattach. |
+| guestd restart / VM reboot | Detached execs are re-adopted within one boot via persisted records + transient-unit reconciliation; a boot-id mismatch is `stale-session` and a retention-evicted record is `exec-expired`. Attached session identity does not survive a restart and rejects unsafe reattach. |
 | raw-mode restoration | CLI owns local raw mode and restores on terminal state or protocol error. |
 | max message size | ttRPC fixed 4 MiB frame cap plus bounded post-decode `max_chunk_bytes` check. |
 | malformed messages | Typed `protocol-error` codes with bounded fields only. |

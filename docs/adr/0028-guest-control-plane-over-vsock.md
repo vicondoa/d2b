@@ -154,6 +154,80 @@ candidate if chunked stdio fails later implementation evidence. A custom
 binary stream or custom JSON control remains a last resort and requires a
 new panel-approved decision.
 
+### Detached exec
+
+Detached exec (`exec_create` with `detach=true`) runs a non-interactive
+command that outlives the originating connection. It is served entirely by
+the root-owned guest daemon (`nixlingd`'s guest counterpart `nixling-guestd`);
+there is no per-user `nixling-userd` involvement and no per-user state
+directory.
+
+**Slot-based transient units.** Each detached exec occupies one of 32 fixed
+slots. guestd launches the per-exec worker through `systemd-run` as a
+transient unit named `nixling-exec-<NN>.service` (zero-padded slot index),
+scoped to the guest-internal `nixling-exec.slice`. The unit name and its
+`ExecStart` argv carry **only** the slot index — never the opaque exec id,
+argv, environment, or cwd — so journald/systemd metadata cardinality is
+bounded to ≤32 stable values and leaks no command detail. The worker is the
+dependency-pure `nixling-exec-runner` binary invoked as
+`nixling-exec-runner --serve-exec --slot <NN>`.
+
+**Retained logs and quota.** Each exec retains stdout and stderr in
+slot-keyed files under the root-owned, 0700, boot-scoped parent
+`/run/nixling-exec/slot-<NN>/`. Each stream is capped at **4 MiB** with
+drop-oldest truncation accounting (a truncation marker plus a dropped-byte
+counter); there is no per-user quota. The VM-global retained-log quota is
+**256 MiB** (32 slots × 2 streams × 4 MiB), enforced as an exact invariant.
+Capacity exhaustion (active slots, retained slots, or log quota) is detected
+before a unit starts.
+
+**Indefinite runtime + optional ceiling.** A detached exec runs indefinitely
+by default (`detachedMaxRuntimeSec = 0`): the runner installs no ceiling
+timer and guestd emits no systemd `RuntimeMaxSec`. A long-running `Running`
+record is never reaped by TTL/GC. When `detachedMaxRuntimeSec > 0`, the
+runner enforces the ceiling (cancel + retain) and guestd emits a
+strictly-larger `RuntimeMaxSec` backstop.
+
+**Cancellation.** Cancellation is a two-phase, control-file mechanism with no
+in-process signal handler: guestd writes a cancel sentinel and waits for the
+runner to publish a terminal status before any `stop_unit`; `stop_unit` is
+invoked only if the cancel deadline elapses with no status. The runner's
+watcher thread polls the control file, then drives TERM → grace → KILL → reap
+on the child's process group and writes the terminal status exactly once
+(natural exit vs cancel precedence is resolved exactly-once).
+
+**Re-adoption within one boot.** guestd persists each exec's lifecycle record
+(including a `Dispatching` phase written and fsync'd *before* `systemd-run`,
+with a persisted `dispatch_deadline`) under the slot dir. On restart guestd
+reconciles the full state matrix against an all-states systemd unit query: a
+`Dispatching` record with a live authentic unit is adopted as `Running`
+(never killed); a `Dispatching` record with no unit is held in-flight within
+its `dispatch_deadline` (slot reserved, non-listable) and adopts a
+late-registering unit, but is deleted and released past the deadline on a
+negative re-query; `infra-failed` rows are cleaned up and released. A vanished
+unit with no terminal status is marked lost exactly like a natural
+termination — slot, logs, and quota are retained as a terminal record until
+TTL/GC. Re-adoption is bounded to a single boot: a boot-id mismatch is a
+`StaleSession`.
+
+**Discovery (`ExecList`).** A minimal read-only `ExecList` RPC enumerates the
+caller's detached records for the same VM token + boot (bounded ≤32). Each
+entry carries the exec id, slot, state, create time, an **argv SHA-256 hash**
+(never raw argv), and the per-stream truncation/dropped-byte counters. A job
+whose create-reply was lost (crash-after-dispatch, re-adopted) is discoverable
+via `ExecList` and cancellable by the returned id. Attached execs are not
+listed.
+
+**Retention + eviction.** Terminal records are retained for **30 minutes**
+(TTL applies to terminal records only; a `Running` detached job is
+indefinite), then GC'd to a tombstone. Three distinct not-available
+conditions are reported as distinct error kinds: `StaleSession` (boot
+mismatch), `ExecExpired` (retention-evicted / tombstoned), and `ExecNotFound`
+(never existed for this caller). An in-flight `ExecLogs` read is guarded
+against GC: the read completes with stable bytes/offset, and only after the
+guard drops do files and the registry entry drop, with future reads returning
+`ExecExpired`.
+
 ## Feasibility gate
 
 The feasibility dossier must include:
