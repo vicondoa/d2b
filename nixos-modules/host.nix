@@ -231,11 +231,19 @@ in
           # user to edit. No new host surface — it rides the normal
           # read-only closure (no virtiofs share).
           ++ lib.optional (vm'.guestConfigFile != null) (
-            { lib, ... }: {
+            { lib, ... }: let
+              # D17/D18: the operator-editable working copy is part of
+              # the GuestConfig target and exists independently of any
+              # SSH metadata. `ssh.user` only chooses ownership when it
+              # is set; when absent the framework defaults ownership to
+              # root (guestd reads the copy, and the guest-control exec
+              # path edits it, as root).
+              owner = if vm'.ssh.user != null then vm'.ssh.user else "root";
+            in {
               environment.etc."nixling/guest-config.nix".source = vm'.guestConfigFile;
-              systemd.tmpfiles.rules = lib.optionals (vm'.ssh.user != null) [
-                "d /var/lib/nixling-guest 0750 ${vm'.ssh.user} users -"
-                "C /var/lib/nixling-guest/guest-config.nix 0640 ${vm'.ssh.user} users - /etc/nixling/guest-config.nix"
+              systemd.tmpfiles.rules = [
+                "d /var/lib/nixling-guest 0750 ${owner} users -"
+                "C /var/lib/nixling-guest/guest-config.nix 0640 ${owner} users - /etc/nixling/guest-config.nix"
               ];
             }
           )
@@ -274,6 +282,14 @@ in
               nixling.sshUser = vm'.ssh.user;
               nixling.sudo = vm'.sudo;
               nixling.guestControl.enable = vm'.guest.control.enable;
+              # D17: thread the operator-editable working-copy path into
+              # the guest independently of ssh.user so guestd advertises
+              # the ReadGuestFile capability exactly when there is a
+              # guestConfigFile to sync.
+              nixling.guestControl.guestConfigPath =
+                if vm'.guestConfigFile != null
+                then "/var/lib/nixling-guest/guest-config.nix"
+                else null;
               nixling.guestControl.exec = {
                 enable = lib.mkForce vm'.guest.exec.enable;
                 allowRoot = lib.mkForce vm'.guest.exec.allowRoot;

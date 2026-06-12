@@ -41,6 +41,22 @@ in
       description = "Whether nixling's guest-control credential surface is wired in this guest.";
     };
 
+    guestConfigPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      internal = true;
+      readOnly = true;
+      description = ''
+        Absolute in-guest path of the operator-editable guest config
+        working copy that `nixling config sync` reads back over the
+        authenticated guest-control channel. Host-owned, derived from
+        `nixling.vms.<vm>.guestConfigFile` independently of any SSH
+        metadata. When non-null, guestd advertises the `ReadGuestFile`
+        capability and serves a bounded read of exactly this path; when
+        null there is nothing to sync and the capability stays absent
+        (config sync fails closed).
+      '';
+    };
+
     exec = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -180,8 +196,15 @@ in
                   + " --exec-runner-path ${guestPackages.nixling-exec-runner-static}/bin/nixling-exec-runner"
                   + " --detached-max-runtime-sec ${toString cfg.exec.detachedMaxRuntimeSec}"
                 );
+              # config sync read surface: advertised iff the host
+              # declared a guestConfigFile (path threaded independently
+              # of ssh.user). guestd gates the ReadGuestFile capability
+              # on this flag being present.
+              configFlags =
+                lib.optionalString (cfg.guestConfigPath != null)
+                  " --guest-config-path ${lib.escapeShellArg cfg.guestConfigPath}";
             in
-            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${detachedFlags}";
+            "${guestPackages.nixling-guestd-static}/bin/nixling-guestd --serve --vm-id ${lib.escapeShellArg name}${execFlags}${detachedFlags}${configFlags}";
           LoadCredential = [
             "guest_control_token:/run/nixling-guest-control-host/token"
           ];
