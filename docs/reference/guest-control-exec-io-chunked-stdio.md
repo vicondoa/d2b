@@ -887,6 +887,7 @@ objects, daemon logs, metrics, or health JSON.
 Required typed error kinds:
 
 - `exec-not-found`
+- `exec-already-exited`
 - `exec-expired`
 - `stale-session`
 - `tty-required`
