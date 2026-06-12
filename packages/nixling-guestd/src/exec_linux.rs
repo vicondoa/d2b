@@ -9,14 +9,15 @@
 
 use std::os::unix::process::ExitStatusExt;
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rustix::process::{kill_process_group, Pid, Signal};
 use tokio::process::{Child, Command};
 
 use crate::exec::{
-    ExecError, ExitOutcome, ProcessHandle, ProcessSpawner, SpawnedProcess, ValidatedCommand,
+    ExecError, ExitOutcome, ProcessKiller, ProcessSpawner, ProcessWaiter, SpawnedProcess,
+    ValidatedCommand,
 };
 
 /// Spawns validated commands into their own process group.
@@ -35,7 +36,7 @@ impl ProcessSpawner for LinuxProcessSpawner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // New process group with the child as leader (pgid == pid), so the
-            // whole subtree can be signalled and the leader anchors the PGID.
+            // whole subtree can be signalled as a unit.
             .process_group(0)
             .kill_on_drop(true);
 
@@ -44,34 +45,42 @@ impl ProcessSpawner for LinuxProcessSpawner {
         let stdout = child.stdout.take().ok_or(ExecError::SpawnFailed)?;
         let stderr = child.stderr.take().ok_or(ExecError::SpawnFailed)?;
 
-        let handle = LinuxProcessHandle {
-            pgid: pid,
-            child: Mutex::new(Some(child)),
-        };
         Ok(SpawnedProcess {
             stdout: Box::new(stdout),
             stderr: Box::new(stderr),
-            handle: Box::new(handle),
+            killer: Arc::new(LinuxProcessKiller { pgid: pid }),
+            waiter: Box::new(LinuxProcessWaiter { child: Some(child) }),
         })
     }
 }
 
-struct LinuxProcessHandle {
+/// Lock-free, idempotent process-group terminator.
+struct LinuxProcessKiller {
     pgid: i32,
-    child: Mutex<Option<Child>>,
+}
+
+impl ProcessKiller for LinuxProcessKiller {
+    fn kill_group(&self) {
+        // Idempotent best-effort group termination. A process group persists
+        // while any member is alive, so the PGID cannot be reused underneath
+        // this signal as long as descendants remain; once the group is empty
+        // the signal is a harmless ESRCH no-op.
+        if let Some(pid) = Pid::from_raw(self.pgid) {
+            let _ = kill_process_group(pid, Signal::Kill);
+        }
+    }
+}
+
+/// Owns the direct child; `wait` reaps it (tokio semantics). Dropping the
+/// waiter before `wait` completes tears the child down via `kill_on_drop`.
+struct LinuxProcessWaiter {
+    child: Option<Child>,
 }
 
 #[async_trait]
-impl ProcessHandle for LinuxProcessHandle {
+impl ProcessWaiter for LinuxProcessWaiter {
     async fn wait(&mut self) -> ExitOutcome {
-        let mut child = {
-            let mut guard = self
-                .child
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.take()
-        };
-        match child.as_mut() {
+        match self.child.as_mut() {
             Some(child) => match child.wait().await {
                 Ok(status) => {
                     if let Some(code) = status.code() {
@@ -87,27 +96,5 @@ impl ProcessHandle for LinuxProcessHandle {
             None => ExitOutcome::Exited(-1),
         }
     }
-
-    fn kill_group(&self) {
-        // Idempotent best-effort group termination. A process group persists
-        // while any member is alive, so the PGID cannot be reused underneath
-        // this signal as long as descendants remain; once the group is empty
-        // the signal is a harmless ESRCH no-op.
-        if let Some(pid) = Pid::from_raw(self.pgid) {
-            let _ = kill_process_group(pid, Signal::Kill);
-        }
-    }
-
-    async fn reap(&mut self) {
-        // tokio reaps the direct child inside `wait`. Any remaining handle is
-        // dropped here, which (with kill_on_drop) also tears down a child that
-        // was never waited on.
-        let _ = {
-            let mut guard = self
-                .child
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.take()
-        };
-    }
 }
+

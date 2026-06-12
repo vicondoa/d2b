@@ -1,16 +1,15 @@
 //! Attached, non-interactive guest exec runtime.
 //!
-//! This module implements the create-and-start exec subset selected for the
-//! first guest exec wave: non-TTY, non-detached, stdin-closed commands only.
-//! It is guest-local process execution inside the VM. There is no host broker
-//! op, no CLI surface, no readiness wiring, and no user-session-daemon
-//! participation.
+//! This module implements the create-and-start attached exec subset: non-TTY,
+//! non-detached, stdin-closed commands only. It is guest-local process
+//! execution inside the VM. There is no host broker op, no CLI surface, no
+//! readiness wiring, and no user-session-daemon participation.
 //!
-//! Security posture: W12 exec is trusted-control-plane guest-root execution.
-//! It is gated behind an explicit `user = "root"` request plus the host-owned
-//! per-VM `exec.enable` + `allowRoot` policy. It is not a sandbox and makes no
-//! CPU/memory/fd kernel-isolation claim; it bounds the protocol/session
-//! resources it owns and applies a wall-clock runtime ceiling.
+//! Security posture: attached exec is trusted-control-plane guest-root
+//! execution. It is gated behind an explicit `user = "root"` request plus the
+//! host-owned per-VM `exec.enable` + `allowRoot` policy. It is not a sandbox
+//! and makes no CPU/memory/fd kernel-isolation claim; it bounds the
+//! protocol/session resources it owns and applies a wall-clock runtime ceiling.
 //!
 //! Process spawning is abstracted behind [`ProcessSpawner`] so the lifecycle
 //! state machine, output retention, and offset accounting can be exercised
@@ -114,9 +113,9 @@ impl ExecError {
             Self::ExecDisabled => WireErrorKind::GuestExecDisabled,
             Self::RootDenied => WireErrorKind::GuestExecRootDenied,
             Self::UserDenied => WireErrorKind::GuestExecUserDenied,
-            // The supported W12 protocol subset is non-TTY/non-detached/
+            // The supported attached protocol subset is non-TTY/non-detached/
             // stdin-closed. Requests outside that subset are protocol errors;
-            // W12 deliberately does not add new wire enum variants.
+            // no new wire enum variants are added for them.
             Self::UnsupportedMode => WireErrorKind::ProtocolError,
             Self::InvalidArgv => WireErrorKind::ProtocolError,
             Self::CwdInvalid => WireErrorKind::CwdInvalid,
@@ -161,7 +160,7 @@ pub enum ExitOutcome {
 }
 
 /// A command that has passed validation and policy and is ready to spawn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ValidatedCommand {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -169,29 +168,41 @@ pub struct ValidatedCommand {
     pub env: Vec<(String, String)>,
 }
 
+// Redacted Debug: never print argv/cwd/env values (they may carry secrets).
+impl std::fmt::Debug for ValidatedCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidatedCommand")
+            .field("argc", &(self.args.len() + 1))
+            .field("env_count", &self.env.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// A spawned child handed back by a [`ProcessSpawner`]. The stdout/stderr
-/// readers MUST be continuously drained by the runtime; the handle owns
-/// process-group termination and the final reap.
+/// readers MUST be continuously drained by the runtime. The `killer` signals
+/// the whole process group and is lock-free and idempotent; the `waiter` is
+/// owned exclusively by the supervisor task.
 pub struct SpawnedProcess {
     pub stdout: Box<dyn AsyncRead + Send + Unpin>,
     pub stderr: Box<dyn AsyncRead + Send + Unpin>,
-    pub handle: Box<dyn ProcessHandle>,
+    pub killer: Arc<dyn ProcessKiller>,
+    pub waiter: Box<dyn ProcessWaiter>,
 }
 
-/// Process-group-aware lifecycle handle. Implementations MUST treat
-/// `kill_group` as idempotent and MUST keep the direct child as the
-/// process-group anchor until `reap` is called.
-#[async_trait]
-pub trait ProcessHandle: Send + Sync {
-    /// Wait for the direct child to change to a terminal state without
-    /// reaping it, so the numeric PGID remains a valid signal target.
-    async fn wait(&mut self) -> ExitOutcome;
-    /// Signal the whole process group (idempotent). Used to clean up
-    /// descendants and to cancel a running exec.
+/// Lock-free, idempotent process-group terminator. Held by the exec entry so
+/// cancellation can signal the group without contending with the supervisor's
+/// in-flight `wait`.
+pub trait ProcessKiller: Send + Sync {
+    /// Signal the whole process group (idempotent, best-effort).
     fn kill_group(&self);
-    /// Final reap of the direct child. Called only after the drain grace and
-    /// any final `kill_group`, so the PGID cannot be reused mid-cleanup.
-    async fn reap(&mut self);
+}
+
+/// Owns the direct child and waits for it to terminate. Exclusively owned by
+/// the supervisor task, so no locking is required.
+#[async_trait]
+pub trait ProcessWaiter: Send {
+    /// Wait for the direct child to terminate, reaping it.
+    async fn wait(&mut self) -> ExitOutcome;
 }
 
 /// Spawns validated commands into their own process group.
@@ -279,7 +290,7 @@ impl OutputRing {
 }
 
 /// Result of a ring read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RingChunk {
     pub data: Vec<u8>,
     pub start_offset: u64,
@@ -288,6 +299,21 @@ pub struct RingChunk {
     pub dropped_bytes: u64,
     pub truncated: bool,
     pub eof: bool,
+}
+
+// Redacted Debug: never print captured stdout/stderr bytes.
+impl std::fmt::Debug for RingChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RingChunk")
+            .field("len", &self.data.len())
+            .field("start_offset", &self.start_offset)
+            .field("end_offset", &self.end_offset)
+            .field("next_offset", &self.next_offset)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("eof", &self.eof)
+            .finish()
+    }
 }
 
 /// Mutable, lock-protected exec state. All critical sections are short and
@@ -326,10 +352,10 @@ struct ExecEntry {
     guest_boot_id: String,
     shared: Mutex<ExecShared>,
     notify: Arc<Notify>,
-    kill: Box<dyn Fn() + Send + Sync>,
+    killer: Arc<dyn ProcessKiller>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
-    pending_waits: AtomicU64,
-    pending_reads: AtomicU64,
+    // Pending ReadOutput long-polls, counted per stream (stdout, stderr).
+    pending_reads: [AtomicU64; 2],
 }
 
 impl ExecEntry {
@@ -360,11 +386,20 @@ impl ExecEntry {
         !matches!(self.lock_shared().state, ExecState::Running)
     }
 
-    /// Idempotent cancellation: kill the process group, abort reader tasks,
-    /// and move to a terminal state. The reaper owner clears process-group
-    /// ownership separately.
+    fn pending_reads(&self, stream: Stream) -> &AtomicU64 {
+        match stream {
+            Stream::Stdout => &self.pending_reads[0],
+            Stream::Stderr => &self.pending_reads[1],
+        }
+    }
+
+    /// Idempotent cancellation. The process-group signal goes first and is
+    /// lock-free, so it always reaches the group even while the supervisor is
+    /// mid-`wait`; this guarantees descendants are torn down before the reader
+    /// and supervisor tasks (which would otherwise reap the direct child via
+    /// `kill_on_drop`) are aborted.
     fn cancel(&self) {
-        (self.kill)();
+        self.killer.kill_group();
         let mut tasks = self
             .tasks
             .lock()
@@ -525,6 +560,11 @@ pub struct ExecRuntime<Sp, Id> {
     ids: Arc<Id>,
     policy: ExecPolicy,
     execs: Mutex<BTreeMap<String, Arc<ExecEntry>>>,
+    // In-flight create reservations, counted against capacity so concurrent
+    // creates cannot collectively exceed the caps before they are inserted.
+    reservations: AtomicU64,
+    // Pending ExecWait long-polls, counted at VM scope.
+    pending_exec_waits: AtomicU64,
 }
 
 impl<Sp, Id> ExecRuntime<Sp, Id>
@@ -538,6 +578,8 @@ where
             ids: Arc::new(ids),
             policy,
             execs: Mutex::new(BTreeMap::new()),
+            reservations: AtomicU64::new(0),
+            pending_exec_waits: AtomicU64::new(0),
         }
     }
 
@@ -573,21 +615,27 @@ where
     ) -> Result<(String, ExecSnapshot), ExecError> {
         let command = validate_and_authorize(&input, self.policy)?;
 
-        // Capacity is checked before allocation/spawn so a rejected request
-        // leaves no partially-created state.
-        {
+        // Reserve a capacity slot under the execs lock so concurrent creates
+        // cannot collectively exceed the caps. The reservation is released by
+        // the guard on every early return and committed once the entry lands.
+        let reservation = {
             let execs = self.lock_execs();
-            if execs.len() >= EXEC_SESSIONS_PER_VM {
+            let reserved = self.reservations.load(Ordering::SeqCst) as usize;
+            if execs.len() + reserved >= EXEC_SESSIONS_PER_VM {
                 return Err(ExecError::ExecCapacityExceeded);
             }
             let running = execs
                 .values()
                 .filter(|entry| !entry.is_terminal())
                 .count();
-            if running >= ATTACHED_SESSIONS_PER_VM {
+            if running + reserved >= ATTACHED_SESSIONS_PER_VM {
                 return Err(ExecError::AttachCapacityExceeded);
             }
-        }
+            self.reservations.fetch_add(1, Ordering::SeqCst);
+            ReservationGuard {
+                reservations: &self.reservations,
+            }
+        };
 
         let exec_id = self.ids.next_exec_id()?;
         if exec_id.is_empty() || exec_id.len() > EXEC_ID_BYTES {
@@ -598,7 +646,8 @@ where
         let SpawnedProcess {
             stdout,
             stderr,
-            handle,
+            killer,
+            waiter,
         } = spawned;
 
         let notify = Arc::new(Notify::new());
@@ -610,29 +659,19 @@ where
             state_generation: 1,
         });
 
-        let handle = Arc::new(tokio::sync::Mutex::new(handle));
-        let kill_handle = Arc::clone(&handle);
-        // Best-effort, synchronous, idempotent group kill used by cancel().
-        let kill: Box<dyn Fn() + Send + Sync> = Box::new(move || {
-            if let Ok(guard) = kill_handle.try_lock() {
-                guard.kill_group();
-            }
-        });
-
         let entry = Arc::new(ExecEntry {
             owner,
             guest_boot_id,
             shared,
             notify: Arc::clone(&notify),
-            kill,
+            killer: Arc::clone(&killer),
             tasks: Mutex::new(Vec::new()),
-            pending_waits: AtomicU64::new(0),
-            pending_reads: AtomicU64::new(0),
+            pending_reads: [AtomicU64::new(0), AtomicU64::new(0)],
         });
 
         let stdout_task = spawn_reader(Arc::clone(&entry), Stream::Stdout, stdout);
         let stderr_task = spawn_reader(Arc::clone(&entry), Stream::Stderr, stderr);
-        let supervisor = spawn_supervisor(Arc::clone(&entry), Arc::clone(&handle));
+        let supervisor = spawn_supervisor(Arc::clone(&entry), waiter, killer);
         {
             let mut tasks = entry
                 .tasks
@@ -645,6 +684,8 @@ where
 
         let snapshot = entry.snapshot();
         self.lock_execs().insert(exec_id.clone(), entry);
+        // The entry is now tracked; release the reservation slot.
+        drop(reservation);
         Ok((exec_id, snapshot))
     }
 
@@ -669,16 +710,16 @@ where
         timeout_ms: u64,
     ) -> Result<(ExecSnapshot, bool), ExecError> {
         let entry = self.lookup_owned(owner, exec_id, guest_boot_id)?;
-        if entry.pending_waits.fetch_add(1, Ordering::SeqCst) as usize
+        if self.pending_exec_waits.fetch_add(1, Ordering::SeqCst) as usize
             >= PENDING_EXEC_WAITS_PER_VM
         {
-            entry.pending_waits.fetch_sub(1, Ordering::SeqCst);
+            self.pending_exec_waits.fetch_sub(1, Ordering::SeqCst);
             return Err(ExecError::WaitCapacityExceeded);
         }
         let result = self
             .wait_inner(&entry, known_generation, timeout_ms)
             .await;
-        entry.pending_waits.fetch_sub(1, Ordering::SeqCst);
+        self.pending_exec_waits.fetch_sub(1, Ordering::SeqCst);
         result
     }
 
@@ -741,16 +782,16 @@ where
             }
         }
 
-        if entry.pending_reads.fetch_add(1, Ordering::SeqCst) as usize
+        if entry.pending_reads(stream).fetch_add(1, Ordering::SeqCst) as usize
             >= PENDING_READ_OUTPUT_WAITS_PER_STREAM
         {
-            entry.pending_reads.fetch_sub(1, Ordering::SeqCst);
+            entry.pending_reads(stream).fetch_sub(1, Ordering::SeqCst);
             return Err(ExecError::ReadWaitCapacityExceeded);
         }
         let result = self
             .read_wait_inner(&entry, stream, offset, max_len, timeout_ms)
             .await;
-        entry.pending_reads.fetch_sub(1, Ordering::SeqCst);
+        entry.pending_reads(stream).fetch_sub(1, Ordering::SeqCst);
         result
     }
 
@@ -804,6 +845,17 @@ where
     }
 }
 
+/// Releases a create reservation slot on drop unless explicitly committed.
+struct ReservationGuard<'a> {
+    reservations: &'a AtomicU64,
+}
+
+impl Drop for ReservationGuard<'_> {
+    fn drop(&mut self) {
+        self.reservations.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Continuously drain a child output stream into its ring buffer until EOF or
 /// task cancellation. Never stops reading because the client is slow.
 fn spawn_reader(
@@ -837,37 +889,40 @@ fn spawn_reader(
 }
 
 /// Await the direct child (bounded by a wall-clock runtime ceiling), then clean
-/// up the process group, drain output within a grace window, reap, and publish
-/// the terminal state.
+/// up the process group, drain output within a grace window, and publish the
+/// terminal state.
+///
+/// The `waiter` is owned exclusively by this task (no shared lock), so the
+/// lock-free `killer` held by the exec entry can always signal the group even
+/// while this task is parked in `wait`. On a normal exit the waiter has already
+/// reaped the direct child; the subsequent `kill_group` then cleans up any
+/// descendants. A process group remains allocated while any member is alive, so
+/// once the leader is reaped the group is either still populated (its PGID is
+/// still in use and cannot be reassigned) or empty (the signal is a harmless
+/// `ESRCH`); the leader PID cannot be recycled within this window.
 fn spawn_supervisor(
     entry: Arc<ExecEntry>,
-    handle: Arc<tokio::sync::Mutex<Box<dyn ProcessHandle>>>,
+    mut waiter: Box<dyn ProcessWaiter>,
+    killer: Arc<dyn ProcessKiller>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let ceiling = Duration::from_millis(MAX_EXEC_RUNTIME_MS);
-        let waited = {
-            let mut guard = handle.lock().await;
-            tokio::time::timeout(ceiling, guard.wait()).await
-        };
+        let waited = tokio::time::timeout(ceiling, waiter.wait()).await;
         let (outcome, ceiling_exceeded) = match waited {
             Ok(outcome) => (outcome, false),
-            // Runtime ceiling hit: the child is force-terminated and the exec
-            // transitions to Cancelled rather than a normal terminal status.
-            Err(_) => (ExitOutcome::Signaled(9), true),
+            // Runtime ceiling hit: force-terminate the group and drop the
+            // waiter so kill_on_drop reaps the (still-unreaped) direct child.
+            Err(_) => {
+                killer.kill_group();
+                drop(waiter);
+                (ExitOutcome::Signaled(9), true)
+            }
         };
-        // Direct child has changed state but is not yet reaped: it remains the
-        // PGID anchor. Clean up any descendants before reaping.
-        {
-            let guard = handle.lock().await;
-            guard.kill_group();
-        }
+        // Clean up any descendants left in the group.
+        killer.kill_group();
         // Bounded drain grace: give readers a chance to observe trailing
         // output before forcing terminal accounting.
         tokio::time::sleep(Duration::from_millis(POST_EXIT_DRAIN_GRACE_MS)).await;
-        {
-            let mut guard = handle.lock().await;
-            guard.reap().await;
-        }
         {
             let mut shared = entry.lock_shared();
             if matches!(shared.state, ExecState::Running) {
@@ -914,31 +969,37 @@ mod tests {
         }
     }
 
-    struct FakeHandle {
-        exit_rx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<ExitOutcome>>>,
+    struct FakeKiller {
         killed: Arc<AtomicU64>,
+    }
+
+    impl ProcessKiller for FakeKiller {
+        fn kill_group(&self) {
+            self.killed.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct FakeWaiter {
+        exit_rx: Option<tokio::sync::oneshot::Receiver<ExitOutcome>>,
         reaped: Arc<AtomicU64>,
     }
 
     #[async_trait]
-    impl ProcessHandle for FakeHandle {
+    impl ProcessWaiter for FakeWaiter {
         async fn wait(&mut self) -> ExitOutcome {
-            let rx = {
-                let mut guard = self.exit_rx.lock().await;
-                guard.take()
-            };
-            match rx {
+            let outcome = match self.exit_rx.take() {
                 Some(rx) => rx.await.unwrap_or(ExitOutcome::Exited(0)),
                 // No exit channel: keep the child "running" until cancelled.
                 None => std::future::pending::<ExitOutcome>().await,
-            }
+            };
+            self.reaped.fetch_add(1, Ordering::SeqCst);
+            outcome
         }
+    }
 
-        fn kill_group(&self) {
-            self.killed.fetch_add(1, Ordering::SeqCst);
-        }
-
-        async fn reap(&mut self) {
+    impl Drop for FakeWaiter {
+        fn drop(&mut self) {
+            // Mirror kill_on_drop reaping for the ceiling/abort paths.
             self.reaped.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -1015,15 +1076,16 @@ mod tests {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard.take().expect("spawn called once")
             };
-            let handle = FakeHandle {
-                exit_rx: tokio::sync::Mutex::new(Some(controls.exit_rx)),
-                killed: Arc::clone(&self.killed),
-                reaped: Arc::clone(&self.reaped),
-            };
             Ok(SpawnedProcess {
                 stdout: Box::new(controls.stdout),
                 stderr: Box::new(controls.stderr),
-                handle: Box::new(handle),
+                killer: Arc::new(FakeKiller {
+                    killed: Arc::clone(&self.killed),
+                }),
+                waiter: Box::new(FakeWaiter {
+                    exit_rx: Some(controls.exit_rx),
+                    reaped: Arc::clone(&self.reaped),
+                }),
             })
         }
     }
@@ -1362,30 +1424,52 @@ mod tests {
             // "running" until cancelled).
             std::mem::forget(_w_out);
             std::mem::forget(_w_err);
-            let handle = FakeHandle {
-                exit_rx: tokio::sync::Mutex::new(None),
-                killed: Arc::clone(&self.killed),
-                reaped: Arc::new(AtomicU64::new(0)),
-            };
             Ok(SpawnedProcess {
                 stdout: Box::new(r_out),
                 stderr: Box::new(r_err),
-                handle: Box::new(handle),
+                killer: Arc::new(FakeKiller {
+                    killed: Arc::clone(&self.killed),
+                }),
+                waiter: Box::new(FakeWaiter {
+                    exit_rx: None,
+                    reaped: Arc::new(AtomicU64::new(0)),
+                }),
             })
         }
     }
 
     fn pending_runtime() -> ExecRuntime<PendingSpawner, SeqIds> {
-        ExecRuntime::new(
+        pending_runtime_with_kills().0
+    }
+
+    fn pending_runtime_with_kills() -> (ExecRuntime<PendingSpawner, SeqIds>, Arc<AtomicU64>) {
+        let killed = Arc::new(AtomicU64::new(0));
+        let rt = ExecRuntime::new(
             PendingSpawner {
-                killed: Arc::new(AtomicU64::new(0)),
+                killed: Arc::clone(&killed),
             },
             SeqIds::new(),
             ExecPolicy {
                 enabled: true,
                 allow_root: true,
             },
-        )
+        );
+        (rt, killed)
+    }
+
+    #[tokio::test]
+    async fn close_connection_kills_process_group() {
+        let (rt, killed) = pending_runtime_with_kills();
+        let owner = b"conn-1".to_vec();
+        rt.create(owner.clone(), "boot-1".to_owned(), good_input())
+            .await
+            .unwrap();
+        assert_eq!(killed.load(Ordering::SeqCst), 0);
+        rt.close_connection(&owner);
+        // The lock-free killer must have signalled the group even though the
+        // supervisor was parked in wait() at disconnect time.
+        assert!(killed.load(Ordering::SeqCst) >= 1);
+        assert_eq!(rt.tracked_len(), 0);
     }
 
     #[tokio::test]

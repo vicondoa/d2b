@@ -62,6 +62,15 @@ in
   };
 
   config = {
+    warnings =
+      lib.optional (cfg.exec.enable && cfg.exec.users != [ ]) ''
+        nixling.guestControl.exec.users is set, but non-root guest exec is not
+        yet served by the guest exec runtime. Until non-root exec lands, the
+        guestd runtime only honours root exec (guest.exec.allowRoot = true) and
+        rejects every non-root request. The user allowlist is reserved for a
+        future wave and has no runtime effect today.
+      '';
+
     assertions = [
       {
         assertion =

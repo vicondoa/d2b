@@ -482,7 +482,7 @@ fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
     }
 }
 
-/// W12 advertised effective limits. Shared by the capabilities snapshot and
+/// Advertised effective limits. Shared by the capabilities snapshot and
 /// exec responses so both report identical bounds.
 pub fn effective_limits() -> pb::GuestEffectiveLimits {
     let mut limits = pb::GuestEffectiveLimits::new();
@@ -577,8 +577,7 @@ impl GuestControl for GuestControlService {
             tty: request.tty,
             stdin_open: request.stdin_open,
             detached: request.detached,
-            has_terminal_size: request.initial_terminal_size.is_some()
-                && request.initial_terminal_size.rows != 0,
+            has_terminal_size: request.initial_terminal_size.is_some(),
             max_chunk_bytes: request
                 .output_policy
                 .as_ref()
@@ -1076,6 +1075,17 @@ mod tests {
         ))
     }
 
+    fn test_exec_root_enabled() -> SharedExec {
+        Arc::new(ExecRuntime::new(
+            LinuxProcessSpawner,
+            OsExecIds,
+            ExecPolicy {
+                enabled: true,
+                allow_root: true,
+            },
+        ))
+    }
+
     fn test_service(instance: u8) -> GuestControlService {
         GuestControlService::new(test_auth(), test_exec(), test_context(instance))
     }
@@ -1353,6 +1363,37 @@ mod tests {
                 .as_ref()
                 .unwrap(),
         );
+    }
+
+    #[tokio::test]
+    async fn exec_create_rejects_terminal_size_even_with_zero_rows() {
+        let ctx = ttrpc_context();
+        // Root exec enabled so the request passes policy and reaches the
+        // unsupported-mode check before any spawn.
+        let service =
+            GuestControlService::new(test_auth(), test_exec_root_enabled(), test_context(8));
+        authenticate(&service).await;
+        let mut request = pb::ExecCreateRequest::new();
+        request.metadata = metadata();
+        request.argv = vec!["/bin/true".to_owned()];
+        request.user = Some("root".to_owned());
+        let mut output_policy = pb::OutputPolicy::new();
+        output_policy.max_chunk_bytes = 64 * 1024;
+        request.output_policy = MessageField::some(output_policy);
+        // A cols-only terminal size (rows = 0) must still be rejected: the
+        // mere presence of initial_terminal_size is an unsupported mode.
+        let mut size = pb::TerminalSize::new();
+        size.rows = 0;
+        size.cols = 80;
+        request.initial_terminal_size = MessageField::some(size);
+        let response = service.exec_create(&ctx, request).await.unwrap();
+        let error = response.error.as_ref().expect("terminal size rejected");
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR
+        );
+        // No exec id is allocated for a rejected request.
+        assert!(response.exec_id.is_none());
     }
 
     #[test]
