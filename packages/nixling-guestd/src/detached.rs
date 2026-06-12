@@ -31,11 +31,16 @@ pub enum UnitError {
 }
 
 /// A transient unit the manager currently knows about (re-adoption input).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedUnit {
     pub slot: u32,
     /// True when the unit is loaded and active/activating.
     pub active: bool,
+    /// The unit's `Slice` (identity verification); `None` if unknown.
+    pub slice: Option<String>,
+    /// The unit's rendered `ExecStart` (identity verification); `None` if
+    /// unknown. Compared against the expected runner path + `--slot NN`.
+    pub exec_start: Option<String>,
 }
 
 /// Absolute, controlled paths the manager needs to launch a runner unit. All
@@ -176,8 +181,76 @@ impl TransientUnitManager for SystemdRunUnitManager {
             return Err(UnitError::NonZeroExit);
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        Ok(parse_managed_units(&text))
+        let mut units = parse_managed_units(&text);
+        if units.is_empty() {
+            return Ok(units);
+        }
+        // Enrich with Slice + ExecStart for identity verification. A failure
+        // here leaves slice/exec_start as None so the caller treats the unit as
+        // unverifiable (Foreign) rather than crashing — it must never widen
+        // liveness, only narrow it.
+        let mut show = tokio::process::Command::new(&self.systemctl_path);
+        show.arg("show")
+            .arg("--no-pager")
+            .arg("--property=Id,Slice,ExecStart")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        for unit in &units {
+            show.arg(unit_name(unit.slot));
+        }
+        if let Ok(show_out) = show.output().await {
+            if show_out.status.success() {
+                let show_text = String::from_utf8_lossy(&show_out.stdout);
+                let blocks = parse_show_blocks(&show_text);
+                for unit in &mut units {
+                    let name = unit_name(unit.slot);
+                    if let Some(block) = blocks.iter().find(|b| b.id == name) {
+                        unit.slice = block.slice.clone();
+                        unit.exec_start = block.exec_start.clone();
+                    }
+                }
+            }
+        }
+        Ok(units)
     }
+}
+
+/// One `systemctl show` property block (identity-verification input).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ShowEntry {
+    id: String,
+    slice: Option<String>,
+    exec_start: Option<String>,
+}
+
+/// Parse `systemctl show --property=Id,Slice,ExecStart UNIT...` output. Blocks
+/// for distinct units are separated by a blank line. `ExecStart` renders as
+/// `{ path=... ; argv[]=<abs> --serve-exec --slot NN ; ... }`; the raw value is
+/// kept verbatim for a `contains`-based identity check upstream.
+fn parse_show_blocks(text: &str) -> Vec<ShowEntry> {
+    let mut out = Vec::new();
+    for block in text.split("\n\n") {
+        let mut entry = ShowEntry::default();
+        for line in block.lines() {
+            if let Some(v) = line.strip_prefix("Id=") {
+                entry.id = v.trim().to_owned();
+            } else if let Some(v) = line.strip_prefix("Slice=") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    entry.slice = Some(v.to_owned());
+                }
+            } else if let Some(v) = line.strip_prefix("ExecStart=") {
+                let v = v.trim();
+                if !v.is_empty() && entry.exec_start.is_none() {
+                    entry.exec_start = Some(v.to_owned());
+                }
+            }
+        }
+        if !entry.id.is_empty() {
+            out.push(entry);
+        }
+    }
+    out
 }
 
 /// Parse `systemctl list-units --plain --no-legend` output into the bounded set
@@ -210,7 +283,12 @@ fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
         let _load = cols.next();
         let active_state = cols.next().unwrap_or("");
         let active = matches!(active_state, "active" | "activating");
-        out.push(ManagedUnit { slot, active });
+        out.push(ManagedUnit {
+            slot,
+            active,
+            slice: None,
+            exec_start: None,
+        });
     }
     out
 }
@@ -259,11 +337,17 @@ fn systemd_run_argv(slot: u32, ceiling_sec: u64, exec_runner_path: &Path) -> Vec
         OsString::from("Type=exec"),
     ];
     // Optional indefinite-runtime ceiling: only emit RuntimeMaxSec when the
-    // operator opted in (> 0), and it is strictly larger than the runner's
-    // own control-watcher ceiling by construction (the runner cancels first).
+    // operator opted in (> 0). It MUST be strictly larger than the runner's own
+    // control-watcher ceiling (== ceiling_sec) plus the full TERM->grace->KILL->
+    // reap->status window so systemd's unit-level RuntimeMaxSec SIGTERM (which
+    // the no-handler runner would die on immediately) only fires after the
+    // runner already published `cancelled` (F11).
     if ceiling_sec > 0 {
+        let runtime_max = ceiling_sec
+            .saturating_add(crate::detached_registry::TIMEOUT_STOP_SEC)
+            .saturating_add(crate::detached_registry::RUNTIME_MAX_MARGIN_SEC);
         argv.push(OsString::from("-p"));
-        argv.push(OsString::from(format!("RuntimeMaxSec={ceiling_sec}")));
+        argv.push(OsString::from(format!("RuntimeMaxSec={runtime_max}")));
     }
     argv.push(exec_runner_path.as_os_str().to_owned());
     argv.push(OsString::from("--serve-exec"));
@@ -307,11 +391,29 @@ mod tests {
         assert!(none
             .iter()
             .all(|a| !a.to_string_lossy().starts_with("RuntimeMaxSec=")));
-        // ceiling > 0 => the backstop is emitted with the exact value.
-        let some = systemd_run_argv(3, 3600, &runner);
-        assert!(some
+        // ceiling > 0 => the backstop is emitted, and STRICTLY larger than the
+        // runner's own ceiling so systemd does not SIGKILL before the runner
+        // writes `cancelled` (F11).
+        let ceiling = 3600;
+        let some = systemd_run_argv(3, ceiling, &runner);
+        let runtime_max: u64 = some
             .iter()
-            .any(|a| a.to_string_lossy() == "RuntimeMaxSec=3600"));
+            .find_map(|a| {
+                a.to_string_lossy()
+                    .strip_prefix("RuntimeMaxSec=")
+                    .and_then(|v| v.parse().ok())
+            })
+            .expect("RuntimeMaxSec emitted when ceiling > 0");
+        assert!(
+            runtime_max > ceiling,
+            "RuntimeMaxSec ({runtime_max}) must exceed the runner ceiling ({ceiling})"
+        );
+        assert_eq!(
+            runtime_max,
+            ceiling
+                + crate::detached_registry::TIMEOUT_STOP_SEC
+                + crate::detached_registry::RUNTIME_MAX_MARGIN_SEC
+        );
     }
 
     #[test]
@@ -346,9 +448,24 @@ other.service           loaded active   running Unrelated
         assert_eq!(
             units,
             vec![
-                ManagedUnit { slot: 0, active: true },
-                ManagedUnit { slot: 1, active: false },
-                ManagedUnit { slot: 2, active: true },
+                ManagedUnit {
+                    slot: 0,
+                    active: true,
+                    slice: None,
+                    exec_start: None
+                },
+                ManagedUnit {
+                    slot: 1,
+                    active: false,
+                    slice: None,
+                    exec_start: None
+                },
+                ManagedUnit {
+                    slot: 2,
+                    active: true,
+                    slice: None,
+                    exec_start: None
+                },
             ]
         );
     }
@@ -357,6 +474,51 @@ other.service           loaded active   running Unrelated
     fn parse_managed_units_tolerates_leading_status_glyph() {
         let text = "● nixling-exec-05.service loaded failed failed Detached exec 05\n";
         let units = parse_managed_units(text);
-        assert_eq!(units, vec![ManagedUnit { slot: 5, active: false }]);
+        assert_eq!(
+            units,
+            vec![ManagedUnit {
+                slot: 5,
+                active: false,
+                slice: None,
+                exec_start: None
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_show_blocks_extracts_id_slice_and_exec_start() {
+        let text = "\
+Id=nixling-exec-07.service
+Slice=nixling-exec.slice
+ExecStart={ path=/nix/store/abc/bin/nixling-exec-runner ; argv[]=/nix/store/abc/bin/nixling-exec-runner --serve-exec --slot 07 ; ignore_errors=no }
+
+Id=nixling-exec-08.service
+Slice=other.slice
+ExecStart={ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }
+";
+        let blocks = parse_show_blocks(text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].id, "nixling-exec-07.service");
+        assert_eq!(blocks[0].slice.as_deref(), Some("nixling-exec.slice"));
+        assert!(blocks[0]
+            .exec_start
+            .as_deref()
+            .unwrap()
+            .contains("--slot 07"));
+        assert_eq!(blocks[1].slice.as_deref(), Some("other.slice"));
+    }
+
+    #[test]
+    fn parse_show_blocks_keeps_only_first_exec_start_and_skips_empty() {
+        let text = "\
+Id=nixling-exec-00.service
+Slice=
+ExecStart=
+";
+        let blocks = parse_show_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].id, "nixling-exec-00.service");
+        assert_eq!(blocks[0].slice, None);
+        assert_eq!(blocks[0].exec_start, None);
     }
 }

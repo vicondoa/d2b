@@ -21,7 +21,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
-use crate::detached::{unit_name, RunnerUnitPaths, TransientUnitManager};
+use crate::detached::{unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager};
 use crate::exec::{ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream, ValidatedCommand};
 
 use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
@@ -50,6 +50,13 @@ pub const CANCEL_DEADLINE_MS: u64 = 15_000;
 /// systemd unit `TimeoutStopSec` (covers control-poll + child grace + reap +
 /// status fsync + margin). The guestd cancel deadline is strictly larger.
 pub const TIMEOUT_STOP_SEC: u64 = 10;
+/// Extra seconds added on top of `ceiling_sec + TIMEOUT_STOP_SEC` when emitting
+/// the optional systemd `RuntimeMaxSec` backstop, so the unit-level
+/// `RuntimeMaxSec` SIGTERM only fires well AFTER the runner's own control
+/// watcher has run its TERM->grace->KILL->reap->`cancelled`-status path. The
+/// runner has no signal handler, so a too-early `RuntimeMaxSec` SIGTERM would
+/// kill it before it could publish `cancelled` (F11).
+pub const RUNTIME_MAX_MARGIN_SEC: u64 = 5;
 
 /// The argv hash plus the resolved per-exec log/runtime caps for one create.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +125,15 @@ pub trait SlotStore: Send + Sync + 'static {
     /// Remove the slot directory (respecting that no read is in flight is the
     /// caller's responsibility).
     fn delete_slot_dir(&self, slot: u32) -> Result<(), ExecError>;
+    /// Remove any stale per-slot runner files (status/cancel/log data+sidecars)
+    /// left by a prior occupant before a slot is reused, so a reused slot never
+    /// inherits another exec's status or captured output. Idempotent.
+    fn scrub_slot_files(&self, slot: u32) -> Result<(), ExecError>;
+    /// Re-adoption authenticity gate: every present slot dir + file must be
+    /// reached via `openat`/`O_NOFOLLOW` and be root-owned with the expected
+    /// type/mode (dirs 0700; files regular 0600 with link-count 1). Returns
+    /// `Err` (→ quarantine) on any deviation. Absent files are permitted.
+    fn validate_authenticity(&self, slot: u32) -> Result<(), ExecError>;
     /// Enumerate present slot directories (re-adoption input).
     fn list_slot_dirs(&self) -> Result<Vec<u32>, ExecError>;
 }
@@ -160,8 +176,15 @@ impl Sleeper for TokioSleeper {
 struct SlotEntry {
     record: DurableRecord,
     caps: DetachedCaps,
-    /// In-flight create guard: invisible to ExecList/reaper until resolved.
+    /// In-flight live-create guard: invisible to ExecList/reaper until resolved.
     creating: bool,
+    /// Crash-recovered `Dispatching` hold within the dispatch deadline. Like
+    /// `creating` it hides the entry from ExecList/find_by_id, but UNLIKE
+    /// `creating` the periodic reaper actively resolves it after the deadline
+    /// (re-query → adopt a late unit, or delete + release). Tracked separately
+    /// so a held dispatch is never skipped forever the way a `creating` guard
+    /// is (F2).
+    dispatch_hold: bool,
     /// Bumped on every observable state transition.
     generation: u64,
     /// Active-concurrency counter still held for this record.
@@ -174,6 +197,41 @@ impl SlotEntry {
     fn is_terminal(&self) -> bool {
         self.record.state.is_terminal()
     }
+
+    /// Hidden from `ExecList`/`find_by_id`: an in-flight live create OR a
+    /// crash-recovered dispatch hold. The reaper still resolves dispatch holds.
+    fn hidden(&self) -> bool {
+        self.creating || self.dispatch_hold
+    }
+}
+
+/// Per-slot unit liveness resolved against systemd (F1). A query error is its
+/// own variant — it is NEVER collapsed into `Absent`, so a transient
+/// `systemctl` failure cannot trigger destructive reconciliation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotLiveness {
+    /// Present, active/activating, AND identity-verified (`Slice` +
+    /// `ExecStart` match the expected runner for this slot).
+    Live,
+    /// Present but not adoptable as our live runner: inactive/failed, or the
+    /// `Slice`/`ExecStart` identity does not match (an impostor at our slot).
+    Foreign,
+    /// No unit present for this slot.
+    Absent,
+    /// The liveness query itself failed; liveness is unknown. Callers MUST skip
+    /// destructive reconciliation and retry later.
+    Unknown,
+}
+
+/// How a durable record is re-adopted on startup.
+enum AdoptKind {
+    /// A terminal status was present: adopt as the terminal state.
+    Terminal(RecordState, Option<i32>, Option<u32>),
+    /// A live (or conservatively-assumed-live) record: adopt as `Running`.
+    Running,
+    /// A crash-recovered `Dispatching` record still within its dispatch
+    /// deadline: hold (reserved, non-listable) until the reaper resolves it.
+    DispatchHold,
 }
 
 #[derive(Default)]
@@ -196,7 +254,7 @@ impl RegistryState {
     fn find_by_id(&self, exec_id: &str) -> Option<u32> {
         self.slots
             .iter()
-            .find(|(_, entry)| !entry.creating && entry.record.exec_id == exec_id)
+            .find(|(_, entry)| !entry.hidden() && entry.record.exec_id == exec_id)
             .map(|(slot, _)| *slot)
     }
 
@@ -347,6 +405,7 @@ impl DetachedRegistry {
                     record,
                     caps: caps.clone(),
                     creating: true,
+                    dispatch_hold: false,
                     generation: 0,
                     active_counted: true,
                     read_guards: 0,
@@ -378,6 +437,10 @@ impl DetachedRegistry {
 
     fn persist_dispatch(&self, slot: u32, spec: &ExecSpec) -> Result<(), ExecError> {
         self.store.prepare_slot_dir(slot)?;
+        // F12: a reused slot must never inherit a prior occupant's status,
+        // cancel sentinel, or captured-output files (e.g. after a partial
+        // delete_slot_dir). Scrub before writing the new record/spec.
+        self.store.scrub_slot_files(slot)?;
         let record = {
             let state = self.lock();
             state
@@ -409,7 +472,18 @@ impl DetachedRegistry {
     ) -> Result<(String, ExecSnapshot), ExecError> {
         let start = self.clock.now_ms();
         loop {
-            match self.store.read_status(slot)? {
+            // F6: a read_status IO/decode error must NOT propagate while the
+            // slot is still reserved under the Creating guard — that would leak
+            // the active/quota reservation and the reaper would skip it forever
+            // (creating). Tear the create down first, then surface the error.
+            let status = match self.store.read_status(slot) {
+                Ok(status) => status,
+                Err(err) => {
+                    self.abort_create(slot).await;
+                    return Err(err);
+                }
+            };
+            match status {
                 Some(StatusPhase::Started) => {
                     self.commit_running(slot);
                     return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
@@ -436,14 +510,21 @@ impl DetachedRegistry {
                 }
                 None => {
                     if self.clock.now_ms().saturating_sub(start) >= CREATE_TIMEOUT_MS {
-                        // Re-query the unit: a live unit is sufficient proof
-                        // (never kill a running job); a gone unit fails create.
-                        if self.unit_present(slot).await {
-                            self.commit_running(slot);
-                            return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
+                        // Re-query the unit (F1). A verified-live unit — or an
+                        // UNKNOWN query result — commits Running: we must never
+                        // kill a job whose unit might be live just because the
+                        // status marker has not landed yet. Only a definitive
+                        // Absent/Foreign result fails the create.
+                        match self.unit_liveness(slot).await {
+                            SlotLiveness::Live | SlotLiveness::Unknown => {
+                                self.commit_running(slot);
+                                return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
+                            }
+                            SlotLiveness::Absent | SlotLiveness::Foreign => {
+                                self.abort_create(slot).await;
+                                return Err(ExecError::Internal);
+                            }
                         }
-                        self.abort_create(slot).await;
-                        return Err(ExecError::Internal);
                     }
                     self.sleeper.sleep_ms(STATUS_POLL_INTERVAL_MS).await;
                 }
@@ -495,11 +576,47 @@ impl DetachedRegistry {
         let _ = self.store.write_record(slot, &record);
     }
 
-    async fn unit_present(&self, slot: u32) -> bool {
+    /// Resolve one slot's unit liveness against systemd (F1). A query error
+    /// becomes [`SlotLiveness::Unknown`] — never `Absent` — so a transient
+    /// `systemctl` failure cannot drive destructive reconciliation.
+    async fn unit_liveness(&self, slot: u32) -> SlotLiveness {
         match self.units.list_managed_units().await {
-            Ok(units) => units.iter().any(|unit| unit.slot == slot),
-            Err(_) => false,
+            Ok(units) => self.classify_unit(&units, slot),
+            Err(_) => SlotLiveness::Unknown,
         }
+    }
+
+    /// Classify a slot against an already-fetched unit list.
+    fn classify_unit(&self, units: &[ManagedUnit], slot: u32) -> SlotLiveness {
+        match units.iter().find(|u| u.slot == slot) {
+            None => SlotLiveness::Absent,
+            Some(unit) => {
+                if unit.active && self.unit_identity_ok(unit, slot) {
+                    SlotLiveness::Live
+                } else {
+                    // Loaded-but-inactive/failed, or an identity mismatch: not a
+                    // unit we may adopt as our live runner.
+                    SlotLiveness::Foreign
+                }
+            }
+        }
+    }
+
+    /// Verify an adopted unit really is THIS slot's runner: it must live in the
+    /// dedicated `nixling-exec.slice` and its `ExecStart` must invoke the
+    /// expected runner binary with `--serve-exec --slot NN` (F1).
+    fn unit_identity_ok(&self, unit: &ManagedUnit, slot: u32) -> bool {
+        if unit.slice.as_deref() != Some("nixling-exec.slice") {
+            return false;
+        }
+        let Some(exec_start) = unit.exec_start.as_deref() else {
+            return false;
+        };
+        let runner = self.config.paths.exec_runner_path.to_string_lossy();
+        let slot_arg = format!("--slot {slot:02}");
+        exec_start.contains(runner.as_ref())
+            && exec_start.contains("--serve-exec")
+            && exec_start.contains(&slot_arg)
     }
 
     // ---- read-side ops ---------------------------------------------------
@@ -558,7 +675,15 @@ impl DetachedRegistry {
         {
             let mut state = self.lock();
             let Some(entry) = state.slots.get_mut(&slot) else {
-                return Err(self.missing_kind(exec_id));
+                // The entry was GC'd between resolve and lock. Compute the kind
+                // from the already-held state — never re-lock the mutex here
+                // (missing_kind() would deadlock on the non-reentrant std
+                // Mutex, F5).
+                return Err(if state.is_tombstoned(exec_id) {
+                    ExecError::ExecExpired
+                } else {
+                    ExecError::ExecNotFound
+                });
             };
             entry.read_guards += 1;
         }
@@ -585,7 +710,7 @@ impl DetachedRegistry {
             state
                 .slots
                 .iter()
-                .filter(|(_, entry)| !entry.creating)
+                .filter(|(_, entry)| !entry.hidden())
                 .map(|(slot, _)| *slot)
                 .collect()
         };
@@ -598,7 +723,7 @@ impl DetachedRegistry {
             state
                 .slots
                 .iter()
-                .filter(|(_, entry)| !entry.creating)
+                .filter(|(_, entry)| !entry.hidden())
                 .map(|(slot, entry)| (*slot, entry.record.clone(), entry.generation))
                 .collect()
         };
@@ -666,14 +791,14 @@ impl DetachedRegistry {
     /// status — mark the record `Cancelled`/lost (release only the active
     /// counter, retain slot+logs+quota until TTL/GC).
     async fn reconcile_slot(&self, slot: u32) {
-        let (creating, terminal) = {
+        let (hidden, terminal) = {
             let state = self.lock();
             match state.slots.get(&slot) {
-                Some(entry) => (entry.creating, entry.is_terminal()),
+                Some(entry) => (entry.hidden(), entry.is_terminal()),
                 None => return,
             }
         };
-        if creating || terminal {
+        if hidden || terminal {
             return;
         }
         // A published terminal status wins regardless of unit liveness.
@@ -700,8 +825,20 @@ impl DetachedRegistry {
             Ok(Some(StatusPhase::InfraFailed)) | Ok(None) | Err(_) => {}
         }
 
-        if self.unit_present(slot).await {
-            return;
+        // No terminal status: resolve against the unit's verified liveness (F1).
+        match self.unit_liveness(slot).await {
+            // Live + identity-verified: healthy, leave it running.
+            SlotLiveness::Live => return,
+            // Query error: liveness is UNKNOWN — never mark a maybe-live exec
+            // lost on a transient systemctl failure. Retry on the next pass.
+            SlotLiveness::Unknown => return,
+            // An impostor unit sits at our slot: clean it up, then treat the
+            // record as having no live unit (fall through to lost handling).
+            SlotLiveness::Foreign => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
+            }
+            SlotLiveness::Absent => {}
         }
         // Within the dispatch deadline a not-yet-registered unit is normal.
         let within_deadline = {
@@ -751,14 +888,14 @@ impl DetachedRegistry {
             state.slots.keys().copied().collect()
         };
         for slot in slots {
-            let (creating, terminal, terminal_time, guards) = {
+            let (creating, dispatch_hold, terminal, terminal_time) = {
                 let state = self.lock();
                 match state.slots.get(&slot) {
                     Some(entry) => (
                         entry.creating,
+                        entry.dispatch_hold,
                         entry.is_terminal(),
                         entry.record.terminal_time_unix,
-                        entry.read_guards,
                     ),
                     None => continue,
                 }
@@ -766,14 +903,19 @@ impl DetachedRegistry {
             if creating {
                 continue;
             }
+            if dispatch_hold {
+                // F2: unlike a `creating` guard, a crash-recovered dispatch hold
+                // is actively resolved by the reaper after its deadline.
+                self.resolve_dispatch_hold(slot).await;
+                continue;
+            }
             if !terminal {
                 self.reconcile_slot(slot).await;
                 continue;
             }
-            // Terminal: GC past TTL, deferring while a read guard is held.
-            if guards > 0 {
-                continue;
-            }
+            // Terminal: GC past TTL. The read-guard recheck happens INSIDE
+            // gc_slot under the mutex so a reader that took a guard after this
+            // snapshot cannot race the unlink (F5).
             let expired = terminal_time
                 .map(|t| self.clock.now_ms().saturating_sub(t) >= RETENTION_TTL_MS)
                 .unwrap_or(false);
@@ -784,15 +926,97 @@ impl DetachedRegistry {
     }
 
     async fn gc_slot(&self, slot: u32) {
+        // Best-effort unit teardown happens outside the registry mutex (async).
         let _ = self.units.stop_unit(slot).await;
         let _ = self.units.reset_failed(slot).await;
+        // Recheck read guards and unlink UNDER the mutex: a reader that took a
+        // guard after the reaper's snapshot must defer the unlink (F5).
+        // delete_slot_dir is synchronous, so holding the std mutex across it
+        // introduces no await and cannot deadlock.
+        let mut state = self.lock();
+        let Some(entry) = state.slots.get(&slot) else {
+            return;
+        };
+        if entry.read_guards > 0 {
+            // An ExecLogs read is in flight; defer GC to a later reaper pass.
+            return;
+        }
+        match self.store.delete_slot_dir(slot) {
+            Ok(()) => {
+                let exec_id = state.slots.get(&slot).map(|e| e.record.exec_id.clone());
+                state.remove_entry(slot);
+                if let Some(exec_id) = exec_id {
+                    state.push_tombstone(exec_id);
+                }
+            }
+            Err(_) => {
+                // F12: deletion failed — retain the entry so the slot is NOT
+                // freed for reuse with stale files still on disk. A later reaper
+                // pass retries the unlink.
+            }
+        }
+    }
+
+    /// Resolve a crash-recovered dispatch hold (F2): a late-registered unit is
+    /// promoted to Running; a definitive absence past the dispatch deadline is
+    /// deleted + released; anything else (still within the deadline, or an
+    /// unknown query) stays held for the next pass.
+    async fn resolve_dispatch_hold(&self, slot: u32) {
+        let past_deadline = {
+            let state = self.lock();
+            match state.slots.get(&slot) {
+                Some(entry) => self.clock.now_ms() >= entry.record.dispatch_deadline_unix,
+                None => return,
+            }
+        };
+        match self.unit_liveness(slot).await {
+            SlotLiveness::Live => self.promote_dispatch_hold(slot),
+            // Unknown: never resolve destructively on a query error; keep held.
+            SlotLiveness::Unknown => {}
+            SlotLiveness::Foreign => {
+                // Impostor unit at our slot; clean it up. Delete the hold once
+                // past the deadline (the real runner never registered).
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
+                if past_deadline {
+                    self.delete_dispatch_hold(slot).await;
+                }
+            }
+            SlotLiveness::Absent => {
+                if past_deadline {
+                    self.delete_dispatch_hold(slot).await;
+                }
+            }
+        }
+    }
+
+    /// A late unit appeared for a held dispatch: clear the hold and promote it
+    /// to Running (it keeps its already-counted active reservation).
+    fn promote_dispatch_hold(&self, slot: u32) {
+        let record = {
+            let mut state = self.lock();
+            let Some(entry) = state.slots.get_mut(&slot) else {
+                return;
+            };
+            if !entry.dispatch_hold {
+                return;
+            }
+            entry.dispatch_hold = false;
+            if entry.record.state == RecordState::Dispatching {
+                entry.record.state = RecordState::Running;
+            }
+            entry.generation += 1;
+            entry.record.clone()
+        };
+        let _ = self.store.write_record(slot, &record);
+    }
+
+    /// A held dispatch never registered a unit within its deadline: delete the
+    /// slot dir + release the reservation. No id was ever externally visible.
+    async fn delete_dispatch_hold(&self, slot: u32) {
         let _ = self.store.delete_slot_dir(slot);
         let mut state = self.lock();
-        let exec_id = state.slots.get(&slot).map(|e| e.record.exec_id.clone());
         state.remove_entry(slot);
-        if let Some(exec_id) = exec_id {
-            state.push_tombstone(exec_id);
-        }
     }
 
     // ---- startup re-adoption --------------------------------------------
@@ -806,29 +1030,49 @@ impl DetachedRegistry {
             Ok(slots) => slots,
             Err(_) => return,
         };
-        let present_units = self.units.list_managed_units().await.unwrap_or_default();
-        let unit_live = |slot: u32| present_units.iter().any(|u| u.slot == slot);
+        // F1: a query error must NOT be treated as "no units present" — that
+        // would make every no-status record look unit-less and trigger
+        // destructive reconciliation. On error, classify every slot as Unknown
+        // and adopt non-destructively; the periodic reaper resolves once
+        // systemd is queryable again.
+        let present_units = self.units.list_managed_units().await.ok();
 
-        for slot in slots {
-            self.adopt_slot(slot, unit_live(slot)).await;
+        for slot in &slots {
+            let liveness = match &present_units {
+                Some(units) => self.classify_unit(units, *slot),
+                None => SlotLiveness::Unknown,
+            };
+            self.adopt_slot(*slot, liveness).await;
         }
 
-        // Orphan units with no record → stop + reset-failed.
-        let adopted: Vec<u32> = {
-            let state = self.lock();
-            state.slots.keys().copied().collect()
-        };
-        for unit in &present_units {
-            if !adopted.contains(&unit.slot) {
-                let _ = self.units.stop_unit(unit.slot).await;
-                let _ = self.units.reset_failed(unit.slot).await;
+        // Orphan units with no record → stop + reset-failed. Only safe when the
+        // unit list was actually obtained (skip on a query error).
+        if let Some(present_units) = &present_units {
+            let adopted: Vec<u32> = {
+                let state = self.lock();
+                state.slots.keys().copied().collect()
+            };
+            for unit in present_units {
+                if !adopted.contains(&unit.slot) {
+                    let _ = self.units.stop_unit(unit.slot).await;
+                    let _ = self.units.reset_failed(unit.slot).await;
+                }
             }
         }
 
         self.evict_over_budget().await;
     }
 
-    async fn adopt_slot(&self, slot: u32, unit_live: bool) {
+    async fn adopt_slot(&self, slot: u32, liveness: SlotLiveness) {
+        // F7: authenticity gate BEFORE trusting any on-disk bytes. A slot whose
+        // dir/files fail the root-owned/mode/link-count/no-symlink checks is
+        // quarantined (stop+reset any unit, delete the dir) and never adopted.
+        if self.store.validate_authenticity(slot).is_err() {
+            let _ = self.units.stop_unit(slot).await;
+            let _ = self.units.reset_failed(slot).await;
+            let _ = self.store.delete_slot_dir(slot);
+            return;
+        }
         let Ok(record) = self.store.read_record(slot) else {
             // Unreadable/corrupt → quarantine (delete).
             let _ = self.store.delete_slot_dir(slot);
@@ -859,58 +1103,86 @@ impl DetachedRegistry {
                 let _ = self.store.delete_slot_dir(slot);
                 return;
             }
-            self.insert_adopted(slot, record, Some((terminal, code, signal)), false);
+            self.insert_adopted(slot, record, AdoptKind::Terminal(terminal, code, signal));
             return;
         }
 
-        if unit_live {
-            // Live authentic unit + started/none → adopt as Running. Never kill.
-            self.insert_adopted(slot, record, None, true);
-            return;
-        }
-
-        // No unit, no terminal status.
-        if record.state == RecordState::Dispatching
-            && self.clock.now_ms() < record.dispatch_deadline_unix
-        {
-            // Within dispatch deadline → hold in-flight (reserved, non-listable).
-            self.insert_adopted(slot, record, None, false);
-            // Keep it guarded so it is not listable/reaped until resolved.
-            if let Some(entry) = self.lock().slots.get_mut(&slot) {
-                entry.creating = true;
+        // No terminal status: branch on the unit's verified liveness.
+        match liveness {
+            SlotLiveness::Live => {
+                // Authentic live unit + started/none → adopt Running. Never kill.
+                self.insert_adopted(slot, record, AdoptKind::Running);
             }
-            return;
+            SlotLiveness::Foreign => {
+                // Present but not our active runner (inactive/failed/mismatch):
+                // clean up the impostor, then treat as having no live unit.
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
+                self.adopt_no_unit(slot, record);
+            }
+            SlotLiveness::Absent => {
+                self.adopt_no_unit(slot, record);
+            }
+            SlotLiveness::Unknown => {
+                // F1: a query error is NOT absence. Adopt non-destructively and
+                // let the reaper resolve once systemd is queryable: a
+                // Dispatching record holds; anything else keeps Running.
+                if record.state == RecordState::Dispatching {
+                    self.insert_adopted(slot, record, AdoptKind::DispatchHold);
+                } else {
+                    self.insert_adopted(slot, record, AdoptKind::Running);
+                }
+            }
         }
-
-        // Past the dispatch deadline (or non-Dispatching) with no unit/status →
-        // delete + release; no visible id.
-        let _ = self.store.delete_slot_dir(slot);
     }
 
-    fn insert_adopted(
-        &self,
-        slot: u32,
-        mut record: DurableRecord,
-        terminal: Option<(RecordState, Option<i32>, Option<u32>)>,
-        running: bool,
-    ) {
+    /// Adopt a record with NO terminal status and NO live unit (definitive).
+    /// Distinguishes "never ran" from "was running, runner vanished":
+    /// - Dispatching within deadline → dispatch hold (F2; reaper resolves).
+    /// - Dispatching past deadline → delete + release (never ran).
+    /// - any other live state (e.g. Running) → mark lost, RETAIN slot+logs+
+    ///   quota (F3): the runner was up while guestd was down.
+    fn adopt_no_unit(&self, slot: u32, record: DurableRecord) {
+        if record.state == RecordState::Dispatching {
+            if self.clock.now_ms() < record.dispatch_deadline_unix {
+                self.insert_adopted(slot, record, AdoptKind::DispatchHold);
+            } else {
+                // Past the dispatch deadline, never ran → delete + release.
+                let _ = self.store.delete_slot_dir(slot);
+            }
+        } else {
+            // F3: persisted Running (or other non-Dispatching live) with no unit
+            // and no terminal status. Route through the SAME lost path as live
+            // reconciliation: adopt as Running, then mark lost — releases only
+            // the active counter, retaining slot + logs + quota until TTL/GC.
+            self.insert_adopted(slot, record, AdoptKind::Running);
+            self.mark_lost(slot);
+        }
+    }
+
+    fn insert_adopted(&self, slot: u32, mut record: DurableRecord, kind: AdoptKind) {
         let caps = DetachedCaps::standard(self.config.max_runtime_sec);
         let now = self.clock.now_ms();
-        let mut active_counted = false;
-        if let Some((terminal_state, code, signal)) = terminal {
-            record.state = terminal_state;
-            record.exit_code = code;
-            record.term_signal = signal;
-            if record.terminal_time_unix.is_none() {
-                record.terminal_time_unix = Some(now);
+        let (active_counted, dispatch_hold) = match &kind {
+            AdoptKind::Terminal(terminal_state, code, signal) => {
+                record.state = *terminal_state;
+                record.exit_code = *code;
+                record.term_signal = *signal;
+                if record.terminal_time_unix.is_none() {
+                    record.terminal_time_unix = Some(now);
+                }
+                (false, false)
             }
-        } else if running {
-            record.state = RecordState::Running;
-            active_counted = true;
-        } else {
-            // In-flight dispatch hold: still active (reserved).
-            active_counted = true;
-        }
+            AdoptKind::Running => {
+                record.state = RecordState::Running;
+                (true, false)
+            }
+            AdoptKind::DispatchHold => {
+                // Keep the persisted Dispatching state; reserved + non-listable
+                // until the reaper resolves the hold.
+                (true, true)
+            }
+        };
         let mut state = self.lock();
         state.reserved_log_bytes = state
             .reserved_log_bytes
@@ -924,6 +1196,7 @@ impl DetachedRegistry {
                 record,
                 caps,
                 creating: false,
+                dispatch_hold,
                 generation: 0,
                 active_counted,
                 read_guards: 0,
@@ -970,15 +1243,6 @@ impl DetachedRegistry {
             } else {
                 ExecError::ExecNotFound
             }),
-        }
-    }
-
-    fn missing_kind(&self, exec_id: &str) -> ExecError {
-        let state = self.lock();
-        if state.is_tombstoned(exec_id) {
-            ExecError::ExecExpired
-        } else {
-            ExecError::ExecNotFound
         }
     }
 
@@ -1178,24 +1442,47 @@ impl RunSlotStore {
         RunnerPaths::new(self.base.clone(), slot)
     }
 
-    /// Validate the parent and slot directories are root-owned via dir-fd
-    /// `openat`/`O_NOFOLLOW` (mirrors the runner's `validate_slot_dir`).
+    /// Validate the parent and slot directories are root-owned 0700 dirs via
+    /// dir-fd `openat`/`O_NOFOLLOW` (mirrors the runner's `validate_slot_dir`).
     fn validate_slot_dir(&self, paths: &RunnerPaths) -> Result<(), ExecError> {
         use rustix::fs::{fstat, open, openat, Mode, OFlags};
         let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let base = open(paths.base(), dir_flags, Mode::empty()).map_err(|_| ExecError::Internal)?;
         let base_stat = fstat(&base).map_err(|_| ExecError::Internal)?;
-        if base_stat.st_uid != 0 {
-            return Err(ExecError::RetainedLogPathUnsafe);
-        }
+        check_dir_stat(&base_stat)?;
         let slot = openat(&base, paths.slot_dir_name(), dir_flags, Mode::empty())
             .map_err(|_| ExecError::Internal)?;
         let slot_stat = fstat(&slot).map_err(|_| ExecError::Internal)?;
-        if slot_stat.st_uid != 0 {
-            return Err(ExecError::RetainedLogPathUnsafe);
-        }
+        check_dir_stat(&slot_stat)?;
         Ok(())
     }
+}
+
+/// A re-adoption authenticity check failed for a slot dir: it must be a
+/// root-owned 0700 directory.
+fn check_dir_stat(st: &rustix::fs::Stat) -> Result<(), ExecError> {
+    use rustix::fs::FileType;
+    if FileType::from_raw_mode(st.st_mode) != FileType::Directory
+        || st.st_uid != 0
+        || (st.st_mode & 0o777) != 0o700
+    {
+        return Err(ExecError::RetainedLogPathUnsafe);
+    }
+    Ok(())
+}
+
+/// A re-adoption authenticity check failed for a slot file: it must be a
+/// root-owned, regular 0600 file with exactly one hard link.
+fn check_file_stat(st: &rustix::fs::Stat) -> Result<(), ExecError> {
+    use rustix::fs::FileType;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile
+        || st.st_uid != 0
+        || (st.st_mode & 0o777) != 0o600
+        || st.st_nlink != 1
+    {
+        return Err(ExecError::RetainedLogPathUnsafe);
+    }
+    Ok(())
 }
 
 impl Default for RunSlotStore {
@@ -1326,6 +1613,58 @@ impl SlotStore for RunSlotStore {
             .map_err(|_| ExecError::Internal)
     }
 
+    fn scrub_slot_files(&self, slot: u32) -> Result<(), ExecError> {
+        let paths = self.paths(slot);
+        // The runner-written files a reused slot must never inherit. The
+        // record/spec are immediately rewritten by persist_dispatch, so they are
+        // left to be replaced atomically.
+        let stale = [
+            paths.status(),
+            paths.cancel(),
+            paths.data(RunnerStream::Stdout),
+            paths.data(RunnerStream::Stderr),
+            paths.sidecar(RunnerStream::Stdout),
+            paths.sidecar(RunnerStream::Stderr),
+        ];
+        for path in stale {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(ExecError::Internal),
+            }
+        }
+        nixling_exec_runner::atomicio::fsync_parent_dir(&paths.slot_dir())
+            .map_err(|_| ExecError::Internal)
+    }
+
+    fn validate_authenticity(&self, slot: u32) -> Result<(), ExecError> {
+        use rustix::fs::{fstat, open, openat, Mode, OFlags};
+        let paths = self.paths(slot);
+        let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        // Base dir: root-owned 0700 directory.
+        let base = open(paths.base(), dir_flags, Mode::empty()).map_err(|_| ExecError::Internal)?;
+        check_dir_stat(&fstat(&base).map_err(|_| ExecError::Internal)?)?;
+        // Slot dir: root-owned 0700 directory reached via openat O_NOFOLLOW.
+        let slot_fd = openat(&base, paths.slot_dir_name(), dir_flags, Mode::empty())
+            .map_err(|_| ExecError::RetainedLogPathUnsafe)?;
+        check_dir_stat(&fstat(&slot_fd).map_err(|_| ExecError::RetainedLogPathUnsafe)?)?;
+        // Each present per-slot file: root-owned regular 0600, link-count 1,
+        // reached without traversing a symlink (O_NOFOLLOW). Absent files are
+        // permitted (the runner may not have created every stream yet).
+        let file_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        for name in RunnerPaths::slot_file_names() {
+            match openat(&slot_fd, name, file_flags, Mode::empty()) {
+                Ok(fd) => {
+                    check_file_stat(&fstat(&fd).map_err(|_| ExecError::RetainedLogPathUnsafe)?)?;
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                // ELOOP (symlink under O_NOFOLLOW) or any other failure → unsafe.
+                Err(_) => return Err(ExecError::RetainedLogPathUnsafe),
+            }
+        }
+        Ok(())
+    }
+
     fn list_slot_dirs(&self) -> Result<Vec<u32>, ExecError> {
         let mut slots = Vec::new();
         let entries = match std::fs::read_dir(&self.base) {
@@ -1356,8 +1695,60 @@ mod tests {
     use crate::detached::UnitError;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Condvar;
+
+    const RUNNER_PATH: &str = "/run/current-system/sw/bin/nixling-exec-runner";
 
     // ---- fakes -----------------------------------------------------------
+
+    /// Cross-fake event log: lets order-sensitive tests assert the relative
+    /// order of store writes and unit-manager calls (e.g. the cancel sentinel
+    /// strictly precedes `stop_unit`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Event {
+        WriteCancel(u32),
+        StopUnit(u32),
+        ScrubSlotFiles(u32),
+        DeleteSlotDir(u32),
+    }
+
+    type EventLog = Arc<Mutex<Vec<Event>>>;
+
+    /// A barrier that blocks `FakeStore::read_log` until a test releases it,
+    /// while signalling once the read-guard has actually been taken. Used to
+    /// deterministically exercise the GC-vs-in-flight-read race (F5).
+    #[derive(Default)]
+    struct ReadGate {
+        state: Mutex<ReadGateState>,
+        entered_cv: Condvar,
+        release_cv: Condvar,
+    }
+    #[derive(Default)]
+    struct ReadGateState {
+        entered: bool,
+        released: bool,
+    }
+    impl ReadGate {
+        fn wait_in_read(&self) {
+            let mut g = self.state.lock().unwrap();
+            g.entered = true;
+            self.entered_cv.notify_all();
+            while !g.released {
+                g = self.release_cv.wait(g).unwrap();
+            }
+        }
+        fn wait_until_entered(&self) {
+            let mut g = self.state.lock().unwrap();
+            while !g.entered {
+                g = self.entered_cv.wait(g).unwrap();
+            }
+        }
+        fn release(&self) {
+            let mut g = self.state.lock().unwrap();
+            g.released = true;
+            self.release_cv.notify_all();
+        }
+    }
 
     #[derive(Default)]
     struct FakeStoreState {
@@ -1369,15 +1760,27 @@ mod tests {
         stderr_meta: HashMap<u32, StreamMeta>,
         stdout_data: HashMap<u32, Vec<u8>>,
         prepared: Vec<u32>,
+        scrubbed: Vec<u32>,
         fail_prepare: bool,
+        /// Slots whose authenticity gate must fail (re-adoption quarantine).
+        fail_authenticity: std::collections::HashSet<u32>,
         /// When set, writing the cancel sentinel also publishes this terminal
         /// status (simulating a promptly-reacting runner).
         cancel_terminal: Option<StatusPhase>,
+        /// When set, `read_log` blocks on this gate (GC-vs-read race test).
+        read_gate: Option<Arc<ReadGate>>,
+        /// When set, `read_status` returns this error (F6 create-resolution leak).
+        fail_status: bool,
+        /// When set, `delete_slot_dir` returns an error (F12 retain-on-failure).
+        fail_delete: bool,
+        /// When set, `read_status` blocks on this gate (Creating-guard race).
+        status_gate: Option<Arc<ReadGate>>,
     }
 
     #[derive(Clone, Default)]
     struct FakeStore {
         inner: Arc<Mutex<FakeStoreState>>,
+        events: EventLog,
     }
 
     impl FakeStore {
@@ -1404,6 +1807,24 @@ mod tests {
                 .unwrap()
                 .records
                 .insert(slot, record.encode());
+        }
+        fn scrubbed(&self) -> Vec<u32> {
+            self.inner.lock().unwrap().scrubbed.clone()
+        }
+        fn set_fail_authenticity(&self, slot: u32) {
+            self.inner.lock().unwrap().fail_authenticity.insert(slot);
+        }
+        fn install_read_gate(&self, gate: Arc<ReadGate>) {
+            self.inner.lock().unwrap().read_gate = Some(gate);
+        }
+        fn install_status_gate(&self, gate: Arc<ReadGate>) {
+            self.inner.lock().unwrap().status_gate = Some(gate);
+        }
+        fn set_fail_status(&self, fail: bool) {
+            self.inner.lock().unwrap().fail_status = fail;
+        }
+        fn set_fail_delete(&self, fail: bool) {
+            self.inner.lock().unwrap().fail_delete = fail;
         }
     }
 
@@ -1436,6 +1857,7 @@ mod tests {
             Ok(())
         }
         fn write_cancel(&self, slot: u32) -> Result<(), ExecError> {
+            self.events.lock().unwrap().push(Event::WriteCancel(slot));
             let mut s = self.inner.lock().unwrap();
             s.cancels.insert(slot, true);
             if let Some(phase) = s.cancel_terminal {
@@ -1444,7 +1866,17 @@ mod tests {
             Ok(())
         }
         fn read_status(&self, slot: u32) -> Result<Option<StatusPhase>, ExecError> {
-            Ok(self.inner.lock().unwrap().status.get(&slot).copied())
+            // Optionally park here (with the Creating guard held by the caller)
+            // so a concurrent ExecList/reaper must observe the hidden entry.
+            let gate = self.inner.lock().unwrap().status_gate.clone();
+            if let Some(gate) = gate {
+                gate.wait_in_read();
+            }
+            let s = self.inner.lock().unwrap();
+            if s.fail_status {
+                return Err(ExecError::Internal);
+            }
+            Ok(s.status.get(&slot).copied())
         }
         fn read_log_meta(
             &self,
@@ -1464,6 +1896,12 @@ mod tests {
             offset: u64,
             max_len: u64,
         ) -> Result<RingChunk, FileRingError> {
+            // Optionally block here (with the read-guard already held by the
+            // caller) so a concurrent GC observes guard>0 and defers (F5).
+            let gate = self.inner.lock().unwrap().read_gate.clone();
+            if let Some(gate) = gate {
+                gate.wait_in_read();
+            }
             let s = self.inner.lock().unwrap();
             let (data, meta) = match stream {
                 RunnerStream::Stdout => (s.stdout_data.get(&slot), s.stdout_meta.get(&slot)),
@@ -1505,7 +1943,11 @@ mod tests {
             Ok(())
         }
         fn delete_slot_dir(&self, slot: u32) -> Result<(), ExecError> {
+            self.events.lock().unwrap().push(Event::DeleteSlotDir(slot));
             let mut s = self.inner.lock().unwrap();
+            if s.fail_delete {
+                return Err(ExecError::Internal);
+            }
             s.records.remove(&slot);
             s.specs.remove(&slot);
             s.status.remove(&slot);
@@ -1515,22 +1957,62 @@ mod tests {
             s.stdout_data.remove(&slot);
             Ok(())
         }
+        fn scrub_slot_files(&self, slot: u32) -> Result<(), ExecError> {
+            self.events
+                .lock()
+                .unwrap()
+                .push(Event::ScrubSlotFiles(slot));
+            // Record-only: the real removal is covered by a dedicated on-disk
+            // test. Clearing status here would break create-flow tests that
+            // pre-seed a status before calling `create`.
+            self.inner.lock().unwrap().scrubbed.push(slot);
+            Ok(())
+        }
+        fn validate_authenticity(&self, slot: u32) -> Result<(), ExecError> {
+            if self.inner.lock().unwrap().fail_authenticity.contains(&slot) {
+                return Err(ExecError::RetainedLogPathUnsafe);
+            }
+            Ok(())
+        }
         fn list_slot_dirs(&self) -> Result<Vec<u32>, ExecError> {
             Ok(self.inner.lock().unwrap().records.keys().copied().collect())
         }
     }
 
-    #[derive(Default)]
     struct FakeUnitsState {
         live: Vec<u32>,
         started: Vec<u32>,
         stopped: Vec<u32>,
         fail_start: bool,
+        /// `list_managed_units` returns an error (liveness must be Unknown, F1).
+        fail_list: bool,
+        /// Live slots forced to report `active = false` (→ Foreign).
+        inactive: std::collections::HashSet<u32>,
+        /// Live slots forced to report a non-matching identity (→ Foreign).
+        mismatch: std::collections::HashSet<u32>,
+        /// Runner binary path used to synthesize a matching `ExecStart`.
+        runner_path: String,
+    }
+
+    impl Default for FakeUnitsState {
+        fn default() -> Self {
+            Self {
+                live: Vec::new(),
+                started: Vec::new(),
+                stopped: Vec::new(),
+                fail_start: false,
+                fail_list: false,
+                inactive: std::collections::HashSet::new(),
+                mismatch: std::collections::HashSet::new(),
+                runner_path: RUNNER_PATH.to_owned(),
+            }
+        }
     }
 
     #[derive(Clone, Default)]
     struct FakeUnits {
         inner: Arc<Mutex<FakeUnitsState>>,
+        events: EventLog,
     }
 
     impl FakeUnits {
@@ -1543,6 +2025,15 @@ mod tests {
         }
         fn stopped(&self, slot: u32) -> bool {
             self.inner.lock().unwrap().stopped.contains(&slot)
+        }
+        fn set_fail_list(&self, fail: bool) {
+            self.inner.lock().unwrap().fail_list = fail;
+        }
+        fn set_inactive(&self, slot: u32) {
+            self.inner.lock().unwrap().inactive.insert(slot);
+        }
+        fn set_mismatch(&self, slot: u32) {
+            self.inner.lock().unwrap().mismatch.insert(slot);
         }
     }
 
@@ -1562,6 +2053,7 @@ mod tests {
             Ok(())
         }
         async fn stop_unit(&self, slot: u32) -> Result<(), UnitError> {
+            self.events.lock().unwrap().push(Event::StopUnit(slot));
             let mut s = self.inner.lock().unwrap();
             s.stopped.push(slot);
             s.live.retain(|x| *x != slot);
@@ -1572,11 +2064,27 @@ mod tests {
         }
         async fn list_managed_units(&self) -> Result<Vec<crate::detached::ManagedUnit>, UnitError> {
             let s = self.inner.lock().unwrap();
+            if s.fail_list {
+                return Err(UnitError::Internal);
+            }
             Ok(s.live
                 .iter()
-                .map(|slot| crate::detached::ManagedUnit {
-                    slot: *slot,
-                    active: true,
+                .map(|slot| {
+                    let exec_start = if s.mismatch.contains(slot) {
+                        // Plausible-but-foreign command at our slot.
+                        Some(format!("/usr/bin/evil --serve-exec --slot {slot:02}"))
+                    } else {
+                        Some(format!(
+                            "{} --serve-exec --slot {slot:02}",
+                            s.runner_path
+                        ))
+                    };
+                    crate::detached::ManagedUnit {
+                        slot: *slot,
+                        active: !s.inactive.contains(slot),
+                        slice: Some("nixling-exec.slice".to_owned()),
+                        exec_start,
+                    }
                 })
                 .collect())
         }
@@ -1620,6 +2128,7 @@ mod tests {
         store: FakeStore,
         units: FakeUnits,
         now: Arc<AtomicU64>,
+        events: EventLog,
     }
 
     fn harness() -> Harness {
@@ -1627,8 +2136,15 @@ mod tests {
     }
 
     fn harness_with_clock_step(step: u64) -> Harness {
-        let store = FakeStore::default();
-        let units = FakeUnits::default();
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let store = FakeStore {
+            inner: Arc::default(),
+            events: Arc::clone(&events),
+        };
+        let units = FakeUnits {
+            inner: Arc::default(),
+            events: Arc::clone(&events),
+        };
         let now = Arc::new(AtomicU64::new(1_000));
         let registry = DetachedRegistry::new(
             Arc::new(units.clone()),
@@ -1644,7 +2160,7 @@ mod tests {
                 next: AtomicU64::new(1),
             }),
             RegistryConfig {
-                paths: RunnerUnitPaths::new("/run/current-system/sw/bin/nixling-exec-runner"),
+                paths: RunnerUnitPaths::new(RUNNER_PATH),
                 boot_id: "boot-A".to_owned(),
                 max_runtime_sec: 0,
             },
@@ -1654,6 +2170,7 @@ mod tests {
             store,
             units,
             now,
+            events,
         }
     }
 
@@ -2042,6 +2559,466 @@ mod tests {
         assert_eq!(
             DETACHED_LOG_QUOTA_BYTES,
             DETACHED_RETAINED_PER_VM as u64 * 2 * DETACHED_STREAM_LOG_BYTES
+        );
+    }
+
+    // ---- W13fu1 round-1 regression tests --------------------------------
+
+    /// A record seeded for re-adoption with arbitrary state/deadline.
+    fn rec(slot: u32, id: u64, state: RecordState, dispatch_deadline_unix: u64) -> DurableRecord {
+        DurableRecord {
+            exec_id: format!("{id:032x}"),
+            slot,
+            boot_id: "boot-A".to_owned(),
+            create_time_unix: 1_000,
+            dispatch_deadline_unix,
+            argv_sha256: "x".repeat(64),
+            state,
+            exit_code: None,
+            term_signal: None,
+            lost: false,
+            terminal_time_unix: None,
+        }
+    }
+
+    async fn create_live_running(h: &Harness, slot: u32) -> String {
+        h.units.set_live(slot, true);
+        h.store.set_status(slot, StatusPhase::Started);
+        let (id, _) = h
+            .registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .expect("create");
+        id
+    }
+
+    // F1: a transient liveness QUERY error must be Unknown, never Absent — a
+    // live exec must not be marked lost on a flaky `systemctl`.
+    #[tokio::test]
+    async fn f1_query_error_does_not_mark_running_lost() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.units.set_fail_list(true);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(
+            snap.state,
+            ExecState::Running,
+            "query error must be Unknown (retain), not Absent (lost)"
+        );
+        // The periodic reaper path must behave identically.
+        h.registry.reap_once().await;
+        assert_eq!(
+            h.registry.inspect(&id, "boot-A").await.unwrap().state,
+            ExecState::Running
+        );
+    }
+
+    // F1: a merely-loaded (inactive/failed) unit is NOT live.
+    #[tokio::test]
+    async fn f1_inactive_unit_is_not_live() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.units.set_inactive(0);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd, "inactive unit ⇒ not live");
+    }
+
+    // F1: an identity mismatch (foreign command at our slot) is not adoptable.
+    #[tokio::test]
+    async fn f1_identity_mismatch_unit_is_foreign() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.units.set_mismatch(0);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+        assert!(h.units.stopped(0), "impostor unit at our slot is stopped");
+    }
+
+    // F2: a crash-recovered Dispatching record within its deadline is held —
+    // non-listable, non-inspectable — but the slot dir is retained.
+    #[tokio::test]
+    async fn f2_crash_dispatching_within_deadline_is_held_nonlistable() {
+        let h = harness();
+        h.store
+            .seed_record(3, &rec(3, 21, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.registry.reconcile_on_startup().await;
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+        assert_eq!(
+            h.registry
+                .inspect(&format!("{:032x}", 21), "boot-A")
+                .await
+                .unwrap_err(),
+            ExecError::ExecNotFound
+        );
+        assert!(h.store.slot_exists(3), "the hold retains the slot dir");
+    }
+
+    // F2: a late-registering unit for a held dispatch is promoted to Running by
+    // the reaper (the slot does not leak as a forever-hidden hold).
+    #[tokio::test]
+    async fn f2_late_unit_promotes_hold_to_running() {
+        let h = harness();
+        h.store
+            .seed_record(3, &rec(3, 22, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.registry.reconcile_on_startup().await;
+        // The forked systemd-run finally registers the unit.
+        h.units.set_live(3, true);
+        h.registry.reap_once().await;
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 22), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::Running);
+        assert_eq!(
+            h.registry.list("boot-A").await.unwrap().len(),
+            1,
+            "promoted hold is now listable"
+        );
+    }
+
+    // F2: a held dispatch whose unit never registers is deleted + released once
+    // the dispatch deadline passes (NOT skipped forever like a Creating guard).
+    #[tokio::test]
+    async fn f2_held_dispatch_deleted_after_deadline_passes() {
+        let h = harness();
+        h.store
+            .seed_record(3, &rec(3, 24, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.registry.reconcile_on_startup().await;
+        assert!(h.store.slot_exists(3));
+        h.now
+            .store(1_000 + DISPATCH_DEADLINE_MS + 1, Ordering::SeqCst);
+        h.registry.reap_once().await;
+        assert!(!h.store.slot_exists(3), "past-deadline hold deleted");
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+        // Slot + active fully released: a full batch of fresh creates succeeds.
+        for slot in 0..DETACHED_ACTIVE_PER_VM as u32 {
+            create_live_running(&h, slot).await;
+        }
+    }
+
+    // F3: a persisted Running record with no unit + no terminal status is marked
+    // lost and RETAINED (id + logs survive a guestd restart), never deleted.
+    #[tokio::test]
+    async fn f3_persisted_running_no_unit_is_lost_and_retained() {
+        let h = harness();
+        h.store
+            .seed_record(2, &rec(2, 30, RecordState::Running, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.set_stdout(2, b"partial", meta(7, 0, false, false));
+        h.registry.reconcile_on_startup().await;
+        let id = format!("{:032x}", 30);
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+        // Logs retained + readable; slot retained.
+        let chunk = h
+            .registry
+            .read_logs(&id, "boot-A", RtStream::Stdout, 0, 1024)
+            .await
+            .unwrap();
+        assert_eq!(chunk.data, b"partial");
+        assert!(h.store.slot_exists(2));
+    }
+
+    // Re-adoption matrix: terminal status with no unit ⇒ adopt terminal.
+    #[tokio::test]
+    async fn readoption_terminal_status_with_no_unit_adopts_terminal() {
+        let h = harness();
+        h.store.seed_record(1, &rec(1, 31, RecordState::Running, 0));
+        h.store.set_status(1, StatusPhase::Exited(3));
+        h.registry.reconcile_on_startup().await;
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 31), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::Exited);
+        assert_eq!(snap.outcome, Some(ExitOutcome::Exited(3)));
+    }
+
+    // Re-adoption matrix: terminal status with a still-live unit ⇒ adopt terminal.
+    #[tokio::test]
+    async fn readoption_terminal_status_with_live_unit_adopts_terminal() {
+        let h = harness();
+        h.store.seed_record(1, &rec(1, 32, RecordState::Running, 0));
+        h.store.set_status(1, StatusPhase::Signaled(9));
+        h.units.set_live(1, true);
+        h.registry.reconcile_on_startup().await;
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 32), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::Signaled);
+    }
+
+    // Re-adoption matrix: an infra-failed status at startup is quarantined.
+    #[tokio::test]
+    async fn readoption_infra_failed_is_quarantined() {
+        let h = harness();
+        h.store.seed_record(1, &rec(1, 33, RecordState::Running, 0));
+        h.store.set_status(1, StatusPhase::InfraFailed);
+        h.units.set_live(1, true);
+        h.registry.reconcile_on_startup().await;
+        assert!(!h.store.slot_exists(1));
+        assert!(h.units.stopped(1));
+    }
+
+    // Re-adoption matrix: a live unit with no seeded record is an orphan ⇒ cleaned.
+    #[tokio::test]
+    async fn readoption_orphan_unit_without_record_is_cleaned() {
+        let h = harness();
+        h.units.set_live(4, true);
+        h.registry.reconcile_on_startup().await;
+        assert!(h.units.stopped(4), "orphan unit with no record is stopped");
+    }
+
+    // F7: a slot that fails the authenticity gate is quarantined, never adopted.
+    #[tokio::test]
+    async fn f7_unsafe_slot_is_quarantined_on_readoption() {
+        let h = harness();
+        h.store.seed_record(2, &rec(2, 40, RecordState::Running, 0));
+        h.units.set_live(2, true);
+        h.store.set_fail_authenticity(2);
+        h.registry.reconcile_on_startup().await;
+        assert!(!h.store.slot_exists(2), "unsafe slot deleted");
+        assert!(h.units.stopped(2), "unit for unsafe slot stopped");
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+    }
+
+    // F6: a `read_status` error during create resolution must tear the create
+    // down (stop unit + delete dir + release) rather than leak the reservation.
+    #[tokio::test]
+    async fn f6_create_read_status_error_releases_reservation() {
+        let h = harness();
+        h.units.set_live(0, true);
+        h.store.set_fail_status(true);
+        let err = h
+            .registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .unwrap_err();
+        assert_eq!(err, ExecError::Internal);
+        assert!(h.registry.list("boot-A").await.unwrap().is_empty());
+        assert!(!h.store.slot_exists(0));
+        assert!(h.units.stopped(0), "abort_create stops the unit");
+        // Reservation released: a full batch of fresh creates succeeds.
+        h.store.set_fail_status(false);
+        for slot in 0..DETACHED_ACTIVE_PER_VM as u32 {
+            create_live_running(&h, slot).await;
+        }
+    }
+
+    // F12: a failed slot-dir deletion during GC retains the entry (the slot is
+    // never freed for reuse with stale files), and a later pass retries.
+    #[tokio::test]
+    async fn f12_gc_delete_failure_retains_entry_for_retry() {
+        let h = harness();
+        h.store.set_status(0, StatusPhase::Exited(0));
+        let (id, _) = h
+            .registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .unwrap();
+        h.now.store(1_000 + RETENTION_TTL_MS + 1, Ordering::SeqCst);
+        h.store.set_fail_delete(true);
+        h.registry.reap_once().await;
+        assert!(
+            h.registry.inspect(&id, "boot-A").await.is_ok(),
+            "entry retained when deletion fails"
+        );
+        assert!(h.store.slot_exists(0));
+        // Retry succeeds once deletion works.
+        h.store.set_fail_delete(false);
+        h.registry.reap_once().await;
+        assert_eq!(
+            h.registry.inspect(&id, "boot-A").await.unwrap_err(),
+            ExecError::ExecExpired
+        );
+    }
+
+    // F12: a reused slot is scrubbed before the new record/spec are persisted.
+    #[tokio::test]
+    async fn f12_create_scrubs_slot_before_persist() {
+        let h = harness();
+        create_live_running(&h, 0).await;
+        assert!(
+            h.store.scrubbed().contains(&0),
+            "persist_dispatch scrubs the slot before writing"
+        );
+    }
+
+    // Two-phase cancel ORDER: the cancel sentinel write strictly precedes the
+    // last-resort stop_unit backstop (recorded via the shared event log).
+    #[tokio::test]
+    async fn cancel_event_order_sentinel_strictly_before_stop_unit() {
+        let h = harness_with_clock_step(CANCEL_DEADLINE_MS + 1);
+        let id = create_live_running(&h, 0).await;
+        h.registry.cancel(&id, "boot-A").await.unwrap();
+        let events = h.events.lock().unwrap().clone();
+        let sentinel = events
+            .iter()
+            .position(|e| *e == Event::WriteCancel(0))
+            .expect("sentinel written");
+        let stop = events
+            .iter()
+            .position(|e| *e == Event::StopUnit(0))
+            .expect("stop_unit backstop");
+        assert!(
+            sentinel < stop,
+            "cancel sentinel must precede stop_unit (events: {events:?})"
+        );
+    }
+
+    // Live reconciliation via the PERIODIC reaper: a vanished unit is marked
+    // lost (active released) while retained logs remain readable.
+    #[tokio::test]
+    async fn periodic_reaper_marks_vanished_unit_lost_and_retains_logs() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.store.set_stdout(0, b"out", meta(3, 0, false, false));
+        h.units.set_live(0, false);
+        h.registry.reap_once().await;
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+        let chunk = h
+            .registry
+            .read_logs(&id, "boot-A", RtStream::Stdout, 0, 64)
+            .await
+            .unwrap();
+        assert_eq!(chunk.data, b"out");
+    }
+
+    // F2/Creating guard: an in-flight create is invisible to a concurrent
+    // ExecList AND a concurrent reaper — neither may reveal, mark, or delete it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn creating_guard_hides_inflight_create_from_list_and_reaper() {
+        let Harness {
+            registry,
+            store,
+            units,
+            now: _now,
+            events: _events,
+        } = harness();
+        units.set_live(0, true);
+        let gate = Arc::new(ReadGate::default());
+        store.install_status_gate(Arc::clone(&gate));
+        let registry = Arc::new(registry);
+
+        let create_reg = Arc::clone(&registry);
+        let create = tokio::spawn(async move {
+            create_reg
+                .create("boot-A", command(), DetachedCaps::standard(0))
+                .await
+        });
+        // Wait until create is parked in read_status with the Creating guard held.
+        gate.wait_until_entered();
+
+        // Concurrent ExecList must not reveal the in-flight create.
+        assert!(
+            registry.list("boot-A").await.unwrap().is_empty(),
+            "ExecList must not reveal a Creating entry"
+        );
+        // Concurrent reaper must not mark/delete the in-flight create.
+        registry.reap_once().await;
+        assert!(store.slot_exists(0), "reaper must not delete a Creating entry");
+        assert!(!units.stopped(0), "reaper must not stop a Creating unit");
+
+        // Release: the create resolves Running and becomes listable.
+        store.set_status(0, StatusPhase::Started);
+        gate.release();
+        let (_id, snapshot) = create.await.unwrap().unwrap();
+        assert_eq!(snapshot.state, ExecState::Running);
+        assert_eq!(registry.list("boot-A").await.unwrap().len(), 1);
+    }
+
+    // F5: GC must recheck read-guards under the mutex — a read that took a guard
+    // after the reaper's snapshot keeps serving stable bytes, and only once it
+    // completes does a later pass GC the slot to a tombstone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn f5_gc_defers_while_read_guard_held_then_expires() {
+        let Harness {
+            registry,
+            store,
+            units: _units,
+            now,
+            events: _events,
+        } = harness();
+        store.set_status(0, StatusPhase::Exited(0));
+        let (id, _) = registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .unwrap();
+        store.set_stdout(0, b"hello", meta(5, 0, false, true));
+        // Make the terminal record GC-eligible.
+        now.store(1_000 + RETENTION_TTL_MS + 1, Ordering::SeqCst);
+        let gate = Arc::new(ReadGate::default());
+        store.install_read_gate(Arc::clone(&gate));
+        let registry = Arc::new(registry);
+
+        let read_reg = Arc::clone(&registry);
+        let read_id = id.clone();
+        let read = tokio::spawn(async move {
+            read_reg
+                .read_logs(&read_id, "boot-A", RtStream::Stdout, 0, 1024)
+                .await
+        });
+        // The read guard is now held; the read is parked in read_log.
+        gate.wait_until_entered();
+
+        // GC must DEFER while the guard is held.
+        registry.reap_once().await;
+        assert!(
+            registry.inspect(&id, "boot-A").await.is_ok(),
+            "GC must defer while a read guard is held"
+        );
+
+        // Release the read: it returns stable bytes.
+        gate.release();
+        let chunk = read.await.unwrap().unwrap();
+        assert_eq!(chunk.data, b"hello", "stable bytes before release");
+
+        // Now the guard is dropped: a later pass GCs to a tombstone.
+        registry.reap_once().await;
+        assert_eq!(
+            registry.inspect(&id, "boot-A").await.unwrap_err(),
+            ExecError::ExecExpired,
+            "ExecExpired after GC"
+        );
+    }
+
+    // ExecList enforces same-boot: a mismatched boot id is StaleSession.
+    #[tokio::test]
+    async fn list_boot_mismatch_is_stale_session() {
+        let h = harness();
+        create_live_running(&h, 0).await;
+        assert_eq!(
+            h.registry.list("boot-OTHER").await.unwrap_err(),
+            ExecError::StaleSession
+        );
+    }
+
+    // ExecList exposes only the argv hash — never the raw program/args/cwd/env.
+    #[tokio::test]
+    async fn list_entries_redact_raw_argv() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        let list = h.registry.list("boot-A").await.unwrap();
+        assert_eq!(list.len(), 1);
+        let entry = &list[0];
+        assert_eq!(entry.exec_id, id);
+        assert_eq!(entry.argv_sha256.len(), 64);
+        assert!(entry
+            .argv_sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        let rendered = format!("{entry:?}");
+        assert!(
+            !rendered.contains("/bin/sleep"),
+            "raw program must never appear in a list entry"
+        );
+        assert!(
+            !rendered.contains("3600"),
+            "raw args must never appear in a list entry"
         );
     }
 }

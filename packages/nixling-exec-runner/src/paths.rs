@@ -96,6 +96,22 @@ impl RunnerPaths {
     pub fn sidecar(&self, stream: Stream) -> PathBuf {
         self.slot_dir().join(stream.meta_name())
     }
+
+    /// Static basenames of every per-slot file the framework may create. Used
+    /// by the re-adoption authenticity gate (per-file `openat`/`O_NOFOLLOW`
+    /// `fstat`) and by stale-file scrubbing on slot reuse.
+    pub fn slot_file_names() -> [&'static str; 8] {
+        [
+            "record",
+            "spec",
+            "status",
+            "cancel",
+            "stdout",
+            "stderr",
+            "stdout.meta",
+            "stderr.meta",
+        ]
+    }
 }
 
 #[cfg(test)]

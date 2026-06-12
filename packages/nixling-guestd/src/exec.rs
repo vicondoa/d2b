@@ -1372,6 +1372,86 @@ mod tests {
         assert!(chunk.eof);
     }
 
+    // Parity: the guestd in-memory `OutputRing` (attached path) and the runner's
+    // on-disk `FileRing` (detached path) MUST expose identical drop-oldest,
+    // offset, dropped-byte, truncation, and EOF semantics. This compares the two
+    // REAL implementations against each other (not a local model copy), so a
+    // future divergence in either ring is caught.
+    #[test]
+    fn output_ring_and_runner_file_ring_have_identical_semantics() {
+        use nixling_exec_runner::filering::{FileRing, FileRingReader};
+
+        let unique = format!(
+            "exec-parity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        // cwd-relative scratch (never /tmp); cleaned up at the end.
+        let dir = std::path::PathBuf::from(".").join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let data = dir.join("stdout");
+        let side = dir.join("stdout.meta");
+
+        let cap = 16u64;
+        let mut file_ring = FileRing::create(&data, &side, cap).unwrap();
+        let mut mem_ring = OutputRing::new(cap as usize);
+
+        let appends: &[&[u8]] = &[
+            b"abc",
+            b"defgh",
+            b"",
+            b"ijklmnop",
+            b"qrstuvwxyz0123456789",
+            b"!",
+        ];
+        for chunk in appends {
+            file_ring.append(chunk).unwrap();
+            mem_ring.append(chunk);
+            let reader = FileRingReader::open(&data, &side).unwrap();
+            let end = mem_ring.end_offset();
+            for off in [0u64, end.saturating_sub(5), end.saturating_sub(1), end] {
+                for max in [0u64, 1, 7, 1024] {
+                    let mem = mem_ring.read(off, max);
+                    let file = reader.read(off, max);
+                    match (mem, file) {
+                        (Ok(m), Ok(f)) => {
+                            assert_eq!(m.data, f.data, "data off={off} max={max}");
+                            assert_eq!(m.start_offset, f.start_offset, "start off={off}");
+                            assert_eq!(m.end_offset, f.end_offset, "end off={off}");
+                            assert_eq!(m.next_offset, f.next_offset, "next off={off}");
+                            assert_eq!(m.dropped_bytes, f.dropped_bytes, "dropped off={off}");
+                            assert_eq!(m.truncated, f.truncated, "truncated off={off}");
+                            assert_eq!(m.eof, f.eof, "eof off={off}");
+                        }
+                        // Both rings reject the same out-of-window offsets.
+                        (Err(_), Err(_)) => {}
+                        (m, f) => {
+                            panic!("parity mismatch off={off} max={max}: mem={m:?} file={f:?}")
+                        }
+                    }
+                }
+            }
+        }
+
+        // EOF parity: only observable once the stream is fully drained.
+        mem_ring.mark_eof();
+        file_ring.mark_eof().unwrap();
+        let reader = FileRingReader::open(&data, &side).unwrap();
+        let end = mem_ring.end_offset();
+        let mem_mid = mem_ring.read(mem_ring.start_offset, 1).unwrap();
+        let file_mid = reader.read(mem_ring.start_offset, 1).unwrap();
+        assert_eq!(mem_mid.eof, file_mid.eof, "eof not signalled mid-stream");
+        let mem_end = mem_ring.read(end, 8).unwrap();
+        let file_end = reader.read(end, 8).unwrap();
+        assert!(mem_end.eof && file_end.eof, "eof at drain");
+        assert_eq!(mem_end.data, file_end.data);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn runtime(policy: ExecPolicy) -> (ExecRuntime<FakeSpawner, SeqIds>, SpawnHooks) {
         let (spawner, hooks) = FakeSpawner::new();
         (ExecRuntime::new(spawner, SeqIds::new(), policy), hooks)
