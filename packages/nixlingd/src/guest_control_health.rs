@@ -16,7 +16,7 @@ use nixling_ipc::guest_auth::{
     AUTH_NONCE_LEN, AUTH_TAG_LEN, AUTH_TRANSCRIPT_VERSION, GUEST_CONTROL_AUTH_PORT,
 };
 use nixling_ipc::guest_proto as pb;
-use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+use nixling_ipc::guest_wire::{GUEST_CONTROL_PROTOCOL_VERSION, READ_GUEST_FILE_MAX_BYTES};
 use protobuf::{Message, MessageField};
 use subtle::ConstantTimeEq;
 
@@ -55,6 +55,10 @@ pub trait GuestControlRpc {
         &self,
         request: pb::HealthRequest,
     ) -> Result<pb::HealthResponse, GuestControlHealthError>;
+    async fn read_guest_file(
+        &self,
+        request: pb::ReadGuestFileRequest,
+    ) -> Result<pb::ReadGuestFileResponse, GuestControlHealthError>;
 }
 
 pub trait GuestControlSigner {
@@ -147,6 +151,13 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         request: pb::HealthRequest,
     ) -> Result<pb::HealthResponse, GuestControlHealthError> {
         self.unary("Health", request).await
+    }
+
+    async fn read_guest_file(
+        &self,
+        request: pb::ReadGuestFileRequest,
+    ) -> Result<pb::ReadGuestFileResponse, GuestControlHealthError> {
+        self.unary("ReadGuestFile", request).await
     }
 }
 
@@ -242,6 +253,103 @@ where
         health,
     })
 }
+
+/// Typed outcome of an authenticated `ReadGuestFile` read. Each variant maps to
+/// an operator-actionable CLI error (Decision 12) — never a blind retry. The
+/// transport/auth/protocol variants reuse the Health probe's failure taxonomy;
+/// `CapabilityUnavailable` is the fail-closed result for an authenticated guest
+/// that never advertised `ReadGuestFile` (Decision 15 — an old/partial guest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuestFileReadError {
+    /// Handshake/transport/protocol failure (incl. unreachable, old-generation
+    /// listener, auth failure) surfaced from the underlying probe.
+    Probe(GuestControlHealthError),
+    /// Authenticated, but the guest does not advertise `ReadGuestFile`.
+    CapabilityUnavailable,
+    /// The guest config working copy does not exist.
+    FileNotFound,
+    /// The guest config exceeds the read cap.
+    FileTooLarge,
+    /// The resolved path was unsafe (symlink/non-regular/`..`).
+    PathUnsafe,
+    /// The guest denied the read (no path wired, or permission denied).
+    ReadDenied,
+    /// The guest returned a malformed `ReadGuestFile` response (oversize
+    /// content, unknown error kind, or content past the cap).
+    Protocol,
+}
+
+/// Authenticate to the guest control endpoint (reusing the W11 Health-probe
+/// handshake) and read the editable guest config working copy via the typed
+/// `ReadGuestFile { GuestConfig }` RPC on the SAME authenticated connection.
+///
+/// Decision 15: the negotiated `ReadGuestFile` capability is REQUIRED — an
+/// authenticated guest that never advertised it fails closed
+/// (`CapabilityUnavailable`) instead of being probed for a config file.
+///
+/// Decision 4: the returned bytes are the integrity ground truth; the guest's
+/// self-reported `size_bytes`/`sha256` are ignored here and recomputed by the
+/// host. This function returns ONLY the raw bytes (or a typed error) and never
+/// leaks them into the error path.
+pub async fn read_guest_config_authenticated<C, S>(
+    vm_id: &str,
+    peer_cid: Option<u32>,
+    host_nonce: [u8; AUTH_NONCE_LEN],
+    client: &C,
+    signer: &S,
+) -> Result<Vec<u8>, GuestFileReadError>
+where
+    C: GuestControlRpc + Sync,
+    S: GuestControlSigner + Sync,
+{
+    let evidence = probe_guest_control_health(vm_id, peer_cid, host_nonce, client, signer)
+        .await
+        .map_err(GuestFileReadError::Probe)?;
+    let advertises_read = evidence.health.capabilities.iter().any(|capability| {
+        matches!(
+            capability.enum_value(),
+            Ok(pb::GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE)
+        )
+    });
+    if !advertises_read {
+        return Err(GuestFileReadError::CapabilityUnavailable);
+    }
+
+    let mut request = pb::ReadGuestFileRequest::new();
+    request.metadata = MessageField::some(request_metadata(vm_id));
+    request.file_id =
+        protobuf::EnumOrUnknown::new(pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG);
+    let response = client
+        .read_guest_file(request)
+        .await
+        .map_err(GuestFileReadError::Probe)?;
+
+    if let Some(error) = response.error.as_ref() {
+        return Err(map_guest_file_error(error.kind.enum_value_or_default()));
+    }
+    // Defense in depth: a well-behaved guest never returns content past the cap,
+    // but the host re-enforces the bound on RECEIVED bytes and never trusts the
+    // guest-reported size/hash (Decision 4).
+    if response.content.len() as u64 > READ_GUEST_FILE_MAX_BYTES {
+        return Err(GuestFileReadError::Protocol);
+    }
+    Ok(response.content)
+}
+
+/// Exhaustive host-side mapping of a guest `ReadGuestFile` error kind to a typed
+/// read error (Decision 12 — no default `Retry`). Non-file kinds collapse to
+/// `Protocol` because the guest must not return them on this RPC.
+fn map_guest_file_error(kind: pb::GuestControlErrorKind) -> GuestFileReadError {
+    use pb::GuestControlErrorKind as K;
+    match kind {
+        K::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND => GuestFileReadError::FileNotFound,
+        K::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE => GuestFileReadError::FileTooLarge,
+        K::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE => GuestFileReadError::PathUnsafe,
+        K::GUEST_CONTROL_ERROR_KIND_READ_DENIED => GuestFileReadError::ReadDenied,
+        _ => GuestFileReadError::Protocol,
+    }
+}
+
 
 fn validate_health_evidence(health: &pb::HealthResponse) -> Result<(), GuestControlHealthError> {
     let origin = health
@@ -373,10 +481,14 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct FakeClient {
         bad_guest_tag: bool,
         overlong_boot_id: bool,
         invalid_health: bool,
+        advertise_read_cap: bool,
+        read_error: Option<pb::GuestControlErrorKind>,
+        read_content: Vec<u8>,
     }
 
     #[async_trait]
@@ -424,7 +536,30 @@ mod tests {
             health.remediation =
                 protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
             health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+            if self.advertise_read_cap {
+                health.capabilities.push(protobuf::EnumOrUnknown::new(
+                    pb::GuestCapability::GUEST_CAPABILITY_READ_GUEST_FILE,
+                ));
+            }
             Ok(health)
+        }
+
+        async fn read_guest_file(
+            &self,
+            _request: pb::ReadGuestFileRequest,
+        ) -> Result<pb::ReadGuestFileResponse, GuestControlHealthError> {
+            let mut response = pb::ReadGuestFileResponse::new();
+            response.file_id =
+                protobuf::EnumOrUnknown::new(pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG);
+            if let Some(kind) = self.read_error {
+                let mut error = pb::GuestControlError::new();
+                error.kind = protobuf::EnumOrUnknown::new(kind);
+                response.error = MessageField::some(error);
+            } else {
+                response.content = self.read_content.clone();
+                response.size_bytes = self.read_content.len() as u64;
+            }
+            Ok(response)
         }
     }
 
@@ -438,6 +573,7 @@ mod tests {
                 bad_guest_tag: false,
                 overlong_boot_id: false,
                 invalid_health: false,
+                ..Default::default()
             },
             &FakeSigner,
         )
@@ -455,6 +591,7 @@ mod tests {
                     bad_guest_tag: true,
                     overlong_boot_id: false,
                     invalid_health: false,
+                    ..Default::default()
                 },
                 &FakeSigner,
             )
@@ -471,6 +608,7 @@ mod tests {
                     bad_guest_tag: false,
                     overlong_boot_id: true,
                     invalid_health: false,
+                    ..Default::default()
                 },
                 &FakeSigner,
             )
@@ -487,11 +625,94 @@ mod tests {
                     bad_guest_tag: false,
                     overlong_boot_id: false,
                     invalid_health: true,
+                    ..Default::default()
                 },
                 &FakeSigner,
             )
             .await,
             Err(GuestControlHealthError::Protocol)
         ));
+    }
+
+    async fn read_config(client: &FakeClient) -> Result<Vec<u8>, GuestFileReadError> {
+        read_guest_config_authenticated("corp-vm", Some(2), [0x11; AUTH_NONCE_LEN], client, &FakeSigner)
+            .await
+    }
+
+    #[tokio::test]
+    async fn read_guest_config_returns_received_bytes_when_cap_advertised() {
+        let bytes = read_config(&FakeClient {
+            advertise_read_cap: true,
+            read_content: b"hostname = corp-vm\n".to_vec(),
+            ..Default::default()
+        })
+        .await
+        .expect("read succeeds");
+        assert_eq!(bytes, b"hostname = corp-vm\n");
+    }
+
+    #[tokio::test]
+    async fn read_guest_config_fails_closed_without_capability() {
+        // D15: an authenticated guest that never advertised ReadGuestFile is an
+        // old/partial guest; the read fails closed rather than being attempted.
+        assert_eq!(
+            read_config(&FakeClient {
+                advertise_read_cap: false,
+                read_content: b"should-not-be-read".to_vec(),
+                ..Default::default()
+            })
+            .await,
+            Err(GuestFileReadError::CapabilityUnavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn read_guest_config_auth_failure_never_reaches_read() {
+        assert_eq!(
+            read_config(&FakeClient {
+                bad_guest_tag: true,
+                advertise_read_cap: true,
+                read_content: b"unreachable".to_vec(),
+                ..Default::default()
+            })
+            .await,
+            Err(GuestFileReadError::Probe(GuestControlHealthError::AuthFailed))
+        );
+    }
+
+    #[tokio::test]
+    async fn read_guest_config_maps_each_file_error_kind() {
+        for (kind, expected) in [
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND,
+                GuestFileReadError::FileNotFound,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE,
+                GuestFileReadError::FileTooLarge,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
+                GuestFileReadError::PathUnsafe,
+            ),
+            (
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
+                GuestFileReadError::ReadDenied,
+            ),
+            (
+                // A non-file kind on this RPC is a protocol violation, not a
+                // blind retry (D12).
+                pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+                GuestFileReadError::Protocol,
+            ),
+        ] {
+            let result = read_config(&FakeClient {
+                advertise_read_cap: true,
+                read_error: Some(kind),
+                ..Default::default()
+            })
+            .await;
+            assert_eq!(result, Err(expected), "kind {kind:?}");
+        }
     }
 }
