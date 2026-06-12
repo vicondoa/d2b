@@ -975,6 +975,48 @@ mod tests {
     }
 
     #[test]
+    fn negotiated_recv_message_cap_boundary_is_exact_at_ttrpc_frame() {
+        // cap-1 and cap are accepted; cap+1 is rejected. Removing the
+        // `max_recv_message_bytes > TTRPC_FRAME_CAP_BYTES` check would accept
+        // cap+1 and fail this test, so the ttRPC frame boundary is pinned at
+        // exactly TTRPC_FRAME_CAP_BYTES on the negotiation path.
+        let authenticate_with = |recv: u64| {
+            let context = context();
+            let mut provider = StaticCapabilitiesProvider::healthy("caps-sha256");
+            provider
+                .snapshot
+                .capabilities
+                .limits
+                .as_mut()
+                .unwrap()
+                .max_recv_message_bytes = recv;
+            let mut core = GuestAuthCore::new(
+                SharedSecretToken::new(TOKEN.to_vec()).unwrap(),
+                FixedNonceRng(GUEST_NONCE),
+                StaticBoot("boot-1"),
+                provider,
+                InMemoryChallengeStore::default(),
+                StaticClock(1_000),
+            );
+            core.hello(&context, &hello_request()).unwrap();
+            core.authenticate(&context, &authenticate_request(&context))
+        };
+        assert!(
+            authenticate_with(TTRPC_FRAME_CAP_BYTES - 1).is_ok(),
+            "cap-1 recv message size must be accepted"
+        );
+        assert!(
+            authenticate_with(TTRPC_FRAME_CAP_BYTES).is_ok(),
+            "cap recv message size must be accepted"
+        );
+        assert_eq!(
+            authenticate_with(TTRPC_FRAME_CAP_BYTES + 1),
+            Err(GuestAuthError::InvalidCapabilitiesSnapshot),
+            "cap+1 recv message size must be rejected"
+        );
+    }
+
+    #[test]
     fn challenge_ttl_and_capacity_fail_closed() {
         let context = context();
         let mut expired = GuestAuthCore::new(
