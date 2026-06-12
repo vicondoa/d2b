@@ -44,6 +44,31 @@ let
             processes = { };
           };
         };
+      } // lib.optionalAttrs cfg.scrapeJournal {
+        # Tail the guest's systemd journal via the contrib journald
+        # receiver (which execs `journalctl`). `start_at = "end"` keeps
+        # boot-time backlog out of the pipeline; the file_storage cursor
+        # below means a collector restart resumes where it left off
+        # instead of silently dropping entries written during downtime.
+        # The severity_parser maps the journal PRIORITY field onto OTel
+        # severity so logs are filterable by level in SigNoz.
+        journald = {
+          start_at = "end";
+          storage = "file_storage/journald";
+          operators = [
+            {
+              type = "severity_parser";
+              parse_from = "body.PRIORITY";
+              mapping = {
+                fatal = [ "0" "1" "2" ];
+                error = "3";
+                warn = "4";
+                info = [ "5" "6" ];
+                debug = "7";
+              };
+            }
+          ];
+        };
       };
       processors = {
         memory_limiter = {
@@ -74,7 +99,18 @@ let
         sending_queue.enabled = true;
         retry_on_failure.enabled = true;
       };
+      extensions = lib.optionalAttrs cfg.scrapeJournal {
+        # Persist the journald read cursor so a collector restart
+        # (OOM/crash → Restart=on-failure) resumes from the last read
+        # entry instead of jumping back to the journal tail and dropping
+        # everything written during the downtime window.
+        "file_storage/journald" = {
+          directory = "/var/lib/otel/journald";
+          create_directory = true;
+        };
+      };
       service = {
+        extensions = lib.optional cfg.scrapeJournal "file_storage/journald";
         telemetry.metrics.readers = [
           {
             pull.exporter.prometheus = {
@@ -99,7 +135,7 @@ let
           exporters = [ "otlp" ];
         };
         pipelines.logs = {
-          receivers = [ "otlp" ];
+          receivers = [ "otlp" ] ++ lib.optional cfg.scrapeJournal "journald";
           processors = [ "memory_limiter" "resource" "batch" ];
           exporters = [ "otlp" ];
         };
@@ -111,8 +147,8 @@ in
   options.nixling.observability = {
     scrapeJournal = lib.mkOption {
       type = lib.types.bool;
-      default = false;
-      description = "Compatibility toggle reserved for future journald collection; native OTel guest logs are not yet scraped from journald.";
+      default = true;
+      description = "Whether the guest OTel collector tails this VM's systemd journal (journald receiver) and forwards it to SigNoz as logs.";
     };
 
     scrapeNodeMetrics = lib.mkOption {
@@ -143,11 +179,7 @@ in
   };
 
   config = {
-    warnings = lib.optional cfg.scrapeJournal ''
-      nixling.vms.<vm>.observability.scrapeJournal is currently a
-      compatibility no-op in the native SigNoz path; journald/audit log
-      ingestion is not wired yet.
-    '';
+    warnings = [ ];
 
     microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
 
@@ -157,6 +189,10 @@ in
       home = "/var/lib/otel";
       createHome = false;
       description = "Guest OpenTelemetry collector user";
+      # The journald receiver execs `journalctl`, which needs read
+      # access to the system journal. Membership in `systemd-journal`
+      # grants that without any extra capabilities.
+      extraGroups = lib.optional cfg.scrapeJournal "systemd-journal";
     };
     users.groups.otel = { };
 
@@ -170,10 +206,17 @@ in
       description = "nixling guest OpenTelemetry collector";
       wantedBy = [ "multi-user.target" ];
       restartIfChanged = false;
+      # The journald receiver shells out to `journalctl`; expose it (and
+      # its systemd runtime deps) on the unit PATH.
+      path = lib.optional cfg.scrapeJournal pkgs.systemd;
       serviceConfig = {
         Type = "exec";
         User = "otel";
         Group = "otel";
+        # Supplementary group is granted via users.users.otel.extraGroups;
+        # SupplementaryGroups here keeps it explicit for the unit even if
+        # the static user definition is overridden.
+        SupplementaryGroups = lib.optional cfg.scrapeJournal "systemd-journal";
         ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config=file:${collectorConfig}";
         Restart = "on-failure";
         RestartSec = "3s";

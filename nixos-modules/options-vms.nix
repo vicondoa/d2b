@@ -463,11 +463,12 @@
 
         observability.scrapeJournal = lib.mkOption {
           type = lib.types.bool;
-          default = false;
+          default = true;
           description = ''
-            Reserved compatibility toggle for guest journald/audit log
-            collection. The native SigNoz path does not scrape journald
-            yet; setting this to true currently emits a warning.
+            Whether the guest OpenTelemetry collector tails this VM's
+            systemd journal (journald receiver) and forwards it to the
+            SigNoz backend as logs. Default on for observed VMs; set to
+            false to suppress guest log collection.
           '';
         };
 

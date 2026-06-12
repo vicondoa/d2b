@@ -12,6 +12,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Guest systemd-journal log collection. The per-VM OpenTelemetry
+  collector now tails the guest journal through the contrib `journald`
+  receiver and forwards it to SigNoz as logs tagged with the VM's
+  `vm.name` / `vm.env` resource attributes, with the journal `PRIORITY`
+  mapped to OTel severity and a `file_storage` cursor so a collector
+  restart resumes without dropping entries.
+  `nixling.vms.<vm>.observability.scrapeJournal` now defaults to `true`
+  (previously a reserved no-op) and the guest collector user is granted
+  `systemd-journal` read access plus `journalctl` on its unit PATH.
+
 - Native, container-free SigNoz observability backend packages and ADR.
   The bundled observability path now targets SigNoz, the SigNoz OTel
   Collector, schema migrator, ClickHouse, and ClickHouse Keeper as native
