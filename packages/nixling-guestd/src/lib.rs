@@ -1,6 +1,7 @@
 #![doc = "Guest-side nixling control daemon primitives."]
 
 pub mod auth;
+pub mod detached;
 pub mod exec;
 pub mod exec_linux;
 pub mod generated;

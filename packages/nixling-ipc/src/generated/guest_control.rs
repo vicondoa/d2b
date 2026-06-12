@@ -4496,6 +4496,537 @@ impl ::protobuf::reflect::ProtobufValue for ExecLogsResponse {
     type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
 }
 
+// @@protoc_insertion_point(message:nixling.guest.v1.ExecListRequest)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ExecListRequest {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListRequest.metadata)
+    pub metadata: ::protobuf::MessageField<RequestMetadata>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListRequest.guest_boot_id)
+    pub guest_boot_id: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ExecListRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ExecListRequest {
+    fn default() -> &'a ExecListRequest {
+        <ExecListRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ExecListRequest {
+    pub fn new() -> ExecListRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, RequestMetadata>(
+            "metadata",
+            |m: &ExecListRequest| { &m.metadata },
+            |m: &mut ExecListRequest| { &mut m.metadata },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "guest_boot_id",
+            |m: &ExecListRequest| { &m.guest_boot_id },
+            |m: &mut ExecListRequest| { &mut m.guest_boot_id },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ExecListRequest>(
+            "ExecListRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ExecListRequest {
+    const NAME: &'static str = "ExecListRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.metadata)?;
+                },
+                18 => {
+                    self.guest_boot_id = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.metadata.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        if !self.guest_boot_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.guest_boot_id);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.metadata.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        }
+        if !self.guest_boot_id.is_empty() {
+            os.write_string(2, &self.guest_boot_id)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ExecListRequest {
+        ExecListRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.metadata.clear();
+        self.guest_boot_id.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ExecListRequest {
+        static instance: ExecListRequest = ExecListRequest {
+            metadata: ::protobuf::MessageField::none(),
+            guest_boot_id: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ExecListRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ExecListRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ExecListRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ExecListRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ExecListResponse)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ExecListResponse {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListResponse.entries)
+    pub entries: ::std::vec::Vec<ExecListEntry>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListResponse.error)
+    pub error: ::protobuf::MessageField<GuestControlError>,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ExecListResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ExecListResponse {
+    fn default() -> &'a ExecListResponse {
+        <ExecListResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ExecListResponse {
+    pub fn new() -> ExecListResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "entries",
+            |m: &ExecListResponse| { &m.entries },
+            |m: &mut ExecListResponse| { &mut m.entries },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_message_field_accessor::<_, GuestControlError>(
+            "error",
+            |m: &ExecListResponse| { &m.error },
+            |m: &mut ExecListResponse| { &mut m.error },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ExecListResponse>(
+            "ExecListResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ExecListResponse {
+    const NAME: &'static str = "ExecListResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.entries.push(is.read_message()?);
+                },
+                18 => {
+                    ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        for value in &self.entries {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.error.as_ref() {
+            let len = v.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        for v in &self.entries {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        };
+        if let Some(v) = self.error.as_ref() {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ExecListResponse {
+        ExecListResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.error.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ExecListResponse {
+        static instance: ExecListResponse = ExecListResponse {
+            entries: ::std::vec::Vec::new(),
+            error: ::protobuf::MessageField::none(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ExecListResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ExecListResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ExecListResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ExecListResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+// @@protoc_insertion_point(message:nixling.guest.v1.ExecListEntry)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct ExecListEntry {
+    // message fields
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.exec_id)
+    pub exec_id: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.slot)
+    pub slot: u32,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.state)
+    pub state: ::protobuf::EnumOrUnknown<ExecState>,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.create_time_unix)
+    pub create_time_unix: u64,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.argv_sha256)
+    pub argv_sha256: ::std::string::String,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.stdout_truncated)
+    pub stdout_truncated: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.stderr_truncated)
+    pub stderr_truncated: bool,
+    // @@protoc_insertion_point(field:nixling.guest.v1.ExecListEntry.dropped_bytes)
+    pub dropped_bytes: u64,
+    // special fields
+    // @@protoc_insertion_point(special_field:nixling.guest.v1.ExecListEntry.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a ExecListEntry {
+    fn default() -> &'a ExecListEntry {
+        <ExecListEntry as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl ExecListEntry {
+    pub fn new() -> ExecListEntry {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exec_id",
+            |m: &ExecListEntry| { &m.exec_id },
+            |m: &mut ExecListEntry| { &mut m.exec_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "slot",
+            |m: &ExecListEntry| { &m.slot },
+            |m: &mut ExecListEntry| { &mut m.slot },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "state",
+            |m: &ExecListEntry| { &m.state },
+            |m: &mut ExecListEntry| { &mut m.state },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "create_time_unix",
+            |m: &ExecListEntry| { &m.create_time_unix },
+            |m: &mut ExecListEntry| { &mut m.create_time_unix },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "argv_sha256",
+            |m: &ExecListEntry| { &m.argv_sha256 },
+            |m: &mut ExecListEntry| { &mut m.argv_sha256 },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stdout_truncated",
+            |m: &ExecListEntry| { &m.stdout_truncated },
+            |m: &mut ExecListEntry| { &mut m.stdout_truncated },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stderr_truncated",
+            |m: &ExecListEntry| { &m.stderr_truncated },
+            |m: &mut ExecListEntry| { &mut m.stderr_truncated },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "dropped_bytes",
+            |m: &ExecListEntry| { &m.dropped_bytes },
+            |m: &mut ExecListEntry| { &mut m.dropped_bytes },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ExecListEntry>(
+            "ExecListEntry",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for ExecListEntry {
+    const NAME: &'static str = "ExecListEntry";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.exec_id = is.read_string()?;
+                },
+                16 => {
+                    self.slot = is.read_uint32()?;
+                },
+                24 => {
+                    self.state = is.read_enum_or_unknown()?;
+                },
+                32 => {
+                    self.create_time_unix = is.read_uint64()?;
+                },
+                42 => {
+                    self.argv_sha256 = is.read_string()?;
+                },
+                48 => {
+                    self.stdout_truncated = is.read_bool()?;
+                },
+                56 => {
+                    self.stderr_truncated = is.read_bool()?;
+                },
+                64 => {
+                    self.dropped_bytes = is.read_uint64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.exec_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.exec_id);
+        }
+        if self.slot != 0 {
+            my_size += ::protobuf::rt::uint32_size(2, self.slot);
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ExecState::EXEC_STATE_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(3, self.state.value());
+        }
+        if self.create_time_unix != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.create_time_unix);
+        }
+        if !self.argv_sha256.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.argv_sha256);
+        }
+        if self.stdout_truncated != false {
+            my_size += 1 + 1;
+        }
+        if self.stderr_truncated != false {
+            my_size += 1 + 1;
+        }
+        if self.dropped_bytes != 0 {
+            my_size += ::protobuf::rt::uint64_size(8, self.dropped_bytes);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.exec_id.is_empty() {
+            os.write_string(1, &self.exec_id)?;
+        }
+        if self.slot != 0 {
+            os.write_uint32(2, self.slot)?;
+        }
+        if self.state != ::protobuf::EnumOrUnknown::new(ExecState::EXEC_STATE_UNSPECIFIED) {
+            os.write_enum(3, ::protobuf::EnumOrUnknown::value(&self.state))?;
+        }
+        if self.create_time_unix != 0 {
+            os.write_uint64(4, self.create_time_unix)?;
+        }
+        if !self.argv_sha256.is_empty() {
+            os.write_string(5, &self.argv_sha256)?;
+        }
+        if self.stdout_truncated != false {
+            os.write_bool(6, self.stdout_truncated)?;
+        }
+        if self.stderr_truncated != false {
+            os.write_bool(7, self.stderr_truncated)?;
+        }
+        if self.dropped_bytes != 0 {
+            os.write_uint64(8, self.dropped_bytes)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> ExecListEntry {
+        ExecListEntry::new()
+    }
+
+    fn clear(&mut self) {
+        self.exec_id.clear();
+        self.slot = 0;
+        self.state = ::protobuf::EnumOrUnknown::new(ExecState::EXEC_STATE_UNSPECIFIED);
+        self.create_time_unix = 0;
+        self.argv_sha256.clear();
+        self.stdout_truncated = false;
+        self.stderr_truncated = false;
+        self.dropped_bytes = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static ExecListEntry {
+        static instance: ExecListEntry = ExecListEntry {
+            exec_id: ::std::string::String::new(),
+            slot: 0,
+            state: ::protobuf::EnumOrUnknown::from_i32(0),
+            create_time_unix: 0,
+            argv_sha256: ::std::string::String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            dropped_bytes: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for ExecListEntry {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("ExecListEntry").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for ExecListEntry {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for ExecListEntry {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
 // @@protoc_insertion_point(message:nixling.guest.v1.WriteStdinRequest)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct WriteStdinRequest {
@@ -8035,6 +8566,8 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_AUTH_FAILED = 35,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE)
     GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE = 36,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED)
+    GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED = 37,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -8083,6 +8616,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             34 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION),
             35 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED),
             36 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE),
+            37 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED),
             _ => ::std::option::Option::None
         }
     }
@@ -8126,6 +8660,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION),
             "GUEST_CONTROL_ERROR_KIND_AUTH_FAILED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED),
             "GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE),
+            "GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED),
             _ => ::std::option::Option::None
         }
     }
@@ -8168,6 +8703,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
     ];
 }
 
@@ -8333,160 +8869,173 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x07\x20\x01(\x04R\x0bstartOffset\x12#\n\rdropped_bytes\x18\x08\x20\x01(\
     \x04R\x0cdroppedBytes\x12\x1c\n\ttruncated\x18\t\x20\x01(\x08R\ttruncate\
     d\x129\n\x05error\x18\n\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErro\
-    rR\x05error\"\xed\x01\n\x11WriteStdinRequest\x12A\n\x08metadata\x18\x01\
-    \x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\
-    \x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\x12\n\x04data\x18\
-    \x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0bclose_after\x18\x04\x20\x01(\x08\
-    R\ncloseAfter\x121\n\x12client_deadline_ms\x18\x05\x20\x01(\x04H\0R\x10c\
-    lientDeadlineMs\x88\x01\x01B\x15\n\x13_client_deadline_ms\"\xe0\x02\n\
-    \x12WriteStdinResponse\x12'\n\x0faccepted_offset\x18\x01\x20\x01(\x04R\
-    \x0eacceptedOffset\x12!\n\x0caccepted_len\x18\x02\x20\x01(\x04R\x0baccep\
-    tedLen\x12\x1f\n\x0bnext_offset\x18\x03\x20\x01(\x04R\nnextOffset\x12=\n\
-    \x0bstdin_state\x18\x04\x20\x01(\x0e2\x1c.nixling.guest.v1.StdinStateR\n\
-    stdinState\x12\x1d\n\nblocked_ms\x18\x05\x20\x01(\x04R\tblockedMs\x12D\n\
-    \x0bdisposition\x18\x06\x20\x01(\x0e2\".nixling.guest.v1.WriteDispositio\
-    nR\x0bdisposition\x129\n\x05error\x18\x07\x20\x01(\x0b2#.nixling.guest.v\
-    1.GuestControlErrorR\x05error\"\xf2\x01\n\x11ReadOutputRequest\x12A\n\
-    \x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadata\
-    R\x08metadata\x126\n\x06stream\x18\x02\x20\x01(\x0e2\x1e.nixling.guest.v\
-    1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\x03\x20\x01(\x04R\x06o\
-    ffset\x12\x17\n\x07max_len\x18\x04\x20\x01(\x04R\x06maxLen\x12\x12\n\x04\
-    wait\x18\x05\x20\x01(\x08R\x04wait\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01\
-    (\x04R\ttimeoutMs\"\x88\x03\n\x12ReadOutputResponse\x126\n\x06stream\x18\
-    \x01\x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\
-    \n\x06offset\x18\x02\x20\x01(\x04R\x06offset\x12\x1d\n\nend_offset\x18\
-    \x03\x20\x01(\x04R\tendOffset\x12\x12\n\x04data\x18\x04\x20\x01(\x0cR\
-    \x04data\x12\x1f\n\x0bnext_offset\x18\x05\x20\x01(\x04R\nnextOffset\x12\
-    \x10\n\x03eof\x18\x06\x20\x01(\x08R\x03eof\x12!\n\x0cstart_offset\x18\
-    \x07\x20\x01(\x04R\x0bstartOffset\x12#\n\rdropped_bytes\x18\x08\x20\x01(\
-    \x04R\x0cdroppedBytes\x12\x1c\n\ttruncated\x18\t\x20\x01(\x08R\ttruncate\
-    d\x12\x1b\n\ttimed_out\x18\n\x20\x01(\x08R\x08timedOut\x129\n\x05error\
-    \x18\x0b\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"n\
-    \n\x11CloseStdinRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixlin\
-    g.guest.v1.ExecRequestMetadataR\x08metadata\x12\x16\n\x06offset\x18\x02\
-    \x20\x01(\x04R\x06offset\"\xf7\x01\n\x12CloseStdinResponse\x12=\n\x0bstd\
-    in_state\x18\x01\x20\x01(\x0e2\x1c.nixling.guest.v1.StdinStateR\nstdinSt\
-    ate\x12!\n\x0cfinal_offset\x18\x02\x20\x01(\x04R\x0bfinalOffset\x12D\n\
-    \x0bdisposition\x18\x03\x20\x01(\x0e2\".nixling.guest.v1.WriteDispositio\
-    nR\x0bdisposition\x129\n\x05error\x18\x04\x20\x01(\x0b2#.nixling.guest.v\
-    1.GuestControlErrorR\x05error\"\xa1\x01\n\x13TtyWinResizeRequest\x12A\n\
-    \x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadata\
-    R\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncontrolSeq\
-    \x12\x12\n\x04rows\x18\x03\x20\x01(\rR\x04rows\x12\x12\n\x04cols\x18\x04\
-    \x20\x01(\rR\x04cols\"\xc7\x01\n\x11ExecSignalRequest\x12A\n\x08metadata\
-    \x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metadat\
-    a\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12\x16\n\
-    \x06signal\x18\x03\x20\x01(\rR\x06signal\x126\n\x06target\x18\x04\x20\
-    \x01(\x0e2\x1e.nixling.guest.v1.SignalTargetR\x06target\"\xb3\x01\n\x11E\
-    xecCancelRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest\
-    .v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\x02\
-    \x20\x01(\x04R\ncontrolSeq\x12:\n\x06reason\x18\x03\x20\x01(\x0e2\".nixl\
-    ing.guest.v1.ExecCancelReasonR\x06reason\"\x86\x01\n\nControlAck\x12\x1f\
-    \n\x0bcontrol_seq\x18\x01\x20\x01(\x04R\ncontrolSeq\x12\x1c\n\tduplicate\
-    \x18\x02\x20\x01(\x08R\tduplicate\x129\n\x05error\x18\x03\x20\x01(\x0b2#\
-    .nixling.guest.v1.GuestControlErrorR\x05error\"\xb8\x01\n\x0eTerminalSta\
-    tus\x12\x1d\n\texit_code\x18\x01\x20\x01(\x05H\0R\x08exitCode\x12\x18\n\
-    \x06signal\x18\x02\x20\x01(\rH\0R\x06signal\x12!\n\x0bstatus_code\x18\
-    \x03\x20\x01(\x05H\0R\nstatusCode\x12?\n\x05error\x18\x04\x20\x01(\x0e2'\
-    .nixling.guest.v1.GuestControlErrorKindH\0R\x05errorB\t\n\x07outcome\"\
-    \xd5\x01\n\x11GuestControlError\x12;\n\x04kind\x18\x01\x20\x01(\x0e2'.ni\
-    xling.guest.v1.GuestControlErrorKindR\x04kind\x12E\n\x0bremediation\x18\
-    \x02\x20\x01(\x0e2#.nixling.guest.v1.HealthRemediationR\x0bremediation\
-    \x12)\n\x0eretry_after_ms\x18\x03\x20\x01(\x04H\0R\x0cretryAfterMs\x88\
-    \x01\x01B\x11\n\x0f_retry_after_ms*\xb9\x02\n\x0fGuestCapability\x12\x20\
-    \n\x1cGUEST_CAPABILITY_UNSPECIFIED\x10\0\x12\x1b\n\x17GUEST_CAPABILITY_H\
-    EALTH\x10\x01\x12!\n\x1dGUEST_CAPABILITY_CAPABILITIES\x10\x02\x12\"\n\
-    \x1eGUEST_CAPABILITY_EXEC_ATTACHED\x10\x03\x12\"\n\x1eGUEST_CAPABILITY_E\
-    XEC_DETACHED\x10\x04\x12\x1d\n\x19GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\
-    \x1e\n\x1aGUEST_CAPABILITY_EXEC_LOGS\x10\x06\x12\x1f\n\x1bGUEST_CAPABILI\
-    TY_TTY_RESIZE\x10\x07\x12\x1c\n\x18GUEST_CAPABILITY_SIGNALS\x10\x08*\xd9\
-    \x01\n\x0eGuestSubsystem\x12\x1f\n\x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\
-    \x12\x1a\n\x16GUEST_SUBSYSTEM_GUESTD\x10\x01\x12\x19\n\x15GUEST_SUBSYSTE\
-    M_USERD\x10\x02\x12\x18\n\x14GUEST_SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bG\
-    UEST_SUBSYSTEM_LOG_STORAGE\x10\x04\x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\
-    \x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM_VSOCK\x10\x06*s\n\x0cHealthOrigin\
-    \x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIED\x10\0\x12\x20\n\x1cHEALTH_ORIGIN\
-    _GUEST_REPORTED\x10\x01\x12\"\n\x1eHEALTH_ORIGIN_HOST_SYNTHESIZED\x10\
-    \x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\x18HEALTH_STATE_UNSPECIFIED\x10\
-    \0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\x01\x12\x19\n\x15HEALTH_STATE_D\
-    EGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAVAILABLE_OLD_GENERATION\x10\x03\
-    \x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\x10\x04\x12&\n\"HEALTH_STATE_\
-    TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\x18HEALTH_STATE_AUTH_FAILED\x10\
-    \x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MISMATCH\x10\x07\x12\x1e\n\x1aHEAL\
-    TH_STATE_STALE_SESSION\x10\x08*\xa4\x05\n\x0cHealthReason\x12\x1d\n\x19H\
-    EALTH_REASON_UNSPECIFIED\x10\0\x12\x16\n\x12HEALTH_REASON_NONE\x10\x01\
-    \x12\x20\n\x1cHEALTH_REASON_OLD_GENERATION\x10\x02\x12!\n\x1dHEALTH_REAS\
-    ON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEALTH_REASON_CONNECT_REFUSED\x10\
-    \x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEOUT\x10\x05\x12\x20\n\x1cHEALTH\
-    _REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\x1bHEALTH_REASON_MALFORMED_ACK\
-    \x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_TOO_LONG\x10\x08\x12\x1e\n\x1aHE\
-    ALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEALTH_REASON_AUTH_TOKEN_REJECTED\
-    \x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSION_UNSUPPORTED\x10\x0b\x12-\n)\
-    HEALTH_REASON_SESSION_GENERATION_MISMATCH\x10\x0c\x12,\n(HEALTH_REASON_E\
-    XEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HEALTH_REASON_LOG_STORAGE_UNAVAIL\
-    ABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_QUOTA_EXCEEDED\x10\x0f\x12\x1e\n\
-    \x1aHEALTH_REASON_RATE_LIMITED\x10\x10\x12.\n*HEALTH_REASON_INTERNAL_HEA\
-    LTH_CHECK_FAILED\x10\x11*\xe0\x02\n\x11HealthRemediation\x12\"\n\x1eHEAL\
-    TH_REMEDIATION_UNSPECIFIED\x10\0\x12\x1b\n\x17HEALTH_REMEDIATION_NONE\
-    \x10\x01\x12\x1c\n\x18HEALTH_REMEDIATION_RETRY\x10\x02\x12!\n\x1dHEALTH_\
-    REMEDIATION_RESTART_VM\x10\x03\x12$\n\x20HEALTH_REMEDIATION_UPGRADE_GUES\
-    T\x10\x04\x12'\n#HEALTH_REMEDIATION_CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEAL\
-    TH_REMEDIATION_CHECK_GUESTD_SERVICE\x10\x06\x12\"\n\x1eHEALTH_REMEDIATIO\
-    N_REDUCE_LOAD\x10\x07\x12)\n%HEALTH_REMEDIATION_INSPECT_GUEST_LOGS\x10\
-    \x08*a\n\x0cOutputStream\x12\x1d\n\x19OUTPUT_STREAM_UNSPECIFIED\x10\0\
-    \x12\x18\n\x14OUTPUT_STREAM_STDOUT\x10\x01\x12\x18\n\x14OUTPUT_STREAM_ST\
-    DERR\x10\x02*\x96\x01\n\x10WriteDisposition\x12!\n\x1dWRITE_DISPOSITION_\
-    UNSPECIFIED\x10\0\x12\x1e\n\x1aWRITE_DISPOSITION_ACCEPTED\x10\x01\x12\
-    \x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\x10\x02\x12\x1e\n\x1aWRITE_DISPOSI\
-    TION_REJECTED\x10\x03*\x9b\x02\n\tExecState\x12\x1a\n\x16EXEC_STATE_UNSP\
-    ECIFIED\x10\0\x12\x16\n\x12EXEC_STATE_CREATED\x10\x01\x12\x16\n\x12EXEC_\
-    STATE_RUNNING\x10\x02\x12\x15\n\x11EXEC_STATE_EXITED\x10\x03\x12\x17\n\
-    \x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\n\x14EXEC_STATE_CANCELLED\x10\
-    \x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANCELLED\x10\x06\x12\x1d\n\x19EXE\
-    C_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\x16EXEC_STATE_LOST_GUESTD\x10\
-    \x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\xbd\x01\n\nStdinState\x12\x1b\
-    \n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\x14\n\x10STDIN_STATE_OPEN\x10\
-    \x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\x02\x12\x16\n\x12STDIN_STATE_C\
-    LOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSED_BY_PROCESS\x10\x04\x12(\n$STD\
-    IN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05*y\n\x0cSignalTarget\x12\x1d\n\
-    \x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n&SIGNAL_TARGET_FOREGROUND_PROC\
-    ESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARGET_PROCESS_TREE\x10\x02*\xd4\
-    \x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\
-    \0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCE\
-    L_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUM\
-    ER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xca\x0e\n\
-    \x15GuestControlErrorKind\x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\
-    \x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUE\
-    ST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ER\
-    ROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST_CONTROL_ERROR_KIND_STDI\
-    N_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN\x10\x05\
-    \x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS\x10\x06\x122\n.\
-    GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\x10\x07\x128\n4GUEST_CONT\
-    ROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\x08\x12+\n'GUEST_CONTROL_\
-    ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_I\
-    N_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED\x10\x0b\
-    \x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\x10\x0c\x123\n/GUEST_CONTRO\
-    L_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\x12)\n%GUEST_CONTROL_ERROR_KIN\
-    D_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXC\
-    EEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEE\
-    DED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND\x10\x11\x120\
-    \n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED\x10\x12\x120\n,GUEST_CON\
-    TROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\x13\x123\n/GUEST_CONTROL_ERROR_K\
-    IND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST\
-    _EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_CONTROL_ERROR_KIND_CWD_INVALID\
-    \x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_CWD_DENIED\x10\x17\x125\n1GUEST\
-    _CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE\x10\x18\x128\n4GUEST_CONTRO\
-    L_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\x10\x19\x128\n4GUEST_CONTROL_ER\
-    ROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\x1a\x123\n/GUEST_CONTROL_ERROR_\
-    KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\n-GUEST_CONTROL_ERROR_KIND_SUPE\
-    RSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CONTROL_ERROR_KIND_RATE_LIMITED\
-    \x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_REQUEST_ID_CONFLICT\x10\x1e\x12\
-    1\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH\x10\x1f\x124\n0GUEST_C\
-    ONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\x10\x20\x12*\n&GUEST_CONTROL_E\
-    RROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST_CONTROL_ERROR_KIND_GUEST_CONTR\
-    OL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\n$GUEST_CONTROL_ERROR_KIND_AUTH\
-    _FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE\x10$b\
-    \x06proto3\
+    rR\x05error\"t\n\x0fExecListRequest\x12=\n\x08metadata\x18\x01\x20\x01(\
+    \x0b2!.nixling.guest.v1.RequestMetadataR\x08metadata\x12\"\n\rguest_boot\
+    _id\x18\x02\x20\x01(\tR\x0bguestBootId\"\x88\x01\n\x10ExecListResponse\
+    \x129\n\x07entries\x18\x01\x20\x03(\x0b2\x1f.nixling.guest.v1.ExecListEn\
+    tryR\x07entries\x129\n\x05error\x18\x02\x20\x01(\x0b2#.nixling.guest.v1.\
+    GuestControlErrorR\x05error\"\xb5\x02\n\rExecListEntry\x12\x17\n\x07exec\
+    _id\x18\x01\x20\x01(\tR\x06execId\x12\x12\n\x04slot\x18\x02\x20\x01(\rR\
+    \x04slot\x121\n\x05state\x18\x03\x20\x01(\x0e2\x1b.nixling.guest.v1.Exec\
+    StateR\x05state\x12(\n\x10create_time_unix\x18\x04\x20\x01(\x04R\x0ecrea\
+    teTimeUnix\x12\x1f\n\x0bargv_sha256\x18\x05\x20\x01(\tR\nargvSha256\x12)\
+    \n\x10stdout_truncated\x18\x06\x20\x01(\x08R\x0fstdoutTruncated\x12)\n\
+    \x10stderr_truncated\x18\x07\x20\x01(\x08R\x0fstderrTruncated\x12#\n\rdr\
+    opped_bytes\x18\x08\x20\x01(\x04R\x0cdroppedBytes\"\xed\x01\n\x11WriteSt\
+    dinRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.Ex\
+    ecRequestMetadataR\x08metadata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\
+    \x06offset\x12\x12\n\x04data\x18\x03\x20\x01(\x0cR\x04data\x12\x1f\n\x0b\
+    close_after\x18\x04\x20\x01(\x08R\ncloseAfter\x121\n\x12client_deadline_\
+    ms\x18\x05\x20\x01(\x04H\0R\x10clientDeadlineMs\x88\x01\x01B\x15\n\x13_c\
+    lient_deadline_ms\"\xe0\x02\n\x12WriteStdinResponse\x12'\n\x0faccepted_o\
+    ffset\x18\x01\x20\x01(\x04R\x0eacceptedOffset\x12!\n\x0caccepted_len\x18\
+    \x02\x20\x01(\x04R\x0bacceptedLen\x12\x1f\n\x0bnext_offset\x18\x03\x20\
+    \x01(\x04R\nnextOffset\x12=\n\x0bstdin_state\x18\x04\x20\x01(\x0e2\x1c.n\
+    ixling.guest.v1.StdinStateR\nstdinState\x12\x1d\n\nblocked_ms\x18\x05\
+    \x20\x01(\x04R\tblockedMs\x12D\n\x0bdisposition\x18\x06\x20\x01(\x0e2\".\
+    nixling.guest.v1.WriteDispositionR\x0bdisposition\x129\n\x05error\x18\
+    \x07\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xf2\
+    \x01\n\x11ReadOutputRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.ni\
+    xling.guest.v1.ExecRequestMetadataR\x08metadata\x126\n\x06stream\x18\x02\
+    \x20\x01(\x0e2\x1e.nixling.guest.v1.OutputStreamR\x06stream\x12\x16\n\
+    \x06offset\x18\x03\x20\x01(\x04R\x06offset\x12\x17\n\x07max_len\x18\x04\
+    \x20\x01(\x04R\x06maxLen\x12\x12\n\x04wait\x18\x05\x20\x01(\x08R\x04wait\
+    \x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\x04R\ttimeoutMs\"\x88\x03\n\x12R\
+    eadOutputResponse\x126\n\x06stream\x18\x01\x20\x01(\x0e2\x1e.nixling.gue\
+    st.v1.OutputStreamR\x06stream\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\
+    \x06offset\x12\x1d\n\nend_offset\x18\x03\x20\x01(\x04R\tendOffset\x12\
+    \x12\n\x04data\x18\x04\x20\x01(\x0cR\x04data\x12\x1f\n\x0bnext_offset\
+    \x18\x05\x20\x01(\x04R\nnextOffset\x12\x10\n\x03eof\x18\x06\x20\x01(\x08\
+    R\x03eof\x12!\n\x0cstart_offset\x18\x07\x20\x01(\x04R\x0bstartOffset\x12\
+    #\n\rdropped_bytes\x18\x08\x20\x01(\x04R\x0cdroppedBytes\x12\x1c\n\ttrun\
+    cated\x18\t\x20\x01(\x08R\ttruncated\x12\x1b\n\ttimed_out\x18\n\x20\x01(\
+    \x08R\x08timedOut\x129\n\x05error\x18\x0b\x20\x01(\x0b2#.nixling.guest.v\
+    1.GuestControlErrorR\x05error\"n\n\x11CloseStdinRequest\x12A\n\x08metada\
+    ta\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metad\
+    ata\x12\x16\n\x06offset\x18\x02\x20\x01(\x04R\x06offset\"\xf7\x01\n\x12C\
+    loseStdinResponse\x12=\n\x0bstdin_state\x18\x01\x20\x01(\x0e2\x1c.nixlin\
+    g.guest.v1.StdinStateR\nstdinState\x12!\n\x0cfinal_offset\x18\x02\x20\
+    \x01(\x04R\x0bfinalOffset\x12D\n\x0bdisposition\x18\x03\x20\x01(\x0e2\".\
+    nixling.guest.v1.WriteDispositionR\x0bdisposition\x129\n\x05error\x18\
+    \x04\x20\x01(\x0b2#.nixling.guest.v1.GuestControlErrorR\x05error\"\xa1\
+    \x01\n\x13TtyWinResizeRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.\
+    nixling.guest.v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_s\
+    eq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12\x12\n\x04rows\x18\x03\x20\x01(\
+    \rR\x04rows\x12\x12\n\x04cols\x18\x04\x20\x01(\rR\x04cols\"\xc7\x01\n\
+    \x11ExecSignalRequest\x12A\n\x08metadata\x18\x01\x20\x01(\x0b2%.nixling.\
+    guest.v1.ExecRequestMetadataR\x08metadata\x12\x1f\n\x0bcontrol_seq\x18\
+    \x02\x20\x01(\x04R\ncontrolSeq\x12\x16\n\x06signal\x18\x03\x20\x01(\rR\
+    \x06signal\x126\n\x06target\x18\x04\x20\x01(\x0e2\x1e.nixling.guest.v1.S\
+    ignalTargetR\x06target\"\xb3\x01\n\x11ExecCancelRequest\x12A\n\x08metada\
+    ta\x18\x01\x20\x01(\x0b2%.nixling.guest.v1.ExecRequestMetadataR\x08metad\
+    ata\x12\x1f\n\x0bcontrol_seq\x18\x02\x20\x01(\x04R\ncontrolSeq\x12:\n\
+    \x06reason\x18\x03\x20\x01(\x0e2\".nixling.guest.v1.ExecCancelReasonR\
+    \x06reason\"\x86\x01\n\nControlAck\x12\x1f\n\x0bcontrol_seq\x18\x01\x20\
+    \x01(\x04R\ncontrolSeq\x12\x1c\n\tduplicate\x18\x02\x20\x01(\x08R\tdupli\
+    cate\x129\n\x05error\x18\x03\x20\x01(\x0b2#.nixling.guest.v1.GuestContro\
+    lErrorR\x05error\"\xb8\x01\n\x0eTerminalStatus\x12\x1d\n\texit_code\x18\
+    \x01\x20\x01(\x05H\0R\x08exitCode\x12\x18\n\x06signal\x18\x02\x20\x01(\r\
+    H\0R\x06signal\x12!\n\x0bstatus_code\x18\x03\x20\x01(\x05H\0R\nstatusCod\
+    e\x12?\n\x05error\x18\x04\x20\x01(\x0e2'.nixling.guest.v1.GuestControlEr\
+    rorKindH\0R\x05errorB\t\n\x07outcome\"\xd5\x01\n\x11GuestControlError\
+    \x12;\n\x04kind\x18\x01\x20\x01(\x0e2'.nixling.guest.v1.GuestControlErro\
+    rKindR\x04kind\x12E\n\x0bremediation\x18\x02\x20\x01(\x0e2#.nixling.gues\
+    t.v1.HealthRemediationR\x0bremediation\x12)\n\x0eretry_after_ms\x18\x03\
+    \x20\x01(\x04H\0R\x0cretryAfterMs\x88\x01\x01B\x11\n\x0f_retry_after_ms*\
+    \xb9\x02\n\x0fGuestCapability\x12\x20\n\x1cGUEST_CAPABILITY_UNSPECIFIED\
+    \x10\0\x12\x1b\n\x17GUEST_CAPABILITY_HEALTH\x10\x01\x12!\n\x1dGUEST_CAPA\
+    BILITY_CAPABILITIES\x10\x02\x12\"\n\x1eGUEST_CAPABILITY_EXEC_ATTACHED\
+    \x10\x03\x12\"\n\x1eGUEST_CAPABILITY_EXEC_DETACHED\x10\x04\x12\x1d\n\x19\
+    GUEST_CAPABILITY_EXEC_TTY\x10\x05\x12\x1e\n\x1aGUEST_CAPABILITY_EXEC_LOG\
+    S\x10\x06\x12\x1f\n\x1bGUEST_CAPABILITY_TTY_RESIZE\x10\x07\x12\x1c\n\x18\
+    GUEST_CAPABILITY_SIGNALS\x10\x08*\xd9\x01\n\x0eGuestSubsystem\x12\x1f\n\
+    \x1bGUEST_SUBSYSTEM_UNSPECIFIED\x10\0\x12\x1a\n\x16GUEST_SUBSYSTEM_GUEST\
+    D\x10\x01\x12\x19\n\x15GUEST_SUBSYSTEM_USERD\x10\x02\x12\x18\n\x14GUEST_\
+    SUBSYSTEM_EXEC\x10\x03\x12\x1f\n\x1bGUEST_SUBSYSTEM_LOG_STORAGE\x10\x04\
+    \x12\x19\n\x15GUEST_SUBSYSTEM_TOKEN\x10\x05\x12\x19\n\x15GUEST_SUBSYSTEM\
+    _VSOCK\x10\x06*s\n\x0cHealthOrigin\x12\x1d\n\x19HEALTH_ORIGIN_UNSPECIFIE\
+    D\x10\0\x12\x20\n\x1cHEALTH_ORIGIN_GUEST_REPORTED\x10\x01\x12\"\n\x1eHEA\
+    LTH_ORIGIN_HOST_SYNTHESIZED\x10\x02*\xb9\x02\n\x0bHealthState\x12\x1c\n\
+    \x18HEALTH_STATE_UNSPECIFIED\x10\0\x12\x18\n\x14HEALTH_STATE_HEALTHY\x10\
+    \x01\x12\x19\n\x15HEALTH_STATE_DEGRADED\x10\x02\x12+\n'HEALTH_STATE_UNAV\
+    AILABLE_OLD_GENERATION\x10\x03\x12\x20\n\x1cHEALTH_STATE_LISTENER_ABSENT\
+    \x10\x04\x12&\n\"HEALTH_STATE_TRANSPORT_UNREACHABLE\x10\x05\x12\x1c\n\
+    \x18HEALTH_STATE_AUTH_FAILED\x10\x06\x12\"\n\x1eHEALTH_STATE_PROTOCOL_MI\
+    SMATCH\x10\x07\x12\x1e\n\x1aHEALTH_STATE_STALE_SESSION\x10\x08*\xa4\x05\
+    \n\x0cHealthReason\x12\x1d\n\x19HEALTH_REASON_UNSPECIFIED\x10\0\x12\x16\
+    \n\x12HEALTH_REASON_NONE\x10\x01\x12\x20\n\x1cHEALTH_REASON_OLD_GENERATI\
+    ON\x10\x02\x12!\n\x1dHEALTH_REASON_LISTENER_ABSENT\x10\x03\x12!\n\x1dHEA\
+    LTH_REASON_CONNECT_REFUSED\x10\x04\x12!\n\x1dHEALTH_REASON_CONNECT_TIMEO\
+    UT\x10\x05\x12\x20\n\x1cHEALTH_REASON_EOF_BEFORE_ACK\x10\x06\x12\x1f\n\
+    \x1bHEALTH_REASON_MALFORMED_ACK\x10\x07\x12\x1e\n\x1aHEALTH_REASON_ACK_T\
+    OO_LONG\x10\x08\x12\x1e\n\x1aHEALTH_REASON_TRANSPORT_IO\x10\t\x12%\n!HEA\
+    LTH_REASON_AUTH_TOKEN_REJECTED\x10\n\x12.\n*HEALTH_REASON_PROTOCOL_VERSI\
+    ON_UNSUPPORTED\x10\x0b\x12-\n)HEALTH_REASON_SESSION_GENERATION_MISMATCH\
+    \x10\x0c\x12,\n(HEALTH_REASON_EXEC_SUBSYSTEM_UNAVAILABLE\x10\r\x12)\n%HE\
+    ALTH_REASON_LOG_STORAGE_UNAVAILABLE\x10\x0e\x12\x20\n\x1cHEALTH_REASON_Q\
+    UOTA_EXCEEDED\x10\x0f\x12\x1e\n\x1aHEALTH_REASON_RATE_LIMITED\x10\x10\
+    \x12.\n*HEALTH_REASON_INTERNAL_HEALTH_CHECK_FAILED\x10\x11*\xe0\x02\n\
+    \x11HealthRemediation\x12\"\n\x1eHEALTH_REMEDIATION_UNSPECIFIED\x10\0\
+    \x12\x1b\n\x17HEALTH_REMEDIATION_NONE\x10\x01\x12\x1c\n\x18HEALTH_REMEDI\
+    ATION_RETRY\x10\x02\x12!\n\x1dHEALTH_REMEDIATION_RESTART_VM\x10\x03\x12$\
+    \n\x20HEALTH_REMEDIATION_UPGRADE_GUEST\x10\x04\x12'\n#HEALTH_REMEDIATION\
+    _CHECK_AUTH_TOKEN\x10\x05\x12+\n'HEALTH_REMEDIATION_CHECK_GUESTD_SERVICE\
+    \x10\x06\x12\"\n\x1eHEALTH_REMEDIATION_REDUCE_LOAD\x10\x07\x12)\n%HEALTH\
+    _REMEDIATION_INSPECT_GUEST_LOGS\x10\x08*a\n\x0cOutputStream\x12\x1d\n\
+    \x19OUTPUT_STREAM_UNSPECIFIED\x10\0\x12\x18\n\x14OUTPUT_STREAM_STDOUT\
+    \x10\x01\x12\x18\n\x14OUTPUT_STREAM_STDERR\x10\x02*\x96\x01\n\x10WriteDi\
+    sposition\x12!\n\x1dWRITE_DISPOSITION_UNSPECIFIED\x10\0\x12\x1e\n\x1aWRI\
+    TE_DISPOSITION_ACCEPTED\x10\x01\x12\x1f\n\x1bWRITE_DISPOSITION_DUPLICATE\
+    \x10\x02\x12\x1e\n\x1aWRITE_DISPOSITION_REJECTED\x10\x03*\x9b\x02\n\tExe\
+    cState\x12\x1a\n\x16EXEC_STATE_UNSPECIFIED\x10\0\x12\x16\n\x12EXEC_STATE\
+    _CREATED\x10\x01\x12\x16\n\x12EXEC_STATE_RUNNING\x10\x02\x12\x15\n\x11EX\
+    EC_STATE_EXITED\x10\x03\x12\x17\n\x13EXEC_STATE_SIGNALED\x10\x04\x12\x18\
+    \n\x14EXEC_STATE_CANCELLED\x10\x05\x12&\n\"EXEC_STATE_SLOW_CONSUMER_CANC\
+    ELLED\x10\x06\x12\x1d\n\x19EXEC_STATE_PROTOCOL_ERROR\x10\x07\x12\x1a\n\
+    \x16EXEC_STATE_LOST_GUESTD\x10\x08\x12\x15\n\x11EXEC_STATE_REAPED\x10\t*\
+    \xbd\x01\n\nStdinState\x12\x1b\n\x17STDIN_STATE_UNSPECIFIED\x10\0\x12\
+    \x14\n\x10STDIN_STATE_OPEN\x10\x01\x12\x17\n\x13STDIN_STATE_CLOSING\x10\
+    \x02\x12\x16\n\x12STDIN_STATE_CLOSED\x10\x03\x12!\n\x1dSTDIN_STATE_CLOSE\
+    D_BY_PROCESS\x10\x04\x12(\n$STDIN_STATE_REJECTED_NOT_INTERACTIVE\x10\x05\
+    *y\n\x0cSignalTarget\x12\x1d\n\x19SIGNAL_TARGET_UNSPECIFIED\x10\0\x12*\n\
+    &SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP\x10\x01\x12\x1e\n\x1aSIGNAL_TARG\
+    ET_PROCESS_TREE\x10\x02*\xd4\x01\n\x10ExecCancelReason\x12\"\n\x1eEXEC_C\
+    ANCEL_REASON_UNSPECIFIED\x10\0\x12(\n$EXEC_CANCEL_REASON_CLIENT_DISCONNE\
+    CT\x10\x01\x12%\n!EXEC_CANCEL_REASON_USER_REQUESTED\x10\x02\x12$\n\x20EX\
+    EC_CANCEL_REASON_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_CANCEL_REASON_PROTOCO\
+    L_ERROR\x10\x04*\xf5\x0e\n\x15GuestControlErrorKind\x12(\n$GUEST_CONTROL\
+    _ERROR_KIND_UNSPECIFIED\x10\0\x12+\n'GUEST_CONTROL_ERROR_KIND_PROTOCOL_E\
+    RROR\x10\x01\x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED\x10\x02\
+    \x12/\n+GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\x10\x03\x12)\n%GUEST\
+    _CONTROL_ERROR_KIND_STDIN_CLOSED\x10\x04\x12+\n'GUEST_CONTROL_ERROR_KIND\
+    _STDIN_NOT_OPEN\x10\x05\x124\n0GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_\
+    PROCESS\x10\x06\x122\n.GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH\
+    \x10\x07\x128\n4GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED\x10\
+    \x08\x12+\n'GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED\x10\t\x12-\n)GUEST_C\
+    ONTROL_ERROR_KIND_OFFSET_IN_FUTURE\x10\n\x12-\n)GUEST_CONTROL_ERROR_KIND\
+    _OFFSET_EXHAUSTED\x10\x0b\x12(\n$GUEST_CONTROL_ERROR_KIND_OUTPUT_LOST\
+    \x10\x0c\x123\n/GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE\x10\r\
+    \x12)\n%GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED\x10\x0e\x123\n/GUEST_CONTR\
+    OL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED\x10\x0f\x12:\n6GUEST_CONTROL_ERROR_\
+    KIND_EXEC_ATTACH_CAPACITY_EXCEEDED\x10\x10\x12+\n'GUEST_CONTROL_ERROR_KI\
+    ND_EXEC_NOT_FOUND\x10\x11\x120\n,GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_E\
+    XITED\x10\x12\x120\n,GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED\x10\
+    \x13\x123\n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED\x10\x14\x123\
+    \n/GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED\x10\x15\x12(\n$GUEST_\
+    CONTROL_ERROR_KIND_CWD_INVALID\x10\x16\x12'\n#GUEST_CONTROL_ERROR_KIND_C\
+    WD_DENIED\x10\x17\x125\n1GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSA\
+    FE\x10\x18\x128\n4GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED\
+    \x10\x19\x128\n4GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED\x10\
+    \x1a\x123\n/GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED\x10\x1b\x121\
+    \n-GUEST_CONTROL_ERROR_KIND_SUPERSEDED_READ_WAIT\x10\x1c\x12)\n%GUEST_CO\
+    NTROL_ERROR_KIND_RATE_LIMITED\x10\x1d\x120\n,GUEST_CONTROL_ERROR_KIND_RE\
+    QUEST_ID_CONFLICT\x10\x1e\x121\n-GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MI\
+    SMATCH\x10\x1f\x124\n0GUEST_CONTROL_ERROR_KIND_SLOW_CONSUMER_CANCELLED\
+    \x10\x20\x12*\n&GUEST_CONTROL_ERROR_KIND_STALE_SESSION\x10!\x12E\nAGUEST\
+    _CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION\x10\"\x12(\
+    \n$GUEST_CONTROL_ERROR_KIND_AUTH_FAILED\x10#\x122\n.GUEST_CONTROL_ERROR_\
+    KIND_TRANSPORT_UNREACHABLE\x10$\x12)\n%GUEST_CONTROL_ERROR_KIND_EXEC_EXP\
+    IRED\x10%b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -8504,7 +9053,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(34);
+            let mut messages = ::std::vec::Vec::with_capacity(37);
             messages.push(RequestMetadata::generated_message_descriptor_data());
             messages.push(ExecRequestMetadata::generated_message_descriptor_data());
             messages.push(HelloRequest::generated_message_descriptor_data());
@@ -8527,6 +9076,9 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(ExecWaitResponse::generated_message_descriptor_data());
             messages.push(ExecLogsRequest::generated_message_descriptor_data());
             messages.push(ExecLogsResponse::generated_message_descriptor_data());
+            messages.push(ExecListRequest::generated_message_descriptor_data());
+            messages.push(ExecListResponse::generated_message_descriptor_data());
+            messages.push(ExecListEntry::generated_message_descriptor_data());
             messages.push(WriteStdinRequest::generated_message_descriptor_data());
             messages.push(WriteStdinResponse::generated_message_descriptor_data());
             messages.push(ReadOutputRequest::generated_message_descriptor_data());

@@ -16,6 +16,8 @@
     "execCreated",
     "execInspect",
     "execInspected",
+    "execList",
+    "execListed",
     "execLogChunk",
     "execLogs",
     "execSignal",
@@ -74,6 +76,12 @@
     },
     "execInspected": {
       "$ref": "#/definitions/ExecInspectResponse"
+    },
+    "execList": {
+      "$ref": "#/definitions/ExecListRequest"
+    },
+    "execListed": {
+      "$ref": "#/definitions/ExecListResponse"
     },
     "execLogChunk": {
       "$ref": "#/definitions/ExecLogsResponse"
@@ -134,6 +142,11 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "ArgvSha256": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
     "AuthenticateRequest": {
       "type": "object",
       "required": [
@@ -646,6 +659,97 @@
       },
       "additionalProperties": false
     },
+    "ExecListEntry": {
+      "description": "One detached exec record summary. Discloses only bounded, non-sensitive metadata: the opaque id, slot, lifecycle state, create time, an argv hash (never the raw argv), and retained-log accounting.",
+      "type": "object",
+      "required": [
+        "argvSha256",
+        "createTimeUnix",
+        "droppedBytes",
+        "execId",
+        "slot",
+        "state",
+        "stderrTruncated",
+        "stdoutTruncated"
+      ],
+      "properties": {
+        "argvSha256": {
+          "$ref": "#/definitions/ArgvSha256"
+        },
+        "createTimeUnix": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "$ref": "#/definitions/ExecId"
+        },
+        "slot": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 31.0,
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecListRequest": {
+      "description": "Read-only listing of detached execs visible to the same VM token on the same guest boot. Carries no exec id, argv, or output; the boot id binds the request to the current guest generation.",
+      "type": "object",
+      "required": [
+        "guestBootId",
+        "metadata"
+      ],
+      "properties": {
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecListResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExecListEntry"
+          },
+          "maxItems": 32
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ExecLogsRequest": {
       "type": "object",
       "required": [
@@ -985,7 +1089,8 @@
         "stale-session",
         "guest-control-unavailable-old-generation",
         "auth-failed",
-        "transport-unreachable"
+        "transport-unreachable",
+        "exec-expired"
       ]
     },
     "GuestCwd": {

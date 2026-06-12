@@ -990,6 +990,9 @@ dependencies = [
 [[package]]
 name = "nixling-exec-runner"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "rustix 0.38.44",
+]
 
 [[package]]
 name = "nixling-guestd"
@@ -998,6 +1001,7 @@ dependencies = [
  "async-trait",
  "futures",
  "hmac",
+ "nixling-exec-runner",
  "nixling-ipc",
  "protobuf",
  "rustix 0.38.44",

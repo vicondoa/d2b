@@ -1,4 +1,24 @@
-#![doc = "Guest-side detached exec runner validation primitives."]
+#![doc = "Guest-side detached exec runner: validation primitives, the on-disk"]
+#![doc = "spec/record/status codecs, the file-backed output ring, and the"]
+#![doc = "slot-keyed path layout. This library is dependency-pure (std only) so"]
+#![doc = "the guest-static dependency-policy gate stays green; the binary may use"]
+#![doc = "rustix for the privileged service-mode syscalls."]
+
+pub mod codec;
+pub mod filering;
+pub mod limits;
+pub mod paths;
+pub mod record;
+pub mod spec;
+
+pub use filering::{FileRing, FileRingError, RingChunk, StreamMeta};
+pub use limits::{
+    DETACHED_ACTIVE_PER_VM, DETACHED_LOG_QUOTA_BYTES, DETACHED_PER_EXEC_LOG_BYTES,
+    DETACHED_RETAINED_PER_VM, DETACHED_STREAM_LOG_BYTES,
+};
+pub use paths::{RunnerPaths, Stream};
+pub use record::{DurableRecord, RecordState, StatusPhase, StatusRecord};
+pub use spec::{ExecSpec, SpecCodec, SpecError};
 
 pub const MAX_ARGV: usize = 128;
 pub const MAX_ARG_LEN: usize = 4096;

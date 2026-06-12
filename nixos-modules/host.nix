@@ -278,6 +278,7 @@ in
                 enable = lib.mkForce vm'.guest.exec.enable;
                 allowRoot = lib.mkForce vm'.guest.exec.allowRoot;
                 users = lib.mkForce vm'.guest.exec.users;
+                detachedMaxRuntimeSec = lib.mkForce vm'.guest.exec.detachedMaxRuntimeSec;
               };
             }
             # Per-VM framework-managed shares moved from store.nix to

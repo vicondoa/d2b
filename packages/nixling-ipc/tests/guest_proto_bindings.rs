@@ -133,3 +133,45 @@ fn generated_transport_schema_constants_match_guest_wire() {
         "generated health enum discriminant changed"
     );
 }
+
+#[test]
+fn generated_exec_expired_error_kind_matches_guest_wire() {
+    // The additive `ExecExpired` wire kind is value 37 and must stay in
+    // lockstep with the `guest_wire::GuestControlErrorKind` enum.
+    assert_eq!(
+        pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED as i32,
+        37,
+        "generated ExecExpired discriminant changed"
+    );
+    assert_eq!(
+        serde_json::to_string(&nixling_ipc::guest_wire::GuestControlErrorKind::ExecExpired).unwrap(),
+        "\"exec-expired\"",
+    );
+}
+
+#[test]
+fn generated_exec_list_shapes_round_trip() {
+    let mut common = pb::RequestMetadata::new();
+    common.vm_id = "corp-vm".to_owned();
+    common.request_id = "req-list".to_owned();
+    common.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
+
+    let mut request = pb::ExecListRequest::new();
+    request.metadata = MessageField::some(common);
+    request.guest_boot_id = "boot-1".to_owned();
+    round_trip(request);
+
+    let mut entry = pb::ExecListEntry::new();
+    entry.exec_id = "00112233".to_owned();
+    entry.slot = 7;
+    entry.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_RUNNING);
+    entry.create_time_unix = 1_700_000_000;
+    entry.argv_sha256 = "a".repeat(64);
+    entry.stdout_truncated = true;
+    entry.stderr_truncated = false;
+    entry.dropped_bytes = 4096;
+
+    let mut response = pb::ExecListResponse::new();
+    response.entries.push(entry);
+    round_trip(response);
+}

@@ -15,6 +15,7 @@ service GuestControl {
   rpc ExecInspect(ExecInspectRequest) returns (ExecInspectResponse);
   rpc ExecWait(ExecWaitRequest) returns (ExecWaitResponse);
   rpc ExecLogs(ExecLogsRequest) returns (ExecLogsResponse);
+  rpc ExecList(ExecListRequest) returns (ExecListResponse);
 
   rpc WriteStdin(WriteStdinRequest) returns (WriteStdinResponse);
   rpc ReadOutput(ReadOutputRequest) returns (ReadOutputResponse);
@@ -210,6 +211,27 @@ message ExecLogsResponse {
   uint64 dropped_bytes = 8;
   bool truncated = 9;
   GuestControlError error = 10;
+}
+
+message ExecListRequest {
+  RequestMetadata metadata = 1;
+  string guest_boot_id = 2;
+}
+
+message ExecListResponse {
+  repeated ExecListEntry entries = 1;
+  GuestControlError error = 2;
+}
+
+message ExecListEntry {
+  string exec_id = 1;
+  uint32 slot = 2;
+  ExecState state = 3;
+  uint64 create_time_unix = 4;
+  string argv_sha256 = 5;
+  bool stdout_truncated = 6;
+  bool stderr_truncated = 7;
+  uint64 dropped_bytes = 8;
 }
 
 message WriteStdinRequest {
@@ -466,4 +488,5 @@ enum GuestControlErrorKind {
   GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION = 34;
   GUEST_CONTROL_ERROR_KIND_AUTH_FAILED = 35;
   GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE = 36;
+  GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED = 37;
 }

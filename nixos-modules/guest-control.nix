@@ -58,6 +58,17 @@ in
         readOnly = true;
         description = "Host-owned non-root guest exec user allowlist.";
       };
+
+      detachedMaxRuntimeSec = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 0;
+        internal = true;
+        readOnly = true;
+        description = ''
+          Host-owned default runtime ceiling (seconds) for detached execs.
+          0 means no ceiling (indefinite runtime).
+        '';
+      };
     };
   };
 

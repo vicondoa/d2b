@@ -102,6 +102,21 @@ pub struct GuestdServeConfig {
     pub vm_id: String,
     pub token: Vec<u8>,
     pub exec_policy: ExecPolicy,
+    /// Present when the host wired detached-exec runtime constants into the
+    /// guest unit. `None` => detached exec is unsupported (attached only).
+    pub detached: Option<DetachedRuntimeConfig>,
+}
+
+/// Host-supplied, controlled-constant runtime configuration for detached exec.
+/// All paths are absolute store paths passed by the guest module.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetachedRuntimeConfig {
+    /// Absolute path to `systemd-run`.
+    pub systemd_run_path: PathBuf,
+    /// Absolute path to the `nixling-exec-runner` binary.
+    pub exec_runner_path: PathBuf,
+    /// Default per-exec runtime ceiling in seconds; 0 means unlimited.
+    pub max_runtime_sec: u64,
 }
 
 impl GuestdServeConfig {
@@ -122,7 +137,14 @@ impl GuestdServeConfig {
             vm_id,
             token,
             exec_policy,
+            detached: None,
         })
+    }
+
+    /// Attach host-supplied detached runtime constants.
+    pub fn with_detached(mut self, detached: DetachedRuntimeConfig) -> Self {
+        self.detached = Some(detached);
+        self
     }
 }
 
@@ -441,43 +463,39 @@ fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
 }
 
 fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
-    use nixling_ipc::guest_wire::GuestControlErrorKind as WireKind;
-    match error.wire_kind() {
-        WireKind::GuestExecDisabled => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED
+    use pb::GuestControlErrorKind as Pb;
+    // Exhaustive match on `ExecError` so adding a runtime variant without a
+    // wire mapping is a compile error rather than a silent `ProtocolError`
+    // swallow. The supported attached/detached protocol subset maps
+    // mode/validation faults to `ProtocolError` deliberately.
+    match error {
+        ExecError::ExecDisabled => Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED,
+        ExecError::RootDenied => Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED,
+        ExecError::UserDenied => Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED,
+        ExecError::UnsupportedMode => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::InvalidArgv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::CwdInvalid => Pb::GUEST_CONTROL_ERROR_KIND_CWD_INVALID,
+        ExecError::InvalidEnv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::MaxChunkExceeded => Pb::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED,
+        ExecError::ExecCapacityExceeded => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED,
+        ExecError::AttachCapacityExceeded => {
+            Pb::GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED
         }
-        WireKind::GuestExecRootDenied => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED
+        ExecError::WaitCapacityExceeded => Pb::GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED,
+        ExecError::ReadWaitCapacityExceeded => {
+            Pb::GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED
         }
-        WireKind::GuestExecUserDenied => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED
+        ExecError::ExecNotFound => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND,
+        ExecError::OffsetExpired => Pb::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED,
+        ExecError::OffsetInFuture => Pb::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE,
+        ExecError::SpawnFailed => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::RetainedLogPathUnsafe => Pb::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE,
+        ExecError::RetainedLogQuotaExceeded => {
+            Pb::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED
         }
-        WireKind::CwdInvalid => pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_CWD_INVALID,
-        WireKind::MaxChunkExceeded => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED
-        }
-        WireKind::ExecCapacityExceeded => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED
-        }
-        WireKind::ExecAttachCapacityExceeded => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED
-        }
-        WireKind::WaitCapacityExceeded => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED
-        }
-        WireKind::ReadWaitCapacityExceeded => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED
-        }
-        WireKind::ExecNotFound => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
-        }
-        WireKind::OffsetExpired => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED
-        }
-        WireKind::OffsetInFuture => {
-            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE
-        }
-        _ => pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::StaleSession => Pb::GUEST_CONTROL_ERROR_KIND_STALE_SESSION,
+        ExecError::ExecExpired => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
+        ExecError::Internal => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
     }
 }
 
@@ -492,8 +510,8 @@ pub fn effective_limits() -> pb::GuestEffectiveLimits {
     limits.stdin_queue_chunks_per_exec = 1;
     limits.stdout_live_buffer_bytes = crate::exec::STDOUT_LIVE_BUFFER_BYTES as u64;
     limits.stderr_live_buffer_bytes = crate::exec::STDERR_LIVE_BUFFER_BYTES as u64;
-    limits.detached_stdout_log_bytes = 16 * 1024 * 1024;
-    limits.detached_stderr_log_bytes = 16 * 1024 * 1024;
+    limits.detached_stdout_log_bytes = nixling_exec_runner::DETACHED_STREAM_LOG_BYTES;
+    limits.detached_stderr_log_bytes = nixling_exec_runner::DETACHED_STREAM_LOG_BYTES;
     limits.long_poll_timeout_ms = 100;
     limits.slow_consumer_grace_ms = 30_000;
     limits.exec_sessions_per_vm = crate::exec::EXEC_SESSIONS_PER_VM as u32;
@@ -682,6 +700,19 @@ impl GuestControl for GuestControlService {
         // Retained detached logs are out of scope for the attached subset.
         self.require_authenticated()?;
         let mut response = pb::ExecLogsResponse::new();
+        response.error = MessageField::some(exec_disabled_error());
+        Ok(response)
+    }
+
+    async fn exec_list(
+        &self,
+        _ctx: &ttrpc::r#async::TtrpcContext,
+        _request: pb::ExecListRequest,
+    ) -> ttrpc::Result<pb::ExecListResponse> {
+        // Detached exec listing is wired by the detached runtime; the
+        // attached-only build advertises no detached records.
+        self.require_authenticated()?;
+        let mut response = pb::ExecListResponse::new();
         response.error = MessageField::some(exec_disabled_error());
         Ok(response)
     }
@@ -1420,5 +1451,101 @@ mod tests {
         assert_eq!(error, GuestdServiceError::UnsafeCredential);
         assert!(!error.public_message().contains("nixling-guestd-cred-test"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn exec_error_wire_mapping_is_exhaustive_and_typed() {
+        use pb::GuestControlErrorKind as Pb;
+        // Every ExecError variant maps to its expected typed wire kind; the
+        // detached-introduced variants never collapse to ProtocolError.
+        let cases: &[(ExecError, Pb)] = &[
+            (
+                ExecError::ExecDisabled,
+                Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED,
+            ),
+            (
+                ExecError::RootDenied,
+                Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_ROOT_DENIED,
+            ),
+            (
+                ExecError::UserDenied,
+                Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED,
+            ),
+            (
+                ExecError::UnsupportedMode,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::InvalidArgv,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::CwdInvalid,
+                Pb::GUEST_CONTROL_ERROR_KIND_CWD_INVALID,
+            ),
+            (
+                ExecError::InvalidEnv,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::MaxChunkExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED,
+            ),
+            (
+                ExecError::ExecCapacityExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_EXEC_CAPACITY_EXCEEDED,
+            ),
+            (
+                ExecError::AttachCapacityExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_EXEC_ATTACH_CAPACITY_EXCEEDED,
+            ),
+            (
+                ExecError::WaitCapacityExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_WAIT_CAPACITY_EXCEEDED,
+            ),
+            (
+                ExecError::ReadWaitCapacityExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_READ_WAIT_CAPACITY_EXCEEDED,
+            ),
+            (
+                ExecError::ExecNotFound,
+                Pb::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND,
+            ),
+            (
+                ExecError::OffsetExpired,
+                Pb::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED,
+            ),
+            (
+                ExecError::OffsetInFuture,
+                Pb::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE,
+            ),
+            (
+                ExecError::SpawnFailed,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::RetainedLogPathUnsafe,
+                Pb::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_PATH_UNSAFE,
+            ),
+            (
+                ExecError::RetainedLogQuotaExceeded,
+                Pb::GUEST_CONTROL_ERROR_KIND_RETAINED_LOG_QUOTA_EXCEEDED,
+            ),
+            (
+                ExecError::StaleSession,
+                Pb::GUEST_CONTROL_ERROR_KIND_STALE_SESSION,
+            ),
+            (
+                ExecError::ExecExpired,
+                Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
+            ),
+            (
+                ExecError::Internal,
+                Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(wire_error_kind(*error), *expected, "mapping for {error:?}");
+        }
     }
 }

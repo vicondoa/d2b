@@ -104,6 +104,10 @@ pub enum ExecError {
     OffsetExpired,
     OffsetInFuture,
     SpawnFailed,
+    RetainedLogPathUnsafe,
+    RetainedLogQuotaExceeded,
+    StaleSession,
+    ExecExpired,
     Internal,
 }
 
@@ -129,6 +133,10 @@ impl ExecError {
             Self::OffsetExpired => WireErrorKind::OffsetExpired,
             Self::OffsetInFuture => WireErrorKind::OffsetInFuture,
             Self::SpawnFailed => WireErrorKind::ProtocolError,
+            Self::RetainedLogPathUnsafe => WireErrorKind::RetainedLogPathUnsafe,
+            Self::RetainedLogQuotaExceeded => WireErrorKind::RetainedLogQuotaExceeded,
+            Self::StaleSession => WireErrorKind::StaleSession,
+            Self::ExecExpired => WireErrorKind::ExecExpired,
             Self::Internal => WireErrorKind::ProtocolError,
         }
     }

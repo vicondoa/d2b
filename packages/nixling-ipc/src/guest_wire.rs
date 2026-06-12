@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const GUEST_CONTROL_SCHEMA_VERSION: &str = "v2";
-pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 1;
+pub const GUEST_CONTROL_PROTOCOL_VERSION: u32 = 2;
 pub const GUEST_CONTROL_VSOCK_PORT: u32 = 14_318;
 pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
@@ -151,6 +151,11 @@ bounded_string! {
     ExecId, 128
 }
 
+bounded_string! {
+    /// Hex-encoded SHA-256 of a detached exec's argv (never the raw argv).
+    ArgvSha256, 64
+}
+
 bounded_bytes! {
     /// Fixed-size raw challenge nonce bytes.
     GuestNonce, 32, 32
@@ -262,6 +267,8 @@ pub struct GuestControlSchema {
     pub exec_waited: ExecWaitResponse,
     pub exec_logs: ExecLogsRequest,
     pub exec_log_chunk: ExecLogsResponse,
+    pub exec_list: ExecListRequest,
+    pub exec_listed: ExecListResponse,
     pub write_stdin: WriteStdinRequest,
     pub write_stdin_result: WriteStdinResponse,
     pub read_output: ReadOutputRequest,
@@ -686,6 +693,41 @@ pub struct ExecLogsResponse {
     pub error: Option<GuestControlError>,
 }
 
+/// Read-only listing of detached execs visible to the same VM token on the
+/// same guest boot. Carries no exec id, argv, or output; the boot id binds
+/// the request to the current guest generation.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecListRequest {
+    pub metadata: GuestRequestMetadata,
+    pub guest_boot_id: GuestBootId,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecListResponse {
+    #[schemars(length(max = 32))]
+    pub entries: Vec<ExecListEntry>,
+    pub error: Option<GuestControlError>,
+}
+
+/// One detached exec record summary. Discloses only bounded, non-sensitive
+/// metadata: the opaque id, slot, lifecycle state, create time, an argv
+/// hash (never the raw argv), and retained-log accounting.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecListEntry {
+    pub exec_id: ExecId,
+    #[schemars(range(max = 31))]
+    pub slot: u32,
+    pub state: ExecState,
+    pub create_time_unix: u64,
+    pub argv_sha256: ArgvSha256,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub dropped_bytes: u64,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WriteStdinRequest {
@@ -914,6 +956,7 @@ pub enum GuestControlErrorKind {
     GuestControlUnavailableOldGeneration,
     AuthFailed,
     TransportUnreachable,
+    ExecExpired,
 }
 
 #[cfg(test)]
@@ -954,6 +997,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&GuestControlErrorKind::TtyStderrUnavailable).unwrap(),
             "\"tty-stderr-unavailable\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuestControlErrorKind::ExecExpired).unwrap(),
+            "\"exec-expired\""
         );
         assert_eq!(
             serde_json::to_string(&TerminalStatus::Signal { signal: 2 }).unwrap(),

@@ -60,15 +60,15 @@ compatibility surface.
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
 | `FeatureFlag` | struct | [`FeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L95) | empty struct |
-| `GuestCapability` | enum | [`GuestCapability`](../../packages/nixling-ipc/src/guest_wire.rs#L201) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals` |
+| `GuestCapability` | enum | [`GuestCapability`](../../packages/nixling-ipc/src/guest_wire.rs#L206) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals` |
 | `Hello` | struct | [`Hello`](../../packages/nixling-ipc/src/lib.rs#L170) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
 | `HelloOk` | struct | [`HelloOk`](../../packages/nixling-ipc/src/lib.rs#L178) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
 | `HelloRejected` | struct | [`HelloRejected`](../../packages/nixling-ipc/src/lib.rs#L186) | struct { `reason`: `HelloRejectedReason` } |
 | `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/nixling-ipc/src/lib.rs#L192) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/nixling-ipc/src/broker_wire.rs#L383) | struct { `client_version`: `String`; `supported_features`: `Vec<String>` } |
-| `HelloRequest` | struct | [`HelloRequest`](../../packages/nixling-ipc/src/guest_wire.rs#L338) | struct { `metadata`: `GuestRequestMetadata`; `host_nonce`: `GuestNonce`; `transcript_version`: `u32` } |
+| `HelloRequest` | struct | [`HelloRequest`](../../packages/nixling-ipc/src/guest_wire.rs#L345) | struct { `metadata`: `GuestRequestMetadata`; `host_nonce`: `GuestNonce`; `transcript_version`: `u32` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L457) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
-| `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/guest_wire.rs#L346) | struct { `guest_nonce`: `GuestNonce`; `guest_boot_id`: `GuestBootId`; `protocol_version`: `u32` } |
+| `HelloResponse` | struct | [`HelloResponse`](../../packages/nixling-ipc/src/guest_wire.rs#L353) | struct { `guest_nonce`: `GuestNonce`; `guest_boot_id`: `GuestBootId`; `protocol_version`: `u32` } |
 | `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L146) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 <!-- END AUTO-GENERATED: handshake-types -->
 
@@ -288,23 +288,23 @@ state-machine node.
 | `AuthDirection` | enum | [`AuthDirection`](../../packages/nixling-ipc/src/guest_auth.rs#L13) | `HostToGuest` |
 | `AuthPurpose` | enum | [`AuthPurpose`](../../packages/nixling-ipc/src/guest_auth.rs#L26) | `GuestControlAuthV1` |
 | `ProofRole` | enum | [`ProofRole`](../../packages/nixling-ipc/src/guest_auth.rs#L39) | `Host`; `Guest` |
-| `GuestCapability` | enum | [`GuestCapability`](../../packages/nixling-ipc/src/guest_wire.rs#L201) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals` |
-| `GuestSubsystem` | enum | [`GuestSubsystem`](../../packages/nixling-ipc/src/guest_wire.rs#L214) | `Guestd`; `Userd`; `Exec`; `LogStorage`; `Token`; `Vsock` |
-| `HealthOrigin` | enum | [`HealthOrigin`](../../packages/nixling-ipc/src/guest_wire.rs#L225) | `GuestReported`; `HostSynthesized` |
-| `GuestVsockDirection` | enum | [`GuestVsockDirection`](../../packages/nixling-ipc/src/guest_wire.rs#L232) | `HostToGuest` |
-| `GuestIdentityBinding` | enum | [`GuestIdentityBinding`](../../packages/nixling-ipc/src/guest_wire.rs#L238) | `VmIdCidPortAndTokenTranscript` |
-| `GuestTransportKind` | enum | [`GuestTransportKind`](../../packages/nixling-ipc/src/guest_wire.rs#L294) | `VirtioVsockTtrpc` |
-| `GuestConnectAckValue` | enum | [`GuestConnectAckValue`](../../packages/nixling-ipc/src/guest_wire.rs#L308) | `OpaqueLocalPort` |
-| `HealthState` | enum | [`HealthState`](../../packages/nixling-ipc/src/guest_wire.rs#L410) | `Healthy`; `Degraded`; `UnavailableOldGeneration`; `ListenerAbsent`; `TransportUnreachable`; `AuthFailed`; `ProtocolMismatch`; `StaleSession` |
-| `HealthReason` | enum | [`HealthReason`](../../packages/nixling-ipc/src/guest_wire.rs#L423) | `None`; `OldGeneration`; `ListenerAbsent`; `ConnectRefused`; `ConnectTimeout`; `EofBeforeAck`; `MalformedAck`; `AckTooLong`; `TransportIo`; `AuthTokenRejected`; `ProtocolVersionUnsupported`; `SessionGenerationMismatch`; `ExecSubsystemUnavailable`; `LogStorageUnavailable`; `QuotaExceeded`; `RateLimited`; `InternalHealthCheckFailed` |
-| `HealthRemediation` | enum | [`HealthRemediation`](../../packages/nixling-ipc/src/guest_wire.rs#L445) | `None`; `Retry`; `RestartVm`; `UpgradeGuest`; `CheckAuthToken`; `CheckGuestdService`; `ReduceLoad`; `InspectGuestLogs` |
-| `OutputStream` | enum | [`OutputStream`](../../packages/nixling-ipc/src/guest_wire.rs#L793) | `Stdout`; `Stderr` |
-| `WriteDisposition` | enum | [`WriteDisposition`](../../packages/nixling-ipc/src/guest_wire.rs#L800) | `Accepted`; `Duplicate`; `Rejected` |
-| `ExecState` | enum | [`ExecState`](../../packages/nixling-ipc/src/guest_wire.rs#L808) | `Created`; `Running`; `Exited`; `Signaled`; `Cancelled`; `SlowConsumerCancelled`; `ProtocolError`; `LostGuestd`; `Reaped` |
-| `StdinState` | enum | [`StdinState`](../../packages/nixling-ipc/src/guest_wire.rs#L822) | `Open`; `Closing`; `Closed`; `ClosedByProcess`; `RejectedNotInteractive` |
-| `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-ipc/src/guest_wire.rs#L837) | `ExitCode` — struct { `exit_code`: `i32` }; `Signal` — struct { `signal`: `u32` }; `StatusCode` — struct { `status_code`: `i32` }; `Error` — struct { `error`: `GuestControlErrorKind` } |
-| `SignalTarget` | enum | [`SignalTarget`](../../packages/nixling-ipc/src/guest_wire.rs#L856) | `ForegroundProcessGroup`; `ProcessTree` |
-| `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/nixling-ipc/src/guest_wire.rs#L863) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
+| `GuestCapability` | enum | [`GuestCapability`](../../packages/nixling-ipc/src/guest_wire.rs#L206) | `Health`; `Capabilities`; `ExecAttached`; `ExecDetached`; `ExecTty`; `ExecLogs`; `TtyResize`; `Signals` |
+| `GuestSubsystem` | enum | [`GuestSubsystem`](../../packages/nixling-ipc/src/guest_wire.rs#L219) | `Guestd`; `Userd`; `Exec`; `LogStorage`; `Token`; `Vsock` |
+| `HealthOrigin` | enum | [`HealthOrigin`](../../packages/nixling-ipc/src/guest_wire.rs#L230) | `GuestReported`; `HostSynthesized` |
+| `GuestVsockDirection` | enum | [`GuestVsockDirection`](../../packages/nixling-ipc/src/guest_wire.rs#L237) | `HostToGuest` |
+| `GuestIdentityBinding` | enum | [`GuestIdentityBinding`](../../packages/nixling-ipc/src/guest_wire.rs#L243) | `VmIdCidPortAndTokenTranscript` |
+| `GuestTransportKind` | enum | [`GuestTransportKind`](../../packages/nixling-ipc/src/guest_wire.rs#L301) | `VirtioVsockTtrpc` |
+| `GuestConnectAckValue` | enum | [`GuestConnectAckValue`](../../packages/nixling-ipc/src/guest_wire.rs#L315) | `OpaqueLocalPort` |
+| `HealthState` | enum | [`HealthState`](../../packages/nixling-ipc/src/guest_wire.rs#L417) | `Healthy`; `Degraded`; `UnavailableOldGeneration`; `ListenerAbsent`; `TransportUnreachable`; `AuthFailed`; `ProtocolMismatch`; `StaleSession` |
+| `HealthReason` | enum | [`HealthReason`](../../packages/nixling-ipc/src/guest_wire.rs#L430) | `None`; `OldGeneration`; `ListenerAbsent`; `ConnectRefused`; `ConnectTimeout`; `EofBeforeAck`; `MalformedAck`; `AckTooLong`; `TransportIo`; `AuthTokenRejected`; `ProtocolVersionUnsupported`; `SessionGenerationMismatch`; `ExecSubsystemUnavailable`; `LogStorageUnavailable`; `QuotaExceeded`; `RateLimited`; `InternalHealthCheckFailed` |
+| `HealthRemediation` | enum | [`HealthRemediation`](../../packages/nixling-ipc/src/guest_wire.rs#L452) | `None`; `Retry`; `RestartVm`; `UpgradeGuest`; `CheckAuthToken`; `CheckGuestdService`; `ReduceLoad`; `InspectGuestLogs` |
+| `OutputStream` | enum | [`OutputStream`](../../packages/nixling-ipc/src/guest_wire.rs#L835) | `Stdout`; `Stderr` |
+| `WriteDisposition` | enum | [`WriteDisposition`](../../packages/nixling-ipc/src/guest_wire.rs#L842) | `Accepted`; `Duplicate`; `Rejected` |
+| `ExecState` | enum | [`ExecState`](../../packages/nixling-ipc/src/guest_wire.rs#L850) | `Created`; `Running`; `Exited`; `Signaled`; `Cancelled`; `SlowConsumerCancelled`; `ProtocolError`; `LostGuestd`; `Reaped` |
+| `StdinState` | enum | [`StdinState`](../../packages/nixling-ipc/src/guest_wire.rs#L864) | `Open`; `Closing`; `Closed`; `ClosedByProcess`; `RejectedNotInteractive` |
+| `TerminalStatus` | enum | [`TerminalStatus`](../../packages/nixling-ipc/src/guest_wire.rs#L879) | `ExitCode` — struct { `exit_code`: `i32` }; `Signal` — struct { `signal`: `u32` }; `StatusCode` — struct { `status_code`: `i32` }; `Error` — struct { `error`: `GuestControlErrorKind` } |
+| `SignalTarget` | enum | [`SignalTarget`](../../packages/nixling-ipc/src/guest_wire.rs#L898) | `ForegroundProcessGroup`; `ProcessTree` |
+| `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/nixling-ipc/src/guest_wire.rs#L905) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
 | `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L146) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 | `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L338) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
 | `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-ipc/src/public_wire.rs#L422) | `Bound`; `Unbound` |
@@ -365,8 +365,8 @@ the failure class, for example `host check`, `audit`, `status`, or
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
 | `BrokerErrorResponse` | struct | [`BrokerErrorResponse`](../../packages/nixling-ipc/src/broker_wire.rs#L443) | struct { `kind`: `String`; `operation`: `String`; `target_wave`: `Option<String>`; `message`: `String`; `action`: `String` } |
-| `GuestControlError` | struct | [`GuestControlError`](../../packages/nixling-ipc/src/guest_wire.rs#L872) | struct { `kind`: `GuestControlErrorKind`; `remediation`: `HealthRemediation`; `retry_after_ms`: `Option<u64>` } |
-| `GuestControlErrorKind` | enum | [`GuestControlErrorKind`](../../packages/nixling-ipc/src/guest_wire.rs#L880) | `ProtocolError`; `MaxChunkExceeded`; `StdinBackpressure`; `StdinClosed`; `StdinNotOpen`; `StdinClosedByProcess`; `StdinOffsetMismatch`; `StdinByteBudgetExhausted`; `OffsetExpired`; `OffsetInFuture`; `OffsetExhausted`; `OutputLost`; `TtyStderrUnavailable`; `TtyRequired`; `ExecCapacityExceeded`; `ExecAttachCapacityExceeded`; `ExecNotFound`; `ExecAlreadyExited`; `GuestExecDisabled`; `GuestExecRootDenied`; `GuestExecUserDenied`; `CwdInvalid`; `CwdDenied`; `RetainedLogPathUnsafe`; `RetainedLogQuotaExceeded`; `ReadWaitCapacityExceeded`; `WaitCapacityExceeded`; `SupersededReadWait`; `RateLimited`; `RequestIdConflict`; `ControlSeqMismatch`; `SlowConsumerCancelled`; `StaleSession`; `GuestControlUnavailableOldGeneration`; `AuthFailed`; `TransportUnreachable` |
+| `GuestControlError` | struct | [`GuestControlError`](../../packages/nixling-ipc/src/guest_wire.rs#L914) | struct { `kind`: `GuestControlErrorKind`; `remediation`: `HealthRemediation`; `retry_after_ms`: `Option<u64>` } |
+| `GuestControlErrorKind` | enum | [`GuestControlErrorKind`](../../packages/nixling-ipc/src/guest_wire.rs#L922) | `ProtocolError`; `MaxChunkExceeded`; `StdinBackpressure`; `StdinClosed`; `StdinNotOpen`; `StdinClosedByProcess`; `StdinOffsetMismatch`; `StdinByteBudgetExhausted`; `OffsetExpired`; `OffsetInFuture`; `OffsetExhausted`; `OutputLost`; `TtyStderrUnavailable`; `TtyRequired`; `ExecCapacityExceeded`; `ExecAttachCapacityExceeded`; `ExecNotFound`; `ExecAlreadyExited`; `GuestExecDisabled`; `GuestExecRootDenied`; `GuestExecUserDenied`; `CwdInvalid`; `CwdDenied`; `RetainedLogPathUnsafe`; `RetainedLogQuotaExceeded`; `ReadWaitCapacityExceeded`; `WaitCapacityExceeded`; `SupersededReadWait`; `RateLimited`; `RequestIdConflict`; `ControlSeqMismatch`; `SlowConsumerCancelled`; `StaleSession`; `GuestControlUnavailableOldGeneration`; `AuthFailed`; `TransportUnreachable`; `ExecExpired` |
 <!-- END AUTO-GENERATED: error-envelope -->
 
 ## Audit

@@ -693,6 +693,22 @@
               use `allowRoot` for the separate root-exec policy gate.
             '';
           };
+
+          detachedMaxRuntimeSec = lib.mkOption {
+            type = lib.types.ints.unsigned;
+            default = 0;
+            example = 86400;
+            description = ''
+              Default runtime ceiling, in seconds, for detached execs on this
+              VM. `0` (the default) means no ceiling: a detached exec may run
+              indefinitely until it exits or is cancelled.
+
+              When non-zero, guestd passes the value to the per-exec transient
+              unit as a `RuntimeMaxSec` ceiling; a detached exec exceeding it is
+              terminated and reported as expired. This is a guest-enforced
+              backstop, not a substitute for explicit cancellation.
+            '';
+          };
         };
 
         # REMOVED. The submodule path is kept ONLY so that

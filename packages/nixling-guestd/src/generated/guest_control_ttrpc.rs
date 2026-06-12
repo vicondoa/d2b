@@ -75,6 +75,12 @@ impl GuestControlClient {
         Ok(cres)
     }
 
+    pub fn exec_list(&self, ctx: ttrpc::context::Context, req: &super::guest_control::ExecListRequest) -> ::ttrpc::Result<super::guest_control::ExecListResponse> {
+        let mut cres = super::guest_control::ExecListResponse::new();
+        ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "ExecList", cres);
+        Ok(cres)
+    }
+
     pub fn write_stdin(&self, ctx: ttrpc::context::Context, req: &super::guest_control::WriteStdinRequest) -> ::ttrpc::Result<super::guest_control::WriteStdinResponse> {
         let mut cres = super::guest_control::WriteStdinResponse::new();
         ::ttrpc::client_request!(self, ctx, req, "nixling.guest.v1.GuestControl", "WriteStdin", cres);
@@ -200,6 +206,17 @@ impl ::ttrpc::r#async::MethodHandler for ExecLogsMethod {
     }
 }
 
+struct ExecListMethod {
+    service: Arc<dyn GuestControl + Send + Sync>,
+}
+
+#[async_trait]
+impl ::ttrpc::r#async::MethodHandler for ExecListMethod {
+    async fn handler(&self, ctx: ::ttrpc::r#async::TtrpcContext, req: ::ttrpc::Request) -> ::ttrpc::Result<::ttrpc::Response> {
+        ::ttrpc::async_request_handler!(self, ctx, req, guest_control, ExecListRequest, exec_list);
+    }
+}
+
 struct WriteStdinMethod {
     service: Arc<dyn GuestControl + Send + Sync>,
 }
@@ -292,6 +309,9 @@ pub trait GuestControl: Sync {
     async fn exec_logs(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ExecLogsRequest) -> ::ttrpc::Result<super::guest_control::ExecLogsResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ExecLogs is not supported".to_string())))
     }
+    async fn exec_list(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::ExecListRequest) -> ::ttrpc::Result<super::guest_control::ExecListResponse> {
+        Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/ExecList is not supported".to_string())))
+    }
     async fn write_stdin(&self, _ctx: &::ttrpc::r#async::TtrpcContext, _: super::guest_control::WriteStdinRequest) -> ::ttrpc::Result<super::guest_control::WriteStdinResponse> {
         Err(::ttrpc::Error::RpcStatus(::ttrpc::get_status(::ttrpc::Code::NOT_FOUND, "/nixling.guest.v1.GuestControl/WriteStdin is not supported".to_string())))
     }
@@ -340,6 +360,9 @@ pub fn create_guest_control(service: Arc<dyn GuestControl + Send + Sync>) -> Has
 
     methods.insert("ExecLogs".to_string(),
                     Box::new(ExecLogsMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
+
+    methods.insert("ExecList".to_string(),
+                    Box::new(ExecListMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
 
     methods.insert("WriteStdin".to_string(),
                     Box::new(WriteStdinMethod{service: service.clone()}) as Box<dyn ::ttrpc::r#async::MethodHandler + Send + Sync>);
