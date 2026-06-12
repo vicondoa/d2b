@@ -1031,14 +1031,35 @@ mod tests {
         assert_eq!(recorded.len(), 2, "host + guest proof signed");
         assert_eq!(recorded[0].role, GuestControlProofRole::HostProof);
         assert_eq!(recorded[1].role, GuestControlProofRole::GuestProof);
+        // Assert EVERY field of EVERY forwarded request so a regression in
+        // any one (vm_id, direction, purpose, port, cid, nonces, boot id,
+        // protocol version, span id) is caught, not just a representative
+        // subset.
         for request in recorded.iter() {
-            assert_eq!(request.peer_cid, Some(VMADDR_CID_HOST));
-            assert_eq!(request.host_nonce, host_nonce.to_vec());
-            assert_eq!(request.guest_boot_id.as_str(), "boot-1");
+            assert_eq!(request.vm_id.as_str(), "corp-vm");
             assert_eq!(
                 request.protocol_version,
                 nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION
             );
+            assert_eq!(
+                request.direction,
+                nixling_ipc::broker_wire::GuestControlDirection::HostToGuest
+            );
+            assert_eq!(
+                request.purpose,
+                nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1
+            );
+            assert_eq!(
+                request.guest_control_port,
+                nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT
+            );
+            assert_eq!(request.peer_cid, Some(VMADDR_CID_HOST));
+            assert_eq!(request.host_nonce, host_nonce.to_vec());
+            // The guest nonce echoes the HappyFakeClient Hello reply.
+            assert_eq!(request.guest_nonce, vec![0x22; AUTH_NONCE_LEN]);
+            assert_eq!(request.guest_boot_id.as_str(), "boot-1");
+            // The host never forwards a tracing span id to the broker.
+            assert!(request.tracing_span_id.is_none());
         }
         // The GuestProof carries the capabilities hash; the HostProof
         // does not.

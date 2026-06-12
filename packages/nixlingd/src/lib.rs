@@ -7760,6 +7760,74 @@ mod broker_dispatch_tests {
         (socket_path, join)
     }
 
+    /// The production `BrokerSigner` must forward a `GuestControlSign`
+    /// request to the broker byte-for-byte (every field), not just the
+    /// subset a `RecordingSigner` would observe in-process. This drives
+    /// the real `dispatch_broker_request_to_socket` framing path against
+    /// a fake seqpacket broker that records the decoded request.
+    #[test]
+    fn broker_signer_forwards_guest_control_sign_request_verbatim() {
+        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
+        use crate::guest_control_health::{AttemptBudget, GuestControlSigner};
+        use nixling_ipc::broker_wire::{
+            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+            GuestControlSignRequest, GuestControlSignResponse,
+        };
+        use nixling_ipc::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use nixling_ipc::types::VmId;
+
+        let request = GuestControlSignRequest {
+            vm_id: VmId::new("corp-vm"),
+            role: GuestControlProofRole::GuestProof,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: GuestControlDirection::HostToGuest,
+            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(7),
+            host_nonce: vec![0x11; AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
+            guest_boot_id: GuestBootIdWire::new("boot-xyz"),
+            capabilities_hash: Some("caps-sha256".to_owned()),
+            tracing_span_id: None,
+        };
+        let expected = request.clone();
+        let recorded: Arc<Mutex<Vec<GuestControlSignRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded_server = Arc::clone(&recorded);
+        let response_tag = vec![0xCDu8; 32];
+        let response_tag_server = response_tag.clone();
+        let (socket_path, broker) =
+            start_test_broker_server("guest-control-sign-verbatim", 1, move |_, env, fd| {
+                match env.request {
+                    BrokerRequest::GuestControlSign(req) => {
+                        recorded_server.lock().unwrap().push(req);
+                        write_test_json_frame(
+                            fd,
+                            &BrokerResponse::GuestControlSign(GuestControlSignResponse {
+                                tag: response_tag_server.clone(),
+                            }),
+                        )
+                        .expect("write sign response");
+                    }
+                    other => panic!("unexpected broker request {other:?}"),
+                }
+            });
+        let signer = BrokerSigner::new(
+            socket_path,
+            AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
+        );
+        let response = signer.sign(request).expect("broker signer succeeds");
+        broker.join().expect("broker join");
+
+        assert_eq!(response.tag, response_tag);
+        let recorded = recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "exactly one request forwarded");
+        assert_eq!(
+            recorded[0], expected,
+            "BrokerSigner must forward every GuestControlSign field verbatim",
+        );
+    }
+
     fn read_child_start_time(child: &Child) -> u64 {
         let path = format!("/proc/{}/stat", child.id());
         let content = fs::read_to_string(&path).expect("read child stat");
