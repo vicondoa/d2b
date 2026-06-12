@@ -815,6 +815,19 @@ pub mod linux {
                 .kill_on_drop(false);
 
             let child = cmd.spawn().map_err(|_| ExecError::SpawnFailed)?;
+            // Drop the parent `Command` IMMEDIATELY after a successful spawn, and
+            // BEFORE awaiting the status handshake. `Command::spawn(&mut self)`
+            // leaves `cmd` owning the parent's copies of the slave (the child's
+            // fd 0) and the status-pipe write end (the child's fd 1) until the
+            // Command is dropped. The status pipe only reaches EOF — the
+            // success signal `read_status_byte` awaits — once EVERY write end is
+            // closed, so the parent MUST release its `status_w` copy here or
+            // `ExecCreate` would hang forever on a successful exec (the child
+            // closes its CLOEXEC status copy on `execve`, but the parent's copy
+            // would keep the pipe open). Dropping `cmd` also releases the
+            // parent's slave copy, leaving the child as the sole holder of each
+            // fd (the HUP/EOF fd-hygiene contract).
+            drop(cmd);
             let pid = child.id().ok_or(ExecError::SpawnFailed)? as i32;
             // Arm a no-orphan drop guard immediately. `kill_on_drop(false)` is
             // required for the success path (the supervisor owns reaping via the
