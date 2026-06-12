@@ -549,8 +549,7 @@ fn valid_env_key(key: &str) -> bool {
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }
-    key.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The guest exec runtime: tracks per-connection execs and drives spawning,
@@ -630,10 +629,7 @@ where
             if execs.len() + reserved >= EXEC_SESSIONS_PER_VM {
                 return Err(ExecError::ExecCapacityExceeded);
             }
-            let running = execs
-                .values()
-                .filter(|entry| !entry.is_terminal())
-                .count();
+            let running = execs.values().filter(|entry| !entry.is_terminal()).count();
             if running + reserved >= ATTACHED_SESSIONS_PER_VM {
                 return Err(ExecError::AttachCapacityExceeded);
             }
@@ -649,7 +645,8 @@ where
         }
 
         // Insert a placeholder so close_connection can see this in-flight exec.
-        let placeholder = new_exec_entry(owner.clone(), guest_boot_id.clone(), Arc::new(NoopKiller));
+        let placeholder =
+            new_exec_entry(owner.clone(), guest_boot_id.clone(), Arc::new(NoopKiller));
         self.lock_execs()
             .insert(exec_id.clone(), Arc::clone(&placeholder));
         // The placeholder now occupies the slot; release the reservation.
@@ -998,7 +995,11 @@ fn spawn_supervisor(
                         ExitOutcome::Signaled(_) => ExecState::Signaled,
                     }
                 };
-                shared.outcome = if ceiling_exceeded { None } else { Some(outcome) };
+                shared.outcome = if ceiling_exceeded {
+                    None
+                } else {
+                    Some(outcome)
+                };
                 shared.stdout.mark_eof();
                 shared.stderr.mark_eof();
                 shared.bump();
@@ -1403,7 +1404,13 @@ mod tests {
                 break;
             }
             snap = rt
-                .wait(&owner, &exec_id, "boot-1", Some(snap.state_generation), 1000)
+                .wait(
+                    &owner,
+                    &exec_id,
+                    "boot-1",
+                    Some(snap.state_generation),
+                    1000,
+                )
                 .await
                 .unwrap()
                 .0;
@@ -1593,7 +1600,16 @@ mod tests {
 
         // A non-waiting read at the current (empty) window returns no data.
         let (chunk, timed_out) = rt
-            .read_output(&owner, &exec_id, "boot-1", Stream::Stdout, 0, 1024, false, 0)
+            .read_output(
+                &owner,
+                &exec_id,
+                "boot-1",
+                Stream::Stdout,
+                0,
+                1024,
+                false,
+                0,
+            )
             .await
             .unwrap();
         assert!(chunk.data.is_empty());
@@ -1609,7 +1625,16 @@ mod tests {
             .await
             .unwrap();
         let (chunk, timed_out) = rt
-            .read_output(&owner, &exec_id, "boot-1", Stream::Stdout, 0, 1024, true, 50)
+            .read_output(
+                &owner,
+                &exec_id,
+                "boot-1",
+                Stream::Stdout,
+                0,
+                1024,
+                true,
+                50,
+            )
             .await
             .unwrap();
         assert!(chunk.data.is_empty());

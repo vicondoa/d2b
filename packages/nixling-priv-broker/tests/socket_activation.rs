@@ -23,7 +23,6 @@
 //! `dup2` (internally used by the shell) clears FD_CLOEXEC on fd 3.
 
 #![cfg(not(feature = "layer1-bootstrap"))]
-
 // unsafe needed for clearing FD_CLOEXEC on the listen socket before spawn.
 #![allow(unsafe_code)]
 

@@ -270,8 +270,7 @@ pub async fn run_single_connection<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
 {
-    let cleanup =
-        ConnectionCleanup::new(Arc::clone(&auth), Arc::clone(&exec), context.clone());
+    let cleanup = ConnectionCleanup::new(Arc::clone(&auth), Arc::clone(&exec), context.clone());
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let wrapped = CleanupStream::new(stream, cleanup.clone(), done_tx);
     let listener = ttrpc::r#async::transport::Listener::new(stream::once(async move {
@@ -1185,7 +1184,10 @@ mod tests {
 
         authenticate(&service).await;
         assert!(service.health(&ctx, health_request()).await.is_ok());
-        assert!(service.capabilities(&ctx, capabilities_request()).await.is_ok());
+        assert!(service
+            .capabilities(&ctx, capabilities_request())
+            .await
+            .is_ok());
 
         let other = GuestControlService::new(
             Arc::clone(&service.auth),

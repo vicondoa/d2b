@@ -951,8 +951,7 @@ pub mod path_safe {
 
         const FULL: u64 =
             RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
-        const MOUNT_TOLERANT: u64 =
-            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
+        const MOUNT_TOLERANT: u64 = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS;
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
 
         let mut cur: OwnedFd = File::open("/")?.into();
@@ -1089,8 +1088,15 @@ pub mod path_safe {
         owner_uid: u32,
         owner_gid: u32,
     ) -> io::Result<OwnedFd> {
-        ensure_dir_path_safe_inner(parent_fd, name, mode, Some(owner_uid), Some(owner_gid), true)
-            .map(|(fd, _)| fd)
+        ensure_dir_path_safe_inner(
+            parent_fd,
+            name,
+            mode,
+            Some(owner_uid),
+            Some(owner_gid),
+            true,
+        )
+        .map(|(fd, _)| fd)
     }
 
     pub fn remove_path_safe(parent_fd: &OwnedFd, name: &str) -> io::Result<()> {
@@ -1156,8 +1162,7 @@ pub mod path_safe {
         #[test]
         fn open_dir_path_safe_walks_across_a_mount_boundary() {
             let target = Path::new("/run");
-            let (Ok(target_md), Ok(root_md)) =
-                (std::fs::metadata(target), std::fs::metadata("/"))
+            let (Ok(target_md), Ok(root_md)) = (std::fs::metadata(target), std::fs::metadata("/"))
             else {
                 eprintln!("cross-mount test: SKIP (cannot stat /run or /)");
                 return;
@@ -3145,10 +3150,8 @@ mod tests {
         }
         use std::os::unix::fs::MetadataExt as _;
 
-        let dir = std::env::temp_dir().join(format!(
-            "nixling-device-bind-target-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nixling-device-bind-target-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create tempdir");
         let path = dir.join("null");
         let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())

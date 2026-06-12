@@ -507,11 +507,7 @@ fn rollback_target_view_path(
         // Must be a single, non-traversing path component (a Nix store
         // basename). Reject anything with separators / `.` / `..` so a
         // malformed marker can never escape the generation dir.
-        if !basename.is_empty()
-            && !basename.contains('/')
-            && basename != "."
-            && basename != ".."
-        {
+        if !basename.is_empty() && !basename.contains('/') && basename != "." && basename != ".." {
             return Ok(dir.join(basename));
         }
     }
@@ -1784,10 +1780,7 @@ fn ch_vsock_connect_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
         if !arg.contains("nixling-ch-vsock-connect") {
             return None;
         }
-        let exec = arg
-            .strip_prefix("EXEC:")
-            .unwrap_or(arg)
-            .trim_matches('"');
+        let exec = arg.strip_prefix("EXEC:").unwrap_or(arg).trim_matches('"');
         let fields: Vec<&str> = exec.split_whitespace().collect();
         let helper_index = fields.iter().position(|field| {
             field
@@ -1960,17 +1953,13 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             })?;
             for socket in ["pipewire-0", "wayland-0", "pulse/native"] {
                 let path = runtime.join(socket);
-                setfacl_fd_safe(
-                    &path,
-                    &format!("u:{}:---", plan.uid),
-                    AclPathKind::Socket,
-                )
-                .map_err(|detail| LiveHandlerError::SpawnFailed {
-                    detail: format!(
-                        "revoke session socket ACL for video runner uid {}: {detail}",
-                        plan.uid
-                    ),
-                })?;
+                setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
+                    .map_err(|detail| LiveHandlerError::SpawnFailed {
+                        detail: format!(
+                            "revoke session socket ACL for video runner uid {}: {detail}",
+                            plan.uid
+                        ),
+                    })?;
             }
         }
     }
@@ -1996,17 +1985,13 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             })?;
             for socket in ["pipewire-0", "pulse/native"] {
                 let path = runtime.join(socket);
-                setfacl_fd_safe(
-                    &path,
-                    &format!("u:{}:---", plan.uid),
-                    AclPathKind::Socket,
-                )
-                .map_err(|detail| LiveHandlerError::SpawnFailed {
-                    detail: format!(
-                        "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
-                        plan.uid
-                    ),
-                })?;
+                setfacl_fd_safe(&path, &format!("u:{}:---", plan.uid), AclPathKind::Socket)
+                    .map_err(|detail| LiveHandlerError::SpawnFailed {
+                        detail: format!(
+                            "revoke audio socket ACL for wayland-proxy uid {}: {detail}",
+                            plan.uid
+                        ),
+                    })?;
             }
         }
     }
@@ -2362,7 +2347,8 @@ mod tests {
         );
     }
 
-    fn sample_gc_intent() -> ResolvedGcIntent {        ResolvedGcIntent {
+    fn sample_gc_intent() -> ResolvedGcIntent {
+        ResolvedGcIntent {
             intent_id: "gc:host".to_owned(),
             retained_store_paths: vec![
                 PathBuf::from("/nix/store/aaaaaaaaaaaaaaaa-alpha"),

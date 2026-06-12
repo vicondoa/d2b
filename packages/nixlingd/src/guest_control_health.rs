@@ -43,16 +43,25 @@ pub struct GuestControlHealthEvidence {
 
 #[async_trait]
 pub trait GuestControlRpc {
-    async fn hello(&self, request: pb::HelloRequest) -> Result<pb::HelloResponse, GuestControlHealthError>;
+    async fn hello(
+        &self,
+        request: pb::HelloRequest,
+    ) -> Result<pb::HelloResponse, GuestControlHealthError>;
     async fn authenticate(
         &self,
         request: pb::AuthenticateRequest,
     ) -> Result<pb::AuthenticateResponse, GuestControlHealthError>;
-    async fn health(&self, request: pb::HealthRequest) -> Result<pb::HealthResponse, GuestControlHealthError>;
+    async fn health(
+        &self,
+        request: pb::HealthRequest,
+    ) -> Result<pb::HealthResponse, GuestControlHealthError>;
 }
 
 pub trait GuestControlSigner {
-    fn sign(&self, request: GuestControlSignRequest) -> Result<GuestControlSignResponse, GuestControlHealthError>;
+    fn sign(
+        &self,
+        request: GuestControlSignRequest,
+    ) -> Result<GuestControlSignResponse, GuestControlHealthError>;
 }
 
 pub fn connected_stream_to_ttrpc_socket(
@@ -119,7 +128,10 @@ impl TtrpcGuestControlClient {
 
 #[async_trait]
 impl GuestControlRpc for TtrpcGuestControlClient {
-    async fn hello(&self, request: pb::HelloRequest) -> Result<pb::HelloResponse, GuestControlHealthError> {
+    async fn hello(
+        &self,
+        request: pb::HelloRequest,
+    ) -> Result<pb::HelloResponse, GuestControlHealthError> {
         self.unary("Hello", request).await
     }
 
@@ -130,7 +142,10 @@ impl GuestControlRpc for TtrpcGuestControlClient {
         self.unary("Authenticate", request).await
     }
 
-    async fn health(&self, request: pb::HealthRequest) -> Result<pb::HealthResponse, GuestControlHealthError> {
+    async fn health(
+        &self,
+        request: pb::HealthRequest,
+    ) -> Result<pb::HealthResponse, GuestControlHealthError> {
         self.unary("Health", request).await
     }
 }
@@ -386,7 +401,10 @@ mod tests {
             _request: pb::AuthenticateRequest,
         ) -> Result<pb::AuthenticateResponse, GuestControlHealthError> {
             let mut response = pb::AuthenticateResponse::new();
-            response.guest_auth_tag = Some(vec![if self.bad_guest_tag { 0x99 } else { 0x77 }; AUTH_TAG_LEN]);
+            response.guest_auth_tag = Some(vec![
+                if self.bad_guest_tag { 0x99 } else { 0x77 };
+                AUTH_TAG_LEN
+            ]);
             response.capabilities_hash = Some("caps-sha256".to_owned());
             Ok(response)
         }
@@ -403,7 +421,8 @@ mod tests {
             });
             health.state = protobuf::EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_HEALTHY);
             health.reason = protobuf::EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_NONE);
-            health.remediation = protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
+            health.remediation =
+                protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_NONE);
             health.protocol_version = GUEST_CONTROL_PROTOCOL_VERSION;
             Ok(health)
         }
