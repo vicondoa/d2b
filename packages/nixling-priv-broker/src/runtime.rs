@@ -600,7 +600,21 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
             // Not socket-activated: legacy / test mode — bind ourselves.
             validate_socket_parent(&config.socket_path, config.test_mode)?;
             prepare_socket_path(&config.socket_path)?;
-            let listener = bind_seqpacket(&config.socket_path)?;
+            // fchmod() on an AF_UNIX socket fd does not change the bound
+            // path's mode on some kernels/filesystems (verified: a socket
+            // bound under umask 0o022 stays 0o755 after fchmod 0o660), so
+            // constrain the creation umask around bind() so the socket is
+            // materialized at 0o660 directly. The fchmod below stays as a
+            // belt-and-suspenders for kernels where it does take effect.
+            // Production uses socket activation (systemd owns the mode);
+            // this is only the non-socket-activated fallback, and the
+            // broker is single-threaded at startup so the transient
+            // process-wide umask change is race-free.
+            let prev_umask =
+                nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o117));
+            let listener_result = bind_seqpacket(&config.socket_path);
+            nix::sys::stat::umask(prev_umask);
+            let listener = listener_result?;
             path_safe::fchmod(listener.as_fd(), 0o660)?;
             if !config.test_mode {
                 path_safe::fchown(listener.as_fd(), Some(0), Some(config.nixlingd_gid))?;
