@@ -12,7 +12,22 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Guest-control interactive TTY exec: `exec_create` with
+- `ReadGuestFile` guest-control RPC: a single-shot, bounded, enum-keyed
+  (initially `GuestConfig`-only) RPC for the host to read a small,
+  trusted in-guest file over the authenticated vsock channel.
+  `nixling-guestd` resolves the path with a safe `openat` from a trusted
+  directory fd (`O_RDONLY | O_CLOEXEC | O_NOFOLLOW`, rejecting symlinks /
+  `..` / non-regular files) and enforces a size cap before allocating;
+  the response is bounded below both the ttRPC and `public.sock` frame
+  budgets. The capability is negotiated as
+  `GuestCapability::ReadGuestFile`, and an authenticated guest that does
+  not advertise it fails closed. File-specific typed errors
+  (`FileNotFound` / `FileTooLarge` / `PathUnsafe` / `ReadDenied`) carry
+  operator-actionable remediations rather than a blind retry. The
+  guest-control protocol version is bumped accordingly. See
+  [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
+
+
   `tty=true && detach=false` now routes to a PTY-backed,
   connection-owned, non-durable attached exec. PTY setup keeps
   `unsafe_code = "forbid"` via a helper-exec pattern — a new `--tty-exec`
@@ -336,6 +351,20 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Framework readiness for a guest-control-capable VM is now the
+  authenticated guest-control Health probe rather than a raw TCP-22 SSH
+  connect. The per-VM DAG node `guest-ssh-readiness` is replaced by
+  `guest-control-health` (`ProcessRole::GuestControlHealth` +
+  `ReadinessPredicate::GuestControlHealth`), which fails closed: a VM is
+  ready only once the daemon completes the full authenticated handshake
+  and the guest reports `Healthy` or `Degraded`. Old-generation /
+  unreachable / auth-failed / timed-out guests are never marked ready.
+  Per-VM guest sshd and host keys remain for the SSH compatibility
+  window but no longer drive framework readiness. See
+  [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
+- `nixling vm konsole` is deprecated. It still works as an operator SSH
+  convenience; a typed guest-control session replacement is planned for
+  a later release. Nothing is removed yet.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.

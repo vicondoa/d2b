@@ -702,8 +702,10 @@ enum VmCommand {
     List(VmListArgs),
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
-    /// Open an SSH session to the VM in a host terminal. Resolves
-    /// the per-VM SSH key from the bundle's
+    /// [DEPRECATED] Open an SSH session to the VM in a host terminal.
+    /// Still functional over operator SSH; a typed guest-control session
+    /// command is planned to replace it in a future release and nothing is
+    /// removed yet. Resolves the per-VM SSH key from the bundle's
     /// `managed_keys.effective_key_path(<vm>)` (honors
     /// `nixling.site.keysDir` + per-VM overrides; legacy
     /// `/var/lib/nixling/keys/<vm>_ed25519` is the fallback) and the
@@ -3451,6 +3453,15 @@ fn konsole_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), Cli
 }
 
 fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
+    // D8: `vm konsole` is deprecated but fully functional. It remains the
+    // operator SSH convenience until a typed guest-control `nixling vm exec`
+    // surface lands in a later wave; nothing is removed yet. The note goes to
+    // stderr so it never corrupts the --json/dry-run envelope on stdout.
+    eprintln!(
+        "warning: `nixling vm konsole` is deprecated. It still works over \
+         operator SSH for now; a typed guest-control session command is planned \
+         to replace it in a future release. No removal is scheduled yet."
+    );
     require_known_vm(context, &args.vm, args.json)?;
     let manifest = context.load_manifest()?;
     let vm = manifest.entries.get(&args.vm).ok_or_else(|| {

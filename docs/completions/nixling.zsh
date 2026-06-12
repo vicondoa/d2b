@@ -1826,7 +1826,7 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:\[DEPRECATED\] Open an SSH session to the VM in a host terminal. Still functional over operator SSH; a typed guest-control session command is planned to replace it in a future release and nothing is removed yet. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
 }
@@ -2162,7 +2162,7 @@ _nixling__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:\[DEPRECATED\] Open an SSH session to the VM in a host terminal. Still functional over operator SSH; a typed guest-control session command is planned to replace it in a future release and nothing is removed yet. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm commands' commands "$@"
@@ -2175,7 +2175,7 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:\[DEPRECATED\] Open an SSH session to the VM in a host terminal. Still functional over operator SSH; a typed guest-control session command is planned to replace it in a future release and nothing is removed yet. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm help commands' commands "$@"
