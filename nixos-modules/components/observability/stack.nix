@@ -72,7 +72,11 @@ let
         { key = "vm.role"; value = source.role; action = "upsert"; }
         { key = "host.name"; value = source.vmName; action = "upsert"; }
         { key = "service.namespace"; value = source.envName; action = "upsert"; }
-        { key = "deployment.environment"; value = source.envName; action = "upsert"; }
+        # deployment.environment is the physical host the guests run on
+        # (cfg.hostName), so SigNoz's environment dimension groups all
+        # VMs by their host machine. The per-VM env still lives in
+        # service.namespace / vm.env and the VM identity in vm.name.
+        { key = "deployment.environment"; value = cfg.hostName; action = "upsert"; }
       ];
     }
   ) ingressSources) // {
@@ -395,6 +399,17 @@ in
       type = lib.types.str;
       default = "sys-obs";
       description = "VM name of the auto-declared observability VM.";
+    };
+
+    hostName = lib.mkOption {
+      type = lib.types.str;
+      default = "nixling-host";
+      description = ''
+        Name of the physical host the guests run on. Stamped as the
+        `deployment.environment` resource attribute on all ingested
+        telemetry so SigNoz groups VMs by their host machine. The host
+        module defaults this to the host's `networking.hostName`.
+      '';
     };
 
     retention = lib.mkOption {

@@ -120,15 +120,23 @@ fi
 
 if grep -q 'type = "severity_parser"' "$GUEST" \
   && grep -q 'parse_from = "body.PRIORITY"' "$GUEST" \
+  && grep -q 'overwrite_text = true' "$GUEST" \
   && grep -q 'error = "3"' "$GUEST" \
   && grep -q 'storage = "file_storage/journald"' "$GUEST" \
   && grep -q '"file_storage/journald" = {' "$GUEST" \
   && grep -q 'directory = "/var/lib/otel/journald"' "$GUEST" \
   && grep -q 'create_directory = true' "$GUEST" \
   && grep -q 'extensions = lib.optional cfg\.scrapeJournal "file_storage/journald"' "$GUEST"; then
-  ok "guest journald logs carry severity and persist a restart-safe read cursor"
+  ok "guest journald logs carry readable severity and persist a restart-safe read cursor"
 else
-  fail "guest journald receiver must map PRIORITY->severity and bind+enable a file_storage cursor"
+  fail "guest journald receiver must map PRIORITY->severity (overwrite_text) and bind+enable a file_storage cursor"
+fi
+
+if grep -q 'key = "deployment.environment"; value = cfg.hostName' "$STACK" \
+  && grep -q 'hostName = lib.mkDefault config.networking.hostName' "$ROOT/nixos-modules/observability-vm.nix"; then
+  ok "central collector stamps deployment.environment with the physical host name"
+else
+  fail "deployment.environment must be the physical host name (cfg.hostName threaded from networking.hostName)"
 fi
 
 if grep -q 'pipelines = sourcePipelines' "$STACK" && ! grep -q 'receivers = \[ "otlp" \]' "$STACK"; then
