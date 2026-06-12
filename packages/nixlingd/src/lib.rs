@@ -2234,6 +2234,7 @@ fn map_guest_file_read_error(error: guest_control_health::GuestFileReadError) ->
     let kind = match error {
         E::Probe(H::TransportIo) | E::Probe(H::Signer) => K::Transport,
         E::Probe(H::Ttrpc) => K::Transport,
+        E::Probe(H::Timeout) => K::Timeout,
         E::Probe(H::AuthFailed) => K::AuthFailed,
         E::Probe(H::StaleSession) => K::AuthFailed,
         E::Probe(H::Protocol) => K::Protocol,
@@ -2349,7 +2350,7 @@ pub(crate) fn dispatch_broker_request_to_socket(
     caller_role: BrokerCallerRole,
     timeout: Option<Duration>,
 ) -> Result<BrokerResponse, TypedError> {
-    let socket = Socket::from(connect_seqpacket(socket_path)?);
+    let socket = Socket::from(connect_seqpacket_with_timeout(socket_path, timeout)?);
     if let Some(timeout) = timeout {
         socket
             .set_read_timeout(Some(timeout))
@@ -2417,7 +2418,7 @@ fn dispatch_broker_request_with_fds_timeout(
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket(&socket_path)?);
+    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
         .map_err(|err| TypedError::InternalIo {
@@ -6672,6 +6673,49 @@ fn connect_seqpacket(path: &Path) -> Result<OwnedFd, TypedError> {
     Ok(fd)
 }
 
+/// Connect a `SOCK_SEQPACKET` unix socket to `path`, bounding the connect
+/// itself by `timeout` when set.
+///
+/// A plain blocking `connect(2)` on a backlogged / half-open broker
+/// socket can stall unbounded, which defeats the readiness / config-sync
+/// deadline that the caller is trying to honour. When `timeout` is set we
+/// drive the connect nonblocking and poll for completion for at most
+/// `timeout` (socket2's `connect_timeout` sets the fd nonblocking,
+/// issues the connect, polls writability with the budget, checks
+/// `SO_ERROR`, then restores blocking mode), so the subsequent
+/// read/write-timeout-bounded I/O behaves exactly as before. With
+/// `timeout == None` it falls back to the plain blocking connect.
+fn connect_seqpacket_with_timeout(
+    path: &Path,
+    timeout: Option<Duration>,
+) -> Result<OwnedFd, TypedError> {
+    let Some(timeout) = timeout else {
+        return connect_seqpacket(path);
+    };
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|err| TypedError::InternalIo {
+        context: "create seqpacket socket".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let address = SockAddr::unix(path).map_err(|err| TypedError::InternalIo {
+        context: "encode seqpacket socket path".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let socket = Socket::from(fd);
+    socket
+        .connect_timeout(&address, timeout)
+        .map_err(|err| TypedError::InternalBrokerUnavailable {
+            path: path.to_path_buf(),
+            detail: err.to_string(),
+        })?;
+    Ok(OwnedFd::from(socket))
+}
+
 fn round_trip(socket: &impl AsRawFd, frame_json: &str) -> Result<Vec<u8>, TypedError> {
     write_frame(socket, frame_json.as_bytes())?;
     read_frame(socket)
@@ -10379,6 +10423,7 @@ mod broker_dispatch_tests {
             (E::Probe(H::TransportIo), K::Transport),
             (E::Probe(H::Signer), K::Transport),
             (E::Probe(H::Ttrpc), K::Transport),
+            (E::Probe(H::Timeout), K::Timeout),
             (E::Probe(H::AuthFailed), K::AuthFailed),
             (E::Probe(H::StaleSession), K::AuthFailed),
             (E::Probe(H::Protocol), K::Protocol),

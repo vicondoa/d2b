@@ -34,8 +34,8 @@ use nixling_ipc::guest_auth::AUTH_NONCE_LEN;
 
 use crate::guest_control_health::{
     connected_stream_to_ttrpc_socket, guest_control_health_ready, probe_guest_control_health,
-    read_guest_config_authenticated, GuestControlHealthError, GuestControlHealthEvidence,
-    GuestControlSigner, GuestFileReadError, TtrpcGuestControlClient,
+    read_guest_config_authenticated, AttemptBudget, GuestControlHealthError,
+    GuestControlHealthEvidence, GuestControlSigner, GuestFileReadError, TtrpcGuestControlClient,
 };
 use crate::guest_control_vsock::{connect_guest_control_vsock, GuestControlTransportProbeResult};
 use crate::typed_error::TypedError;
@@ -82,21 +82,24 @@ fn map_broker_sign_response(
 
 /// Production [`GuestControlSigner`] backed by the privileged broker.
 ///
-/// Holds only the broker socket path and a per-call timeout so it is
-/// `Send + Sync` and movable into the blocking probe worker. `sign`
+/// Holds only the broker socket path and the shared per-attempt budget so
+/// it is `Send + Sync` and movable into the blocking probe worker. `sign`
 /// forwards the probe-built request verbatim — it never mints nonces,
 /// roles, or boot ids; the broker remains the sole minter of the tag.
+/// Each `sign` draws `min(cap, remaining)` from the budget so the broker
+/// round-trip shares the same absolute deadline as connect / ttRPC; a
+/// passed deadline returns [`GuestControlHealthError::Timeout`].
 #[derive(Clone)]
 pub struct BrokerSigner {
     broker_socket_path: PathBuf,
-    timeout: Duration,
+    budget: AttemptBudget,
 }
 
 impl BrokerSigner {
-    pub fn new(broker_socket_path: PathBuf, timeout: Duration) -> Self {
+    pub fn new(broker_socket_path: PathBuf, budget: AttemptBudget) -> Self {
         Self {
             broker_socket_path,
-            timeout,
+            budget,
         }
     }
 }
@@ -106,11 +109,15 @@ impl GuestControlSigner for BrokerSigner {
         &self,
         request: GuestControlSignRequest,
     ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
+        let timeout = self
+            .budget
+            .next()
+            .ok_or(GuestControlHealthError::Timeout)?;
         let result = crate::dispatch_broker_request_to_socket(
             &self.broker_socket_path,
             BrokerRequest::GuestControlSign(request),
             BrokerCallerRole::default(),
-            Some(self.timeout),
+            Some(timeout),
         );
         map_broker_sign_response(result)
     }
@@ -186,11 +193,15 @@ fn build_probe_runtime() -> Result<tokio::runtime::Runtime, GuestControlHealthEr
 
 /// Synchronously connect the per-VM vsock socket and wrap it in a ttRPC
 /// client. MUST be called inside the probe runtime: the returned client
-/// holds a `tokio::net::UnixStream` that needs the reactor.
+/// holds a `tokio::net::UnixStream` that needs the reactor. The connect
+/// draws `min(cap, remaining)` from the shared attempt budget so it
+/// shares the same absolute deadline as the ttRPC calls; a passed
+/// deadline returns [`GuestControlHealthError::Timeout`].
 fn connect_and_build_client(
     params: &ProbeParams,
-    attempt_timeout: Duration,
+    budget: AttemptBudget,
 ) -> Result<TtrpcGuestControlClient, GuestControlHealthError> {
+    let connect_timeout = budget.next().ok_or(GuestControlHealthError::Timeout)?;
     let connected = match connect_guest_control_vsock(
         &params.socket_path,
         &params.state_root,
@@ -198,7 +209,7 @@ fn connect_and_build_client(
         params.expected_state_root_gid,
         params.expected_peer_uid,
         params.expected_peer_gid,
-        attempt_timeout,
+        connect_timeout,
     ) {
         GuestControlTransportProbeResult::Connected(connected) => connected,
         GuestControlTransportProbeResult::Failed(_) => {
@@ -206,21 +217,26 @@ fn connect_and_build_client(
         }
     };
     let socket = connected_stream_to_ttrpc_socket(connected)?;
-    Ok(TtrpcGuestControlClient::new(socket, attempt_timeout))
+    Ok(TtrpcGuestControlClient::new(socket, budget))
 }
 
-/// One authenticated Health probe attempt. Builds a fresh host nonce, a
-/// per-attempt broker signer, and a dedicated current-thread runtime.
+/// One authenticated Health probe attempt. Builds a fresh host nonce, an
+/// absolute-deadline budget (`now + attempt_timeout`, capped at
+/// [`GUEST_CONTROL_ATTEMPT_CAP`]), a per-attempt broker signer sharing
+/// that budget, and a dedicated current-thread runtime. Connect, every
+/// ttRPC unary, and both broker signs draw from the one budget so the
+/// whole attempt is bounded by its absolute deadline.
 pub fn run_health_probe_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
     attempt_timeout: Duration,
 ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), attempt_timeout);
+    let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
     let nonce = host_nonce().map_err(|_| GuestControlHealthError::Signer)?;
     let runtime = build_probe_runtime()?;
     runtime.block_on(async {
-        let client = connect_and_build_client(params, attempt_timeout)?;
+        let client = connect_and_build_client(params, budget)?;
         probe_guest_control_health(
             &params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -232,19 +248,21 @@ pub fn run_health_probe_once(
     })
 }
 
-/// One authenticated config-read attempt over the same handshake.
+/// One authenticated config-read attempt over the same handshake. Shares
+/// a single absolute-deadline budget across connect / ttRPC / sign.
 pub fn run_config_read_once(
     params: &ProbeParams,
     broker_socket_path: &Path,
     attempt_timeout: Duration,
 ) -> Result<Vec<u8>, GuestFileReadError> {
-    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), attempt_timeout);
+    let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
+    let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
     let nonce = host_nonce()
         .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestFileReadError::Probe)?;
     runtime.block_on(async {
         let client =
-            connect_and_build_client(params, attempt_timeout).map_err(GuestFileReadError::Probe)?;
+            connect_and_build_client(params, budget).map_err(GuestFileReadError::Probe)?;
         read_guest_config_authenticated(
             &params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -256,20 +274,83 @@ pub fn run_config_read_once(
     })
 }
 
-/// Run a single config read on a DEDICATED OS thread so the probe's
+/// Whether a config-read failure is a transient connect-level failure
+/// worth retrying within the config-sync deadline. A missing/refused CH
+/// vsock socket during startup/restart (TransportIo), a ttRPC transport
+/// hiccup, or a per-attempt timeout are transient; auth/protocol/signer
+/// failures and every guest-reported file error (not-found, too-large,
+/// path-unsafe, read-denied, capability-unavailable) are deterministic
+/// and returned immediately.
+fn config_read_error_is_transient(error: &GuestFileReadError) -> bool {
+    matches!(
+        error,
+        GuestFileReadError::Probe(GuestControlHealthError::TransportIo)
+            | GuestFileReadError::Probe(GuestControlHealthError::Ttrpc)
+            | GuestFileReadError::Probe(GuestControlHealthError::Timeout)
+    )
+}
+
+/// State-aware config-read loop, mirroring [`run_guest_control_readiness_loop`].
+/// Retries the authenticated config read on transient connect-level
+/// failures until `deadline` elapses, applying a per-attempt timeout of
+/// `min(attempt_cap, remaining_deadline)` to connect / CONNECT-ACK /
+/// ttRPC / broker-sign. A terminal (auth/protocol/file) error returns
+/// immediately. On deadline it returns the last transient error.
+pub fn run_guest_control_config_read_loop(
+    probe: &dyn GuestControlProbe,
+    params: &ProbeParams,
+    deadline: Duration,
+    attempt_cap: Duration,
+    retry_backoff: Duration,
+    clock: &dyn ProbeClock,
+) -> Result<Vec<u8>, GuestFileReadError> {
+    loop {
+        let remaining = deadline.saturating_sub(clock.elapsed());
+        let attempt_timeout = attempt_cap.min(remaining).max(Duration::from_millis(1));
+        match probe.read_config(params, attempt_timeout) {
+            Ok(bytes) => return Ok(bytes),
+            Err(err) => {
+                if !config_read_error_is_transient(&err) {
+                    return Err(err);
+                }
+                // No room for another attempt + backoff before the
+                // deadline: return the last transient error.
+                if clock.elapsed().saturating_add(retry_backoff) >= deadline {
+                    return Err(err);
+                }
+                clock.sleep(retry_backoff);
+            }
+        }
+    }
+}
+
+/// Run the config-read loop on a DEDICATED OS thread so the probe's
 /// current-thread runtime is never nested inside a caller's Tokio runtime
 /// (the public.sock dispatch path runs synchronously on a multi-threaded
-/// runtime worker; calling `Runtime::block_on` there would panic). This is the
-/// the synchronous-verb runtime boundary: nothing is borrowed
-/// across the thread, and the spawned thread starts with no runtime context.
+/// runtime worker; calling `Runtime::block_on` there would panic). This is
+/// the synchronous-verb runtime boundary: nothing is borrowed across the
+/// thread, and the spawned thread starts with no runtime context. The
+/// loop retries transient connect failures up to `deadline` with the same
+/// per-attempt cap / backoff model as the readiness loop.
 pub fn run_config_read_on_dedicated_thread(
     params: ProbeParams,
     broker_socket_path: PathBuf,
-    timeout: Duration,
+    deadline: Duration,
 ) -> Result<Vec<u8>, GuestFileReadError> {
-    std::thread::spawn(move || run_config_read_once(&params, &broker_socket_path, timeout))
-        .join()
-        .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::TransportIo))?
+    std::thread::spawn(move || {
+        let probe = RealGuestControlProbe::new(broker_socket_path);
+        let clock = RealProbeClock::new();
+        run_guest_control_config_read_loop(
+            &probe,
+            &params,
+            deadline,
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        )
+    })
+    .join()
+    .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::TransportIo))?
 }
 
 /// Injectable clock for deterministic retry-loop tests. The real
@@ -445,6 +526,7 @@ pub fn error_kind_label(error: &GuestControlHealthError) -> &'static str {
         GuestControlHealthError::Protocol => "protocol",
         GuestControlHealthError::AuthFailed => "auth-failed",
         GuestControlHealthError::StaleSession => "stale-session",
+        GuestControlHealthError::Timeout => "timeout",
     }
 }
 
@@ -571,7 +653,7 @@ mod tests {
         // connect and must map to a Signer error (fail closed).
         let signer = BrokerSigner::new(
             PathBuf::from("/nonexistent-nixling-broker.sock"),
-            Duration::from_millis(50),
+            AttemptBudget::from_now(Duration::from_millis(50), GUEST_CONTROL_ATTEMPT_CAP),
         );
         let request = GuestControlSignRequest {
             vm_id: nixling_ipc::types::VmId::new("corp-vm"),
@@ -757,6 +839,171 @@ mod tests {
         // Many attempts occurred before giving up (2s / 250ms backoff).
         assert!(probe.attempt_timeouts.lock().unwrap().len() >= 5);
         assert!(run.attempts >= 5);
+    }
+
+    /// Probe whose `read_config` returns a scripted sequence, recording
+    /// each per-attempt timeout. Used to drive the config-read retry loop
+    /// deterministically.
+    struct ScriptedConfigProbe {
+        outcomes: Mutex<Vec<Result<Vec<u8>, GuestFileReadError>>>,
+        attempt_timeouts: Mutex<Vec<Duration>>,
+    }
+
+    impl ScriptedConfigProbe {
+        fn new(outcomes: Vec<Result<Vec<u8>, GuestFileReadError>>) -> Self {
+            Self {
+                outcomes: Mutex::new(outcomes),
+                attempt_timeouts: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl GuestControlProbe for ScriptedConfigProbe {
+        fn probe_health(
+            &self,
+            _params: &ProbeParams,
+            _attempt_timeout: Duration,
+        ) -> Result<GuestControlHealthEvidence, GuestControlHealthError> {
+            unreachable!("config-read loop never probes health")
+        }
+
+        fn read_config(
+            &self,
+            _params: &ProbeParams,
+            attempt_timeout: Duration,
+        ) -> Result<Vec<u8>, GuestFileReadError> {
+            self.attempt_timeouts.lock().unwrap().push(attempt_timeout);
+            let mut outcomes = self.outcomes.lock().unwrap();
+            if outcomes.is_empty() {
+                // Past the script: persistent transient connect failure.
+                return Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo));
+            }
+            outcomes.remove(0)
+        }
+    }
+
+    #[test]
+    fn config_read_loop_retries_transient_then_succeeds() {
+        // A transient missing/refused CH vsock socket during startup must
+        // be retried, not fail config sync immediately (F5).
+        let probe = ScriptedConfigProbe::new(vec![
+            Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo)),
+            Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout)),
+            Ok(b"config-bytes".to_vec()),
+        ]);
+        let clock = FakeClock::new();
+        let result = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(10),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert_eq!(result.expect("read succeeds"), b"config-bytes".to_vec());
+        assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn config_read_loop_per_attempt_timeout_is_capped() {
+        let probe = ScriptedConfigProbe::new(vec![Ok(b"x".to_vec())]);
+        let clock = FakeClock::new();
+        let _ = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(10),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        // 10s deadline, 3s cap -> first attempt timeout is the cap.
+        assert_eq!(
+            probe.attempt_timeouts.lock().unwrap()[0],
+            GUEST_CONTROL_ATTEMPT_CAP
+        );
+    }
+
+    #[test]
+    fn config_read_loop_terminal_error_returns_immediately() {
+        // A deterministic guest-reported file error (FileNotFound) must
+        // NOT be retried: it returns on the first attempt.
+        let probe = ScriptedConfigProbe::new(vec![Err(GuestFileReadError::FileNotFound)]);
+        let clock = FakeClock::new();
+        let result = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(10),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(matches!(result, Err(GuestFileReadError::FileNotFound)));
+        assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn config_read_loop_persistent_transient_hits_deadline() {
+        // Persistent transient connect failure: retried until the
+        // config-sync deadline, then the last transient error is returned.
+        let probe = ScriptedConfigProbe::new(vec![]);
+        let clock = FakeClock::new();
+        let result = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(2),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(matches!(
+            result,
+            Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo))
+        ));
+        assert!(probe.attempt_timeouts.lock().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn expired_attempt_budget_surfaces_timeout_through_broker_signer() {
+        // F4: a genuinely expired per-attempt budget must surface as a
+        // Timeout from the PRODUCTION BrokerSigner WITHOUT even reaching
+        // the broker socket, so a real deadline/timeout reaches the
+        // documented guest-control-timeout error.
+        let signer = BrokerSigner::new(
+            PathBuf::from("/nonexistent-nixling-broker.sock"),
+            AttemptBudget::from_now(Duration::ZERO, GUEST_CONTROL_ATTEMPT_CAP),
+        );
+        let request = GuestControlSignRequest {
+            vm_id: nixling_ipc::types::VmId::new("corp-vm"),
+            role: GuestControlProofRole::HostProof,
+            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: nixling_ipc::broker_wire::GuestControlDirection::HostToGuest,
+            purpose: nixling_ipc::broker_wire::GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: nixling_ipc::guest_auth::GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(VMADDR_CID_HOST),
+            host_nonce: vec![0x11; AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
+            guest_boot_id: nixling_ipc::broker_wire::GuestBootIdWire::new("boot-1"),
+            capabilities_hash: None,
+            tracing_span_id: None,
+        };
+        assert_eq!(signer.sign(request), Err(GuestControlHealthError::Timeout));
+    }
+
+    #[test]
+    fn config_read_timeout_maps_to_timeout_kind() {
+        // F4: a probe timeout flows through the read-error mapping as the
+        // closed-enum Timeout kind (slug guest-control-timeout), not a
+        // generic Transport collapse.
+        use crate::typed_error::{GuestControlReadErrorKind, TypedError};
+        let mapped = crate::map_guest_file_read_error(GuestFileReadError::Probe(
+            GuestControlHealthError::Timeout,
+        ));
+        match mapped {
+            TypedError::GuestControlReadFailed { kind } => {
+                assert_eq!(kind, GuestControlReadErrorKind::Timeout);
+            }
+            other => panic!("expected GuestControlReadFailed, got {other:?}"),
+        }
     }
 
     #[tokio::test]

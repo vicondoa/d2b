@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use nixling_ipc::broker_wire::{
@@ -30,6 +30,61 @@ pub enum GuestControlHealthError {
     Protocol,
     AuthFailed,
     StaleSession,
+    /// The absolute per-attempt deadline elapsed before (or during) an
+    /// operation. Distinct from a generic transport/ttRPC failure so a
+    /// genuine timeout surfaces as a timeout end-to-end (the
+    /// `guest-control-timeout` config-sync error).
+    Timeout,
+}
+
+/// An absolute-deadline budget for a single guest-control probe / config
+/// read attempt.
+///
+/// Each sub-operation — connect, CONNECT-ACK, every ttRPC unary, and
+/// every broker `sign` — draws `min(cap, deadline - now)` from the same
+/// budget via [`AttemptBudget::next`], so the whole attempt is bounded
+/// by its absolute deadline instead of running connect + N ttRPC + 2
+/// signs each at the full per-attempt timeout (which let one attempt run
+/// many multiples of the intended budget). [`AttemptBudget::next`]
+/// returns `None` once the deadline is reached, which callers surface as
+/// [`GuestControlHealthError::Timeout`].
+#[derive(Clone, Copy, Debug)]
+pub struct AttemptBudget {
+    deadline: Instant,
+    cap: Duration,
+}
+
+impl AttemptBudget {
+    /// Budget with an explicit absolute deadline and a per-operation cap.
+    pub fn new(deadline: Instant, cap: Duration) -> Self {
+        Self { deadline, cap }
+    }
+
+    /// Budget whose deadline is `span` from now, with per-operation cap
+    /// `cap`. A zero (or non-representable) span yields an immediately
+    /// expired budget.
+    pub fn from_now(span: Duration, cap: Duration) -> Self {
+        let deadline = Instant::now()
+            .checked_add(span)
+            .unwrap_or_else(Instant::now);
+        Self { deadline, cap }
+    }
+
+    /// The timeout to apply to the next sub-operation:
+    /// `min(cap, deadline - now)` floored at 1ms, or `None` if the
+    /// deadline has already passed.
+    pub fn next(&self) -> Option<Duration> {
+        let remaining = self.deadline.checked_duration_since(Instant::now())?;
+        if remaining.is_zero() {
+            return None;
+        }
+        Some(self.cap.min(remaining).max(Duration::from_millis(1)))
+    }
+
+    /// Whether the absolute deadline has elapsed.
+    pub fn is_expired(&self) -> bool {
+        self.next().is_none()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,14 +145,14 @@ pub fn connected_stream_to_ttrpc_socket(
 
 pub struct TtrpcGuestControlClient {
     client: ttrpc::r#async::Client,
-    timeout_nano: i64,
+    budget: AttemptBudget,
 }
 
 impl TtrpcGuestControlClient {
-    pub fn new(socket: ttrpc::r#async::transport::Socket, timeout: Duration) -> Self {
+    pub fn new(socket: ttrpc::r#async::transport::Socket, budget: AttemptBudget) -> Self {
         Self {
             client: ttrpc::r#async::Client::new(socket),
-            timeout_nano: timeout.as_nanos().min(i64::MAX as u128) as i64,
+            budget,
         }
     }
 
@@ -110,6 +165,11 @@ impl TtrpcGuestControlClient {
         Req: Message,
         Resp: Message + Default,
     {
+        // Recompute the remaining attempt budget per call so connect +
+        // every ttRPC share one absolute deadline. A passed deadline
+        // surfaces as a timeout rather than blocking at the full timeout.
+        let timeout = self.budget.next().ok_or(GuestControlHealthError::Timeout)?;
+        let timeout_nano = timeout.as_nanos().min(i64::MAX as u128) as i64;
         let mut payload = Vec::new();
         request
             .write_to_vec(&mut payload)
@@ -119,7 +179,7 @@ impl TtrpcGuestControlClient {
             .request(ttrpc::Request {
                 service: "nixling.guest.v1.GuestControl".to_owned(),
                 method: method.to_owned(),
-                timeout_nano: self.timeout_nano,
+                timeout_nano,
                 metadata: ttrpc::context::to_pb(HashMap::new()),
                 payload,
                 ..Default::default()
@@ -780,11 +840,38 @@ mod tests {
             GuestControlHealthError::Protocol,
             GuestControlHealthError::AuthFailed,
             GuestControlHealthError::StaleSession,
+            GuestControlHealthError::Timeout,
         ] {
             assert!(
                 !guest_control_health_ready(&Err(error.clone())),
                 "error {error:?} must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn attempt_budget_caps_each_op_and_expires_at_deadline() {
+        // A budget with plenty of headroom yields the per-op cap, never
+        // the full remaining deadline.
+        let budget = AttemptBudget::from_now(Duration::from_secs(30), Duration::from_secs(3));
+        let next = budget.next().expect("budget not yet expired");
+        assert!(next <= Duration::from_secs(3));
+        assert!(!budget.is_expired());
+
+        // A zero-span budget is immediately expired: next() is None so the
+        // caller surfaces a Timeout instead of issuing an unbounded op.
+        let expired = AttemptBudget::from_now(Duration::ZERO, Duration::from_secs(3));
+        assert!(expired.next().is_none());
+        assert!(expired.is_expired());
+    }
+
+    #[test]
+    fn attempt_budget_remaining_below_cap_is_used() {
+        // When the remaining deadline is smaller than the cap, the op gets
+        // the (smaller) remaining budget, so connect + ttRPC + sign share
+        // one absolute deadline rather than each getting the full cap.
+        let budget = AttemptBudget::from_now(Duration::from_millis(40), Duration::from_secs(3));
+        let next = budget.next().expect("budget not yet expired");
+        assert!(next <= Duration::from_millis(40));
     }
 }
