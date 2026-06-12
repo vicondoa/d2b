@@ -32,6 +32,17 @@ stub_socket="$scratch/never-exists.sock"
 broker_socket="$scratch/broker.sock"
 public_socket="$scratch/public.sock"
 
+# Pin a controlled manifest so the SigNoz UI probe is hermetic. Without this,
+# the signoz-ui-endpoint check reads the host's real
+# /run/current-system/sw/share/nixling/vms.json, and on a host whose manifest
+# has observability enabled (or no manifest at all) it adds an extra check and
+# the baseline check-name assertion drifts. A readable manifest with
+# observability disabled makes the probe return early on every host.
+manifest_path="$scratch/vms.json"
+cat > "$manifest_path" <<'EOF'
+{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}
+EOF
+
 run_doctor() {
   local label="$1"; shift
   local rc
@@ -41,6 +52,7 @@ run_doctor() {
     NIXLING_PUBLIC_SOCKET="$public_socket" \
     NIXLING_DAEMON_STATE_DIR="$state_dir" \
     NIXLING_METRICS_URL="http://127.0.0.1:1/metrics" \
+    NIXLING_MANIFEST_PATH="$manifest_path" \
     "$cli" host doctor --read-only --json \
       > "$scratch/$label.json" 2> "$scratch/$label.stderr"
   rc=$?
@@ -191,6 +203,7 @@ env \
   NIXLING_PUBLIC_SOCKET="$public_socket" \
   NIXLING_DAEMON_STATE_DIR="$state_dir" \
   NIXLING_METRICS_URL="http://127.0.0.1:1/metrics" \
+  NIXLING_MANIFEST_PATH="$manifest_path" \
   "$cli" host doctor --read-only --human \
     > "$scratch/human.out" 2> "$scratch/human.err" || true
 set -e
