@@ -95,7 +95,12 @@ let
     assert tokenVirtiofsd != null;
     assert cloudHypervisor != null;
     assert lib.all (node: !(lib.hasInfix "guestd" node.id)) processNodes;
-    assert lib.all (node: !(lib.hasInfix "guest-control-health" (builtins.toJSON node))) processNodes;
+    # W15: a guest-control-capable VM emits the authenticated guest-control
+    # Health readiness node (and never the retired SSH-readiness node).
+    assert lib.any (node: node.id == "guest-control-health"
+      && node.role == "guest-control-health"
+      && node.readiness == [{ kind = "guest-control-health"; value = { vm = "corp-vm"; }; }]) processNodes;
+    assert lib.all (node: node.id != "guest-ssh-readiness") processNodes;
     assert builtins.elem "--readonly" tokenVirtiofsd.argv;
     assert builtins.elem "--socket-path=/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock"
       tokenVirtiofsd.argv;

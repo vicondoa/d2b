@@ -1535,10 +1535,15 @@ pub(crate) fn policy_ref_device_classes(
         // virtiofsd accesses /dev/fuse via read/write; FUSE_NO_IOCTL
         // sentinel → permissive BPF (FUSE mount handshake needs ioctls).
         "w1-virtiofsd" => Some(&[DeviceClass::Fuse]),
-        // host-reconcile, store-virtiofs-preflight, guest-ssh-readiness:
-        // no device binds → permissive BPF (these run nix toolchain
-        // which uses many ioctls for terminal/file operations).
-        "w1-host-reconcile" | "w1-store-virtiofs-preflight" | "w1-guest-ssh-readiness" => Some(&[]),
+        // host-reconcile, store-virtiofs-preflight, guest-control-health:
+        // no device binds → permissive BPF. host-reconcile and
+        // store-virtiofs-preflight run the nix toolchain (many ioctls for
+        // terminal/file operations); guest-control-health is the daemon-side
+        // authenticated Health probe, which speaks ttRPC over the guest-control
+        // vsock and uses connect(2)/socket ioctls.
+        "w1-host-reconcile" | "w1-store-virtiofs-preflight" | "w1-guest-control-health" => {
+            Some(&[])
+        }
         // swtpm is a software TPM emulator; no hardware device ioctls,
         // but it uses terminal/file ioctls during init → permissive BPF.
         "w1-swtpm" => Some(&[]),

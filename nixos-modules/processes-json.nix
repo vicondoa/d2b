@@ -104,6 +104,12 @@ EOF
   unixSocketListening = value: { kind = "unix-socket-listening"; inherit value; };
   tcpPort = host: port: { kind = "tcp-port"; value = { inherit host port; }; };
   commandReady = value: { kind = "command"; inherit value; };
+  # Authenticated guest-control Health readiness (W15). Unlike a raw TCP-22
+  # probe this predicate fails CLOSED: the daemon completes a full
+  # Hello + token challenge-response + Health over the guest-control vsock
+  # before the node is ready. The daemon resolves the per-VM vsock socket,
+  # peer credentials, and broker-backed signer from its own trusted state.
+  guestControlHealthReady = vmName: { kind = "guest-control-health"; value = { vm = vmName; }; };
 
   extractOptValues = optFlag: extraArgs:
     let
@@ -799,7 +805,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       manifest = cfg.manifest.${name};
       microvm = nl.vmRunner config name;
-      guestSshEnabled = manifest.sshUser != null && manifest.staticIp != null;
+      # W15: the guest-control authenticated Health probe is the framework
+      # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
+      # retained for the W16 SSH-compat window but are no longer the framework
+      # readiness signal, so a TCP-22 readiness node is no longer emitted.
+      guestControlEnabled = vm.guest.control.enable;
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
         microvm.shares;
@@ -964,10 +974,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         unit = "nixling-otel-host-bridge.service";
         readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
       } // otelHostBridgeRunner manifest))
-      ++ lib.optional guestSshEnabled (node name {
-        id = "guest-ssh-readiness";
-        role = "guest-ssh-readiness";
-        readiness = [ (tcpPort manifest.staticIp 22) ];
+      ++ lib.optional guestControlEnabled (node name {
+        id = "guest-control-health";
+        role = "guest-control-health";
+        readiness = [ (guestControlHealthReady name) ];
       });
       edges = [
         (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
@@ -1001,8 +1011,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
-      ++ lib.optional guestSshEnabled
-        (edge "cloud-hypervisor" "guest-ssh-readiness" "SSH readiness is checked only after Cloud Hypervisor is running.");
+      ++ lib.optional guestControlEnabled
+        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

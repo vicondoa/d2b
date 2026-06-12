@@ -89,6 +89,7 @@ let
           env = "alpha";
           index = 10;
           ssh.user = "alice";
+          guest.control.enable = true;
           observability.enable = true;
           config = {
             networking.hostName = lib.mkDefault "alpha-vm";
@@ -174,7 +175,7 @@ let
   assertStateDirTmpfile = name:
     assert builtins.elem "d /var/lib/nixling/vms/${name} 2770 microvm kvm -" tmpfilesRules;
     true;
-  alphaReadiness = processNode "alpha-vm" "guest-ssh-readiness";
+  alphaReadiness = processNode "alpha-vm" "guest-control-health";
   legacyExpectedCid = nl.guestControlVsockCid {
     name = "legacy-vm";
     envIndex = null;
@@ -209,18 +210,20 @@ let
     # The observability vsock-relay transport argv is validated by the
     # SigNoz observability eval suite (observability-eval / tempo / loki),
     # not here: this eval owns guest-control vsock allocation and dormancy.
+    # W15: framework readiness on a guest-control-capable VM is the
+    # authenticated guest-control Health probe, not a raw TCP-22 SSH probe.
     assert alphaReadiness != null;
-    assert alphaReadiness.role == "guest-ssh-readiness";
+    assert alphaReadiness.role == "guest-control-health";
     assert alphaReadiness.readiness == [
       {
-        kind = "tcp-port";
+        kind = "guest-control-health";
         value = {
-          host = "10.20.0.10";
-          port = 22;
+          vm = "alpha-vm";
         };
       }
     ];
-    assert !(builtins.hasAttr "guest-control-health" (builtins.listToAttrs (map (node: { name = node.id; value = true; }) (processVm "alpha-vm").nodes)));
+    # The retired SSH-readiness node is no longer emitted as framework readiness.
+    assert !(builtins.hasAttr "guest-ssh-readiness" (builtins.listToAttrs (map (node: { name = node.id; value = true; }) (processVm "alpha-vm").nodes)));
     builtins.toJSON {
       inherit (manifest.alpha-vm.observability) vsockCid vsockHostSocket;
       alphaArgv = vsockValues (chArgv "alpha-vm");

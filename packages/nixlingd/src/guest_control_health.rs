@@ -350,6 +350,28 @@ fn map_guest_file_error(kind: pb::GuestControlErrorKind) -> GuestFileReadError {
     }
 }
 
+/// Map an authenticated guest-control Health probe outcome to a framework
+/// readiness decision (W15 readiness DAG migration, Decision 5).
+///
+/// Fails CLOSED: a node is ready only when the daemon completed the full
+/// authenticated Hello + token challenge-response + Health handshake AND the
+/// guest reported a `Healthy` or `Degraded` state. An old-generation /
+/// unreachable / auth-failed / timed-out / protocol-violating guest (every
+/// `Err`) is never ready. This is the deliberate contrast with
+/// `ReadinessPredicate::ComponentSpecific`, which reports ready unconditionally
+/// and would fail OPEN.
+pub fn guest_control_health_ready(
+    outcome: &Result<GuestControlHealthEvidence, GuestControlHealthError>,
+) -> bool {
+    match outcome {
+        Ok(evidence) => matches!(
+            evidence.health.state.enum_value(),
+            Ok(pb::HealthState::HEALTH_STATE_HEALTHY)
+                | Ok(pb::HealthState::HEALTH_STATE_DEGRADED)
+        ),
+        Err(_) => false,
+    }
+}
 
 fn validate_health_evidence(health: &pb::HealthResponse) -> Result<(), GuestControlHealthError> {
     let origin = health
@@ -713,6 +735,56 @@ mod tests {
             })
             .await;
             assert_eq!(result, Err(expected), "kind {kind:?}");
+        }
+    }
+
+    fn evidence_with_state(state: pb::HealthState) -> GuestControlHealthEvidence {
+        let mut health = pb::HealthResponse::new();
+        health.state = protobuf::EnumOrUnknown::new(state);
+        GuestControlHealthEvidence {
+            vm_id: "corp-vm".to_owned(),
+            guest_boot_id: "boot-1".to_owned(),
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            capabilities_hash: "caps-sha256".to_owned(),
+            health,
+        }
+    }
+
+    #[test]
+    fn guest_control_health_ready_is_fail_closed() {
+        // A successfully authenticated guest reporting healthy or degraded is
+        // ready (D5).
+        assert!(guest_control_health_ready(&Ok(evidence_with_state(
+            pb::HealthState::HEALTH_STATE_HEALTHY
+        ))));
+        assert!(guest_control_health_ready(&Ok(evidence_with_state(
+            pb::HealthState::HEALTH_STATE_DEGRADED
+        ))));
+        // Any other reported state is never ready (defense in depth — the probe
+        // already rejects these, but the decision is fail-closed regardless).
+        assert!(!guest_control_health_ready(&Ok(evidence_with_state(
+            pb::HealthState::HEALTH_STATE_UNAVAILABLE_OLD_GENERATION
+        ))));
+        assert!(!guest_control_health_ready(&Ok(evidence_with_state(
+            pb::HealthState::HEALTH_STATE_LISTENER_ABSENT
+        ))));
+        assert!(!guest_control_health_ready(&Ok(evidence_with_state(
+            pb::HealthState::HEALTH_STATE_UNSPECIFIED
+        ))));
+        // Every probe failure — old generation, unreachable, auth failure,
+        // timeout, protocol violation, stale session — fails closed.
+        for error in [
+            GuestControlHealthError::TransportIo,
+            GuestControlHealthError::Ttrpc,
+            GuestControlHealthError::Signer,
+            GuestControlHealthError::Protocol,
+            GuestControlHealthError::AuthFailed,
+            GuestControlHealthError::StaleSession,
+        ] {
+            assert!(
+                !guest_control_health_ready(&Err(error.clone())),
+                "error {error:?} must fail closed"
+            );
         }
     }
 }

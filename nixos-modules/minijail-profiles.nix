@@ -336,12 +336,12 @@ let
         controllers = serviceControllers;
       };
 
-      "${profileIdFor name "guest-ssh-readiness"}" = mkProfile {
-        profileId = profileIdFor name "guest-ssh-readiness";
-        role = "guest-ssh-readiness";
+      "${profileIdFor name "guest-control-health"}" = mkProfile {
+        profileId = profileIdFor name "guest-control-health";
+        role = "guest-control-health";
         principal = "nixlingd";
-        seccompPolicyRef = "w1-guest-ssh-readiness";
-        cgroupSubtree = "nixling.slice/${name}/guest-ssh-readiness";
+        seccompPolicyRef = "w1-guest-control-health";
+        cgroupSubtree = "nixling.slice/${name}/guest-control-health";
       };
     }
     // lib.optionalAttrs vm.tpm.enable {

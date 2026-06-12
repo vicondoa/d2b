@@ -2998,8 +2998,10 @@ fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, Str
         // daemon-state-aware path (it needs the per-VM vsock socket, peer
         // credentials, and a broker-backed signer that this stateless helper
         // cannot reach). Fail CLOSED here: a generic evaluation never reports a
-        // guest-control-health node ready. The state-aware evaluation is wired
-        // into the readiness loop by the W15 readiness DAG migration.
+        // guest-control-health node ready. The state-aware probe result is
+        // mapped to a readiness decision by
+        // `guest_control_health::guest_control_health_ready`, which the daemon
+        // readiness loop invokes with live probe evidence.
         ReadinessPredicate::GuestControlHealth { .. } => Ok(false),
     }
 }
@@ -4983,16 +4985,13 @@ fn dispatch_broker_vm_start(
                     );
                 }
             }
-            // Post-readiness trigger. The per-VM DAG's
-            // `GuestSshReadiness` node is the
-            // canonical sd_notify-from-guest signal; once the DAG
-            // reports overall_ok we know sshd inside the VM has
-            // accepted at least one probe, so it is safe to pin the
-            // host pubkey into `/var/lib/nixling/known_hosts.nixling`
-            // via the broker. Failures here are warn-only — matching
-            // the legacy `nixling-known-hosts-refresh@<vm>.service`
-            // behaviour, which left the old pin in place rather than
-            // failing the VM start.
+            // Post-readiness trigger. Once the per-VM DAG reports
+            // overall_ok the guest is up, so it is safe to pin the host
+            // pubkey into `/var/lib/nixling/known_hosts.nixling` via the
+            // broker for the retained W16 SSH-compat path. Failures here are
+            // warn-only — matching the legacy
+            // `nixling-known-hosts-refresh@<vm>.service` behaviour, which
+            // left the old pin in place rather than failing the VM start.
             let outcome = known_hosts_refresh::refresh_known_hosts(
                 &request.vm,
                 &resolver.manifest,
