@@ -27,7 +27,8 @@ use nixling_ipc::{
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
-        UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
+        ReadGuestConfigRequest, UsbipProbeEntry as IpcUsbipProbeEntry,
+        UsbipProbeStatus as IpcUsbipProbeStatus,
     },
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
@@ -57,7 +58,12 @@ const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const DEFAULT_METRICS_URL: &str = "http://127.0.0.1:9101/metrics";
 /// Exit code for api-ready timeout in strict mode.
 pub const EXIT_API_TIMEOUT: i32 = 33;
-
+/// Default in-guest path of the editable guest config working copy. Only the
+/// legacy operator SSH transport honors a custom path; the guest-control
+/// transport reads the VM's canonical guest config working copy by file id.
+const DEFAULT_GUEST_CONFIG_PATH: &str = "/var/lib/nixling-guest/guest-config.nix";
+/// Exit code surfaced for every guest-control config-read failure on the CLI.
+const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
@@ -1371,6 +1377,14 @@ struct StoreVerifyResponseFrame {
     payload: IpcStoreVerifyResponse,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadGuestConfigResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    content_base64: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StoreVerifyOutputV2 {
@@ -1731,23 +1745,29 @@ enum ConfigCommand {
 struct ConfigSyncArgs {
     /// VM name (must match the static manifest).
     vm: String,
-    /// Path of the editable guest config INSIDE the VM to pull.
-    #[arg(long, default_value = "/var/lib/nixling-guest/guest-config.nix")]
+    /// Path of the editable guest config INSIDE the VM to pull. Honored only by
+    /// the legacy operator SSH transport; on guest-control VMs the canonical
+    /// guest config working copy is read by file id and this flag is rejected.
+    #[arg(long, default_value = DEFAULT_GUEST_CONFIG_PATH)]
     guest_path: String,
-    /// Override the SSH host (defaults to the manifest `static_ip`).
+    /// Override the SSH host (defaults to the manifest `static_ip`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     host: Option<String>,
-    /// Override the SSH user (defaults to the manifest `ssh_user`).
+    /// Override the SSH user (defaults to the manifest `ssh_user`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     user: Option<String>,
-    /// Override the SSH private key path.
+    /// Override the SSH private key path. SSH transport only; rejected on
+    /// guest-control VMs.
     #[arg(long)]
     key: Option<PathBuf>,
     /// known_hosts file used to verify the VM's host key (defaults to
-    /// the framework-managed `/var/lib/nixling/known_hosts.nixling`).
+    /// the framework-managed `/var/lib/nixling/known_hosts.nixling`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     known_hosts: Option<PathBuf>,
-    /// Print the SSH command instead of running it.
+    /// Print the planned action instead of running it.
     #[arg(long)]
     dry_run: bool,
     /// Emit a JSON envelope.
@@ -1982,6 +2002,11 @@ fn warn_all_pending_staged_configs() {
 /// integrity is verified against the framework-managed known_hosts with
 /// `accept-new` (pins on first use; refuses a CHANGED key, so a same-env
 /// peer cannot silently MITM the pulled config).
+///
+/// Retained for the operator SSH compatibility transport; the guest-control
+/// config-sync path does not call it (it routes through the daemon's
+/// authenticated `ReadGuestConfig` verb instead).
+#[allow(dead_code)]
 fn config_sync_ssh_argv(
     key_path: &Path,
     known_hosts: &Path,
@@ -2062,6 +2087,10 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
 /// (non-empty/UTF-8), then atomically publish it to `staging`. Returns
 /// the byte count. Spawning `argv[0]` (an absolute path or PATH-resolved
 /// binary) makes this hermetically testable with a fake `ssh`.
+///
+/// Retained for the operator SSH compatibility transport; the guest-control
+/// config-sync path does not spawn a subprocess.
+#[allow(dead_code)]
 fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
     // A guest config file is small; bound the untrusted pull on both
     // size and time. The guest controls the remote file, so both limits
@@ -2073,6 +2102,7 @@ fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usi
 
 /// Inner capture with injectable limits so the byte-cap AND timeout
 /// paths are both hermetically testable.
+#[allow(dead_code)]
 fn config_sync_capture_to_staging_limited(
     argv: &[String],
     staging: &Path,
@@ -2191,58 +2221,300 @@ fn config_sync_capture_to_staging_limited(
     Ok(stdout_bytes.len())
 }
 
+/// Standard `sha256:<64-hex>` digest over `data`. Computed by the host from the
+/// RECEIVED bytes; the guest-reported size/hash is never trusted (Decision 4).
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let digest: [u8; 32] = sha2::Sha256::digest(data).into();
+    let mut hex = String::with_capacity("sha256:".len() + 64);
+    hex.push_str("sha256:");
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// True iff `vm`'s committed bundle declares a guest-control health node, i.e.
+/// the VM exposes the authenticated guest-control transport. Old or partial
+/// generations without the node return false and fall to the fail-closed
+/// old-generation path (the operator SSH compatibility transport is wired in a
+/// later milestone).
+fn vm_uses_guest_control(context: &Context, vm: &str) -> Result<bool, CliFailure> {
+    let Some(bundle) = context.load_bundle_context()? else {
+        return Ok(false);
+    };
+    let Some(processes) = bundle.processes.as_ref() else {
+        return Ok(false);
+    };
+    Ok(processes
+        .vms
+        .iter()
+        .find(|entry| entry.vm == vm)
+        .is_some_and(|entry| {
+            entry.nodes.iter().any(|node| {
+                matches!(
+                    node.role,
+                    nixling_core::processes::ProcessRole::GuestControlHealth
+                )
+            })
+        }))
+}
+
+/// Build a consistent, leak-free CLI failure envelope for a guest-control
+/// config-sync error. `observed_state`/`remediation` carry only daemon-supplied
+/// closed-enum text — never guest content, paths, nonces, or transport detail.
+fn guest_control_config_failure(
+    kind: &str,
+    what_was_checked: &str,
+    observed_state: &str,
+    remediation: &str,
+    exit_code: i32,
+    is_json: bool,
+) -> CliFailure {
+    let envelope = host_error_envelope(
+        kind,
+        kind,
+        exit_code,
+        what_was_checked,
+        observed_state,
+        remediation,
+        "docs/reference/cli-contract.md#config-sync-guest-control-transport",
+    );
+    let rendered_stderr = if is_json {
+        let mut rendered = serde_json::to_string_pretty(&envelope)
+            .expect("serialize guest-control config failure envelope");
+        rendered.push('\n');
+        rendered
+    } else {
+        format!(
+            "nixling: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}\n",
+            envelope.kind,
+            envelope.code,
+            envelope.exit_code,
+            envelope.what_was_checked,
+            envelope.observed_state,
+            envelope.remediation,
+            envelope.docs_anchor,
+        )
+    };
+    CliFailure {
+        exit_code: envelope.exit_code,
+        message: envelope.kind,
+        rendered_stderr: Some(rendered_stderr),
+    }
+}
+
+/// Surface a daemon-typed guest-control read error as a CLI failure, preserving
+/// the daemon's closed-enum `kind`, human message, and remediation. The daemon
+/// guarantees these fields never embed guest content (verified by its own
+/// leak-free test), so they are safe to render verbatim.
+fn guest_control_config_failure_from_daemon(
+    error: DaemonErrorEnvelope,
+    is_json: bool,
+) -> CliFailure {
+    let remediation = if error.remediation.is_empty() {
+        "retry after the guest finishes booting, then check `nixling status <vm>`".to_owned()
+    } else {
+        error.remediation
+    };
+    guest_control_config_failure(
+        &error.kind,
+        "reading the guest config over the guest-control transport",
+        &error.message,
+        &remediation,
+        i32::from(error.exit_code),
+        is_json,
+    )
+}
+
+/// Reject SSH-only overrides (and a non-default in-guest path) on the
+/// guest-control path. These flags only configure the legacy operator SSH
+/// transport; the guest-control transport reads the VM's canonical guest config
+/// working copy over the authenticated channel.
+fn reject_ssh_only_flags_on_guest_control(args: &ConfigSyncArgs) -> Result<(), CliFailure> {
+    let mut offenders: Vec<&str> = Vec::new();
+    if args.host.is_some() {
+        offenders.push("--host");
+    }
+    if args.user.is_some() {
+        offenders.push("--user");
+    }
+    if args.key.is_some() {
+        offenders.push("--key");
+    }
+    if args.known_hosts.is_some() {
+        offenders.push("--known-hosts");
+    }
+    if args.guest_path != DEFAULT_GUEST_CONFIG_PATH {
+        offenders.push("--guest-path");
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(guest_control_config_failure(
+        "guest-control-ssh-flag-rejected",
+        "validating the flags passed to config sync",
+        &format!(
+            "the {} flag(s) configure the legacy operator SSH transport, which is not used for guest-control VMs",
+            offenders.join(", ")
+        ),
+        "omit these flags; the guest-control transport reads the VM's canonical guest config working copy over the authenticated channel",
+        2,
+        args.json,
+    ))
+}
+
+/// Reply parsed from a `readGuestConfig` socket exchange.
+enum GuestConfigReadOutcome {
+    /// The daemon public socket was missing or not reachable.
+    Unavailable,
+    /// A raw daemon reply frame (success OR typed error frame).
+    Reply(Vec<u8>),
+}
+
+/// Send an admin-only `readGuestConfig` request over the daemon public socket
+/// and return the raw reply frame. Connection failures collapse to
+/// `Unavailable`; any daemon reply (success or typed error) is returned verbatim
+/// for [`finish_config_sync_from_reply`] to interpret.
+fn read_guest_config_via_socket(
+    context: &Context,
+    vm: &str,
+) -> Result<GuestConfigReadOutcome, CliFailure> {
+    if !context.public_socket.exists() {
+        return Ok(GuestConfigReadOutcome::Unavailable);
+    }
+    let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
+        Ok(socket) => socket,
+        Err(err) if is_daemon_unreachable(&err) => {
+            return Ok(GuestConfigReadOutcome::Unavailable)
+        }
+        Err(err) => {
+            return Err(CliFailure::new(
+                1,
+                format!(
+                    "failed to connect to {}: {err}",
+                    context.public_socket.display()
+                ),
+            ))
+        }
+    };
+    let hello = daemon_hello_frame("hello")?;
+    socket
+        .send_frame(&hello)
+        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
+    let hello_response = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
+    let _ = parse_hello_reply(&hello_response)?;
+    let request = encode_type_tagged_message(
+        "readGuestConfig",
+        &ReadGuestConfigRequest { vm: vm.to_owned() },
+        "readGuestConfig request",
+    )?;
+    socket.send_frame(&request).map_err(|err| {
+        CliFailure::new(1, format!("failed to send readGuestConfig request: {err}"))
+    })?;
+    let response = socket.recv_frame().map_err(|err| {
+        CliFailure::new(1, format!("failed to receive readGuestConfig reply: {err}"))
+    })?;
+    Ok(GuestConfigReadOutcome::Reply(response))
+}
+
+/// Result of staging a guest config pulled over the guest-control transport.
+#[derive(Debug)]
+struct ConfigSyncStaged {
+    bytes: usize,
+    sha256: String,
+}
+
+/// Interpret a `readGuestConfig` daemon reply: decode the base64 content,
+/// re-enforce the raw size cap on the DECODED bytes, compute size + sha256 from
+/// the received bytes (never a guest-reported value), and atomically stage the
+/// result. On ANY error (daemon typed error frame, malformed reply, oversize, or
+/// empty/non-UTF-8 content) this stages NOTHING and never echoes guest content
+/// into the error.
+fn finish_config_sync_from_reply(
+    reply: &[u8],
+    staging: &Path,
+    is_json: bool,
+) -> Result<ConfigSyncStaged, CliFailure> {
+    let protocol_error = |observed: &str| {
+        guest_control_config_failure(
+            "guest-control-protocol-error",
+            "decoding the daemon reply to config sync",
+            observed,
+            "retry; if it persists, restart nixlingd after switching to this generation",
+            EXIT_GUEST_CONTROL_CONFIG,
+            is_json,
+        )
+    };
+    let value: Value = serde_json::from_slice(reply)
+        .map_err(|_| protocol_error("the daemon returned a reply that was not valid JSON"))?;
+    match value.get("type").and_then(Value::as_str).unwrap_or("") {
+        "readGuestConfigResponse" => {
+            let frame: ReadGuestConfigResponseFrame = serde_json::from_value(value)
+                .map_err(|_| protocol_error("the daemon reply was missing contentBase64"))?;
+            let bytes = nixling_core::base64_codec::decode(&frame.content_base64)
+                .map_err(|_| protocol_error("the daemon returned a malformed base64 payload"))?;
+            // Defense in depth: the daemon already bounds the encoded payload,
+            // but the host re-enforces the raw cap and never trusts a
+            // guest-reported size.
+            if bytes.len() as u64 > nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES {
+                return Err(guest_control_config_failure(
+                    "guest-control-file-too-large",
+                    "validating the received guest config size",
+                    "the received guest config exceeded the read cap",
+                    "shrink the guest config working copy below the read cap and retry",
+                    EXIT_GUEST_CONTROL_CONFIG,
+                    is_json,
+                ));
+            }
+            config_validate_staging_bytes(&bytes)?;
+            let sha256 = sha256_hex(&bytes);
+            if let Some(parent) = staging.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CliFailure::new(1, format!("config sync: create staging dir: {e}"))
+                })?;
+            }
+            config_atomic_write(staging, &bytes)?;
+            Ok(ConfigSyncStaged {
+                bytes: bytes.len(),
+                sha256,
+            })
+        }
+        "error" => {
+            let frame: ErrorFrame = serde_json::from_value(value)
+                .map_err(|_| protocol_error("the daemon returned a malformed error reply"))?;
+            Err(guest_control_config_failure_from_daemon(frame.error, is_json))
+        }
+        other => Err(protocol_error(&format!(
+            "the daemon returned an unexpected reply type '{other}'"
+        ))),
+    }
+}
+
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
     config_validate_vm_name(&args.vm)?;
     config_validate_remote_path(&args.guest_path)?;
     require_known_vm(context, &args.vm, args.json)?;
-    let manifest = context.load_manifest()?;
-    let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!("config sync: unknown vm '{}' in manifest", args.vm),
-        )
-    })?;
-    let host = args
-        .host
-        .clone()
-        .or_else(|| vm.static_ip.clone())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "config sync: vm '{}' has no static_ip in manifest and no --host override",
-                    args.vm
-                ),
-            )
-        })?;
-    let user = args
-        .user
-        .clone()
-        .or_else(|| vm.ssh_user.clone())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "config sync: vm '{vm}' has no SSH user; set `nixling.vms.{vm}.ssh.user` \
-                     in your host config (the account that owns the writable guest config copy) \
-                     or pass `--user <name>`",
-                    vm = args.vm
-                ),
-            )
-        })?;
-    let key_path = if let Some(p) = args.key.clone() {
-        p
-    } else {
-        konsole_resolve_bundle_key_path(&context.bundle_path, &args.vm, args.json)?
-            .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
-    };
-    let ssh_target = format!("{user}@{host}");
-    let known_hosts = args
-        .known_hosts
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("/var/lib/nixling/known_hosts.nixling"));
-    let argv: Vec<String> =
-        config_sync_ssh_argv(&key_path, &known_hosts, &ssh_target, &args.guest_path);
+
+    if !vm_uses_guest_control(context, &args.vm)? {
+        return Err(guest_control_config_failure(
+            "guest-control-unavailable-old-generation",
+            "selecting the config-sync transport for the VM",
+            &format!(
+                "vm '{}' does not declare the guest-control transport (old or partial generation)",
+                args.vm
+            ),
+            "rebuild and switch the VM to a generation that enables guest control, then retry; the operator SSH compatibility transport is not yet wired into this command",
+            EXIT_GUEST_CONTROL_CONFIG,
+            args.json,
+        ));
+    }
+
+    reject_ssh_only_flags_on_guest_control(args)?;
+
     let staging = config_staging_path(&args.vm);
 
     if args.dry_run {
@@ -2251,37 +2523,57 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
                 "command": "config sync",
                 "mode": "dry-run",
                 "vm": args.vm,
-                "argv": argv,
+                "transport": "guest-control",
                 "staging": staging.display().to_string(),
+                "guestFile": "guest-config",
             });
             print_json(&body)?;
         } else {
             print_stdout(&format!(
-                "config sync --dry-run: would run `{}` and stage to {}\n",
-                argv.join(" "),
+                "config sync --dry-run: would read the canonical guest config working copy of {} \
+                 over the authenticated guest-control transport and stage it to {}\n",
+                args.vm,
                 staging.display()
             ));
         }
         return Ok(0);
     }
 
-    konsole_validate_key_exists(&key_path, args.json)?;
-    let n = config_sync_capture_to_staging(&argv, &staging)?;
+    let staged = match read_guest_config_via_socket(context, &args.vm)? {
+        GuestConfigReadOutcome::Unavailable => {
+            return Err(guest_control_config_failure(
+                "guest-control-transport-unavailable",
+                "connecting to the nixling daemon for config sync",
+                "the nixling daemon public socket was not reachable",
+                "ensure nixlingd is running (`systemctl status nixlingd`) and retry",
+                EXIT_GUEST_CONTROL_CONFIG,
+                args.json,
+            ));
+        }
+        GuestConfigReadOutcome::Reply(reply) => {
+            finish_config_sync_from_reply(&reply, &staging, args.json)?
+        }
+    };
+
     if args.json {
         let body = serde_json::json!({
             "command": "config sync",
             "vm": args.vm,
+            "transport": "guest-control",
             "staging": staging.display().to_string(),
-            "bytes": n,
+            "bytes": staged.bytes,
+            "sha256": staged.sha256,
         });
         print_json(&body)?;
     } else {
         print_stdout(&format!(
-            "config sync: staged {n} bytes from {ssh_target}:{} to {}\n\
+            "config sync: staged {} bytes (sha256 {}) from the guest-control transport of {} to {}\n\
              Review with `nixling config diff {} --against <guestConfigFile>` then \
              `nixling config approve {} --to <guestConfigFile>` \
              (the host-side nixling.vms.{}.guestConfigFile path).\n",
-            args.guest_path,
+            staged.bytes,
+            staged.sha256,
+            args.vm,
             staging.display(),
             args.vm,
             args.vm,
@@ -8404,5 +8696,182 @@ mod config_cmd_tests {
                 "1-2"
             ]
         );
+    }
+
+    fn gc_sync_args(vm: &str) -> super::ConfigSyncArgs {
+        super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: super::DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn ssh_only_flags_are_rejected_on_guest_control_path() {
+        // Default args (no SSH overrides, default in-guest path) are accepted.
+        assert!(super::reject_ssh_only_flags_on_guest_control(&gc_sync_args("work-aad")).is_ok());
+
+        let with_host = super::ConfigSyncArgs {
+            host: Some("10.0.0.5".to_owned()),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_host).is_err());
+
+        let with_user = super::ConfigSyncArgs {
+            user: Some("alice".to_owned()),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_user).is_err());
+
+        let with_key = super::ConfigSyncArgs {
+            key: Some(PathBuf::from("/tmp/k")),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_key).is_err());
+
+        let with_known_hosts = super::ConfigSyncArgs {
+            known_hosts: Some(PathBuf::from("/tmp/kh")),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_known_hosts).is_err());
+
+        let with_custom_path = super::ConfigSyncArgs {
+            guest_path: "/etc/other.nix".to_owned(),
+            ..gc_sync_args("work-aad")
+        };
+        let err = super::reject_ssh_only_flags_on_guest_control(&with_custom_path)
+            .expect_err("custom guest path must be rejected");
+        // Flag rejection is a usage error, not a transport failure.
+        assert_eq!(err.exit_code, 2);
+    }
+
+    fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
+        let encoded = nixling_core::base64_codec::encode(content);
+        serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": encoded,
+        }))
+        .expect("serialize reply")
+    }
+
+    fn guest_control_error_reply(kind: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "error",
+            "error": {
+                "kind": kind,
+                "exitCode": 70,
+                "message": "guest-control read failed",
+                "remediation": "retry after the guest finishes booting",
+            },
+        }))
+        .expect("serialize error reply")
+    }
+
+    #[test]
+    fn finish_config_sync_decodes_stages_and_hashes_received_bytes() {
+        let dir = scratch("gc-sync-ok");
+        let staging = dir.join("work.guest.nix");
+        let content = b"{ environment.systemPackages = [ ]; }\n";
+        let reply = read_guest_config_reply(content);
+
+        let staged = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect("decode + stage ok");
+        assert_eq!(staged.bytes, content.len());
+        assert_eq!(staged.sha256, super::sha256_hex(content));
+        assert_eq!(fs::read(&staging).expect("read staging"), content);
+    }
+
+    #[test]
+    fn finish_config_sync_error_frames_never_stage_and_carry_no_guest_bytes() {
+        // The full daemon error matrix: each kind must fail closed, leave NO
+        // staging file, and surface exit code 70 (guest-control config read).
+        for kind in [
+            "guest-control-transport-unavailable",
+            "guest-control-auth-failed",
+            "guest-control-protocol-error",
+            "guest-control-capability-unavailable",
+            "guest-control-file-not-found",
+            "guest-control-file-too-large",
+            "guest-control-path-unsafe",
+            "guest-control-read-denied",
+            "guest-control-timeout",
+        ] {
+            let dir = scratch("gc-sync-err");
+            let staging = dir.join("work.guest.nix");
+            let reply = guest_control_error_reply(kind);
+            let err = super::finish_config_sync_from_reply(&reply, &staging, true)
+                .expect_err("error frame must fail");
+            assert_eq!(err.exit_code, 70, "kind {kind} must map to exit 70");
+            assert!(
+                !staging.exists(),
+                "kind {kind} must not create a staging file"
+            );
+            let rendered = err.rendered_stderr.unwrap_or_default();
+            assert!(
+                rendered.contains(kind),
+                "kind {kind} must surface its slug"
+            );
+            // No success content can appear on an error path: a sentinel that
+            // only exists in a real config body must never leak here.
+            assert!(!rendered.contains("systemPackages"));
+        }
+    }
+
+    #[test]
+    fn finish_config_sync_empty_content_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-empty");
+        let staging = dir.join("work.guest.nix");
+        let reply = read_guest_config_reply(b"   \n\t ");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("blank content must be rejected");
+        assert!(!staging.exists(), "blank content must not be staged");
+        // config_validate_staging_bytes rejects with a plain CliFailure.
+        assert_ne!(err.exit_code, 0);
+    }
+
+    #[test]
+    fn finish_config_sync_oversize_decoded_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-big");
+        let staging = dir.join("work.guest.nix");
+        let oversize =
+            vec![b'a'; (nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
+        let reply = read_guest_config_reply(&oversize);
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("oversize must be rejected");
+        assert_eq!(err.exit_code, 70);
+        assert_eq!(err.message, "guest-control-file-too-large");
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn finish_config_sync_malformed_base64_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-b64");
+        let staging = dir.join("work.guest.nix");
+        let reply = serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": "not valid base64!!!",
+        }))
+        .expect("serialize");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("malformed base64 must be rejected");
+        assert_eq!(err.message, "guest-control-protocol-error");
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn finish_config_sync_unexpected_reply_type_is_rejected() {
+        let dir = scratch("gc-sync-type");
+        let staging = dir.join("work.guest.nix");
+        let reply = serde_json::to_vec(&serde_json::json!({ "type": "somethingElse" }))
+            .expect("serialize");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("unexpected type must be rejected");
+        assert_eq!(err.message, "guest-control-protocol-error");
+        assert!(!staging.exists());
     }
 }
