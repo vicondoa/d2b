@@ -1135,13 +1135,13 @@
         "detachedStderrLogBytes": {
           "type": "integer",
           "format": "uint64",
-          "maximum": 134217728.0,
+          "maximum": 4194304.0,
           "minimum": 0.0
         },
         "detachedStdoutLogBytes": {
           "type": "integer",
           "format": "uint64",
-          "maximum": 134217728.0,
+          "maximum": 4194304.0,
           "minimum": 0.0
         },
         "execSessionsPerVm": {

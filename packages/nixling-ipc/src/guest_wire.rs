@@ -543,9 +543,9 @@ pub struct GuestEffectiveLimits {
     pub stdout_live_buffer_bytes: u64,
     #[schemars(range(max = 8388608))]
     pub stderr_live_buffer_bytes: u64,
-    #[schemars(range(max = 134217728))]
+    #[schemars(range(max = 4194304))]
     pub detached_stdout_log_bytes: u64,
-    #[schemars(range(max = 134217728))]
+    #[schemars(range(max = 4194304))]
     pub detached_stderr_log_bytes: u64,
     #[schemars(range(max = 1000))]
     pub long_poll_timeout_ms: u64,

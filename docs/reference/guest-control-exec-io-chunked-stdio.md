@@ -887,8 +887,8 @@ objects, daemon logs, metrics, or health JSON.
 Required typed error kinds:
 
 - `exec-not-found`
+- `exec-expired`
 - `stale-session`
-- `exec-already-exited`
 - `tty-required`
 - `tty-stderr-unavailable`
 - `stdin-not-open`
@@ -1010,8 +1010,10 @@ Before implementation exits design hardening, add at least:
      without leaking socket paths, tokens, transcripts, guest text, or
      unbounded IDs;
 15. retained-log storage security tests covering guest-local path roots,
-    ownership/mode, symlink and hard-link rejection, per-user isolation,
-    per-exec/per-user/VM quota enforcement, TTL/startup cleanup, and the
+    ownership/mode, symlink and hard-link rejection, attached per-user
+    isolation, and the detached exact VM-global quota enforcement (8 active /
+    32 retained slots × 2 streams × 4 MiB = 256 MiB; detached state is
+    slot-keyed and **not** per-user), TTL/startup cleanup, and the
     absence of retained stdout/stderr bytes from host-visible state other
     than explicit `ExecLogs` responses;
 16. observability and audit redaction tests proving stdout/stderr/env/
