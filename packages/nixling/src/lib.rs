@@ -7185,6 +7185,322 @@ mod host_install_dispatch_tests {
         (result, request)
     }
 
+    fn gc_sync_args(vm: &str) -> super::ConfigSyncArgs {
+        super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: super::DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: false,
+        }
+    }
+
+    fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
+        let encoded = nixling_core::base64_codec::encode(content);
+        serde_json::to_vec(&json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": encoded,
+        }))
+        .expect("serialize reply")
+    }
+
+    fn guest_control_error_reply(kind: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "type": "error",
+            "error": {
+                "kind": kind,
+                "exitCode": 70,
+                "message": "guest-control read failed",
+                "remediation": "retry after the guest finishes booting",
+            },
+        }))
+        .expect("serialize error reply")
+    }
+
+    fn gc_test_role_profile() -> nixling_core::processes::RoleProfile {
+        nixling_core::processes::RoleProfile {
+            profile_id: "guest-control-health".to_owned(),
+            uid: 1000,
+            gid: 1000,
+            adr_carve_out: None,
+            caps: Vec::new(),
+            namespaces: nixling_core::minijail_profile::NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: false,
+            },
+            seccomp_policy_ref: None,
+            mount_policy: nixling_core::minijail_profile::MountPolicy {
+                read_only_paths: Vec::new(),
+                writable_paths: Vec::new(),
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+            },
+            cgroup_placement: nixling_core::minijail_profile::CgroupPlacement {
+                subtree: "nixling.slice/test".to_owned(),
+                controllers: Vec::new(),
+                delegated: false,
+            },
+            user_namespace: None,
+            umask: None,
+        }
+    }
+
+    /// Write a bundle whose processes DAG declares a `GuestControlHealth`
+    /// node for `vm`, so `vm_uses_guest_control` resolves true and
+    /// `cmd_config_sync` follows the guest-control transport path.
+    fn write_guest_control_bundle(bundle_path: &std::path::Path, vm: &str) {
+        let base_dir = bundle_path.parent().expect("bundle parent");
+        std::fs::create_dir_all(base_dir).expect("create bundle dir");
+        let processes_path = base_dir.join(format!("{vm}.processes.json"));
+        let processes = nixling_core::processes::ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![nixling_core::processes::VmProcessDag {
+                vm: vm.to_owned(),
+                nodes: vec![nixling_core::processes::ProcessNode {
+                    id: nixling_core::processes::NodeId("guest-control-health".to_owned()),
+                    role: nixling_core::processes::ProcessRole::GuestControlHealth,
+                    unit: None,
+                    binary_path: None,
+                    argv: Vec::new(),
+                    env: Vec::new(),
+                    plan_ops: Vec::new(),
+                    profile: gc_test_role_profile(),
+                    readiness: Vec::new(),
+                }],
+                edges: Vec::new(),
+                invariants: nixling_core::processes::VmProcessInvariants {
+                    swtpm_pre_start_flush: false,
+                    per_vm_audit_pipeline: false,
+                    usbip_gating: false,
+                    tpm_ownership_migration_without_running_vm_mutation: false,
+                },
+            }],
+        };
+        std::fs::write(
+            &processes_path,
+            serde_json::to_vec(&processes).expect("serialize processes"),
+        )
+        .expect("write processes.json");
+        let bundle = json!({
+            "bundleVersion": 4,
+            "schemaVersion": "v2",
+            "publicManifestPath": base_dir.join("vms.json").to_string_lossy(),
+            "hostPath": base_dir.join("host.json").to_string_lossy(),
+            "processesPath": processes_path.to_string_lossy(),
+            "privilegesPath": base_dir.join("privileges.json").to_string_lossy(),
+            "closures": [],
+            "minijailProfiles": [],
+            "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
+        });
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle.json");
+    }
+
+    /// Drive the real `cmd_config_sync` over a mock public.sock that
+    /// performs the hello handshake then, if `serve` is `Some`, reads the
+    /// `readGuestConfig` request (recording it) and replies with the given
+    /// frame. When `serve` is `None`, no socket is created so the command
+    /// observes the daemon as unavailable. Returns the command result, the
+    /// recorded daemon request (if a server ran), and the captured stdout.
+    fn run_config_sync_with_mock_daemon(
+        args: super::ConfigSyncArgs,
+        serve: Option<Vec<u8>>,
+    ) -> (Result<i32, super::CliFailure>, Option<Value>, Vec<u8>) {
+        let socket_path = test_socket_path("config-sync", ".sock");
+        let manifest_path = test_socket_path("config-sync", ".manifest.json");
+        let bundle_path = manifest_path.with_extension("bundle.json");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, &args.vm);
+        write_guest_control_bundle(&bundle_path, &args.vm);
+        let staging_dir = test_socket_path("config-sync", ".staging");
+        let _ = std::fs::remove_dir_all(&staging_dir);
+
+        let server = serve.map(|reply| {
+            let listener = socket(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .expect("listener socket");
+            let addr = UnixAddr::new(&socket_path).expect("unix addr");
+            bind(listener.as_raw_fd(), &addr).expect("bind listener");
+            listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+            let (request_tx, request_rx) = mpsc::channel();
+            let join = thread::spawn(move || {
+                let accepted =
+                    accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+                let exchange = (|| -> io::Result<()> {
+                    let hello_bytes = recv_test_frame(accepted)?;
+                    let hello: Value = serde_json::from_slice(&hello_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                    let hello_reply = encode_type_tagged_message(
+                        "helloOk",
+                        &IpcHelloOk {
+                            server_version: Version::new("0.4.0").expect("server version"),
+                            selected_version: Version::new("0.4.0").expect("selected version"),
+                            capabilities: daemon_supported_features(),
+                        },
+                        "test hello reply",
+                    )
+                    .expect("encode hello reply");
+                    send_test_frame(accepted, &hello_reply)?;
+                    let request_bytes = recv_test_frame(accepted)?;
+                    let request: Value = serde_json::from_slice(&request_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    request_tx.send(request).expect("send request to test thread");
+                    send_test_frame(accepted, &reply)
+                })();
+                close(accepted).expect("close accepted socket");
+                exchange.expect("mock daemon exchange");
+            });
+            (join, request_rx)
+        });
+
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: bundle_path.clone(),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            let _staging_guard =
+                EnvVarGuard::set("NIXLING_CONFIG_STAGING_DIR", staging_dir.as_os_str());
+            super::cmd_config_sync(&context, &args)
+        });
+
+        let recorded = server.map(|(join, request_rx)| {
+            let request = request_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("receive daemon request");
+            join.join().expect("join mock daemon thread");
+            request
+        });
+
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        let _ = std::fs::remove_file(&bundle_path);
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        (result, recorded, stdout)
+    }
+
+    #[test]
+    fn config_sync_dry_run_uses_guest_control_transport_and_reads_no_bytes() {
+        let args = super::ConfigSyncArgs {
+            dry_run: true,
+            json: true,
+            ..gc_sync_args("work-aad")
+        };
+        // serve = None: no socket, no server. A dry-run must select the
+        // guest-control transport WITHOUT connecting or reading guest bytes.
+        let (result, recorded, stdout) = run_config_sync_with_mock_daemon(args, None);
+        assert_eq!(result.expect("dry-run succeeds"), 0);
+        assert!(recorded.is_none(), "dry-run must not contact the daemon");
+        let body: Value = serde_json::from_slice(&stdout).expect("dry-run json");
+        assert_eq!(
+            body.get("transport").and_then(Value::as_str),
+            Some("guest-control")
+        );
+        assert_eq!(body.get("mode").and_then(Value::as_str), Some("dry-run"));
+        let rendered = String::from_utf8_lossy(&stdout);
+        // No SSH argv and no guest content may appear in a dry-run.
+        assert!(!rendered.contains("ssh"));
+        assert!(!rendered.contains("sudo"));
+        assert!(!rendered.contains("contentBase64"));
+    }
+
+    #[test]
+    fn config_sync_end_to_end_success_stages_received_bytes() {
+        let content = b"{ environment.systemPackages = [ ]; }\n";
+        let reply = read_guest_config_reply(content);
+        let args = gc_sync_args("work-aad");
+        let (result, recorded, stdout) =
+            run_config_sync_with_mock_daemon(args, Some(reply));
+        assert_eq!(result.expect("config sync succeeds"), 0);
+        let request = recorded.expect("server recorded a request");
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("readGuestConfig")
+        );
+        assert_eq!(request.get("vm").and_then(Value::as_str), Some("work-aad"));
+        let rendered = String::from_utf8_lossy(&stdout);
+        assert!(rendered.contains("guest-control"));
+        // The success summary reports byte count + sha256 but never the
+        // raw guest config body.
+        assert!(!rendered.contains("systemPackages"));
+    }
+
+    #[test]
+    fn config_sync_end_to_end_failure_matrix_never_stages_or_leaks() {
+        for kind in [
+            "guest-control-transport-unavailable",
+            "guest-control-auth-failed",
+            "guest-control-protocol-error",
+            "guest-control-capability-unavailable",
+            "guest-control-file-not-found",
+            "guest-control-file-too-large",
+            "guest-control-path-unsafe",
+            "guest-control-read-denied",
+            "guest-control-timeout",
+        ] {
+            let reply = guest_control_error_reply(kind);
+            let args = super::ConfigSyncArgs {
+                json: true,
+                ..gc_sync_args("work-aad")
+            };
+            let (result, recorded, _stdout) =
+                run_config_sync_with_mock_daemon(args, Some(reply));
+            let err = result.expect_err(&format!("kind {kind} must fail"));
+            assert_eq!(err.exit_code, 70, "kind {kind} maps to exit 70");
+            assert!(recorded.is_some(), "kind {kind} reached the daemon");
+            let rendered = err.rendered_stderr.unwrap_or_default();
+            assert!(rendered.contains(kind), "kind {kind} surfaces its slug");
+            // No guest bytes, paths, or transport detail in the error.
+            assert!(!rendered.contains("systemPackages"));
+            assert!(!rendered.contains("contentBase64"));
+        }
+    }
+
+    #[test]
+    fn config_sync_daemon_unavailable_returns_transport_unavailable() {
+        let args = super::ConfigSyncArgs {
+            json: true,
+            ..gc_sync_args("work-aad")
+        };
+        // serve = None: the socket file is absent, so the daemon is
+        // unavailable and no guest bytes are read.
+        let (result, recorded, _stdout) = run_config_sync_with_mock_daemon(args, None);
+        let err = result.expect_err("missing daemon socket must fail");
+        assert_eq!(err.exit_code, 70);
+        assert!(recorded.is_none());
+        let rendered = err.rendered_stderr.unwrap_or_default();
+        assert!(rendered.contains("guest-control-transport-unavailable"));
+    }
+
     fn run_host_install_with_mock_daemon(
         args: HostInstallArgs,
         response: Value,
