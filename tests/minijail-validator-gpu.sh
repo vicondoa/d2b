@@ -113,9 +113,12 @@ assert_eq "${BIND_TARGET}" "/run/nixling-gpu/${VM_NAME}/wayland-0" \
 RESOLVER_SRC="${ROOT}/packages/nixling-core/src/bundle_resolver.rs"
 if [ -f "$RESOLVER_SRC" ]; then
   # Extract the Gpu allowed-class slice contents (between &[ and ])
-  # following the `ProcessRole::Gpu =>` arm. We grep a small window
-  # and check the canonical class slugs.
-  gpu_arm=$(awk '/ProcessRole::Gpu =>/{flag=1} flag{print; if (/\],/) exit}' "$RESOLVER_SRC")
+  # following the device-class match arm. The arm is shared with
+  # GpuRenderNode (`ProcessRole::Gpu | ProcessRole::GpuRenderNode =>
+  # &[ ... ]`), so anchor on a line that mentions ProcessRole::Gpu and
+  # opens the slice (`=> &[`) rather than a bare `ProcessRole::Gpu =>`,
+  # which would otherwise fall through to the role-name mapping arm.
+  gpu_arm=$(awk '/ProcessRole::Gpu.*=>.*&\[/{flag=1} flag{print; if (/\],/) exit}' "$RESOLVER_SRC")
   for required in '"kvm"' '"dri"' '"nvidia-ctl"' '"nvidia-uvm"' '"nvidia-render"' '"udmabuf"'; do
     if echo "$gpu_arm" | grep -q "$required"; then
       ok "broker Gpu role-device claim includes $required"
