@@ -185,12 +185,17 @@ non-bootstrap dispatch surface as typed per-op payloads:
   spawning it also grants the unprivileged `nixlingd` daemon uid a
   narrow ACL on the per-VM vsock transport (traversal `--x` on the
   non-public state-dir components, `rw` on `vsock.sock`) so the daemon
-  can drive the authenticated guest-control bridge; the matching revoke
-  fires when that runner stops or guest-control is disabled. This ACL is
+  can drive the authenticated guest-control bridge. The grant runs as a
+  revoke-then-grant at each cloud-hypervisor (re-)spawn: any stale
+  daemon grant left on a replaced/disabled socket inode is revoked
+  first, then the traversal chain and the live-socket `rw` grant are
+  (re-)established, so a disabled or replaced socket cannot retain a
+  stale daemon grant. (A dedicated stop-time teardown revoke hook is
+  future work: `SignalRunner` carries no socket path.) This ACL is
   a SpawnRunner **side-effect**, not a separate broker op. Both the grant
-  and the revoke emit a hash-only audit record carrying `acl_target_class`
-  (e.g. `guest-control-vsock`), the granted `daemon_uid`, and
-  `acl_diff_hash` + `result` — never the raw socket / state-dir path.
+  and the revoke emit a hash-only audit record carrying `target_class`
+  (`state-dir`, `ancestor`, or `vsock-socket`), the `daemon_principal`,
+  and `acl_diff_hash` + `result` — never the raw socket / state-dir path.
 - `RunHostInstall { bundle_installer_intent_ref, enable, start, no_start }`
 - `RunMigrate { bundle_migrate_intent_ref }`
 - `RunActivation { bundle_activation_intent_ref, mode, vm }`
@@ -401,7 +406,7 @@ enforces fail-closed before fork/exec.
 | --- | --- | --- | --- | --- |
 | `OtelHostBridge` | `nixling-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton — exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: `/run/nixling/otel` exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
 | `Usbip` | per-env singletons `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** — two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `nixling usb attach --apply` dispatches `UsbipBind(busid, vm)` first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
-| `CloudHypervisor` (guest-control VM) | `nixling@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `nixlingd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. The matching revoke fires when the cloud-hypervisor runner stops, guest-control is disabled, or no active socket remains. Both grant and revoke emit hash-only audit records (`acl_target_class`, `daemon_uid`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. |
+| `CloudHypervisor` (guest-control VM) | `nixling@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `nixlingd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats after the fd-based setfacl and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. It runs as a revoke-then-grant at each cloud-hypervisor (re-)spawn — any stale daemon grant on a replaced/disabled socket inode is revoked first — so a disabled or replaced socket cannot retain a stale daemon grant; a dedicated stop-time teardown revoke hook is future work (`SignalRunner` carries no socket path). The shared traversal `--x` grants on non-public ancestors are retained, since the daemon also needs them for the per-VM api-socket and sibling VMs depend on them. Both grant and revoke emit hash-only audit records (`target_class` ∈ {`state-dir`, `ancestor`, `vsock-socket`}, `daemon_principal`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. |
 
 ### Metrics endpoint
 

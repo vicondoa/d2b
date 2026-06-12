@@ -35,6 +35,18 @@ contains the guestd-local service bindings.
   authenticated readiness/version/capability RPCs. Pre-ttRPC CONNECT, Hello
   challenge, and Authenticate failures are host-synthesized status, not
   guest-returned `Health` RPC payloads.
+- `readGuestFile` / `readGuestFileResult` - the authenticated host↔guest
+  framework config-read RPC that grounds `nixling config sync` for
+  guest-control VMs (the daemon's `ReadGuestConfig` bridge wraps it).
+  `ReadGuestFileRequest` keys a **closed** `GuestFileId` enum (currently
+  only `guest-config`, the in-guest editable config working copy) — never
+  a free-form path; guestd maps the key to the host-declared target. The
+  single-shot `ReadGuestFileResponse` returns bounded `content` (capped at
+  `READ_GUEST_FILE_MAX_BYTES`; oversize files fail `FileTooLarge` BEFORE
+  any read/allocation), plus guest-reported `sizeBytes`/`sha256`
+  diagnostics that the host recomputes from the received bytes, and an
+  optional closed-enum `GuestControlError`. It is only reachable over the
+  authenticated channel after `Authenticate` succeeds.
 - `exec*`, `writeStdin`, `readOutput`, `closeStdin`, `ttyWinResize`, and
   signal/cancel messages - Docker-like exec lifecycle and chunked stdio.
   `controlAck` is the shared response for resize, signal, and cancel control

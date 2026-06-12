@@ -1959,7 +1959,8 @@ key). The SSH user comes from `--user` or the manifest `ssh_user`
 existing per-VM key + manifest `static_ip` / `ssh_user`. No new
 privileged surface, no virtiofs.
 
-**Guest-control compatibility note:** ADR 0028 reserves the future
+**Guest-control compatibility note:** <a id="config-sync-guest-control-transport"></a>
+ADR 0028 reserves the future
 guest-control implementation path for `config sync`. Once a running VM
 advertises healthy guest-control, `config sync` prefers guestd. During the
 old-generation compatibility window, VMs without guest-control capability
