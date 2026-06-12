@@ -10482,6 +10482,52 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    fn read_guest_config_dispatch_denies_launcher_before_any_side_effect() {
+        // The broker socket is unreachable. If the admin gate did NOT
+        // short-circuit, dispatch_read_guest_config would load the bundle
+        // resolver, resolve probe params, BrokerSign, and read guest bytes —
+        // producing a transport / broker error, never AuthzNotAdmin.
+        // Receiving AuthzNotAdmin proves the launcher was denied at the gate
+        // BEFORE any bundle load / probe / sign / guest-byte read.
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "read-guest-config-authz",
+        ));
+        let request = super::wire::Request::ReadGuestConfig(nixling_ipc::public_wire::ReadGuestConfigRequest {
+            vm: "vm-a".to_owned(),
+        });
+        let err = dispatch_request(&state, &launcher_peer(), request)
+            .expect_err("launcher must be denied readGuestConfig");
+        match &err {
+            super::typed_error::TypedError::AuthzNotAdmin { verb } => {
+                assert_eq!(verb, "readGuestConfig");
+            }
+            other => panic!("expected AuthzNotAdmin for readGuestConfig, got {other:?}"),
+        }
+        assert_eq!(err.exit_code(), 75);
+    }
+
+    #[test]
+    fn read_guest_config_dispatch_admin_clears_gate_and_reaches_handler() {
+        // The admin peer clears the authz gate, so dispatch reaches the
+        // handler and fails LATER (the bundle vm has no guest-control node /
+        // the broker is unreachable) with a guest-control read or transport
+        // error — never an authz error. This proves the gate is the only
+        // thing denying the launcher above, not some unrelated failure.
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "read-guest-config-admin",
+        ));
+        let request = super::wire::Request::ReadGuestConfig(nixling_ipc::public_wire::ReadGuestConfigRequest {
+            vm: "vm-a".to_owned(),
+        });
+        let err = dispatch_request(&state, &admin_peer(), request)
+            .expect_err("the read must fail after the gate is cleared");
+        assert!(
+            !matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
+            "admin must clear the authz gate, got {err:?}"
+        );
+    }
+
+    #[test]
     fn guest_file_read_error_maps_to_closed_daemon_kinds() {
         use super::map_guest_file_read_error;
         use crate::guest_control_health::{GuestControlHealthError as H, GuestFileReadError as E};
