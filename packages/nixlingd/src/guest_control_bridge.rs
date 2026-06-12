@@ -715,6 +715,33 @@ mod tests {
         }
     }
 
+    /// A successfully authenticated guest reporting DEGRADED with a valid
+    /// reason / remediation / degraded-subsystem set. `guest_control_health_ready`
+    /// treats DEGRADED as a SUCCESS (ready), so this drives the
+    /// degraded-success readiness path end to end.
+    fn degraded_evidence() -> GuestControlHealthEvidence {
+        use nixling_ipc::guest_proto as pb;
+        let mut health = pb::HealthResponse::new();
+        health.origin =
+            protobuf::EnumOrUnknown::new(pb::HealthOrigin::HEALTH_ORIGIN_GUEST_REPORTED);
+        health.state = protobuf::EnumOrUnknown::new(pb::HealthState::HEALTH_STATE_DEGRADED);
+        health.reason =
+            protobuf::EnumOrUnknown::new(pb::HealthReason::HEALTH_REASON_QUOTA_EXCEEDED);
+        health.remediation =
+            protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD);
+        health
+            .degraded_subsystems
+            .push(protobuf::EnumOrUnknown::new(pb::GuestSubsystem::GUEST_SUBSYSTEM_EXEC));
+        health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        GuestControlHealthEvidence {
+            vm_id: "corp-vm".to_owned(),
+            guest_boot_id: "boot-1".to_owned(),
+            protocol_version: nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION,
+            capabilities_hash: "caps-sha256".to_owned(),
+            health,
+        }
+    }
+
     /// Fake clock that advances a logical millisecond counter on sleep,
     /// so the retry loop's deadline behaviour is fully deterministic.
     struct FakeClock {
@@ -800,6 +827,36 @@ mod tests {
         // Three attempts: two transient, one healthy.
         assert_eq!(probe.attempt_timeouts.lock().unwrap().len(), 3);
         assert_eq!(run.attempts, 3);
+    }
+
+    #[test]
+    fn readiness_loop_degraded_state_is_ready_success() {
+        // A guest reporting DEGRADED (with a valid reason/remediation/
+        // degraded-subsystem set) is a SUCCESS: the loop terminates ready
+        // on the first attempt and the observation projects health_state
+        // "degraded" with outcome "ready". This locks the degraded-success
+        // path through the full loop + observation projection, not just the
+        // `guest_control_health_ready` predicate in isolation.
+        let probe = ScriptedProbe::new(vec![Ok(degraded_evidence())]);
+        let clock = FakeClock::new();
+        let run = run_guest_control_readiness_loop(
+            &probe,
+            &test_params(),
+            Duration::from_secs(30),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(
+            guest_control_health_ready(&run.outcome),
+            "DEGRADED is a ready/success outcome"
+        );
+        assert_eq!(run.attempts, 1, "degraded success terminates immediately");
+        let obs = ReadinessObservation::from_run(&run);
+        assert_eq!(obs.outcome, "ready");
+        assert_eq!(obs.health_state, "degraded");
+        assert_eq!(obs.health_reason, "quota-exceeded");
+        assert_eq!(obs.error_kind, "none");
     }
 
     #[test]

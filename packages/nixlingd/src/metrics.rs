@@ -577,6 +577,75 @@ mod tests {
     }
 
     #[test]
+    fn rendered_metric_labels_are_within_approved_allowlist() {
+        // Every label key the daemon's core registry renders must be in
+        // an APPROVED, low-cardinality allowlist. This is an allowlist
+        // (not a forbidden-list on an empty registry), so a NEW metric
+        // that introduces an unapproved label key — or a guest-control
+        // closed-enum field (health_state, error_kind, ...) promoted to a
+        // metric label — fails this test. The allowlist is hardcoded and
+        // independent of METRIC_INVENTORY so widening the inventory cannot
+        // silently widen the allowlist.
+        const APPROVED_METRIC_LABEL_KEYS: &[&str] =
+            &["vm", "state", "outcome", "step", "op", "le"];
+
+        // Populate one sample of EVERY inventory metric so render() emits
+        // a series (and therefore a label block) for each.
+        let r = Registry::new();
+        for d in METRIC_INVENTORY {
+            let labels: Vec<(&str, &str)> = d.labels.iter().map(|k| (*k, "sample")).collect();
+            match d.kind {
+                MetricKind::Counter => r.counter_inc(d.name, &labels),
+                MetricKind::Gauge => r.gauge_set(d.name, &labels, 1.0),
+                MetricKind::Histogram => r.histogram_observe(d.name, &labels, 0.5),
+            }
+        }
+        let body = r.render();
+
+        // Guard against a vacuous pass: at least one labelled series must
+        // have rendered.
+        assert!(
+            body.contains('{'),
+            "expected at least one labelled series in rendered metrics"
+        );
+
+        // Extract every label KEY from every `{...}` block and assert each
+        // is in the approved allowlist.
+        for line in body.lines() {
+            let (Some(open), Some(close)) = (line.find('{'), line.find('}')) else {
+                continue;
+            };
+            let inner = &line[open + 1..close];
+            if inner.is_empty() {
+                continue;
+            }
+            for pair in inner.split(',') {
+                let key = pair.split('=').next().unwrap_or("").trim();
+                assert!(
+                    APPROVED_METRIC_LABEL_KEYS.contains(&key),
+                    "unapproved metric label key {key:?} in rendered series: {line}"
+                );
+            }
+        }
+
+        // Belt-and-suspenders: the guest-control readiness closed-enum
+        // field names must NEVER appear as a metric label key.
+        for forbidden in [
+            "health_state",
+            "health_reason",
+            "error_kind",
+            "subsystem",
+            "guest_boot_id",
+            "capabilities_hash",
+        ] {
+            assert!(
+                !body.contains(&format!("{forbidden}=\"")),
+                "guest-control field {forbidden:?} leaked as a metric label"
+            );
+        }
+    }
+
+    #[test]
     fn metrics_handler_returns_text_format_on_get() {
         let r = Registry::new();
         let resp = metrics_handler(b"GET /metrics HTTP/1.1\r\n\r\n", &r);

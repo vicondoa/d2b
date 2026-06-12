@@ -2827,6 +2827,43 @@ fn resolve_store_view_intent_for_vm<'a>(
         .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
 }
 
+/// Emit the guest-control readiness observation as a structured tracing
+/// event. Every field is drawn from the closed-enum / numeric projection
+/// in [`guest_control_bridge::ReadinessObservation`]; by construction the
+/// event can never carry guest content, store/socket/state-dir paths,
+/// nonces, tokens, auth tags, `guest_boot_id`, or `capabilities_hash`.
+/// Kept as a free function so the leak-safe field set can be asserted by
+/// a tracing-capture test without driving the full supervisor.
+fn emit_guest_control_readiness_event(
+    obs: &guest_control_bridge::ReadinessObservation,
+    ready: bool,
+) {
+    if ready {
+        tracing::info!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe completed"
+        );
+    } else {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            error_kind = obs.error_kind,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe failed"
+        );
+    }
+}
+
 impl VmStartRunner<'_> {
     fn sync_store_view(&self, vm: &str) -> Result<(), String> {
         let intent = resolve_store_view_intent_for_vm(self.resolver, vm)?;
@@ -3085,30 +3122,7 @@ impl VmStartRunner<'_> {
 
         let ready = guest_control_health::guest_control_health_ready(&run.outcome);
         let obs = guest_control_bridge::ReadinessObservation::from_run(&run);
-        if ready {
-            tracing::info!(
-                kind = "critical",
-                subsystem = obs.subsystem,
-                outcome = obs.outcome,
-                health_state = obs.health_state,
-                health_reason = obs.health_reason,
-                attempt_count = obs.attempt_count,
-                duration_ms = obs.duration_ms,
-                "guest-control readiness probe completed"
-            );
-        } else {
-            tracing::warn!(
-                kind = "critical",
-                subsystem = obs.subsystem,
-                outcome = obs.outcome,
-                error_kind = obs.error_kind,
-                health_state = obs.health_state,
-                health_reason = obs.health_reason,
-                attempt_count = obs.attempt_count,
-                duration_ms = obs.duration_ms,
-                "guest-control readiness probe failed"
-            );
-        }
+        emit_guest_control_readiness_event(&obs, ready);
 
         if ready {
             tracing::info!(
@@ -10452,6 +10466,59 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    fn guest_control_health_empty_readiness_fallthrough_is_intercepted() {
+        use super::{vm_start_node_mode, wait_for_readiness, VmStartNodeMode};
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
+        use std::time::Duration;
+
+        let node = ProcessNode {
+            id: NodeId("guest-control-health".to_owned()),
+            role: ProcessRole::GuestControlHealth,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("gc-health")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+
+        // HAZARD: the stateless readiness helper treats an EMPTY predicate
+        // slice as TRIVIALLY ready — it returns Ok without running any
+        // probe. `spawn_and_check_process_alive` (the process-alive fast
+        // path, e.g. `--no-wait-api`) delegates the node to
+        // `spawn_and_wait_ready(vm, node, &[], budget)` with exactly this
+        // empty slice. If a GuestControlHealth node ever reached
+        // `wait_for_readiness`, an absent/auth-failing guest-control
+        // listener would be reported "ready" with NO authenticated probe.
+        assert_eq!(
+            wait_for_readiness(&node, &[], Duration::from_millis(0)),
+            Ok(()),
+            "empty readiness is trivially ready; the authenticated probe \
+             must be reached via the GuestControlHealth interception, never \
+             via this helper"
+        );
+
+        // GUARD: GuestControlHealth is a ReadinessOnly node, so
+        // `spawn_and_check_process_alive` does NOT take the LongLived
+        // process-alive-only short-circuit (which registers a node as alive
+        // after spawn with no probe at all). It falls through to
+        // `spawn_and_wait_ready`, whose `node.role == GuestControlHealth`
+        // special case runs `wait_for_guest_control_health` BEFORE the empty
+        // readiness slice can reach the trivially-ready `wait_for_readiness`.
+        // Were GuestControlHealth ever made LongLived, or the interception
+        // removed, the authenticated probe would be bypassed on this path.
+        assert!(matches!(
+            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            VmStartNodeMode::ReadinessOnly
+        ));
+    }
+
+    #[test]
     fn cloud_hypervisor_vsock_socket_extracts_socket_field() {
         use super::cloud_hypervisor_vsock_socket;
         use std::path::PathBuf;
@@ -10556,5 +10623,153 @@ mod broker_dispatch_tests {
                 other => panic!("expected GuestControlReadFailed, got {other:?}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod guest_control_readiness_tracing_tests {
+    use super::emit_guest_control_readiness_event;
+    use crate::guest_control_bridge::ReadinessObservation;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    /// Captured events: one inner vec of `(field_name, value)` pairs per
+    /// recorded tracing event.
+    type CapturedEvents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[derive(Default)]
+    struct FieldCollector {
+        fields: Vec<(String, String)>,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CapturingLayer {
+        events: CapturedEvents,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut collector = FieldCollector::default();
+            event.record(&mut collector);
+            self.events.lock().unwrap().push(collector.fields);
+        }
+    }
+
+    fn observation(error_kind: &'static str, outcome: &'static str) -> ReadinessObservation {
+        ReadinessObservation {
+            subsystem: "guest-control-health",
+            outcome,
+            health_state: "degraded",
+            health_reason: "quota-exceeded",
+            error_kind,
+            attempt_count: 3,
+            duration_ms: 1234,
+        }
+    }
+
+    #[test]
+    fn readiness_tracing_events_carry_only_leak_safe_fields() {
+        // APPROVED field-name allowlist for the readiness observation
+        // events. Hardcoded (not derived from the call site) so that
+        // adding a new field to the `tracing::info!`/`warn!` macro — e.g.
+        // a raw path, nonce, or guest-supplied string — fails this test.
+        const APPROVED_FIELDS: &[&str] = &[
+            "message",
+            "kind",
+            "subsystem",
+            "outcome",
+            "health_state",
+            "health_reason",
+            "error_kind",
+            "attempt_count",
+            "duration_ms",
+        ];
+        // Field names that MUST NEVER appear on a readiness event.
+        const FORBIDDEN_FIELDS: &[&str] = &[
+            "vm",
+            "env",
+            "node",
+            "role_id",
+            "path",
+            "socket",
+            "state_dir",
+            "store_path",
+            "nonce",
+            "token",
+            "auth_tag",
+            "guest_boot_id",
+            "capabilities_hash",
+            "peer_cid",
+            "guest_bytes",
+            "content",
+            "error",
+            "error_message",
+        ];
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let layer = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            // Exercise BOTH the ready and not-ready arms so both call
+            // sites are covered.
+            emit_guest_control_readiness_event(&observation("none", "ready"), true);
+            emit_guest_control_readiness_event(&observation("auth-failed", "not-ready"), false);
+        });
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2, "expected exactly two readiness events");
+        for fields in captured.iter() {
+            assert!(!fields.is_empty(), "readiness event recorded no fields");
+            for (name, value) in fields {
+                assert!(
+                    APPROVED_FIELDS.contains(&name.as_str()),
+                    "unapproved readiness tracing field: {name}={value}"
+                );
+                assert!(
+                    !FORBIDDEN_FIELDS.contains(&name.as_str()),
+                    "forbidden readiness tracing field: {name}"
+                );
+                assert!(
+                    !value.contains('/'),
+                    "path-like value leaked: {name}={value}"
+                );
+                assert!(
+                    !value.contains("SENTINEL"),
+                    "guest content leaked: {name}={value}"
+                );
+            }
+        }
+
+        // The ready arm must NOT carry error_kind; the not-ready arm MUST.
+        let ready_fields: Vec<&str> = captured[0].iter().map(|(n, _)| n.as_str()).collect();
+        let not_ready_fields: Vec<&str> = captured[1].iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !ready_fields.contains(&"error_kind"),
+            "ready event must not carry error_kind"
+        );
+        assert!(
+            not_ready_fields.contains(&"error_kind"),
+            "not-ready event must carry error_kind"
+        );
     }
 }
