@@ -47,7 +47,10 @@ const EXIT_SETUP_FAILED: i32 = 72;
 
 /// Typed setup/exec failure. The single status byte guestd reads is the
 /// `as_byte()` discriminant; the values are a stable wire contract between the
-/// helper and guestd's PTY spawner.
+/// helper and guestd's PTY spawner. guestd maps ANY status byte to a typed
+/// `ExecCreate` spawn/setup failure, and only a bare EOF (the `O_CLOEXEC` status
+/// fd closing on a successful `execve`) to success — so every non-exec exit path
+/// MUST write a byte first, or guestd would misread the exit as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HelperFailure {
     /// `setsid()` failed (helper was unexpectedly already a group leader, or
@@ -63,6 +66,13 @@ pub(crate) enum HelperFailure {
     Dup = 4,
     /// `execve` of the target failed (ENOENT/EACCES/ENOEXEC/...).
     Exec = 5,
+    /// Argument parsing failed (malformed `--tty-exec` invocation). Reported
+    /// over the still-attached status fd (no `dup2` has happened yet).
+    Args = 6,
+    /// Duplicating the inherited status fd to a high CLOEXEC fd failed, so the
+    /// handshake fd could not be preserved across the slave wiring. Reported on
+    /// the still-attached fd 1 before exit.
+    StatusDup = 7,
 }
 
 impl HelperFailure {
@@ -119,6 +129,10 @@ impl TtyHelperArgs {
 pub(crate) fn run(args: &[String]) -> i32 {
     let Some(parsed) = TtyHelperArgs::parse(args) else {
         eprintln!("nixling-exec-runner: --tty-exec requires --rows R --cols C -- <abs-argv...>");
+        // fd 1 is still the inherited status pipe write end (no dup2 onto it has
+        // happened yet). Report a typed byte so guestd does not read the bare
+        // EOF on helper exit as a successful exec.
+        let _ = write(stdout(), &[HelperFailure::Args.as_byte()]);
         return 64;
     };
     // Duplicate the inherited status pipe (fd 1) to a high CLOEXEC fd BEFORE any
@@ -126,9 +140,13 @@ pub(crate) fn run(args: &[String]) -> i32 {
     // on a successful execve (guestd reads EOF == success).
     let status = match fcntl_dupfd_cloexec(stdout(), STATUS_DUP_MIN_FD) {
         Ok(fd) => fd,
-        // Without a status channel we cannot reliably report failure; fail
-        // closed with a distinct exit code (no side effects have happened yet).
-        Err(_) => return EXIT_NO_STATUS_CHANNEL,
+        // The dup failed, so we have no high CLOEXEC copy — but fd 1 is still the
+        // inherited status pipe (the slave wiring has not run). Report a typed
+        // byte on it before exiting so a bare EOF is never misread as success.
+        Err(_) => {
+            let _ = write(stdout(), &[HelperFailure::StatusDup.as_byte()]);
+            return EXIT_NO_STATUS_CHANNEL;
+        }
     };
     // setup_and_exec only returns on failure; on success it has already replaced
     // the process image via execve.
@@ -222,5 +240,7 @@ mod tests {
         assert_eq!(HelperFailure::Winsize.as_byte(), 3);
         assert_eq!(HelperFailure::Dup.as_byte(), 4);
         assert_eq!(HelperFailure::Exec.as_byte(), 5);
+        assert_eq!(HelperFailure::Args.as_byte(), 6);
+        assert_eq!(HelperFailure::StatusDup.as_byte(), 7);
     }
 }
