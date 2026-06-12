@@ -104,7 +104,7 @@
           serde = { version = "1", features = ["derive"] }
           serde_json = "1"
           schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system"] }
+          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
           sha2 = "0.10"
           EOF
         '';
@@ -281,7 +281,7 @@
           serde = { version = "1", features = ["derive"] }
           serde_json = "1"
           schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system"] }
+          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
           sha2 = "0.10"
           EOF
         '';

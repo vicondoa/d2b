@@ -709,6 +709,22 @@
               backstop, not a substitute for explicit cancellation.
             '';
           };
+
+          interactiveMaxRuntimeSec = lib.mkOption {
+            type = lib.types.ints.unsigned;
+            default = 0;
+            example = 28800;
+            description = ''
+              Default runtime ceiling, in seconds, for interactive (TTY) execs
+              on this VM. `0` (the default) means no ceiling: an interactive
+              session is connection-owned and may run indefinitely until it
+              exits or the controlling connection drops.
+
+              This ceiling applies only to interactive `tty = true`,
+              non-detached execs. Non-interactive attached execs keep their
+              fixed built-in runtime ceiling regardless of this value.
+            '';
+          };
         };
 
         # REMOVED. The submodule path is kept ONLY so that

@@ -72,6 +72,16 @@ in
           0 means no ceiling (indefinite runtime).
         '';
       };
+
+      interactiveMaxRuntimeSec = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        internal = true;
+        readOnly = true;
+        description = ''
+          Host-owned default runtime ceiling (seconds) for interactive (TTY)
+          execs. 0 means no ceiling (indefinite, connection-owned runtime).
+        '';
+      };
     };
   };
 
@@ -161,7 +171,9 @@ in
             let
               execFlags =
                 lib.optionalString cfg.exec.enable " --exec-enable"
-                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root";
+                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root"
+                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot)
+                    " --interactive-max-runtime-sec ${toString cfg.exec.interactiveMaxRuntimeSec}";
               detachedFlags =
                 lib.optionalString detachedEnabled (
                   " --systemd-run-path ${pkgs.systemd}/bin/systemd-run"

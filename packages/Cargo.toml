@@ -49,7 +49,7 @@ schemars = { version = "0.8", features = ["derive"] }
 # adds the consumer. See plan.md §"W3 broker variant additions" — the
 # wire contract for routes/nft is fully encoded in nixling-ipc here,
 # so scope agents have everything they need to pull these crates in.
-rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread"] }
+rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
 # W3 s2: declared in workspace.dependencies so future scope work (and
 # the eventual production netlink backend in nixling-priv-broker) can
 # opt into rtnetlink via `{ workspace = true }`. Not yet consumed by

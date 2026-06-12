@@ -5,6 +5,7 @@ pub mod detached;
 pub mod detached_registry;
 pub mod exec;
 pub mod exec_linux;
+pub mod exec_pty;
 pub mod generated;
 pub mod service;
 

@@ -115,6 +115,10 @@ pub struct GuestdServeConfig {
     /// Present when the host wired detached-exec runtime constants into the
     /// guest unit. `None` => detached exec is unsupported (attached only).
     pub detached: Option<DetachedRuntimeConfig>,
+    /// Default per-exec runtime ceiling, in seconds, for interactive (tty=true,
+    /// non-detached) attached execs; 0 means unlimited. Non-TTY attached execs
+    /// keep the fixed `MAX_EXEC_RUNTIME_MS` ceiling regardless of this value.
+    pub interactive_max_runtime_sec: u64,
 }
 
 /// Host-supplied, controlled-constant runtime configuration for detached exec.
@@ -148,12 +152,20 @@ impl GuestdServeConfig {
             token,
             exec_policy,
             detached: None,
+            interactive_max_runtime_sec: 0,
         })
     }
 
     /// Attach host-supplied detached runtime constants.
     pub fn with_detached(mut self, detached: DetachedRuntimeConfig) -> Self {
         self.detached = Some(detached);
+        self
+    }
+
+    /// Set the default interactive (TTY) per-exec runtime ceiling in seconds.
+    /// 0 (the default) means unlimited; non-TTY attached execs are unaffected.
+    pub fn with_interactive_max_runtime_sec(mut self, seconds: u64) -> Self {
+        self.interactive_max_runtime_sec = seconds;
         self
     }
 }
@@ -652,6 +664,19 @@ fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
         }
         ExecError::StaleSession => Pb::GUEST_CONTROL_ERROR_KIND_STALE_SESSION,
         ExecError::ExecExpired => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
+        // Interactive TTY exec (W14): reuse existing wire kinds (no regen).
+        ExecError::InvalidTerminalSize => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::TtyStderrUnavailable => Pb::GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE,
+        ExecError::TtyRequired => Pb::GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED,
+        ExecError::StdinClosed => Pb::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED,
+        ExecError::StdinOffsetMismatch => Pb::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH,
+        ExecError::StdinByteBudgetExhausted => {
+            Pb::GUEST_CONTROL_ERROR_KIND_STDIN_BYTE_BUDGET_EXHAUSTED
+        }
+        ExecError::StdinBackpressure => Pb::GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE,
+        ExecError::ControlSeqMismatch => Pb::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH,
+        ExecError::InvalidSignal => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::ExecClosing => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED,
         ExecError::Internal => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
     }
 }

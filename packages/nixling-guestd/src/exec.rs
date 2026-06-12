@@ -108,6 +108,18 @@ pub enum ExecError {
     RetainedLogQuotaExceeded,
     StaleSession,
     ExecExpired,
+    // Interactive TTY exec (W14). These map to existing wire kinds; no new wire
+    // enum variant is introduced.
+    InvalidTerminalSize,
+    TtyStderrUnavailable,
+    TtyRequired,
+    StdinClosed,
+    StdinOffsetMismatch,
+    StdinByteBudgetExhausted,
+    StdinBackpressure,
+    ControlSeqMismatch,
+    InvalidSignal,
+    ExecClosing,
     Internal,
 }
 
@@ -137,6 +149,17 @@ impl ExecError {
             Self::RetainedLogQuotaExceeded => WireErrorKind::RetainedLogQuotaExceeded,
             Self::StaleSession => WireErrorKind::StaleSession,
             Self::ExecExpired => WireErrorKind::ExecExpired,
+            // Interactive TTY exec (W14): reuse existing wire kinds.
+            Self::InvalidTerminalSize => WireErrorKind::ProtocolError,
+            Self::TtyStderrUnavailable => WireErrorKind::TtyStderrUnavailable,
+            Self::TtyRequired => WireErrorKind::TtyRequired,
+            Self::StdinClosed => WireErrorKind::StdinClosed,
+            Self::StdinOffsetMismatch => WireErrorKind::StdinOffsetMismatch,
+            Self::StdinByteBudgetExhausted => WireErrorKind::StdinByteBudgetExhausted,
+            Self::StdinBackpressure => WireErrorKind::StdinBackpressure,
+            Self::ControlSeqMismatch => WireErrorKind::ControlSeqMismatch,
+            Self::InvalidSignal => WireErrorKind::ProtocolError,
+            Self::ExecClosing => WireErrorKind::ExecAlreadyExited,
             Self::Internal => WireErrorKind::ProtocolError,
         }
     }
