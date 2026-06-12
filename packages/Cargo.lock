@@ -1075,6 +1075,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "clap",
+ "getrandom 0.2.17",
  "libc",
  "nix 0.29.0",
  "nixling-core",

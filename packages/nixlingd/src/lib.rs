@@ -72,6 +72,7 @@ use supervisor::pidfd_table::{
 };
 use uzers::{get_user_by_uid, get_user_groups};
 
+pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
 pub mod supervisor;
@@ -2182,30 +2183,48 @@ fn dispatch_broker_request_with_timeout(
     timeout: Duration,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket(&socket_path)?);
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
-    socket
-        .set_write_timeout(Some(timeout))
-        .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
-            detail: err.to_string(),
-        })?;
+    dispatch_broker_request_to_socket(&socket_path, request, Default::default(), Some(timeout))
+}
+
+/// Dispatch a single broker request over a freshly-connected seqpacket
+/// socket identified only by its path. Unlike the `ServerState`-based
+/// dispatchers this borrows nothing from the daemon and so can be
+/// invoked from an owned-data worker (e.g. the guest-control
+/// `BrokerSigner`, which holds only the broker socket path so it stays
+/// `Send + Sync` across a `spawn_blocking` boundary). `timeout`, when
+/// set, bounds both the write and the read.
+pub(crate) fn dispatch_broker_request_to_socket(
+    socket_path: &Path,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    timeout: Option<Duration>,
+) -> Result<BrokerResponse, TypedError> {
+    let socket = Socket::from(connect_seqpacket(socket_path)?);
+    if let Some(timeout) = timeout {
+        socket
+            .set_read_timeout(Some(timeout))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker read timeout to {timeout:?}"),
+                detail: err.to_string(),
+            })?;
+        socket
+            .set_write_timeout(Some(timeout))
+            .map_err(|err| TypedError::InternalIo {
+                context: format!("set broker write timeout to {timeout:?}"),
+                detail: err.to_string(),
+            })?;
+    }
     write_json_frame(
         &socket,
         &BrokerRequestEnvelope {
             request,
-            caller_role: Default::default(),
+            caller_role,
             test_peer_uid: None,
         },
     )?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
-        path: socket_path,
+        path: socket_path.to_path_buf(),
         detail: err.to_string(),
     })
 }
