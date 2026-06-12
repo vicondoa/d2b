@@ -2,7 +2,7 @@
 //!
 //! Wires the host daemon's authenticated guest-control probe
 //! ([`crate::guest_control_health`]) to a real broker-backed signer and
-//! the per-VM vsock socket. The W11 layer shipped the probe, the ttRPC
+//! the per-VM vsock socket. An earlier layer shipped the probe, the ttRPC
 //! client, the vsock connector, and the broker's HMAC signing op, but no
 //! production [`GuestControlSigner`] and nothing that drives the probe.
 //! This module supplies both:
@@ -260,7 +260,7 @@ pub fn run_config_read_once(
 /// current-thread runtime is never nested inside a caller's Tokio runtime
 /// (the public.sock dispatch path runs synchronously on a multi-threaded
 /// runtime worker; calling `Runtime::block_on` there would panic). This is the
-/// BR13 runtime boundary for the synchronous verb path: nothing is borrowed
+/// the synchronous-verb runtime boundary: nothing is borrowed
 /// across the thread, and the spawned thread starts with no runtime context.
 pub fn run_config_read_on_dedicated_thread(
     params: ProbeParams,

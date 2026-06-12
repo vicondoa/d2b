@@ -2148,7 +2148,7 @@ fn broker_socket_path(state: &ServerState) -> PathBuf {
 /// per-VM directory to `<daemon-user>:users` mode 2770, so the runtime owner
 /// is `nixlingd:users`. Existing-code-is-canon: the probe reconciles its
 /// `expected_state_root_uid/gid` to the actual runtime owner; the tmpfiles vs
-/// activation divergence is confirmed live at W19.
+/// activation divergence is to be confirmed against a live host.
 const GUEST_CONTROL_STATE_ROOT_GROUP: &str = "users";
 
 /// Resolve the canonical runtime owner `(uid, gid)` of the per-VM state
@@ -2250,8 +2250,8 @@ fn map_guest_file_read_error(error: guest_control_health::GuestFileReadError) ->
 /// ADMIN-ONLY public.sock verb: read the editable guest config working copy of
 /// `vm` over the authenticated guest-control bridge and return it as a base64
 /// string. The admin authorization gate runs in `dispatch_request` BEFORE this
-/// handler. The orchestration runs on a dedicated OS thread (BR13 runtime
-/// boundary). The encoded payload is bounded so it fits both transport frames;
+/// handler. The orchestration runs on a dedicated OS thread (the
+/// synchronous-verb runtime boundary). The encoded payload is bounded so it fits both transport frames;
 /// any guest content is never echoed into an error.
 fn dispatch_read_guest_config(
     state: &ServerState,
@@ -3053,7 +3053,7 @@ impl VmStartRunner<'_> {
     /// State-aware readiness for a `GuestControlHealth` node. Resolves the
     /// per-VM probe parameters from the trusted bundle and runs the
     /// authenticated Health probe on a dedicated current-thread runtime
-    /// inside `spawn_blocking` (BR13 runtime boundary: no `Handle::current`,
+    /// inside `spawn_blocking` (a strict runtime boundary: no `Handle::current`,
     /// `block_in_place`, or nested runtime; nothing borrowed from
     /// `ServerState` crosses the boundary). The retry loop is bounded by
     /// `budget.readiness`; `guest_control_health_ready` decides ready.

@@ -313,12 +313,12 @@ complete -c nixling -n "__fish_nixling_using_subcommand config; and not __fish_s
 complete -c nixling -n "__fish_nixling_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "reject" -d 'Discard the staged guest config'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "status" -d 'Report whether a VM has a pending (un-approved) staged config'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and not __fish_seen_subcommand_from sync diff approve reject status help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l guest-path -d 'Path of the editable guest config INSIDE the VM to pull' -r
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l host -d 'Override the SSH host (defaults to the manifest `static_ip`)' -r
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l user -d 'Override the SSH user (defaults to the manifest `ssh_user`)' -r
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l key -d 'Override the SSH private key path' -r -F
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l known-hosts -d 'known_hosts file used to verify the VM\'s host key (defaults to the framework-managed `/var/lib/nixling/known_hosts.nixling`)' -r -F
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l dry-run -d 'Print the SSH command instead of running it'
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l guest-path -d 'Path of the editable guest config INSIDE the VM to pull. Honored only by the legacy operator SSH transport; on guest-control VMs the canonical guest config working copy is read by file id and this flag is rejected' -r
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l host -d 'Override the SSH host (defaults to the manifest `static_ip`). SSH transport only; rejected on guest-control VMs' -r
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l user -d 'Override the SSH user (defaults to the manifest `ssh_user`). SSH transport only; rejected on guest-control VMs' -r
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l key -d 'Override the SSH private key path. SSH transport only; rejected on guest-control VMs' -r -F
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l known-hosts -d 'known_hosts file used to verify the VM\'s host key (defaults to the framework-managed `/var/lib/nixling/known_hosts.nixling`). SSH transport only; rejected on guest-control VMs' -r -F
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l dry-run -d 'Print the planned action instead of running it'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l json -d 'Emit a JSON envelope'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from diff" -l against -d 'The live host-side guest config file to compare the staging against' -r -F

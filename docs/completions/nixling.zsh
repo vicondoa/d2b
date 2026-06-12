@@ -834,12 +834,12 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (sync)
 _arguments "${_arguments_options[@]}" : \
-'--guest-path=[Path of the editable guest config INSIDE the VM to pull]:GUEST_PATH:_default' \
-'--host=[Override the SSH host (defaults to the manifest \`static_ip\`)]:HOST:_default' \
-'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`)]:USER:_default' \
-'--key=[Override the SSH private key path]:KEY:_files' \
-'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`)]:KNOWN_HOSTS:_files' \
-'--dry-run[Print the SSH command instead of running it]' \
+'--guest-path=[Path of the editable guest config INSIDE the VM to pull. Honored only by the legacy operator SSH transport; on guest-control VMs the canonical guest config working copy is read by file id and this flag is rejected]:GUEST_PATH:_default' \
+'--host=[Override the SSH host (defaults to the manifest \`static_ip\`). SSH transport only; rejected on guest-control VMs]:HOST:_default' \
+'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`). SSH transport only; rejected on guest-control VMs]:USER:_default' \
+'--key=[Override the SSH private key path. SSH transport only; rejected on guest-control VMs]:KEY:_files' \
+'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`). SSH transport only; rejected on guest-control VMs]:KNOWN_HOSTS:_files' \
+'--dry-run[Print the planned action instead of running it]' \
 '--json[Emit a JSON envelope]' \
 '-h[Print help]' \
 '--help[Print help]' \

@@ -27,6 +27,27 @@ deprecations ship one minor release before removal.
   guest-control protocol version is bumped accordingly. See
   [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
 
+- Production guest-control transport bridge: the host daemon now drives
+  the authenticated vsock channel to guest-control VMs end-to-end. A
+  broker-backed signer forwards each guest-control sign request verbatim
+  to the privileged broker over a timeout-bounded dispatch, and a probe
+  orchestrator resolves the per-VM vsock socket and peer credentials from
+  the trusted bundle, connects to the host CID, and runs the
+  authenticated Hello / Authenticate / Health handshake on a dedicated
+  runtime with per-attempt timeouts. Spawning a guest-control VM's
+  cloud-hypervisor runner now grants the unprivileged daemon a minimal,
+  single-uid ACL (`--x` traversal on the per-VM state dir, `rw` on
+  `vsock.sock`) scoped to the current socket inode, revoked when the
+  runner stops; both grant and revoke are audited with hash-only fields
+  (no raw paths).
+
+- New admin-only `public.sock` verb `ReadGuestConfig { vm }`: returns the
+  editable guest config working copy of a guest-control VM as a bounded
+  base64 string over the authenticated bridge. The daemon enforces the
+  admin role before any probe / sign / read, recomputes size and sha256
+  from the received bytes (never trusting guest-reported values), and
+  bounds the encoded payload below both the ttRPC and `public.sock`
+  frames.
 
   `tty=true && detach=false` now routes to a PTY-backed,
   connection-owned, non-durable attached exec. PTY setup keeps
@@ -362,6 +383,20 @@ deprecations ship one minor release before removal.
   Per-VM guest sshd and host keys remain for the SSH compatibility
   window but no longer drive framework readiness. See
   [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
+- `nixling config sync` on a guest-control VM now pulls the editable
+  guest config over the authenticated guest-control bridge (the new
+  `ReadGuestConfig` daemon verb) instead of an SSH transfer. The host
+  computes size and sha256 from the received bytes and keeps the existing
+  atomic temp+fsync+rename staging. `--dry-run` reports
+  `transport: "guest-control"` and the planned target without reading any
+  guest bytes or printing an SSH command, and SSH-only flags
+  (`--host` / `--user` / `--key` / `--known-hosts` / `--guest-path`) are
+  rejected on the guest-control path with a remediation pointing at the
+  operator SSH compatibility transport. Old-generation VMs that predate
+  guest-control fail closed with `guest-control-unavailable-old-generation`.
+- The framework readiness label is now the canonical `guest-control-health`
+  (no per-VM suffix) across `status`, `vm list`, and the start preview;
+  the start-preview DAG no longer hard-codes an `ssh-ready` node.
 - `nixling vm konsole` is deprecated. It still works as an operator SSH
   convenience; a typed guest-control session replacement is planned for
   a later release. Nothing is removed yet.
