@@ -496,6 +496,37 @@ pub fn validate_and_authorize(
     Ok(command)
 }
 
+/// Validate + authorize a **detached** create. Mirrors [`validate_and_authorize`]
+/// but permits `detached = true` while still rejecting the unsupported
+/// interactive flags (`tty`, `stdin_open`, `has_terminal_size`). Detached execs
+/// do not use the attached `max_chunk_bytes` policy (logs use fixed per-stream
+/// caps), so that bound is not enforced here.
+pub fn validate_and_authorize_detached(
+    input: &ExecCreateInput,
+    policy: ExecPolicy,
+) -> Result<ValidatedCommand, ExecError> {
+    if !policy.enabled {
+        return Err(ExecError::ExecDisabled);
+    }
+    if input.tty || input.stdin_open || input.has_terminal_size {
+        return Err(ExecError::UnsupportedMode);
+    }
+
+    // Root-only gate. Omitted users fail closed; non-root is unsupported.
+    match input.user.as_deref() {
+        Some("root") => {
+            if !policy.allow_root {
+                return Err(ExecError::RootDenied);
+            }
+        }
+        Some(_) => return Err(ExecError::UserDenied),
+        None => return Err(ExecError::RootDenied),
+    }
+
+    let command = validate_command(input)?;
+    Ok(command)
+}
+
 fn validate_command(input: &ExecCreateInput) -> Result<ValidatedCommand, ExecError> {
     if input.argv.is_empty() || input.argv.len() > MAX_ARGV {
         return Err(ExecError::InvalidArgv);
@@ -588,6 +619,12 @@ where
             reservations: AtomicU64::new(0),
             pending_exec_waits: AtomicU64::new(0),
         }
+    }
+
+    /// The effective exec policy (read-only; used by the detached path to
+    /// authorize a create routed to the detached registry).
+    pub fn policy(&self) -> ExecPolicy {
+        self.policy
     }
 
     fn lock_execs(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Arc<ExecEntry>>> {

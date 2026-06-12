@@ -30,6 +30,10 @@ use crate::{
         CapabilitiesSnapshot, GuestAuthCore, GuestAuthError, InMemoryChallengeStore, NonceRng,
         SharedSecretToken, AUTH_NONCE_LEN, CONNECTION_INSTANCE_LEN, GUEST_CONTROL_AUTH_PORT,
     },
+    detached::{RunnerUnitPaths, SystemdRunUnitManager},
+    detached_registry::{
+        DetachedRegistry, RegistryConfig, RunSlotStore, SystemWallClock, TokioSleeper,
+    },
     exec::{
         ExecCreateInput, ExecError, ExecPolicy, ExecRuntime, ExecSnapshot,
         ExecState as RtExecState, ExitOutcome, Stream as RtStream,
@@ -58,15 +62,21 @@ impl crate::exec::ExecIdSource for OsExecIds {
 
 type RuntimeExec = ExecRuntime<LinuxProcessSpawner, OsExecIds>;
 type SharedExec = Arc<RuntimeExec>;
+/// The cross-connection detached-exec registry, present only when the host
+/// wired detached runtime constants into the guest unit.
+type SharedDetached = Option<Arc<DetachedRegistry>>;
 
 const TOKEN_FILE_NAME: &str = "guest_control_token";
 const MAX_TOKEN_BYTES: usize = 4096;
+/// Cadence of the periodic detached-exec reaper (live reconciliation of
+/// vanished units + terminal-record TTL/GC).
+const DETACHED_REAPER_INTERVAL_MS: u64 = 30_000;
 
 type RuntimeAuthCore = GuestAuthCore<
     SharedSecretToken,
     OsNonceRng,
     ProcBootIdSource,
-    MinimalCapabilitiesProvider,
+    RuntimeCapabilitiesProvider,
     InMemoryChallengeStore,
     SystemClock,
 >;
@@ -222,20 +232,70 @@ fn owner_is_safe(uid: u32) -> bool {
     uid == 0 || cfg!(test)
 }
 
-pub fn build_runtime_auth_core(token: Vec<u8>) -> Result<RuntimeAuthCore, GuestdServiceError> {
+/// Runtime-usability flags that gate the advertised guest capabilities. A
+/// feature is advertised only when it is both configured AND usable, so a
+/// configured-but-broken feature's first call returns a typed error instead of
+/// being silently advertised.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct CapabilitiesConfig {
+    pub exec_attached: bool,
+    pub exec_detached: bool,
+    pub exec_logs: bool,
+}
+
+pub fn build_runtime_auth_core(
+    token: Vec<u8>,
+    capabilities: CapabilitiesConfig,
+) -> Result<RuntimeAuthCore, GuestdServiceError> {
     let token = SharedSecretToken::new(token).map_err(|_| GuestdServiceError::TokenUnavailable)?;
     Ok(GuestAuthCore::new(
         token,
         OsNonceRng,
         ProcBootIdSource,
-        MinimalCapabilitiesProvider::new(),
+        RuntimeCapabilitiesProvider::new(capabilities),
         InMemoryChallengeStore::default(),
         SystemClock,
     ))
 }
 
 pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
-    let auth = Arc::new(Mutex::new(build_runtime_auth_core(config.token)?));
+    let exec_enabled_root = config.exec_policy.enabled && config.exec_policy.allow_root;
+
+    // Build the cross-connection detached registry (shared by all connections)
+    // when the host wired detached runtime constants AND exec is usable.
+    let detached: SharedDetached = match (&config.detached, exec_enabled_root) {
+        (Some(detached_cfg), true) if detached_runtime_usable(detached_cfg) => {
+            let boot_id = ProcBootIdSource
+                .guest_boot_id()
+                .map_err(|_| GuestdServiceError::Io)?;
+            let registry = build_detached_registry(detached_cfg, boot_id);
+            // Re-adopt durable records before serving so a guestd restart never
+            // kills a still-running adopted unit and lost ids remain listable.
+            registry.reconcile_on_startup().await;
+            // Periodic reaper: live reconciliation of vanished units + TTL/GC.
+            let reaper = Arc::clone(&registry);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(DETACHED_REAPER_INTERVAL_MS)).await;
+                    reaper.reap_once().await;
+                }
+            });
+            Some(registry)
+        }
+        _ => None,
+    };
+
+    let capabilities = CapabilitiesConfig {
+        exec_attached: exec_enabled_root,
+        exec_detached: detached.is_some(),
+        // Retained logs share the detached store + quota.
+        exec_logs: detached.is_some(),
+    };
+
+    let auth = Arc::new(Mutex::new(build_runtime_auth_core(
+        config.token,
+        capabilities,
+    )?));
     let exec: SharedExec = Arc::new(ExecRuntime::new(
         LinuxProcessSpawner,
         OsExecIds,
@@ -251,12 +311,52 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         };
         let auth = Arc::clone(&auth);
         let exec = Arc::clone(&exec);
+        let detached = detached.clone();
         let vm_id = config.vm_id.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
-                let _ = run_single_connection(stream, auth, exec, context).await;
+                let _ = run_single_connection(stream, auth, exec, detached, context).await;
             }
         });
+    }
+}
+
+/// Build the production detached registry: `systemd-run`/`systemctl` unit
+/// manager, `/run/nixling-exec` slot store, system wall clock, tokio sleeper,
+/// and `/dev/urandom` exec ids.
+fn build_detached_registry(
+    detached: &DetachedRuntimeConfig,
+    boot_id: String,
+) -> Arc<DetachedRegistry> {
+    let units = Arc::new(SystemdRunUnitManager::new(detached.systemd_run_path.clone()));
+    let store = Arc::new(RunSlotStore::new());
+    let clock = Arc::new(SystemWallClock);
+    let sleeper = Arc::new(TokioSleeper);
+    let ids = Arc::new(OsExecIds);
+    let registry_config = RegistryConfig {
+        paths: RunnerUnitPaths::new(detached.exec_runner_path.clone()),
+        boot_id,
+        max_runtime_sec: detached.max_runtime_sec,
+    };
+    Arc::new(DetachedRegistry::new(
+        units,
+        store,
+        clock,
+        sleeper,
+        ids,
+        registry_config,
+    ))
+}
+
+/// Runtime-usability probe for detached exec: the `systemd-run` + runner
+/// binaries must exist and `/run/nixling-exec` must be a root-owned directory.
+fn detached_runtime_usable(detached: &DetachedRuntimeConfig) -> bool {
+    if !detached.systemd_run_path.is_file() || !detached.exec_runner_path.is_file() {
+        return false;
+    }
+    match fs::symlink_metadata(nixling_exec_runner::paths::RUN_DIR) {
+        Ok(meta) => meta.is_dir() && owner_is_safe(meta.uid()),
+        Err(_) => false,
     }
 }
 
@@ -287,6 +387,7 @@ pub async fn run_single_connection<S>(
     stream: S,
     auth: SharedAuthCore,
     exec: SharedExec,
+    detached: SharedDetached,
     context: AuthConnectionContext,
 ) -> Result<(), GuestdServiceError>
 where
@@ -298,7 +399,7 @@ where
     let listener = ttrpc::r#async::transport::Listener::new(stream::once(async move {
         Ok::<_, std::io::Error>(wrapped)
     }));
-    let service = Arc::new(GuestControlService::new(auth, exec, context));
+    let service = Arc::new(GuestControlService::new(auth, exec, detached, context));
     let mut server = ttrpc::r#async::Server::new()
         .add_listener(listener)
         .register_service(create_guest_control(service));
@@ -316,14 +417,21 @@ where
 pub struct GuestControlService {
     auth: SharedAuthCore,
     exec: SharedExec,
+    detached: SharedDetached,
     context: AuthConnectionContext,
 }
 
 impl GuestControlService {
-    pub fn new(auth: SharedAuthCore, exec: SharedExec, context: AuthConnectionContext) -> Self {
+    pub fn new(
+        auth: SharedAuthCore,
+        exec: SharedExec,
+        detached: SharedDetached,
+        context: AuthConnectionContext,
+    ) -> Self {
         Self {
             auth,
             exec,
+            detached,
             context,
         }
     }
@@ -391,6 +499,55 @@ impl GuestControlService {
             ));
         }
         Ok((&metadata.exec_id, &metadata.guest_boot_id))
+    }
+
+    /// Handle a `detached = true` create: validate (allowing detached, rejecting
+    /// interactive flags), then route to the cross-connection detached registry.
+    /// When detached exec is unconfigured/unusable, return a typed disabled
+    /// error (the `EXEC_DETACHED` capability is not advertised in that case).
+    async fn exec_create_detached(
+        &self,
+        input: ExecCreateInput,
+        guest_boot_id: &str,
+    ) -> ttrpc::Result<pb::ExecCreateResponse> {
+        let Some(registry) = self.detached.as_ref() else {
+            let mut response = pb::ExecCreateResponse::new();
+            response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+            response.error = MessageField::some(exec_disabled_error());
+            return Ok(response);
+        };
+
+        let command =
+            match crate::exec::validate_and_authorize_detached(&input, self.exec.policy()) {
+                Ok(command) => command,
+                Err(error) => {
+                    let mut response = pb::ExecCreateResponse::new();
+                    response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+                    response.error = MessageField::some(guest_error_kind(error));
+                    return Ok(response);
+                }
+            };
+
+        match registry
+            .create(guest_boot_id, command, registry.default_caps())
+            .await
+        {
+            Ok((exec_id, snapshot)) => {
+                let mut response = pb::ExecCreateResponse::new();
+                response.exec_id = Some(exec_id);
+                response.stdout_cursor = snapshot.stdout_start_offset;
+                response.stderr_cursor = snapshot.stderr_start_offset;
+                response.effective_limits = MessageField::some(effective_limits());
+                response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
+                Ok(response)
+            }
+            Err(error) => {
+                let mut response = pb::ExecCreateResponse::new();
+                response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+                response.error = MessageField::some(guest_error_kind(error));
+                Ok(response)
+            }
+        }
     }
 }
 
@@ -608,6 +765,10 @@ impl GuestControl for GuestControlService {
             .guest_boot_id()
             .map_err(|_| rpc_status(ttrpc::Code::INTERNAL, "guest-control-internal-error"))?;
 
+        if input.detached {
+            return self.exec_create_detached(input, &guest_boot_id).await;
+        }
+
         match self
             .exec
             .create(self.connection_key(), guest_boot_id, input)
@@ -638,10 +799,15 @@ impl GuestControl for GuestControlService {
     ) -> ttrpc::Result<pb::ExecInspectResponse> {
         self.require_authenticated()?;
         let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
-        match self
+        let mut result = self
             .exec
-            .inspect(&self.connection_key(), exec_id, guest_boot_id)
-        {
+            .inspect(&self.connection_key(), exec_id, guest_boot_id);
+        // Fall back to the cross-connection detached registry (same-VM + boot
+        // visibility) when the id is not an attached exec on this connection.
+        if let (Err(ExecError::ExecNotFound), Some(registry)) = (&result, self.detached.as_ref()) {
+            result = registry.inspect(exec_id, guest_boot_id).await;
+        }
+        match result {
             Ok(snapshot) => Ok(inspect_response(&snapshot)),
             Err(error) => {
                 let mut response = pb::ExecInspectResponse::new();
@@ -660,7 +826,7 @@ impl GuestControl for GuestControlService {
         self.require_authenticated()?;
         let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
         let known = request.known_state_generation;
-        match self
+        let mut result = self
             .exec
             .wait(
                 &self.connection_key(),
@@ -669,8 +835,14 @@ impl GuestControl for GuestControlService {
                 known,
                 request.timeout_ms,
             )
-            .await
-        {
+            .await;
+        // Fall back to the detached registry's bounded status-poll wait.
+        if let (Err(ExecError::ExecNotFound), Some(registry)) = (&result, self.detached.as_ref()) {
+            result = registry
+                .wait(exec_id, guest_boot_id, known, request.timeout_ms)
+                .await;
+        }
+        match result {
             Ok((snapshot, timed_out)) => {
                 let mut response = pb::ExecWaitResponse::new();
                 response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
@@ -695,26 +867,91 @@ impl GuestControl for GuestControlService {
     async fn exec_logs(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::ExecLogsRequest,
+        request: pb::ExecLogsRequest,
     ) -> ttrpc::Result<pb::ExecLogsResponse> {
-        // Retained detached logs are out of scope for the attached subset.
         self.require_authenticated()?;
-        let mut response = pb::ExecLogsResponse::new();
-        response.error = MessageField::some(exec_disabled_error());
-        Ok(response)
+        let Some(registry) = self.detached.as_ref() else {
+            let mut response = pb::ExecLogsResponse::new();
+            response.error = MessageField::some(exec_disabled_error());
+            return Ok(response);
+        };
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        let stream = match request.stream.enum_value() {
+            Ok(stream) => rt_stream(stream)?,
+            Err(_) => {
+                return Err(rpc_status(
+                    ttrpc::Code::INVALID_ARGUMENT,
+                    "guest-control-stream-invalid",
+                ))
+            }
+        };
+        match registry
+            .read_logs(exec_id, guest_boot_id, stream, request.offset, request.max_len)
+            .await
+        {
+            Ok(chunk) => {
+                let mut response = pb::ExecLogsResponse::new();
+                response.stream = EnumOrUnknown::new(wire_stream(stream));
+                response.offset = request.offset;
+                response.end_offset = chunk.end_offset;
+                response.data = chunk.data;
+                response.next_offset = chunk.next_offset;
+                response.eof = chunk.eof;
+                response.start_offset = chunk.start_offset;
+                response.dropped_bytes = chunk.dropped_bytes;
+                response.truncated = chunk.truncated;
+                Ok(response)
+            }
+            Err(error) => {
+                let mut response = pb::ExecLogsResponse::new();
+                response.stream = EnumOrUnknown::new(wire_stream(stream));
+                response.error = MessageField::some(guest_error_kind(error));
+                Ok(response)
+            }
+        }
     }
 
     async fn exec_list(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::ExecListRequest,
+        request: pb::ExecListRequest,
     ) -> ttrpc::Result<pb::ExecListResponse> {
-        // Detached exec listing is wired by the detached runtime; the
-        // attached-only build advertises no detached records.
         self.require_authenticated()?;
-        let mut response = pb::ExecListResponse::new();
-        response.error = MessageField::some(exec_disabled_error());
-        Ok(response)
+        let Some(registry) = self.detached.as_ref() else {
+            let mut response = pb::ExecListResponse::new();
+            response.error = MessageField::some(exec_disabled_error());
+            return Ok(response);
+        };
+        self.validate_metadata(request.metadata.as_ref())?;
+        if request.guest_boot_id.is_empty() {
+            return Err(rpc_status(
+                ttrpc::Code::INVALID_ARGUMENT,
+                "guest-control-metadata-invalid",
+            ));
+        }
+        match registry.list(&request.guest_boot_id).await {
+            Ok(entries) => {
+                let mut response = pb::ExecListResponse::new();
+                for entry in entries {
+                    let mut wire = pb::ExecListEntry::new();
+                    wire.exec_id = entry.exec_id;
+                    wire.slot = entry.slot;
+                    wire.state = EnumOrUnknown::new(wire_exec_state(entry.state));
+                    wire.create_time_unix = entry.create_time_unix;
+                    wire.argv_sha256 = entry.argv_sha256;
+                    wire.stdout_truncated = entry.stdout_truncated;
+                    wire.stderr_truncated = entry.stderr_truncated;
+                    wire.dropped_bytes = entry.dropped_bytes;
+                    response.entries.push(wire);
+                }
+                Ok(response)
+            }
+            Err(error) => {
+                let mut response = pb::ExecListResponse::new();
+                response.error = MessageField::some(guest_error_kind(error));
+                Ok(response)
+            }
+        }
     }
 
     async fn write_stdin(
@@ -813,10 +1050,27 @@ impl GuestControl for GuestControlService {
     async fn exec_cancel(
         &self,
         _ctx: &ttrpc::r#async::TtrpcContext,
-        _request: pb::ExecCancelRequest,
+        request: pb::ExecCancelRequest,
     ) -> ttrpc::Result<pb::ControlAck> {
         self.require_authenticated()?;
-        Ok(control_ack_disabled())
+        let Some(registry) = self.detached.as_ref() else {
+            return Ok(control_ack_disabled());
+        };
+        let (exec_id, guest_boot_id) = self.validate_exec_metadata(request.metadata.as_ref())?;
+        match registry.cancel(exec_id, guest_boot_id).await {
+            Ok(duplicate) => {
+                let mut ack = pb::ControlAck::new();
+                ack.control_seq = request.control_seq;
+                ack.duplicate = duplicate;
+                Ok(ack)
+            }
+            Err(error) => {
+                let mut ack = pb::ControlAck::new();
+                ack.control_seq = request.control_seq;
+                ack.error = MessageField::some(guest_error_kind(error));
+                Ok(ack)
+            }
+        }
     }
 }
 
@@ -1005,12 +1259,12 @@ impl crate::auth::Clock for SystemClock {
     }
 }
 
-pub struct MinimalCapabilitiesProvider {
+pub struct RuntimeCapabilitiesProvider {
     snapshot: CapabilitiesSnapshot,
 }
 
-impl MinimalCapabilitiesProvider {
-    pub fn new() -> Self {
+impl RuntimeCapabilitiesProvider {
+    pub fn new(config: CapabilitiesConfig) -> Self {
         let limits = effective_limits();
 
         let mut capabilities = pb::CapabilitiesResponse::new();
@@ -1021,6 +1275,24 @@ impl MinimalCapabilitiesProvider {
         capabilities.capabilities.push(EnumOrUnknown::new(
             pb::GuestCapability::GUEST_CAPABILITY_CAPABILITIES,
         ));
+        // Exec capabilities are advertised only when both configured AND
+        // usable, so a configured-but-broken feature's first call returns a
+        // typed error instead of advertising a feature whose call would fail.
+        if config.exec_attached {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED,
+            ));
+        }
+        if config.exec_detached {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_EXEC_DETACHED,
+            ));
+        }
+        if config.exec_logs {
+            capabilities.capabilities.push(EnumOrUnknown::new(
+                pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS,
+            ));
+        }
         capabilities.limits = MessageField::some(limits);
 
         let mut health = pb::HealthResponse::new();
@@ -1042,13 +1314,13 @@ impl MinimalCapabilitiesProvider {
     }
 }
 
-impl Default for MinimalCapabilitiesProvider {
+impl Default for RuntimeCapabilitiesProvider {
     fn default() -> Self {
-        Self::new()
+        Self::new(CapabilitiesConfig::default())
     }
 }
 
-impl CapabilitiesProvider for MinimalCapabilitiesProvider {
+impl CapabilitiesProvider for RuntimeCapabilitiesProvider {
     fn snapshot(&self) -> Result<CapabilitiesSnapshot, GuestAuthError> {
         Ok(self.snapshot.clone())
     }
@@ -1093,7 +1365,7 @@ mod tests {
 
     fn test_auth() -> SharedAuthCore {
         Arc::new(Mutex::new(
-            build_runtime_auth_core(TEST_TOKEN.to_vec()).unwrap(),
+            build_runtime_auth_core(TEST_TOKEN.to_vec(), CapabilitiesConfig::default()).unwrap(),
         ))
     }
 
@@ -1117,7 +1389,7 @@ mod tests {
     }
 
     fn test_service(instance: u8) -> GuestControlService {
-        GuestControlService::new(test_auth(), test_exec(), test_context(instance))
+        GuestControlService::new(test_auth(), test_exec(), None, test_context(instance))
     }
 
     fn ttrpc_context() -> ttrpc::r#async::TtrpcContext {
@@ -1223,6 +1495,7 @@ mod tests {
         let other = GuestControlService::new(
             Arc::clone(&service.auth),
             Arc::clone(&service.exec),
+            None,
             test_context(2),
         );
         assert_unauthenticated(other.health(&ctx, health_request()).await);
@@ -1404,7 +1677,7 @@ mod tests {
         // Root exec enabled so the request passes policy and reaches the
         // unsupported-mode check before any spawn.
         let service =
-            GuestControlService::new(test_auth(), test_exec_root_enabled(), test_context(8));
+            GuestControlService::new(test_auth(), test_exec_root_enabled(), None, test_context(8));
         authenticate(&service).await;
         let mut request = pb::ExecCreateRequest::new();
         request.metadata = metadata();

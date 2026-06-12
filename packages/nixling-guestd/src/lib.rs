@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod detached;
+pub mod detached_registry;
 pub mod exec;
 pub mod exec_linux;
 pub mod generated;

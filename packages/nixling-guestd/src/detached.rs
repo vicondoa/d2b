@@ -117,24 +117,137 @@ impl SystemdRunUnitManager {
 impl TransientUnitManager for SystemdRunUnitManager {
     async fn start_transient_unit(
         &self,
-        _slot: u32,
-        _ceiling_sec: u64,
-        _paths: &RunnerUnitPaths,
+        slot: u32,
+        ceiling_sec: u64,
+        paths: &RunnerUnitPaths,
     ) -> Result<(), UnitError> {
-        todo!("W13 guestd: systemd-run start_transient_unit")
+        let unit = format!("nixling-exec-{slot:02}");
+        let slot_arg = format!("{slot:02}");
+        let timeout_stop = format!("TimeoutStopSec={}", crate::detached_registry::TIMEOUT_STOP_SEC);
+
+        let mut cmd = tokio::process::Command::new(&self.systemd_run_path);
+        cmd.arg(format!("--unit={unit}"))
+            .arg("--slice=nixling-exec.slice")
+            .arg("-p")
+            .arg("User=root")
+            .arg("-p")
+            .arg("StandardInput=null")
+            .arg("-p")
+            .arg("StandardOutput=null")
+            .arg("-p")
+            .arg("StandardError=null")
+            .arg("-p")
+            .arg("KillMode=mixed")
+            .arg("-p")
+            .arg(&timeout_stop)
+            .arg("-p")
+            .arg("Type=exec");
+        // Optional indefinite-runtime ceiling: only emit RuntimeMaxSec when the
+        // operator opted in (> 0), and it is strictly larger than the runner's
+        // own control-watcher ceiling by construction (the runner cancels first).
+        if ceiling_sec > 0 {
+            cmd.arg("-p").arg(format!("RuntimeMaxSec={ceiling_sec}"));
+        }
+        cmd.arg(&paths.exec_runner_path)
+            .arg("--serve-exec")
+            .arg("--slot")
+            .arg(&slot_arg)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        let status = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(UnitError::NonZeroExit)
+        }
     }
 
-    async fn stop_unit(&self, _slot: u32) -> Result<(), UnitError> {
-        todo!("W13 guestd: systemctl stop_unit")
+    async fn stop_unit(&self, slot: u32) -> Result<(), UnitError> {
+        // Best-effort + idempotent: a non-zero exit (e.g. "unit not loaded")
+        // is treated as success; only a spawn failure is surfaced.
+        let mut cmd = tokio::process::Command::new(&self.systemctl_path);
+        cmd.arg("stop")
+            .arg(unit_name(slot))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        Ok(())
     }
 
-    async fn reset_failed(&self, _slot: u32) -> Result<(), UnitError> {
-        todo!("W13 guestd: systemctl reset-failed")
+    async fn reset_failed(&self, slot: u32) -> Result<(), UnitError> {
+        let mut cmd = tokio::process::Command::new(&self.systemctl_path);
+        cmd.arg("reset-failed")
+            .arg(unit_name(slot))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        Ok(())
     }
 
     async fn list_managed_units(&self) -> Result<Vec<ManagedUnit>, UnitError> {
-        todo!("W13 guestd: systemctl list-units")
+        let mut cmd = tokio::process::Command::new(&self.systemctl_path);
+        cmd.arg("list-units")
+            .arg("--type=service")
+            .arg("--all")
+            .arg("--no-legend")
+            .arg("--plain")
+            .arg("nixling-exec-*.service")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let output = cmd.output().await.map_err(|_| UnitError::SpawnFailed)?;
+        if !output.status.success() {
+            return Err(UnitError::NonZeroExit);
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_managed_units(&text))
     }
+}
+
+/// Parse `systemctl list-units --plain --no-legend` output into the bounded set
+/// of managed `nixling-exec-<NN>.service` units. Columns are
+/// `UNIT LOAD ACTIVE SUB DESCRIPTION`; a unit is `active` iff its ACTIVE column
+/// is `active` or `activating`.
+fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut cols = line.split_whitespace();
+        let Some(unit) = cols.next() else { continue };
+        // systemctl prefixes a status glyph (e.g. "●") on failed/loaded units
+        // in some locales; tolerate a leading non-unit token.
+        let unit = if unit.ends_with(".service") {
+            unit
+        } else if let Some(next) = cols.clone().next() {
+            if next.ends_with(".service") {
+                cols.next();
+                next
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+        let Some(slot) = parse_slot_from_unit(unit) else {
+            continue;
+        };
+        // ACTIVE column (3rd after the unit name): LOAD ACTIVE SUB ...
+        let _load = cols.next();
+        let active_state = cols.next().unwrap_or("");
+        let active = matches!(active_state, "active" | "activating");
+        out.push(ManagedUnit { slot, active });
+    }
+    out
+}
+
+/// Extract the slot from `nixling-exec-<NN>.service`; `None` if it does not
+/// match the bounded slot-keyed name.
+fn parse_slot_from_unit(unit: &str) -> Option<u32> {
+    let rest = unit.strip_prefix("nixling-exec-")?;
+    let digits = rest.strip_suffix(".service")?;
+    digits.parse::<u32>().ok()
 }
 
 /// Stable unit name for a slot: `nixling-exec-<NN>.service` (zero-padded). The
@@ -160,5 +273,42 @@ mod tests {
             mgr.systemctl_path(),
             &PathBuf::from("/run/current-system/sw/bin/systemctl")
         );
+    }
+
+    #[test]
+    fn parse_slot_from_unit_matches_only_bounded_names() {
+        assert_eq!(parse_slot_from_unit("nixling-exec-00.service"), Some(0));
+        assert_eq!(parse_slot_from_unit("nixling-exec-31.service"), Some(31));
+        assert_eq!(parse_slot_from_unit("nixling-exec-07.service"), Some(7));
+        assert_eq!(parse_slot_from_unit("other.service"), None);
+        assert_eq!(parse_slot_from_unit("nixling-exec-.service"), None);
+        assert_eq!(parse_slot_from_unit("nixling-exec-xx.service"), None);
+    }
+
+    #[test]
+    fn parse_managed_units_reads_active_column() {
+        let text = "\
+nixling-exec-00.service loaded active   running Detached exec 00
+nixling-exec-01.service loaded inactive dead    Detached exec 01
+nixling-exec-02.service loaded activating start Detached exec 02
+other.service           loaded active   running Unrelated
+";
+        let mut units = parse_managed_units(text);
+        units.sort_by_key(|u| u.slot);
+        assert_eq!(
+            units,
+            vec![
+                ManagedUnit { slot: 0, active: true },
+                ManagedUnit { slot: 1, active: false },
+                ManagedUnit { slot: 2, active: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_managed_units_tolerates_leading_status_glyph() {
+        let text = "● nixling-exec-05.service loaded failed failed Detached exec 05\n";
+        let units = parse_managed_units(text);
+        assert_eq!(units, vec![ManagedUnit { slot: 5, active: false }]);
     }
 }
