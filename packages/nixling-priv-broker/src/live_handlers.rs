@@ -1623,18 +1623,66 @@ fn setfacl_fd_safe(path: &Path, acl_spec: &str, kind: AclPathKind) -> Result<(),
     setfacl_fd_safe_op(path, "-m", acl_spec, kind).map(|_| ())
 }
 
-/// Like [`setfacl_fd_safe`] but parameterised on the setfacl operation
-/// flag (`-m` to add/modify, `-x` to remove) and returns the resolved
-/// `(dev, ino)` of the target the ACL was applied to (`None` if the
-/// path was absent). The returned identity is consumed by path-free
-/// audit hashing so audit records never carry raw socket/state-dir
-/// paths.
-fn setfacl_fd_safe_op(
-    path: &Path,
-    op: &str,
-    acl_spec: &str,
-    kind: AclPathKind,
-) -> Result<Option<(u64, u64)>, String> {
+/// The fd-safe setfacl stage that failed. A closed-set classification so
+/// guest-control callers can build path-free, acl-spec-free error
+/// details (the raw path / acl spec never escapes into logs or audit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetfaclStage {
+    Open,
+    Fstat,
+    TypeMismatch,
+    Apply,
+}
+
+/// A classified fd-safe setfacl failure.
+///
+/// `legacy_detail` carries the historical path-bearing message for the
+/// observability/device/session callers that already embed paths in
+/// their error strings. The structured `stage` / `errno_kind` /
+/// `raw_os_error` fields let the guest-control path build a path-free,
+/// acl-spec-free detail that satisfies the hash-only observability
+/// contract. The guest-control formatter MUST NOT read `legacy_detail`.
+#[derive(Debug, PartialEq, Eq)]
+struct SetfaclFailure {
+    stage: SetfaclStage,
+    errno_kind: std::io::ErrorKind,
+    raw_os_error: Option<i32>,
+    legacy_detail: String,
+}
+
+impl SetfaclFailure {
+    fn stage_label(&self) -> &'static str {
+        match self.stage {
+            SetfaclStage::Open => "open",
+            SetfaclStage::Fstat => "fstat",
+            SetfaclStage::TypeMismatch => "type-mismatch",
+            SetfaclStage::Apply => "apply",
+        }
+    }
+
+    /// Path-free, acl-spec-free failure detail for the guest-control
+    /// observability contract. Carries only the closed-set operation
+    /// label, target class, daemon principal, failed stage, and the
+    /// numeric errno / `io::ErrorKind`. Never the raw socket / state-dir
+    /// path or the acl-spec string.
+    fn guest_control_detail(&self, op_label: &str, target_class: &str) -> String {
+        let errno = self
+            .raw_os_error
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        format!(
+            "guest-control vsock daemon ACL {op_label} on {target_class} failed: \
+             principal={GUEST_CONTROL_DAEMON_PRINCIPAL} stage={} kind={:?} errno={errno}",
+            self.stage_label(),
+            self.errno_kind,
+        )
+    }
+}
+
+/// Open `path` as an `O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS` fd and fstat
+/// it, returning the live `File` (kept open so callers can mutate the
+/// exact inode) plus its metadata. `Ok(None)` if the path is absent.
+fn open_o_path_metadata(path: &Path) -> Result<Option<(File, std::fs::Metadata)>, SetfaclFailure> {
     let fd = match rustix::fs::openat2(
         CWD,
         path,
@@ -1645,16 +1693,42 @@ fn setfacl_fd_safe_op(
         Ok(fd) => fd,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(format!(
-                "openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
-                path.display()
-            ));
+            return Err(SetfaclFailure {
+                stage: SetfaclStage::Open,
+                errno_kind: err.kind(),
+                raw_os_error: Some(err.raw_os_error()),
+                legacy_detail: format!(
+                    "openat2(O_PATH|NOFOLLOW, RESOLVE_NO_SYMLINKS) {}: {err}",
+                    path.display()
+                ),
+            });
         }
     };
     let file = File::from(fd);
-    let metadata = file
-        .metadata()
-        .map_err(|err| format!("fstat {}: {err}", path.display()))?;
+    match file.metadata() {
+        Ok(metadata) => Ok(Some((file, metadata))),
+        Err(err) => Err(SetfaclFailure {
+            stage: SetfaclStage::Fstat,
+            errno_kind: err.kind(),
+            raw_os_error: err.raw_os_error(),
+            legacy_detail: format!("fstat {}: {err}", path.display()),
+        }),
+    }
+}
+
+/// Classified core of [`setfacl_fd_safe_op`]. Returns the resolved
+/// `(dev, ino)` of the target the ACL was applied to (`None` if the path
+/// was absent), or a [`SetfaclFailure`] carrying both the legacy
+/// path-bearing message and a closed-set classification.
+fn setfacl_fd_safe_op_classed(
+    path: &Path,
+    op: &str,
+    acl_spec: &str,
+    kind: AclPathKind,
+) -> Result<Option<(u64, u64)>, SetfaclFailure> {
+    let Some((file, metadata)) = open_o_path_metadata(path)? else {
+        return Ok(None);
+    };
     let file_type = metadata.file_type();
     let matches_kind = match kind {
         AclPathKind::Directory => file_type.is_dir(),
@@ -1662,18 +1736,45 @@ fn setfacl_fd_safe_op(
         AclPathKind::CharDevice => file_type.is_char_device(),
     };
     if !matches_kind {
-        return Err(format!(
-            "refusing setfacl on {}: expected {:?}, mode=0o{:o}",
-            path.display(),
-            kind,
-            std::os::unix::fs::MetadataExt::mode(&metadata)
-        ));
+        return Err(SetfaclFailure {
+            stage: SetfaclStage::TypeMismatch,
+            errno_kind: std::io::ErrorKind::InvalidInput,
+            raw_os_error: None,
+            legacy_detail: format!(
+                "refusing setfacl on {}: expected {:?}, mode=0o{:o}",
+                path.display(),
+                kind,
+                metadata.mode()
+            ),
+        });
     }
 
-    crate::sys::pidfd_sys::run_setfacl_op_on_fd(file.as_fd(), op, acl_spec)
-        .map_err(|err| format!("setfacl {op} {acl_spec} on {}: {err}", path.display()))?;
-    use std::os::unix::fs::MetadataExt as _;
+    if let Err(err) = crate::sys::pidfd_sys::run_setfacl_op_on_fd(file.as_fd(), op, acl_spec) {
+        return Err(SetfaclFailure {
+            stage: SetfaclStage::Apply,
+            errno_kind: err.kind(),
+            raw_os_error: err.raw_os_error(),
+            legacy_detail: format!("setfacl {op} {acl_spec} on {}: {err}", path.display()),
+        });
+    }
     Ok(Some((metadata.dev(), metadata.ino())))
+}
+
+/// Like [`setfacl_fd_safe`] but parameterised on the setfacl operation
+/// flag (`-m` to add/modify, `-x` to remove) and returns the resolved
+/// `(dev, ino)` of the target the ACL was applied to (`None` if the
+/// path was absent). The returned identity is consumed by path-free
+/// audit hashing so audit records never carry raw socket/state-dir
+/// paths. The error string is the historical path-bearing form for
+/// the observability/device/session callers; guest-control callers use
+/// [`setfacl_fd_safe_op_classed`] for a path-free detail instead.
+fn setfacl_fd_safe_op(
+    path: &Path,
+    op: &str,
+    acl_spec: &str,
+    kind: AclPathKind,
+) -> Result<Option<(u64, u64)>, String> {
+    setfacl_fd_safe_op_classed(path, op, acl_spec, kind).map_err(|failure| failure.legacy_detail)
 }
 
 fn setfacl_verified_device(
@@ -2120,82 +2221,144 @@ fn audit_guest_control_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u6
     );
 }
 
-/// Grant the `nixlingd` daemon principal the minimum ACL needed to
-/// reach the per-VM guest-control vsock socket: `--x` (traverse only)
-/// on the enclosing state directory and `rw` on the socket itself.
+/// Path-free wrapper over [`setfacl_fd_safe_op_classed`] for the
+/// guest-control ACL path: on failure, builds a detail string carrying
+/// only the closed-set op/target-class/stage/errno classification —
+/// never the raw socket/state-dir path or the acl-spec string.
+fn setfacl_guest_control(
+    path: &Path,
+    op: &str,
+    acl_spec: &str,
+    kind: AclPathKind,
+    op_label: &str,
+    target_class: &str,
+) -> Result<Option<(u64, u64)>, String> {
+    setfacl_fd_safe_op_classed(path, op, acl_spec, kind)
+        .map_err(|failure| failure.guest_control_detail(op_label, target_class))
+}
+
+/// Whether the daemon needs an explicit `--x` grant to traverse `path`.
 ///
-/// Grants exactly one named user entry (`u:nixlingd:...`); never a
-/// group, default, or blanket entry. Each `setfacl` is applied to an
-/// `openat2(O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS)` fd, so the mutation
-/// targets the exact inode resolved at grant time — if the socket is
-/// replaced mid-grant the fresh inode (the live CH socket) is the one
-/// the daemon must reach anyway. Returns `Ok(false)` while the socket
-/// has not yet been created by cloud-hypervisor so the caller retries.
-fn grant_guest_control_vsock_acl_once(socket: &Path) -> Result<bool, String> {
-    if !socket.exists() {
-        return Ok(false);
-    }
-    let Some(parent) = socket.parent() else {
-        return Err("guest-control vsock path has no parent".to_owned());
+/// `Ok(Some(true))` if `path` is a directory the daemon cannot already
+/// search (world execute bit clear). `Ok(Some(false))` if it is a
+/// world-traversable directory (no grant needed) or not a directory.
+/// `Ok(None)` if the path is absent.
+fn dir_needs_daemon_traverse(path: &Path) -> Result<Option<bool>, SetfaclFailure> {
+    let Some((_file, metadata)) = open_o_path_metadata(path)? else {
+        return Ok(None);
     };
-    if let Some((dev, ino)) = setfacl_fd_safe_op(
-        parent,
-        "-m",
-        &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:--x"),
-        AclPathKind::Directory,
-    )? {
-        audit_guest_control_vsock_acl("grant", "state-dir", dev, ino);
+    if !metadata.file_type().is_dir() {
+        return Ok(Some(false));
     }
-    match setfacl_fd_safe_op(
+    Ok(Some(metadata.mode() & 0o001 == 0))
+}
+
+/// Resolve the current `(dev, ino)` of `path` via an
+/// `openat2(O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS)` fstat. `Ok(None)` if
+/// the path is absent.
+fn current_path_dev_ino(path: &Path) -> Result<Option<(u64, u64)>, SetfaclFailure> {
+    Ok(open_o_path_metadata(path)?.map(|(_file, metadata)| (metadata.dev(), metadata.ino())))
+}
+
+/// Grant the daemon `u:nixlingd:--x` on every non-world-traversable
+/// directory from the filesystem root down to `leaf` (inclusive), so the
+/// daemon can `connect()` to the per-VM guest-control socket through the
+/// full ancestor chain — not just the immediate parent. World-
+/// traversable directories already grant search to everyone and are
+/// skipped. The immediate per-VM leaf is audited as `state-dir`; higher
+/// non-world-x ancestors as `ancestor`. These grants are additive and
+/// idempotent; they are never revoked because sibling VMs and the
+/// per-VM api-socket also depend on them.
+fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
+    let mut chain: Vec<&Path> = leaf
+        .ancestors()
+        .filter(|component| !component.as_os_str().is_empty())
+        .collect();
+    chain.reverse();
+    let last_idx = chain.len().saturating_sub(1);
+    for (idx, dir) in chain.iter().enumerate() {
+        let target_class = if idx == last_idx { "state-dir" } else { "ancestor" };
+        let needs = dir_needs_daemon_traverse(dir)
+            .map_err(|failure| failure.guest_control_detail("grant", target_class))?;
+        if needs == Some(true) {
+            if let Some((dev, ino)) = setfacl_guest_control(
+                dir,
+                "-m",
+                &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:--x"),
+                AclPathKind::Directory,
+                "grant",
+                target_class,
+            )? {
+                audit_guest_control_vsock_acl("grant", target_class, dev, ino);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Grant `u:nixlingd:rw` on the guest-control vsock socket inode, then
+/// re-stat the path to confirm it still resolves to the same `(dev,
+/// ino)` the fd-based setfacl mutated (BR15b inode pinning). If the
+/// socket was replaced (or vanished) between the setfacl and the
+/// re-stat, the grant landed on a now-stale inode: do not audit success
+/// and report not-ready (`Ok(false)`) so the caller retries against the
+/// current, live inode. Returns `Ok(false)` while the socket has not yet
+/// been created by cloud-hypervisor.
+fn grant_guest_control_socket_acl_once(socket: &Path) -> Result<bool, String> {
+    let Some((dev, ino)) = setfacl_guest_control(
         socket,
         "-m",
         &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}:rw"),
         AclPathKind::Socket,
-    )? {
-        Some((dev, ino)) => {
+        "grant",
+        "vsock-socket",
+    )?
+    else {
+        return Ok(false);
+    };
+    match current_path_dev_ino(socket)
+        .map_err(|failure| failure.guest_control_detail("grant", "vsock-socket"))?
+    {
+        Some(current) if current == (dev, ino) => {
             audit_guest_control_vsock_acl("grant", "vsock-socket", dev, ino);
             Ok(true)
         }
-        None => Ok(false),
+        _ => Ok(false),
     }
 }
 
 /// Revoke the daemon-principal guest-control vsock ACL from the socket
-/// and its enclosing state directory. Best-effort and idempotent: a
-/// missing path is a no-op. Provided for explicit teardown; the primary
-/// revocation mechanism is structural — `cleanup_cloud_hypervisor_stale_sockets`
-/// unlinks the prior vsock socket inode before each CH respawn, so a
-/// stale grant can never survive a generation change.
-#[cfg_attr(not(test), allow(dead_code))]
+/// inode. Best-effort, idempotent, and path-free: a missing socket is a
+/// no-op. Scoped to the per-VM socket inode only — the shared/ancestor
+/// traversal grants are intentionally retained (the daemon also needs
+/// them for the per-VM api-socket and sibling VMs depend on them). This
+/// is the production revoke wiring: there is no CH-stop teardown hook
+/// carrying the socket path (`SignalRunner` has only vm_id/role_id/
+/// signal), so revoke runs as a revoke-then-grant at the next CH
+/// (re-)spawn so a replaced/disabled socket cannot retain a stale grant.
 fn revoke_guest_control_vsock_acl(socket: &Path) -> Result<(), String> {
-    if let Some(parent) = socket.parent() {
-        if let Some((dev, ino)) = setfacl_fd_safe_op(
-            parent,
-            "-x",
-            &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}"),
-            AclPathKind::Directory,
-        )? {
-            audit_guest_control_vsock_acl("revoke", "state-dir", dev, ino);
-        }
-    }
-    if let Some((dev, ino)) = setfacl_fd_safe_op(
+    if let Some((dev, ino)) = setfacl_guest_control(
         socket,
         "-x",
         &format!("u:{GUEST_CONTROL_DAEMON_PRINCIPAL}"),
         AclPathKind::Socket,
+        "revoke",
+        "vsock-socket",
     )? {
         audit_guest_control_vsock_acl("revoke", "vsock-socket", dev, ino);
     }
     Ok(())
 }
 
-/// Retry the daemon-vsock ACL grant in a background thread until the
-/// cloud-hypervisor process has created the vsock socket (bounded to
-/// ~30s, matching the obs-vsock precedent). Logs are path-free.
+/// Retry the daemon-vsock socket ACL grant in a background thread until
+/// the cloud-hypervisor process has created the vsock socket (bounded to
+/// ~30s, matching the obs-vsock precedent). The traversal ACLs are
+/// granted synchronously before this thread starts, so the retry only
+/// re-attempts the socket grant. Logs are path-free.
 fn spawn_guest_control_vsock_acl_retry(socket: PathBuf) {
     std::thread::spawn(move || {
         for _ in 0..120 {
-            match grant_guest_control_vsock_acl_once(&socket) {
+            match grant_guest_control_socket_acl_once(&socket) {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(_) => {
@@ -2215,13 +2378,40 @@ fn spawn_guest_control_vsock_acl_retry(socket: PathBuf) {
 }
 
 /// Refresh the daemon-vsock ACL for a CH runner plan. No-op for any
-/// non-CH runner (no `--vsock socket=` arg). Grants immediately if the
-/// socket already exists, otherwise spawns a bounded retry thread.
+/// non-CH runner (no `--vsock socket=` arg).
+///
+/// Revoke-then-grant: first revoke any stale per-VM daemon grant left on
+/// the (possibly replaced) socket inode from a prior generation, then
+/// (re-)establish the full ancestor traversal chain and grant `rw` on
+/// the live socket. The traversal grant is applied synchronously so the
+/// daemon never loses search on the per-VM state dir (the api-socket
+/// depends on it too); if the socket is not yet present, a bounded retry
+/// thread completes the socket grant.
 fn refresh_guest_control_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
     let Some(socket) = cloud_hypervisor_vsock_socket_arg(plan) else {
         return Ok(());
     };
-    match grant_guest_control_vsock_acl_once(&socket) {
+    let Some(parent) = socket.parent().map(Path::to_path_buf) else {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "guest-control vsock path has no parent".to_owned(),
+        });
+    };
+
+    if let Err(detail) = revoke_guest_control_vsock_acl(&socket) {
+        tracing::debug!(
+            subsystem = "guest-control-health",
+            detail = %detail,
+            "pre-grant guest-control daemon ACL revoke (best-effort)",
+        );
+    }
+
+    grant_guest_control_traversal_acls(&parent).map_err(|detail| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("refresh guest-control traversal ACLs: {detail}"),
+        }
+    })?;
+
+    match grant_guest_control_socket_acl_once(&socket) {
         Ok(true) => Ok(()),
         Ok(false) => {
             spawn_guest_control_vsock_acl_retry(socket);
@@ -3224,19 +3414,110 @@ mod tests {
     #[test]
     fn guest_control_acl_grant_not_ready_for_absent_socket() {
         // Hermetic: before cloud-hypervisor creates the vsock socket,
-        // the grant must report not-ready (Ok(false)) so the caller
-        // retries — never erroring and never touching a foreign inode.
+        // the socket grant must report not-ready (Ok(false)) so the
+        // caller retries — never erroring and never touching a foreign
+        // inode.
         let dir = TestDir::new("gc-vsock-acl");
         let socket = dir.join("vsock.sock");
         assert!(!socket.exists());
         assert_eq!(
-            grant_guest_control_vsock_acl_once(&socket),
+            grant_guest_control_socket_acl_once(&socket),
             Ok(false),
             "absent socket must report not-ready",
         );
-        // Revoke against an absent socket (and its parent) is a no-op.
+        // Traversal over the world-traversable TestDir ancestors is a
+        // no-op (no non-world-x component needs an explicit grant).
+        grant_guest_control_traversal_acls(&dir.path)
+            .expect("traversal over world-x ancestors is a no-op");
+        // Revoke against an absent socket is a no-op.
         revoke_guest_control_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
     }
+
+    #[test]
+    fn setfacl_failure_guest_control_detail_is_path_free() {
+        // A path-bearing legacy detail must never leak through the
+        // guest-control formatter: it carries only closed-set class
+        // tokens (op/target-class/stage), the daemon principal, the
+        // io::ErrorKind, and the numeric errno.
+        let failure = SetfaclFailure {
+            stage: SetfaclStage::Apply,
+            errno_kind: std::io::ErrorKind::PermissionDenied,
+            raw_os_error: Some(13),
+            legacy_detail:
+                "setfacl -m u:nixlingd:rw on /var/lib/nixling/vms/corp-vm/vsock.sock: denied"
+                    .to_owned(),
+        };
+        let detail = failure.guest_control_detail("grant", "vsock-socket");
+        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
+        assert!(!detail.contains("vsock.sock"), "detail leaked socket name: {detail}");
+        assert!(!detail.contains(":rw"), "detail leaked acl spec: {detail}");
+        assert!(detail.contains("vsock-socket"), "missing target class: {detail}");
+        assert!(detail.contains("stage=apply"), "missing stage: {detail}");
+        assert!(detail.contains("errno=13"), "missing errno: {detail}");
+        assert!(
+            detail.contains(GUEST_CONTROL_DAEMON_PRINCIPAL),
+            "missing daemon principal: {detail}"
+        );
+        // No-errno case renders a stable token.
+        let mismatch = SetfaclFailure {
+            stage: SetfaclStage::TypeMismatch,
+            errno_kind: std::io::ErrorKind::InvalidInput,
+            raw_os_error: None,
+            legacy_detail: "refusing setfacl on /secret/path".to_owned(),
+        };
+        let detail = mismatch.guest_control_detail("revoke", "state-dir");
+        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
+        assert!(detail.contains("errno=none"), "missing errno token: {detail}");
+        assert!(detail.contains("stage=type-mismatch"), "missing stage: {detail}");
+    }
+
+    #[test]
+    fn dir_traverse_classification_world_x_vs_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // World-traversable dir (0o755) needs no daemon --x grant; a
+        // private dir (0o700) does. A regular file is not part of the
+        // traversal grant. An absent path resolves to None.
+        let dir = TestDir::new("gc-traverse");
+        let world_x = dir.join("world");
+        std::fs::create_dir(&world_x).expect("mkdir world");
+        std::fs::set_permissions(&world_x, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod 0755");
+        let private = dir.join("private");
+        std::fs::create_dir(&private).expect("mkdir private");
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700))
+            .expect("chmod 0700");
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").expect("write file");
+
+        assert_eq!(dir_needs_daemon_traverse(&world_x), Ok(Some(false)));
+        assert_eq!(dir_needs_daemon_traverse(&private), Ok(Some(true)));
+        assert_eq!(dir_needs_daemon_traverse(&file), Ok(Some(false)));
+        assert_eq!(dir_needs_daemon_traverse(&dir.join("absent")), Ok(None));
+    }
+
+    #[test]
+    fn current_path_dev_ino_tracks_inode_replacement() {
+        // BR15b inode pinning relies on re-stat detecting that a path now
+        // resolves to a different inode than the one a prior fd mutated.
+        // Use a rename to swap a fresh inode over the path deterministically
+        // (remove+recreate can reuse the same inode number on some
+        // filesystems, so don't rely on the allocator).
+        let dir = TestDir::new("gc-restat");
+        let path = dir.join("sock");
+        let other = dir.join("other");
+        std::fs::write(&path, b"a").expect("write path");
+        std::fs::write(&other, b"bb").expect("write other");
+        let path_id = current_path_dev_ino(&path).expect("stat path").expect("present");
+        let other_id = current_path_dev_ino(&other).expect("stat other").expect("present");
+        assert_ne!(path_id.1, other_id.1, "distinct files must have distinct inodes");
+        // Rename `other` over `path`: the path now resolves to other's inode.
+        std::fs::rename(&other, &path).expect("rename over path");
+        let after = current_path_dev_ino(&path).expect("stat after").expect("present");
+        assert_eq!(after, other_id, "path must resolve to the replacement inode");
+        assert_ne!(after, path_id, "path must no longer resolve to the original inode");
+        assert_eq!(current_path_dev_ino(&dir.join("absent")), Ok(None));
+    }
+
 
     #[test]
     fn parses_quoted_otel_host_bridge_ch_vsock_socket() {
