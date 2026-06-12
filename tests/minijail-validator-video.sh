@@ -96,8 +96,10 @@ fi
 if [ ! -f "$HOST_ACTIVATION_NIX" ]; then
   layer1_die "host-activation.nix not found at $HOST_ACTIVATION_NIX"
 elif grep -q 'video_media_uids=' "$HOST_ACTIVATION_NIX" \
-  && grep -q 'session_socket_uids=' "$HOST_ACTIVATION_NIX" \
-  && grep -q 'select(.role == "gpu" or .role == "gpu-render-node" or .role == "audio")' "$HOST_ACTIVATION_NIX" \
+  && grep -q 'gpu_session_uids=' "$HOST_ACTIVATION_NIX" \
+  && grep -q 'audio_session_uids=' "$HOST_ACTIVATION_NIX" \
+  && grep -q 'select(.role == "gpu" or .role == "gpu-render-node")' "$HOST_ACTIVATION_NIX" \
+  && grep -q 'select(.role == "audio")' "$HOST_ACTIVATION_NIX" \
   && grep -q 'select(.role == "cloud-hypervisor-runner" or .role == "video")' "$HOST_ACTIVATION_NIX" \
   && grep -q 'setfacl -d -x "u:$uid" /run/nixling-video' "$HOST_ACTIVATION_NIX" \
   && grep -q 'u:$uid:---' "$HOST_ACTIVATION_NIX" \
