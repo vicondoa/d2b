@@ -392,6 +392,7 @@ pub struct ResolvedStoreViewIntent {
     pub hardlink_farm_path: PathBuf,
     pub target_view_path: PathBuf,
     pub closure_paths: Vec<PathBuf>,
+    pub db_dump_path: PathBuf,
 }
 
 impl ResolvedStoreViewIntent {
@@ -2120,6 +2121,7 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
         ProcessRole::Audio => Some("audio"),
         ProcessRole::CloudHypervisorRunner => Some("cloud-hypervisor"),
         ProcessRole::VsockRelay => Some("vsock-relay"),
+        ProcessRole::OtelHostBridge => Some("otel-host-bridge"),
         ProcessRole::Usbip => Some("usbip"),
         ProcessRole::WaylandProxy => Some("wayland-proxy"),
     }
@@ -2148,6 +2150,9 @@ fn legacy_runner_spec(
         ProcessRole::Audio => ("vhost-device-sound", format!("nixling-{}-snd", dag.vm)),
         ProcessRole::CloudHypervisorRunner => ("cloud-hypervisor", format!("microvm@{}", dag.vm)),
         ProcessRole::VsockRelay => ("socat", format!("nixling-otel-relay@{}", dag.vm)),
+        // OtelHostBridge must always carry the closed argv from
+        // processes.json; it has no legacy singleton fallback.
+        ProcessRole::OtelHostBridge => return None,
         // USBIP proxy runners must bind their own listen socket in the
         // daemon-owned SpawnRunner path. The retired socket-activated
         // systemd-socket-proxyd shape is not a safe legacy fallback.
@@ -2380,10 +2385,8 @@ fn build_store_view_intents(
             continue;
         };
         let hardlink_farm_path = PathBuf::from(&vm.state_dir).join("store-view");
-        let target_view_path = hardlink_farm_path
-            .join("generations")
-            .join(generation.to_string())
-            .join(target_name);
+        let live_view_path = hardlink_farm_path.join("live");
+        let target_view_path = live_view_path.join(target_name);
         let mut closure_paths: Vec<PathBuf> =
             closure.closure_paths.iter().map(PathBuf::from).collect();
         let toplevel_path = PathBuf::from(&closure.toplevel);
@@ -2400,6 +2403,7 @@ fn build_store_view_intents(
                 hardlink_farm_path,
                 target_view_path,
                 closure_paths,
+                db_dump_path: PathBuf::from(&closure.db_dump_path),
             },
         );
     }
@@ -2616,8 +2620,7 @@ mod tests {
         UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     };
     use crate::manifest_v04::{
-        ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy,
-        VmObservability,
+        ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
     };
     use crate::minijail_profile::WritablePath;
     use crate::processes::{
@@ -2873,11 +2876,12 @@ mod tests {
                 manifest_version: 4,
             },
             observability: ObservabilityMeta {
-                ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
-                grafana_url: "http://127.0.0.1:3000".to_owned(),
                 obs_vsock_cid: 3,
                 obs_vsock_host_socket: "/run/nixling/obs.sock".to_owned(),
+                signoz_otlp_grpc_port: 4317,
+                signoz_otlp_http_port: 4318,
+                signoz_url: "http://127.0.0.1:8080".to_owned(),
                 vm_name: "obs".to_owned(),
             },
             vms: BTreeMap::from([(
@@ -2924,6 +2928,7 @@ mod tests {
             vm: "personal-dev".to_owned(),
             toplevel: "/nix/store/personal-dev-system".to_owned(),
             closure_paths: vec!["/nix/store/personal-dev-system".to_owned()],
+            db_dump_path: "/nix/store/personal-dev-registration".to_owned(),
             declared_runner: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_path: "/run/current-system/sw/bin/cloud-hypervisor".to_owned(),
             runner_parity_ok: true,
@@ -3022,9 +3027,10 @@ mod tests {
             generation: 42,
             hardlink_farm_path: PathBuf::from("/var/lib/nixling/vms/corp-vm/store-view"),
             target_view_path: PathBuf::from(
-                "/var/lib/nixling/vms/corp-vm/store-view/generations/42/abc123-nixos-system-corp",
+                "/var/lib/nixling/vms/corp-vm/store-view/live/abc123-nixos-system-corp",
             ),
             closure_paths: Vec::new(),
+            db_dump_path: PathBuf::from("/nix/store/corp-vm-registration"),
         };
         // Identity is the toplevel basename (carries the Nix input hash),
         // so two distinct closures of one VM never share an identity even

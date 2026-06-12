@@ -20,6 +20,7 @@ stability promises for the **rust-native** read-only commands.
 | `host check` | `host-check.schema.json` | [host-check.md](./host-check.md) |
 | `host doctor` | `host-doctor.schema.json` | [host-doctor.md](./host-doctor.md) |
 | `auth status` | `auth-status.schema.json` | [auth-status.md](./auth-status.md) |
+| `store verify` | `store-verify.schema.json` | [store-verify.md](./store-verify.md) |
 
 The legacy bash compatibility commands keep their existing JSON
 contracts, but only the rust-native read-only set gets a dedicated

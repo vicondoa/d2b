@@ -1,4 +1,4 @@
-# ADR 0026: Guest control plane over virtio-vsock
+# ADR 0028: Guest control plane over virtio-vsock
 
 - Status: Accepted
 - Date: 2026-06-08

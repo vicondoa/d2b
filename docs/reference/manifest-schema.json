@@ -14,8 +14,8 @@
       "properties": {
         "manifestVersion": {
           "type": "integer",
-          "const": 4,
-          "description": "Schema version. This document is the v4 schema; the field is locked to `const: 4`. Breaking schema revisions use a new schema document with its own `const: <N>`. CLI consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v4 manifests (versions 0, 1, 2, 3) are historical and are no longer valid under this schema."
+          "const": 5,
+          "description": "Schema version. This document is the v5 schema; the field is locked to `const: 5`. v5 combines two independent contract changes that each landed as a `4`: the base Cloud Hypervisor vsock semantics for per-VM `observability.vsockCid`/`vsockHostSocket`, and the native SigNoz `_observability` shape. CLI/daemon/broker consumers built against version N MUST refuse to operate on a manifest with version > N. See docs/reference/manifest-schema.md for the full compatibility policy. Pre-v5 manifests (versions 0, 1, 2, 3, 4) are historical and are no longer valid under this schema."
         }
       }
     },
@@ -33,7 +33,7 @@
     "observabilityMeta": {
       "type": "object",
       "description": "Reserved observability-metadata key. Always emitted so consumers can discover the observability stack wiring without looking inside any single VM entry.",
-      "required": ["enabled", "vmName", "obsVsockCid", "obsVsockHostSocket", "grafanaUrl", "chExporter"],
+      "required": ["enabled", "vmName", "obsVsockCid", "obsVsockHostSocket", "signozUrl", "signozOtlpGrpcPort", "signozOtlpHttpPort"],
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -43,7 +43,7 @@
         "vmName": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "VM name reserved for the observability stack (default: sys-obs-stack)."
+          "description": "VM name reserved for the observability stack (default: sys-obs)."
         },
         "obsVsockCid": {
           "type": "integer",
@@ -54,22 +54,21 @@
           "type": "string",
           "description": "Host-side Unix socket backing the observability stack VM's vsock device. Currently /var/lib/nixling/vms/<vm>/vsock.sock."
         },
-        "grafanaUrl": {
+        "signozUrl": {
           "type": "string",
-          "description": "Resolved Grafana URL derived from nixling.observability.grafana.{listenAddress,listenPort}."
+          "description": "Resolved SigNoz UI URL derived from nixling.observability.signoz.{listenAddress,listenPort}."
         },
-        "chExporter": {
-          "type": "object",
-          "required": ["listenPort"],
-          "additionalProperties": false,
-          "properties": {
-            "listenPort": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 65535,
-              "description": "Loopback port exported by the host-side Cloud Hypervisor metrics exporter."
-            }
-          }
+        "signozOtlpGrpcPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback OTLP/gRPC port exposed by the SigNoz OTel Collector inside the observability VM."
+        },
+        "signozOtlpHttpPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback OTLP/HTTP port exposed by the SigNoz OTel Collector inside the observability VM."
         }
       }
     },

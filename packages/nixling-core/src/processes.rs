@@ -138,6 +138,8 @@ pub enum ProcessRole {
     CloudHypervisorRunner,
     /// vsock relay sidecar.
     VsockRelay,
+    /// Host-to-observability-VM OTLP bridge.
+    OtelHostBridge,
     /// Guest SSH readiness probe.
     GuestSshReadiness,
     /// USBIP proxy or attach helper.

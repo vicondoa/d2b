@@ -37,7 +37,7 @@
 #   9. The default path MUST remain isolated when `allowEastWest` is unset.
 #  10. When `nixling.observability.enable = true` materialises the
 #      reserved `obs` env (lanSubnet 10.40.0.0/24, uplinkSubnet
-#      203.0.113.0/30) plus the `sys-obs-stack` workload VM, the
+#      203.0.113.0/30) plus the `sys-obs` workload VM, the
 #      auto-instantiated `sys-obs-net` VM MUST follow the same per-env
 #      net-VM contract as the user-declared `work`/`safe` envs:
 #        a. `10-uplink` address = 203.0.113.2/30, `10-lan` address =
@@ -92,7 +92,7 @@ let
         users.users.alice = { isNormalUser = true; uid = 1000; };
         nixling.site = { waylandUser = "alice"; launcherUsers = [ "alice" ]; yubikey.enable = false; allowUnsafeEastWest = true; };
         # Auto-declares env "obs" (lanSubnet 10.40.0.0/24,
-        # uplinkSubnet 203.0.113.0/30), the sys-obs-stack workload VM,
+        # uplinkSubnet 203.0.113.0/30), the sys-obs workload VM,
         # and — via the per-env net-VM auto-instantiation — sys-obs-net.
         nixling.observability.enable = true;
         nixling.envs.work = {
@@ -124,7 +124,7 @@ let
   netVm = vms.sys-work-net.config;
   safeNetVm = vms.sys-safe-net.config;
   obsNetVm = vms.sys-obs-net.config;
-  obsStackVm = vms.sys-obs-stack.config;
+  obsStackVm = vms.sys-obs.config;
   workGuest = vms.corp-vm.config.config;
   ed = netVm.config.systemd.network.networks."10-eth-dhcp";
   up = netVm.config.systemd.network.networks."10-uplink";
@@ -436,13 +436,13 @@ OBS_LAN_ISOLATED=$(printf '%s' "$OUT" | jq -r '.obsLanBridgeIsolated // "null"')
 OBS_STACK_HOST=$(printf '%s' "$OUT" | jq -r '.obsStackEnv')
 OBS_STACK_NAME=$(printf '%s' "$OUT" | jq -r '.obsStackVmName')
 
-if [ "$OBS_STACK_NAME" != "sys-obs-stack" ]; then
-  fail "nixling.observability.vmName is '$OBS_STACK_NAME'; expected canonical 'sys-obs-stack' (see nixos-modules/options-observability.nix). The obs env fixture pins this name because all components/observability/host.nix wiring keys off it."
+if [ "$OBS_STACK_NAME" != "sys-obs" ]; then
+  fail "nixling.observability.vmName is '$OBS_STACK_NAME'; expected canonical 'sys-obs' (see nixos-modules/options-observability.nix). The obs env fixture pins this name because all components/observability/host.nix wiring keys off it."
 fi
 if [ "$OBS_STACK_HOST" != "obs" ]; then
-  fail "manifest entry for sys-obs-stack has env '$OBS_STACK_HOST'; expected 'obs' (auto-declared by nixling.observability.enable = true). The obs env fixture depends on this VM being instantiated in the reserved env."
+  fail "manifest entry for sys-obs has env '$OBS_STACK_HOST'; expected 'obs' (auto-declared by nixling.observability.enable = true). The obs env fixture depends on this VM being instantiated in the reserved env."
 fi
-ok "obs env auto-declares the sys-obs-stack workload VM in env 'obs'"
+ok "obs env auto-declares the sys-obs workload VM in env 'obs'"
 
 if [ "$OBS_UPLINK_ADDR" != "203.0.113.2/30" ]; then
   fail "obs net VM '10-uplink' address is '$OBS_UPLINK_ADDR'; expected 203.0.113.2/30 (env obs, uplinkSubnet=203.0.113.0/30, net VM is host=.1, net=.2)."

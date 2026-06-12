@@ -3,7 +3,7 @@
 This document specifies the bounded exec I/O protocol selected for the
 guest-control design: ttRPC unary calls for lifecycle and
 Kata-style chunked stdio RPCs for stdin/stdout/stderr. It is the design
-follow-up to [ADR 0026](../adr/0026-guest-control-plane-over-vsock.md)
+follow-up to [ADR 0028](../adr/0028-guest-control-plane-over-vsock.md)
 and the [guest-control feasibility dossier](../adr/guest-control-feasibility-dossier.md).
 
 ## Decision summary
@@ -698,7 +698,7 @@ locks.
 
 ## Conformance matrix mapping
 
-| ADR 0026 row | Chunked stdio behavior |
+| ADR 0028 row | Chunked stdio behavior |
 | --- | --- |
 | stdin open/close, EOF, TTY Ctrl-D | `stdin_open`, `WriteStdin` offsets, `CloseStdin`, and TTY Ctrl-D-as-data define this explicitly. |
 | stdout/stderr separation | Separate logs and read RPCs in non-TTY mode. |
@@ -831,7 +831,7 @@ use:
 
 ### Old-generation VMs
 
-As required by ADR 0026, new exec commands do not fall back to SSH. If a
+As required by ADR 0028, new exec commands do not fall back to SSH. If a
 running VM lacks guest-control capabilities, the CLI returns
 `guest-control-unavailable-old-generation` with remediation. Existing
 SSH-backed compatibility commands outside generic exec keep their
@@ -1083,7 +1083,7 @@ incorrect CLI retry behavior around `stdin-backpressure` or
 
 ## References
 
-- [ADR 0026: Guest control plane over virtio-vsock](../adr/0026-guest-control-plane-over-vsock.md)
+- [ADR 0028: Guest control plane over virtio-vsock](../adr/0028-guest-control-plane-over-vsock.md)
 - [Guest control feasibility dossier](../adr/guest-control-feasibility-dossier.md)
 - [Kata Agent protocol stdio RPCs](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L33-L49)
 - [Kata Agent stream message shapes](https://github.com/kata-containers/kata-containers/blob/6d2066b692ce69a908bb4daec2c6b71ccfad3829/src/libs/protocols/protos/agent.proto#L211-L227)

@@ -15,9 +15,9 @@ observability VM "ready".
 Without a readiness gate the daemon would report `overall_ok=true`
 for the obs VM the moment the per-VM process DAG settled, even if
 the host-side OTLP forwarder was still mid-handshake (or had
-silently failed to bind its vsock host socket). Operators then
-saw mysterious gaps in Grafana / Tempo / Loki for the first few
-seconds of every obs VM boot.
+silently failed to bind its vsock host socket). Operators then saw
+mysterious gaps in SigNoz for the first few seconds of every obs VM
+boot.
 
 This page documents the typed gate that closes that window.
 

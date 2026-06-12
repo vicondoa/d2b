@@ -5,10 +5,10 @@
 #
 #   * host-side flag    → `nixling.observability.enable = true`
 #   * per-VM opt-in     → `nixling.vms.work-app.observability.enable = true`
-#   * stack VM reserved → `nixling.observability.vmName = "sys-obs-stack"`
+#   * stack VM reserved → `nixling.observability.vmName = "sys-obs"`
 #
 # Setting the host flag auto-declares the `obs` env and the
-# `sys-obs-stack` VM (Grafana + Prometheus + Loki + Tempo + Alloy).
+# `sys-obs` VM (native SigNoz).
 # The workload VM `work-app` lives in a separate `work` env and
 # forwards its telemetry to the stack VM over the vsock transport.
 #
@@ -63,20 +63,15 @@
   # Setting `enable = true` causes the framework to:
   #   * auto-declare `nixling.envs.obs`     (LAN  10.40.0.0/24,
   #                                          uplink 203.0.113.0/30)
-  #   * auto-declare `nixling.vms.<vmName>` carrying the
-  #     Grafana + Prometheus + Loki + Tempo + Alloy stack
-  #     (defaults: 2 GiB RAM, retention 30d/14d/7d, Grafana on
-  #     http://10.40.0.10:3000 at index 10)
-  #   * enable the host-side OTLP relay, CH exporter, and the
+  #   * auto-declare `nixling.vms.<vmName>` carrying the native
+  #     SigNoz stack
+  #     (default UI http://10.40.0.10:8080 at index 10)
+  #   * enable the host-side OTLP relay and the
   #     per-VM observability sidecar wiring for any VM that opts in
   #
-  # `vmName` is set explicitly to its current default to document
-  # the public surface and to pin the VM name this example asserts
-  # against in tests/examples-with-observability-eval.sh.
   # ---------------------------------------------------------------
   nixling.observability = {
     enable = true;
-    vmName = "sys-obs-stack";
   };
 
   # ---------------------------------------------------------------
@@ -95,14 +90,13 @@
   # ---------------------------------------------------------------
   # nixling.vms.work-app — one headless workload VM that opts into
   # observability. The per-VM `observability.enable = true` toggle
-  # attaches the guest-side Alloy agent + journald + node-exporter
-  # scrape configs and wires the OTLP relay path through the host
-  # into `sys-obs-stack`'s vsock receiver.
+  # attaches the guest-side telemetry agent and wires the OTLP relay path
+  # through the host into `sys-obs`'s vsock receiver.
   #
   # Topology:
   #   work-app guest  → /run/nixling/otlp.sock
-  #   host relay      → AF_VSOCK port 14317 on sys-obs-stack
-  #   sys-obs-stack   → Prometheus / Loki / Tempo / Grafana
+  #   host relay      → AF_VSOCK into sys-obs
+  #   sys-obs         → SigNoz
   # ---------------------------------------------------------------
   nixling.vms.work-app = {
     enable = true;

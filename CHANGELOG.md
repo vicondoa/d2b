@@ -26,7 +26,7 @@ deprecations ship one minor release before removal.
 
 - `docs/reference/schemas/v2/guest-control.json` and
   `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
-  protobuf source for the ADR 0026 ttRPC contract, covering health, Hello,
+  protobuf source for the ADR 0028 ttRPC contract, covering health, Hello,
   capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health
   labels, bounded string identifiers/payload metadata, oneof-style terminal
   status, structured stdio error results, and descriptor-shape drift checks.
@@ -108,6 +108,21 @@ deprecations ship one minor release before removal.
   explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
   behavior, conformance matrix, risks, and required tests.
 
+- Guest systemd-journal log collection. The per-VM OpenTelemetry
+  collector now tails the guest journal through the contrib `journald`
+  receiver and forwards it to SigNoz as logs tagged with the VM's
+  `vm.name` / `vm.env` resource attributes, with the journal `PRIORITY`
+  mapped to OTel severity and a `file_storage` cursor so a collector
+  restart resumes without dropping entries.
+  `nixling.vms.<vm>.observability.scrapeJournal` now defaults to `true`
+  (previously a reserved no-op) and the guest collector user is granted
+  `systemd-journal` read access plus `journalctl` on its unit PATH.
+
+- Native, container-free SigNoz observability backend packages and ADR.
+  The bundled observability path now targets SigNoz, the SigNoz OTel
+  Collector, schema migrator, ClickHouse, and ClickHouse Keeper as native
+  NixOS services.
+
 - `nixling.site.niriVmBorders.{enable,outputPath}` — opt-in niri KDL
   window-rule include generator. When enabled, installs a KDL file at
   the configured path (default `/etc/nixling/niri-vm-borders.kdl`)
@@ -125,6 +140,12 @@ deprecations ship one minor release before removal.
   cross-domain forwarding. The filter is enabled by default when
   `graphics.crossDomainTrusted = true`, denies unknown/high-risk globals
   by default, and exposes explicit allow/deny/version-cap overrides.
+- `nixling.vms.<vm>.graphics.waylandFilter.{byteLogging,dmabufAllow,dmabufDeny}`
+  — default-off diagnostics and dmabuf format/modifier controls for the
+  host-side Wayland filter. The filter preserves compositor dmabuf
+  feedback by default and lets operators hide known-bad format/modifier
+  pairs while keeping buffer creation requests fail-closed against the
+  same policy.
 - `docs/how-to/niri-vm-borders.md` — how-to for enabling the niri
   include, customizing colors, verifying the setup, and understanding
   the `crossDomainTrusted` requirement for app-id matching.
@@ -135,6 +156,65 @@ deprecations ship one minor release before removal.
   catalog for `graphics.waylandFilter` listing every warning condition,
   the triggering option or global, why the warning exists, and how to
   override intentionally.
+
+- StoreSync-only observability JSONL export. The privileged broker now
+  writes a positive-allow-list projection of each terminal StoreSync
+  attempt to `<stateDir>/observability/store-sync/store-sync-<utc-date>.jsonl`
+  (`0640`, daily-rotated, best-effort). The export carries exactly the
+  allow-listed fields (`schema_version`, `target_vm`, `vm_id`,
+  `target_env`, `generation_id`, `generation_token`, `sync_status`,
+  `error_stage`, `cleanup_status`, `cleanup_reason`, `authz_outcome`,
+  closure/linked/skipped/swept counts, `fast_path`, and the flattened
+  `*_ms` timings) via a dedicated `StoreSyncObservabilityRecord` struct
+  so no serializer ever receives the full host audit record; host-only
+  fields (`caller_principal`, `retained_generations`, host/store paths,
+  `db.dump`, marker payloads) are redacted by construction. Host Alloy
+  tails only this export glob (`local.file_match` + `loki.source.file`,
+  following rotation) and the `alloy` identity receives focused
+  read/traverse ACLs to the export directory only — never the unified
+  broker audit log, the privileged daemon socket, or nixlingd state. The
+  Loki stream stays a host singleton (`vm="host"`, `env="host"`,
+  `role="host"`, `source="store-sync-audit"`); `target_vm`/`target_env`
+  remain JSON content. `target_env` is resolved from the trusted manifest
+  when present (and remains a JSON field, not a stream label). New gate
+  `tests/store-sync-export-eval.sh`;
+  `tests/loki-label-cardinality-eval.sh` now also parses
+  `local.file_match` `path_targets` label maps. See
+  [ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md) and
+  `docs/reference/store-sync.md` § "Observability export".
+
+- `nixling store verify <vm> [--repair] [--json]` — explicit
+  broker-backed live-pool integrity verification for the ADR 0027 split
+  store-view. The CLI is thin and never reads `store-view` directly;
+  `nixlingd` sends a typed `BrokerRequest::StoreVerify` to the privileged
+  broker, which verifies `state/current`, `meta/current`, the host marker,
+  zero-length live marker, and every manifest top-level basename in
+  `live/`. It writes host-only integrity state under
+  `store-view/state/generations/<generation-id>/integrity.json` (or
+  `state/integrity-unknown.json` when generation identity is unavailable)
+  and returns the signed JSON envelope documented in
+  `docs/reference/cli-output/store-verify.md`. `--repair` now delegates to
+  StoreSync as a forced non-fast-path republish, then verifies again before
+  returning `repaired`; incomplete repairs remain exit-4 `drift`/`unknown`
+  instead of a success-shaped result.
+- `nixling store verify` now performs deep recursive live-pool verification
+  against trusted source closure paths (file type, executable bit, symlink
+  target, and hardlink identity or byte equality for copied fallback files).
+  Existing top-level packages with internal drift are repaired by staging clean
+  replacements and swapping them into `live/` with same-filesystem
+  `RENAME_EXCHANGE`, so the served basename is never absent.
+- StoreSync success audit/export records now populate available phase timings
+  (`lock_wait_ms`, `lock_hold_ms`, `probe_ms`, `verify_ms`, `stage_ms`,
+  `metadata_ms`, `cleanup_ms`) in addition to `total_ms`.
+- StoreSync now performs conservative cleanup/retention when no virtiofsd
+  process appears to be serving the VM's `store-view/live` path. Offline-safe
+  cleanup removes unretained live basenames, stale meta/state generation dirs,
+  and stale gcroots; online or uncertain serving state defers cleanup.
+- Cross-mount store-view materialisation no longer shells through
+  `unshare ... /bin/sh -ceu ...`. The broker now execs
+  `nixling-activation-helper private-store <verb>` directly; the helper
+  unshares its own mount namespace, makes propagation private, lazily detaches
+  `/nix/store`, then runs the selected build/replace verb from stdin JSON.
 
 - `nixling config` verb group — the host-side review/approve workflow
   for a VM's guest-editable `guestConfigFile`: `config sync` pulls the
@@ -175,6 +255,45 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- The default observability VM name is now `sys-obs`. The old
+  `sys-obs-stack` state is not deleted automatically; keep it for
+  rollback until the new stack is validated.
+- Observability metadata in `vms.json` moves to manifest version 4 for
+  the SigNoz backend shape. Historical v3 fixtures remain frozen.
+- Host and guest telemetry collection is moving from Alloy pipelines to
+  OpenTelemetry Collector services that export OTLP over nixling's
+  broker-supervised Unix/vsock transport.
+- Retired Grafana credential-file options are now documented as
+  compatibility shims; native SigNoz credentials can be sourced from
+  `nixling.observability.signoz.{jwtSecretFile,rootPasswordFile,clickhousePasswordFile}`.
+- `retention.*` and `sampling.*` remain compatibility shims for the
+  retired Tempo/Loki backend and warn when changed; native
+  SigNoz/ClickHouse retention is operator-managed.
+- Per-VM store isolation is moving to the Rust-owned `store-view/live`
+  hardlink pool
+  ([ADR 0027](docs/adr/0027-store-view-hardlink-live-pool.md)). The
+  broker `StoreSync` path is the canonical writer for store-view
+  metadata and live pool updates; host activation no longer
+  builds/sweeps store-view closures. The guest readiness marker
+  `store-view/live/.nixling-marker-<vm>` is a zero-length file, and each
+  generation publishes a guest-safe `meta.json` authored by an
+  independent allow-list serializer (`schema_version`, `generation_id`,
+  `generation_token`, `sync_status`, `closure_count`) that never
+  receives the full host audit record. The broker `StoreSync` wire
+  response now carries the collision-free `generation_id` alongside the
+  u32 `generation_token` (request + response renamed `generation` →
+  `generation_token`); the token is display/wire only and is never used
+  as the on-disk layout key. Each StoreSync attempt that reaches the
+  broker handler emits exactly one terminal structured broker audit
+  record under the signed `StoreSyncAuditFields` schema
+  (`schema_version = 1`) with invariant-enforcing constructors and
+  `validate()`: success records use `ok_fast_path` / `ok_non_fast_path`,
+  and a failure emits a `failed` record carrying the classified
+  `error_stage` (the failure surfaces as `BrokerError::StoreSyncFailed`
+  and is never double-audited). Authorization-deny emission
+  (`error_stage = authz`) is modelled by the `denied` constructor but is
+  not yet reachable from dispatch, pending a per-VM StoreSync
+  authorization policy.
 - Graphics VMs that opt into cross-domain forwarding use
   `wl-cross-domain-proxy` in the guest and a host-side
   `nixling-wayland-filter` proxy instead of the former
@@ -197,9 +316,28 @@ deprecations ship one minor release before removal.
   (`/var/lib/nixling/vms/<vm>/store`), restoring the isolation the legacy
   `BindReadOnlyPaths /nix/store -> per-VM farm` provided; a guest's
   `/nix/store` now contains only its own closure.
+- StoreSync observability export confinement: Grafana Alloy is granted
+  focused POSIX ACLs (`u:alloy:--x` traverse on `<stateDir>` and
+  `<stateDir>/observability`, `u:alloy:r-x` + a `default:u:alloy:r--`
+  ACL on the export dir) to read the StoreSync export and nothing else
+  under the broker state dir. Alloy is never added to the `nixlingd`
+  group and gets no read access to the unified broker audit log
+  (`<stateDir>/audit/broker-*.jsonl`) or the privileged daemon socket.
+  The export itself is a redacted projection, so a host-Alloy compromise
+  exposes only the allow-listed StoreSync fields already destined for
+  Loki, not the host-confidential audit stream.
 
 ### Fixed
 
+- The host OTel bridge is now represented as a daemon/broker process role
+  (`otel-host-bridge`) so readiness can track the broker-spawned runner.
+- Observability relay ACL setup now excludes the host bridge principal
+  from broad obs-VM state directory grants and uses the nixling-owned OTel
+  runtime path for the bridge egress socket.
+- TPM-enabled guests now flush stale loaded/saved TPM sessions during
+  early boot before SRK provisioning. This prevents swtpm session-handle
+  exhaustion from breaking TPM-bound credentials while preserving NVRAM
+  and persistent handles.
 - VM start (`nixling up` / `switch`) no longer aborts with
   `SpawnRunner failed ... broker-error` ("Invalid cross-device link")
   while building the per-VM store-view hardlink farm on hosts where

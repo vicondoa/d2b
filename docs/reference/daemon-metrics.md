@@ -36,14 +36,14 @@ Why scrape and not OTLP push:
 - A scrape collector decides cardinality + retention policy
   out-of-band, so the daemon doesn't need a remote-write client
   buffer, retry loop, or backoff state.
-- The observability env's local Alloy already runs a
-  `prometheus.scrape` component (see
+- The observability pipeline's OTel Collector runs a scrape receiver
+  for this endpoint (see
   [`docs/reference/components-observability.md`](./components-observability.md))
   so wiring the scrape side is a config-only change.
 
 OTLP push is intentionally *out of scope* for the daemon process
-itself. Operators who need OTLP metrics shipping run the in-stack
-Alloy as a `prometheus.scrape` → `otelcol.exporter.otlp` pipeline.
+itself. Operators who need OTLP metrics shipping run an OTel Collector
+pipeline that scrapes this endpoint and exports OTLP downstream.
 
 ## Metric inventory
 
@@ -169,18 +169,18 @@ apply.
 
 ## Scrape configuration example
 
-```alloy
-prometheus.scrape "nixlingd" {
-  targets = [{
-    __address__ = "/run/nixling/public.sock",
-    __scheme__  = "http+unix",
-    __metrics_path__ = "/metrics",
-  }]
-  forward_to = [prometheus.remote_write.obs.receiver]
-  scrape_interval = "30s"
-}
+```yaml
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: nixlingd
+          scrape_interval: 30s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["127.0.0.1:9101"]
 ```
 
 The 30-second scrape interval is the recommended default; faster
 scrapes (5–10 s) are appropriate during incident investigation but
-inflate Prometheus storage proportionally.
+inflate backend storage proportionally.

@@ -13,9 +13,9 @@ guest-control token share is present only when
 
 | Tag           | Socket                                   | Shared dir                                            | Mode |
 |---------------|------------------------------------------|-------------------------------------------------------|------|
-| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | per-VM hardlink farm served as guest `/nix/store`     | RO   |
-| `nl-meta`     | `/run/nixling/vms/corp-vm/nl-meta.sock`  | `/var/lib/nixling/vms/corp-vm/store-meta`             | RW   |
-| `nl-hkeys`    | `/run/nixling/vms/corp-vm/nl-hkeys.sock` | `/var/lib/nixling/vms/corp-vm/host-keys`              | RW   |
+| `ro-store`    | `/run/nixling/vms/corp-vm/ro-store.sock` | `/var/lib/nixling/vms/corp-vm/store-view/live`       | RO   |
+| `nl-meta`     | `/run/nixling/vms/corp-vm/nl-meta.sock`  | `/var/lib/nixling/vms/corp-vm/store-view/meta`       | RO   |
+| `nl-hkeys`    | `/run/nixling/vms/corp-vm/nl-hkeys.sock` | `/var/lib/nixling/vms/corp-vm/host-keys`             | RW   |
 | `nl-ssh-host` | `/run/nixling/vms/corp-vm/nl-ssh-host.sock` | `/var/lib/nixling/vms/corp-vm/sshd-host-keys`      | RW   |
 | `nl-gctl`     | `/run/nixling/vms/corp-vm/guest-control/nl-gctl.sock` | `/var/lib/nixling/guest-control-corp-vm` | RO |
 
@@ -57,10 +57,16 @@ Flag semantics:
 - `--cache=auto` — auto-cache (kernel decides per inode). `always`
   is unsafe for the `ro-store` share because hardlink farm churn
   could expose stale store-paths; `never` makes virtiofs latency
-  visible.
-- `--readonly` — emitted for every share whose schema marks it
-  `readOnly`, including `ro-store` and the guest-control token share
-  (`nl-gctl`). Other framework shares remain RW.
+  visible. `auto` matches the audit.
+- `--inode-file-handles=prefer` — virtiofsd uses `name_to_handle_at`
+  when the underlying filesystem supports it. Reduces the per-share
+  fd budget; matches the audit shape.
+- `--readonly` — `ro-store`, `nl-meta`, and the guest-control token
+  share (`nl-gctl`) are read-only. `nl-meta` is rooted at
+  `store-view/meta` and carries only guest-safe generation metadata
+  (`current`, `store-paths`, `db.dump`, allow-listed `meta.json`); it
+  never exposes `live/`, `state/`, `gcroots/`, or `sync.lock`. The
+  other framework shares remain RW.
 
 ## Daemon-owned uid/gid
 

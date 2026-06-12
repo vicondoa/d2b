@@ -43,7 +43,7 @@ use nixling_core::processes::ProcessRole;
 use crate::audio_argv::{generate_audio_argv, AudioArgvInput};
 use crate::ch_argv::{generate_ch_argv, ChArgvInput};
 use crate::gpu_argv::{generate_gpu_argv, GpuArgvInput};
-use crate::otel_host_bridge_argv::OtelHostBridgeArgvInputs;
+use crate::otel_host_bridge_argv::{generate_otel_host_bridge_argv, OtelHostBridgeArgvInputs};
 use crate::swtpm_argv::{generate_swtpm_argv, SwtpmArgvInput};
 use crate::usbip_argv::{generate_usbip_argv, UsbipArgvInput, UsbipSubcommand};
 use crate::video_argv::{generate_video_argv, VideoArgvInput};
@@ -175,6 +175,17 @@ pub fn regenerate_argv(
         ProcessRole::VsockRelay => {
             let input = require(&extra.vsock_relay_input, &intent.role, "vsock_relay_input")?;
             let mut argv = generate_vsock_relay_argv(input)
+                .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
+            replace_arg0(&mut argv, intent);
+            Ok(argv)
+        }
+        ProcessRole::OtelHostBridge => {
+            let input = require(
+                &extra.otel_host_bridge_input,
+                &intent.role,
+                "otel_host_bridge_input",
+            )?;
+            let mut argv = generate_otel_host_bridge_argv(input)
                 .map_err(|e| RegenerateArgvError::Generator(format!("{e:?}")))?;
             replace_arg0(&mut argv, intent);
             Ok(argv)

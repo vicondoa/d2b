@@ -1,7 +1,7 @@
 # Guest control feasibility dossier
 
 This dossier records the W0 evidence required by
-[ADR 0026](../adr/0026-guest-control-plane-over-vsock.md). It is the
+[ADR 0028](../adr/0028-guest-control-plane-over-vsock.md). It is the
 panel-review input for locking the guest-control IPC direction.
 
 ## Summary recommendation
@@ -38,8 +38,8 @@ W0 protocol.
 
 | Proof | Branch | Commit | Result |
 | --- | --- | --- | --- |
-| ADR introduced | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0026 added with the feasibility gate. |
-| ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0026 accepted after feasibility evidence and panel review findings were addressed. |
+| ADR introduced | `guest-control-ttRPC` | `c3bd66888722bc03c19f678b3e7da9b23954977e` | ADR 0028 added with the feasibility gate. |
+| ADR accepted | integrated W0 decision branch | `18156adc721025b6d7706e315fe3b94b1026ab37` | ADR 0028 accepted after feasibility evidence and panel review findings were addressed. |
 | CH CONNECT transport | integrated W0 decision branch | `6797def8a1916966b4262d70f2381ce5845a6e8f` | PASS: CH post-OK stream can be wrapped in `ttrpc-rust` async `Socket` and `Client` without a host proxy; `OK <local-port>` is validated as an opaque u32 ACK, not used as a buffer limit, malformed/refused ACK failures surface only bounded error categories, handshake timeout is bounded, and post-OK half-close preserves guest output drain. |
 | Static guest build | `guest-control-w0-static` | `a085e68be5bfa9ed19fcb3441b4f914c7120ac69` | PASS with implementation constraints: representative ttRPC guest dependency probe builds as static musl for x86_64 and aarch64; real `nixling-guestd`/`nixling-userd` artifacts remain a follow-up implementation gate. |
 | ttRPC stream semantics | `guest-control-w0-stream` | `eeaaf881a0aa4b7344b2005290248533a1576605` | CONDITIONAL: duplex streams are semantically expressive, but raw stream queues still need bounded flow control. |
@@ -392,7 +392,7 @@ Observed:
 The proof observed that `ttrpc-rust` async connection handling uses
 bounded mpsc queues, but message delivery tasks can still accumulate
 payloads when an application receiver stalls. Raw ttRPC stream queues
-therefore do not satisfy ADR 0026's backpressure and byte-exact
+therefore do not satisfy ADR 0028's backpressure and byte-exact
 requirements by themselves.
 
 Panel follow-up corrected the message-size invariant for protobuf
@@ -553,7 +553,7 @@ interactions, and more implementation risk around ttRPC stream buffering.
   ttRPC handlers.
 - Design and review any remaining production-specific details around
   long-poll deadlines and cancellation.
-- Keep ADR 0026 aligned with the selected chunked-stdio outcome.
+- Keep ADR 0028 aligned with the selected chunked-stdio outcome.
 - Add generated-code postprocessing to the implementation plan.
 - Keep guest binaries static and first-party unsafe-free.
 - Carry the retained stdout/stderr storage security contract into the

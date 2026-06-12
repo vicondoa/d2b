@@ -51,7 +51,7 @@ let
   };
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+    outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
   };
   activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
@@ -459,6 +459,8 @@ in
             wlproxy_wayland_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "wayland-proxy") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             audio_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "audio") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             gpu_session_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "gpu" or .role == "gpu-render-node") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            otel_host_bridge_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | select(.role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
+            otel_obs_connect_uids=$(${pkgs.jq}/bin/jq -r '.vms[] | .nodes[] | select(.role == "vsock-relay" or .role == "otel-host-bridge") | .profile.uid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)
             overlay_uid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerUid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_gid=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | .ownerGid' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
             overlay_size_mib=$(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .planOps[]? | select(.kind == "diskInit" and (.targetPath | endswith("/store-overlay.img"))) | (.sizeBytes / 1048576 | floor)' "$bundle_json" 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)
@@ -477,6 +479,19 @@ in
                 --mode 0600 \
                 --size-mib "$overlay_size_mib" \
                 2>/dev/null || true
+            fi
+            if [ "${name}" = "${cfg.observability.vmName}" ]; then
+              obs_vsock="/var/lib/nixling/vms/${name}/vsock.sock"
+              obs_state_dir="/var/lib/nixling/vms/${name}"
+              if [ -S "$obs_vsock" ]; then
+                for obs_uid in $otel_obs_connect_uids; do
+                  [ "$obs_uid" = "0" ] && continue
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:x" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -d -m "u:$obs_uid:rw" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -d -m "m::rw" "$obs_state_dir" 2>/dev/null || true
+                  ${pkgs.acl}/bin/setfacl -m "u:$obs_uid:rw,m::rw" "$obs_vsock" 2>/dev/null || true
+                done
+              fi
             fi
             for uid in $(${pkgs.jq}/bin/jq -r '.vms[] | select(.vm == "${name}") | .nodes[] | .profile.uid' "$bundle_json" | ${pkgs.coreutils}/bin/sort -u); do
               [ "$uid" = "0" ] && continue
@@ -538,6 +553,13 @@ in
                 done
                 continue
               fi
+              if echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.coreutils}/bin/mkdir -p /run/nixling/otel 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chown nixlingd:nixling /run/nixling/otel 2>/dev/null || true
+                ${pkgs.coreutils}/bin/chmod 0750 /run/nixling/otel 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /run/nixling/otel 2>/dev/null || true
+              fi
               # panel-security R2 must-fix B: /dev/kvm
               # + /dev/vhost-net only for Hypervisor/Gpu UIDs.
               if echo "$kvm_consuming_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
@@ -554,8 +576,10 @@ in
               # broker-spawned CH re-creates disk-image-shaped
               # files with the inherited ACL. Documented in the
               # migration-guide section.
-              ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
-              ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+              if ! echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                ${pkgs.acl}/bin/setfacl -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+                ${pkgs.acl}/bin/setfacl -d -m "u:$uid:rwx" /var/lib/nixling/vms/${name} 2>/dev/null || true
+              fi
               # panel-security R4 critical must-fix
               # the per-subdir setfacl loop used to do
               # `[ -d "$vm_dir/$sub" ] && setfacl...` on paths
@@ -569,13 +593,15 @@ in
               # passes /proc/self/fd/<N> to setfacl so the
               # syscall operates on the inode the helper holds.
               for sub in state sshd-host-keys host-keys; do
-                ${activationHelper} setfacl-on-path \
-                  --path "/var/lib/nixling/vms/${name}/$sub" \
-                  --acl-spec "u:$uid:rx" \
-                  --also-spec "mask:r-x" \
-                  --require-kind directory \
-                  --setfacl-bin "${pkgs.acl}/bin/setfacl" \
-                  2>/dev/null || true
+                if ! echo "$otel_host_bridge_uids" | ${pkgs.gnugrep}/bin/grep -qx "$uid"; then
+                  ${activationHelper} setfacl-on-path \
+                    --path "/var/lib/nixling/vms/${name}/$sub" \
+                    --acl-spec "u:$uid:rx" \
+                    --also-spec "mask:r-x" \
+                    --require-kind directory \
+                    --setfacl-bin "${pkgs.acl}/bin/setfacl" \
+                    2>/dev/null || true
+                fi
               done
 
               # + v1.1.2fu23
@@ -892,10 +918,15 @@ in
   # snippet runs on every nixos-rebuild switch + every boot and
   # idempotently re-asserts the canonical posture.
   #
-  # Also enforce per-VM store / store-meta ownership (`nixlingd:users
-  # 2775`); the BindMountFromHardlinkFarm broker op preserves the
-  # source's root:kvm 2755 which trips the ownership-matrix preflight.
-  # Re-enforce here.
+  # Also enforce per-VM store-view top-level ownership (ADR 0027):
+  # `store-view`, `store-view/live`, and `store-view/meta` are
+  # runner/virtiofsd-readable (`nixlingd:users 0755`); the broker
+  # hardlink/bind ops can leave a freshly-created inode with a stricter
+  # source posture that trips the ownership-matrix preflight, so
+  # re-enforce here. Legacy `store`/`store-meta` are postured only when
+  # present (migrated VMs). Host-only `store-view/state`,
+  # `store-view/gcroots`, and `store-view/sync.lock` are NOT touched
+  # here — they are broker-owned `nixlingd:nixling`.
   #
   # Replace the `[ ! -L ] && chown && chmod` shell pattern with calls to
   # nixling-activation-helper which use O_DIRECTORY|O_NOFOLLOW +
@@ -927,9 +958,38 @@ in
       if [ -d /var/lib/nixling/vms ] && [ -n "$users_gid" ]; then
         for vm_dir in /var/lib/nixling/vms/*/; do
           vm_dir="''${vm_dir%/}"
-          for sub in store store-meta; do
+          # ADR 0027: activation may create the missing top-level
+          # store-view directory inodes and re-assert posture on them so
+          # the read-only ro-store/nl-meta virtiofsd shares always have a
+          # directory to serve, but it must NOT recurse into the live
+          # hardlink pool and must NOT touch broker-owned host-only state
+          # (store-view/state, store-view/gcroots, store-view/sync.lock,
+          # integrity leaves) — those are `nixlingd:nixling` and managed
+          # by the broker StoreSync path, never `users 0755`. Posture
+          # only the runner-readable top-level paths here.
+          for sub in store-view store-view/live store-view/meta; do
+            path="$vm_dir/$sub"
+            ${pkgs.coreutils}/bin/mkdir -p "$path" 2>/dev/null || true
+            [ -d "$path" ] && ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
             ${activationHelper} enforce-dir-posture \
-              --path "$vm_dir/$sub" \
+              --path "$path" \
+              --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
+          done
+          vm_name="''${vm_dir##*/}"
+          live_marker="$vm_dir/store-view/live/.nixling-marker-$vm_name"
+          if [ -f "$live_marker" ] && [ ! -L "$live_marker" ]; then
+            ${pkgs.acl}/bin/setfacl -k "$live_marker" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chown "$nixlingd_uid:$users_gid" "$live_marker" 2>/dev/null || true
+            ${pkgs.coreutils}/bin/chmod 0644 "$live_marker" 2>/dev/null || true
+          fi
+          # Legacy recovery artifacts (migrated VMs only): posture if
+          # present, never created by activation.
+          for sub in store store-meta; do
+            path="$vm_dir/$sub"
+            [ -d "$path" ] || continue
+            ${pkgs.acl}/bin/setfacl -k "$path" 2>/dev/null || true
+            ${activationHelper} enforce-dir-posture \
+              --path "$path" \
               --uid "$nixlingd_uid" --gid "$users_gid" --mode 0755 2>/dev/null || true
           done
         done

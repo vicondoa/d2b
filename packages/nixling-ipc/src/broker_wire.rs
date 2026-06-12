@@ -64,9 +64,15 @@ pub enum BrokerRequest {
     /// `current` symlink. Replaces the retired per-VM
     /// `nixling-<vm>-store-sync.service` bash oneshot. The daemon names
     /// only the opaque `bundle_closure_ref` + `vm_id` + expected
-    /// `generation`; the broker re-derives every closure path from its
-    /// trusted bundle copy.
+    /// `generation_token`; the broker re-derives every closure path from
+    /// its trusted bundle copy and derives the collision-free on-disk
+    /// `generation_id` itself.
     StoreSync(StoreSyncRequest),
+    /// Operator-facing live-pool verification. The daemon names only the
+    /// VM id; the broker resolves the trusted store-view intent and reads
+    /// host-only `store-view/state` itself. The CLI never reads the
+    /// store-view directly.
+    StoreVerify(StoreVerifyRequest),
     ReadSecretById(SecretByIdRequest),
     ResumeBroker,
     RotateSecretById(SecretByIdRequest),
@@ -173,6 +179,7 @@ impl BrokerRequest {
             Self::PrepareStateDir(_) => "PrepareStateDir",
             Self::PrepareStoreView(_) => "PrepareStoreView",
             Self::StoreSync(_) => "StoreSync",
+            Self::StoreVerify(_) => "StoreVerify",
             Self::ReadSecretById(_) => "ReadSecretById",
             Self::ResumeBroker => "ResumeBroker",
             Self::RotateSecretById(_) => "RotateSecretById",
@@ -416,11 +423,14 @@ pub enum BrokerResponse {
     SignalRunner(SignalRunnerResponse),
     DeregisterRunnerPidfd(DeregisterRunnerPidfdResponse),
     SpawnRunner(SpawnRunnerResponse),
-    /// Typed response carrying the activated generation, the resolved
+    /// Typed response carrying the activated generation (collision-free
+    /// `generation_id` plus the u32 `generation_token`), the resolved
     /// hardlink-farm root, and the count of top-level closure paths
     /// populated. Used by the daemon to surface the swap result in audit
     /// + start traces.
     StoreSync(StoreSyncResponse),
+    /// Result of an explicit live-pool verification request.
+    StoreVerify(StoreVerifyResponse),
     ValidateBundle(ValidateBundleResponse),
 }
 
@@ -829,21 +839,24 @@ pub struct PrepareStoreViewRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// Store-sync request. The broker resolves the closure intent row keyed
-/// by `vm_id` (canonical id form `"store-view:vm:<vm>"`) and refuses
-/// the op if `bundle_closure_ref` does not match. The broker also
-/// refuses if the wire-supplied `generation` does not match the bundle's
-/// resolved generation. The generation is a content-derived stable
-/// equality token (see `closures-json.nix`), not a monotonic counter:
+/// Store-sync request. The broker resolves the closure intent row from
+/// the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref`
+/// does not match. The broker also
+/// refuses if the wire-supplied `generation_token` does not match the
+/// bundle's resolved generation. The token is a content-derived stable
+/// equality value (see `closures-json.nix`), not a monotonic counter:
 /// the daemon and broker both read it from the same trusted bundle, so
 /// a mismatch means a stale daemon is racing the activator and the op
-/// is refused fail-closed.
+/// is refused fail-closed. It is a display/wire token only and is never
+/// used as the on-disk generation key — the broker derives the
+/// collision-free `generation_id` (full closure identity, ADR 0027)
+/// from its trusted closure copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreSyncRequest {
     pub vm_id: VmId,
     pub bundle_closure_ref: BundleClosureRef,
-    pub generation: u32,
+    pub generation_token: u32,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -851,15 +864,77 @@ pub struct StoreSyncRequest {
 /// Store-sync response. Returned after the broker successfully
 /// populates the per-VM hardlink farm and swaps the `current` symlink
 /// atomically. The `hardlink_farm_path` is the per-VM farm root (i.e.
-/// `/var/lib/nixling/vms/<vm>/store/`); the active generation directory
-/// is reachable via the `current` symlink.
+/// `/var/lib/nixling/vms/<vm>/store-view/`); the active generation
+/// directory is reachable via the `current` symlink.
+///
+/// ADR 0027: `generation_id` is the collision-free on-disk layout key
+/// (a SHA-256 over the full ordered closure identity). `generation_token`
+/// is the truncated u32 display/wire value carried for backwards
+/// compatibility and operator-facing output; it is never used as the
+/// on-disk key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreSyncResponse {
     pub vm: String,
-    pub generation: u32,
+    pub generation_id: String,
+    pub generation_token: u32,
     pub hardlink_farm_path: String,
     pub closure_count: u32,
+    pub retained_generations: Vec<u32>,
+    pub swept_count: u32,
+    pub cleanup_deferred: bool,
+}
+
+/// Store-verify request. `repair=true` requests the broker's explicit
+/// repair path; builds without that path must fail closed instead of
+/// returning a success-shaped repair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreVerifyRequest {
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub repair: bool,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreVerifyStatus {
+    Ok,
+    Drift,
+    Unknown,
+    Repaired,
+    Failed,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreVerifyUnknownReason {
+    MarkerOrManifestMissing,
+    MarkerOrManifestUnreadable,
+    OlderHostGeneration,
+    GenerationIdentityUnavailable,
+}
+
+/// Store-verify response. Field names intentionally match the public CLI
+/// JSON envelope after serde's camelCase conversion on the private wire;
+/// the CLI re-renders the signed snake_case envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StoreVerifyResponse {
+    pub vm: String,
+    pub status: StoreVerifyStatus,
+    pub checked: u32,
+    pub drifted: u32,
+    pub repaired: u32,
+    #[serde(default)]
+    pub unknown_reason: Option<StoreVerifyUnknownReason>,
+    #[serde(default)]
+    pub audit_ref: Option<String>,
+    #[serde(default)]
+    pub remediation: Option<String>,
 }
 
 /// The broker derives the bridge, port,
@@ -1072,9 +1147,9 @@ pub enum RunnerRole {
     Usbip,
     /// OTel host-bridge sidecar (vsock relay folded out of
     /// `nixling-otel-host-bridge.service` into broker SpawnRunner).
-    /// Receives pre-opened vsock fds for the obs VM and the alloy
-    /// host-egress socket; no AF_VSOCK socket creation capability in
-    /// the role profile. Broker invokes
+    /// Receives pre-opened fds for the obs VM vsock socket and the
+    /// nixling OTel host-egress socket; no AF_VSOCK socket creation
+    /// capability in the role profile. Broker invokes
     /// `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.
     OtelHostBridge,
     /// Host-jailed Wayland filter proxy. Broker invokes

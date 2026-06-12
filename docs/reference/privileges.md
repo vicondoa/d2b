@@ -201,7 +201,7 @@ seccomp policy are listed below.
 
 | Runner role | Replaces | Caps | Notes |
 | --- | --- | --- | --- |
-| `OtelHostBridge` | singleton `nixling-otel-host-bridge.service`; the current surface is broker `SpawnRunner{role: OtelHostBridge, …}` | empty | The bundle's `OtelHostBridge` runner intent MUST point at a VM whose `vm_name` equals `manifest._observability.vmName`; the broker refuses fail-closed via `Broker.OtelHostBridgeIntentInvalid` otherwise. Pre-opened vsock fds only; `AF_VSOCK` / `AF_UNIX` socket(2) is denied by `w1-otel-host-bridge` seccomp policy. Bind set: alloy runtime dir (RW), obs VM CH vsock host UDS dir (RW). No `/dev` binds. Host-scoped profile `host-otel-host-bridge` (principal: `nixling-otel-bridge`, cgroup subtree: `nixling.slice/host/otel-host-bridge`). |
+| `OtelHostBridge` | singleton `nixling-otel-host-bridge.service`; the current surface is broker `SpawnRunner{role: OtelHostBridge, …}` | empty | The bundle's `OtelHostBridge` runner intent MUST point at a VM whose `vm_name` equals `manifest._observability.vmName`; the broker refuses fail-closed via `Broker.OtelHostBridgeIntentInvalid` otherwise. Pre-opened vsock fds only; `AF_VSOCK` / `AF_UNIX` socket(2) is denied by `w1-otel-host-bridge` seccomp policy. Bind set: nixling OTel runtime dir `/run/nixling/otel` (RW), obs VM CH vsock host UDS dir (connect), and `/run/nixling/otel/host-egress.sock` (RW listen target). No `/dev` binds. Host-scoped profile `host-otel-host-bridge` (principal: `nixling-otel-bridge`, cgroup subtree: `nixling.slice/host/otel-host-bridge`). |
 
 
 Sensitive path components are stable-hashed; user identity is stored
@@ -389,7 +389,7 @@ enforces fail-closed before fork/exec.
 
 | Runner role | Legacy unit replaced | Caps (steady-state) | Per-env scope | Broker-dispatch contract |
 | --- | --- | --- | --- | --- |
-| `OtelHostBridge` | `nixling-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton — exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: alloy runtime dir exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
+| `OtelHostBridge` | `nixling-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton — exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: `/run/nixling/otel` exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
 | `Usbip` | per-env singletons `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** — two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `nixling usb attach --apply` dispatches `UsbipBind(busid, vm)` first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
 
 ### Metrics endpoint
@@ -401,7 +401,7 @@ the broker-dispatch contracts for trust-boundary completeness.
 | Endpoint | Served by | Transport | Capabilities | Sandbox posture | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `http://127.0.0.1:9101/metrics` | `nixlingd` (daemon, **not** broker) | HTTP Prometheus exposition, no auth (loopback-only bind) | **empty** bounding set on `nixlingd.service` (the daemon already runs unprivileged; the metrics handler adds no new caps) | `NoNewPrivileges=true` on `nixlingd.service`. Listener is `127.0.0.1:9101` only — never `0.0.0.0`. | Metric names are preserved (`nixling_vm_ch_api_up`, `nixling_vm_running`, `nixling_vm_state`); default cardinality budget is `vm`/`env`/`role` labels only, with topology labels opt-in. |
-| `unix:///run/nixling/host-otlp.sock` | `nixlingd` (daemon) | OTLP/gRPC over `AF_UNIX` | **empty** bounding set | `NoNewPrivileges=true`; socket created with `0660 nixlingd:nixlingd` so only alloy (in `nixlingd` group) can connect. | Span/log attributes are constrained to the tracing contract: no secrets, no argv, no `/nix/store` paths. |
+| `unix:///run/nixling/otel/host-egress.sock` | broker-spawned `OtelHostBridge` | OTLP/gRPC over `AF_UNIX` into CH-vsock | **empty** bounding set | Host OTel collector connects to the nixling-owned runtime socket; the bridge principal gets only the required runtime path and obs-vsock socket access. | Span/log attributes are constrained to the tracing contract: no secrets, no argv, no `/nix/store` paths. |
 
 ### Mutating recovery verb
 
@@ -431,7 +431,7 @@ unit names should not appear in operator-facing remediation.
 | --- | --- | --- | --- |
 | `nixling-net-route-preflight.service` | Daemon startup self-check; on failure the daemon enters **degraded mode** (refuses per-env starts; keeps `status`/`doctor`/`audit` read-only available). The **sole** mutating recovery verb is `nixling host reconcile --network --apply`, which the broker dispatches through existing host-prep ops to recreate bridges/routes without starting any VM. | not emitted | `nixling host reconcile --network --apply` |
 | `nixling-audit-check.service` + `nixling-audit-check.timer` | Daemon health endpoint that reads the broker `OpAuditRecord` daily files via `ExportBrokerAudit`; the Rust CLI `nixling audit` reads through the daemon. No separate systemd timer — `nixling host doctor` polls on demand. | not emitted | `ExportBrokerAudit` |
-| `nixling-ch-exporter.service` | Daemon-emitted OTel metrics with preserved metric names (`nixling_vm_ch_api_up`, `nixling_vm_running`, `nixling_vm_state`) and bounded labels (`vm`/`env`/`role` only by default). Prometheus is served at `http://127.0.0.1:9101/metrics`; host OTLP is `unix:///run/nixling/host-otlp.sock`. | not emitted | [`docs/reference/components-observability.md`](components-observability.md) |
+| `nixling-ch-exporter.service` | Daemon-emitted scrape metrics with preserved metric names (`nixling_vm_ch_api_up`, `nixling_vm_running`, `nixling_vm_state`) and bounded labels (`vm`/`env`/`role` only by default). The loopback scrape endpoint is `http://127.0.0.1:9101/metrics`; host telemetry egress to the obs VM uses `unix:///run/nixling/otel/host-egress.sock`. | not emitted | [`docs/reference/components-observability.md`](components-observability.md) |
 | `nixling-otel-host-bridge.service` | Broker `SpawnRunner{role: OtelHostBridge}` runner (host-scoped singleton). See the per-runner-role dispatch contract above. | not emitted | `SpawnRunner{role: OtelHostBridge}` |
 | `nixling-sys-<env>-usbipd-proxy.service` + `nixling-sys-<env>-usbipd-proxy.socket` + `nixling-sys-<env>-usbipd-backend.service` + `nixling-sys-<env>-usbipd-backend.socket` (per USBIP-enabled env) | Broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd}` runner per env, gated by the per-busid state machine. See the runner-role row above. | not emitted | [`docs/reference/usbip-state-machine.md`](usbip-state-machine.md) |
 
@@ -487,14 +487,15 @@ never both.
 | `nixling-store-sync` activation hook (store.nix) | `nixling host install --apply` invoking broker `StoreSync` dispatch through the daemon. | not emitted |
 | Per-VM `desktopItems` generation (cli.nix `nixling-launch-<vm>`) | Daemon-native launcher module emitting `.desktop` wrappers calling `nixling vm start <vm> --apply`. | not emitted |
 
-The only `systemd.services.*` declarations the framework owns under
-`nixos-modules/` are `nixlingd`, `nixling-priv-broker`,
-`nixling-load-store-db` (boot-time tmpfiles helper),
-`nixling-load-host-keys` (boot-time helper), and the upstream
-`pipewire` / `alloy` / `grafana` services the observability stack
-delegates to. Every per-VM `nixling-<vm>-*` and `microvm-*@<vm>`
-template, and every `nixling-{net-route-preflight,audit-check,
-ch-exporter,otel-host-bridge}` singleton, is gone.
+The root-visible `systemd.services.*` declarations the framework owns
+under `nixos-modules/` are `nixlingd`, `nixling-priv-broker`,
+`nixling-load-store-db` (boot-time tmpfiles helper), and
+`nixling-load-host-keys` (boot-time helper). The observability backend
+declares native services inside the auto-declared `sys-obs` VM, not
+root-visible framework singletons. Every per-VM `nixling-<vm>-*` and
+`microvm-*@<vm>` template, and every
+`nixling-{net-route-preflight,audit-check,ch-exporter,otel-host-bridge}`
+singleton, is gone.
 
 ## Operations outside the current broker surface
 
@@ -658,7 +659,7 @@ validator (`tests/minijail-validator-<role>.sh`) which writes
 | `vsock-relay` | `vm-<vm>-vsock-relay` | empty (pre-opened fds only, no AF_VSOCK socket creation in-role) | bind: per-VM `/var/lib/nixling/vms/<vm>/vsock.sock` (the inherited UDS); seccompPolicyRef = `w1-vsock-relay` (denies `socket(AF_VSOCK)` + `ptrace`) | `tests/minijail-validator-vsock-relay.sh` |
 | `usbip` backend | `vm-sys-<env>-usbipd-backend` | uid 0 carve-out + `CAP_NET_RAW` | host module `usbip-host` (not `vhci_hcd`, which is the guest module); long-lived per-env `usbipd` backend. `usbipd` must write the kernel `usbip_sockfd` sysfs attribute as host-root, so the broker gives this one runner a scoped root carve-out with a private PID namespace and fresh procfs; `/etc`, `/var`, `/home`, `/root`, `/run`, `/tmp`, `/boot`, `/mnt`, `/media`, `/srv`, and `/opt` masked; `/dev` masked; and only the currently locked `/dev/bus/usb/<bus>/<dev>` node(s) rebound writable. | `tests/minijail-validator-usbip.sh` |
 | `usbip` proxy | `vm-sys-<env>-usbipd-proxy` | empty | self-binding TCP proxy from `<env.hostUplinkIp>:3240` to `127.0.0.1:<backendPort>`; no device access | `tests/minijail-validator-usbip.sh` |
-| `otel-host-bridge` | (host-scoped) `nixling-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: alloy runtime dir, CH vsock host socket, host-egress.sock (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | `tests/minijail-validator-otel-host-bridge.sh` |
+| `otel-host-bridge` | (host-scoped) `nixling-otel-host-bridge` | empty (fd-only contract; no AF_VSOCK socket creation) | bind set: `/run/nixling/otel`, CH vsock host socket, `host-egress.sock` (RW listen target); broker rejects bundle intent whose source VM ≠ `observability.vmName` | `tests/minijail-validator-otel-host-bridge.sh` |
 
 
 ## Related ADRs

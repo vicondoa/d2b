@@ -53,6 +53,7 @@ use nixling_ipc::{
         RunMigrateRequest as BrokerRunMigrateRequest,
         RunRotateKnownHostRequest as BrokerRunRotateKnownHostRequest, RunnerRole, RunnerSignal,
         SignalRunnerRequest, SpawnRunnerRequest as BrokerSpawnRunnerRequest,
+        StoreVerifyRequest as BrokerStoreVerifyRequest,
         UpdateHostsFileRequest as BrokerUpdateHostsFileRequest,
         UsbipBindFirewallRuleRequest as BrokerUsbipBindFirewallRuleRequest,
         UsbipBindRequest as BrokerUsbipBindRequest,
@@ -60,7 +61,7 @@ use nixling_ipc::{
         UsbipUnbindRequest as BrokerUsbipUnbindRequest,
     },
     public_wire::{self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability},
-    types::{BundleOpId, RoleId, ScopeId, VmId},
+    types::{BundleClosureRef, BundleOpId, RoleId, ScopeId, VmId},
     KnownFeatureFlag, BROKER_SOCKET_PATH,
 };
 use serde::{Deserialize, Serialize};
@@ -1718,6 +1719,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "rotateKnownHost"
             | "usbipBind"
             | "usbipUnbind"
+            | "storeVerify"
             | "migrate"
             | "hostPrepare"
             | "hostDestroy"
@@ -1772,6 +1774,7 @@ fn dispatch_request(
         wire::Request::UsbipBind(req) => dispatch_broker_usbip_bind(state, req),
         wire::Request::UsbipUnbind(req) => dispatch_broker_usbip_unbind(state, req),
         wire::Request::UsbipProbe => dispatch_broker_usbip_probe(state),
+        wire::Request::StoreVerify(req) => dispatch_broker_store_verify(state, req),
         wire::Request::Migrate(req) => dispatch_broker_run_migrate(state, req),
         wire::Request::HostPrepare(req) => dispatch_broker_host_prepare(state, req),
         wire::Request::HostDestroy(req) => dispatch_broker_host_destroy(state, req),
@@ -2608,6 +2611,7 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::Audio => VmStartNodeMode::LongLived(RunnerRole::Audio),
         ProcessRole::Video => VmStartNodeMode::LongLived(RunnerRole::Video),
         ProcessRole::VsockRelay => VmStartNodeMode::LongLived(RunnerRole::VsockRelay),
+        ProcessRole::OtelHostBridge => VmStartNodeMode::LongLived(RunnerRole::OtelHostBridge),
         ProcessRole::Usbip => VmStartNodeMode::LongLived(RunnerRole::Usbip),
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
@@ -2643,7 +2647,59 @@ struct VmStartRunner<'a> {
     resolver: &'a BundleResolver,
 }
 
+fn resolve_store_view_intent_for_vm<'a>(
+    resolver: &'a BundleResolver,
+    vm: &str,
+) -> Result<&'a nixling_core::bundle_resolver::ResolvedStoreViewIntent, String> {
+    resolver
+        .find_store_view_intent(vm)
+        .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
+}
+
 impl VmStartRunner<'_> {
+    fn sync_store_view(&self, vm: &str) -> Result<(), String> {
+        let intent = resolve_store_view_intent_for_vm(self.resolver, vm)?;
+        match dispatch_broker_request(
+            self.state,
+            BrokerRequest::StoreSync(nixling_ipc::broker_wire::StoreSyncRequest {
+                vm_id: VmId::new(vm),
+                bundle_closure_ref: BundleClosureRef::new(intent.intent_id.clone()),
+                generation_token: u32::try_from(intent.generation)
+                    .map_err(|_| "store-view-generation-overflow".to_owned())?,
+                tracing_span_id: None,
+            }),
+        ) {
+            Ok(BrokerResponse::StoreSync(_)) => Ok(()),
+            Ok(BrokerResponse::Error(error)) => {
+                tracing::warn!(
+                    vm = %vm,
+                    broker_kind = %error.kind,
+                    broker_operation = %error.operation,
+                    broker_message = %error.message,
+                    broker_action = %error.action,
+                    "StoreSync preflight dispatch failed"
+                );
+                Err(format!("broker-error:StoreSync:{}", error.kind))
+            }
+            Ok(other) => {
+                tracing::warn!(
+                    vm = %vm,
+                    broker_response_kind = %broker_response_kind(&other),
+                    "StoreSync preflight returned unexpected broker response"
+                );
+                Err("broker-protocol:StoreSync".to_owned())
+            }
+            Err(error) => {
+                tracing::warn!(
+                    vm = %vm,
+                    error = ?error,
+                    "StoreSync preflight dispatch failed"
+                );
+                Err("broker-dispatch:StoreSync".to_owned())
+            }
+        }
+    }
+
     fn spawn_runner(
         &self,
         vm: &str,
@@ -2835,7 +2891,12 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         budget: supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
         match vm_start_node_mode(&node.role) {
-            VmStartNodeMode::ReadinessOnly => wait_for_readiness(node, readiness, budget.readiness),
+            VmStartNodeMode::ReadinessOnly => {
+                if node.role == ProcessRole::StoreVirtiofsPreflight {
+                    self.sync_store_view(vm)?;
+                }
+                wait_for_readiness(node, readiness, budget.readiness)
+            }
             VmStartNodeMode::OneShot(runner_role) => {
                 let response = self.spawn_runner(vm, node, runner_role, budget.spawn)?;
                 wait_for_one_shot_exit(response.pid, response.start_time_ticks, budget.readiness)
@@ -4619,6 +4680,11 @@ fn dispatch_broker_vm_start(
         }
     }
 
+    let runner = VmStartRunner {
+        state,
+        resolver: &resolver,
+    };
+
     let dag = resolver
         .processes
         .vms
@@ -4628,6 +4694,28 @@ fn dispatch_broker_vm_start(
             context: format!("load process DAG for {}", request.vm),
             detail: "VM not present in processes.json".to_owned(),
         })?;
+
+    // StoreSync owns the guest-served live marker
+    // (`store-view/live/.nixling-marker-<vm>`) and postures it as
+    // `nixlingd:users 0644`. Run it before ownership preflight so stale
+    // markers from older broker/activation paths are repaired before the
+    // fail-closed matrix check. The process DAG still contains the
+    // StoreVirtiofsPreflight readiness node; that second StoreSync call is
+    // idempotent and keeps the DAG contract explicit.
+    if let Err(error) = runner.sync_store_view(&request.vm) {
+        tracing::warn!(
+            vm = %request.vm,
+            error = %error,
+            "vm start: pre-ownership StoreSync failed"
+        );
+        return Ok(daemon_failure_response(
+            VERB,
+            format!(
+                "vm start {}: store-view sync failed before ownership preflight",
+                request.vm
+            ),
+        ));
+    }
 
     // Refuse VM start if any per-VM state subdirectory has drifted from
     // the typed ownership matrix
@@ -4743,10 +4831,6 @@ fn dispatch_broker_vm_start(
         ));
     }
 
-    let runner = VmStartRunner {
-        state,
-        resolver: &resolver,
-    };
     let api_timeout = Duration::from_secs(
         std::env::var("NIXLING_API_TIMEOUT_SECONDS")
             .ok()
@@ -5776,6 +5860,62 @@ fn dispatch_broker_gc(
     }
 }
 
+fn dispatch_broker_store_verify(
+    state: &ServerState,
+    request: public_wire::StoreVerifyRequest,
+) -> Result<Value, TypedError> {
+    let response = match dispatch_broker_request(
+        state,
+        BrokerRequest::StoreVerify(BrokerStoreVerifyRequest {
+            vm_id: VmId::new(&request.vm),
+            repair: request.repair,
+            tracing_span_id: None,
+        }),
+    ) {
+        Ok(BrokerResponse::StoreVerify(response)) => response,
+        Ok(BrokerResponse::Error(error)) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry ({}: {})",
+                error.kind, error.message
+            )),
+        },
+        Ok(other) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry (unexpected broker response {})",
+                broker_response_kind(&other)
+            )),
+        },
+        Err(error) => nixling_ipc::broker_wire::StoreVerifyResponse {
+            vm: request.vm,
+            status: nixling_ipc::broker_wire::StoreVerifyStatus::Failed,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some(format!(
+                "inspect audit_ref and broker logs, then retry ({})",
+                error.message()
+            )),
+        },
+    };
+    Ok(wire::store_verify_response(response))
+}
+
 fn dispatch_broker_keys_rotate(
     state: &ServerState,
     request: public_wire::KeysRotateRequest,
@@ -6733,6 +6873,7 @@ mod broker_dispatch_tests {
     use std::io::{self, IoSlice, Read, Write};
     use std::net::TcpListener;
     use std::os::fd::{AsRawFd, RawFd};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command};
@@ -6776,8 +6917,9 @@ mod broker_dispatch_tests {
         dispatch_broker_test, dispatch_broker_trust, dispatch_broker_vm_restart,
         dispatch_broker_vm_start, dispatch_broker_vm_stop, dispatch_broker_vm_stop_with_timeout,
         dispatch_request, redact_broker_dispatch_failure_for_launcher,
-        redact_broker_error_for_launcher, vm_start_node_mode, ArtifactPaths, DaemonConfig,
-        PeerIdentity, PeerRole, ServerState, VmStartNodeMode, VM_RUNNER_ROLE_ID,
+        redact_broker_error_for_launcher, resolve_store_view_intent_for_vm, vm_start_node_mode,
+        ArtifactPaths, DaemonConfig, PeerIdentity, PeerRole, ServerState, VmStartNodeMode,
+        VM_RUNNER_ROLE_ID,
     };
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -6943,11 +7085,12 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 4 },
+                "_manifest": { "manifestVersion": 5 },
                 "_observability": {
-                    "chExporter": { "listenPort": 9100 },
                     "enabled": false,
-                    "grafanaUrl": "http://127.0.0.1:3000",
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
                     "obsVsockCid": 7,
                     "obsVsockHostSocket": "/run/nixling/obs.sock",
                     "vmName": "obs"
@@ -7046,6 +7189,86 @@ mod broker_dispatch_tests {
         }
     }
 
+    #[test]
+    fn vm_start_store_sync_resolves_bare_vm_name() {
+        let root = test_daemon_state_dir("store-sync-resolves-bare-vm");
+        let artifacts = write_minimal_vm_start_bundle_artifacts(&root);
+        let bundle_dir = artifacts
+            .bundle_path
+            .parent()
+            .expect("bundle path parent")
+            .to_path_buf();
+        let host_path = bundle_dir.join("host.json");
+        fs::copy(host_fixture_path(), &host_path).expect("copy host fixture");
+        let closure_path = bundle_dir.join("closures/vm-a.json");
+        let fake_store = root.join("nix-store-mock");
+        fs::create_dir_all(&fake_store).expect("create fake store");
+        let toplevel = fake_store.join("aaaaaaaaaaaaaaaa-vm-a-system");
+        fs::create_dir_all(&toplevel).expect("create fake toplevel");
+        let db_dump = root.join("vm-a.db.dump");
+        fs::write(&db_dump, b"db").expect("write db dump");
+        write_json_file(
+            &closure_path,
+            &json!({
+                "schemaVersion": "v2",
+                "vm": "vm-a",
+                "toplevel": toplevel.display().to_string(),
+                "closurePaths": [toplevel.display().to_string()],
+                "dbDumpPath": db_dump.display().to_string(),
+                "declaredRunner": "/run/current-system/sw/bin/cloud-hypervisor",
+                "runnerParityPath": "/run/current-system/sw/bin/cloud-hypervisor",
+                "runnerParityOk": true,
+                "generation": {
+                    "hostGeneration": 7,
+                    "vmGeneration": "7",
+                    "sourceRevision": "test",
+                    "generatedAt": "2026-01-01T00:00:00Z"
+                }
+            }),
+        );
+        let mut bundle_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifacts.bundle_path).expect("read bundle"))
+                .expect("parse bundle");
+        bundle_json["schemaVersion"] = json!("v1");
+        bundle_json["hostPath"] = json!(host_path.display().to_string());
+        bundle_json["closures"] = json!([
+            { "vm": "vm-a", "path": "closures/vm-a.json" }
+        ]);
+        write_json_file(&artifacts.bundle_path, &bundle_json);
+        for path in [
+            &artifacts.bundle_path,
+            &artifacts.processes_path,
+            &bundle_dir.join("privileges.json"),
+            &host_path,
+            &closure_path,
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod test bundle artifact");
+        }
+        let resolver = nixling_core::bundle_resolver::BundleResolver::load_with_policy(
+            &artifacts.bundle_path,
+            &nixling_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+        )
+        .expect("load resolver with store-view closure");
+
+        let intent = resolve_store_view_intent_for_vm(&resolver, "vm-a")
+            .expect("bare VM name resolves store-view intent");
+        assert_eq!(
+            intent.intent_id,
+            nixling_core::bundle_resolver::intent_id_store_view("vm-a")
+        );
+        assert!(
+            resolver
+                .find_store_view_intent(&nixling_core::bundle_resolver::intent_id_store_view(
+                    "vm-a"
+                ))
+                .is_none(),
+            "passing a pre-wrapped store-view id double-wraps and must not be used"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[allow(dead_code)]
     fn write_custom_vm_start_bundle_artifacts(
         root: &Path,
@@ -7062,11 +7285,12 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 4 },
+                "_manifest": { "manifestVersion": 5 },
                 "_observability": {
-                    "chExporter": { "listenPort": 9100 },
                     "enabled": false,
-                    "grafanaUrl": "http://127.0.0.1:3000",
+                    "signozUrl": "http://127.0.0.1:8080",
+                    "signozOtlpGrpcPort": 4317,
+                    "signozOtlpHttpPort": 4318,
                     "obsVsockCid": 7,
                     "obsVsockHostSocket": "/run/nixling/obs.sock",
                     "vmName": "obs"

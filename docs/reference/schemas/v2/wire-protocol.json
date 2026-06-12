@@ -985,7 +985,7 @@
           }
         },
         {
-          "description": "Typed broker op that hardlink-farms a VM's resolved closure into `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the `current` symlink. Replaces the retired per-VM `nixling-<vm>-store-sync.service` bash oneshot. The daemon names only the opaque `bundle_closure_ref` + `vm_id` + expected `generation`; the broker re-derives every closure path from its trusted bundle copy.",
+          "description": "Typed broker op that hardlink-farms a VM's resolved closure into `/var/lib/nixling/vms/<vm>/store/` and atomically swaps the `current` symlink. Replaces the retired per-VM `nixling-<vm>-store-sync.service` bash oneshot. The daemon names only the opaque `bundle_closure_ref` + `vm_id` + expected `generation_token`; the broker re-derives every closure path from its trusted bundle copy and derives the collision-free on-disk `generation_id` itself.",
           "type": "object",
           "required": [
             "kind",
@@ -1000,6 +1000,25 @@
             },
             "payload": {
               "$ref": "#/definitions/StoreSyncRequest"
+            }
+          }
+        },
+        {
+          "description": "Operator-facing live-pool verification. The daemon names only the VM id; the broker resolves the trusted store-view intent and reads host-only `store-view/state` itself. The CLI never reads the store-view directly.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreVerify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyRequest2"
             }
           }
         },
@@ -1859,7 +1878,7 @@
           }
         },
         {
-          "description": "Typed response carrying the activated generation, the resolved hardlink-farm root, and the count of top-level closure paths populated. Used by the daemon to surface the swap result in audit + start traces.",
+          "description": "Typed response carrying the activated generation (collision-free `generation_id` plus the u32 `generation_token`), the resolved hardlink-farm root, and the count of top-level closure paths populated. Used by the daemon to surface the swap result in audit + start traces.",
           "type": "object",
           "required": [
             "kind",
@@ -1874,6 +1893,25 @@
             },
             "payload": {
               "$ref": "#/definitions/StoreSyncResponse"
+            }
+          }
+        },
+        {
+          "description": "Result of an explicit live-pool verification request.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreVerify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyResponse"
             }
           }
         },
@@ -3702,6 +3740,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "store verify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "migrate"
               ]
             },
@@ -3946,6 +4002,24 @@
             },
             "payload": {
               "$ref": "#/definitions/UsbipProbeResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "store verify"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/StoreVerifyResponse"
             }
           }
         },
@@ -4470,7 +4544,7 @@
           ]
         },
         {
-          "description": "OTel host-bridge sidecar (vsock relay folded out of `nixling-otel-host-bridge.service` into broker SpawnRunner). Receives pre-opened vsock fds for the obs VM and the alloy host-egress socket; no AF_VSOCK socket creation capability in the role profile. Broker invokes `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.",
+          "description": "OTel host-bridge sidecar (vsock relay folded out of `nixling-otel-host-bridge.service` into broker SpawnRunner). Receives pre-opened fds for the obs VM vsock socket and the nixling OTel host-egress socket; no AF_VSOCK socket creation capability in the role profile. Broker invokes `nixling_host::otel_host_bridge_argv::generate_otel_host_bridge_argv`.",
           "type": "string",
           "enum": [
             "otel-host-bridge"
@@ -4870,18 +4944,18 @@
       "additionalProperties": false
     },
     "StoreSyncRequest": {
-      "description": "Store-sync request. The broker resolves the closure intent row keyed by `vm_id` (canonical id form `\"store-view:vm:<vm>\"`) and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation` does not match the bundle's resolved generation. The generation is a content-derived stable equality token (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed.",
+      "description": "Store-sync request. The broker resolves the closure intent row from the plain per-VM `vm_id` and refuses the op if `bundle_closure_ref` does not match. The broker also refuses if the wire-supplied `generation_token` does not match the bundle's resolved generation. The token is a content-derived stable equality value (see `closures-json.nix`), not a monotonic counter: the daemon and broker both read it from the same trusted bundle, so a mismatch means a stale daemon is racing the activator and the op is refused fail-closed. It is a display/wire token only and is never used as the on-disk generation key — the broker derives the collision-free `generation_id` (full closure identity, ADR 0027) from its trusted closure copy.",
       "type": "object",
       "required": [
         "bundleClosureRef",
-        "generation",
+        "generationToken",
         "vmId"
       ],
       "properties": {
         "bundleClosureRef": {
           "type": "string"
         },
-        "generation": {
+        "generationToken": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -4900,21 +4974,31 @@
       "additionalProperties": false
     },
     "StoreSyncResponse": {
-      "description": "Store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store/`); the active generation directory is reachable via the `current` symlink.",
+      "description": "Store-sync response. Returned after the broker successfully populates the per-VM hardlink farm and swaps the `current` symlink atomically. The `hardlink_farm_path` is the per-VM farm root (i.e. `/var/lib/nixling/vms/<vm>/store-view/`); the active generation directory is reachable via the `current` symlink.\n\nADR 0027: `generation_id` is the collision-free on-disk layout key (a SHA-256 over the full ordered closure identity). `generation_token` is the truncated u32 display/wire value carried for backwards compatibility and operator-facing output; it is never used as the on-disk key.",
       "type": "object",
       "required": [
+        "cleanupDeferred",
         "closureCount",
-        "generation",
+        "generationId",
+        "generationToken",
         "hardlinkFarmPath",
+        "retainedGenerations",
+        "sweptCount",
         "vm"
       ],
       "properties": {
+        "cleanupDeferred": {
+          "type": "boolean"
+        },
         "closureCount": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
-        "generation": {
+        "generationId": {
+          "type": "string"
+        },
+        "generationToken": {
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -4922,11 +5006,144 @@
         "hardlinkFarmPath": {
           "type": "string"
         },
+        "retainedGenerations": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "sweptCount": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
         "vm": {
           "type": "string"
         }
       },
       "additionalProperties": false
+    },
+    "StoreVerifyRequest": {
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "repair": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyRequest2": {
+      "description": "Store-verify request. `repair=true` requests the broker's explicit repair path; builds without that path must fail closed instead of returning a success-shaped repair.",
+      "type": "object",
+      "required": [
+        "vmId"
+      ],
+      "properties": {
+        "repair": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyResponse": {
+      "description": "Store-verify response. Field names intentionally match the public CLI JSON envelope after serde's camelCase conversion on the private wire; the CLI re-renders the signed snake_case envelope.",
+      "type": "object",
+      "required": [
+        "checked",
+        "drifted",
+        "repaired",
+        "status",
+        "vm"
+      ],
+      "properties": {
+        "auditRef": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "drifted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "remediation": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repaired": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "status": {
+          "$ref": "#/definitions/StoreVerifyStatus"
+        },
+        "unknownReason": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StoreVerifyUnknownReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StoreVerifyStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "drift",
+        "unknown",
+        "repaired",
+        "failed",
+        "not_found"
+      ]
+    },
+    "StoreVerifyUnknownReason": {
+      "type": "string",
+      "enum": [
+        "marker_or_manifest_missing",
+        "marker_or_manifest_unreadable",
+        "older_host_generation",
+        "generation_identity_unavailable"
+      ]
     },
     "TapReadyResponse": {
       "type": "object",

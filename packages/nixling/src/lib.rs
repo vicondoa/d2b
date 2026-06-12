@@ -20,7 +20,10 @@ use nixling_core::{
     error::Error as CoreError, host::HostJson, host_check, processes::ProcessesJson,
 };
 use nixling_ipc::{
-    broker_wire::ExportBrokerAuditResponse,
+    broker_wire::{
+        ExportBrokerAuditResponse, StoreVerifyResponse as IpcStoreVerifyResponse,
+        StoreVerifyStatus as IpcStoreVerifyStatus,
+    },
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
@@ -127,6 +130,21 @@ pub struct StatusVmOutputV2 {
     pub api_ready: Option<ApiReadyStatusV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runner_parity: Option<RunnerParityOutputV2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_pool_integrity: Option<LivePoolIntegrityOutputV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LivePoolIntegrityOutputV1 {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_ref: Option<String>,
+    pub repair_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -413,6 +431,8 @@ enum NativeCommand {
     Rollback(RollbackArgs),
     /// Garbage-collect the per-VM /nix/store hardlink farm.
     Gc(GcArgs),
+    /// Store-view maintenance and verification.
+    Store(StoreArgs),
     /// Managed-key lifecycle (list / show / rotate).
     Keys(KeysArgs),
     /// Trust a VM's host key on first use (TOFU).
@@ -884,6 +904,29 @@ struct GcArgs {
     human: bool,
 }
 
+#[derive(Debug, Args)]
+struct StoreArgs {
+    #[command(subcommand)]
+    command: StoreCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum StoreCommand {
+    /// Verify a VM's hardlink-backed live store-view.
+    Verify(StoreVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct StoreVerifyArgs {
+    vm: String,
+    #[arg(long)]
+    repair: bool,
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+}
+
 // ---- keys + trust verbs ----
 
 #[derive(Debug, Args)]
@@ -1317,6 +1360,28 @@ struct UsbipProbeResponseFrame {
     entries: Vec<IpcUsbipProbeEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreVerifyResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    #[serde(flatten)]
+    payload: IpcStoreVerifyResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreVerifyOutputV2 {
+    pub vm: String,
+    pub status: IpcStoreVerifyStatus,
+    pub checked: u32,
+    pub drifted: u32,
+    pub repaired: u32,
+    pub unknown_reason: Option<String>,
+    pub audit_ref: Option<String>,
+    pub remediation: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 enum AuditSocketOutcome {
     Unreachable,
@@ -1334,6 +1399,12 @@ enum KeysSocketOutcome {
 enum UsbProbeSocketOutcome {
     Unavailable,
     Entries(Vec<IpcUsbipProbeEntry>),
+}
+
+#[derive(Debug, Clone)]
+enum StoreVerifySocketOutcome {
+    Unavailable,
+    Response(IpcStoreVerifyResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -1591,6 +1662,9 @@ fn dispatch(
         NativeCommand::Test(args) => cmd_test(context, args, original_args),
         NativeCommand::Rollback(args) => cmd_rollback(context, args, original_args),
         NativeCommand::Gc(args) => cmd_gc(context, args, original_args),
+        NativeCommand::Store(args) => match &args.command {
+            StoreCommand::Verify(args) => cmd_store_verify(context, args),
+        },
         NativeCommand::Keys(args) => match &args.command {
             KeysCommand::List(args) => cmd_keys_list(context, args, original_args),
             KeysCommand::Show(args) => cmd_keys_show(context, args, original_args),
@@ -3067,12 +3141,12 @@ fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFa
     let exit_code = emit_host_error(
         &host_error_envelope(
             &format!("vm '{vm}' is not declared in the loaded manifest"),
-            "not-yet-implemented",
+            "not-found",
             70,
             "Whether the VM name appears in `nixling.vms.<name>` in the active manifest.",
             "VM name unknown",
             "Run `nixling list` to see declared VMs, then re-run with a name from that list.",
-            "docs/reference/error-codes.md#not-yet-implemented",
+            "docs/reference/error-codes.md#not-found",
         ),
         json,
     )?;
@@ -3737,6 +3811,90 @@ fn cmd_gc(
     Ok(0)
 }
 
+fn cmd_store_verify(context: &Context, args: &StoreVerifyArgs) -> Result<i32, CliFailure> {
+    let json_mode = if args.human { false } else { args.json };
+    let manifest = context.load_manifest()?;
+    if !manifest.vms().iter().any(|vm| vm.name == args.vm) {
+        let response = IpcStoreVerifyResponse {
+            vm: args.vm.clone(),
+            status: IpcStoreVerifyStatus::NotFound,
+            checked: 0,
+            drifted: 0,
+            repaired: 0,
+            unknown_reason: None,
+            audit_ref: None,
+            remediation: Some("check the VM name, declaration, and authorization".to_owned()),
+        };
+        if json_mode {
+            let envelope = store_verify_cli_envelope(&response);
+            print_json(&envelope)?;
+        } else {
+            print_stdout(&render_store_verify_human(&response));
+        }
+        return Ok(70);
+    }
+    let response = match try_store_verify_via_socket(context, &args.vm, args.repair)? {
+        StoreVerifySocketOutcome::Response(response) => response,
+        StoreVerifySocketOutcome::Unavailable => {
+            return emit_host_error(&daemon_down_envelope("store verify"), json_mode);
+        }
+    };
+    if json_mode {
+        let envelope = store_verify_cli_envelope(&response);
+        print_json(&envelope)?;
+    } else {
+        print_stdout(&render_store_verify_human(&response));
+    }
+    Ok(store_verify_exit_code(response.status))
+}
+
+fn store_verify_exit_code(status: IpcStoreVerifyStatus) -> i32 {
+    match status {
+        IpcStoreVerifyStatus::Ok | IpcStoreVerifyStatus::Repaired => 0,
+        IpcStoreVerifyStatus::Drift | IpcStoreVerifyStatus::Unknown => 4,
+        IpcStoreVerifyStatus::NotFound => 70,
+        IpcStoreVerifyStatus::Failed => 78,
+    }
+}
+
+fn store_verify_cli_envelope(response: &IpcStoreVerifyResponse) -> StoreVerifyOutputV2 {
+    StoreVerifyOutputV2 {
+        vm: response.vm.clone(),
+        status: response.status,
+        checked: response.checked,
+        drifted: response.drifted,
+        repaired: response.repaired,
+        unknown_reason: response
+            .unknown_reason
+            .map(|reason| serde_json::to_value(reason).unwrap_or(Value::Null))
+            .and_then(|value| value.as_str().map(str::to_owned)),
+        audit_ref: response.audit_ref.clone(),
+        remediation: response.remediation.clone(),
+    }
+}
+
+fn render_store_verify_human(response: &IpcStoreVerifyResponse) -> String {
+    let status = serde_json::to_value(response.status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "failed".to_owned());
+    let mut out = format!(
+        "store verify {}: status={status} checked={} drifted={} repaired={}\n",
+        response.vm, response.checked, response.drifted, response.repaired
+    );
+    if let Some(reason) = response.unknown_reason {
+        let reason = serde_json::to_value(reason)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned());
+        let _ = writeln!(out, "unknown_reason={reason}");
+    }
+    if let Some(remediation) = &response.remediation {
+        let _ = writeln!(out, "remediation={remediation}");
+    }
+    out
+}
+
 // ---- native usb CLI ----
 
 fn usb_json_mode(json: bool, human: bool) -> bool {
@@ -3791,7 +3949,35 @@ fn usb_mutating_verb(
     let flags = require_mutation_flag(verb, dry_run, apply, json_mode)?;
     require_known_vm(context, vm, json_mode)?;
     if flags.apply {
-        let rc = dispatch_mutating_verb(
+        if verb == "usb attach" {
+            let guest_plan = usb_guest_attach_plan(context, vm, bus_id, json_mode)?;
+            let outcome = try_daemon_mutating_verb(
+                context,
+                request_type,
+                serde_json::json!({
+                    "vm": vm,
+                    "busId": bus_id,
+                }),
+                flags.dry_run,
+                flags.apply,
+                json_mode,
+            )?;
+            match outcome {
+                DaemonVerbOutcome::Applied { summary } => {
+                    run_usb_guest_attach(&guest_plan, json_mode)?;
+                    print_stdout(&format!("{summary}\n"));
+                    if !json_mode {
+                        print_stdout(&format!(
+                            "nixling usb attach --apply: imported busid '{}' inside vm '{}'\n",
+                            guest_plan.bus_id, guest_plan.vm_name
+                        ));
+                    }
+                    return Ok(0);
+                }
+                other => return emit_daemon_mutating_outcome(other, json_mode),
+            }
+        }
+        return dispatch_mutating_verb(
             context,
             request_type,
             serde_json::json!({
@@ -3801,11 +3987,7 @@ fn usb_mutating_verb(
             flags.dry_run,
             flags.apply,
             json_mode,
-        )?;
-        if rc == 0 && verb == "usb attach" {
-            usb_guest_attach(context, vm, bus_id, json_mode)?;
-        }
-        return Ok(rc);
+        );
     }
     let planned: Vec<&str> = if verb == "usb attach" {
         vec![
@@ -3814,6 +3996,7 @@ fn usb_mutating_verb(
             "SpawnRunner(sys-<env>-usbipd/backend)",
             "SpawnRunner(sys-<env>-usbipd/proxy)",
             "UsbipProxyReconcile",
+            "GuestUsbipAttach(ssh sudo -n usbip attach)",
         ]
     } else {
         vec!["UsbipUnbind", "UsbipProxyReconcile"]
@@ -3824,7 +4007,11 @@ fn usb_mutating_verb(
         "vm": vm,
         "busId": bus_id,
         "planned": planned,
-        "notes": "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, and reconcile plan without mutating host state.",
+        "notes": if verb == "usb attach" {
+            "USBIP dry-run reports the daemon → broker bind/lock, firewall, backend/proxy ensurement, reconcile plan, and guest import without mutating host or guest state."
+        } else {
+            "USBIP dry-run reports the daemon → broker unbind and reconcile plan without mutating host state."
+        },
     });
     if json_mode {
         let mut rendered = serde_json::to_string_pretty(&summary)
@@ -3837,11 +4024,28 @@ fn usb_mutating_verb(
         } else {
             "unbind"
         };
-        print_stdout(&format!(
-            "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
-        ));
+        if verb == "usb attach" {
+            print_stdout(&format!(
+                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach\n"
+            ));
+        } else {
+            print_stdout(&format!(
+                "nixling {verb} --dry-run: would {action} busid '{bus_id}' for vm '{vm}', and reconcile the USBIP proxy\n"
+            ));
+        }
     }
     Ok(0)
+}
+
+#[derive(Debug, Clone)]
+struct UsbGuestAttachPlan {
+    vm_name: String,
+    bus_id: String,
+    host: String,
+    user: String,
+    usbip_host: String,
+    key_path: PathBuf,
+    known_hosts: PathBuf,
 }
 
 fn usb_guest_attach_ssh_argv(
@@ -3875,57 +4079,208 @@ fn usb_guest_attach_ssh_argv(
     ]
 }
 
-fn usb_guest_attach(
+fn usb_attach_cli_failure(
+    kind: &str,
+    code: &str,
+    what_was_checked: &str,
+    observed_state: &str,
+    remediation: &str,
+    is_json: bool,
+) -> CliFailure {
+    let envelope = host_error_envelope(
+        kind,
+        code,
+        1,
+        what_was_checked,
+        observed_state,
+        remediation,
+        "docs/reference/components-usbip.md#common-gotchas--failure-modes",
+    );
+    let rendered_stderr = if is_json {
+        let mut rendered =
+            serde_json::to_string_pretty(&envelope).expect("serialize usb attach failure envelope");
+        rendered.push('\n');
+        rendered
+    } else {
+        format!(
+            "nixling: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}\n",
+            envelope.kind,
+            envelope.code,
+            envelope.exit_code,
+            envelope.what_was_checked,
+            envelope.observed_state,
+            envelope.remediation,
+            envelope.docs_anchor,
+        )
+    };
+    CliFailure {
+        exit_code: envelope.exit_code,
+        message: envelope.kind,
+        rendered_stderr: Some(rendered_stderr),
+    }
+}
+
+fn usb_resolve_bundle_key_path(
+    bundle_path: &Path,
+    vm_name: &str,
+    is_json: bool,
+) -> Result<Option<PathBuf>, CliFailure> {
+    match bundle_path.try_exists() {
+        Ok(true) => {
+            let bundle: Bundle = match read_json_file(bundle_path) {
+                Ok(bundle) => bundle,
+                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
+                Err(err) => {
+                    return Err(usb_attach_cli_failure(
+                        "nixling usb attach --apply failed to read the trusted bundle",
+                        "usb-guest-import-prerequisite",
+                        "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
+                        &format!("Failed to read bundle {}: {err}", bundle_path.display()),
+                        "Rebuild the host so the bundle is readable to the launcher, or ensure the framework-managed key exists at /var/lib/nixling/keys/<vm>_ed25519.",
+                        is_json,
+                    ));
+                }
+            };
+            Ok(Some(bundle.managed_keys.effective_key_path(vm_name)))
+        }
+        Ok(false) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(err) => Err(usb_attach_cli_failure(
+            "nixling usb attach --apply failed to inspect the trusted bundle",
+            "usb-guest-import-prerequisite",
+            "Whether the CLI can resolve the framework-managed VM SSH key before mutating host USBIP state.",
+            &format!("Failed to inspect bundle {}: {err}", bundle_path.display()),
+            "Fix the bundle path or filesystem permissions, then retry `nixling usb attach`.",
+            is_json,
+        )),
+    }
+}
+
+fn usb_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), CliFailure> {
+    match key_path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(usb_attach_cli_failure(
+            "nixling usb attach --apply cannot find the VM SSH key",
+            "usb-guest-import-prerequisite",
+            "Whether the framework-managed VM SSH key exists before mutating host USBIP state.",
+            &format!("SSH key not found at {}", key_path.display()),
+            "Rebuild the host or run `nixling keys rotate <vm>` for the target VM, then retry `nixling usb attach`.",
+            is_json,
+        )),
+        Err(err) => {
+            let remediation = if err.kind() == io::ErrorKind::PermissionDenied {
+                "Verify your shell session is a member of the `nixling` group (`id -nG | tr ' ' '\\n' | grep -x nixling`) and that /var/lib/nixling grants launcher traversal, then retry `nixling usb attach`."
+            } else {
+                "Fix the SSH key path or filesystem error, then retry `nixling usb attach`."
+            };
+            Err(usb_attach_cli_failure(
+                "nixling usb attach --apply cannot access the VM SSH key",
+                "usb-guest-import-prerequisite",
+                "Whether the framework-managed VM SSH key is accessible before mutating host USBIP state.",
+                &format!("Failed to inspect SSH key {}: {err}", key_path.display()),
+                remediation,
+                is_json,
+            ))
+        }
+    }
+}
+
+fn usb_guest_attach_plan(
     context: &Context,
     vm_name: &str,
     bus_id: &str,
     is_json: bool,
-) -> Result<(), CliFailure> {
+) -> Result<UsbGuestAttachPlan, CliFailure> {
     let manifest = context.load_manifest()?;
     let vm = manifest.entries.get(vm_name).ok_or_else(|| {
-        CliFailure::new(1, format!("usb attach: unknown vm '{vm_name}' in manifest"))
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM is not in the manifest",
+            "usage",
+            "Whether the requested VM exists in the active manifest before mutating host USBIP state.",
+            &format!("Unknown VM '{vm_name}' in manifest"),
+            "Run `nixling list` and retry with a declared VM name.",
+            is_json,
+        )
     })?;
     let host = vm.static_ip.clone().ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!("usb attach: vm '{vm_name}' has no static_ip in manifest"),
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no static IP",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no staticIp in the manifest"),
+            "Start from a VM that belongs to a nixling env and has a generated static IP, then retry `nixling usb attach`.",
+            is_json,
         )
     })?;
     let user = vm.ssh_user.clone().ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!("usb attach: vm '{vm_name}' has no ssh_user in manifest"),
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no SSH user",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has guest SSH metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no sshUser in the manifest"),
+            "Set `nixling.vms.<vm>.ssh.user`, rebuild the host, and retry `nixling usb attach`.",
+            is_json,
         )
     })?;
     let usbip_host = vm.usbipd_host_ip.clone().ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!("usb attach: vm '{vm_name}' has no usbipdHostIp in manifest"),
+        usb_attach_cli_failure(
+            "nixling usb attach --apply target VM has no USBIP proxy IP",
+            "usb-guest-import-prerequisite",
+            "Whether the target VM has per-env USBIP proxy metadata before mutating host USBIP state.",
+            &format!("VM '{vm_name}' has no usbipdHostIp in the manifest"),
+            "Rebuild the host with a current nixling module so the manifest includes usbipdHostIp, then retry `nixling usb attach`.",
+            is_json,
         )
     })?;
-    let key_path = konsole_resolve_bundle_key_path(&context.bundle_path, vm_name, is_json)?
+    let key_path = usb_resolve_bundle_key_path(&context.bundle_path, vm_name, is_json)?
         .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{vm_name}_ed25519")));
-    konsole_validate_key_exists(&key_path, is_json)?;
+    usb_validate_key_exists(&key_path, is_json)?;
 
-    let remote = format!("{user}@{host}");
-    let known_hosts = PathBuf::from("/var/lib/nixling/known_hosts.nixling");
-    let argv = usb_guest_attach_ssh_argv(&key_path, &known_hosts, &remote, &usbip_host, bus_id);
+    Ok(UsbGuestAttachPlan {
+        vm_name: vm_name.to_owned(),
+        bus_id: bus_id.to_owned(),
+        host,
+        user,
+        usbip_host,
+        key_path,
+        known_hosts: PathBuf::from("/var/lib/nixling/known_hosts.nixling"),
+    })
+}
+
+fn run_usb_guest_attach(plan: &UsbGuestAttachPlan, is_json: bool) -> Result<(), CliFailure> {
+    let remote = format!("{}@{}", plan.user, plan.host);
+    let argv = usb_guest_attach_ssh_argv(
+        &plan.key_path,
+        &plan.known_hosts,
+        &remote,
+        &plan.usbip_host,
+        &plan.bus_id,
+    );
     let status = Command::new(&argv[0])
         .args(&argv[1..])
         .status()
-        .map_err(|err| CliFailure::new(1, format!("usb attach: ssh guest import failed: {err}")))?;
+        .map_err(|err| {
+            usb_attach_cli_failure(
+                "nixling usb attach --apply failed to SSH into the guest",
+                "usb-guest-import-failed",
+                "Guest-side USBIP import after the host-side daemon → broker attach succeeded.",
+                &format!("SSH guest import failed for vm '{}': {err}", plan.vm_name),
+                &format!("The host-side USBIP attach may already be active. Check VM reachability and guest sudo/usbip availability, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+                is_json,
+            )
+        })?;
     if !status.success() {
-        return Err(CliFailure::new(
-            1,
-            format!(
-                "usb attach: guest import in vm '{vm_name}' exited {}",
+        return Err(usb_attach_cli_failure(
+            "nixling usb attach --apply guest import command failed",
+            "usb-guest-import-failed",
+            "Guest-side `sudo -n usbip attach` after the host-side daemon → broker attach succeeded.",
+            &format!(
+                "Guest import in vm '{}' exited {}",
+                plan.vm_name,
                 status.code().unwrap_or(-1)
             ),
-        ));
-    }
-    if !is_json {
-        print_stdout(&format!(
-            "nixling usb attach --apply: imported busid '{bus_id}' inside vm '{vm_name}'\n"
+            &format!("The host-side USBIP attach may already be active. Check guest sudo permissions and `usbip`/`vhci_hcd`, then run `nixling usb detach {} {} --apply` before retrying if needed.", plan.vm_name, plan.bus_id),
+            is_json,
         ));
     }
     Ok(())
@@ -4466,6 +4821,178 @@ fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyS
     }
 }
 
+fn live_pool_integrity_unknown(reason: &str, remediation: String) -> LivePoolIntegrityOutputV1 {
+    LivePoolIntegrityOutputV1 {
+        status: "unknown".to_owned(),
+        unknown_reason: Some(reason.to_owned()),
+        audit_ref: None,
+        repair_attempted: false,
+        remediation: Some(remediation),
+    }
+}
+
+fn live_pool_integrity_suspect(
+    repair_attempted: bool,
+    audit_ref: Option<String>,
+    remediation: String,
+) -> LivePoolIntegrityOutputV1 {
+    LivePoolIntegrityOutputV1 {
+        status: "suspect".to_owned(),
+        unknown_reason: None,
+        audit_ref,
+        repair_attempted,
+        remediation: Some(remediation),
+    }
+}
+
+fn marker_status_for_integrity(store_root: &Path, vm: &str) -> Result<(), &'static str> {
+    let marker = store_root
+        .join("live")
+        .join(format!(".nixling-marker-{vm}"));
+    match std::fs::symlink_metadata(&marker) {
+        Ok(meta) if meta.is_file() && meta.len() == 0 => Ok(()),
+        Ok(_) => Err("suspect"),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err("marker_or_manifest_missing"),
+        Err(_) => Err("marker_or_manifest_unreadable"),
+    }
+}
+
+fn read_live_pool_integrity(
+    context: &Context,
+    vm: &ManifestVm,
+) -> Option<LivePoolIntegrityOutputV1> {
+    let store_root = vm_state_dir(context, vm).join("store-view");
+    let state_dir = store_root.join("state");
+    let generation_id = match std::fs::read_link(state_dir.join("current")) {
+        Ok(target) => target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "generation_identity_unavailable",
+                "restore state/current or activate a new generation, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let Some(generation_id) = generation_id else {
+        let vm_unknown = state_dir.join("integrity-unknown.json");
+        if let Ok(raw) = std::fs::read_to_string(&vm_unknown) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                if value.get("state").and_then(Value::as_str) == Some("unknown") {
+                    let reason = value
+                        .get("unknown_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("generation_identity_unavailable");
+                    return Some(live_pool_integrity_unknown(
+                        reason,
+                        "restore state/current or activate a new generation, then rerun verify"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        return Some(live_pool_integrity_unknown(
+            "generation_identity_unavailable",
+            "restore state/current or activate a new generation, then rerun verify".to_owned(),
+        ));
+    };
+
+    let integrity_path = state_dir
+        .join("generations")
+        .join(&generation_id)
+        .join("integrity.json");
+    let raw = match std::fs::read_to_string(&integrity_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_missing",
+                format!(
+                    "run `nixling store verify {}` to establish live-pool integrity",
+                    vm.name
+                ),
+            ));
+        }
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_unreadable",
+                "fix permissions or storage errors, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let value: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return Some(live_pool_integrity_unknown(
+                "marker_or_manifest_unreadable",
+                "fix permissions or storage errors, then rerun verify".to_owned(),
+            ));
+        }
+    };
+    let audit_ref = value
+        .get("audit_ref")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let repair_attempted = value
+        .get("repair_attempted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match value.get("state").and_then(Value::as_str) {
+        Some("ok") => match marker_status_for_integrity(&store_root, &vm.name) {
+            Ok(()) => Some(LivePoolIntegrityOutputV1 {
+                status: "ok".to_owned(),
+                unknown_reason: None,
+                audit_ref,
+                repair_attempted,
+                remediation: None,
+            }),
+            Err("suspect") => Some(live_pool_integrity_suspect(
+                repair_attempted,
+                audit_ref,
+                format!("run `nixling store verify {} --repair`", vm.name),
+            )),
+            Err(reason) => Some(live_pool_integrity_unknown(
+                reason,
+                format!(
+                    "run `nixling store verify {}` to re-establish live-pool integrity",
+                    vm.name
+                ),
+            )),
+        },
+        Some("suspect") => {
+            let remediation = if repair_attempted {
+                if audit_ref.is_some() {
+                    "repair already attempted; inspect audit_ref and broker logs".to_owned()
+                } else {
+                    "repair already attempted; inspect broker logs".to_owned()
+                }
+            } else {
+                format!("run `nixling store verify {} --repair`", vm.name)
+            };
+            Some(live_pool_integrity_suspect(
+                repair_attempted,
+                audit_ref,
+                remediation,
+            ))
+        }
+        Some("unknown") => {
+            let reason = value
+                .get("unknown_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("marker_or_manifest_unreadable");
+            Some(live_pool_integrity_unknown(
+                reason,
+                format!("run `nixling store verify {}`", vm.name),
+            ))
+        }
+        _ => Some(live_pool_integrity_unknown(
+            "marker_or_manifest_unreadable",
+            "fix permissions or storage errors, then rerun verify".to_owned(),
+        )),
+    }
+}
+
 fn build_vm_status_output(
     context: &Context,
     vm: &ManifestVm,
@@ -4517,6 +5044,7 @@ fn build_vm_status_output(
         readiness,
         api_ready: read_vm_api_ready(&context.daemon_state_dir, &vm.name),
         runner_parity,
+        live_pool_integrity: read_live_pool_integrity(context, vm),
     }
 }
 
@@ -4667,6 +5195,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::Audio => "audio",
         nixling_core::processes::ProcessRole::CloudHypervisorRunner => "cloud-hypervisor-runner",
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
+        nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
         nixling_core::processes::ProcessRole::Usbip => "usbip",
         nixling_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
@@ -4797,6 +5326,15 @@ fn render_status_vm_human(
             },
             runner_parity.runner_parity_path,
         );
+    }
+    if let Some(integrity) = &output.live_pool_integrity {
+        let _ = writeln!(text, "live-pool integrity: {}", integrity.status);
+        if let Some(reason) = &integrity.unknown_reason {
+            let _ = writeln!(text, "live-pool unknown reason: {reason}");
+        }
+        if let Some(remediation) = &integrity.remediation {
+            let _ = writeln!(text, "live-pool remediation: {remediation}");
+        }
     }
     text.push_str("\n=== Bridge health ===\n");
     text.push_str("BRIDGE               STATE      ADMIN   EXPECTED     RESULT\n");
@@ -5601,21 +6139,7 @@ fn broker_error_envelope(
     )
 }
 
-/// Top-level dispatcher for mutating verbs. Runs the native daemon
-/// path; failure modes surface as typed envelopes (daemon-down
-/// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
-/// Rust CLI dispatching through nixlingd → broker is the only
-/// operator path — no bash fallback.
-fn dispatch_mutating_verb(
-    context: &Context,
-    request_type: &str,
-    extra_fields: serde_json::Value,
-    dry_run: bool,
-    apply: bool,
-    json: bool,
-) -> Result<i32, CliFailure> {
-    let outcome =
-        try_daemon_mutating_verb(context, request_type, extra_fields, dry_run, apply, json)?;
+fn emit_daemon_mutating_outcome(outcome: DaemonVerbOutcome, json: bool) -> Result<i32, CliFailure> {
     match outcome {
         DaemonVerbOutcome::Applied { summary } => {
             print_stdout(&format!("{summary}\n"));
@@ -5694,6 +6218,24 @@ fn dispatch_mutating_verb(
             )
         }
     }
+}
+
+/// Top-level dispatcher for mutating verbs. Runs the native daemon
+/// path; failure modes surface as typed envelopes (daemon-down
+/// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
+/// Rust CLI dispatching through nixlingd → broker is the only
+/// operator path — no bash fallback.
+fn dispatch_mutating_verb(
+    context: &Context,
+    request_type: &str,
+    extra_fields: serde_json::Value,
+    dry_run: bool,
+    apply: bool,
+    json: bool,
+) -> Result<i32, CliFailure> {
+    let outcome =
+        try_daemon_mutating_verb(context, request_type, extra_fields, dry_run, apply, json)?;
+    emit_daemon_mutating_outcome(outcome, json)
 }
 
 fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
@@ -5790,6 +6332,29 @@ fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, 
         }
         PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
             Ok(UsbProbeSocketOutcome::Unavailable)
+        }
+    }
+}
+
+fn try_store_verify_via_socket(
+    context: &Context,
+    vm: &str,
+    repair: bool,
+) -> Result<StoreVerifySocketOutcome, CliFailure> {
+    let request = encode_type_tagged_message(
+        "storeVerify",
+        &nixling_ipc::public_wire::StoreVerifyRequest {
+            vm: vm.to_owned(),
+            repair,
+        },
+        "storeVerify request",
+    )?;
+    match try_public_socket_request(context, &request, "storeVerify")? {
+        PublicSocketOutcome::Reply(response) => {
+            parse_store_verify_reply(&response).map(StoreVerifySocketOutcome::Response)
+        }
+        PublicSocketOutcome::Unavailable | PublicSocketOutcome::Unsupported => {
+            Ok(StoreVerifySocketOutcome::Unavailable)
         }
     }
 }
@@ -5907,6 +6472,22 @@ fn parse_usb_probe_reply(bytes: &[u8]) -> Result<Vec<IpcUsbipProbeEntry>, CliFai
     }
 }
 
+fn parse_store_verify_reply(bytes: &[u8]) -> Result<IpcStoreVerifyResponse, CliFailure> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|err| CliFailure::new(1, format!("failed to parse storeVerify reply: {err}")))?;
+    match value.get("type").and_then(Value::as_str) {
+        Some("storeVerifyResponse") => serde_json::from_value::<StoreVerifyResponseFrame>(value)
+            .map(|frame| frame.payload)
+            .map_err(|err| {
+                CliFailure::new(1, format!("failed to decode storeVerify reply: {err}"))
+            }),
+        _ => Err(CliFailure::new(
+            1,
+            "daemon returned an unexpected reply to storeVerify".to_owned(),
+        )),
+    }
+}
+
 struct SeqpacketUnixSocket {
     fd: OwnedFd,
 }
@@ -6006,7 +6587,7 @@ mod host_install_dispatch_tests {
         broker_error_envelope, cmd_host_install, cmd_vm_start, daemon_supported_features,
         encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, ApiReadySimple,
         ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag,
-        SockType, UnixAddr, VmStartArgs, MAX_FRAME_BYTES,
+        SockType, UnixAddr, UsbAttachArgs, VmStartArgs, MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -6175,6 +6756,30 @@ mod host_install_dispatch_tests {
             serde_json::to_vec(&manifest).expect("serialize manifest"),
         )
         .expect("write manifest");
+    }
+
+    fn write_usb_attach_manifest(path: &PathBuf, vm: &str) {
+        let manifest = json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "usbipYubikey": true,
+                "staticIp": "10.20.0.10",
+                "usbipdHostIp": "192.0.2.1",
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize usb attach manifest"),
+        )
+        .expect("write usb attach manifest");
     }
 
     fn run_vm_start_with_mock_daemon(
@@ -6551,6 +7156,47 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn usb_attach_prevalidates_guest_import_before_daemon_dispatch() {
+        let manifest_path = test_socket_path("usb-attach-prevalidate", ".manifest.json");
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test manifest dir");
+        }
+        let vm = "unit-usb-missing-key";
+        write_usb_attach_manifest(&manifest_path, vm);
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: test_socket_path("usb-attach-prevalidate", ".sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let args = UsbAttachArgs {
+            vm: vm.to_owned(),
+            busid: "1-2".to_owned(),
+            dry_run: false,
+            apply: true,
+            json: true,
+            human: false,
+        };
+
+        let err = super::cmd_usb_attach(&context, &args)
+            .expect_err("missing key must fail before daemon dispatch");
+        assert_eq!(err.exit_code, 1);
+        let rendered = err.rendered_stderr.as_deref().unwrap_or("");
+        assert!(rendered.contains("nixling usb attach --apply"));
+        assert!(!rendered.contains("vm konsole"));
+        assert!(!rendered.contains("--key"));
+        assert!(!rendered.contains("daemon-down"));
+
+        let _ = std::fs::remove_file(&manifest_path);
+    }
+
+    #[test]
     fn start_apply_no_wait_api_exits_zero_on_process_alive() {
         let _env_lock = ENV_MUTEX.lock().expect("lock env mutex");
         let args = VmStartArgs {
@@ -6659,6 +7305,69 @@ mod host_install_dispatch_tests {
     }
 
     #[test]
+    fn vm_status_reports_live_pool_integrity_ok() {
+        let counter = TEST_SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join(format!(
+                "vm-status-live-pool-{}-{counter}",
+                std::process::id()
+            ));
+        let manifest_path = root.join("vms.json");
+        std::fs::create_dir_all(&root).expect("create status root");
+        write_test_manifest(&manifest_path, "vm-a");
+        let vm_root = root.join("vm-a");
+        let store_view = vm_root.join("store-view");
+        let generation_id = "g-test";
+        std::fs::create_dir_all(store_view.join("state/generations").join(generation_id))
+            .expect("create state generation");
+        std::fs::create_dir_all(store_view.join("live")).expect("create live");
+        std::os::unix::fs::symlink(
+            format!("generations/{generation_id}"),
+            store_view.join("state/current"),
+        )
+        .expect("state current symlink");
+        std::fs::write(store_view.join("live/.nixling-marker-vm-a"), b"")
+            .expect("write zero marker");
+        std::fs::write(
+            store_view
+                .join("state/generations")
+                .join(generation_id)
+                .join("integrity.json"),
+            br#"{"generation_id":"g-test","state":"ok","repair_attempted":false}"#,
+        )
+        .expect("write integrity");
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: manifest_path.with_extension("bundle.json"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: Some(root.clone()),
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: root.join("daemon-state"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let manifest_bytes = std::fs::read(&manifest_path).expect("read manifest");
+        let manifest: std::collections::BTreeMap<String, super::ManifestVm> =
+            serde_json::from_slice(&manifest_bytes).expect("parse manifest");
+        let vm = manifest.get("vm-a").expect("vm-a in manifest");
+        let output = super::build_vm_status_output(&context, vm, None);
+
+        let integrity = output
+            .live_pool_integrity
+            .expect("live pool integrity is reported");
+        assert_eq!(integrity.status, "ok");
+        assert_eq!(integrity.remediation, None);
+        let value = serde_json::to_value(integrity).expect("serialize integrity");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("ok"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn status_human_redacts_ssh_target_details() {
         let output = super::StatusVmOutputV2 {
             name: "vm-a".to_owned(),
@@ -6680,6 +7389,7 @@ mod host_install_dispatch_tests {
             readiness: Vec::new(),
             api_ready: None,
             runner_parity: None,
+            live_pool_integrity: None,
         };
         let manifest_vm = super::ManifestVm {
             name: "vm-a".to_owned(),

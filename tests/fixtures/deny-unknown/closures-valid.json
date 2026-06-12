@@ -2,6 +2,7 @@
   "closurePaths": [
     "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-corp-vm"
   ],
+  "dbDumpPath": "/nix/store/dddddddddddddddddddddddddddddddd-corp-vm-db-dump",
   "declaredRunner": "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-cloud-hypervisor",
   "generation": {
     "generatedAt": null,

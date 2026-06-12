@@ -171,10 +171,9 @@ let
       obsVsockCid = 1000;
       obsVsockHostSocket =
         nl.guestControlVsockHostSocket "${config.nixling.store.stateDir}/${obsCfg.vmName}";
-      grafanaUrl = "http://${obsCfg.grafana.listenAddress}:${toString obsCfg.grafana.listenPort}";
-      chExporter = {
-        listenPort = obsCfg.ch.exporter.listenPort;
-      };
+      signozUrl = "http://${obsCfg.signoz.listenAddress}:${toString obsCfg.signoz.listenPort}";
+      signozOtlpGrpcPort = obsCfg.signoz.otlpGrpcPort;
+      signozOtlpHttpPort = obsCfg.signoz.otlpHttpPort;
     };
   };
 
@@ -458,7 +457,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 4;
+    default = 5;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -492,6 +491,16 @@ in
           broker / daemon refuse any other value with a
           `manifest-version-mismatch` typed error (no legacy
           compatibility window).
+        * 5 — combines two independent contract changes that each
+          landed as a `4` on separate branches: the base Cloud
+          Hypervisor vsock semantics above, and the native SigNoz
+          observability backend, which replaces the top-level
+          `_observability` Grafana / Cloud Hypervisor exporter metadata
+          (`grafanaUrl`, `chExporter`) with SigNoz UI and
+          collector-ingress metadata (`signozUrl`, `signozOtlpGrpcPort`,
+          `signozOtlpHttpPort`). The vsock transport contract is
+          unchanged. Pinned by
+          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
     '';
   };
 

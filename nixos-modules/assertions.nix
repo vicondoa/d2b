@@ -261,7 +261,7 @@ let
       }
       {
         assertion = !(vm.enable && vm.observability.enable && !obsCfg.enable);
-        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs-stack telemetry sink).";
+        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs telemetry sink).";
       }
       {
         assertion = !(vm.enable && vm.audit.enable && !vm.observability.enable);

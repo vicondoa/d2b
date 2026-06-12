@@ -25,6 +25,7 @@ bridge-health table.
 | `declaredRoles` | array of strings | Process-DAG roles declared for the VM in the trusted bundle. Video-enabled VMs include `video`; graphics VMs without `graphics.videoSidecar` omit it. | Stable wire contract. |
 | `readiness` | array of strings | Readiness predicates rendered as strings. Video-enabled VMs include `unix-socket-listening:/run/nixling-video/<vm>/video.sock`; graphics VMs with video disabled omit video readiness because the video sidecar is a default-off capability. | Stable wire contract. |
 | `runtime` | string | Daemon runtime state label. | Stable wire contract. |
+| `livePoolIntegrity` | object or omitted | Host-side integrity state for the ADR 0027 `store-view/live` pool: `status` is `ok`, `suspect`, or `unknown`; `unknownReason`, `auditRef`, `repairAttempted`, and `remediation` provide operator guidance when present. | Stable additive field. |
 
 ## Ordering and null handling
 
@@ -42,7 +43,7 @@ bridge-health table.
 The top-level keys and service-subkeys are frozen within this schema
 revision. Guest-control rollout will add a negotiated guest-control status
 field in the release that implements guest-control; until that schema revision lands,
-operators discover old-generation guest-control state through the ADR 0026
+operators discover old-generation guest-control state through the ADR 0028
 compatibility surfaces rather than an ad hoc extra key.
 
 ## Human example
@@ -87,6 +88,10 @@ declared roles: host-reconcile, store-virtiofs-preflight, gpu
     "store-virtiofs-preflight",
     "gpu"
   ],
-  "readiness": []
+  "readiness": [],
+  "livePoolIntegrity": {
+    "status": "ok",
+    "repairAttempted": false
+  }
 }
 ```

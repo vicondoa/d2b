@@ -656,6 +656,58 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(store)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_nixling__subcmd__store_commands" \
+"*::: :->store" \
+&& ret=0
+
+    case $state in
+    (store)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-store-command-$line[1]:"
+        case $line[1] in
+            (verify)
+_arguments "${_arguments_options[@]}" : \
+'--repair[]' \
+'(--human)--json[]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__store__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-store-help-command-$line[1]:"
+        case $line[1] in
+            (verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (keys)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1105,6 +1157,26 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(store)
+_arguments "${_arguments_options[@]}" : \
+":: :_nixling__subcmd__help__subcmd__store_commands" \
+"*::: :->store" \
+&& ret=0
+
+    case $state in
+    (store)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:nixling-help-store-command-$line[1]:"
+        case $line[1] in
+            (verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (keys)
 _arguments "${_arguments_options[@]}" : \
 ":: :_nixling__subcmd__help__subcmd__keys_commands" \
@@ -1216,6 +1288,7 @@ _nixling_commands() {
 'test:Activate a per-VM closure with rollback on reboot' \
 'rollback:Roll a VM back to its previous generation' \
 'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
+'store:Store-view maintenance and verification' \
 'keys:Managed-key lifecycle (list / show / rotate)' \
 'trust:Trust a VM'\''s host key on first use (TOFU)' \
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
@@ -1459,6 +1532,7 @@ _nixling__subcmd__help_commands() {
 'test:Activate a per-VM closure with rollback on reboot' \
 'rollback:Roll a VM back to its previous generation' \
 'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
+'store:Store-view maintenance and verification' \
 'keys:Managed-key lifecycle (list / show / rotate)' \
 'trust:Trust a VM'\''s host key on first use (TOFU)' \
 'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
@@ -1687,6 +1761,18 @@ _nixling__subcmd__help__subcmd__rotate-known-host_commands() {
 _nixling__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'nixling help status commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__store_commands] )) ||
+_nixling__subcmd__help__subcmd__store_commands() {
+    local commands; commands=(
+'verify:Verify a VM'\''s hardlink-backed live store-view' \
+    )
+    _describe -t commands 'nixling help store commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__store__subcmd__verify_commands] )) ||
+_nixling__subcmd__help__subcmd__store__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help store verify commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__switch_commands] )) ||
 _nixling__subcmd__help__subcmd__switch_commands() {
@@ -1961,6 +2047,37 @@ _nixling__subcmd__rotate-known-host_commands() {
 _nixling__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'nixling status commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__store_commands] )) ||
+_nixling__subcmd__store_commands() {
+    local commands; commands=(
+'verify:Verify a VM'\''s hardlink-backed live store-view' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling store commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__store__subcmd__help_commands] )) ||
+_nixling__subcmd__store__subcmd__help_commands() {
+    local commands; commands=(
+'verify:Verify a VM'\''s hardlink-backed live store-view' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'nixling store help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__store__subcmd__help__subcmd__help_commands] )) ||
+_nixling__subcmd__store__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling store help help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__store__subcmd__help__subcmd__verify_commands] )) ||
+_nixling__subcmd__store__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling store help verify commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__store__subcmd__verify_commands] )) ||
+_nixling__subcmd__store__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling store verify commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__switch_commands] )) ||
 _nixling__subcmd__switch_commands() {

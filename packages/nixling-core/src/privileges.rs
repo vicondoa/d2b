@@ -457,6 +457,16 @@ pub const PUBLIC_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
         AuditMode::Yes,
     ),
     row(
+        "store verify",
+        "store/VM",
+        "per-VM",
+        &["nixling-admin"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
         "keys list",
         "key",
         "per-VM",
@@ -1111,6 +1121,16 @@ pub const BROKER_OPERATION_AUTHZ: &[OperationAuthzRow] = &[
     ),
     row(
         "StoreSync",
+        "store",
+        "per-VM",
+        &["nixlingd"],
+        true,
+        SecretAccess::None,
+        BrokerRequirement::Yes,
+        AuditMode::Yes,
+    ),
+    row(
+        "StoreVerify",
         "store",
         "per-VM",
         &["nixlingd"],

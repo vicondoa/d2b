@@ -1,7 +1,7 @@
 //! Guest-control ttRPC/protobuf schema DTOs.
 //!
 //! These Rust DTOs are the schema oracle for the guest-control protobuf
-//! surface selected by ADR 0026. They intentionally model the message
+//! surface selected by ADR 0028. They intentionally model the message
 //! contract, not a JSON transport: implementations generate protobuf/ttRPC
 //! bindings from the matching `.proto` surface and keep these DTOs aligned
 //! through the schema drift gate.

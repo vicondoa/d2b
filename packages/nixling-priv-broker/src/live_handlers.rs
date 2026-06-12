@@ -1779,6 +1779,85 @@ fn env_value<'a>(plan: &'a SpawnRunnerPlan, key: &str) -> Option<&'a str> {
         .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
 }
 
+fn ch_vsock_connect_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+    plan.argv.iter().find_map(|arg| {
+        if !arg.contains("nixling-ch-vsock-connect") {
+            return None;
+        }
+        let exec = arg
+            .strip_prefix("EXEC:")
+            .unwrap_or(arg)
+            .trim_matches('"');
+        let fields: Vec<&str> = exec.split_whitespace().collect();
+        let helper_index = fields.iter().position(|field| {
+            field
+                .trim_matches('"')
+                .ends_with("/nixling-ch-vsock-connect")
+                || field.trim_matches('"') == "nixling-ch-vsock-connect"
+        })?;
+        let socket = fields.get(helper_index + 1)?.trim_matches('"');
+        socket.starts_with('/').then(|| PathBuf::from(socket))
+    })
+}
+
+fn grant_obs_vsock_acl_once(uid: u32, socket: &Path) -> Result<bool, String> {
+    if !socket.exists() {
+        return Ok(false);
+    }
+    let Some(parent) = socket.parent() else {
+        return Err("socket path has no parent".to_owned());
+    };
+    setfacl_fd_safe(parent, &format!("u:{uid}:--x"), AclPathKind::Directory)?;
+    setfacl_fd_safe(socket, &format!("u:{uid}:rw"), AclPathKind::Socket)?;
+    Ok(socket.exists())
+}
+
+fn spawn_obs_vsock_acl_retry(uid: u32, socket: PathBuf) {
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            match grant_obs_vsock_acl_once(uid, &socket) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::debug!(
+                        path = %socket.display(),
+                        error = %err,
+                        "obs-vsock socket ACL refresh not ready yet",
+                    );
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        tracing::warn!(
+            path = %socket.display(),
+            "obs-vsock socket ACL refresh timed out",
+        );
+    });
+}
+
+fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    if !matches!(
+        plan.seccomp_policy_ref.as_deref(),
+        Some("w1-vsock-relay" | "w1-otel-host-bridge")
+    ) {
+        return Ok(());
+    }
+    let Some(socket) = ch_vsock_connect_socket_arg(plan) else {
+        return Ok(());
+    };
+    let uid = plan.uid;
+    match grant_obs_vsock_acl_once(uid, &socket) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            spawn_obs_vsock_acl_retry(uid, socket);
+            Ok(())
+        }
+        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+            detail: format!("refresh obs-vsock ACL for runner uid {uid}: {detail}"),
+        }),
+    }
+}
+
 pub(crate) fn live_grant_verified_device_acl(
     path: &Path,
     uid: u32,
@@ -1931,6 +2010,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
             }
         }
     }
+    refresh_obs_vsock_acl(plan)?;
 
     Ok(())
 }
@@ -2227,8 +2307,9 @@ mod tests {
             vm: "alpha".to_owned(),
             generation: 42,
             hardlink_farm_path: root.join("store-view"),
-            target_view_path: root.join("store-view/generations/42/alpha-system"),
+            target_view_path: root.join("store-view/live/alpha-system"),
             closure_paths: vec![source_view],
+            db_dump_path: root.join("db.dump"),
         }
     }
 
@@ -2243,6 +2324,7 @@ mod tests {
                 "/var/lib/nixling/vms/alpha/store-view/generations/99/current-system",
             ),
             closure_paths: Vec::new(),
+            db_dump_path: PathBuf::from("/nix/store/alpha-registration"),
         };
         let marker = hardlink_farm::GenerationMarker {
             closure_hash: "toplevel:old-system".to_owned(),
@@ -2871,6 +2953,66 @@ mod tests {
         };
         let err = live_spawn_runner(&plan).unwrap_err();
         assert!(matches!(err, LiveHandlerError::SpawnPreflight(_)));
+    }
+
+    fn test_spawn_plan_with_argv(argv: Vec<String>, seccomp_policy_ref: &str) -> SpawnRunnerPlan {
+        SpawnRunnerPlan {
+            binary_path: PathBuf::from("/bin/socat"),
+            argv,
+            uid: 1000,
+            gid: 1000,
+            supplementary_groups: vec![],
+            env: vec![],
+            capabilities: vec![],
+            namespaces: test_namespaces(),
+            seccomp_policy_ref: Some(seccomp_policy_ref.to_owned()),
+            mount_policy: test_mount_policy(),
+            cgroup_placement: test_cgroup_placement(),
+            user_namespace: None,
+            umask: None,
+        }
+    }
+
+    #[test]
+    fn parses_quoted_otel_host_bridge_ch_vsock_socket() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "nixling-otel-host-bridge".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317\""
+                    .to_owned(),
+            ],
+            "w1-otel-host-bridge",
+        );
+
+        assert_eq!(
+            ch_vsock_connect_socket_arg(&plan),
+            Some(PathBuf::from("/var/lib/nixling/vms/sys-obs/vsock.sock"))
+        );
+    }
+
+    #[test]
+    fn parses_unquoted_vsock_relay_ch_vsock_socket() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "nixling-otel-relay@work-aad".to_owned(),
+                "-d".to_owned(),
+                "-d".to_owned(),
+                "UNIX-LISTEN:/var/lib/nixling/vms/work-aad/vsock.sock_14317,fork,max-children=16,reuseaddr,mode=0660"
+                    .to_owned(),
+                "EXEC:/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14318"
+                    .to_owned(),
+            ],
+            "w1-vsock-relay",
+        );
+
+        assert_eq!(
+            ch_vsock_connect_socket_arg(&plan),
+            Some(PathBuf::from("/var/lib/nixling/vms/sys-obs/vsock.sock"))
+        );
     }
 
     #[test]

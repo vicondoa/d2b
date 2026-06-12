@@ -11,9 +11,9 @@
 //! - Broker rejects bundle intent whose source VM ≠ obs VM
 //!   (`observability.vmName`).
 //! - Per-role caps = empty.
-//! - Bind set in the jail: alloy runtime dir (RW), CH vsock host
-//!   socket (RW), host-egress.sock (RW listen target). No `/dev`
-//!   bind mounts.
+//! - Bind set in the jail: nixling OTel runtime dir (RW), obs VM CH
+//!   vsock socket (connect), host-egress.sock (RW listen target). No
+//!   `/dev` bind mounts.
 //!
 //! Byte-parity oracle:
 //! [`tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt`].
@@ -30,8 +30,9 @@ pub struct OtelHostBridgeArgvInputs {
     /// Path to the socat binary (resolved from the bundle's relay
     /// package). MUST be an absolute path.
     pub socat_path: String,
-    /// Path where the host's alloy egress UDS will be listened on
-    /// (`/run/alloy/host-egress.sock`). MUST be absolute + non-empty.
+    /// Path where the host OTel egress UDS will be listened on
+    /// (`/run/nixling/otel/host-egress.sock`). MUST be absolute +
+    /// non-empty.
     pub host_egress_socket: String,
     /// Path to the obs VM's base CH vsock UDS
     /// (`/var/lib/nixling/vms/<obs-vm>/vsock.sock`). MUST be
@@ -145,8 +146,8 @@ mod tests {
     fn happy_inputs() -> OtelHostBridgeArgvInputs {
         OtelHostBridgeArgvInputs {
             socat_path: "/run/current-system/sw/bin/socat".to_owned(),
-            host_egress_socket: "/run/alloy/host-egress.sock".to_owned(),
-            obs_vsock_host_socket: "/var/lib/nixling/vms/sys-obs-stack/vsock.sock".to_owned(),
+            host_egress_socket: "/run/nixling/otel/host-egress.sock".to_owned(),
+            obs_vsock_host_socket: "/var/lib/nixling/vms/sys-obs/vsock.sock".to_owned(),
             obs_otlp_port: 14317,
             ch_vsock_connect_path: "/run/current-system/sw/bin/nixling-ch-vsock-connect".to_owned(),
         }
@@ -164,8 +165,8 @@ mod tests {
                 "/run/current-system/sw/bin/socat",
                 "-d",
                 "-d",
-                "UNIX-LISTEN:/run/alloy/host-egress.sock,fork,reuseaddr,mode=0660",
-                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs-stack/vsock.sock 14317\"",
+                "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660",
+                "EXEC:\"/run/current-system/sw/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs/vsock.sock 14317\"",
             ]
         );
     }

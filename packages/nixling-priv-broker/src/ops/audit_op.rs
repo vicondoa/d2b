@@ -11,6 +11,8 @@ use nixling_ipc::broker_wire::RunnerAllocation;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::ops::store_sync_audit::StoreSyncAuditFields;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OperationFields {
@@ -96,16 +98,21 @@ pub enum OperationFields {
         hardlink_farm_path: String,
         view_root: String,
     },
-    /// Store-sync audit fields. The broker re-derives the closure paths
-    /// from the trusted bundle, so the audit row records only the
-    /// resolved farm root + closure count + activated generation +
-    /// opaque closure ref.
-    StoreSync {
-        vm_id: String,
-        bundle_closure_ref: String,
-        generation: u32,
-        closure_count: u32,
-        hardlink_farm_path: String,
+    /// Signed ADR 0027 `StoreSync` terminal audit fields. Every
+    /// `StoreSync` attempt emits exactly one of these. The full schema,
+    /// enums, and invariant-enforcing constructors live in
+    /// [`crate::ops::store_sync_audit`]. The record is host-confidential:
+    /// it carries audit-only `caller_principal` / `retained_generations`
+    /// and host-only context (`bundle_closure_ref`, `hardlink_farm_path`)
+    /// but never store-path basenames, `db.dump`, or marker payloads.
+    StoreSync(StoreSyncAuditFields),
+    StoreVerify {
+        vm: String,
+        status: String,
+        checked: u32,
+        drifted: u32,
+        repaired: u32,
+        repair_requested: bool,
     },
     SetBridgePortFlags {
         vm: String,
@@ -351,12 +358,14 @@ impl OperationFields {
                 hardlink_farm_path: String,
                 view_root: String,
             }),
-            "StoreSync" => parse_fields!(value => StoreSync {
-                vm_id: String,
-                bundle_closure_ref: String,
-                generation: u32,
-                closure_count: u32,
-                hardlink_farm_path: String,
+            "StoreSync" => Ok(Self::StoreSync(serde_json::from_value(value)?)),
+            "StoreVerify" => parse_fields!(value => StoreVerify {
+                vm: String,
+                status: String,
+                checked: u32,
+                drifted: u32,
+                repaired: u32,
+                repair_requested: bool,
             }),
             "SetBridgePortFlags" => parse_fields!(value => SetBridgePortFlags {
                 vm: String,
@@ -633,13 +642,23 @@ mod tests {
     roundtrip_test!(
         store_sync_round_trip,
         "StoreSync",
-        OperationFields::StoreSync {
-            vm_id: "vm:corp-vm".to_owned(),
-            bundle_closure_ref: "store-view:vm:corp-vm".to_owned(),
-            generation: 42,
-            closure_count: 17,
-            hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store".to_owned(),
-        }
+        OperationFields::StoreSync(StoreSyncAuditFields::ok_non_fast_path(
+            crate::ops::store_sync_audit::StoreSyncAuditContext {
+                vm: "corp-vm".to_owned(),
+                vm_id: "store-view:vm:corp-vm".to_owned(),
+                env: Some("work".to_owned()),
+                bundle_closure_ref: "store-view:vm:corp-vm".to_owned(),
+                hardlink_farm_path: "/var/lib/nixling/vms/corp-vm/store-view".to_owned(),
+                generation_id: "g-deadbeef".to_owned(),
+                generation_token: 42,
+                caller_principal: Some("uid:998/role:daemon".to_owned()),
+                closure_count: 17,
+                timings: crate::ops::store_sync_audit::StoreSyncTimings::default(),
+            },
+            5,
+            12,
+            vec![42, 41],
+        ))
     );
     roundtrip_test!(
         set_bridge_port_flags_round_trip,

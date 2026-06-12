@@ -298,7 +298,15 @@ in
                   proto = "virtiofs";
                 }
                 {
-                  source = "${cfg.store.stateDir}/${name}/store-meta";
+                  # Guest metadata share is rooted at the signed
+                  # `store-view/meta` subtree (ADR 0027), NOT the
+                  # store-view root: the root also holds the served
+                  # `live/` hardlink pool and the host-only
+                  # `state/`, `gcroots/`, and `sync.lock` which must
+                  # never reach the guest. virtiofsd serves this share
+                  # `--readonly` (forced in processes-json.nix off the
+                  # `nl-meta` tag, independent of this source path).
+                  source = "${cfg.store.stateDir}/${name}/store-view/meta";
                   mountPoint = "/run/nixling-store-meta";
                   tag = "nl-meta";
                   proto = "virtiofs";
@@ -405,6 +413,7 @@ in
     "d /run/nixling             0775 root nixling -"
   ] ++ [
     "d /run/nixling/vms         0755 root root -"
+    "d /run/nixling/otel        0750 nixlingd nixling -"
     "f /run/nixling/usbipd.lock 0660 root nixling -"
     "d /run/nixling-gpu         0755 root root -"
     # security-r7-2: lock file for nixling-known-hosts-refresh@.service

@@ -7,7 +7,6 @@
 let
   inherit (pkgs) lib;
   nl = import ../nixos-modules/lib.nix { inherit lib; };
-  chVsockConnect = import ../nixos-modules/nixling-ch-vsock-connect.nix { inherit pkgs; };
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
   scenarioModule =
@@ -175,9 +174,7 @@ let
   assertStateDirTmpfile = name:
     assert builtins.elem "d /var/lib/nixling/vms/${name} 2770 microvm kvm -" tmpfilesRules;
     true;
-  alphaRelay = processNode "alpha-vm" "vsock-relay";
   alphaReadiness = processNode "alpha-vm" "guest-ssh-readiness";
-  allProcessesJson = builtins.toJSON processRows;
   legacyExpectedCid = nl.guestControlVsockCid {
     name = "legacy-vm";
     envIndex = null;
@@ -192,30 +189,26 @@ let
     assert assertChVsock "beta-vm";
     assert assertChVsock "sys-alpha-net";
     assert assertChVsock "sys-beta-net";
-    assert assertChVsock "sys-obs-stack";
+    assert assertChVsock "sys-obs";
     assert assertChVsock "legacy-vm";
     assert assertStateDirTmpfile "alpha-vm";
     assert assertStateDirTmpfile "alpha-high";
     assert assertStateDirTmpfile "beta-vm";
     assert assertStateDirTmpfile "sys-alpha-net";
     assert assertStateDirTmpfile "sys-beta-net";
-    assert assertStateDirTmpfile "sys-obs-stack";
+    assert assertStateDirTmpfile "sys-obs";
     assert assertStateDirTmpfile "legacy-vm";
     assert manifest.alpha-vm.observability.vsockCid == 110;
     assert manifest.alpha-high.observability.vsockCid == 210;
     assert manifest.beta-vm.observability.vsockCid == 1110;
     assert manifest.sys-alpha-net.observability.vsockCid == 101;
     assert manifest.sys-beta-net.observability.vsockCid == 1101;
-    assert manifest.sys-obs-stack.observability.vsockCid == 1000;
+    assert manifest.sys-obs.observability.vsockCid == 1000;
     assert manifest.legacy-vm.observability.vsockCid == legacyExpectedCid;
     assert !(builtins.hasAttr "disabled-vm" manifest);
-    assert builtins.elem
-      "UNIX-LISTEN:/var/lib/nixling/vms/alpha-vm/vsock.sock_14317,fork,max-children=16,reuseaddr,mode=0660"
-      alphaRelay.argv;
-    assert builtins.elem
-      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect /var/lib/nixling/vms/sys-obs-stack/vsock.sock 14317"
-      alphaRelay.argv;
-    assert !(lib.hasInfix "14318" allProcessesJson);
+    # The observability vsock-relay transport argv is validated by the
+    # SigNoz observability eval suite (observability-eval / tempo / loki),
+    # not here: this eval owns guest-control vsock allocation and dormancy.
     assert alphaReadiness != null;
     assert alphaReadiness.role == "guest-ssh-readiness";
     assert alphaReadiness.readiness == [
@@ -233,7 +226,7 @@ let
       alphaArgv = vsockValues (chArgv "alpha-vm");
       betaCid = manifest.beta-vm.observability.vsockCid;
       netCid = manifest.sys-alpha-net.observability.vsockCid;
-      obsCid = manifest.sys-obs-stack.observability.vsockCid;
+      obsCid = manifest.sys-obs.observability.vsockCid;
       legacyCid = manifest.legacy-vm.observability.vsockCid;
     };
 in

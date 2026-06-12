@@ -7,11 +7,21 @@ let
   # nixling-owned access helpers (see lib.nix).
   nl = import ./lib.nix { inherit lib pkgs; };
   enabledVms = lib.filterAttrs (_: vm: vm.enable) cfg.vms;
+  observedVmNames = lib.attrNames (lib.filterAttrs
+    (name: vm: vm.enable && name != cfg.observability.vmName && vm.observability.enable)
+    cfg.vms);
   usbipEnvNames = lib.sort lib.lessThan (lib.unique (lib.concatMap
     (vm: lib.optional (cfg.site.yubikey.enable && vm.enable && vm.usbip.yubikey && vm.env != null) vm.env)
     (lib.attrValues cfg.vms)));
   usbipMeta = lib.filterAttrs (envName: _: lib.elem envName usbipEnvNames) cfg._envMeta;
   obsOtlpPort = 14317;
+  obsSourcePortMap = lib.listToAttrs (lib.imap0
+    (i: name: {
+      inherit name;
+      value = obsOtlpPort + 1 + i;
+    })
+    observedVmNames);
+  obsSourcePort = name: obsSourcePortMap.${name} or obsOtlpPort;
   waylandUid =
     if cfg.site.waylandUser != null
     then toString (config.users.users.${cfg.site.waylandUser}.uid or 0)
@@ -39,7 +49,7 @@ let
     src = packagesSrc;
     cargoLock = {
       lockFile = ../packages/Cargo.lock;
-      outputHashes."wl-proxy-0.1.2" = "sha256-ZKXnOZwjRkt1lbQBpAQYrYKzn6rS4gje8YWE5ek4W/E=";
+      outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
     };
     cargoBuildFlags = [ "--package" "nixling-wayland-filter" ];
     doCheck = false;
@@ -76,7 +86,10 @@ EOF
   };
 
   profileIdFor = name: nodeId: "vm-${name}-${nodeId}";
-  profileFor = name: nodeId: cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
+  profileFor = name: nodeId:
+    if nodeId == "otel-host-bridge"
+    then cfg._bundle.minijailProfiles."host-otel-host-bridge".roleProfile
+    else cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
   shareSocketPath = name: share:
@@ -401,20 +414,20 @@ EOF
       # are dropped: /nix/store has no ACLs, and the per-VM shares
       # are nixling-managed (no foreign xattrs to preserve).
       isRoStore = share.source == "/nix/store";
+      isStoreMeta = share.tag == "nl-meta";
       # SECURITY (per-VM store isolation): the ro-store share's guest
       # `/nix/store` must expose ONLY this VM's closure, never the host's
       # full `/nix/store`. `share.source` stays `/nix/store` as the
       # eval-time sentinel that the guest-mount + overlay + readiness
       # logic keys off, but virtiofsd is pointed at the per-VM hardlink
-      # farm `<stateDir>/<vm>/store` — the canonical closure-only per-VM
-      # store (see AGENTS.md "Per-VM /nix/store hardlink farm" +
-      # nixos-modules/store.nix). virtiofsd still execs from the real host
+      # live pool `<stateDir>/<vm>/store-view/live` — the canonical
+      # closure-only per-VM store. virtiofsd still execs from the real host
       # `/nix/store` (kept mounted in its runner namespace) and only
       # *serves* the farm, so the guest sees a closure-only store. This
       # replaces the previous `--shared-dir=/nix/store`, which leaked the
       # host's entire store into every guest. Mirrors the legacy
       # `BindReadOnlyPaths /nix/store -> per-VM farm` behaviour.
-      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store";
+      roStoreSharedDir = "${toString cfg.store.stateDir}/${name}/store-view/live";
       sharedDir = if isRoStore then roStoreSharedDir else toString share.source;
     in {
       binaryPath = "${microvm.virtiofsd.package}/bin/virtiofsd";
@@ -432,7 +445,7 @@ EOF
         "--cache=${share.cache or "auto"}"
       ]
       ++ lib.optionals (microvm.hypervisor == "crosvm") [ "--tag=${share.tag}" ]
-      ++ lib.optionals (isRoStore || (share.readOnly or false)) [ "--readonly" ]
+      ++ lib.optionals (isRoStore || isStoreMeta || (share.readOnly or false)) [ "--readonly" ]
       ++ microvm.virtiofsd.extraArgs;
     };
 
@@ -550,11 +563,16 @@ EOF
           let parts = lib.splitString "=" nameVersion;
           in [ "--max-version" nameVersion ])
         (lib.mapAttrsToList (iface: ver: "${iface}=${toString ver}") vm.graphics.waylandFilter.maxVersions);
+      dmabufAllowArgs = lib.concatMap (filter: [ "--dmabuf-allow" filter ]) vm.graphics.waylandFilter.dmabufAllow;
+      dmabufDenyArgs = lib.concatMap (filter: [ "--dmabuf-deny" filter ]) vm.graphics.waylandFilter.dmabufDeny;
     in {
       binaryPath = nixlingWaylandFilterBinary;
       env = lib.optionals vm.graphics.waylandFilter.debugLogging [
         "WL_PROXY_DEBUG=1"
         "WL_PROXY_PREFIX=nixling-${vmName}-wlproxy"
+      ] ++ lib.optionals vm.graphics.waylandFilter.byteLogging [
+        "WL_PROXY_HEXDUMP=1"
+        "WL_PROXY_HEXDUMP_LIMIT=256"
       ];
       argv = [
         "nixling-${vmName}-wlproxy"
@@ -563,7 +581,7 @@ EOF
         "--vm-name" vmName
         "--app-id-prefix" appIdPrefix
         "--title-prefix" titlePrefix
-      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs;
+      ] ++ denyArgs ++ allowArgs ++ maxVersionArgs ++ dmabufAllowArgs ++ dmabufDenyArgs;
     };
 
   videoBinaryPath = _name:
@@ -708,7 +726,18 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       "-d"
       "-d"
       "UNIX-LISTEN:${vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort},fork,max-children=16,reuseaddr,mode=0660"
-      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString obsOtlpPort}"
+      "EXEC:${chVsockConnect}/bin/nixling-ch-vsock-connect ${cfg.store.stateDir}/${cfg.observability.vmName}/vsock.sock ${toString (obsSourcePort name)}"
+    ];
+  };
+
+  otelHostBridgeRunner = manifest: {
+    binaryPath = "${cfg.observability.transport.relayPackage}/bin/socat";
+    argv = [
+      "nixling-otel-host-bridge"
+      "-d"
+      "-d"
+      "UNIX-LISTEN:/run/nixling/otel/host-egress.sock,fork,reuseaddr,mode=0660"
+      ''EXEC:"${chVsockConnect}/bin/nixling-ch-vsock-connect ${manifest.observability.vsockHostSocket} ${toString obsOtlpPort}"''
     ];
   };
 
@@ -819,7 +848,7 @@ use devices::virtio::vhost_user_backend::run_video_device;'
           role = "store-virtiofs-preflight";
           unit = "nixling-${name}-store-sync.service";
           readiness = [
-            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store/.nixling-marker-${name}" ])
+            (commandReady [ "test" "-e" "${toString cfg.store.stateDir}/${name}/store-view/live/.nixling-marker-${name}" ])
           ];
         })
       ]
@@ -929,6 +958,12 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         unit = "nixling-otel-relay@${name}.service";
         readiness = [ (unixSocketExists (vsockSocketForPort manifest.observability.vsockHostSocket obsOtlpPort)) ];
       } // vsockRelayRunner name manifest))
+      ++ lib.optional (cfg.observability.enable && name == cfg.observability.vmName) (node name ({
+        id = "otel-host-bridge";
+        role = "otel-host-bridge";
+        unit = "nixling-otel-host-bridge.service";
+        readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
+      } // otelHostBridgeRunner manifest))
       ++ lib.optional guestSshEnabled (node name {
         id = "guest-ssh-readiness";
         role = "guest-ssh-readiness";
@@ -944,6 +979,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
       )
       ++ lib.optionals vm.observability.enable (
         edgesFromNodes preOptionalNodeIds "vsock-relay" "The vsock relay starts only after runtime/state dirs, taps, cgroup setup, and earlier sidecars are ready."
+      )
+      ++ lib.optionals (cfg.observability.enable && name == cfg.observability.vmName) (
+        [
+          (edge "cloud-hypervisor" "otel-host-bridge" "The host OTel bridge starts only after the obs VM Cloud Hypervisor runner creates the base vsock socket.")
+        ]
       )
       ++ lib.optionals vm.graphics.enable (
         (edgesFromNodes optionalSidecarBaseNodeIds graphicsNodeId "The GPU sidecar starts only after every prerequisite sidecar is ready.")

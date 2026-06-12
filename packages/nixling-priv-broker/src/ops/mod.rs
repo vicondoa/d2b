@@ -50,6 +50,24 @@ pub mod audit_op;
 // symlink. Replaces the `nixling-<vm>-store-sync.service` bash oneshot.
 pub mod store_sync;
 
+// Signed ADR 0027 terminal audit schema for `StoreSync` (enums +
+// invariant-enforcing constructors + validation).
+pub mod store_sync_audit;
+
+// StoreSync-only observability JSONL export: a positive-allow-list
+// projection of the host-confidential `StoreSync` terminal audit record
+// (ADR 0027). Written to the alloy-readable export directory; never
+// carries caller identity, retained generations, or any host path.
+pub mod store_sync_export;
+
+// Explicit StoreVerify operator surface for top-level live-pool
+// verification + host-only integrity state.
+pub mod store_verify;
+
+// Single-inode ownership/mode posture for broker-created store-view
+// metadata paths. Never recursive into the hardlinked live pool.
+pub mod store_view_posture;
+
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` and `exec_reconcile::prepare_store_view`
 // so the farm hardlinks succeed even when `/nix/store` is a separate

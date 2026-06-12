@@ -316,21 +316,22 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Mutex;
 
-    /// Build a minimal v3 manifest JSON for tests. Each `vms` entry
+    /// Build a minimal v4 manifest JSON for tests. Each `vms` entry
     /// is `(name, env_opt, usbip_yubikey, usbipd_host_ip_opt)`.
     fn manifest_with(vms: &[(&str, Option<&str>, bool, Option<&str>)]) -> ManifestV04 {
         use serde_json::{json, Value};
         let mut root = serde_json::Map::new();
-        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 4 }));
+        root.insert("_manifest".to_owned(), json!({ "manifestVersion": 5 }));
         root.insert(
             "_observability".to_owned(),
             json!({
                 "enabled": false,
-                "vmName": "sys-obs-stack",
+                "vmName": "sys-obs",
                 "obsVsockCid": 1000,
-                "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs-stack/vsock.sock",
-                "grafanaUrl": "http://10.40.0.10:3000",
-                "chExporter": { "listenPort": 9101 }
+                "obsVsockHostSocket": "/var/lib/nixling/vms/sys-obs/vsock.sock",
+                "signozUrl": "http://10.40.0.10:8080",
+                "signozOtlpGrpcPort": 4317,
+                "signozOtlpHttpPort": 4318
             }),
         );
         for (name, env, usbip, host_ip) in vms {

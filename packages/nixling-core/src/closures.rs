@@ -13,6 +13,8 @@ pub struct ClosureMetadata {
     pub toplevel: String,
     /// Complete closure paths required by the VM.
     pub closure_paths: Vec<String>,
+    /// Nix DB registration dump for the closure.
+    pub db_dump_path: String,
     /// Declared runner path from the public manifest/emitter.
     pub declared_runner: String,
     /// Runner path observed or snapshotted for parity checks.

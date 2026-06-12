@@ -279,7 +279,7 @@ mod tests {
     use nixling_core::bundle_resolver::BundleResolver;
     use nixling_core::host::HostJson;
     use nixling_core::manifest_v04::{
-        ChExporterMeta, ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmObservability,
+        ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmObservability,
     };
     use nixling_core::processes::ProcessesJson;
     use std::collections::BTreeMap;
@@ -385,11 +385,12 @@ mod tests {
                 manifest_version: 4,
             },
             observability: ObservabilityMeta {
-                ch_exporter: ChExporterMeta { listen_port: 9100 },
                 enabled: false,
-                grafana_url: "http://127.0.0.1:3000".to_owned(),
                 obs_vsock_cid: 3,
                 obs_vsock_host_socket: "/run/nixling/obs.sock".to_owned(),
+                signoz_otlp_grpc_port: 4317,
+                signoz_otlp_http_port: 4318,
+                signoz_url: "http://127.0.0.1:8080".to_owned(),
                 vm_name: "obs".to_owned(),
             },
             vms: BTreeMap::from([
