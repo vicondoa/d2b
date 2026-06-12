@@ -643,8 +643,9 @@ accumulating waiters.
 
 Every control mutation carries a `request_id` and a `control_seq`
 supplied by the client. A new control request is accepted when
-`control_seq` equals `last_control_seq + 1`; otherwise the server returns
-`control-seq-mismatch` with the expected value. Accepted controls are
+`control_seq` is **strictly greater** than `last_control_seq` (gaps are
+allowed); a `control_seq` that is not strictly increasing returns
+`control-seq-mismatch` with the expected lower bound. Accepted controls are
 idempotent only for the same retained `request_id`, `control_seq`, and
 payload. Reusing a retained `request_id` with a different sequence or
 payload returns `request-id-conflict`. This sequence covers:
@@ -683,12 +684,12 @@ require a future explicit API flag.
 `foreground_process_group` for TTY and `process_tree` for non-TTY. In the
 current implementation only `foreground_process_group` is accepted: guestd
 rejects any other target (`process_tree`, unspecified, or unknown) with
-`invalid-signal` *before* the control sequence is consumed, so the client may
+`protocol-error` *before* the control sequence is consumed, so the client may
 retry with a valid target at the same seq. Non-TTY `process_tree` signalling is
-deferred — the W14 surface is TTY foreground-process-group only. The signal
+deferred; interactive TTY exec is foreground-process-group only. The signal
 number is matched against the frozen TTY allowlist (`HUP`, `INT`, `QUIT`,
 `KILL`, `USR1`, `USR2`, `TERM`, `CONT`, `TSTP`, `WINCH`); any other number is
-rejected with `invalid-signal`, also before the seq is consumed. A signal
+rejected with `protocol-error`, also before the seq is consumed. A signal
 accepted after process exit is idempotent no-op only for duplicate
 `request_id`; otherwise it returns `exec-already-exited`.
 
@@ -880,7 +881,7 @@ payload bytes, or guest free-form error text.
 > contract. The `nixling vm exec` **CLI** described below — including the
 > `--interactive`, `--tty`, and `--detach` flags and the interactive
 > `exec -it` flow — is the planned operator front-end and is **not yet
-> shipped** (tracked as W15). The behaviors below specify the intended CLI
+> shipped**. The behaviors below specify the intended CLI
 > mapping onto the existing RPC surface, not a currently available command.
 
 ### Attached exec

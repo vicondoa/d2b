@@ -9,7 +9,7 @@ builds on the non-interactive contract in the
 > **Scope note.** This document specifies the interactive TTY exec
 > *RPC/service* surface served by `nixling-guestd`. The operator-facing
 > `nixling vm exec -it` / `--tty` **CLI** front-end is planned but **not yet
-> shipped** (tracked as W15); the contract below is the service behavior the
+> shipped**; the contract below is the service behavior the
 > future CLI will drive, not a currently available command.
 
 ## Mode selection

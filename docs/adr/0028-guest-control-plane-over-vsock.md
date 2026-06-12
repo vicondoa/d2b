@@ -273,9 +273,9 @@ duplicate, and out-of-order sequences are rejected). `ExecSignal` is TTY-only
 and rejects any `SignalTarget` other than `FOREGROUND_PROCESS_GROUP`; the
 target is resolved via `tcgetpgrp(master)` **at delivery time**. The delivered
 signal must be in the allowlist
-`INT/TERM/HUP/QUIT/WINCH/USR1/USR2/KILL/TSTP/CONT`. An invalid target is
-rejected before the sequence is consumed; an invalid signal number is rejected
-after sequence admission.
+`INT/TERM/HUP/QUIT/WINCH/USR1/USR2/KILL/TSTP/CONT`. An invalid target and an
+invalid signal number are both rejected (as `protocol-error`) **before** the
+control sequence is consumed, so the client may retry at the same seq.
 
 **Indefinite runtime scoped to TTY.** A TTY exec runs indefinitely by default
 (`interactiveMaxRuntimeSec = 0` ⇒ unlimited), or under an optional ceiling
