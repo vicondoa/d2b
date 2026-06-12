@@ -34,6 +34,7 @@ eval_ok enabled
 eval_ok default
 eval_ok allow-root-only
 eval_ok allow-root-ceiling
+eval_ok allow-root-interactive-ceiling
 
 eval_fail exec-no-control "guest.exec.enable requires"
 eval_fail exec-disabled-users "guest.exec.allowRoot/users are set"

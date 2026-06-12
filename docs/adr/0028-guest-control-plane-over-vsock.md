@@ -228,6 +228,79 @@ against GC: the read completes with stable bytes/offset, and only after the
 guard drops do files and the registry entry drop, with future reads returning
 `ExecExpired`.
 
+### Interactive exec
+
+Interactive exec (`exec_create` with `tty=true && detach=false`) routes to a
+**PTY-backed, connection-owned, non-durable** attached exec. It is served by
+`nixling-guestd` with no per-user `nixling-userd` involvement and no retained
+log/registry record: the session lives only for the originating connection.
+`tty=true && detach=true` is rejected with a typed `ProtocolError`
+(unsupported mode); there is no durable interactive exec.
+
+**Helper-exec, no first-party unsafe.** guestd never performs the
+controlling-terminal handshake itself and never acquires a controlling tty.
+It allocates the PTY master (`posix_openpt`/`grantpt`/`unlockpt`/`ptsname`)
+and spawns a dedicated `--tty-exec` mode of the static `nixling-exec-runner`
+helper, passing the slave on stdin and an `O_CLOEXEC` status pipe on stdout
+via safe `Stdio::from(OwnedFd)` (no `pass_fds`, no `pre_exec`, no
+`process_group`). The helper, in safe `rustix`, dups the status fd high,
+`setsid()`s, acquires the slave as its controlling terminal (`TIOCSCTTY`),
+`tcsetwinsize`s the initial geometry, `dup2`s the slave onto 0/1/2, and
+`execve`s the target. On success the `O_CLOEXEC` status fd closes during
+`execve` (EOF == success); on setup/exec failure the helper writes one typed
+byte that guestd maps to a typed `ExecCreate` error. The whole guest stack
+keeps `unsafe_code = "forbid"`.
+
+**Merged output, stderr disabled.** A PTY has a single output side, so
+stdout and stderr are merged onto the stdout stream. `ReadOutput(stream=stderr)`
+on a TTY exec returns a typed stderr-unavailable error (the stderr ring is
+pre-marked EOF at create).
+
+**Initial geometry.** An absent `initial_terminal_size` defaults to 24 rows ×
+80 cols. A present size must be in `1..=65535` for both dimensions; `0` or
+out-of-range is rejected as a validation/protocol error.
+
+**Stdin and close.** `WriteStdin` uses the same monotonic-offset, serialized,
+bounded-backpressure machine as non-TTY exec. `CloseStdin` injects VEOF
+(`0x04`) into the PTY and keeps the master open (it is **not** a master-close
+half-close); it is idempotent, and a subsequent `WriteStdin` is rejected with
+a typed stdin-closed error. `WriteStdin` with `close_after=true` writes the
+data and then injects VEOF.
+
+**Resize and signal.** `TtyWinResize` and `ExecSignal` are serialized through
+the same per-exec strictly-increasing `control_seq` dispatcher (stale,
+duplicate, and out-of-order sequences are rejected). `ExecSignal` is TTY-only
+and rejects any `SignalTarget` other than `FOREGROUND_PROCESS_GROUP`; the
+target is resolved via `tcgetpgrp(master)` **at delivery time**. The delivered
+signal must be in the allowlist
+`INT/TERM/HUP/QUIT/WINCH/USR1/USR2/KILL/TSTP/CONT`. An invalid target is
+rejected before the sequence is consumed; an invalid signal number is rejected
+after sequence admission.
+
+**Indefinite runtime scoped to TTY.** A TTY exec runs indefinitely by default
+(`interactiveMaxRuntimeSec = 0` ⇒ unlimited), or under an optional ceiling
+when `interactiveMaxRuntimeSec > 0`. The 6-hour non-TTY attached ceiling is
+unchanged; only the interactive path opts into unlimited runtime.
+
+**Teardown and in-session no-orphan.** Teardown moves the session
+`Running → Closing → Terminal`. Entering `Closing` atomically rejects new
+stdin/control RPCs (typed no-op/error, no side effect), drops pending accepted
+writes, stops issuing master clones, releases handles, and drops the last
+master (delivering `SIGHUP`); after a bounded grace it `SIGKILL`s the whole
+TTY **session** (sid enumeration via `/proc`, repeated until empty) and reaps.
+The no-orphan guarantee is scoped to in-session processes; a `setsid`/
+double-fork escapee is a documented trusted-root limitation. Teardown is
+idempotent and runs on child exit, ceiling expiry, explicit cancel, and host
+disconnect.
+
+**Capabilities.** `ExecTty`, `TtyResize`, and `Signals` are advertised only
+when the interactive path is usable (the PTY spawner is wired, which requires
+the exec-runner helper to be present).
+
+The full interactive contract — mode matrix, helper-exec handshake, merged
+output, VEOF close, resize/signal ordering, and teardown — is specified in the
+[interactive TTY exec reference](../reference/guest-control-exec-interactive-tty.md).
+
 ## Feasibility gate
 
 The feasibility dossier must include:

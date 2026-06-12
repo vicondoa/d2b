@@ -10,6 +10,41 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Guest-control interactive TTY exec: `exec_create` with
+  `tty=true && detach=false` now routes to a PTY-backed,
+  connection-owned, non-durable attached exec. PTY setup keeps
+  `unsafe_code = "forbid"` via a helper-exec pattern — a new `--tty-exec`
+  mode of the static `nixling-exec-runner` performs the
+  `setsid` + `TIOCSCTTY` + `tcsetwinsize` + `dup2` + `execve` handshake in
+  safe `rustix`, so `nixling-guestd` never acquires a controlling
+  terminal. stdout/stderr are merged onto the stdout stream
+  (`ReadOutput(stderr)` returns a typed stderr-unavailable error);
+  `CloseStdin` injects VEOF (`0x04`) and keeps the master open;
+  `TtyWinResize` and `ExecSignal` are serialized through the per-exec
+  control sequence, with signals restricted to the foreground process
+  group (resolved via `tcgetpgrp` at delivery) and the
+  `INT/TERM/HUP/QUIT/WINCH/USR1/USR2/KILL/TSTP/CONT` allowlist. An absent
+  `initial_terminal_size` defaults to 24×80. Interactive sessions run
+  indefinitely by default; teardown drops the master (SIGHUP), waits a
+  bounded grace, then SIGKILLs the whole TTY session (in-session
+  no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
+  limitation). `tty=true && detach=true` is rejected as an unsupported
+  mode. See
+  [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
+  and the interactive-exec section of
+  [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
+  guest-control wire contract is unchanged (the TTY surface was already
+  present).
+
+- New per-VM option `nixling.vms.<vm>.guest.exec.interactiveMaxRuntimeSec`
+  (default `0` = unlimited) caps interactive TTY exec runtime
+  independently of the non-interactive attached ceiling. It is mirrored
+  read-only into the guest config and forced from the host module, and
+  emitted to `nixling-guestd` as `--interactive-max-runtime-sec`
+  alongside the detached exec surface.
+
 ### Fixed
 
 - The privileged broker now compiles under the `layer1-bootstrap`

@@ -83,6 +83,14 @@ let
         detachedMaxRuntimeSec = 3600;
       };
     };
+    allow-root-interactive-ceiling = {
+      controlEnable = true;
+      exec = {
+        enable = true;
+        allowRoot = true;
+        interactiveMaxRuntimeSec = 7200;
+      };
+    };
     internal-override = {
       controlEnable = true;
       exec = {
@@ -206,6 +214,10 @@ let
     assert !guestHasRunDir;
     assert !(lib.hasInfix "--systemd-run-path" guestdExecStart);
     assert !(lib.hasInfix "--exec-runner-path" guestdExecStart);
+    # Interactive TTY shares the detached gate (it needs the exec-runner
+    # helper): with allowRoot = false the interactive ceiling flag is absent.
+    assert corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec == 0;
+    assert !(lib.hasInfix "--interactive-max-runtime-sec" guestdExecStart);
     builtins.toJSON {
       scenario = "enabled";
       userd = corpUserdNames;
@@ -247,6 +259,10 @@ let
     assert lib.hasInfix "/bin/nixling-exec-runner" guestdExecStart;
     # detachedMaxRuntimeSec defaults to 0 (indefinite).
     assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
+    # interactiveMaxRuntimeSec also defaults to 0 (unlimited); the flag is
+    # emitted alongside the detached surface so the TTY ceiling is explicit.
+    assert corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec == 0;
+    assert lib.hasInfix "--interactive-max-runtime-sec 0" guestdExecStart;
     builtins.toJSON {
       scenario = "allow-root-only";
       userd = corpUserdNames;
@@ -267,6 +283,21 @@ let
       scenario = "allow-root-ceiling";
       maxRuntimeSec = corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec;
     };
+  positiveAllowRootInteractiveCeiling =
+    assert corpGuest.nixling.guestControl.exec.enable == true;
+    assert corpGuest.nixling.guestControl.exec.allowRoot == true;
+    assert corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec == 7200;
+    # A nonzero interactive ceiling propagates as the guestd flag. The
+    # detached ceiling stays at its 0 default in this scenario.
+    assert lib.hasInfix "--interactive-max-runtime-sec 7200" guestdExecStart;
+    assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
+    assert guestHasExecSlice;
+    assert !hostHasExecSlice;
+    assert !hostHasRunDir;
+    builtins.toJSON {
+      scenario = "allow-root-interactive-ceiling";
+      interactiveMaxRuntimeSec = corpGuest.nixling.guestControl.exec.interactiveMaxRuntimeSec;
+    };
 in
 if scenario == "enabled" then
   positiveEnabled
@@ -276,6 +307,8 @@ else if scenario == "allow-root-only" then
   positiveAllowRoot
 else if scenario == "allow-root-ceiling" then
   positiveAllowRootCeiling
+else if scenario == "allow-root-interactive-ceiling" then
+  positiveAllowRootInteractiveCeiling
 else
   builtins.seq
     (builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath)
