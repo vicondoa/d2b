@@ -754,8 +754,12 @@ struct VmExecArgs {
     json: bool,
     #[arg(long, conflicts_with = "json")]
     human: bool,
-    /// The command and its arguments, after `--`.
-    #[arg(last = true, required = true)]
+    /// The command and its arguments, after `--`. NOT a clap `required`
+    /// argument: a missing command is validated inside `cmd_vm_exec` so a
+    /// `--json` run still emits the single terminal `source: "cli"`,
+    /// `reason: "usage"` envelope on stdout instead of a clap stderr error
+    /// (matching docs/reference/{error-codes,cli-contract}.md).
+    #[arg(last = true)]
     command: Vec<String>,
 }
 
@@ -6349,30 +6353,28 @@ where
     Ok(())
 }
 
+// Per-thread stdout capture for tests: a thread-local buffer so concurrently
+// running tests never pollute one another's captured output. A prior global
+// `Mutex<Option<Vec<u8>>>` let any parallel test's `print_stdout` append into
+// whichever test currently had capture active, racing the `--json` envelope
+// assertions.
 #[cfg(test)]
-static TEST_STDOUT_CAPTURE: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
-#[cfg(test)]
-static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+thread_local! {
+    static TEST_STDOUT_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
+}
 #[cfg(test)]
 static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
-    let _guard = TEST_STDOUT_CAPTURE_LOCK
-        .lock()
-        .expect("stdout capture lock poisoned");
-    {
-        let mut capture = TEST_STDOUT_CAPTURE
-            .lock()
-            .expect("stdout capture mutex poisoned");
-        *capture = Some(Vec::new());
-    }
+    TEST_STDOUT_CAPTURE.with(|capture| {
+        *capture.borrow_mut() = Some(Vec::new());
+    });
     let result = f();
     let stdout = TEST_STDOUT_CAPTURE
-        .lock()
-        .expect("stdout capture mutex poisoned")
-        .take()
+        .with(|capture| capture.borrow_mut().take())
         .expect("stdout capture active");
     (result, stdout)
 }
@@ -6390,11 +6392,15 @@ fn test_konsole_spawn_count() -> usize {
 fn print_stdout(text: &str) {
     #[cfg(test)]
     {
-        let mut capture = TEST_STDOUT_CAPTURE
-            .lock()
-            .expect("stdout capture mutex poisoned");
-        if let Some(buffer) = capture.as_mut() {
-            buffer.extend_from_slice(text.as_bytes());
+        let captured = TEST_STDOUT_CAPTURE.with(|capture| {
+            if let Some(buffer) = capture.borrow_mut().as_mut() {
+                buffer.extend_from_slice(text.as_bytes());
+                true
+            } else {
+                false
+            }
+        });
+        if captured {
             return;
         }
     }
@@ -7811,6 +7817,61 @@ mod host_install_dispatch_tests {
         );
         assert_eq!(envelope.get("reason").and_then(Value::as_str), Some("usage"));
         assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
+    }
+
+    #[test]
+    fn vm_exec_missing_command_emits_usage_envelope() {
+        // G4 / WR10: a missing command is validated inside `cmd_vm_exec` (the
+        // clap arg is NOT `required`), so a `--json` run emits a single stdout
+        // usage envelope (source: cli, reason: usage, exit 2) and the human run
+        // is a plain stderr usage failure — both matching error-codes.md and
+        // cli-contract.md.
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let json_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
+            json: true,
+            human: false,
+            command: Vec::new(),
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+        let exit_code = result.expect("json missing-command usage returns the exit code");
+        assert_eq!(exit_code, 2);
+        let envelope: Value =
+            serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        assert_eq!(envelope.get("command").and_then(Value::as_str), Some("vm exec"));
+        assert_eq!(envelope.get("source").and_then(Value::as_str), Some("cli"));
+        assert_eq!(envelope.get("reason").and_then(Value::as_str), Some("usage"));
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
+
+        let human_args = VmExecArgs {
+            json: false,
+            ..json_args
+        };
+        let failure = cmd_vm_exec(&context, &human_args)
+            .expect_err("missing command is a human usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            failure.message.contains("missing command"),
+            "human missing-command error is actionable: {}",
+            failure.message
+        );
     }
 
     fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
