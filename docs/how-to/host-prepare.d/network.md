@@ -41,9 +41,11 @@ sudo nixling host prepare --apply
 sudo nixling host destroy --apply
 ```
 
-`host prepare --apply` is refused on Tier 0 NixOS-legacy hosts unless
-at least one VM in the bundle declares
-`nixling.vms.<vm>.supervisor = "nixlingd"`.
+`host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
+one where nixling resolves no daemon-owned bundle to reconcile. The
+per-VM `nixling.vms.<vm>.supervisor` option was removed in v1.1 (per
+ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
+host resolves to the daemon path.
 
 ## Ownership markers (foreign-rule preservation guarantees)
 

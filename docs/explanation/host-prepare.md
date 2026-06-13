@@ -14,9 +14,11 @@
 > ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
 > `UpdateHostsFile`, `ApplyNmUnmanaged`). Broker failures surface a
 > typed `broker-error` envelope (exit 78); daemon-unreachable
-> surfaces `daemon-down` (exit 1). On hosts where every VM keeps
-> `supervisor = "systemd"`, the verb returns
-> `tier-0-legacy-uses-nixos-module` (exit 78). See
+> surfaces `daemon-down` (exit 1). On a Tier 0 NixOS-legacy host —
+> one with no loadable daemon-owned nixling bundle — the verb returns
+> `tier-0-legacy-uses-nixos-module` (exit 78). The per-VM
+> `nixling.vms.<vm>.supervisor` option was removed in v1.1 (ADR 0015);
+> every enabled VM is daemon-supervised. See
 > [`docs/reference/compatibility.md`](../reference/compatibility.md)
 > and ADR 0015.
 

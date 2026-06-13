@@ -258,9 +258,13 @@ envelope (exit 78); daemon-unreachable surfaces `daemon-down`
 (exit 1). The `host check` and `--dry-run` reads exercise the
 broker's read-only audit path.
 
-`host prepare --apply` is refused on Tier 0 NixOS-legacy hosts unless
-at least one VM in the bundle declares
-`nixling.vms.<vm>.supervisor = "nixlingd"`.
+`host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
+one where nixling resolves no daemon-owned bundle to reconcile and
+the upstream NixOS module already owns host-shared reconciliation. The
+per-VM `nixling.vms.<vm>.supervisor` option was removed in v1.1 (per
+ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
+host resolves to the daemon path. The refusal remains as a fail-closed
+guard for hosts with no loadable nixling bundle.
 
 ## Ownership markers (foreign-rule preservation guarantees)
 
