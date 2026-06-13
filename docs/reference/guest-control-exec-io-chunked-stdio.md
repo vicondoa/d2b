@@ -887,7 +887,7 @@ payload bytes, or guest free-form error text.
 
 ### Attached exec
 
-`nixling exec <vm> -- <argv...>` creates a non-TTY exec with stdin
+`nixling vm exec <vm> -- <argv...>` creates a non-TTY exec with stdin
 closed. The CLI reads stdout/stderr through offsets until both streams
 EOF and `ExecWait` returns terminal. The CLI exits with the remote exit
 code for normal command exit. Remote signal termination is reported as the
@@ -906,18 +906,24 @@ resizes as sequenced `TtyWinResize` calls with rows/cols in `1..65535`,
 merges output through stdout, and restores local terminal raw mode on every
 return path.
 
-### Detached exec
+### Detached exec (service surface only)
 
-`--detach` returns the `exec_id`, initial state, and effective retention
-limits. The process continues after host transport disconnect. Operators
-use:
+Detached exec is **not exposed through the `nixling` CLI** today (there is
+no `--detach` flag and no `vm exec inspect/logs/attach/kill/run`
+subcommands; see the scope note above). It is reachable only through the
+guest-control RPC/service surface, where a detached create returns the
+`exec_id`, initial state, and effective retention limits and the process
+continues after host transport disconnect. The corresponding service
+operations are:
 
-- `nixling vm exec inspect <vm> <exec-id>` for state and offset windows;
-- `nixling vm exec logs <vm> <exec-id>` for retained logs;
-- `nixling vm exec attach <vm> <exec-id>` to resume attached polling from
-  a chosen cursor;
-- `nixling vm exec kill <vm> <exec-id>` for `ExecSignal` or later policy
-  escalation.
+- `ExecInspect` for state and offset windows;
+- `ExecLogs` for retained logs;
+- a fresh attached `ReadOutput`/`ExecWait` poll to resume from a chosen
+  cursor;
+- `ExecSignal` (or later policy escalation) to terminate.
+
+A future release may surface these as CLI subcommands; until then the
+catalogue above is the authoritative detached-exec contract.
 
 ### Old-generation VMs
 
@@ -1002,12 +1008,14 @@ environment variables, cwd, credential paths, CH socket paths, HMAC
 material, or guest free-form errors.
 
 Health responses and CLI JSON use the same rule except for fields that are
-the explicit user-facing API result. Attached exec forms reject `--json`
-with usage; detached run JSON, for example
-`nixling vm exec run <vm> --detach --json -- <argv...>`, may return the
-new `execId`, and `ExecLogs --json` may return the requested log payload
-when the user asked for logs, but daemon logs, metrics, spans, health JSON,
-and error JSON must not duplicate those payloads or IDs.
+the explicit user-facing API result. The interactive `-i`/`-t` exec forms
+are human-only and reject `--json` with a usage envelope, while the
+non-TTY `nixling vm exec <vm> --json -- <argv...>` returns a single
+terminal envelope (exit code + source/reason + bounded captured output).
+On the service surface, `ExecInspect`/`ExecLogs` may return the
+`execId`/cursor state or the requested log payload when the caller asked
+for it, but daemon logs, metrics, spans, health JSON, and error JSON must
+not duplicate those payloads or IDs.
 
 ## Required tests
 

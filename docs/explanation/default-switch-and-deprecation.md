@@ -79,11 +79,12 @@ The trade-off explicitly accepted by ADR 0015:
   the operator responsible for not invoking the daemon-native
   verbs.
 
-## W18 flip-gate subset and per-wave evidence (evidence gate still live)
+## Flip-gate subset and per-wave evidence (evidence gate still live)
 
-W18 originally turned `nixling.daemonExperimental.enable` into a
+The daemon-experimental flip originally turned
+`nixling.daemonExperimental.enable` into a
 computed default that evaluated to `true` only when every wave in the
-**W18 flip-gate subset** had both readiness bits green AND a matching
+**flip-gate subset** had both readiness bits green AND a matching
 evidence file on disk. That coupling is **no longer wired**:
 `nixling.daemonExperimental.enable` now defaults `true` and is no
 longer evidence-auto-flipped, but it still functionally gates the
@@ -97,10 +98,10 @@ assertion (fail-closed without the evidence file), not the
 `daemonExperimental.enable` default. The subset and evidence schema
 below remain accurate for that assertion.
 
-### Flip-gate subset (P5 narrowing)
+### Flip-gate subset
 
 The gate iterates over a fixed subset of `defaultSwitchReadiness`
-waves — the subset that has shipped by the time the W18 flip is
+waves — the subset that has shipped by the time the flip is
 considered. The full schema also carries `p5`, `p6`, `p7` records;
 those are intentionally excluded from the gate because they
 describe work that happens AFTER the flip itself, and requiring
