@@ -861,8 +861,8 @@ _arguments "${_arguments_options[@]}" : \
 '--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`). SSH transport only; rejected on guest-control VMs]:KNOWN_HOSTS:_files' \
 '--dry-run[Print the planned action instead of running it]' \
 '--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ':vm -- VM name (must match the static manifest):_default' \
 && ret=0
 ;;

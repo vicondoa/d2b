@@ -1768,6 +1768,14 @@ struct ConfigArgs {
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
     /// Pull the VM's in-guest edited config into a host-side staging file.
+    ///
+    /// Reads the VM's canonical guest config working copy over the
+    /// authenticated guest-control vsock (`readGuestConfig` -> guestd
+    /// `ReadGuestFile`); there is no SSH. The pull fails closed when the VM's
+    /// running generation does not declare the guest-control transport. The
+    /// `--host`/`--user`/`--key`/`--known-hosts` overrides and a non-default
+    /// `--guest-path` configure only a future operator SSH compatibility
+    /// transport and are rejected on guest-control VMs.
     Sync(ConfigSyncArgs),
     /// Diff the staged guest config against a live host-side file.
     Diff(ConfigDiffArgs),

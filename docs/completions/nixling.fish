@@ -329,7 +329,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l known-hosts -d 'known_hosts file used to verify the VM\'s host key (defaults to the framework-managed `/var/lib/nixling/known_hosts.nixling`). SSH transport only; rejected on guest-control VMs' -r -F
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l dry-run -d 'Print the planned action instead of running it'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -l json -d 'Emit a JSON envelope'
-complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help'
+complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from sync" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from diff" -l against -d 'The live host-side guest config file to compare the staging against' -r -F
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from diff" -l json -d 'Emit a JSON envelope'
 complete -c nixling -n "__fish_nixling_using_subcommand config; and __fish_seen_subcommand_from diff" -s h -l help -d 'Print help'

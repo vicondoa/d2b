@@ -623,10 +623,14 @@
             type = lib.types.bool;
             default = false;
             description = ''
-              Enable the guest-control credential/share surface for this VM.
-              The static guest-control binaries are installed for every VM,
-              but the credential share and guestd service wiring stay opt-in
-              until the guest-control service loop lands.
+              Enable the guest-control credential/share surface and the
+              `nixling-guestd` service wiring for this VM. The static
+              guest-control binaries are installed for every VM; this option
+              opts the VM into the live guest-control plane (credential share
+              plus guestd), which serves the readiness Health probe, `config
+              sync` reads (`ReadGuestFile`), and — when `guest.exec` is also
+              enabled — admin guest exec. All of it runs over the
+              authenticated guest-control vsock, not SSH.
             '';
           };
           auth.tokenFile = lib.mkOption {
@@ -656,13 +660,16 @@
             type = lib.types.bool;
             default = false;
             description = ''
-              Enable validation of the guest-control exec policy for this VM.
+              Enable the guest-control exec runtime for this VM.
 
-              This is policy metadata and dormant guest-side wiring only until
-              the guestd exec runtime lands. It does not make `nixling exec`
-              available by itself. Generic exec remains off by default, and
-              enabling it requires `guest.control.enable = true` plus either
-              an explicit non-root user allowlist or `allowRoot = true`.
+              This wires the guestd exec service so admin operators (callers in
+              `nixling.site.adminUsers`) can run `nixling vm exec` and `nixling
+              vm konsole` against this VM over the authenticated guest-control
+              vsock — no SSH. Exec is off by default, and enabling it requires
+              `guest.control.enable = true` plus either `allowRoot = true` or a
+              non-root user allowlist. Today guestd serves guest-root exec only
+              (`allowRoot = true`); the non-root `users` allowlist is validated
+              and reserved but not yet honoured at runtime.
             '';
           };
 
@@ -670,11 +677,13 @@
             type = lib.types.bool;
             default = false;
             description = ''
-              Permit the future guest-control exec runtime to target root.
+              Permit the guest-control exec runtime to target root in this VM.
 
-              This defaults to false and is separate from the non-root user
-              allowlist. In the current policy-wiring stage it is validation
-              metadata only and does not emit a root `nixling-userd` service.
+              This is the currently-served exec target: with
+              `guest.exec.enable = true` and `allowRoot = true`, guestd runs
+              admin-requested `nixling vm exec` / `vm konsole` commands as guest
+              root. It defaults to false and is separate from the non-root user
+              allowlist.
             '';
           };
 
@@ -683,14 +692,17 @@
             default = [ ];
             example = [ "alice" ];
             description = ''
-              Explicit non-root guest users that the future guest-control exec
-              runtime may target.
+              Non-root guest users that the guest-control exec runtime may
+              target.
 
               No users are allowed by default, and the SSH user is not
               implicitly added. Usernames are intentionally restricted to a
-              raw-safe lowercase subset so dormant guest-side unit names and
-              runtime directories are unambiguous. `root` is never listed here;
-              use `allowRoot` for the separate root-exec policy gate.
+              raw-safe lowercase subset so guest-side unit names and runtime
+              directories are unambiguous. `root` is never listed here; use
+              `allowRoot` for the separate root-exec policy gate. Note: non-root
+              exec is not yet served by guestd — these entries are validated and
+              emit per-user `nixling-userd` units, but every non-root exec
+              request is currently rejected (reserved for a future wave).
             '';
           };
 
