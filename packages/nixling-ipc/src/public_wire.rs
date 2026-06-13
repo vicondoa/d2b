@@ -85,6 +85,15 @@ pub enum PublicRequest {
     /// instead of an SSH transfer.
     #[serde(rename = "read guest config")]
     ReadGuestConfig(ReadGuestConfigRequest),
+    /// Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated
+    /// guest-control exec session. A single owner connection issues a
+    /// `Start` op then drives the session with the remaining ops
+    /// (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The
+    /// daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock
+    /// connect, auth, or `ExecCreate`. `nixling vm exec` (and the
+    /// `vm konsole` wrapper) drive this verb; it never crosses SSH.
+    #[serde(rename = "exec")]
+    Exec(ExecOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -114,6 +123,8 @@ pub enum PublicResponse {
     MutatingVerb(MutatingVerbResponse),
     #[serde(rename = "read guest config")]
     ReadGuestConfig(ReadGuestConfigResponse),
+    #[serde(rename = "exec")]
+    Exec(ExecOpResponse),
     #[serde(rename = "error")]
     Error(Error),
 }
@@ -275,6 +286,241 @@ pub struct ReadGuestConfigRequest {
 pub struct ReadGuestConfigResponse {
     pub content_base64: String,
 }
+
+/// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
+/// per `ReadOutput` op (`DEFAULT_MAX_CHUNK_BYTES`). The base64 envelope of a
+/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
+/// single exec op never approaches the frame cap.
+pub const EXEC_MAX_CHUNK_BYTES: u64 = crate::guest_wire::DEFAULT_MAX_CHUNK_BYTES;
+
+/// Output stream selector for `ReadOutput`. A closed enum — the daemon never
+/// forwards an unspecified stream to the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecStream {
+    Stdout,
+    Stderr,
+}
+
+/// A single environment variable for `ExecOp::Start`. Values are forwarded
+/// verbatim into the guest exec request and are NEVER logged, traced, or
+/// audited (only the count is observable).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecEnvVar {
+    pub key: String,
+    pub value: String,
+}
+
+/// Terminal window dimensions for an interactive (`tty`) exec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecTermSize {
+    pub rows: u32,
+    pub cols: u32,
+}
+
+/// `Start` op args. The daemon resolves the per-VM vsock socket + peer
+/// credentials from the trusted bundle; the client supplies only the VM name,
+/// the command, and the session shape. `detached` is carried so the daemon
+/// teardown semantics are unambiguous (a detached session survives owner
+/// disconnect); the W16 CLI ships non-detached + interactive `-it` only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecStartArgs {
+    pub vm: String,
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub tty: bool,
+    #[serde(default)]
+    pub detached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<ExecEnvVar>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub term_size: Option<ExecTermSize>,
+}
+
+/// `WriteStdin` op args. `chunkBase64` is the standard padded base64 of a raw
+/// stdin chunk (≤ `EXEC_MAX_CHUNK_BYTES` decoded). `offset` is the client's
+/// authoritative stdin byte cursor so a lost reply is idempotently retryable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWriteStdinArgs {
+    pub session: String,
+    pub offset: u64,
+    pub chunk_base64: String,
+    #[serde(default)]
+    pub eof: bool,
+}
+
+/// `ReadOutput` op args. A bounded long-poll: `wait` + `timeoutMs` let the
+/// guest hold the request until data arrives or the (server-side bounded)
+/// timeout elapses, so the CLI interleaves short output polls with stdin /
+/// signal forwarding without busy-looping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecReadOutputArgs {
+    pub session: String,
+    pub stream: ExecStream,
+    pub offset: u64,
+    pub max_len: u64,
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+/// `Signal` op args. The signal is delivered to the foreground process group
+/// of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to
+/// the corresponding guest signal numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecSignalArgs {
+    pub session: String,
+    pub signo: u32,
+}
+
+/// `Resize` op args (SIGWINCH → guest PTY window resize).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecResizeArgs {
+    pub session: String,
+    pub rows: u32,
+    pub cols: u32,
+}
+
+/// `Wait` op args. A bounded poll for the terminal status; if the command is
+/// still running after `timeoutMs` the response reports `running` so the CLI
+/// keeps draining output and polling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWaitArgs {
+    pub session: String,
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+/// `Close` op args. Idempotent: closing an already-closed/torn-down session
+/// returns success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecCloseArgs {
+    pub session: String,
+}
+
+/// Multiplexed exec operation. Closed adjacently-tagged enum (`op` + `args`);
+/// each variant's args struct is `deny_unknown_fields`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum ExecOp {
+    Start(ExecStartArgs),
+    WriteStdin(ExecWriteStdinArgs),
+    ReadOutput(ExecReadOutputArgs),
+    Signal(ExecSignalArgs),
+    Resize(ExecResizeArgs),
+    Wait(ExecWaitArgs),
+    Close(ExecCloseArgs),
+}
+
+/// `Start` op result: the daemon-issued opaque session handle plus the initial
+/// per-stream read cursors the CLI begins reading from. `tty` echoes the
+/// negotiated interactive mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecStartResult {
+    pub session: String,
+    pub tty: bool,
+    pub stdout_offset: u64,
+    pub stderr_offset: u64,
+}
+
+/// `WriteStdin` op result. `acceptedLen` is the number of bytes that actually
+/// landed (partial-write aware); the CLI retries any remainder from
+/// `nextOffset`. `backpressured` signals the guest stdin budget is full.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWriteStdinResult {
+    pub accepted_len: u64,
+    pub next_offset: u64,
+    #[serde(default)]
+    pub backpressured: bool,
+    #[serde(default)]
+    pub stdin_closed: bool,
+}
+
+/// `ReadOutput` op result. `dataBase64` is the base64 of a bounded output
+/// chunk; `nextOffset` advances the CLI read cursor; `eof` marks the stream
+/// drained after the command went terminal; `timedOut` marks an empty
+/// long-poll.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecReadOutputResult {
+    pub data_base64: String,
+    pub next_offset: u64,
+    #[serde(default)]
+    pub eof: bool,
+    #[serde(default)]
+    pub dropped_bytes: u64,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub timed_out: bool,
+}
+
+/// `Signal` / `Resize` op result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecControlResult {
+    #[serde(default)]
+    pub delivered: bool,
+}
+
+/// Terminal disposition of the guest command. `Exited` carries the WIFEXITED
+/// code (0–255); `Signaled` carries the terminating signal number; `Error`
+/// carries a closed-enum guest error slug for an abnormal terminal state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum ExecTerminalStatus {
+    Exited { code: i32 },
+    Signaled { signal: u32 },
+    Error { slug: String },
+}
+
+/// `Wait` op result. Exactly one of `terminalStatus` (terminal) or
+/// `running == true` is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWaitResult {
+    #[serde(default)]
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_status: Option<ExecTerminalStatus>,
+}
+
+/// `Close` op result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecCloseResult {
+    #[serde(default)]
+    pub stdin_closed: bool,
+}
+
+/// Multiplexed exec operation result. Closed adjacently-tagged enum mirroring
+/// [`ExecOp`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum ExecOpResponse {
+    Start(ExecStartResult),
+    WriteStdin(ExecWriteStdinResult),
+    ReadOutput(ExecReadOutputResult),
+    Signal(ExecControlResult),
+    Resize(ExecControlResult),
+    Wait(ExecWaitResult),
+    Close(ExecCloseResult),
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
