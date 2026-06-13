@@ -628,4 +628,58 @@ mod tests {
         assert!(gate_capabilities(&full_tty_caps(), true).is_ok());
         assert!(gate_capabilities(&full_tty_caps(), false).is_ok());
     }
+
+    /// Daemon-side fail-closed complement to the CLI-side
+    /// `vm_exec_old_generation_fails_closed_without_proxy_or_ssh`: when the real
+    /// connector cannot reach the guest vsock (absent socket / an old
+    /// generation that never shipped guest-control), `establish` fails CLOSED
+    /// with the typed unreachable error. It never returns `Ok`, never proxies
+    /// an exec op, and never falls back to SSH — the connector has exactly one
+    /// success path, which requires a live authenticated handshake.
+    #[tokio::test]
+    async fn establish_against_absent_vsock_fails_closed_with_typed_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A socket path that does not exist: the guest-control endpoint is
+        // absent, modelling an old generation with no guest-control listener.
+        let absent_socket = dir.path().join("guest-control.sock");
+        assert!(!absent_socket.exists());
+
+        let params = ProbeParams {
+            vm_id: "work".to_owned(),
+            socket_path: absent_socket,
+            state_root: dir.path().to_path_buf(),
+            expected_state_root_uid: 0,
+            expected_state_root_gid: 0,
+            expected_peer_uid: 0,
+            expected_peer_gid: 0,
+        };
+        // A broker socket path that is never reached: the connect fails first,
+        // so no broker sign and no exec op is ever attempted.
+        let connector = RealExecConnector::new(
+            params,
+            dir.path().join("broker.sock"),
+            ExecOpDeadlines::default(),
+        );
+
+        let spec = ExecStartSpec {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: false,
+            detached: false,
+            env: Vec::new(),
+            cwd: None,
+            term_size: None,
+        };
+
+        let result = connector.establish(&spec).await;
+
+        // Fail closed: a typed unreachable error, never Ok, never a silent
+        // SSH/raw fallback.
+        assert_eq!(
+            result.err(),
+            Some(ExecEstablishError::Transport),
+            "an absent guest-control endpoint must fail closed to the typed \
+             transport-unreachable error, never establish or fall back"
+        );
+    }
 }

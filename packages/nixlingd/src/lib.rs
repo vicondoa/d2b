@@ -8473,6 +8473,186 @@ mod runtime_acl_tests {
     fn _ensure_types_in_scope(_: Uid, _: Gid) {}
 }
 
+/// The public.sock accept loop is serial: it accepts one connection, runs
+/// `handle_connection`, then accepts the next. An exec session's owner
+/// connection is long-lived, so `handle_connection` MUST hand the exec session
+/// off to a spawned owner thread and return immediately — otherwise the single
+/// accept loop would be pinned for the entire lifetime of one exec session and
+/// no other client could be served. These hermetic tests drive
+/// `handle_connection` over a real `SOCK_SEQPACKET` pair (no live VM) and prove
+/// the exec branch spawns-and-returns while a second request is still served.
+#[cfg(test)]
+mod accept_loop_concurrency_tests {
+    use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
+    use super::*;
+
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use nixling_ipc::public_wire::{ExecOp, ExecStartArgs};
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn seqpacket_pair() -> (Socket, Socket) {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    /// A `ServerState` whose config admits a single admin/launcher principal so
+    /// the test SO_PEERCRED override resolves to `PeerRole::Admin` (exec
+    /// requires admin). Returns the live `TempDir` so it outlives the daemon.
+    fn admin_exec_state() -> (ServerState, TempDir) {
+        let dir = tempfile::tempdir().expect("daemon state dir");
+        let broker_reap_log = BrokerReapLog::new();
+        let config = DaemonConfig {
+            launcher_users: vec!["execadmin".to_owned()],
+            admin_users: vec!["execadmin".to_owned()],
+            ..DaemonConfig::default()
+        };
+        let state = ServerState {
+            config,
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: dir.path().to_path_buf(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(dir.path().join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
+        };
+        (state, dir)
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0",
+        }))
+        .expect("encode hello frame")
+    }
+
+    fn exec_start_frame(op_id: u64) -> Vec<u8> {
+        let op = ExecOp::Start(ExecStartArgs {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: false,
+            detached: false,
+            env: None,
+            cwd: None,
+            term_size: None,
+        });
+        let mut value = serde_json::to_value(&op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), json!("exec"));
+        object.insert("opId".to_owned(), json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    /// Scoped guard for the test SO_PEERCRED override env vars so a panic still
+    /// restores process-global state. Only `handle_connection` reads these, and
+    /// only these accept-loop tests drive `handle_connection`.
+    struct PeerOverrideEnv;
+
+    impl PeerOverrideEnv {
+        fn admin() -> Self {
+            std::env::set_var("NIXLINGD_TEST_PEER_UID", "4242");
+            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "execadmin");
+            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
+            Self
+        }
+    }
+
+    impl Drop for PeerOverrideEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
+            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
+            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+        }
+    }
+
+    #[test]
+    fn exec_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        let state = Arc::new(state);
+
+        // --- Connection A: opens a long-lived exec owner session. ---
+        let (server_a, client_a) = seqpacket_pair();
+        // SOCK_SEQPACKET preserves message boundaries, so both datagrams can be
+        // buffered before the daemon reads them.
+        write_frame(&client_a, &hello_frame()).expect("client A sends hello");
+        write_frame(&client_a, &exec_start_frame(1)).expect("client A sends exec start");
+        // The client deliberately keeps its end OPEN for the session's lifetime.
+        // If handle_connection ran the exec session inline (or looped reading
+        // further owner frames on the accept-loop thread), it would block here
+        // and never return — the watchdog below would fire.
+
+        let state_a = Arc::clone(&state);
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_a = std::thread::spawn(move || {
+            let result = handle_connection(server_a, &state_a);
+            let _ = done_tx.send(result.is_ok());
+        });
+
+        let returned = done_rx.recv_timeout(Duration::from_secs(10));
+        assert!(
+            matches!(returned, Ok(true)),
+            "handle_connection must spawn the exec owner off the serial accept \
+             loop and return Ok promptly, not run the session inline (got \
+             {returned:?})"
+        );
+        handle_a.join().expect("accept-loop thread joins");
+
+        // --- Connection B: a SECOND public.sock request is accepted and served
+        //     after the exec was dispatched on connection A (whose owner
+        //     connection is still held open). ---
+        let (server_b, client_b) = seqpacket_pair();
+        let client_b = std::thread::spawn(move || {
+            write_frame(&client_b, &hello_frame()).expect("client B sends hello");
+            let hello_ok = read_frame(&client_b).expect("client B reads helloOk");
+            let hello_ok: serde_json::Value =
+                serde_json::from_slice(&hello_ok).expect("helloOk is JSON");
+            assert_eq!(hello_ok["type"], "helloOk", "second connection negotiates");
+            write_frame(
+                &client_b,
+                &serde_json::to_vec(&json!({ "type": "authStatus" })).unwrap(),
+            )
+            .expect("client B sends authStatus");
+            let response = read_frame(&client_b).expect("client B reads response");
+            let response: serde_json::Value =
+                serde_json::from_slice(&response).expect("response is JSON");
+            // Dropping client_b on return signals EOF so handle_connection ends.
+            response
+        });
+
+        let result_b = handle_connection(server_b, &state);
+        assert!(
+            result_b.is_ok(),
+            "the second connection must be served while the exec owner is held \
+             open: {result_b:?}"
+        );
+        let response = client_b.join().expect("client B thread joins");
+        assert_eq!(
+            response["type"], "authStatusResponse",
+            "second request was actually served, not merely accepted"
+        );
+
+        // Connection A's owner session is torn down with its client end.
+        drop(client_a);
+    }
+}
+
 #[cfg(test)]
 mod broker_dispatch_tests {
     use std::fs::File;

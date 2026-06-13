@@ -1186,6 +1186,10 @@ mod tests {
         signal_calls: AtomicUsize,
         resize_calls: AtomicUsize,
         read_calls: AtomicUsize,
+        // Per-op transport deadline recorded in call order, tagged by op kind.
+        // Lets a test assert each op draws a FRESH per-op deadline rather than
+        // sharing one cumulative session budget.
+        op_timeouts: Mutex<Vec<(&'static str, Duration)>>,
     }
 
     struct FakeClient {
@@ -1211,9 +1215,14 @@ mod tests {
             _offset: u64,
             _data: Vec<u8>,
             _eof: bool,
-            _timeout: Duration,
+            timeout: Duration,
         ) -> Result<WriteStdinOutcome, ExecOpError> {
             self.shared.write_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("write", timeout));
             Ok(self.write_outcome.clone())
         }
 
@@ -1224,9 +1233,14 @@ mod tests {
             _max_len: u64,
             _wait: bool,
             _timeout_ms: u64,
-            _timeout: Duration,
+            timeout: Duration,
         ) -> Result<ReadOutputOutcome, ExecOpError> {
             self.shared.read_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("read", timeout));
             if let Some(gate) = &self.read_gate {
                 gate.notified().await;
             }
@@ -1249,9 +1263,14 @@ mod tests {
             &self,
             _control_seq: u64,
             _signo: u32,
-            _timeout: Duration,
+            timeout: Duration,
         ) -> Result<(), ExecOpError> {
             self.shared.signal_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("signal", timeout));
             Ok(())
         }
 
@@ -1260,17 +1279,27 @@ mod tests {
             _control_seq: u64,
             _rows: u32,
             _cols: u32,
-            _timeout: Duration,
+            timeout: Duration,
         ) -> Result<(), ExecOpError> {
             self.shared.resize_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("resize", timeout));
             Ok(())
         }
 
         async fn wait(
             &self,
             _timeout_ms: u64,
-            _timeout: Duration,
+            timeout: Duration,
         ) -> Result<WaitOutcome, ExecOpError> {
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("wait", timeout));
             let outcome = self.waits.lock().unwrap().pop_front();
             Ok(outcome.unwrap_or(WaitOutcome {
                 running: false,
@@ -1278,8 +1307,13 @@ mod tests {
             }))
         }
 
-        async fn close_stdin(&self, _offset: u64, _timeout: Duration) -> Result<(), ExecOpError> {
+        async fn close_stdin(&self, _offset: u64, timeout: Duration) -> Result<(), ExecOpError> {
             self.shared.close_calls.fetch_add(1, Ordering::SeqCst);
+            self.shared
+                .op_timeouts
+                .lock()
+                .unwrap()
+                .push(("close", timeout));
             Ok(())
         }
     }
@@ -1749,6 +1783,77 @@ mod tests {
         assert_eq!(shared.write_calls.load(Ordering::SeqCst), 1);
         drop(tx);
         worker.join().unwrap();
+    }
+
+    /// Each proxied op draws a FRESH per-op transport deadline. A long-lived
+    /// session does NOT share one cumulative budget that shrinks as the session
+    /// ages, so a session whose total elapsed time exceeds a single op deadline
+    /// still serves later ops with a full deadline.
+    #[test]
+    fn each_proxied_op_draws_a_fresh_per_op_deadline_not_a_shared_session_budget() {
+        let deadlines = ExecOpDeadlines::default();
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 3,
+            next_offset: 3,
+            backpressured: false,
+            stdin_closed: false,
+        });
+
+        // Drive a sequence of ops on ONE long-lived session.
+        send_op(&tx, write_op(0, b"abc")).expect("first write");
+        send_op(
+            &tx,
+            ExecOp::Signal(ExecSignalArgs {
+                session: "h".to_owned(),
+                signo: 2,
+                op_id: 0,
+            }),
+        )
+        .expect("signal");
+        send_op(&tx, write_op(3, b"def")).expect("second write");
+        send_op(
+            &tx,
+            ExecOp::Wait(ExecWaitArgs {
+                session: "h".to_owned(),
+                timeout_ms: 1_000,
+            }),
+        )
+        .expect("wait");
+
+        drop(tx);
+        worker.join().unwrap();
+
+        let recorded = shared.op_timeouts.lock().unwrap().clone();
+
+        // Every control op got the FULL fresh control deadline...
+        let control: Vec<Duration> = recorded
+            .iter()
+            .filter(|(kind, _)| *kind == "write" || *kind == "signal")
+            .map(|(_, d)| *d)
+            .collect();
+        assert!(control.len() >= 3, "expected >=3 control ops, got {control:?}");
+        for d in &control {
+            assert_eq!(
+                *d, deadlines.control,
+                "each control op must draw a fresh full control deadline"
+            );
+        }
+        // ...and the LAST control op's deadline equals the FIRST: no shared
+        // cumulative budget that decays as the session ages.
+        assert_eq!(
+            control.first(),
+            control.last(),
+            "a later op must not inherit a shrunk remaining-budget deadline"
+        );
+
+        // The long-poll Wait draws its own fresh poll-based deadline, computed
+        // from THIS op's timeout_ms — not from session start.
+        let wait = recorded
+            .iter()
+            .find(|(kind, _)| *kind == "wait")
+            .map(|(_, d)| *d)
+            .expect("wait op recorded a deadline");
+        assert_eq!(wait, Duration::from_millis(1_000) + deadlines.poll_slack);
     }
 
     #[test]
