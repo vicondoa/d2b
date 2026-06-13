@@ -322,6 +322,9 @@ _nixling() {
             nixling__subcmd__help__subcmd__usb,probe)
                 cmd="nixling__subcmd__help__subcmd__usb__subcmd__probe"
                 ;;
+            nixling__subcmd__help__subcmd__vm,exec)
+                cmd="nixling__subcmd__help__subcmd__vm__subcmd__exec"
+                ;;
             nixling__subcmd__help__subcmd__vm,konsole)
                 cmd="nixling__subcmd__help__subcmd__vm__subcmd__konsole"
                 ;;
@@ -448,6 +451,9 @@ _nixling() {
             nixling__subcmd__usb__subcmd__help,probe)
                 cmd="nixling__subcmd__usb__subcmd__help__subcmd__probe"
                 ;;
+            nixling__subcmd__vm,exec)
+                cmd="nixling__subcmd__vm__subcmd__exec"
+                ;;
             nixling__subcmd__vm,help)
                 cmd="nixling__subcmd__vm__subcmd__help"
                 ;;
@@ -468,6 +474,9 @@ _nixling() {
                 ;;
             nixling__subcmd__vm,stop)
                 cmd="nixling__subcmd__vm__subcmd__stop"
+                ;;
+            nixling__subcmd__vm__subcmd__help,exec)
+                cmd="nixling__subcmd__vm__subcmd__help__subcmd__exec"
                 ;;
             nixling__subcmd__vm__subcmd__help,help)
                 cmd="nixling__subcmd__vm__subcmd__help__subcmd__help"
@@ -1747,8 +1756,22 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__help__subcmd__vm)
-            opts="start stop restart list status konsole"
+            opts="start stop restart list status konsole exec"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__help__subcmd__vm__subcmd__exec)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -2565,7 +2588,7 @@ _nixling() {
             return 0
             ;;
         nixling__subcmd__vm)
-            opts="-h --help start stop restart list status konsole help"
+            opts="-h --help start stop restart list status konsole exec help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2578,9 +2601,45 @@ _nixling() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        nixling__subcmd__vm__subcmd__help)
-            opts="start stop restart list status konsole help"
+        nixling__subcmd__vm__subcmd__exec)
+            opts="-i -t -h --interactive --tty --env --cwd --json --human --help <VM> <COMMAND>..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --env)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__help)
+            opts="start stop restart list status konsole exec help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        nixling__subcmd__vm__subcmd__help__subcmd__exec)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
