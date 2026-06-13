@@ -146,7 +146,7 @@ pub enum ProcessRole {
     /// predate guestd). New generations use [`ProcessRole::GuestControlHealth`]
     /// for framework readiness instead.
     GuestSshReadiness,
-    /// Authenticated guest-control Health readiness probe (W15).
+    /// Authenticated guest-control Health readiness probe.
     ///
     /// Replaces [`ProcessRole::GuestSshReadiness`] as the framework readiness
     /// gate on guest-control-capable VMs: readiness is a full authenticated
@@ -243,9 +243,9 @@ pub enum ReadinessPredicate {
     Command(Vec<String>),
     /// Component-specific predicate named by the emitter.
     ComponentSpecific(String),
-    /// Authenticated guest-control Health probe (W15). Readiness requires a
+    /// Authenticated guest-control Health probe. Readiness requires a
     /// full Hello + token challenge-response + Health over the guest-control
-    /// vsock — the W11 host-side probe. Unlike [`Self::ComponentSpecific`]
+    /// vsock — the host-side probe. Unlike [`Self::ComponentSpecific`]
     /// (which reports ready unconditionally and would fail OPEN), this predicate
     /// fails CLOSED: it is ready only when the daemon completes the
     /// authenticated probe and the guest reports a healthy/degraded state, and

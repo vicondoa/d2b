@@ -16,7 +16,7 @@ pub const TTRPC_FRAME_CAP_BYTES: u64 = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 pub const HARD_MAX_CHUNK_BYTES: u64 = 1024 * 1024;
 
-/// Maximum raw byte size of a single-shot `ReadGuestFile` payload (W15).
+/// Maximum raw byte size of a single-shot `ReadGuestFile` payload.
 ///
 /// Deliberately set BELOW both the public.sock 1 MiB frame
 /// (`nixling_ipc::MAX_FRAME_SIZE`) and the ttRPC frame cap, with margin for the
