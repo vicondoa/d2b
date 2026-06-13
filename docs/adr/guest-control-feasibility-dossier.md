@@ -4,6 +4,18 @@ This dossier records the W0 evidence required by
 [ADR 0028](../adr/0028-guest-control-plane-over-vsock.md). It is the
 panel-review input for locking the guest-control IPC direction.
 
+> **Update (W16) — exploratory/historical.** This is W0 feasibility
+> evidence, not a description of the shipped surface. The guest-control
+> plane has since landed: `nixling-guestd` serves the unary APIs and the
+> chunked-stdio exec RPCs over the authenticated vsock channel, `config
+> sync` reads over `ReadGuestFile` and **fails closed** on old
+> generations (the `ssh-compat` transport in the compatibility-matrix
+> rows below is **not yet wired**), and `vm konsole` / `vm exec` run over
+> guest-control with no SSH. Per-VM SSH keys are retained only for the
+> remaining compatibility surfaces (notably `usb attach --apply`). Read
+> the rows below as the original feasibility analysis, not current
+> behaviour.
+
 ## Summary recommendation
 
 Use **ttRPC/protobuf for guest-control unary APIs**:

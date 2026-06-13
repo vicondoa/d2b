@@ -6,6 +6,22 @@
   (daemon-only clean break), ADR 0017 (no bash fallbacks), ADR 0018
   (microvm.nix removal), ADR 0024 (in-VM guest config sync)
 
+> **Update (W16) — current shipped reality.** The guest-control plane
+> described here has landed: `nixling-guestd` serves `Hello`/`Health`/
+> `Capabilities`, the bounded `ReadGuestFile` read, and the exec
+> lifecycle RPCs over the authenticated vsock channel. `nixling config
+> sync` reads the guest config working copy over `ReadGuestFile` (no
+> `ssh cat`) and **fails closed** on a VM whose running generation does
+> not declare the guest-control transport — the SSH compatibility path
+> sketched below is **not yet wired** into the command. `nixling vm
+> konsole` runs `nixling vm exec -it` over guest-control (no SSH), and
+> the admin-only `nixling vm exec` verb shipped alongside it. The DAG
+> readiness node is `guest-control-health`, not `guest-ssh-readiness`.
+> Per-VM SSH keys are retained only for the remaining compatibility
+> surfaces (notably `usb attach --apply`). There is no separate
+> guest-control field on `nixling status` yet. The original decision
+> text below is preserved as the historical record.
+
 ## Context
 
 Nixling's host control plane is daemon-only: the CLI talks to

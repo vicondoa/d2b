@@ -6,6 +6,19 @@
   config editing, sync, and containment), ADR 0028 (guest-control plane
   over vsock)
 
+> **Update (W16) — current shipped reality.** This migration landed.
+> Framework readiness gates on the fail-closed `guest-control-health`
+> DAG node (authenticated guest-control `Health`), not the raw TCP-22
+> `guest-ssh-readiness` node. `config sync` reads the guest config
+> working copy over the typed bounded `ReadGuestFile` RPC; on a VM whose
+> running generation does not declare the guest-control transport it
+> **fails closed** — the operator SSH compatibility transport described
+> below is **not yet wired** into the command. `nixling vm konsole` now
+> runs over guest-control (no SSH) via the shipped admin-only `nixling
+> vm exec`. Per-VM SSH keys remain only for the surviving compatibility
+> surfaces (notably `usb attach --apply`). The original decision text
+> below is preserved as the historical record.
+
 ## Context
 
 Two framework operations historically reached into a running VM over
