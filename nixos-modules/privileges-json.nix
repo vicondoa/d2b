@@ -342,10 +342,9 @@ let
     "subject": "VM/process",
     "scope": "per-VM",
     "allowedGroups": [
-      "nixling-launcher",
       "nixling-admin"
     ],
-    "destructive": false,
+    "destructive": true,
     "secretAccess": "none",
     "brokerRequired": "no",
     "auditMode": "yes"

@@ -548,6 +548,39 @@ Notes:
   so there is no `OpAuditRecord`; the daemon logs the public-operation
   decision instead.
 
+## Public `exec` operation (daemon-handled, no broker dispatch)
+
+The `nixling vm exec` verb (and its `vm konsole` wrapper) is a
+**public** operation handled entirely by the unprivileged daemon and
+CLI. It dispatches **no** broker request (`brokerRequired: false`): the
+daemon holds an in-process exec **session table** and proxies typed exec
+ops over the authenticated guest-control vsock to the VM's `guestd`. It
+is in the machine-readable public-operation matrix
+([`schemas/v2/privileges.json`](schemas/v2/privileges.json),
+`publicOperations[].operation = "exec"`).
+
+| Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `exec` | VM (guest process) | per VM | none | yes (runs a guest command) | no | `nixling-admin` only | yes | deny |
+
+Notes:
+
+- `exec` is **admin-only**: the daemon checks the `SO_PEERCRED` admin
+  role on the owner connection **before** any session lookup, slot
+  reservation, transport connect, or `ExecCreate`. A launcher-role
+  caller is rejected first, with no guest-control session established.
+- The daemon emits **one** kind=critical session-establishment audit
+  event per exec session carrying only redacted fields: `vm`, `peer_uid`,
+  the opaque `session_handle`, and the negotiated `tty` flag. The guest
+  `exec_id`/`guest_boot_id`, per-stream offsets, and the op stream are
+  span/aggregate detail, never audit labels.
+- Redaction is fail-closed: argv (hash-only), env, cwd, paths, stdio
+  bytes, nonces, tokens, capability tags, and session handles never
+  appear in any `Debug`/trace/audit/metric surface.
+- No host mutation flows through the broker for `exec`, so there is no
+  `OpAuditRecord`; the daemon records the public-operation decision and
+  the session-establishment event instead.
+
 ## Cross-references
 
 - ADR 0011 (cgroup + pidfd), ADR 0012 (IPv6/IfName/bridge-port),

@@ -115,6 +115,33 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `nixling vm exec <vm> -- <cmd…>` (and `-it` for an interactive TTY):
+  an admin-only operator command that runs a command inside a running
+  guest over the authenticated guest-control transport — CLI → daemon
+  `public.sock` → authenticated guest-control vsock → `guestd` exec
+  RPCs. There is no SSH and no host PTY (the guest owns the PTY); the
+  host only flips termios via an RAII raw-mode guard restored on every
+  exit, error, disconnect, or panic. Non-interactive mode streams
+  stdout/stderr separately; `-it` allocates a guest PTY, merges stderr
+  into stdout, and forwards `SIGWINCH`/`SIGINT`/`SIGQUIT`/`SIGHUP`/
+  `SIGTERM`/`SIGTSTP` to the guest foreground process group (signal
+  handlers enqueue only). The daemon holds an in-process exec session
+  table whose per-session workers own one persistent authenticated
+  guest-control client with fresh per-op deadlines; session-table caps
+  (global / per-UID / per-VM) and `Start` rate limiting are enforced
+  before connect/auth, and an old or non-guest-control generation fails
+  closed with exit `70` (no proxy, no SSH fallback). Guest exit status
+  passes through unchanged (`128+N` for signal death); transport, auth,
+  capacity, protocol, old-generation, and internal failures map to
+  reserved CLI exit codes that `--json` disambiguates from a guest exit
+  code via `source`/`reason`/`guestExitCode`/`transportExitCode`. `-it`
+  is human-only and is rejected together with `--json`. Detached
+  reconnect is deferred; the daemon owner handler rejects `detached=true`
+  for now. The exec session establishes one redacted kind=critical audit
+  event (vm / peer uid / opaque handle / tty only); argv is hash-only and
+  stdio/env/cwd/paths never reach any log, span, audit record, or metric
+  label.
+
 - Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
   command that outlives the originating connection, supervised by the root
   guest daemon through slot-based `systemd-run` transient units
@@ -401,9 +428,13 @@ deprecations ship one minor release before removal.
 - The framework readiness label is now the canonical `guest-control-health`
   (no per-VM suffix) across `status`, `vm list`, and the start preview;
   the start-preview DAG no longer hard-codes an `ssh-ready` node.
-- `nixling vm konsole` is deprecated. It still works as an operator SSH
-  convenience; a typed guest-control session replacement is planned for
-  a later release. Nothing is removed yet.
+- `nixling vm konsole` is now a thin wrapper around `nixling vm exec -it`:
+  it opens the interactive guest session in a terminal emulator
+  (default `konsole`, overridable with `--terminal`) over the
+  authenticated guest-control transport. The historical operator-SSH
+  path and its allowlist site were removed; the SSH-only flags
+  (`--host` / `--key` / `--user`) are now rejected with a migration
+  message pointing at `vm exec -it`. No SSH process is spawned.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.
