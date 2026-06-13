@@ -141,6 +141,41 @@ impl ExecClientError {
         let (exit_code, source) = exit_for_kind(kind);
         Self::new(kind.to_owned(), exit_code, source, message, remediation)
     }
+
+    /// Map an abnormal terminal slug (a closed daemon-side terminal-state
+    /// constant, never a guest-supplied string) to a transport/protocol
+    /// failure (WR9). An abnormal terminal is NEVER a guest exit: it carries a
+    /// reserved CLI exit code with `source` `transport`/`guest-control`/
+    /// `protocol`, never `guest`.
+    pub fn from_abnormal_slug(slug: &str) -> Self {
+        match slug {
+            "lost-guestd" => Self::new(
+                "guest-control-lost-guestd",
+                EXIT_EXEC_TRANSPORT,
+                ExecFailureSource::Transport,
+                "the guest-control daemon (guestd) for this VM became unreachable before \
+                 the command reported a terminal status",
+                "confirm the VM is running and guest-control-health is ready (`nixling vm status <vm>`), then retry",
+            ),
+            "cancelled" | "slow-consumer-cancelled" => Self::new(
+                "exec-session-cancelled",
+                EXIT_EXEC_CAPACITY,
+                ExecFailureSource::GuestControl,
+                "the exec session was cancelled before the command reported a terminal status",
+                "retry; the daemon may be shedding load or the session deadline elapsed",
+            ),
+            "reaped" => Self::new(
+                "exec-session-reaped",
+                EXIT_EXEC_CAPACITY,
+                ExecFailureSource::GuestControl,
+                "the exec session slot was reclaimed before the command reported a terminal status",
+                "retry; the session was reaped after a terminal-cleanup timeout",
+            ),
+            _ => Self::protocol(
+                "the guest reported an out-of-contract abnormal terminal status",
+            ),
+        }
+    }
 }
 
 /// The CLI exit code + failure source for a daemon wire `kind` slug (WR9).
@@ -259,6 +294,35 @@ pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
             "cancelled" | "reaped" | "slow-consumer-cancelled" => EXIT_EXEC_CAPACITY,
             _ => EXIT_EXEC_PROTOCOL,
         },
+    }
+}
+
+/// Validate + resolve a wire terminal status into an [`ExecOutcome`] (WR9).
+/// Only a true guest `WIFEXITED` (0–255) or `WIFSIGNALED` (valid signo)
+/// resolves as a guest outcome. An out-of-range exit code, an out-of-range
+/// signal, or an abnormal `Error` slug is a transport/protocol failure — never
+/// synthesized as a guest success/status.
+fn resolve_terminal(status: ExecTerminalStatus) -> Result<ExecOutcome, ExecClientError> {
+    match &status {
+        ExecTerminalStatus::Exited { code } => {
+            if (0..=255).contains(code) {
+                Ok(ExecOutcome { terminal: status })
+            } else {
+                Err(ExecClientError::protocol(
+                    "the guest reported an out-of-range WIFEXITED status (must be 0-255)",
+                ))
+            }
+        }
+        ExecTerminalStatus::Signaled { signal } => {
+            if (1..=64).contains(signal) {
+                Ok(ExecOutcome { terminal: status })
+            } else {
+                Err(ExecClientError::protocol(
+                    "the guest reported an out-of-range terminating signal number",
+                ))
+            }
+        }
+        ExecTerminalStatus::Error { slug } => Err(ExecClientError::from_abnormal_slug(slug)),
     }
 }
 
@@ -493,12 +557,16 @@ where
             }))?;
             let wait = expect_wait(resp)?;
             if let Some(status) = wait.terminal_status {
-                return Ok(ExecOutcome { terminal: status });
+                return resolve_terminal(status);
             }
             if !wait.running {
-                return Ok(ExecOutcome {
-                    terminal: ExecTerminalStatus::Exited { code: 0 },
-                });
+                // The guest reports the command is no longer running but
+                // supplied no terminal status: a protocol failure, never a
+                // synthesized guest success (WR9).
+                return Err(ExecClientError::protocol(
+                    "the guest reported the command is no longer running but supplied \
+                     no terminal status",
+                ));
             }
             // Still running but output EOF reported — keep polling Wait.
         }
@@ -1247,6 +1315,76 @@ mod tests {
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 7 });
         // 3 running polls + 1 terminal poll.
         assert_eq!(transport.count_ops("wait"), 4);
+    }
+
+    #[test]
+    fn out_of_range_exit_code_is_a_protocol_failure() {
+        // WR9: a malformed terminal status (exit code outside 0-255) is a
+        // protocol failure, never synthesized as a guest success/status.
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 4096 });
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect_err("out-of-range exit must fail closed");
+        assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
+        assert_eq!(err.source, ExecFailureSource::Protocol);
+    }
+
+    #[test]
+    fn out_of_range_signal_is_a_protocol_failure() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Signaled { signal: 9001 });
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect_err("out-of-range signal must fail closed");
+        assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
+        assert_eq!(err.source, ExecFailureSource::Protocol);
+    }
+
+    #[test]
+    fn no_terminal_status_without_running_is_a_protocol_failure() {
+        // running == false but no terminal status: protocol failure, NOT a
+        // synthesized Exited(0) guest success.
+        let mut transport = FakeTransport {
+            stdout: b"out".to_vec(),
+            ..Default::default()
+        };
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect_err("missing terminal status must fail closed");
+        assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
+        assert_eq!(err.source, ExecFailureSource::Protocol);
+    }
+
+    #[test]
+    fn abnormal_terminal_slugs_map_to_transport_or_protocol_not_guest() {
+        // WR9: abnormal terminal kinds carry reserved codes with a
+        // transport/guest-control/protocol source, NEVER `guest`.
+        let cases = [
+            ("lost-guestd", EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport),
+            ("cancelled", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
+            ("slow-consumer-cancelled", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
+            ("reaped", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
+            ("protocol-error", EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
+        ];
+        for (slug, code, source) in cases {
+            let mut transport = FakeTransport::terminal(ExecTerminalStatus::Error {
+                slug: slug.to_owned(),
+            });
+            let mut host = FakeHostIo::default();
+            let mut signals = FakeSignals::default();
+            let start = start_result();
+            let err =
+                run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+                    .expect_err("abnormal terminal must fail closed");
+            assert_eq!(err.exit_code, code, "exit code for {slug}");
+            assert_eq!(err.source, source, "source for {slug}");
+            assert_ne!(err.source.as_str(), "guest", "abnormal is never guest-sourced");
+        }
     }
 
     // ---- (e) backpressure / offset / stream separation --------------------

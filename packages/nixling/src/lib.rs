@@ -3689,11 +3689,10 @@ impl exec_client::ExecOwnerTransport for OwnerSocketTransport {
     }
 }
 
-/// CliFailure for an unreachable daemon on the exec path: there is no SSH
-/// fallback, so an absent/unreachable daemon is a transport failure.
-fn exec_daemon_unavailable_failure() -> CliFailure {
-    CliFailure::new(
-        exec_client::EXIT_EXEC_TRANSPORT,
+/// Typed transport error for an unreachable daemon on the exec path: there is
+/// no SSH fallback, so an absent/unreachable daemon is a transport failure.
+fn exec_daemon_unavailable_error() -> exec_client::ExecClientError {
+    exec_client::ExecClientError::transport(
         "vm exec: the nixling daemon is not reachable on its public socket; \
          start nixlingd and retry (nixling does not fall back to SSH)",
     )
@@ -3714,6 +3713,44 @@ fn exec_error_to_failure(error: exec_client::ExecClientError) -> CliFailure {
     CliFailure::new(error.exit_code, message)
 }
 
+/// Terminate `vm exec` on a typed exec-client failure. For `--json`, emit the
+/// single terminal JSON document on STDOUT and return the CLI exit code (so
+/// nothing reaches stderr and there is exactly one JSON document on stdout —
+/// WR10). For human runs, return the plain `CliFailure` rendered to stderr.
+fn exec_terminate(
+    args: &VmExecArgs,
+    error: exec_client::ExecClientError,
+) -> Result<i32, CliFailure> {
+    if args.json {
+        let exit_code = error.exit_code;
+        print_exec_json(&exec_json_failure_value(args, &error))?;
+        Ok(exit_code)
+    } else {
+        Err(exec_error_to_failure(error))
+    }
+}
+
+/// Terminate `vm exec` on a usage error (exit 2, `source: "cli"`). For `--json`
+/// this still emits one terminal JSON document on STDOUT (WR10); otherwise it is
+/// a plain stderr failure.
+fn exec_usage_terminate(
+    args: &VmExecArgs,
+    message: impl Into<String>,
+) -> Result<i32, CliFailure> {
+    let message = message.into();
+    if args.json {
+        let mut map = exec_json_base(args);
+        map.insert("source".to_owned(), Value::String("cli".to_owned()));
+        map.insert("reason".to_owned(), Value::String("usage".to_owned()));
+        map.insert("exitCode".to_owned(), Value::from(2));
+        map.insert("message".to_owned(), Value::String(message));
+        print_exec_json(&Value::Object(map))?;
+        Ok(2)
+    } else {
+        Err(CliFailure::new(2, message))
+    }
+}
+
 /// Run a command inside a guest-control VM (WR11 FSM). Establishes the
 /// daemon-held authenticated session over `public.sock` (admin-only), then
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
@@ -3722,18 +3759,20 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     use nixling_ipc::public_wire::{ExecEnvVar, ExecOp, ExecOpResponse, ExecStartArgs, ExecTermSize};
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
-    if args.json && args.tty {
-        return Err(CliFailure::new(
-            2,
-            "vm exec: --json cannot be combined with -t/--tty; an interactive \
-             TTY session is human-only",
-        ));
+    //    `--json` is machine output: reject it together with ANY interactive /
+    //    TTY mode (which streams raw bytes to stdout) before raw mode (WR10).
+    if args.json && (args.tty || args.interactive) {
+        return exec_usage_terminate(
+            args,
+            "vm exec: --json cannot be combined with -i/-t; an interactive \
+             session streams raw output and is human-only",
+        );
     }
     if args.command.is_empty() {
-        return Err(CliFailure::new(
-            2,
+        return exec_usage_terminate(
+            args,
             "vm exec: missing command; pass it after `--` (e.g. `nixling vm exec myvm -- ls`)",
-        ));
+        );
     }
     let tty = args.tty;
     let interactive = args.interactive || args.tty;
@@ -3741,16 +3780,16 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     let mut env_vars = Vec::with_capacity(args.env.len());
     for entry in &args.env {
         let Some((key, value)) = entry.split_once('=') else {
-            return Err(CliFailure::new(
-                2,
+            return exec_usage_terminate(
+                args,
                 format!("vm exec: --env expects KEY=VALUE, got '{entry}'"),
-            ));
+            );
         };
         if key.is_empty() {
-            return Err(CliFailure::new(
-                2,
+            return exec_usage_terminate(
+                args,
                 format!("vm exec: --env key must be non-empty in '{entry}'"),
-            ));
+            );
         }
         env_vars.push(ExecEnvVar {
             key: key.to_owned(),
@@ -3759,10 +3798,10 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     }
 
     if tty && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
-        return Err(CliFailure::new(
-            2,
+        return exec_usage_terminate(
+            args,
             "vm exec: -t/--tty requires stdin and stdout to be a terminal",
-        ));
+        );
     }
     let term_size = if tty {
         exec_client::current_window_size().map(|(rows, cols)| ExecTermSize { rows, cols })
@@ -3771,34 +3810,54 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     };
 
     // 2. Connect + hello + Start (establish) BEFORE entering raw mode, so an
-    //    establishment failure leaves the host terminal untouched.
+    //    establishment failure leaves the host terminal untouched. Every
+    //    establishment failure is routed through `exec_terminate` so a `--json`
+    //    run still emits exactly one terminal JSON document on stdout (WR10).
     if !context.public_socket.exists() {
-        return Err(exec_daemon_unavailable_failure());
+        return exec_terminate(args, exec_daemon_unavailable_error());
     }
     let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
         Ok(socket) => socket,
-        Err(err) if is_daemon_unreachable(&err) => return Err(exec_daemon_unavailable_failure()),
+        Err(err) if is_daemon_unreachable(&err) => {
+            return exec_terminate(args, exec_daemon_unavailable_error())
+        }
         Err(err) => {
-            return Err(CliFailure::new(
-                exec_client::EXIT_EXEC_TRANSPORT,
-                format!("vm exec: failed to connect to the daemon: {err}"),
-            ))
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to connect to the daemon: {err}"
+                )),
+            )
         }
     };
     let hello = daemon_hello_frame("hello")?;
-    socket.send_frame(&hello).map_err(|err| {
-        CliFailure::new(
-            exec_client::EXIT_EXEC_TRANSPORT,
-            format!("vm exec: failed to send hello frame: {err}"),
-        )
-    })?;
-    let hello_reply = socket.recv_frame().map_err(|err| {
-        CliFailure::new(
-            exec_client::EXIT_EXEC_TRANSPORT,
-            format!("vm exec: failed to receive hello reply: {err}"),
-        )
-    })?;
-    parse_hello_reply(&hello_reply)?;
+    if let Err(err) = socket.send_frame(&hello) {
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::transport(format!(
+                "vm exec: failed to send hello frame: {err}"
+            )),
+        );
+    }
+    let hello_reply = match socket.recv_frame() {
+        Ok(reply) => reply,
+        Err(err) => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to receive hello reply: {err}"
+                )),
+            )
+        }
+    };
+    if let Err(failure) = parse_hello_reply(&hello_reply) {
+        // A rejected hello is a handshake/version skew — a protocol failure on
+        // the exec path. Preserve the redaction-safe message.
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::protocol(failure.message),
+        );
+    }
 
     let start_op = ExecOp::Start(ExecStartArgs {
         vm: args.vm.clone(),
@@ -3809,68 +3868,88 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         cwd: args.cwd.clone(),
         term_size,
     });
-    let start_frame =
-        exec_client::encode_exec_op_frame(&start_op, 0).map_err(exec_error_to_failure)?;
-    socket.send_frame(&start_frame).map_err(|err| {
-        CliFailure::new(
-            exec_client::EXIT_EXEC_TRANSPORT,
-            format!("vm exec: failed to send start request: {err}"),
-        )
-    })?;
-    let start_reply = socket.recv_frame().map_err(|err| {
-        CliFailure::new(
-            exec_client::EXIT_EXEC_TRANSPORT,
-            format!("vm exec: failed to receive start reply: {err}"),
-        )
-    })?;
-    let start_response =
-        exec_client::decode_exec_response_frame(&start_reply).map_err(|err| {
-            if args.json {
-                exec_json_failure(args, &err, None)
-            } else {
-                exec_error_to_failure(err)
-            }
-        })?;
+    let start_frame = match exec_client::encode_exec_op_frame(&start_op, 0) {
+        Ok(frame) => frame,
+        Err(err) => return exec_terminate(args, err),
+    };
+    if let Err(err) = socket.send_frame(&start_frame) {
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::transport(format!(
+                "vm exec: failed to send start request: {err}"
+            )),
+        );
+    }
+    let start_reply = match socket.recv_frame() {
+        Ok(reply) => reply,
+        Err(err) => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to receive start reply: {err}"
+                )),
+            )
+        }
+    };
+    let start_response = match exec_client::decode_exec_response_frame(&start_reply) {
+        Ok(response) => response,
+        Err(err) => return exec_terminate(args, err),
+    };
     let start_result = match start_response {
         ExecOpResponse::Start(result) => result,
         _ => {
-            let err = exec_client::ExecClientError::protocol(
-                "the daemon did not return a Start response to the exec request",
-            );
-            return Err(if args.json {
-                exec_json_failure(args, &err, None)
-            } else {
-                exec_error_to_failure(err)
-            });
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::protocol(
+                    "the daemon did not return a Start response to the exec request",
+                ),
+            )
         }
     };
 
     // 3. Enter host terminal state (raw mode for -t, non-blocking stdin for
     //    -i) + install the forwarded-signal source. The guard restores termios
-    //    + O_NONBLOCK on EVERY return path below (including panics).
+    //    + O_NONBLOCK on EVERY return path below (including panics). `--json`
+    //    rejects -i/-t up front, so this only runs for human sessions.
     let guard = if tty {
-        Some(exec_client::FdStateGuard::enter(true, true).map_err(|err| {
-            CliFailure::new(
-                exec_client::EXIT_EXEC_INTERNAL,
-                format!("vm exec: failed to enter raw mode: {err}"),
-            )
-        })?)
+        match exec_client::FdStateGuard::enter(true, true) {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                return exec_terminate(
+                    args,
+                    exec_client::ExecClientError::internal(format!(
+                        "vm exec: failed to enter raw mode: {err}"
+                    )),
+                )
+            }
+        }
     } else if interactive {
-        Some(exec_client::FdStateGuard::enter(false, true).map_err(|err| {
-            CliFailure::new(
-                exec_client::EXIT_EXEC_INTERNAL,
-                format!("vm exec: failed to set stdin non-blocking: {err}"),
-            )
-        })?)
+        match exec_client::FdStateGuard::enter(false, true) {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                return exec_terminate(
+                    args,
+                    exec_client::ExecClientError::internal(format!(
+                        "vm exec: failed to set stdin non-blocking: {err}"
+                    )),
+                )
+            }
+        }
     } else {
         None
     };
-    let mut signals = exec_client::install_signals().map_err(|err| {
-        CliFailure::new(
-            exec_client::EXIT_EXEC_INTERNAL,
-            format!("vm exec: failed to install signal handlers: {err}"),
-        )
-    })?;
+    let mut signals = match exec_client::install_signals() {
+        Ok(signals) => signals,
+        Err(err) => {
+            drop(guard);
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::internal(format!(
+                    "vm exec: failed to install signal handlers: {err}"
+                )),
+            );
+        }
+    };
 
     let config = exec_client::ExecFsmConfig {
         tty,
@@ -3897,7 +3976,9 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         drop(guard);
         match result {
             Ok(outcome) => exec_json_success(args, &outcome, &host),
-            Err(err) => Err(exec_json_failure(args, &err, Some(&host))),
+            // Failure envelopes carry NO captured stdio bytes (WR12); they are
+            // printed to stdout as the single terminal JSON document (WR10).
+            Err(err) => exec_terminate(args, err),
         }
     } else {
         let mut host = exec_client::RealHostIo;
@@ -3949,7 +4030,9 @@ fn exec_json_attach_output(
 
 /// Build the success `--json` envelope value + CLI exit code. `source` is
 /// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
-/// with a reserved transport code.
+/// with a reserved transport code. The FSM resolves only true guest
+/// `WIFEXITED`/`WIFSIGNALED` terminals as a success (WR9); abnormal terminal
+/// kinds surface through [`exec_terminate`] as transport/protocol failures.
 fn exec_json_success_value(
     args: &VmExecArgs,
     outcome: &exec_client::ExecOutcome,
@@ -3970,11 +4053,9 @@ fn exec_json_success_value(
             map.insert("reason".to_owned(), Value::String("signaled".to_owned()));
             map.insert("signal".to_owned(), Value::from(*signal));
         }
-        ExecTerminalStatus::Error { slug } => {
-            map.insert(
-                "reason".to_owned(),
-                Value::String(format!("abnormal:{slug}")),
-            );
+        // Defensive: the FSM never resolves an abnormal terminal as a success.
+        ExecTerminalStatus::Error { slug: _ } => {
+            map.insert("reason".to_owned(), Value::String("abnormal".to_owned()));
         }
     }
     exec_json_attach_output(&mut map, host);
@@ -3992,13 +4073,13 @@ fn exec_json_success(
     Ok(exit_code)
 }
 
-/// Build the failure `--json` envelope CliFailure (rendered via the typed
-/// stderr channel so a machine consumer gets one coherent JSON document).
-fn exec_json_failure(
+/// Build the failure `--json` envelope value. WR9: transport/protocol/internal
+/// failures carry `transportExitCode` + a non-`guest` `source`. WR12: a failure
+/// envelope NEVER carries captured stdio bytes.
+fn exec_json_failure_value(
     args: &VmExecArgs,
     error: &exec_client::ExecClientError,
-    host: Option<&exec_client::CapturingHostIo>,
-) -> CliFailure {
+) -> Value {
     let mut map = exec_json_base(args);
     map.insert(
         "source".to_owned(),
@@ -4017,16 +4098,7 @@ fn exec_json_failure(
             Value::String(error.remediation.clone()),
         );
     }
-    if let Some(host) = host {
-        exec_json_attach_output(&mut map, host);
-    }
-    let rendered = serde_json::to_string_pretty(&Value::Object(map))
-        .unwrap_or_else(|_| "{}".to_owned());
-    CliFailure {
-        exit_code: error.exit_code,
-        message: error.message.clone(),
-        rendered_stderr: Some(format!("{rendered}\n")),
-    }
+    Value::Object(map)
 }
 
 /// Print a single pretty JSON document to stdout with a trailing newline.
@@ -7500,7 +7572,7 @@ mod host_install_dispatch_tests {
     fn run_vm_exec_with_mock_daemon(
         args: VmExecArgs,
         error_kind: &'static str,
-    ) -> (Result<i32, super::CliFailure>, Vec<Value>) {
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
         let socket_path = test_socket_path("vm-exec", ".sock");
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent).expect("create test socket dir");
@@ -7582,11 +7654,11 @@ mod host_install_dispatch_tests {
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
         };
-        let result = cmd_vm_exec(&context, &args);
+        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec(&context, &args));
         server.join().expect("join mock daemon thread");
         let frames: Vec<Value> = frames_rx.try_iter().collect();
         let _ = std::fs::remove_file(&socket_path);
-        (result, frames)
+        (result, frames, stdout)
     }
 
     #[test]
@@ -7611,15 +7683,38 @@ mod host_install_dispatch_tests {
             human: false,
             command: vec!["ls".to_owned()],
         };
-        let (result, frames) =
+        let (result, frames, stdout) =
             run_vm_exec_with_mock_daemon(args, "guest-control-unavailable-old-generation");
 
-        let err = result.expect_err("old-generation exec must fail closed");
-        assert_eq!(err.exit_code, 70, "old generation maps to exit 70");
-        let rendered = err.rendered_stderr.unwrap_or_default();
+        // WR10: a `--json` run emits exactly ONE terminal JSON document on
+        // STDOUT for ALL outcomes (incl this old-generation establishment
+        // reject) and returns the CLI exit code — nothing goes to stderr.
+        let exit_code = result.expect("json exec returns the exit code, not a stderr failure");
+        assert_eq!(exit_code, 70, "old generation maps to exit 70");
+        let envelope: Value =
+            serde_json::from_slice(&stdout).expect("exactly one JSON document on stdout");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("guest-control-unavailable-old-generation"),
+            "old-generation surfaces its fail-closed slug: {envelope}"
+        );
+        assert_eq!(
+            envelope.get("source").and_then(Value::as_str),
+            Some("guest-control"),
+            "old-generation is a guest-control source, never guest"
+        );
+        assert_eq!(
+            envelope.get("exitCode").and_then(Value::as_i64),
+            Some(70)
+        );
+        assert_eq!(
+            envelope.get("transportExitCode").and_then(Value::as_i64),
+            Some(70),
+            "a non-guest failure carries transportExitCode"
+        );
         assert!(
-            rendered.contains("guest-control-unavailable-old-generation"),
-            "old-generation surfaces its fail-closed slug: {rendered}"
+            envelope.get("stdoutBase64").is_none() && envelope.get("stderrBase64").is_none(),
+            "a failure envelope never carries captured stdio bytes: {envelope}"
         );
         // The daemon received exactly ONE post-hello frame (the Start). A
         // second frame would mean the CLI proxied an exec op after the reject.
@@ -8944,7 +9039,7 @@ mod exec_json_envelope_tests {
     use nixling_ipc::public_wire::ExecTerminalStatus;
 
     use super::{
-        exec_client, exec_json_failure, exec_json_success_value, VmExecArgs,
+        exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs,
     };
 
     fn exec_args(vm: &str) -> VmExecArgs {
@@ -8986,16 +9081,16 @@ mod exec_json_envelope_tests {
             "rebuild the VM with a current nixling generation",
         );
         assert_eq!(error.exit_code, 70);
-        let failure = exec_json_failure(&args, &error, None);
-        let rendered = failure.rendered_stderr.expect("json stderr");
-        let value: serde_json::Value =
-            serde_json::from_str(rendered.trim_end()).expect("valid json");
+        let value = exec_json_failure_value(&args, &error);
         assert_eq!(value["source"], "guest-control");
         assert_eq!(value["reason"], "guest-control-unavailable-old-generation");
         assert_eq!(value["exitCode"], 70);
         assert_eq!(value["transportExitCode"], 70);
         // A failure envelope never carries a guestExitCode.
         assert!(value.get("guestExitCode").is_none());
+        // WR12: a failure envelope never carries captured stdio bytes.
+        assert!(value.get("stdoutBase64").is_none());
+        assert!(value.get("stderrBase64").is_none());
     }
 }
 

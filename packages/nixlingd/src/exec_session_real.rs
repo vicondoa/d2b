@@ -379,19 +379,25 @@ fn terminal_from_state(
 ) -> Option<TerminalKind> {
     match state {
         pb::ExecState::EXEC_STATE_EXITED => {
-            let code = match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::ExitCode(code)) => *code,
-                Some(pb::terminal_status::Outcome::StatusCode(code)) => *code,
-                _ => 0,
-            };
-            Some(TerminalKind::Exited(code))
+            match status.and_then(|status| status.outcome.as_ref()) {
+                Some(pb::terminal_status::Outcome::ExitCode(code)) => {
+                    Some(TerminalKind::Exited(*code))
+                }
+                Some(pb::terminal_status::Outcome::StatusCode(code)) => {
+                    Some(TerminalKind::Exited(*code))
+                }
+                // EXITED without a WIFEXITED code is a protocol violation, not a
+                // synthesized success (WR9).
+                _ => Some(TerminalKind::Error("protocol-error")),
+            }
         }
         pb::ExecState::EXEC_STATE_SIGNALED => {
-            let signal = match status.and_then(|status| status.outcome.as_ref()) {
-                Some(pb::terminal_status::Outcome::Signal(signal)) => *signal,
-                _ => 0,
-            };
-            Some(TerminalKind::Signaled(signal))
+            match status.and_then(|status| status.outcome.as_ref()) {
+                Some(pb::terminal_status::Outcome::Signal(signal)) => {
+                    Some(TerminalKind::Signaled(*signal))
+                }
+                _ => Some(TerminalKind::Error("protocol-error")),
+            }
         }
         pb::ExecState::EXEC_STATE_CANCELLED
         | pb::ExecState::EXEC_STATE_SLOW_CONSUMER_CANCELLED => Some(TerminalKind::Error("cancelled")),

@@ -2117,8 +2117,8 @@ shell status number.
 **`--json` envelope** (non-interactive only): a single terminal stdout
 object.
 
-- success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled"|"abnormal:<slug>", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`.
-- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal", "reason": "<wire-kind>", "exitCode", "transportExitCode", "message", "remediation"? }`.
+- success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`. Only a true guest `WIFEXITED`/`WIFSIGNALED` terminal is a success.
+- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source — never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
 
 Captured output in the `--json` envelope is bounded; `stdoutTruncated` /
 `stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
