@@ -652,7 +652,6 @@ pub enum ExecOpResponse {
     Close(ExecCloseResult),
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MigrateRequest {

@@ -648,8 +648,8 @@ impl WorkerState {
     async fn handle_inline(&mut self, op: ExecOp) -> Result<ExecOpResponse, ExecOpError> {
         match op {
             ExecOp::WriteStdin(args) => {
-                let data = base64_codec::decode(&args.chunk_base64)
-                    .map_err(|_| ExecOpError::Protocol)?;
+                let data =
+                    base64_codec::decode(&args.chunk_base64).map_err(|_| ExecOpError::Protocol)?;
                 if data.len() as u64 > EXEC_MAX_CHUNK_BYTES {
                     return Err(ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
                 }
@@ -727,12 +727,18 @@ impl WorkerState {
             }
             ExecOp::Close(_) => {
                 if self.stdin_closed {
-                    return Ok(ExecOpResponse::Close(ExecCloseResult { stdin_closed: true }));
+                    return Ok(ExecOpResponse::Close(ExecCloseResult {
+                        stdin_closed: true,
+                    }));
                 }
                 let timeout = self.deadlines.control;
                 // A close on a session whose stdin the process already shut is
                 // idempotent: treat a not-open/closed guest error as success.
-                match self.client.close_stdin(self.next_stdin_offset, timeout).await {
+                match self
+                    .client
+                    .close_stdin(self.next_stdin_offset, timeout)
+                    .await
+                {
                     Ok(()) => {}
                     Err(ExecOpError::Guest(
                         GuestOpError::StdinClosed | GuestOpError::StdinNotOpen,
@@ -740,7 +746,9 @@ impl WorkerState {
                     Err(error) => return Err(error),
                 }
                 self.stdin_closed = true;
-                Ok(ExecOpResponse::Close(ExecCloseResult { stdin_closed: true }))
+                Ok(ExecOpResponse::Close(ExecCloseResult {
+                    stdin_closed: true,
+                }))
             }
             ExecOp::Start(_) => Err(ExecOpError::Protocol),
             ExecOp::ReadOutput(_) | ExecOp::Wait(_) => unreachable!("long-polls are spawned"),
@@ -768,7 +776,14 @@ async fn run_long_poll(
             };
             let op_deadline = Duration::from_millis(timeout_ms) + deadlines.poll_slack;
             let outcome = client
-                .read_output(stream, args.offset, max_len, args.wait, timeout_ms, op_deadline)
+                .read_output(
+                    stream,
+                    args.offset,
+                    max_len,
+                    args.wait,
+                    timeout_ms,
+                    op_deadline,
+                )
                 .await?;
             Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
                 data_base64: base64_codec::encode(&outcome.data),
@@ -963,13 +978,7 @@ impl SessionTable {
         {
             return Err(SessionReserveError::PerUidCap);
         }
-        if inner
-            .sessions
-            .values()
-            .filter(|meta| meta.vm == vm)
-            .count()
-            >= self.caps.per_vm
-        {
+        if inner.sessions.values().filter(|meta| meta.vm == vm).count() >= self.caps.per_vm {
             return Err(SessionReserveError::PerVmCap);
         }
         let mut handle = None;
@@ -1344,7 +1353,10 @@ mod tests {
 
     #[async_trait]
     impl ExecGuestConnector for FakeConnector {
-        async fn establish(&self, _spec: &ExecStartSpec) -> Result<Established, ExecEstablishError> {
+        async fn establish(
+            &self,
+            _spec: &ExecStartSpec,
+        ) -> Result<Established, ExecEstablishError> {
             if let Some(error) = self.error {
                 return Err(error);
             }
@@ -1369,7 +1381,10 @@ mod tests {
         established_with_caps(client, NegotiatedCaps::all())
     }
 
-    fn established_with_caps(client: Arc<dyn ExecGuestClient>, caps: NegotiatedCaps) -> Established {
+    fn established_with_caps(
+        client: Arc<dyn ExecGuestClient>,
+        caps: NegotiatedCaps,
+    ) -> Established {
         Established {
             client,
             info: ExecSessionInfo {
@@ -1389,8 +1404,11 @@ mod tests {
         op: ExecOp,
     ) -> Result<ExecOpResponse, ExecOpError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        tx.blocking_send(WorkerCommand { op, reply: reply_tx })
-            .expect("worker accepts command");
+        tx.blocking_send(WorkerCommand {
+            op,
+            reply: reply_tx,
+        })
+        .expect("worker accepts command");
         reply_rx.blocking_recv().expect("worker replies")
     }
 
@@ -1446,7 +1464,11 @@ mod tests {
         });
         let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
         assert!(reply.is_ok());
-        assert_eq!(alive.load(Ordering::SeqCst), 1, "client alive after establish");
+        assert_eq!(
+            alive.load(Ordering::SeqCst),
+            1,
+            "client alive after establish"
+        );
 
         // Owner disconnects: drop the channel, join the worker.
         drop(control_tx);
@@ -1872,7 +1894,10 @@ mod tests {
             .filter(|(kind, _)| *kind == "write" || *kind == "signal")
             .map(|(_, d)| *d)
             .collect();
-        assert!(control.len() >= 3, "expected >=3 control ops, got {control:?}");
+        assert!(
+            control.len() >= 3,
+            "expected >=3 control ops, got {control:?}"
+        );
         for d in &control {
             assert_eq!(
                 *d, deadlines.control,
@@ -2418,7 +2443,10 @@ mod tests {
     #[test]
     fn terminal_reaper_is_not_due_before_a_terminal_observation() {
         let clock = FakeClock::new();
-        let reaper = TerminalReaper::new(Arc::clone(&clock) as Arc<dyn Clock>, Duration::from_secs(10));
+        let reaper = TerminalReaper::new(
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            Duration::from_secs(10),
+        );
         assert!(!reaper.is_terminal());
         // Time passing without a terminal observation never makes it due.
         clock.advance(Duration::from_secs(3600));
@@ -2501,7 +2529,10 @@ mod tests {
                 reaped: reaped_for_worker,
             }),
         });
-        establish_rx.blocking_recv().expect("establish").expect("ok");
+        establish_rx
+            .blocking_recv()
+            .expect("establish")
+            .expect("ok");
 
         // Drive a Wait that returns terminal. The owner then STALLS (never drops
         // the channel), modelling a stuck CLI that pins the slot.
@@ -2524,7 +2555,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(reaped_seen, "terminal-cleanup reaper did not fire for a stalled owner");
+        assert!(
+            reaped_seen,
+            "terminal-cleanup reaper did not fire for a stalled owner"
+        );
 
         drop(control_tx);
         worker.join().expect("worker joins");

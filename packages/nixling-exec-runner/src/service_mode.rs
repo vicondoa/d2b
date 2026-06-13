@@ -235,10 +235,18 @@ pub fn supervise(
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut drains = Vec::new();
     if let Some(reader) = child.take_stdout() {
-        drains.push(spawn_drain(reader, Arc::clone(&stdout_ring), done_tx.clone()));
+        drains.push(spawn_drain(
+            reader,
+            Arc::clone(&stdout_ring),
+            done_tx.clone(),
+        ));
     }
     if let Some(reader) = child.take_stderr() {
-        drains.push(spawn_drain(reader, Arc::clone(&stderr_ring), done_tx.clone()));
+        drains.push(spawn_drain(
+            reader,
+            Arc::clone(&stderr_ring),
+            done_tx.clone(),
+        ));
     }
     let drain_count = drains.len();
     // Drop our own sender so the channel disconnects once every drain thread
@@ -326,8 +334,7 @@ fn spawn_watcher(
         if reaped.load(Ordering::SeqCst) {
             return;
         }
-        let ceiling_hit =
-            ceiling_ms > 0 && clock.now_ms().saturating_sub(start_ms) >= ceiling_ms;
+        let ceiling_hit = ceiling_ms > 0 && clock.now_ms().saturating_sub(start_ms) >= ceiling_ms;
         if cancel.is_cancelled() || ceiling_hit {
             cancel_requested.store(true, Ordering::SeqCst);
             signaller.signal_group(pgid, StopSignal::Term);
@@ -372,8 +379,7 @@ pub fn main_service(slot: u32) -> i32 {
 
     let signaller: Arc<dyn Signaller> = Arc::new(production::RustixSignaller);
     let clock: Arc<dyn Clock> = Arc::new(production::MonotonicClock::new());
-    let cancel: Arc<dyn CancelSource> =
-        Arc::new(production::FileCancelSource::new(paths.cancel()));
+    let cancel: Arc<dyn CancelSource> = Arc::new(production::FileCancelSource::new(paths.cancel()));
     let cfg = SuperviseConfig::default();
 
     match supervise(
@@ -422,7 +428,10 @@ mod production {
 
     use rustix::process::{kill_process_group, Pid, Signal};
 
-    use super::{ChildHandle, ChildOutcome, Clock, CancelSource, Signaller, SpawnFailure, Spawner, StopSignal};
+    use super::{
+        CancelSource, ChildHandle, ChildOutcome, Clock, Signaller, SpawnFailure, Spawner,
+        StopSignal,
+    };
     use std::io::Read;
 
     use nixling_exec_runner::spec::ExecSpec;
@@ -770,9 +779,15 @@ mod tests {
             &spec("/bin/true", 0),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         assert_eq!(result, RunnerResult::Done);
@@ -808,9 +823,15 @@ mod tests {
             &spec("/bin/true", 0),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         assert_eq!(read_phase(&paths), StatusPhase::Signaled(9));
@@ -834,8 +855,12 @@ mod tests {
             Arc::new(FakeSignaller {
                 proc: FakeProc::new(None),
             }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         assert_eq!(result, RunnerResult::Done);
@@ -860,8 +885,12 @@ mod tests {
             &spec("/bin/true", 0),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
             Arc::new(FlagCancel { flag }),
             &fast_cfg(),
         );
@@ -890,9 +919,15 @@ mod tests {
             &spec("/bin/true", 0),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(true)) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(true)),
+            }),
             &fast_cfg(),
         );
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
@@ -921,9 +956,15 @@ mod tests {
             &spec("/bin/true", 1),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
-            Arc::new(FixedClock { now: Arc::clone(&now) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
+            Arc::new(FixedClock {
+                now: Arc::clone(&now),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         bump.join().unwrap();
@@ -955,9 +996,13 @@ mod tests {
             &spec("/bin/true", 0),
             &paths,
             &spawner,
-            Arc::new(FakeSignaller { proc: Arc::clone(&proc) }),
+            Arc::new(FakeSignaller {
+                proc: Arc::clone(&proc),
+            }),
             Arc::new(FixedClock { now }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         bump.join().unwrap();
@@ -986,8 +1031,12 @@ mod tests {
             &paths,
             &spawner,
             Arc::new(FakeSignaller { proc }),
-            Arc::new(FixedClock { now: Arc::new(AtomicU64::new(0)) }),
-            Arc::new(FlagCancel { flag: Arc::new(AtomicBool::new(false)) }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
             &fast_cfg(),
         );
         // No status file could be written (no dir) => unit must fail.

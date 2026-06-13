@@ -114,10 +114,7 @@ impl GuestControlSigner for BrokerSigner {
         &self,
         request: GuestControlSignRequest,
     ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
-        let timeout = self
-            .budget
-            .next()
-            .ok_or(GuestControlHealthError::Timeout)?;
+        let timeout = self.budget.next().ok_or(GuestControlHealthError::Timeout)?;
         let result = crate::dispatch_broker_request_to_socket(
             &self.broker_socket_path,
             BrokerRequest::GuestControlSign(request),
@@ -288,12 +285,11 @@ pub fn run_config_read_once(
 ) -> Result<Vec<u8>, GuestFileReadError> {
     let budget = AttemptBudget::from_now(attempt_timeout, GUEST_CONTROL_ATTEMPT_CAP);
     let signer = BrokerSigner::new(broker_socket_path.to_path_buf(), budget);
-    let nonce = host_nonce()
-        .map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::Signer))?;
+    let nonce =
+        host_nonce().map_err(|_| GuestFileReadError::Probe(GuestControlHealthError::Signer))?;
     let runtime = build_probe_runtime().map_err(GuestFileReadError::Probe)?;
     runtime.block_on(async {
-        let client =
-            connect_and_build_client(params, budget).map_err(GuestFileReadError::Probe)?;
+        let client = connect_and_build_client(params, budget).map_err(GuestFileReadError::Probe)?;
         read_guest_config_authenticated(
             &params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -549,7 +545,6 @@ impl ReadinessObservation {
     }
 }
 
-
 /// Closed-enum label for the guest-reported health state of a probe
 /// outcome. Used as a metric/span label, so the range is a small fixed
 /// vocabulary — never free-form text and never guest-supplied content.
@@ -616,7 +611,6 @@ pub fn health_reason_label(evidence: &GuestControlHealthEvidence) -> &'static st
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,13 +668,14 @@ mod tests {
         assert!(matches!(ok, Ok(resp) if resp.tag.len() == AUTH_TAG_LEN));
 
         // Broker Error response -> Signer.
-        let broker_error = map_broker_sign_response(Ok(BrokerResponse::Error(BrokerErrorResponse {
-            kind: "guest-control-auth".to_owned(),
-            operation: "GuestControlSign".to_owned(),
-            target_wave: None,
-            message: "refused".to_owned(),
-            action: "n/a".to_owned(),
-        })));
+        let broker_error =
+            map_broker_sign_response(Ok(BrokerResponse::Error(BrokerErrorResponse {
+                kind: "guest-control-auth".to_owned(),
+                operation: "GuestControlSign".to_owned(),
+                target_wave: None,
+                message: "refused".to_owned(),
+                action: "n/a".to_owned(),
+            })));
         assert_eq!(broker_error, Err(GuestControlHealthError::Signer));
 
         // Wrong (non-sign) response variant -> Signer.
@@ -791,7 +786,9 @@ mod tests {
             protobuf::EnumOrUnknown::new(pb::HealthRemediation::HEALTH_REMEDIATION_REDUCE_LOAD);
         health
             .degraded_subsystems
-            .push(protobuf::EnumOrUnknown::new(pb::GuestSubsystem::GUEST_SUBSYSTEM_EXEC));
+            .push(protobuf::EnumOrUnknown::new(
+                pb::GuestSubsystem::GUEST_SUBSYSTEM_EXEC,
+            ));
         health.protocol_version = nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
         GuestControlHealthEvidence {
             vm_id: "corp-vm".to_owned(),
@@ -1075,7 +1072,9 @@ mod tests {
             let mut outcomes = self.outcomes.lock().unwrap();
             if outcomes.is_empty() {
                 // Past the script: persistent transient connect failure.
-                return Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo));
+                return Err(GuestFileReadError::Probe(
+                    GuestControlHealthError::TransportIo,
+                ));
             }
             outcomes.remove(0)
         }
@@ -1086,7 +1085,9 @@ mod tests {
         // A transient missing/refused CH vsock socket during startup must
         // be retried, not fail config sync immediately.
         let probe = ScriptedConfigProbe::new(vec![
-            Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo)),
+            Err(GuestFileReadError::Probe(
+                GuestControlHealthError::TransportIo,
+            )),
             Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout)),
             Ok(b"config-bytes".to_vec()),
         ]);
@@ -1156,7 +1157,9 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo))
+            Err(GuestFileReadError::Probe(
+                GuestControlHealthError::TransportIo
+            ))
         ));
         assert!(probe.attempt_timeouts.lock().unwrap().len() >= 5);
     }
@@ -1473,7 +1476,9 @@ mod tests {
 
     impl SshTrapGuard {
         fn install(dir: &std::path::Path) -> Self {
-            let lock = PATH_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+            let lock = PATH_LOCK
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
             let bin = dir.join("bin");
             std::fs::create_dir_all(&bin).expect("create trap bin");
             let marker = dir.join("ssh-spawned.marker");

@@ -27,8 +27,7 @@ fn run(args: Vec<OsString>) -> Result<(), nixling_guestd::service::GuestdService
             if let Some(detached) = parsed.detached {
                 config = config.with_detached(detached);
             }
-            config =
-                config.with_interactive_max_runtime_sec(parsed.interactive_max_runtime_sec);
+            config = config.with_interactive_max_runtime_sec(parsed.interactive_max_runtime_sec);
             if let Some(guest_config_path) = parsed.guest_config_path {
                 config = config.with_guest_config_path(guest_config_path);
             }

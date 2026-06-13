@@ -366,7 +366,11 @@ impl FileRingReader {
     /// from an invalid ring region.
     fn read_validated_meta(&self) -> Result<StreamMeta, FileRingError> {
         let meta = read_meta(&self.sidecar_path)?;
-        let data_len = self.data.metadata().map(|m| m.len()).map_err(FileRingError::from)?;
+        let data_len = self
+            .data
+            .metadata()
+            .map(|m| m.len())
+            .map_err(FileRingError::from)?;
         validate_meta(&meta, data_len)?;
         Ok(meta)
     }
@@ -434,7 +438,8 @@ impl FileRingReader {
         while written < out.len() {
             let space = cap_usize - pos;
             let n = (out.len() - written).min(space);
-            self.data.read_exact_at(&mut out[written..written + n], pos as u64)?;
+            self.data
+                .read_exact_at(&mut out[written..written + n], pos as u64)?;
             pos = (pos + n) % cap_usize;
             written += n;
         }
@@ -769,7 +774,10 @@ mod tests {
             eof: true,
         };
         let rendered = format!("{chunk:?}");
-        assert!(!rendered.contains("secret"), "payload must never appear: {rendered}");
+        assert!(
+            !rendered.contains("secret"),
+            "payload must never appear: {rendered}"
+        );
         assert!(rendered.contains("data_len"));
         assert!(rendered.contains("19"));
     }

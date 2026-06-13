@@ -34,9 +34,7 @@ use tokio::{
 
 use nixling_ipc::guest_wire::GuestControlErrorKind as WireErrorKind;
 
-use crate::exec_pty::{
-    PtyProcessSpawner, SpawnedPtyProcess, StdinWriteOk, TerminalSize, TtyState,
-};
+use crate::exec_pty::{PtyProcessSpawner, SpawnedPtyProcess, StdinWriteOk, TerminalSize, TtyState};
 
 /// Maximum retained live-buffer bytes per output stream (drop-oldest cap).
 pub const STDOUT_LIVE_BUFFER_BYTES: usize = 1024 * 1024;
@@ -963,7 +961,9 @@ where
         let tty = Arc::new(TtyState::new(writer, control, reaper));
         // The entry killer SIGKILLs the whole session (so an accidental
         // `cancel()` path still reaps the interactive session).
-        let killer: Arc<dyn ProcessKiller> = Arc::new(SessionKiller { tty: Arc::clone(&tty) });
+        let killer: Arc<dyn ProcessKiller> = Arc::new(SessionKiller {
+            tty: Arc::clone(&tty),
+        });
         let entry = new_exec_entry_with_tty(owner, guest_boot_id, killer, Some(Arc::clone(&tty)));
         // Merged output: stderr is folded into the PTY, so the stderr stream is
         // never produced. Mark it EOF up front; ReadOutput(Stderr) on a TTY exec
@@ -2642,16 +2642,34 @@ mod tests {
         output.write_all(b"merged-out").await.unwrap();
 
         let (chunk, _timed_out) = rt
-            .read_output(&owner, &exec_id, "boot-1", Stream::Stdout, 0, 1024, true, 500)
+            .read_output(
+                &owner,
+                &exec_id,
+                "boot-1",
+                Stream::Stdout,
+                0,
+                1024,
+                true,
+                500,
+            )
             .await
             .unwrap();
         assert_eq!(chunk.data, b"merged-out");
 
         // Stderr is never produced for a TTY exec; the merged stream is stdout.
         assert_eq!(
-            rt.read_output(&owner, &exec_id, "boot-1", Stream::Stderr, 0, 1024, false, 0)
-                .await
-                .unwrap_err(),
+            rt.read_output(
+                &owner,
+                &exec_id,
+                "boot-1",
+                Stream::Stderr,
+                0,
+                1024,
+                false,
+                0
+            )
+            .await
+            .unwrap_err(),
             ExecError::TtyStderrUnavailable
         );
         // Keep the output writer alive until the assertions complete.
@@ -2731,17 +2749,13 @@ mod tests {
             .unwrap();
         let mut stdin_r = hooks.stdin_r.take().unwrap();
 
-        let (final_offset, duplicate) = rt
-            .close_stdin(&owner, &exec_id, "boot-1", 0)
-            .await
-            .unwrap();
+        let (final_offset, duplicate) =
+            rt.close_stdin(&owner, &exec_id, "boot-1", 0).await.unwrap();
         assert_eq!(final_offset, 0);
         assert!(!duplicate);
         // Second close is an idempotent duplicate (no second VEOF).
-        let (final_offset2, duplicate2) = rt
-            .close_stdin(&owner, &exec_id, "boot-1", 0)
-            .await
-            .unwrap();
+        let (final_offset2, duplicate2) =
+            rt.close_stdin(&owner, &exec_id, "boot-1", 0).await.unwrap();
         assert_eq!(final_offset2, 0);
         assert!(duplicate2);
 
@@ -2778,7 +2792,8 @@ mod tests {
             .unwrap();
 
         // resize at seq=1 is applied.
-        rt.tty_resize(&owner, &exec_id, "boot-1", 1, 50, 100).unwrap();
+        rt.tty_resize(&owner, &exec_id, "boot-1", 1, 50, 100)
+            .unwrap();
         // A stale/duplicate seq on the shared dispatcher is rejected.
         assert_eq!(
             rt.tty_resize(&owner, &exec_id, "boot-1", 1, 10, 10)
@@ -2789,12 +2804,14 @@ mod tests {
         rt.tty_signal(&owner, &exec_id, "boot-1", 2, 2).unwrap();
         // Replayed seq=2 is rejected.
         assert_eq!(
-            rt.tty_signal(&owner, &exec_id, "boot-1", 2, 15).unwrap_err(),
+            rt.tty_signal(&owner, &exec_id, "boot-1", 2, 15)
+                .unwrap_err(),
             ExecError::ControlSeqMismatch
         );
         // Out-of-allowlist signal at a fresh seq is rejected.
         assert_eq!(
-            rt.tty_signal(&owner, &exec_id, "boot-1", 3, 11).unwrap_err(),
+            rt.tty_signal(&owner, &exec_id, "boot-1", 3, 11)
+                .unwrap_err(),
             ExecError::InvalidSignal
         );
         // Invalid geometry at a fresh seq is rejected.
@@ -2922,7 +2939,10 @@ mod tests {
                 .await
                 .unwrap();
         }
-        assert_eq!(allocs.load(Ordering::SeqCst), ATTACHED_SESSIONS_PER_VM as u64);
+        assert_eq!(
+            allocs.load(Ordering::SeqCst),
+            ATTACHED_SESSIONS_PER_VM as u64
+        );
         // The interactive path shares the attached-session capacity.
         assert_eq!(
             rt.create_tty(owner.clone(), "boot-1".to_owned(), tty_input(), None)
@@ -2932,7 +2952,10 @@ mod tests {
         );
         // The over-cap create fails BEFORE any PTY/helper allocation: the
         // spawn-count is unchanged, so there is no half-created session.
-        assert_eq!(allocs.load(Ordering::SeqCst), ATTACHED_SESSIONS_PER_VM as u64);
+        assert_eq!(
+            allocs.load(Ordering::SeqCst),
+            ATTACHED_SESSIONS_PER_VM as u64
+        );
     }
 
     #[tokio::test]
@@ -3023,7 +3046,11 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(rt.tracked_len(), ATTACHED_SESSIONS_PER_VM);
-        assert_eq!(allocs.load(Ordering::SeqCst), 4, "exactly the 4 TTY sessions");
+        assert_eq!(
+            allocs.load(Ordering::SeqCst),
+            4,
+            "exactly the 4 TTY sessions"
+        );
 
         // The 9th attached session is refused regardless of kind, and the TTY
         // refusal allocates no PTY.
@@ -3039,7 +3066,11 @@ mod tests {
                 .unwrap_err(),
             ExecError::AttachCapacityExceeded
         );
-        assert_eq!(allocs.load(Ordering::SeqCst), 4, "over-cap TTY create did not alloc");
+        assert_eq!(
+            allocs.load(Ordering::SeqCst),
+            4,
+            "over-cap TTY create did not alloc"
+        );
     }
 
     #[tokio::test]
@@ -3058,7 +3089,8 @@ mod tests {
         assert_eq!(snap.stdin, TtyStdinSnapshot::Open);
         assert_eq!(snap.last_control_seq, 0);
 
-        rt.tty_resize(&owner, &exec_id, "boot-1", 7, 40, 80).unwrap();
+        rt.tty_resize(&owner, &exec_id, "boot-1", 7, 40, 80)
+            .unwrap();
         let snap = rt.inspect(&owner, &exec_id, "boot-1").unwrap();
         assert_eq!(snap.stdin, TtyStdinSnapshot::Open);
         assert_eq!(snap.last_control_seq, 7);
@@ -3233,10 +3265,7 @@ mod tests {
         }
         #[async_trait]
         impl ProcessSpawner for CeilingSpawner {
-            async fn spawn(
-                &self,
-                _command: ValidatedCommand,
-            ) -> Result<SpawnedProcess, ExecError> {
+            async fn spawn(&self, _command: ValidatedCommand) -> Result<SpawnedProcess, ExecError> {
                 let (_t_o, g_o) = duplex(1024);
                 let (_t_e, g_e) = duplex(1024);
                 std::mem::forget(_t_o);

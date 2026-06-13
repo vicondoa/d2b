@@ -6,8 +6,7 @@
 //! and balloon the frame). This module keeps the framework free of an extra
 //! third-party base64 dependency. It is pure safe Rust.
 
-const ENCODE_TABLE: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const ENCODE_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const PAD: u8 = b'=';
 
 /// Encode `input` as standard padded base64.
@@ -126,15 +125,7 @@ mod tests {
         assert_eq!(encode(b"foob"), "Zm9vYg==");
         assert_eq!(encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(encode(b"foobar"), "Zm9vYmFy");
-        for vector in [
-            &b""[..],
-            b"f",
-            b"fo",
-            b"foo",
-            b"foob",
-            b"fooba",
-            b"foobar",
-        ] {
+        for vector in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar"] {
             assert_eq!(decode(&encode(vector)).unwrap(), vector);
         }
     }
@@ -164,7 +155,7 @@ mod tests {
         assert_eq!(decode("Zg==AAAA"), Err(DecodeError));
         // Two-char padding mid-stream.
         assert_eq!(decode("Zm8=AAAA"), Err(DecodeError)); // "fo" + ...
-        // One-char padding mid-stream.
+                                                          // One-char padding mid-stream.
         assert_eq!(decode("Zm9vYg==Zm9v"), Err(DecodeError));
         // A long run with a padded interior quad.
         assert_eq!(decode("Zm9vZg==Zm9v"), Err(DecodeError));

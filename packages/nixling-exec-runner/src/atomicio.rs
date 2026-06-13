@@ -141,7 +141,10 @@ mod tests {
         let target = dir.join("record");
         atomic_write(&target, b"payload").unwrap();
         let mode = std::fs::metadata(&target).unwrap().mode() & 0o777;
-        assert_eq!(mode, 0o600, "data files are created 0600, not umask-derived");
+        assert_eq!(
+            mode, 0o600,
+            "data files are created 0600, not umask-derived"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -20,12 +20,12 @@ use crate::exec_session::{
     ExecOpError, ExecSessionInfo, ExecStartSpec, GuestOpError, NegotiatedCaps, OutputStreamSel,
     ReadOutputOutcome, TerminalKind, WaitOutcome, WriteStdinOutcome,
 };
-use crate::guest_control_bridge::{
-    connect_and_build_client, host_nonce, ProbeParams, BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP,
-    VMADDR_CID_HOST,
-};
 #[cfg(test)]
 use crate::guest_control_bridge::connect_and_build_client_for_tests;
+use crate::guest_control_bridge::{
+    connect_and_build_client, host_nonce, BrokerSigner, ProbeParams, GUEST_CONTROL_ATTEMPT_CAP,
+    VMADDR_CID_HOST,
+};
 use crate::guest_control_health::{
     probe_guest_control_health, AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient,
 };
@@ -101,8 +101,9 @@ impl ExecGuestConnector for RealExecConnector {
         let budget = AttemptBudget::from_now(ESTABLISH_TIMEOUT, GUEST_CONTROL_ATTEMPT_CAP);
         let signer = BrokerSigner::new(self.broker_socket_path.clone(), budget);
         let nonce = host_nonce().map_err(|_| ExecEstablishError::Transport)?;
-        let client =
-            self.connect_client(budget).map_err(map_establish_health_error)?;
+        let client = self
+            .connect_client(budget)
+            .map_err(map_establish_health_error)?;
         let evidence = probe_guest_control_health(
             &self.params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -446,8 +447,9 @@ fn terminal_from_state(
                 _ => Some(TerminalKind::Error("protocol-error")),
             }
         }
-        pb::ExecState::EXEC_STATE_CANCELLED
-        | pb::ExecState::EXEC_STATE_SLOW_CONSUMER_CANCELLED => Some(TerminalKind::Error("cancelled")),
+        pb::ExecState::EXEC_STATE_CANCELLED | pb::ExecState::EXEC_STATE_SLOW_CONSUMER_CANCELLED => {
+            Some(TerminalKind::Error("cancelled"))
+        }
         pb::ExecState::EXEC_STATE_LOST_GUESTD => Some(TerminalKind::Error("lost-guestd")),
         pb::ExecState::EXEC_STATE_REAPED => Some(TerminalKind::Error("reaped")),
         pb::ExecState::EXEC_STATE_PROTOCOL_ERROR => Some(TerminalKind::Error("protocol-error")),
@@ -480,26 +482,26 @@ fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
         Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE) => {
             ExecOpError::Guest(GuestOpError::StdinBackpressure)
         }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED
-        | K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS) => {
-            ExecOpError::Guest(GuestOpError::StdinClosed)
-        }
+        Ok(
+            K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED
+            | K::GUEST_CONTROL_ERROR_KIND_STDIN_CLOSED_BY_PROCESS,
+        ) => ExecOpError::Guest(GuestOpError::StdinClosed),
         Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_NOT_OPEN) => {
             ExecOpError::Guest(GuestOpError::StdinNotOpen)
         }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH
-        | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED
-        | K::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE
-        | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED) => {
-            ExecOpError::Guest(GuestOpError::OffsetMismatch)
-        }
+        Ok(
+            K::GUEST_CONTROL_ERROR_KIND_STDIN_OFFSET_MISMATCH
+            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED
+            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_IN_FUTURE
+            | K::GUEST_CONTROL_ERROR_KIND_OFFSET_EXHAUSTED,
+        ) => ExecOpError::Guest(GuestOpError::OffsetMismatch),
         Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND) => {
             ExecOpError::Guest(GuestOpError::ExecNotFound)
         }
-        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED
-        | K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED) => {
-            ExecOpError::Guest(GuestOpError::ExecAlreadyExited)
-        }
+        Ok(
+            K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED
+            | K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
+        ) => ExecOpError::Guest(GuestOpError::ExecAlreadyExited),
         Ok(K::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH) => {
             ExecOpError::Guest(GuestOpError::ControlSeqMismatch)
         }

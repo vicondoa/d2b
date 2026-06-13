@@ -24,7 +24,10 @@ use sha2::{Digest, Sha256};
 use crate::detached::{
     parse_exec_start, unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
 };
-use crate::exec::{ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream, TtyStdinSnapshot, ValidatedCommand};
+use crate::exec::{
+    ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream,
+    TtyStdinSnapshot, ValidatedCommand,
+};
 
 use nixling_exec_runner::filering::{FileRingError, RingChunk, StreamMeta};
 use nixling_exec_runner::paths::{RunnerPaths, Stream as RunnerStream};
@@ -113,7 +116,11 @@ pub trait SlotStore: Send + Sync + 'static {
     /// Read the runner status phase (`Ok(None)` if no status yet).
     fn read_status(&self, slot: u32) -> Result<Option<StatusPhase>, ExecError>;
     /// Read a stream's sidecar metadata (`Ok(None)` if the file is absent).
-    fn read_log_meta(&self, slot: u32, stream: RunnerStream) -> Result<Option<StreamMeta>, ExecError>;
+    fn read_log_meta(
+        &self,
+        slot: u32,
+        stream: RunnerStream,
+    ) -> Result<Option<StreamMeta>, ExecError>;
     /// Read a bounded log chunk.
     fn read_log(
         &self,
@@ -628,12 +635,7 @@ impl DetachedRegistry {
     /// zero-padded NN) as DISTINCT argv tokens. An impostor that merely embeds
     /// those strings inside an unrelated argument, or runs a different
     /// executable / a different slot, is rejected.
-    fn identity_matches(
-        &self,
-        slice: Option<&str>,
-        exec_start: Option<&str>,
-        slot: u32,
-    ) -> bool {
+    fn identity_matches(&self, slice: Option<&str>, exec_start: Option<&str>, slot: u32) -> bool {
         if slice != Some("nixling-exec.slice") {
             return false;
         }
@@ -1263,7 +1265,9 @@ impl DetachedRegistry {
                 read_guards: 0,
             },
         );
-        let _ = self.store.write_record(slot, &state.slots[&slot].record.clone());
+        let _ = self
+            .store
+            .write_record(slot, &state.slots[&slot].record.clone());
     }
 
     /// Defense-in-depth: if the adopted reserved sum somehow exceeds the quota
@@ -1471,7 +1475,10 @@ fn argv_hash(command: &ValidatedCommand) -> String {
 
 /// The opaque exec id is 16 random bytes hex-encoded (32 lowercase hex chars).
 fn is_valid_exec_id(exec_id: &str) -> bool {
-    exec_id.len() == 32 && exec_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    exec_id.len() == 32
+        && exec_id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// Stable unit name for a slot (re-exported for the service layer).
@@ -1857,7 +1864,13 @@ mod tests {
             s.stdout_meta.insert(slot, meta);
         }
         fn cancel_written(&self, slot: u32) -> bool {
-            *self.inner.lock().unwrap().cancels.get(&slot).unwrap_or(&false)
+            *self
+                .inner
+                .lock()
+                .unwrap()
+                .cancels
+                .get(&slot)
+                .unwrap_or(&false)
         }
         fn set_cancel_terminal(&self, phase: StatusPhase) {
             self.inner.lock().unwrap().cancel_terminal = Some(phase);
@@ -2382,7 +2395,10 @@ mod tests {
             .await
             .expect("create");
         assert_eq!(snapshot.state, ExecState::Running);
-        assert!(!h.units.stopped(0), "a live unit is never killed on timeout");
+        assert!(
+            !h.units.stopped(0),
+            "a live unit is never killed on timeout"
+        );
         assert!(h.registry.inspect(&id, "boot-A").await.is_ok());
     }
 
@@ -2539,8 +2555,7 @@ mod tests {
             .await
             .unwrap();
         // Past TTL → GC removes it and a future lookup is ExecExpired.
-        h.now
-            .store(1_000 + RETENTION_TTL_MS + 1, Ordering::SeqCst);
+        h.now.store(1_000 + RETENTION_TTL_MS + 1, Ordering::SeqCst);
         h.registry.reap_once().await;
         let err = h.registry.inspect(&id, "boot-A").await.unwrap_err();
         assert_eq!(err, ExecError::ExecExpired);
@@ -2615,7 +2630,11 @@ mod tests {
         h.store.seed_record(5, &record);
         h.units.set_live(5, true);
         h.registry.reconcile_on_startup().await;
-        let snapshot = h.registry.inspect(&format!("{:032x}", 7), "boot-A").await.unwrap();
+        let snapshot = h
+            .registry
+            .inspect(&format!("{:032x}", 7), "boot-A")
+            .await
+            .unwrap();
         assert_eq!(snapshot.state, ExecState::Running);
         assert!(!h.units.stopped(5), "adopted unit not killed");
     }
@@ -2732,7 +2751,11 @@ mod tests {
         let id = create_live_running(&h, 0).await;
         h.units.set_inactive(0);
         let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
-        assert_eq!(snap.state, ExecState::LostGuestd, "inactive unit ⇒ not live");
+        assert_eq!(
+            snap.state,
+            ExecState::LostGuestd,
+            "inactive unit ⇒ not live"
+        );
     }
 
     // An identity mismatch (foreign command at our slot) is not adoptable.
@@ -2801,7 +2824,11 @@ mod tests {
             },
         );
         let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
-        assert_eq!(snap.state, ExecState::LostGuestd, "wrong-exe impostor rejected");
+        assert_eq!(
+            snap.state,
+            ExecState::LostGuestd,
+            "wrong-exe impostor rejected"
+        );
         assert!(h.units.stopped(0), "impostor unit is stopped");
 
         // Case 2: correct executable, but the slot token only appears as a
@@ -2819,7 +2846,11 @@ mod tests {
             },
         );
         let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
-        assert_eq!(snap.state, ExecState::LostGuestd, "wrong-slot impostor rejected");
+        assert_eq!(
+            snap.state,
+            ExecState::LostGuestd,
+            "wrong-slot impostor rejected"
+        );
         assert!(h.units.stopped(0));
 
         // Authentic argv (exe == runner, distinct --serve-exec + --slot NN
@@ -2881,8 +2912,15 @@ mod tests {
     #[tokio::test]
     async fn f2_crash_dispatching_within_deadline_is_held_nonlistable() {
         let h = harness();
-        h.store
-            .seed_record(3, &rec(3, 21, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.seed_record(
+            3,
+            &rec(
+                3,
+                21,
+                RecordState::Dispatching,
+                1_000 + DISPATCH_DEADLINE_MS,
+            ),
+        );
         h.registry.reconcile_on_startup().await;
         assert!(h.registry.list("boot-A").await.unwrap().is_empty());
         assert_eq!(
@@ -2900,8 +2938,15 @@ mod tests {
     #[tokio::test]
     async fn f2_late_unit_promotes_hold_to_running() {
         let h = harness();
-        h.store
-            .seed_record(3, &rec(3, 22, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.seed_record(
+            3,
+            &rec(
+                3,
+                22,
+                RecordState::Dispatching,
+                1_000 + DISPATCH_DEADLINE_MS,
+            ),
+        );
         h.registry.reconcile_on_startup().await;
         // The forked systemd-run finally registers the unit.
         h.units.set_live(3, true);
@@ -2924,8 +2969,15 @@ mod tests {
     #[tokio::test]
     async fn f2_held_dispatch_deleted_after_deadline_passes() {
         let h = harness();
-        h.store
-            .seed_record(3, &rec(3, 24, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.seed_record(
+            3,
+            &rec(
+                3,
+                24,
+                RecordState::Dispatching,
+                1_000 + DISPATCH_DEADLINE_MS,
+            ),
+        );
         h.registry.reconcile_on_startup().await;
         assert!(h.store.slot_exists(3));
         h.now
@@ -2945,15 +2997,25 @@ mod tests {
     #[tokio::test]
     async fn g3_held_dispatch_delete_failure_retains_hidden_entry_for_retry() {
         let h = harness();
-        h.store
-            .seed_record(3, &rec(3, 24, RecordState::Dispatching, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.seed_record(
+            3,
+            &rec(
+                3,
+                24,
+                RecordState::Dispatching,
+                1_000 + DISPATCH_DEADLINE_MS,
+            ),
+        );
         h.registry.reconcile_on_startup().await;
         h.now
             .store(1_000 + DISPATCH_DEADLINE_MS + 1, Ordering::SeqCst);
         // The unlink fails: the slot must remain reserved (hidden), NOT freed.
         h.store.set_fail_delete(true);
         h.registry.reap_once().await;
-        assert!(h.store.slot_exists(3), "stale files retained on delete failure");
+        assert!(
+            h.store.slot_exists(3),
+            "stale files retained on delete failure"
+        );
         // Still hidden (never externally visible).
         assert!(h.registry.list("boot-A").await.unwrap().is_empty());
         // A retry frees the slot once the unlink succeeds.
@@ -2979,7 +3041,10 @@ mod tests {
             h.store.slot_exists(3),
             "stale slot retained when re-adoption unlink fails"
         );
-        assert!(h.registry.list("boot-A").await.unwrap().is_empty(), "hidden hold");
+        assert!(
+            h.registry.list("boot-A").await.unwrap().is_empty(),
+            "hidden hold"
+        );
         // Once the unlink works, the reaper frees the slot.
         h.store.set_fail_delete(false);
         h.now
@@ -2993,8 +3058,10 @@ mod tests {
     #[tokio::test]
     async fn f3_persisted_running_no_unit_is_lost_and_retained() {
         let h = harness();
-        h.store
-            .seed_record(2, &rec(2, 30, RecordState::Running, 1_000 + DISPATCH_DEADLINE_MS));
+        h.store.seed_record(
+            2,
+            &rec(2, 30, RecordState::Running, 1_000 + DISPATCH_DEADLINE_MS),
+        );
         h.store.set_stdout(2, b"partial", meta(7, 0, false, false));
         h.registry.reconcile_on_startup().await;
         let id = format!("{:032x}", 30);
@@ -3087,7 +3154,11 @@ mod tests {
         h.registry.reconcile_on_startup().await;
         assert!(!h.store.slot_exists(1), "corrupt record slot deleted");
         assert!(h.registry.list("boot-A").await.unwrap().is_empty());
-        assert_eq!(h.registry.active_count(), 0, "nothing reserved for a corrupt slot");
+        assert_eq!(
+            h.registry.active_count(),
+            0,
+            "nothing reserved for a corrupt slot"
+        );
     }
 
     // A `read_status` error during create resolution must tear the create
@@ -3225,7 +3296,10 @@ mod tests {
         );
         // Concurrent reaper must not mark/delete the in-flight create.
         registry.reap_once().await;
-        assert!(store.slot_exists(0), "reaper must not delete a Creating entry");
+        assert!(
+            store.slot_exists(0),
+            "reaper must not delete a Creating entry"
+        );
         assert!(!units.stopped(0), "reaper must not stop a Creating unit");
 
         // Release: the create resolves Running and becomes listable.

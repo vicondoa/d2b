@@ -72,11 +72,11 @@ use supervisor::pidfd_table::{
 };
 use uzers::{get_user_by_uid, get_user_groups};
 
+pub mod exec_session;
+pub mod exec_session_real;
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
-pub mod exec_session;
-pub mod exec_session_real;
 pub mod supervisor;
 pub mod typed_error;
 pub mod wire;
@@ -2253,7 +2253,9 @@ fn resolve_guest_control_state_root_owner(state: &ServerState) -> Result<(u32, u
         .flatten()
         .map(|group| group.gid.as_raw())
         .ok_or_else(|| {
-            format!("guest-control-probe:unresolved-state-root-group:{GUEST_CONTROL_STATE_ROOT_GROUP}")
+            format!(
+                "guest-control-probe:unresolved-state-root-group:{GUEST_CONTROL_STATE_ROOT_GROUP}"
+            )
         })?;
     Ok((uid, gid))
 }
@@ -2341,8 +2343,8 @@ fn dispatch_read_guest_config(
     request: public_wire::ReadGuestConfigRequest,
 ) -> Result<Value, TypedError> {
     let resolver = load_bundle_resolver(state)?;
-    let params = resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(
-        |detail| {
+    let params =
+        resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(|detail| {
             tracing::warn!(
                 kind = "critical",
                 subsystem = "guest-control-health",
@@ -2352,8 +2354,7 @@ fn dispatch_read_guest_config(
             TypedError::GuestControlReadFailed {
                 kind: crate::typed_error::GuestControlReadErrorKind::Transport,
             }
-        },
-    )?;
+        })?;
     let broker_path = broker_socket_path(state);
     let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
         params,
@@ -2415,11 +2416,7 @@ fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static 
 /// Increment the exec outcome counter against a metrics registry directly. Used
 /// by the owner writer, which holds only the registry (not the full
 /// `ServerState`) so it is hermetically testable.
-fn exec_metric_into(
-    registry: &metrics::Registry,
-    outcome: &'static str,
-    error_kind: &'static str,
-) {
+fn exec_metric_into(registry: &metrics::Registry, outcome: &'static str, error_kind: &'static str) {
     // Fail-closed in debug/test builds: the only labels are the constant
     // subsystem plus a closed `outcome` / `error_kind` enum. A stray value
     // (e.g. a vm name, session handle, or op id mistakenly threaded through)
@@ -2574,7 +2571,10 @@ fn run_exec_owner(
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
         };
-        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
         exec_metric(&state, "error", "protocol");
         return;
     };
@@ -2583,7 +2583,10 @@ fn run_exec_owner(
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
         };
-        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
         exec_metric(&state, "error", "protocol");
         return;
     }
@@ -2596,7 +2599,10 @@ fn run_exec_owner(
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Capability,
         };
-        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
         exec_metric(&state, "error", "capability");
         return;
     }
@@ -2607,8 +2613,10 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Transport,
             };
-            let _ =
-                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             exec_metric(&state, "error", "transport");
             return;
         }
@@ -2621,8 +2629,10 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::OldGeneration,
             };
-            let _ =
-                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             exec_metric(&state, "error", "old-generation");
             return;
         }
@@ -2635,8 +2645,10 @@ fn run_exec_owner(
         Err(reserve_error) => {
             let error = map_exec_reserve_error(reserve_error);
             let kind = exec_error_kind_label(&error);
-            let _ =
-                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             exec_metric(&state, "error", kind);
             return;
         }
@@ -2659,12 +2671,9 @@ fn run_exec_owner(
     };
 
     let deadlines = exec_session::ExecOpDeadlines::default();
-    let connector: Arc<dyn exec_session::ExecGuestConnector> =
-        Arc::new(exec_session_real::RealExecConnector::new(
-            params,
-            broker_socket_path(&state),
-            deadlines,
-        ));
+    let connector: Arc<dyn exec_session::ExecGuestConnector> = Arc::new(
+        exec_session_real::RealExecConnector::new(params, broker_socket_path(&state), deadlines),
+    );
 
     // The terminal-cleanup reaper shuts down the owner socket so a
     // stalled owner that never closes after the command goes terminal does not
@@ -2691,8 +2700,10 @@ fn run_exec_owner(
         Ok(Err(establish_error)) => {
             let error = map_exec_establish_error(establish_error);
             let kind = exec_error_kind_label(&error);
-            let _ =
-                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             exec_metric(&state, "error", kind);
             drop(control_tx);
             let _ = worker.join();
@@ -2704,8 +2715,10 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Internal,
             };
-            let _ =
-                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
             exec_metric(&state, "error", "internal");
             let _ = worker.join();
             return;
@@ -2716,13 +2729,14 @@ fn run_exec_owner(
     emit_exec_established_event(&start.vm, peer.uid, info.tty);
     exec_metric(&state, "established", "none");
     // Bounded lifecycle audit (leak-safe: vm + admin uid + tty only).
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlExecEstablished {
-            vm: start.vm.clone(),
-            peer_uid: peer.uid,
-            tty: info.tty,
-        });
+    let _ =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecEstablished {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+                tty: info.tty,
+            });
 
     // Spawn the owner writer thread BEFORE committing the session with a start
     // response. An OS thread-spawn failure must surface as a typed internal
@@ -2767,12 +2781,12 @@ fn run_exec_owner(
         let _ = writer.join();
         let _ = worker.join();
         exec_metric(&state, "closed", "none");
-        let _ = state
-            .daemon_audit
-            .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
+        let _ = state.daemon_audit.write_event(
+            &daemon_audit::DaemonEvent::GuestControlExecTerminated {
                 vm: start.vm.clone(),
                 peer_uid: peer.uid,
-            });
+            },
+        );
         return;
     }
 
@@ -2794,12 +2808,13 @@ fn run_exec_owner(
     let _ = worker.join();
     drop(slot);
     exec_metric(&state, "closed", "none");
-    let _ = state
-        .daemon_audit
-        .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
-            vm: start.vm.clone(),
-            peer_uid: peer.uid,
-        });
+    let _ =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+            });
 }
 
 /// A reply frame the owner writer must emit, carried from the per-op awaiter to
@@ -2822,7 +2837,9 @@ enum ExecOwnerFrame {
 enum ExecWriterItem {
     Pending {
         op_id: u64,
-        reply_rx: tokio::sync::oneshot::Receiver<Result<public_wire::ExecOpResponse, exec_session::ExecOpError>>,
+        reply_rx: tokio::sync::oneshot::Receiver<
+            Result<public_wire::ExecOpResponse, exec_session::ExecOpError>,
+        >,
         permit: InflightPermit,
     },
     Immediate {
@@ -2933,8 +2950,7 @@ fn spawn_exec_owner_writer(
     stream: &Arc<Socket>,
     metrics: &Arc<metrics::Registry>,
 ) -> std::io::Result<ExecOwnerWriterParts> {
-    let (item_tx, item_rx) =
-        tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
+    let (item_tx, item_rx) = tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
     let inflight = InflightSemaphore::new(EXEC_OWNER_INFLIGHT_CAP);
     let writer_stream = Arc::clone(stream);
     let writer_metrics = Arc::clone(metrics);
@@ -3125,9 +3141,7 @@ fn exec_owner_writer(
                     ExecOwnerFrame::Response(response) => {
                         wire::exec_response_with_id(op_id, response)
                     }
-                    ExecOwnerFrame::Error { error, .. } => {
-                        wire::error_frame_with_id(op_id, error)
-                    }
+                    ExecOwnerFrame::Error { error, .. } => wire::error_frame_with_id(op_id, error),
                 };
                 let write_result = write_json_frame(drain_stream.as_ref(), &value);
                 if let ExecOwnerFrame::Error { metric_kind, .. } = &frame {
@@ -3318,13 +3332,14 @@ mod exec_metric_tests {
                         EXEC_ERROR_KIND_LABELS.contains(&value),
                         "exec error_kind label {value:?} is outside the closed allowlist"
                     ),
-                    other => panic!(
-                        "exec metric leaked an unapproved label key {other:?}: {line}"
-                    ),
+                    other => panic!("exec metric leaked an unapproved label key {other:?}: {line}"),
                 }
             }
         }
-        assert!(saw_exec_series, "expected the exec metric to render a series");
+        assert!(
+            saw_exec_series,
+            "expected the exec metric to render a series"
+        );
 
         // Belt-and-suspenders: no per-session identifier may ever appear as a
         // label key on the exec metric.
@@ -3358,8 +3373,8 @@ mod exec_owner_io_tests {
     //! down promptly (the in-flight long-poll is cancelled, not awaited).
 
     use super::{
-        exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer,
-        write_frame, Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE,
+        exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer, write_frame,
+        Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE,
     };
     use nixling_ipc::public_wire::{
         ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
@@ -3503,7 +3518,10 @@ mod exec_owner_io_tests {
             .expect("worker observed the parked long-poll");
         send_op(&client, 11, &signal_op());
         let signal_reply = recv_reply(&client);
-        assert_eq!(signal_reply["opId"], 11, "control reply must be serviced first");
+        assert_eq!(
+            signal_reply["opId"], 11,
+            "control reply must be serviced first"
+        );
         assert_eq!(signal_reply["op"], "signal");
 
         // Teardown: closing the client unblocks the reader; the parked poll is
@@ -3586,17 +3604,15 @@ mod exec_owner_io_tests {
         // each receipt signals `seen_tx`. The stash is also held by the test so
         // it can release the parked senders to let the writer awaiters resolve
         // for a clean teardown.
-        type Stash = Arc<Mutex<Vec<oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>>>>;
+        type Stash =
+            Arc<Mutex<Vec<oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>>>>;
         let stash: Stash = Arc::new(Mutex::new(Vec::new()));
         let worker_stash = Arc::clone(&stash);
         let worker = std::thread::spawn(move || {
             while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
                 match op {
                     ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
-                        worker_stash
-                            .lock()
-                            .expect("stash lock")
-                            .push(reply);
+                        worker_stash.lock().expect("stash lock").push(reply);
                         let _ = seen_tx.send(());
                     }
                     _ => {
@@ -3984,7 +4000,10 @@ fn broker_round_trip_within_deadline(
     deadline: Instant,
 ) -> Result<BrokerResponse, TypedError> {
     let remaining = broker_remaining_before_op(deadline, socket_path)?;
-    let socket = Socket::from(connect_seqpacket_with_timeout(socket_path, Some(remaining))?);
+    let socket = Socket::from(connect_seqpacket_with_timeout(
+        socket_path,
+        Some(remaining),
+    )?);
 
     let remaining = broker_remaining_before_op(deadline, socket_path)?;
     socket
@@ -8350,12 +8369,12 @@ fn connect_seqpacket_with_timeout(
         detail: err.to_string(),
     })?;
     let socket = Socket::from(fd);
-    socket
-        .connect_timeout(&address, timeout)
-        .map_err(|err| TypedError::InternalBrokerUnavailable {
+    socket.connect_timeout(&address, timeout).map_err(|err| {
+        TypedError::InternalBrokerUnavailable {
             path: path.to_path_buf(),
             detail: err.to_string(),
-        })?;
+        }
+    })?;
     Ok(OwnedFd::from(socket))
 }
 
@@ -8997,9 +9016,7 @@ mod accept_loop_concurrency_tests {
                 let remaining = deadline
                     .checked_sub(start.elapsed())
                     .expect("exec owner body was not entered within the deadline");
-                let (guard, timeout) = cv
-                    .wait_timeout(s, remaining)
-                    .expect("hook entered wait");
+                let (guard, timeout) = cv.wait_timeout(s, remaining).expect("hook entered wait");
                 s = guard;
                 assert!(!timeout.timed_out(), "exec owner body was not entered");
             }
@@ -9713,22 +9730,23 @@ mod broker_dispatch_tests {
         let recorded_server = Arc::clone(&recorded);
         let response_tag = vec![0xCDu8; 32];
         let response_tag_server = response_tag.clone();
-        let (socket_path, broker) =
-            start_test_broker_server("guest-control-sign-verbatim", 1, move |_, env, fd| {
-                match env.request {
-                    BrokerRequest::GuestControlSign(req) => {
-                        recorded_server.lock().unwrap().push(req);
-                        write_test_json_frame(
-                            fd,
-                            &BrokerResponse::GuestControlSign(GuestControlSignResponse {
-                                tag: response_tag_server.clone(),
-                            }),
-                        )
-                        .expect("write sign response");
-                    }
-                    other => panic!("unexpected broker request {other:?}"),
+        let (socket_path, broker) = start_test_broker_server(
+            "guest-control-sign-verbatim",
+            1,
+            move |_, env, fd| match env.request {
+                BrokerRequest::GuestControlSign(req) => {
+                    recorded_server.lock().unwrap().push(req);
+                    write_test_json_frame(
+                        fd,
+                        &BrokerResponse::GuestControlSign(GuestControlSignResponse {
+                            tag: response_tag_server.clone(),
+                        }),
+                    )
+                    .expect("write sign response");
                 }
-            });
+                other => panic!("unexpected broker request {other:?}"),
+            },
+        );
         let signer = BrokerSigner::new(
             socket_path,
             AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
@@ -9780,7 +9798,9 @@ mod broker_dispatch_tests {
         // holds the connection OPEN without responding so the client's
         // read blocks until its own deadline.
         use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
-        use crate::guest_control_health::{AttemptBudget, GuestControlHealthError, GuestControlSigner};
+        use crate::guest_control_health::{
+            AttemptBudget, GuestControlHealthError, GuestControlSigner,
+        };
         use nixling_ipc::broker_wire::{
             GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
             GuestControlSignRequest,
@@ -12579,9 +12599,11 @@ mod broker_dispatch_tests {
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "read-guest-config-authz",
         ));
-        let request = super::wire::Request::ReadGuestConfig(nixling_ipc::public_wire::ReadGuestConfigRequest {
-            vm: "vm-a".to_owned(),
-        });
+        let request = super::wire::Request::ReadGuestConfig(
+            nixling_ipc::public_wire::ReadGuestConfigRequest {
+                vm: "vm-a".to_owned(),
+            },
+        );
         let err = dispatch_request(&state, &launcher_peer(), request)
             .expect_err("launcher must be denied readGuestConfig");
         match &err {
@@ -12603,9 +12625,11 @@ mod broker_dispatch_tests {
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "read-guest-config-admin",
         ));
-        let request = super::wire::Request::ReadGuestConfig(nixling_ipc::public_wire::ReadGuestConfigRequest {
-            vm: "vm-a".to_owned(),
-        });
+        let request = super::wire::Request::ReadGuestConfig(
+            nixling_ipc::public_wire::ReadGuestConfigRequest {
+                vm: "vm-a".to_owned(),
+            },
+        );
         let err = dispatch_request(&state, &admin_peer(), request)
             .expect_err("the read must fail after the gate is cleared");
         assert!(
@@ -12852,14 +12876,7 @@ mod exec_established_tracing_tests {
         // APPROVED field-name allowlist for the establishment event. The opaque
         // session handle is deliberately NOT approved — per AGENTS, session
         // handles must never reach a span, log, audit, or metric.
-        const APPROVED_FIELDS: &[&str] = &[
-            "message",
-            "kind",
-            "subsystem",
-            "vm",
-            "peer_uid",
-            "tty",
-        ];
+        const APPROVED_FIELDS: &[&str] = &["message", "kind", "subsystem", "vm", "peer_uid", "tty"];
         // Field names that MUST NEVER appear (would leak the command line, the
         // session handle, or guest-supplied content).
         const FORBIDDEN_FIELDS: &[&str] = &[
@@ -12894,7 +12911,11 @@ mod exec_established_tracing_tests {
         });
 
         let captured = events.lock().unwrap();
-        assert_eq!(captured.len(), 1, "expected exactly one establishment event");
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one establishment event"
+        );
         for fields in captured.iter() {
             assert!(!fields.is_empty(), "establishment event recorded no fields");
             for (name, value) in fields {

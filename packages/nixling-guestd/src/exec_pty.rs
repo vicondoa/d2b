@@ -598,7 +598,9 @@ async fn writer_loop(
 /// Lock the stdin machine briefly (the writer task is the only mutator, so this
 /// never contends with another writer).
 fn lock_stdin_logic(stdin: &Arc<Mutex<StdinLogic>>) -> std::sync::MutexGuard<'_, StdinLogic> {
-    stdin.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    stdin
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// True iff the session phase is still `Running`. The admission/commit gate for
@@ -607,7 +609,9 @@ fn lock_stdin_logic(stdin: &Arc<Mutex<StdinLogic>>) -> std::sync::MutexGuard<'_,
 /// `Closing`.
 fn phase_is_running(phase: &Arc<Mutex<TtyPhase>>) -> bool {
     matches!(
-        *phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        *phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
         TtyPhase::Running
     )
 }
@@ -653,7 +657,9 @@ async fn process_write(
     // write, the offset is left untouched and the op surfaces `StdinClosed` —
     // no offset advance / success ack after `Closing`.
     let next_offset = {
-        let phase_guard = phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let phase_guard = phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !matches!(*phase_guard, TtyPhase::Running) {
             return Err(ExecError::StdinClosed);
         }
@@ -700,7 +706,9 @@ async fn process_close(
     // Commit: mark closed only while still `Running` (atomic w.r.t.
     // `begin_closing` via the phase lock).
     let next_offset = {
-        let phase_guard = phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let phase_guard = phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !matches!(*phase_guard, TtyPhase::Running) {
             return Err(ExecError::StdinClosed);
         }
@@ -1032,7 +1040,8 @@ pub mod linux {
             let this = self.get_mut();
             loop {
                 let mut guard = ready!(this.io.poll_write_ready(cx))?;
-                match guard.try_io(|inner| write(inner.get_ref(), buf).map_err(std::io::Error::from))
+                match guard
+                    .try_io(|inner| write(inner.get_ref(), buf).map_err(std::io::Error::from))
                 {
                     Ok(result) => return Poll::Ready(result),
                     Err(_would_block) => continue,
@@ -1341,13 +1350,12 @@ mod tests {
         fn kill_session(&self) {}
     }
 
-    fn tty_state_with_sink(chunk: usize, budget: Option<usize>) -> (TtyState, Arc<Mutex<FakeSinkState>>) {
+    fn tty_state_with_sink(
+        chunk: usize,
+        budget: Option<usize>,
+    ) -> (TtyState, Arc<Mutex<FakeSinkState>>) {
         let (sink, state) = FakeSink::new(chunk, budget);
-        let tty = TtyState::new(
-            Box::new(sink),
-            Arc::new(NoopControl),
-            Arc::new(NoopReaper),
-        );
+        let tty = TtyState::new(Box::new(sink), Arc::new(NoopControl), Arc::new(NoopReaper));
         (tty, state)
     }
 
@@ -1540,7 +1548,10 @@ mod tests {
             (ExecError::TtyRequired, "TtyRequired"),
             (ExecError::StdinClosed, "StdinClosed"),
             (ExecError::StdinOffsetMismatch, "StdinOffsetMismatch"),
-            (ExecError::StdinByteBudgetExhausted, "StdinByteBudgetExhausted"),
+            (
+                ExecError::StdinByteBudgetExhausted,
+                "StdinByteBudgetExhausted",
+            ),
             (ExecError::StdinBackpressure, "StdinBackpressure"),
             (ExecError::ControlSeqMismatch, "ControlSeqMismatch"),
             (ExecError::InvalidSignal, "InvalidSignal"),

@@ -329,7 +329,15 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
 
     let mut child = Command::new(bin)
         .args([
-            "--tty-exec", "--rows", "30", "--cols", "100", "--", "/bin/sh", "-c", script,
+            "--tty-exec",
+            "--rows",
+            "30",
+            "--cols",
+            "100",
+            "--",
+            "/bin/sh",
+            "-c",
+            script,
         ])
         // Safe fd handoff mirroring the production spawner.
         .stdin(Stdio::from(slave))
@@ -352,15 +360,26 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
     // then CHILDREADY. The child is a DIFFERENT process from the shell.
     let mut transcript = String::new();
     assert!(
-        drain_until(&master, &mut transcript, "CHILDREADY", Duration::from_secs(5)),
+        drain_until(
+            &master,
+            &mut transcript,
+            "CHILDREADY",
+            Duration::from_secs(5)
+        ),
         "foreground child did not become ready, saw: {transcript:?}"
     );
     let shell_pid = parse_labelled_pid(&transcript, "SHELL:")
         .unwrap_or_else(|| panic!("expected SHELL:<pid>, saw: {transcript:?}"));
     let child_pid = parse_labelled_pid(&transcript, "CHILD:")
         .unwrap_or_else(|| panic!("expected CHILD:<pid>, saw: {transcript:?}"));
-    assert_eq!(shell_pid, sid, "the shell pid is the session leader / session id");
-    assert_ne!(child_pid, shell_pid, "the foreground child is a distinct process");
+    assert_eq!(
+        shell_pid, sid,
+        "the shell pid is the session leader / session id"
+    );
+    assert_ne!(
+        child_pid, shell_pid,
+        "the foreground child is a distinct process"
+    );
 
     // The terminal's foreground PG moved OFF the session leader and ONTO the
     // child's own process group (job control). This is the precondition the
@@ -398,7 +417,12 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
         "SIGUSR1 was not delivered to the foreground child, saw: {transcript:?}"
     );
     assert!(
-        drain_until(&master, &mut transcript, "SHELLRESUMED", Duration::from_secs(5)),
+        drain_until(
+            &master,
+            &mut transcript,
+            "SHELLRESUMED",
+            Duration::from_secs(5)
+        ),
         "shell did not resume after the foreground child exited, saw: {transcript:?}"
     );
 
@@ -432,7 +456,9 @@ fn pids_in_session(sid: i32) -> Vec<i32> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Ok(pid) = name.parse::<i32>() else { continue };
+        let Ok(pid) = name.parse::<i32>() else {
+            continue;
+        };
         if session_of(pid) == Some(sid) {
             out.push(pid);
         }

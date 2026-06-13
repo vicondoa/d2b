@@ -395,8 +395,7 @@ where
 
     let mut request = pb::ReadGuestFileRequest::new();
     request.metadata = MessageField::some(request_metadata(vm_id));
-    request.file_id =
-        protobuf::EnumOrUnknown::new(pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG);
+    request.file_id = protobuf::EnumOrUnknown::new(pb::GuestFileId::GUEST_FILE_ID_GUEST_CONFIG);
     let response = client
         .read_guest_file(request)
         .await
@@ -444,8 +443,7 @@ pub fn guest_control_health_ready(
     match outcome {
         Ok(evidence) => matches!(
             evidence.health.state.enum_value(),
-            Ok(pb::HealthState::HEALTH_STATE_HEALTHY)
-                | Ok(pb::HealthState::HEALTH_STATE_DEGRADED)
+            Ok(pb::HealthState::HEALTH_STATE_HEALTHY) | Ok(pb::HealthState::HEALTH_STATE_DEGRADED)
         ),
         Err(_) => false,
     }
@@ -735,8 +733,14 @@ mod tests {
     }
 
     async fn read_config(client: &FakeClient) -> Result<Vec<u8>, GuestFileReadError> {
-        read_guest_config_authenticated("corp-vm", Some(2), [0x11; AUTH_NONCE_LEN], client, &FakeSigner)
-            .await
+        read_guest_config_authenticated(
+            "corp-vm",
+            Some(2),
+            [0x11; AUTH_NONCE_LEN],
+            client,
+            &FakeSigner,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -776,7 +780,9 @@ mod tests {
                 ..Default::default()
             })
             .await,
-            Err(GuestFileReadError::Probe(GuestControlHealthError::AuthFailed))
+            Err(GuestFileReadError::Probe(
+                GuestControlHealthError::AuthFailed
+            ))
         );
     }
 

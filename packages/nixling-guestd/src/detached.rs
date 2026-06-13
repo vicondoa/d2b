@@ -385,7 +385,10 @@ pub fn unit_name(slot: u32) -> String {
 fn systemd_run_argv(slot: u32, ceiling_sec: u64, exec_runner_path: &Path) -> Vec<OsString> {
     let unit = format!("nixling-exec-{slot:02}");
     let slot_arg = format!("{slot:02}");
-    let timeout_stop = format!("TimeoutStopSec={}", crate::detached_registry::TIMEOUT_STOP_SEC);
+    let timeout_stop = format!(
+        "TimeoutStopSec={}",
+        crate::detached_registry::TIMEOUT_STOP_SEC
+    );
 
     let mut argv: Vec<OsString> = vec![
         OsString::from(format!("--unit={unit}")),
@@ -610,8 +613,14 @@ ExecStart=
     #[test]
     fn parse_exec_start_rejects_unstructured_or_empty() {
         // No `path=` field at all.
-        assert_eq!(parse_exec_start("/usr/bin/evil --serve-exec --slot 07"), None);
+        assert_eq!(
+            parse_exec_start("/usr/bin/evil --serve-exec --slot 07"),
+            None
+        );
         // Empty executable path.
-        assert_eq!(parse_exec_start("{ path= ; argv[]=x ; ignore_errors=no }"), None);
+        assert_eq!(
+            parse_exec_start("{ path= ; argv[]=x ; ignore_errors=no }"),
+            None
+        );
     }
 }

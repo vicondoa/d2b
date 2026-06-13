@@ -205,8 +205,10 @@ mod tests {
 
     #[test]
     fn parses_well_formed() {
-        let a = TtyHelperArgs::parse(&argv(&["--rows", "24", "--cols", "80", "--", "/bin/sh", "-i"]))
-            .expect("parse");
+        let a = TtyHelperArgs::parse(&argv(&[
+            "--rows", "24", "--cols", "80", "--", "/bin/sh", "-i",
+        ]))
+        .expect("parse");
         assert_eq!(a.rows, 24);
         assert_eq!(a.cols, 80);
         assert_eq!(a.argv, argv(&["/bin/sh", "-i"]));
@@ -220,16 +222,18 @@ mod tests {
 
     #[test]
     fn rejects_relative_or_empty_argv() {
-        assert!(TtyHelperArgs::parse(&argv(&["--rows", "24", "--cols", "80", "--", "sh"])).is_none());
+        assert!(
+            TtyHelperArgs::parse(&argv(&["--rows", "24", "--cols", "80", "--", "sh"])).is_none()
+        );
         assert!(TtyHelperArgs::parse(&argv(&["--rows", "24", "--cols", "80", "--"])).is_none());
     }
 
     #[test]
     fn rejects_unknown_flag() {
-        assert!(
-            TtyHelperArgs::parse(&argv(&["--rows", "24", "--cols", "80", "--bogus", "--", "/bin/sh"]))
-                .is_none()
-        );
+        assert!(TtyHelperArgs::parse(&argv(&[
+            "--rows", "24", "--cols", "80", "--bogus", "--", "/bin/sh"
+        ]))
+        .is_none());
     }
 
     #[test]

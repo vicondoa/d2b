@@ -156,12 +156,8 @@ impl GuestControlExecErrorKind {
             Self::Auth => "guest-control authentication to the VM failed",
             Self::Protocol => "the guest returned a malformed guest-control exec response",
             Self::Timeout => "the guest-control exec operation timed out",
-            Self::OldGeneration => {
-                "the VM generation does not support guest-control exec"
-            }
-            Self::Capability => {
-                "the guest does not advertise a required exec capability"
-            }
+            Self::OldGeneration => "the VM generation does not support guest-control exec",
+            Self::Capability => "the guest does not advertise a required exec capability",
             Self::SessionCapacity => "the exec session table is at capacity",
             Self::RateLimited => "exec session starts are rate limited for this caller",
             Self::GuestError => "the guest rejected the exec operation",
@@ -845,17 +841,38 @@ mod tests {
     #[test]
     fn guest_control_read_failed_kinds_are_distinct_and_leak_free() {
         let kinds = [
-            (GuestControlReadErrorKind::Transport, "guest-control-transport-unavailable"),
-            (GuestControlReadErrorKind::AuthFailed, "guest-control-auth-failed"),
-            (GuestControlReadErrorKind::Protocol, "guest-control-protocol-error"),
+            (
+                GuestControlReadErrorKind::Transport,
+                "guest-control-transport-unavailable",
+            ),
+            (
+                GuestControlReadErrorKind::AuthFailed,
+                "guest-control-auth-failed",
+            ),
+            (
+                GuestControlReadErrorKind::Protocol,
+                "guest-control-protocol-error",
+            ),
             (
                 GuestControlReadErrorKind::CapabilityUnavailable,
                 "guest-control-capability-unavailable",
             ),
-            (GuestControlReadErrorKind::FileNotFound, "guest-control-file-not-found"),
-            (GuestControlReadErrorKind::FileTooLarge, "guest-control-file-too-large"),
-            (GuestControlReadErrorKind::PathUnsafe, "guest-control-path-unsafe"),
-            (GuestControlReadErrorKind::ReadDenied, "guest-control-read-denied"),
+            (
+                GuestControlReadErrorKind::FileNotFound,
+                "guest-control-file-not-found",
+            ),
+            (
+                GuestControlReadErrorKind::FileTooLarge,
+                "guest-control-file-too-large",
+            ),
+            (
+                GuestControlReadErrorKind::PathUnsafe,
+                "guest-control-path-unsafe",
+            ),
+            (
+                GuestControlReadErrorKind::ReadDenied,
+                "guest-control-read-denied",
+            ),
             (GuestControlReadErrorKind::Timeout, "guest-control-timeout"),
         ];
         for (kind, slug) in kinds {
@@ -897,7 +914,10 @@ mod tests {
                 "slug={slug} does not use a guest-control / exec-session prefix"
             );
             assert!(!err.message().is_empty(), "kind={slug} message empty");
-            assert!(!err.remediation().is_empty(), "kind={slug} remediation empty");
+            assert!(
+                !err.remediation().is_empty(),
+                "kind={slug} remediation empty"
+            );
             assert_no_path_leak(slug, &err.message());
             assert_no_path_leak(slug, &err.remediation());
             // The public envelope must never carry guest-supplied tokens.

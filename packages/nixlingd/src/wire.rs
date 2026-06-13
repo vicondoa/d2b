@@ -530,7 +530,8 @@ pub fn error_frame_with_id(op_id: u64, error: &TypedError) -> Value {
     value
 }
 
-pub fn auth_status_response(payload: AuthStatusResponse) -> AuthStatusResponseFrame {    AuthStatusResponseFrame {
+pub fn auth_status_response(payload: AuthStatusResponse) -> AuthStatusResponseFrame {
+    AuthStatusResponseFrame {
         type_name: "authStatusResponse",
         auth: payload,
     }

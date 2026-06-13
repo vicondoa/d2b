@@ -610,8 +610,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
             // this is only the non-socket-activated fallback, and the
             // broker is single-threaded at startup so the transient
             // process-wide umask change is race-free.
-            let prev_umask =
-                nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o117));
+            let prev_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o117));
             let listener_result = bind_seqpacket(&config.socket_path);
             nix::sys::stat::umask(prev_umask);
             let listener = listener_result?;

@@ -1093,7 +1093,9 @@ mod tests {
         );
         assert!((READ_GUEST_CONFIG_ENCODED_MAX_BYTES as u64) < TTRPC_FRAME_CAP_BYTES);
         // A payload at the public.sock frame size must be rejected by the cap.
-        assert!(!guest_config_encoded_within_frame_caps(crate::MAX_FRAME_SIZE));
+        assert!(!guest_config_encoded_within_frame_caps(
+            crate::MAX_FRAME_SIZE
+        ));
     }
 
     #[test]

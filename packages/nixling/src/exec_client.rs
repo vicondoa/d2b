@@ -594,7 +594,8 @@ fn write_output<H: ExecHostIo>(
     } else {
         host.write_stdout(&data)
     };
-    result.map_err(|error| ExecClientError::internal(format!("writing host output failed: {error}")))
+    result
+        .map_err(|error| ExecClientError::internal(format!("writing host output failed: {error}")))
 }
 
 /// Encode an [`ExecOp`] as the `exec` daemon wire frame: the adjacently-tagged
@@ -713,11 +714,8 @@ impl HostTtyOps for RealStdinTty {
     fn restore_termios(&self) {
         let fd = rustix::stdio::stdin();
         if let Some(original) = self.original.borrow().as_ref() {
-            let _ = rustix::termios::tcsetattr(
-                fd,
-                rustix::termios::OptionalActions::Flush,
-                original,
-            );
+            let _ =
+                rustix::termios::tcsetattr(fd, rustix::termios::OptionalActions::Flush, original);
         }
     }
 
@@ -1106,9 +1104,9 @@ mod tests {
                 ExecOp::Start(_) => Err(ExecClientError::protocol("unexpected Start in FSM")),
                 ExecOp::Close(_) => {
                     self.close_seen = true;
-                    Ok(ExecOpResponse::Close(nixling_ipc::public_wire::ExecCloseResult {
-                        stdin_closed: true,
-                    }))
+                    Ok(ExecOpResponse::Close(
+                        nixling_ipc::public_wire::ExecCloseResult { stdin_closed: true },
+                    ))
                 }
                 ExecOp::WriteStdin(args) => {
                     let chunk_len = base64_codec::decode(&args.chunk_base64)
@@ -1149,7 +1147,11 @@ mod tests {
                             }));
                         }
                     }
-                    let buf = if is_stdout { &self.stdout } else { &self.stderr };
+                    let buf = if is_stdout {
+                        &self.stdout
+                    } else {
+                        &self.stderr
+                    };
                     let off = (args.offset as usize).min(buf.len());
                     let data = &buf[off..];
                     Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
@@ -1161,8 +1163,12 @@ mod tests {
                         timed_out: false,
                     }))
                 }
-                ExecOp::Signal(_) => Ok(ExecOpResponse::Signal(ExecControlResult { delivered: true })),
-                ExecOp::Resize(_) => Ok(ExecOpResponse::Resize(ExecControlResult { delivered: true })),
+                ExecOp::Signal(_) => Ok(ExecOpResponse::Signal(ExecControlResult {
+                    delivered: true,
+                })),
+                ExecOp::Resize(_) => Ok(ExecOpResponse::Resize(ExecControlResult {
+                    delivered: true,
+                })),
                 ExecOp::Wait(_) => {
                     if self.wait_running_remaining > 0 {
                         self.wait_running_remaining -= 1;
@@ -1266,7 +1272,12 @@ mod tests {
                 ExecOp::Close(a) => &a.session,
                 ExecOp::Start(_) => panic!("FSM must never emit Start"),
             };
-            assert_eq!(handle, session, "op {} drifted the session handle", op_label(op));
+            assert_eq!(
+                handle,
+                session,
+                "op {} drifted the session handle",
+                op_label(op)
+            );
         }
     }
 
@@ -1279,9 +1290,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let outcome =
-            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-                .expect("fsm");
+        let outcome = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect("fsm");
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
         // Exactly one up-front Close, and the output was drained before exit.
         assert_eq!(transport.count_ops("close"), 1);
@@ -1298,9 +1314,14 @@ mod tests {
         host.stdin.push_back(b"hi".to_vec());
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let outcome =
-            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
-                .expect("fsm");
+        let outcome = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, true),
+        )
+        .expect("fsm");
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
         // Interactive: NO up-front close; exactly one Close on stdin EOF.
         assert_eq!(transport.count_ops("close"), 1);
@@ -1315,9 +1336,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let outcome =
-            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-                .expect("fsm");
+        let outcome = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect("fsm");
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 7 });
         // 3 running polls + 1 terminal poll.
         assert_eq!(transport.count_ops("wait"), 4);
@@ -1331,8 +1357,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect_err("out-of-range exit must fail closed");
+        let err = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect_err("out-of-range exit must fail closed");
         assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
         assert_eq!(err.source, ExecFailureSource::Protocol);
     }
@@ -1343,8 +1375,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect_err("out-of-range signal must fail closed");
+        let err = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect_err("out-of-range signal must fail closed");
         assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
         assert_eq!(err.source, ExecFailureSource::Protocol);
     }
@@ -1360,8 +1398,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect_err("missing terminal status must fail closed");
+        let err = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect_err("missing terminal status must fail closed");
         assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
         assert_eq!(err.source, ExecFailureSource::Protocol);
     }
@@ -1371,11 +1415,31 @@ mod tests {
         // Abnormal terminal kinds carry reserved codes with a
         // transport/guest-control/protocol source, NEVER `guest`.
         let cases = [
-            ("lost-guestd", EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport),
-            ("cancelled", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
-            ("slow-consumer-cancelled", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
-            ("reaped", EXIT_EXEC_CAPACITY, ExecFailureSource::GuestControl),
-            ("protocol-error", EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol),
+            (
+                "lost-guestd",
+                EXIT_EXEC_TRANSPORT,
+                ExecFailureSource::Transport,
+            ),
+            (
+                "cancelled",
+                EXIT_EXEC_CAPACITY,
+                ExecFailureSource::GuestControl,
+            ),
+            (
+                "slow-consumer-cancelled",
+                EXIT_EXEC_CAPACITY,
+                ExecFailureSource::GuestControl,
+            ),
+            (
+                "reaped",
+                EXIT_EXEC_CAPACITY,
+                ExecFailureSource::GuestControl,
+            ),
+            (
+                "protocol-error",
+                EXIT_EXEC_PROTOCOL,
+                ExecFailureSource::Protocol,
+            ),
         ];
         for (slug, code, source) in cases {
             let mut transport = FakeTransport::terminal(ExecTerminalStatus::Error {
@@ -1384,12 +1448,21 @@ mod tests {
             let mut host = FakeHostIo::default();
             let mut signals = FakeSignals::default();
             let start = start_result();
-            let err =
-                run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-                    .expect_err("abnormal terminal must fail closed");
+            let err = run_exec_fsm(
+                &mut transport,
+                &mut host,
+                &mut signals,
+                &start,
+                &cfg(false, false),
+            )
+            .expect_err("abnormal terminal must fail closed");
             assert_eq!(err.exit_code, code, "exit code for {slug}");
             assert_eq!(err.source, source, "source for {slug}");
-            assert_ne!(err.source.as_str(), "guest", "abnormal is never guest-sourced");
+            assert_ne!(
+                err.source.as_str(),
+                "guest",
+                "abnormal is never guest-sourced"
+            );
         }
     }
 
@@ -1406,8 +1479,14 @@ mod tests {
         host.stdin.push_back(b"hello".to_vec());
         let mut signals = FakeSignals::default();
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, true),
+        )
+        .expect("fsm");
         // Two WriteStdin ops; offsets advance 0 -> 3 -> 5.
         let offsets: Vec<u64> = transport
             .ops
@@ -1431,9 +1510,14 @@ mod tests {
         let start = start_result();
         // stdout drains immediately, so the FSM terminates cleanly even though
         // the guest stdin budget was full (zero accepted).
-        let outcome =
-            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
-                .expect("fsm survives backpressure");
+        let outcome = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, true),
+        )
+        .expect("fsm survives backpressure");
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
         assert_eq!(transport.count_ops("writeStdin"), 1);
     }
@@ -1453,8 +1537,14 @@ mod tests {
         host.stdin.push_back(b"hello".to_vec());
         let mut signals = FakeSignals::default();
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, true),
+        )
+        .expect("fsm");
 
         let writes: Vec<(u64, Vec<u8>)> = transport
             .ops
@@ -1481,8 +1571,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect("fsm");
         assert_eq!(host.stdout, b"to-stdout");
         assert_eq!(host.stderr, b"to-stderr");
     }
@@ -1495,13 +1591,21 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(true, true))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(true, true),
+        )
+        .expect("fsm");
         // In tty mode the guest PTY merges stderr; the CLI only reads stdout.
         let stderr_reads = transport
             .ops
             .iter()
-            .filter(|op| matches!(op, ExecOp::ReadOutput(a) if matches!(a.stream, ExecStream::Stderr)))
+            .filter(
+                |op| matches!(op, ExecOp::ReadOutput(a) if matches!(a.stream, ExecStream::Stderr)),
+            )
             .count();
         assert_eq!(stderr_reads, 0);
         assert_eq!(host.stdout, b"merged");
@@ -1520,8 +1624,14 @@ mod tests {
         };
         let mut signals = FakeSignals::once(vec![ExecSignal::Winch]);
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(true, true))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(true, true),
+        )
+        .expect("fsm");
         assert_eq!(transport.resizes(), vec![(40, 120)]);
 
         // non-tty: Winch is dropped (no host PTY to resize).
@@ -1531,8 +1641,14 @@ mod tests {
             ..FakeHostIo::default()
         };
         let mut signals = FakeSignals::once(vec![ExecSignal::Winch]);
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect("fsm");
         assert!(transport.resizes().is_empty());
     }
 
@@ -1548,8 +1664,14 @@ mod tests {
             ExecSignal::Quit,
         ]);
         let start = start_result();
-        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect("fsm");
+        run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect("fsm");
         assert_eq!(transport.signals(), vec![2, 15, 20, 1, 3]);
     }
 
@@ -1637,7 +1759,12 @@ mod tests {
         // Drop restores both the raw mode and the O_NONBLOCK flag it set.
         assert_eq!(
             *events.borrow(),
-            vec!["raw_set", "nonblock_set", "raw_restored", "nonblock_cleared"],
+            vec![
+                "raw_set",
+                "nonblock_set",
+                "raw_restored",
+                "nonblock_cleared"
+            ],
         );
     }
 
@@ -1700,12 +1827,28 @@ mod tests {
     fn exit_for_kind_covers_every_wire_slug() {
         use ExecFailureSource::*;
         let cases = [
-            ("guest-control-transport-unavailable", EXIT_EXEC_TRANSPORT, Transport),
+            (
+                "guest-control-transport-unavailable",
+                EXIT_EXEC_TRANSPORT,
+                Transport,
+            ),
             ("guest-control-timeout", EXIT_EXEC_TRANSPORT, Transport),
-            ("guest-control-unavailable-old-generation", EXIT_EXEC_OLD_GENERATION, GuestControl),
-            ("guest-control-capability-unavailable", EXIT_EXEC_OLD_GENERATION, GuestControl),
+            (
+                "guest-control-unavailable-old-generation",
+                EXIT_EXEC_OLD_GENERATION,
+                GuestControl,
+            ),
+            (
+                "guest-control-capability-unavailable",
+                EXIT_EXEC_OLD_GENERATION,
+                GuestControl,
+            ),
             ("exec-session-capacity", EXIT_EXEC_CAPACITY, GuestControl),
-            ("exec-session-rate-limited", EXIT_EXEC_CAPACITY, GuestControl),
+            (
+                "exec-session-rate-limited",
+                EXIT_EXEC_CAPACITY,
+                GuestControl,
+            ),
             ("guest-control-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
             ("guest-control-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
             ("guest-control-auth-failed", EXIT_EXEC_AUTH, GuestControl),
@@ -1724,7 +1867,8 @@ mod tests {
         // = guest, not an error); an old-generation guest yields an *error*
         // with the same numeric exit. The two are disambiguated by source.
         let guest_70 = exit_code_for_terminal(&ExecTerminalStatus::Exited { code: 70 });
-        let (old_gen_70, old_gen_source) = exit_for_kind("guest-control-unavailable-old-generation");
+        let (old_gen_70, old_gen_source) =
+            exit_for_kind("guest-control-unavailable-old-generation");
         assert_eq!(guest_70, 70);
         assert_eq!(old_gen_70, 70);
         assert_eq!(old_gen_source, ExecFailureSource::GuestControl);
@@ -1741,8 +1885,14 @@ mod tests {
         let mut host = FakeHostIo::default();
         let mut signals = FakeSignals::default();
         let start = start_result();
-        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
-            .expect_err("malformed output is a protocol error");
+        let err = run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start,
+            &cfg(false, false),
+        )
+        .expect_err("malformed output is a protocol error");
         let rendered = format!("{err:?} {} {} {}", err.kind, err.message, err.remediation);
         assert!(
             !rendered.contains(SENTINEL),

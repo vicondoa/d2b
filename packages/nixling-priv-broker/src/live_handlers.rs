@@ -2277,7 +2277,11 @@ fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
     chain.reverse();
     let last_idx = chain.len().saturating_sub(1);
     for (idx, dir) in chain.iter().enumerate() {
-        let target_class = if idx == last_idx { "state-dir" } else { "ancestor" };
+        let target_class = if idx == last_idx {
+            "state-dir"
+        } else {
+            "ancestor"
+        };
         let needs = dir_needs_daemon_traverse(dir)
             .map_err(|failure| failure.guest_control_detail("grant", target_class))?;
         if needs == Some(true) {
@@ -3448,10 +3452,19 @@ mod tests {
                     .to_owned(),
         };
         let detail = failure.guest_control_detail("grant", "vsock-socket");
-        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
-        assert!(!detail.contains("vsock.sock"), "detail leaked socket name: {detail}");
+        assert!(
+            !detail.contains('/'),
+            "detail must not embed any path: {detail}"
+        );
+        assert!(
+            !detail.contains("vsock.sock"),
+            "detail leaked socket name: {detail}"
+        );
         assert!(!detail.contains(":rw"), "detail leaked acl spec: {detail}");
-        assert!(detail.contains("vsock-socket"), "missing target class: {detail}");
+        assert!(
+            detail.contains("vsock-socket"),
+            "missing target class: {detail}"
+        );
         assert!(detail.contains("stage=apply"), "missing stage: {detail}");
         assert!(detail.contains("errno=13"), "missing errno: {detail}");
         assert!(
@@ -3466,9 +3479,18 @@ mod tests {
             legacy_detail: "refusing setfacl on /secret/path".to_owned(),
         };
         let detail = mismatch.guest_control_detail("revoke", "state-dir");
-        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
-        assert!(detail.contains("errno=none"), "missing errno token: {detail}");
-        assert!(detail.contains("stage=type-mismatch"), "missing stage: {detail}");
+        assert!(
+            !detail.contains('/'),
+            "detail must not embed any path: {detail}"
+        );
+        assert!(
+            detail.contains("errno=none"),
+            "missing errno token: {detail}"
+        );
+        assert!(
+            detail.contains("stage=type-mismatch"),
+            "missing stage: {detail}"
+        );
     }
 
     #[test]
@@ -3507,17 +3529,31 @@ mod tests {
         let other = dir.join("other");
         std::fs::write(&path, b"a").expect("write path");
         std::fs::write(&other, b"bb").expect("write other");
-        let path_id = current_path_dev_ino(&path).expect("stat path").expect("present");
-        let other_id = current_path_dev_ino(&other).expect("stat other").expect("present");
-        assert_ne!(path_id.1, other_id.1, "distinct files must have distinct inodes");
+        let path_id = current_path_dev_ino(&path)
+            .expect("stat path")
+            .expect("present");
+        let other_id = current_path_dev_ino(&other)
+            .expect("stat other")
+            .expect("present");
+        assert_ne!(
+            path_id.1, other_id.1,
+            "distinct files must have distinct inodes"
+        );
         // Rename `other` over `path`: the path now resolves to other's inode.
         std::fs::rename(&other, &path).expect("rename over path");
-        let after = current_path_dev_ino(&path).expect("stat after").expect("present");
-        assert_eq!(after, other_id, "path must resolve to the replacement inode");
-        assert_ne!(after, path_id, "path must no longer resolve to the original inode");
+        let after = current_path_dev_ino(&path)
+            .expect("stat after")
+            .expect("present");
+        assert_eq!(
+            after, other_id,
+            "path must resolve to the replacement inode"
+        );
+        assert_ne!(
+            after, path_id,
+            "path must no longer resolve to the original inode"
+        );
         assert_eq!(current_path_dev_ino(&dir.join("absent")), Ok(None));
     }
-
 
     #[test]
     fn parses_quoted_otel_host_bridge_ch_vsock_socket() {

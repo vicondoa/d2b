@@ -2437,9 +2437,7 @@ fn read_guest_config_via_socket(
     }
     let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
         Ok(socket) => socket,
-        Err(err) if is_daemon_unreachable(&err) => {
-            return Ok(GuestConfigReadOutcome::Unavailable)
-        }
+        Err(err) if is_daemon_unreachable(&err) => return Ok(GuestConfigReadOutcome::Unavailable),
         Err(err) => {
             return Err(CliFailure::new(
                 1,
@@ -2537,7 +2535,10 @@ fn finish_config_sync_from_reply(
         "error" => {
             let frame: ErrorFrame = serde_json::from_value(value)
                 .map_err(|_| protocol_error("the daemon returned a malformed error reply"))?;
-            Err(guest_control_config_failure_from_daemon(frame.error, is_json))
+            Err(guest_control_config_failure_from_daemon(
+                frame.error,
+                is_json,
+            ))
         }
         other => Err(protocol_error(&format!(
             "the daemon returned an unexpected reply type '{other}'"
@@ -3752,10 +3753,7 @@ fn exec_terminate(
 /// Terminate `vm exec` on a usage error (exit 2, `source: "cli"`). For `--json`
 /// this still emits one terminal JSON document on STDOUT; otherwise it is
 /// a plain stderr failure.
-fn exec_usage_terminate(
-    args: &VmExecArgs,
-    message: impl Into<String>,
-) -> Result<i32, CliFailure> {
+fn exec_usage_terminate(args: &VmExecArgs, message: impl Into<String>) -> Result<i32, CliFailure> {
     let message = message.into();
     if args.json {
         let mut map = exec_json_base(args);
@@ -3775,7 +3773,9 @@ fn exec_usage_terminate(
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
 fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
-    use nixling_ipc::public_wire::{ExecEnvVar, ExecOp, ExecOpResponse, ExecStartArgs, ExecTermSize};
+    use nixling_ipc::public_wire::{
+        ExecEnvVar, ExecOp, ExecOpResponse, ExecStartArgs, ExecTermSize,
+    };
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
     //    `--json` is machine output: reject it together with ANY interactive /
@@ -4099,10 +4099,7 @@ fn exec_json_success(
 /// Build the failure `--json` envelope value. Transport/protocol/internal
 /// failures carry `transportExitCode` + a non-`guest` `source`. A failure
 /// envelope NEVER carries captured stdio bytes.
-fn exec_json_failure_value(
-    args: &VmExecArgs,
-    error: &exec_client::ExecClientError,
-) -> Value {
+fn exec_json_failure_value(args: &VmExecArgs, error: &exec_client::ExecClientError) -> Value {
     let mut map = exec_json_base(args);
     map.insert(
         "source".to_owned(),
@@ -4110,10 +4107,7 @@ fn exec_json_failure_value(
     );
     map.insert("reason".to_owned(), Value::String(error.kind.clone()));
     map.insert("exitCode".to_owned(), Value::from(error.exit_code));
-    map.insert(
-        "transportExitCode".to_owned(),
-        Value::from(error.exit_code),
-    );
+    map.insert("transportExitCode".to_owned(), Value::from(error.exit_code));
     map.insert("message".to_owned(), Value::String(error.message.clone()));
     if !error.remediation.is_empty() {
         map.insert(
@@ -7740,10 +7734,7 @@ mod host_install_dispatch_tests {
             Some("guest-control"),
             "old-generation is a guest-control source, never guest"
         );
-        assert_eq!(
-            envelope.get("exitCode").and_then(Value::as_i64),
-            Some(70)
-        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(70));
         assert_eq!(
             envelope.get("transportExitCode").and_then(Value::as_i64),
             Some(70),
@@ -7835,14 +7826,16 @@ mod host_install_dispatch_tests {
             super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
         let exit_code = result.expect("json usage failure returns the exit code");
         assert_eq!(exit_code, 2);
-        let envelope: Value =
-            serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
         let rendered = envelope.to_string();
         assert!(
             !rendered.contains(SECRET),
             "json --env envelope leaked the secret value: {rendered}"
         );
-        assert_eq!(envelope.get("reason").and_then(Value::as_str), Some("usage"));
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
         assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
     }
 
@@ -7880,11 +7873,16 @@ mod host_install_dispatch_tests {
             super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
         let exit_code = result.expect("json missing-command usage returns the exit code");
         assert_eq!(exit_code, 2);
-        let envelope: Value =
-            serde_json::from_slice(&stdout).expect("one JSON document on stdout");
-        assert_eq!(envelope.get("command").and_then(Value::as_str), Some("vm exec"));
+        let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        assert_eq!(
+            envelope.get("command").and_then(Value::as_str),
+            Some("vm exec")
+        );
         assert_eq!(envelope.get("source").and_then(Value::as_str), Some("cli"));
-        assert_eq!(envelope.get("reason").and_then(Value::as_str), Some("usage"));
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
         assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
 
         let human_args = VmExecArgs {
@@ -8078,7 +8076,9 @@ mod host_install_dispatch_tests {
                     let request_bytes = recv_test_frame(accepted)?;
                     let request: Value = serde_json::from_slice(&request_bytes)
                         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-                    request_tx.send(request).expect("send request to test thread");
+                    request_tx
+                        .send(request)
+                        .expect("send request to test thread");
                     send_test_frame(accepted, &reply)
                 })();
                 close(accepted).expect("close accepted socket");
@@ -8156,8 +8156,7 @@ mod host_install_dispatch_tests {
         let content = b"{ environment.systemPackages = [ ]; }\n";
         let reply = read_guest_config_reply(content);
         let args = gc_sync_args("work-aad");
-        let (result, recorded, stdout) =
-            run_config_sync_with_mock_daemon(args, Some(reply));
+        let (result, recorded, stdout) = run_config_sync_with_mock_daemon(args, Some(reply));
         assert_eq!(result.expect("config sync succeeds"), 0);
         let request = recorded.expect("server recorded a request");
         assert_eq!(
@@ -8190,8 +8189,7 @@ mod host_install_dispatch_tests {
                 json: true,
                 ..gc_sync_args("work-aad")
             };
-            let (result, recorded, _stdout) =
-                run_config_sync_with_mock_daemon(args, Some(reply));
+            let (result, recorded, _stdout) = run_config_sync_with_mock_daemon(args, Some(reply));
             let err = result.expect_err(&format!("kind {kind} must fail"));
             assert_eq!(err.exit_code, 70, "kind {kind} maps to exit 70");
             assert!(recorded.is_some(), "kind {kind} reached the daemon");
@@ -9025,7 +9023,10 @@ mod konsole_wrapper_tests {
 
     use serde_json::{json, Value};
 
-    use super::{cmd_vm_konsole, reset_test_konsole_spawn_count, test_konsole_spawn_count, Context, VmKonsoleArgs};
+    use super::{
+        cmd_vm_konsole, reset_test_konsole_spawn_count, test_konsole_spawn_count, Context,
+        VmKonsoleArgs,
+    };
 
     static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -9109,9 +9110,7 @@ mod konsole_wrapper_tests {
         // The wrapper must re-exec this binary into `vm exec -it` and must
         // not contain any SSH token. We can only assert the static suffix
         // (the self-exe path is the test harness binary at runtime).
-        let argv_suffix = [
-            "vm", "exec", "-it", "work", "--", "bash", "-l",
-        ];
+        let argv_suffix = ["vm", "exec", "-it", "work", "--", "bash", "-l"];
         // Reconstruct the argv the wrapper would build, mirroring the
         // production logic, and assert no "ssh" token appears.
         let self_exe = std::env::current_exe().expect("self exe");
@@ -9148,7 +9147,10 @@ mod konsole_wrapper_tests {
             "terminal": "konsole",
             "transport": "guest-control",
         });
-        assert_eq!(body.get("transport").and_then(Value::as_str), Some("guest-control"));
+        assert_eq!(
+            body.get("transport").and_then(Value::as_str),
+            Some("guest-control")
+        );
         assert!(body.get("host").is_none());
         assert!(body.get("key").is_none());
         assert!(body.get("user").is_none());
@@ -9201,9 +9203,7 @@ mod exec_json_envelope_tests {
 
     use nixling_ipc::public_wire::ExecTerminalStatus;
 
-    use super::{
-        exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs,
-    };
+    use super::{exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs};
 
     fn exec_args(vm: &str) -> VmExecArgs {
         VmExecArgs {
@@ -9759,10 +9759,7 @@ mod config_cmd_tests {
                 "kind {kind} must not create a staging file"
             );
             let rendered = err.rendered_stderr.unwrap_or_default();
-            assert!(
-                rendered.contains(kind),
-                "kind {kind} must surface its slug"
-            );
+            assert!(rendered.contains(kind), "kind {kind} must surface its slug");
             // No success content can appear on an error path: a sentinel that
             // only exists in a real config body must never leak here.
             assert!(!rendered.contains("systemPackages"));
@@ -9814,8 +9811,8 @@ mod config_cmd_tests {
     fn finish_config_sync_unexpected_reply_type_is_rejected() {
         let dir = scratch("gc-sync-type");
         let staging = dir.join("work.guest.nix");
-        let reply = serde_json::to_vec(&serde_json::json!({ "type": "somethingElse" }))
-            .expect("serialize");
+        let reply =
+            serde_json::to_vec(&serde_json::json!({ "type": "somethingElse" })).expect("serialize");
         let err = super::finish_config_sync_from_reply(&reply, &staging, false)
             .expect_err("unexpected type must be rejected");
         assert_eq!(err.message, "guest-control-protocol-error");
@@ -9929,9 +9926,7 @@ mod ssh_spawn_gate {
         assert!(scan_ssh_argv_violations(&sanctioned).is_empty());
 
         // Test fixtures: an SSH token inside a `#[cfg(test)] mod` is skipped.
-        let in_test = format!(
-            "#[cfg(test)]\nmod t {{\n    fn f() {{ let _ = {ssh_tok}; }}\n}}\n"
-        );
+        let in_test = format!("#[cfg(test)]\nmod t {{\n    fn f() {{ let _ = {ssh_tok}; }}\n}}\n");
         assert!(scan_ssh_argv_violations(&in_test).is_empty());
     }
 
@@ -9956,12 +9951,8 @@ mod ssh_spawn_gate {
             for tool in ["ssh", "scp"] {
                 let script = bin.join(tool);
                 let mut f = std::fs::File::create(&script).expect("create trap script");
-                writeln!(
-                    f,
-                    "#!/bin/sh\necho spawned > {}\nexit 0",
-                    marker.display()
-                )
-                .expect("write trap script");
+                writeln!(f, "#!/bin/sh\necho spawned > {}\nexit 0", marker.display())
+                    .expect("write trap script");
                 let mut perms = std::fs::metadata(&script).expect("stat").permissions();
                 std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
                 std::fs::set_permissions(&script, perms).expect("chmod trap script");

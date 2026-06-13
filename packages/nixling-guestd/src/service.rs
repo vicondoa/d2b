@@ -381,15 +381,9 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         let guest_config_path = guest_config_path.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
-                let _ = run_single_connection(
-                    stream,
-                    auth,
-                    exec,
-                    detached,
-                    context,
-                    guest_config_path,
-                )
-                .await;
+                let _ =
+                    run_single_connection(stream, auth, exec, detached, context, guest_config_path)
+                        .await;
             }
         });
     }
@@ -402,7 +396,9 @@ fn build_detached_registry(
     detached: &DetachedRuntimeConfig,
     boot_id: String,
 ) -> Arc<DetachedRegistry> {
-    let units = Arc::new(SystemdRunUnitManager::new(detached.systemd_run_path.clone()));
+    let units = Arc::new(SystemdRunUnitManager::new(
+        detached.systemd_run_path.clone(),
+    ));
     let store = Arc::new(RunSlotStore::new());
     let clock = Arc::new(SystemWallClock);
     let sleeper = Arc::new(TokioSleeper);
@@ -663,16 +659,16 @@ impl GuestControlService {
             return Ok(response);
         };
 
-        let command =
-            match crate::exec::validate_and_authorize_detached(&input, self.exec.policy()) {
-                Ok(command) => command,
-                Err(error) => {
-                    let mut response = pb::ExecCreateResponse::new();
-                    response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
-                    response.error = MessageField::some(guest_error_kind(error));
-                    return Ok(response);
-                }
-            };
+        let command = match crate::exec::validate_and_authorize_detached(&input, self.exec.policy())
+        {
+            Ok(command) => command,
+            Err(error) => {
+                let mut response = pb::ExecCreateResponse::new();
+                response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
+                response.error = MessageField::some(guest_error_kind(error));
+                return Ok(response);
+            }
+        };
 
         match registry
             .create(guest_boot_id, command, registry.default_caps())
@@ -1007,8 +1003,7 @@ impl GuestControl for GuestControlService {
             if input.tty {
                 let mut response = pb::ExecCreateResponse::new();
                 response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_PROTOCOL_ERROR);
-                response.error =
-                    MessageField::some(guest_error_kind(ExecError::UnsupportedMode));
+                response.error = MessageField::some(guest_error_kind(ExecError::UnsupportedMode));
                 return Ok(response);
             }
             return self.exec_create_detached(input, &guest_boot_id).await;
@@ -1164,7 +1159,13 @@ impl GuestControl for GuestControlService {
             }
         };
         match registry
-            .read_logs(exec_id, guest_boot_id, stream, request.offset, request.max_len)
+            .read_logs(
+                exec_id,
+                guest_boot_id,
+                stream,
+                request.offset,
+                request.max_len,
+            )
             .await
         {
             Ok(chunk) => {
@@ -1352,8 +1353,7 @@ impl GuestControl for GuestControlService {
         {
             Ok((final_offset, duplicate)) => {
                 let mut response = pb::CloseStdinResponse::new();
-                response.stdin_state =
-                    EnumOrUnknown::new(pb::StdinState::STDIN_STATE_CLOSED);
+                response.stdin_state = EnumOrUnknown::new(pb::StdinState::STDIN_STATE_CLOSED);
                 response.final_offset = final_offset;
                 response.disposition = EnumOrUnknown::new(if duplicate {
                     pb::WriteDisposition::WRITE_DISPOSITION_DUPLICATE
@@ -1567,8 +1567,8 @@ fn read_guest_file_safely(path: &Path) -> Result<Vec<u8>, pb::GuestControlErrorK
     let mut buf: Vec<u8> = Vec::with_capacity(declared_size as usize);
     let mut chunk = [0_u8; 65536];
     loop {
-        let n =
-            rustix::io::read(&file, &mut chunk).map_err(|_| K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
+        let n = rustix::io::read(&file, &mut chunk)
+            .map_err(|_| K::GUEST_CONTROL_ERROR_KIND_READ_DENIED)?;
         if n == 0 {
             break;
         }
@@ -2160,8 +2160,12 @@ mod tests {
     #[tokio::test]
     async fn interactive_rpcs_reject_unknown_exec_and_bad_signal_target() {
         let ctx = ttrpc_context();
-        let service =
-            GuestControlService::new(test_auth(), test_exec_root_enabled(), None, test_context(15));
+        let service = GuestControlService::new(
+            test_auth(),
+            test_exec_root_enabled(),
+            None,
+            test_context(15),
+        );
         authenticate(&service).await;
 
         // WriteStdin / CloseStdin against an unknown exec map to a typed
@@ -2172,7 +2176,13 @@ mod tests {
         write.data = b"hi".to_vec();
         let write_response = service.write_stdin(&ctx, write).await.unwrap();
         assert_eq!(
-            write_response.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            write_response
+                .error
+                .as_ref()
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
         );
         assert_eq!(
@@ -2184,7 +2194,13 @@ mod tests {
         close.metadata = exec_metadata("exec-unknown");
         let close_response = service.close_stdin(&ctx, close).await.unwrap();
         assert_eq!(
-            close_response.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            close_response
+                .error
+                .as_ref()
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
         );
 
@@ -2197,7 +2213,13 @@ mod tests {
         let resize_ack = service.tty_win_resize(&ctx, resize).await.unwrap();
         assert_eq!(resize_ack.control_seq, 1);
         assert_eq!(
-            resize_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            resize_ack
+                .error
+                .as_ref()
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
         );
 
@@ -2207,11 +2229,16 @@ mod tests {
         bad_target.metadata = exec_metadata("exec-unknown");
         bad_target.control_seq = 1;
         bad_target.signal = 2;
-        bad_target.target =
-            EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_PROCESS_TREE);
+        bad_target.target = EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_PROCESS_TREE);
         let bad_target_ack = service.exec_signal(&ctx, bad_target).await.unwrap();
         assert_eq!(
-            bad_target_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            bad_target_ack
+                .error
+                .as_ref()
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR
         );
 
@@ -2225,7 +2252,13 @@ mod tests {
             EnumOrUnknown::new(pb::SignalTarget::SIGNAL_TARGET_FOREGROUND_PROCESS_GROUP);
         let signal_ack = service.exec_signal(&ctx, signal).await.unwrap();
         assert_eq!(
-            signal_ack.error.as_ref().unwrap().kind.enum_value().unwrap(),
+            signal_ack
+                .error
+                .as_ref()
+                .unwrap()
+                .kind
+                .enum_value()
+                .unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND
         );
     }
@@ -2648,7 +2681,12 @@ mod tests {
     }
 
     fn service_with_detached(instance: u8, detached: Arc<DetachedRegistry>) -> GuestControlService {
-        GuestControlService::new(test_auth(), test_exec(), Some(detached), test_context(instance))
+        GuestControlService::new(
+            test_auth(),
+            test_exec(),
+            Some(detached),
+            test_context(instance),
+        )
     }
 
     #[tokio::test]
@@ -2679,7 +2717,11 @@ mod tests {
         // below the cap, so asserting the bound here would be vacuous).
         let mut ids: Vec<String> = Vec::new();
         for entry in &response.entries {
-            assert_eq!(entry.argv_sha256.len(), 64, "argv_sha256 is a 32-byte hex digest");
+            assert_eq!(
+                entry.argv_sha256.len(),
+                64,
+                "argv_sha256 is a 32-byte hex digest"
+            );
             assert!(
                 entry.argv_sha256.bytes().all(|b| b.is_ascii_hexdigit()),
                 "argv_sha256 is hex"
@@ -2746,7 +2788,9 @@ mod tests {
             "every retained slot is listed exactly once"
         );
         assert!(
-            slots.iter().all(|&slot| (slot as usize) < DETACHED_RETAINED_PER_VM),
+            slots
+                .iter()
+                .all(|&slot| (slot as usize) < DETACHED_RETAINED_PER_VM),
             "every listed slot is within the retained-per-VM range"
         );
     }
@@ -2763,8 +2807,14 @@ mod tests {
             .exec_list(&ctx, exec_list_request("boot-B"))
             .await
             .expect("exec_list returns a typed error envelope, not a transport error");
-        assert!(response.entries.is_empty(), "no entries leak across a boot mismatch");
-        let error = response.error.as_ref().expect("stale-session error envelope");
+        assert!(
+            response.entries.is_empty(),
+            "no entries leak across a boot mismatch"
+        );
+        let error = response
+            .error
+            .as_ref()
+            .expect("stale-session error envelope");
         assert_eq!(
             error.kind.enum_value().unwrap(),
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_STALE_SESSION
@@ -2798,7 +2848,11 @@ mod tests {
         let service = test_service(42);
         let mut held = Vec::new();
         for _ in 0..WRITE_STDIN_HANDLERS_PER_CONNECTION {
-            held.push(service.acquire_write_stdin_slot(1).expect("slot within budget"));
+            held.push(
+                service
+                    .acquire_write_stdin_slot(1)
+                    .expect("slot within budget"),
+            );
         }
         assert!(
             matches!(
@@ -2876,7 +2930,10 @@ mod tests {
 
     fn assert_file_error(response: &pb::ReadGuestFileResponse, kind: pb::GuestControlErrorKind) {
         // Fail-closed shape: NO content/size/hash on error (D7/D10 no-leak).
-        assert!(response.content.is_empty(), "content must not leak on error");
+        assert!(
+            response.content.is_empty(),
+            "content must not leak on error"
+        );
         assert_eq!(response.size_bytes, 0, "size must not leak on error");
         assert!(response.sha256.is_empty(), "sha256 must not leak on error");
         let error = response.error.as_ref().expect("error set");
@@ -2918,7 +2975,10 @@ mod tests {
             std::fs::write(&path, vec![0x61_u8; size]).unwrap();
             let service = service_with_config(51, Some(path));
             authenticate(&service).await;
-            let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+            let response = service
+                .read_guest_file(&ctx, config_request())
+                .await
+                .unwrap();
             if expect_ok {
                 assert!(response.error.is_none(), "{tag} should succeed");
                 assert_eq!(response.size_bytes as usize, size, "{tag} size");
@@ -2942,7 +3002,10 @@ mod tests {
         let service = service_with_config(52, Some(path));
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         assert!(response.error.is_none());
         assert_eq!(response.content, body);
         assert_eq!(response.size_bytes as usize, body.len());
@@ -2961,7 +3024,10 @@ mod tests {
         let service = service_with_config(53, Some(path));
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         assert_file_error(
             &response,
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND,
@@ -2980,7 +3046,10 @@ mod tests {
         let service = service_with_config(54, Some(link));
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         // O_NOFOLLOW on the leaf rejects the symlink (ELOOP) -> PathUnsafe; the
         // symlink target bytes never leave the guest.
         assert_file_error(
@@ -2998,7 +3067,10 @@ mod tests {
         let service = service_with_config(55, Some(path));
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         // A non-regular target (directory) is rejected after fstat.
         assert_file_error(
             &response,
@@ -3012,7 +3084,10 @@ mod tests {
         let service = service_with_config(56, None);
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         assert_file_error(
             &response,
             pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
@@ -3051,7 +3126,10 @@ mod tests {
         let service = service_with_config(58, Some(path));
         authenticate(&service).await;
         let ctx = ttrpc_context();
-        let response = service.read_guest_file(&ctx, config_request()).await.unwrap();
+        let response = service
+            .read_guest_file(&ctx, config_request())
+            .await
+            .unwrap();
         assert!(response.error.is_none());
         let encoded = response.write_to_bytes().unwrap();
         assert!(
