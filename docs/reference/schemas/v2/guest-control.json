@@ -1270,7 +1270,7 @@
       "minItems": 0
     },
     "GuestFileId": {
-      "description": "Closed set of host-declared guest files readable via `ReadGuestFile`. W15 ships only `GuestConfig` (the in-guest editable config working copy).",
+      "description": "Closed set of host-declared guest files readable via `ReadGuestFile`. Currently ships only `GuestConfig` (the in-guest editable config working copy).",
       "type": "string",
       "enum": [
         "guest-config"
@@ -1670,7 +1670,7 @@
       ]
     },
     "ReadGuestFileRequest": {
-      "description": "W15 framework read of a host-declared guest file, keyed by a closed enum (NOT a free-form path). guestd maps the key to the host-declared target.",
+      "description": "Framework read of a host-declared guest file, keyed by a closed enum (NOT a free-form path). guestd maps the key to the host-declared target.",
       "type": "object",
       "required": [
         "fileId",

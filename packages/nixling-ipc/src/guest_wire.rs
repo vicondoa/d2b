@@ -276,7 +276,7 @@ pub enum GuestCapability {
 }
 
 /// Closed set of host-declared guest files readable via `ReadGuestFile`.
-/// W15 ships only `GuestConfig` (the in-guest editable config working copy).
+/// Currently ships only `GuestConfig` (the in-guest editable config working copy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuestFileId {
@@ -901,7 +901,7 @@ pub struct ControlAck {
     pub error: Option<GuestControlError>,
 }
 
-/// W15 framework read of a host-declared guest file, keyed by a closed enum
+/// Framework read of a host-declared guest file, keyed by a closed enum
 /// (NOT a free-form path). guestd maps the key to the host-declared target.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
