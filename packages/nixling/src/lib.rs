@@ -9236,8 +9236,8 @@ mod ssh_spawn_gate {
     use std::sync::Mutex;
 
     use super::{
-        finish_config_sync_from_reply, read_guest_config_via_socket, Context,
-        GuestConfigReadOutcome,
+        cmd_config_sync, config_staging_path, finish_config_sync_from_reply,
+        read_guest_config_via_socket, Context, GuestConfigReadOutcome, DEFAULT_GUEST_CONFIG_PATH,
     };
 
     /// Allowlist comment markers. Built so this scanner's own source never
@@ -9441,6 +9441,164 @@ mod ssh_spawn_gate {
         assert!(
             !trap.ssh_was_spawned(),
             "the guest-control config path must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write a minimal manifest declaring `vm` so `require_known_vm`
+    /// passes and `cmd_config_sync` proceeds to transport selection.
+    fn write_known_vm_manifest(path: &std::path::Path, vm: &str) {
+        let manifest = serde_json::json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "audioService": format!("nixling-{vm}-audio.service"),
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+    }
+
+    /// Write a bundle whose processes DAG declares `vm` but with NO
+    /// `GuestControlHealth` node, modelling an old/partial generation that
+    /// predates the guest-control transport. `vm_uses_guest_control`
+    /// resolves false, so `cmd_config_sync` must fail closed.
+    fn write_old_generation_bundle(bundle_path: &std::path::Path, vm: &str) {
+        let base_dir = bundle_path.parent().expect("bundle parent");
+        std::fs::create_dir_all(base_dir).expect("create bundle dir");
+        let unique = bundle_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("bundle file name");
+        let processes_path = base_dir.join(format!("{unique}.processes.json"));
+        let processes = nixling_core::processes::ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![nixling_core::processes::VmProcessDag {
+                vm: vm.to_owned(),
+                // No GuestControlHealth node: the VM is a known but
+                // pre-guest-control generation.
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                invariants: nixling_core::processes::VmProcessInvariants {
+                    swtpm_pre_start_flush: false,
+                    per_vm_audit_pipeline: false,
+                    usbip_gating: false,
+                    tpm_ownership_migration_without_running_vm_mutation: false,
+                },
+            }],
+        };
+        std::fs::write(
+            &processes_path,
+            serde_json::to_vec(&processes).expect("serialize processes"),
+        )
+        .expect("write processes.json");
+        let bundle = serde_json::json!({
+            "bundleVersion": 4,
+            "schemaVersion": "v2",
+            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
+            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
+            "processesPath": processes_path.to_string_lossy(),
+            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
+            "closures": [],
+            "minijailProfiles": [],
+            "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
+        });
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle.json");
+    }
+
+    #[test]
+    fn config_sync_old_generation_fails_closed_without_socket_or_ssh() {
+        // Binding fail-closed invariant: `config sync` against a known VM
+        // whose bundle lacks the guest-control transport (an old or
+        // partial generation) must reject with exit 70 +
+        // `guest-control-unavailable-old-generation`, WITHOUT contacting
+        // public.sock, WITHOUT staging/publishing, and WITHOUT taking the
+        // SSH argv path. This is not W19 live behaviour — it is the
+        // hermetic guarantee that an unsupported generation can never
+        // silently fall back to an SSH transport or a partial write.
+        let dir = scratch("config-old-generation");
+        let trap = SshTrapGuard::install(&dir);
+
+        let vm = "oldgenvm";
+        let manifest_path = dir.join("manifest.json");
+        let bundle_path = dir.join("bundle.json");
+        write_known_vm_manifest(&manifest_path, vm);
+        write_old_generation_bundle(&bundle_path, vm);
+
+        let context = Context {
+            manifest_path,
+            bundle_path,
+            // A deliberately ABSENT socket: if a regression let the command
+            // fall through to the transport, `read_guest_config_via_socket`
+            // would surface `guest-control-transport-unavailable` (Unavailable
+            // outcome) instead of the old-generation slug. The kind therefore
+            // discriminates whether ANY public.sock request was attempted.
+            public_socket: dir.join("absent-public.sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let args = super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: true,
+        };
+
+        let err = cmd_config_sync(&context, &args)
+            .expect_err("old-generation config sync must fail closed");
+        assert_eq!(
+            err.exit_code, 70,
+            "old generation maps to EXIT_GUEST_CONTROL_CONFIG"
+        );
+        let rendered = err.rendered_stderr.unwrap_or_default();
+        assert!(
+            rendered.contains("guest-control-unavailable-old-generation"),
+            "old generation surfaces its fail-closed slug"
+        );
+        // Proves no public.sock request was sent: a transport attempt would
+        // have produced the transport-unavailable slug against the absent
+        // socket, not the old-generation slug.
+        assert!(
+            !rendered.contains("guest-control-transport-unavailable"),
+            "the command must not reach the public.sock transport on an old generation"
+        );
+        // No SSH/SCP client may be spawned on any config-sync path.
+        assert!(
+            !trap.ssh_was_spawned(),
+            "old-generation fail-closed must not spawn an SSH client"
+        );
+        // Nothing may be staged or published on the fail-closed path.
+        assert!(
+            !config_staging_path(vm).exists(),
+            "old-generation fail-closed must not stage guest bytes"
         );
 
         drop(trap);
