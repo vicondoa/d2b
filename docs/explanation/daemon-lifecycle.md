@@ -42,9 +42,9 @@ Roles, from
   guest-control-capable VMs (`nixling.vms.<vm>.guest.control.enable =
   true`) and fails **closed**: never ready for an old-generation,
   unreachable, auth-failed, or timed-out guest. Per-VM sshd/host-keys
-  are retained for the SSH-compat window but are no longer the framework
-  readiness signal, so the legacy raw TCP-22 `ssh-ready` /
-  `guest-ssh-readiness` node is no longer emitted.
+  are retained as a compat surface but never gate readiness: the
+  legacy raw TCP-22 `ssh-ready` / `guest-ssh-readiness` DAG node was
+  removed and is no longer emitted for any VM.
 
 Optional roles wired by per-VM features:
 

@@ -142,8 +142,9 @@ is different from the original draft:
 4. `guest-control-health` — the daemon runs the authenticated
    guest-control Health probe (Hello + token challenge-response +
    Health over the guest-control vsock) on guest-control-capable VMs.
-   It fails closed; the legacy raw TCP-22 `ssh-ready` node is no longer
-   emitted.
+   It fails closed and is the guest-readiness gate; SSH is a compat
+   surface only, so the legacy raw TCP-22 `ssh-ready` /
+   `guest-ssh-readiness` node was removed and is no longer emitted.
 
 The operator-facing routing changed: `nixling vm start corp-vm --apply`
 no longer stops at the old `daemon-down` placeholder by default.
