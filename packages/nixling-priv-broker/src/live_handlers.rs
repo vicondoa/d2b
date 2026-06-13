@@ -2298,7 +2298,7 @@ fn grant_guest_control_traversal_acls(leaf: &Path) -> Result<(), String> {
 
 /// Grant `u:nixlingd:rw` on the guest-control vsock socket inode, then
 /// re-stat the path to confirm it still resolves to the same `(dev,
-/// ino)` the fd-based setfacl mutated (BR15b inode pinning). If the
+/// ino)` the fd-based setfacl mutated (inode pinning). If the
 /// socket was replaced (or vanished) between the setfacl and the
 /// re-stat, the grant landed on a now-stale inode: do not audit success
 /// and report not-ready (`Ok(false)`) so the caller retries against the
@@ -3497,7 +3497,7 @@ mod tests {
 
     #[test]
     fn current_path_dev_ino_tracks_inode_replacement() {
-        // BR15b inode pinning relies on re-stat detecting that a path now
+        // Inode pinning relies on re-stat detecting that a path now
         // resolves to a different inode than the one a prior fd mutated.
         // Use a rename to swap a fresh inode over the path deterministically
         // (remove+recreate can reuse the same inode number on some

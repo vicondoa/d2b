@@ -1938,7 +1938,7 @@ mod tests {
     #[test]
     fn control_op_retry_with_same_op_id_replays_cached_ack() {
         // A Signal retried with the SAME client opId must replay the original
-        // ack WITHOUT re-delivering the signal to the guest (F3b idempotency).
+        // ack WITHOUT re-delivering the signal to the guest (idempotency).
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
             next_offset: 0,

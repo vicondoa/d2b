@@ -3605,12 +3605,12 @@ mod exec_owner_io_tests {
         worker.join().expect("fake worker joins");
     }
 
-    /// WR2 under saturation: when the in-flight cap is FULLY held (every permit
-    /// taken by a parked long-poll), an owner disconnect must still tear the
-    /// session down promptly. The reader is parked in `read_frame` (never in a
-    /// permit acquisition), so owner EOF is observed at once: `control_tx` is
-    /// dropped, the worker cancels its parked polls, and the io thread returns
-    /// without waiting for any poll deadline.
+    /// Prompt teardown under saturation: when the in-flight cap is FULLY held
+    /// (every permit taken by a parked long-poll), an owner disconnect must
+    /// still tear the session down promptly. The reader is parked in
+    /// `read_frame` (never in a permit acquisition), so owner EOF is observed at
+    /// once: `control_tx` is dropped, the worker cancels its parked polls, and
+    /// the io thread returns without waiting for any poll deadline.
     #[test]
     fn disconnect_while_inflight_cap_saturated_tears_down_promptly() {
         let cap = EXEC_OWNER_INFLIGHT_CAP;

@@ -414,7 +414,7 @@ where
     let mut pending_stdin: Vec<u8> = Vec::new();
     // Stable client-assigned idempotency token for control ops (Signal/Resize).
     // A single monotonic counter keeps every control op id unique within the
-    // session so the daemon's replay cache can dedup a re-delivered op (F3b).
+    // session so the daemon's replay cache can dedup a re-delivered op.
     let mut next_control_op_id: u64 = 1;
 
     // Non-interactive: close the guest stdin up front so a command reading
