@@ -298,20 +298,25 @@ Pretending otherwise would be dishonest.
   `/var/lib/nixling/keys/<vm>_ed25519` are readable by every
   member of `nixling`. A second untrusted human on the
   same machine breaks the threat model.
-- **A malicious local launcher user.** A member of
-  `nixling` can start, stop, and restart every nixling
-  VM (within the daemon's per-VM scope), and read every per-VM SSH
-  private key. The v1.0 authorisation surface ([§4](#4-defenses-in-depth))
-  is SO_PEERCRED at `/run/nixling/public.sock` accept time +
-  `nixling` group membership; the legacy polkit per-VM
-  allowlist that previously narrowed which unit names launchers
-  could start was retired in v1.0 (per ADR 0015), but the daemon-
-  side per-verb authorisation table still narrows the verb set
-  to lifecycle + read-only operations. Destructive guest-root verbs
-  (`vm exec` / `vm konsole`) are gated separately to the admin role
+- **A malicious local launcher user.** A member of the
+  `nixling` group who is also listed in `nixling.site.launcherUsers`
+  can connect to `/run/nixling/public.sock` and run the daemon's
+  read-only verbs (`vm list`, `vm status`, `host check`,
+  `auth status`, `keys list`/`keys show`), and — because the per-VM
+  SSH keys are group-readable — read every per-VM SSH private key.
+  The v1.0 authorisation surface ([§4](#4-defenses-in-depth)) is
+  `SO_PEERCRED` at `/run/nixling/public.sock` accept time: the
+  `nixling` group plus `launcherUsers` is the *connection* gate, and
+  the daemon's per-verb authorisation table is the *role* gate. The
+  legacy polkit per-VM allowlist that previously narrowed which unit
+  names launchers could start was retired in v1.0 (per ADR 0015).
+  Every mutating verb — lifecycle (`vm start`/`vm stop`/`vm restart`/
+  `switch`), host-prepare, key rotation, USBIP bind, store verify,
+  config sync (`readGuestConfig`), and the destructive guest-root
+  verbs (`vm exec` / `vm konsole`) — is gated to the admin role
   (`nixling.site.adminUsers`, checked via `SO_PEERCRED` at accept
   time), so a launcher-only member cannot reach them. The daemon does
-  not narrow *which* launcher user can drive *which* VM. By design.
+  not narrow *which* admin user can drive *which* VM. By design.
 
 **DHCP reservations are convenience, not security.** The per-env
 net VM assigns predictable IPs to workload VMs via dnsmasq
@@ -814,11 +819,21 @@ lifecycle dispatch goes through `nixlingd`'s public socket at
 `/run/nixling/public.sock` (mode `0660`, owner `nixlingd`, group
 `nixling`). Authorisation is enforced via
 `SO_PEERCRED` at `accept(2)` time: the daemon reads the peer's
-uid/gid and refuses requests from peers outside the
-`nixling` group. Per-verb authorisation lives in the
-daemon's `dispatch_request` table — every mutating verb routes
-through `nixling-priv-broker` with an audited per-op entry, and
-unknown / out-of-scope verbs surface a typed
+uid/gid, refuses requests from peers outside the `nixling` group /
+`nixling.site.launcherUsers` (the *connection* gate), and gates
+mutating verbs to the admin role (`nixling.site.adminUsers`, the
+*role* gate). Per-verb authorisation lives in the daemon's
+`dispatch_request` table. Most host-mutating verbs route through
+`nixling-priv-broker`, where each host mutation is recorded as an
+audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
+guest-control verbs are the exception: `readGuestConfig`
+(config sync) reads the guest's config over the typed guest-control
+channel rather than mutating the host, and `vm exec` / `vm konsole`
+proxy a guest-root session whose establishment and termination are
+recorded as *leak-safe daemon-side* lifecycle events in
+`daemon-events-<utc-date>.jsonl` (VM name, admin peer uid, and tty
+shape only — never argv, env, cwd, or stdio bytes), not as broker
+`OpAuditRecord`s. Unknown / out-of-scope verbs surface a typed
 `not-yet-implemented` (exit 78) or `daemon-down` (exit 1)
 envelope. There is no per-VM allowlist at this layer; the
 daemon is the per-verb gate.
@@ -1452,14 +1467,19 @@ anchor for the design.
 ### New trust boundaries
 
 The current model assumes the privilege boundary is the
-`nixling` group plus polkit. The portability work splits that
-into three layers:
+`nixling` group plus the daemon's per-verb role table. The
+portability work splits that into three layers:
 
-1. **The public CLI socket** at `/run/nixling/nixlingd.sock` —
-   ACL'd to `nixling` (daily lifecycle) and `nixling-admin`
-   (destructive / host-prepare / key rotation), authenticated by
-   `SO_PEERCRED` + `getgrouplist()` (no `/proc/<pid>` races, no
-   abstract sockets). See ADR 0002.
+1. **The public CLI socket** at `/run/nixling/public.sock` —
+   ACL'd `0660 nixlingd:nixling` so the `nixling` group is the
+   *connection* gate (daily read-only lifecycle), authenticated by
+   `SO_PEERCRED` at `accept(2)` time. The daemon then resolves the
+   peer uid against `nixling.site.launcherUsers` (connection) and
+   `nixling.site.adminUsers` (the *role* gate for destructive /
+   host-prepare / key-rotation / guest-control verbs). There is no
+   separate `nixling-admin` socket or group — admin is a
+   `SO_PEERCRED`-derived role on the single public socket, not a
+   second endpoint. See ADR 0002.
 2. **The private broker socket** at `/run/nixling/priv.sock` —
    reachable only by the `nixlingd` service uid; the broker takes
    no daemon-supplied paths, uids, or capabilities and re-derives
