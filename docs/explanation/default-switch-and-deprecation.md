@@ -30,39 +30,40 @@
 | Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
 | `nixling.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane — setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `nixling.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
-| W14c three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after P6. |
-| The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in P6 (`ph6-p6-cli-nix-migrations`, `ph6-remove-systemd-emission`). Rust CLI is the only CLI. |
-| Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in P6. |
-| `W10-fu + 30/60/90/180 days` bash deprecation calendar (warning → fail-loud → binary removed) | Clean break. The clean-break framing is the deprecation: there is no warn-then-remove cadence because there is no coexistence period. |
+| The three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after the clean break. |
+| The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in the daemon-only clean break. Rust CLI is the only CLI. |
+| Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in the clean break. |
+| The original 30/60/90/180-day bash deprecation calendar (warning → fail-loud → binary removed) | Clean break. The clean-break framing is the deprecation: there is no warn-then-remove cadence because there is no coexistence period. |
 | `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Removed. The option no longer exists; setting it fails eval with a typed message (`nixos-modules/assertions.nix`). Every enabled VM is daemon-supervised (see ADR 0015 § Decision). |
 | ADR 0007 (bash coexistence + migration plan) | Superseded by ADR 0015. ADR 0007 remains in the tree as historical context. |
 
 ## Why a clean break instead of the original deprecation cycle
 
-The original W10 plan envisioned a multi-month coexistence window:
+The original deprecation plan envisioned a multi-month coexistence window:
 the bash CLI would warn at `+30 days`, fail loudly at `+90 days`,
 and only be removed at `+180 days` (the nominal 1.0 cut). That
 shape made sense while the daemon-native path was still earning
 trust per-wave.
 
-By the end of P4 + P5 every operator-facing verb already ran
-daemon-native end-to-end on hosts that had passed the W18
+By the time the daemon-native path shipped, every operator-facing verb
+already ran
+daemon-native end-to-end on hosts that had passed the
 flip-gate, and the bash fallback was a strict superset of the
 daemon path's failure modes (it bypassed the broker's audit log,
 re-introduced root-level lifecycle decisions, and could not be
-sandboxed under the minijail profiles W17/P1 ship). Maintaining a
+sandboxed under the minijail profiles the framework ships). Maintaining a
 parallel bash runtime for the deprecation window therefore meant
 maintaining a *less safe* code path purely so operators could
 choose it. ADR 0015 records the panel's decision that the operator
 ergonomics of a "warn-then-remove" cycle were not worth the
 security and audit-coverage regressions implied by carrying the
-bash runtime past P5.
+bash runtime through the deprecation window.
 
 The trade-off explicitly accepted by ADR 0015:
 
 - **Lost:** the ability for an operator to roll back to a known-good
-  bash CLI on the same host after P6 lands. The remediation path is
-  to pin to the last pre-P6 nixling tag (the bash runtime is still
+  bash CLI on the same host after the clean break lands. The remediation path is
+  to pin to the last pre-clean-break nixling tag (the bash runtime is still
   in that revision's tree) rather than mix bash and daemon paths
   on the same host.
 - **Lost:** the `+30 / +90 / +180 day` cadence that gave external
@@ -72,10 +73,10 @@ The trade-off explicitly accepted by ADR 0015:
   deprecation warning, because there is no in-CLI legacy code path
   to warn from.
 - **Kept:** every operator config knob that selects daemon vs not
-  (`nixling.daemonExperimental.enable` itself, the W18 gate, the
+  (`nixling.daemonExperimental.enable` itself, the flip gate, the
   `validated` evidence machinery). What changed is what the "off"
-  side of that knob means: pre-P6 it selected the bash runtime;
-  post-P6 it disables the daemon-managed lifecycle bits and leaves
+  side of that knob means: before the clean break it selected the bash runtime;
+  after it disables the daemon-managed lifecycle bits and leaves
   the operator responsible for not invoking the daemon-native
   verbs.
 
@@ -107,19 +108,19 @@ those are intentionally excluded from the gate because they
 describe work that happens AFTER the flip itself, and requiring
 them would deadlock the auto-flip.
 
-| Wave | Origin | Evidence file |
+| Wave | Capability the evidence covers | Evidence file |
 | --- | --- | --- |
-| `w4Fu` | W12 / W14 headless supervisor + non-bootstrap broker path | `<defaultFlipEvidenceDir>/w4Fu.json` |
-| `w5Fu` | W17 minijail profiles + GPU/audio/video argv generators | `<defaultFlipEvidenceDir>/w5Fu.json` |
-| `w6Fu` | W13 USBIP live executors + per-busid lock | `<defaultFlipEvidenceDir>/w6Fu.json` |
-| `w7Fu` | W7b store-lifecycle verbs + admin auth | `<defaultFlipEvidenceDir>/w7Fu.json` |
-| `w8Fu` | W14 keys / trust / rotate-known-host live wiring | `<defaultFlipEvidenceDir>/w8Fu.json` |
-| `w9Fu` | W15 host install + migrate live broker ops (incl. W15-fu1) | `<defaultFlipEvidenceDir>/w9Fu.json` |
-| `p0` | Daemon-only foundation (socket-activated broker, bundle hash verify, canonical `/run/nixling`) | `<defaultFlipEvidenceDir>/p0.json` |
-| `p0Fu` | P0 follow-up: cgroup delegation sequence + per-artifact hash verification | `<defaultFlipEvidenceDir>/p0Fu.json` |
-| `p1` | Per-role minijail profiles + byte-parity argv generators | `<defaultFlipEvidenceDir>/p1.json` |
-| `p2` | Daemon-side host-prep + ownership matrix + `manifestVersion = 4` + daemon autostart | `<defaultFlipEvidenceDir>/p2.json` |
-| `p3` | Retire host singletons + daemon health endpoint | `<defaultFlipEvidenceDir>/p3.json` |
+| `w4Fu` | headless supervisor + non-bootstrap broker path | `<defaultFlipEvidenceDir>/w4Fu.json` |
+| `w5Fu` | minijail profiles + GPU/audio/video argv generators | `<defaultFlipEvidenceDir>/w5Fu.json` |
+| `w6Fu` | USBIP live executors + per-busid lock | `<defaultFlipEvidenceDir>/w6Fu.json` |
+| `w7Fu` | store-lifecycle verbs + admin auth | `<defaultFlipEvidenceDir>/w7Fu.json` |
+| `w8Fu` | keys / trust / rotate-known-host live wiring | `<defaultFlipEvidenceDir>/w8Fu.json` |
+| `w9Fu` | host install + migrate live broker ops | `<defaultFlipEvidenceDir>/w9Fu.json` |
+| `p0` | daemon-only foundation (socket-activated broker, bundle hash verify, canonical `/run/nixling`) | `<defaultFlipEvidenceDir>/p0.json` |
+| `p0Fu` | cgroup delegation sequence + per-artifact hash verification (foundation follow-up) | `<defaultFlipEvidenceDir>/p0Fu.json` |
+| `p1` | per-role minijail profiles + byte-parity argv generators | `<defaultFlipEvidenceDir>/p1.json` |
+| `p2` | daemon-side host-prep + ownership matrix + manifest version bump + daemon autostart | `<defaultFlipEvidenceDir>/p2.json` |
+| `p3` | retire host singletons + daemon health endpoint | `<defaultFlipEvidenceDir>/p3.json` |
 | `p4` | `vm start/stop/restart/list` daemon-native end-to-end + desktop wrapper | `<defaultFlipEvidenceDir>/p4.json` |
 
 `defaultFlipEvidenceDir` is the
@@ -158,8 +159,8 @@ Operator overrides still win in both directions:
   into daemon mode before the flip gate is fully green. Same
   semantics as before.
 - `nixling.daemonExperimental.enable = lib.mkForce false` — opt
-  out. **Semantics changed post-P6.** Pre-P6 this selected the
-  legacy bash/systemd runtime. Post-P6 the legacy runtime no
+  out. **Semantics changed at the clean break.** Before it, this selected the
+  legacy bash/systemd runtime. After it, the legacy runtime no
   longer exists; setting this to `false` simply disables the
   daemon-managed lifecycle bits and leaves the operator
   responsible for not invoking daemon-native verbs. There is no
@@ -170,56 +171,55 @@ The `mkDefault` / `mkForce` priority semantics of the underlying
 default expression, so any operator-side assignment behaves
 exactly as the NixOS option-merging rules describe.
 
-## Historical compatibility table (W10 main, pre-clean-break)
+## Historical compatibility table (pre-clean-break)
 
-The pre-P6 contract was a per-verb matrix that recorded, for every
+The pre-clean-break contract was a per-verb matrix that recorded, for every
 public CLI verb, which paths existed (bash, native daemon, native
-`--apply` wired live) and which follow-up wave promoted the
-native `--apply` from "typed refusal" to "live". The table is
-preserved verbatim below so historical CHANGELOG / commit
+`--apply` wired live). The table is
+preserved below so historical CHANGELOG / commit
 references resolve. Every row's "Bash" column reads as
-**deleted in P6** as of this revision.
+**deleted** as of this revision.
 
-| Verb | Bash (pre-P6) | Native | Live --apply (final) | Promoting wave |
-| --- | --- | --- | --- | --- |
-| `list` | ✅ | ✅ | ✅ (read-only) | — |
-| `status` | ✅ | ✅ | ✅ (read-only) | — |
-| `status --check-bridges` | ✅ | ✅ | ✅ (read-only) | — |
-| `audit` | ✅ | ✅ | ✅ (read-only) | — |
-| `auth status` | ✅ | ✅ | ✅ (read-only) | — |
-| `host check` | ✅ | ✅ | ✅ (read-only) | — |
-| `host prepare` | ✅ | ✅ | ✅ (P2 daemon-side host-prep) | W4-fu / P2 |
-| `host destroy` | ✅ | ✅ | ✅ (P2 daemon-side host-prep) | W4-fu / P2 |
-| `host doctor` | ✅ | ✅ | ✅ (read-only) | — |
-| `host install` | — | ✅ (W15) | ✅ (daemon → broker `RunHostInstall`) | — |
-| `vm start` | ✅ (`up`) | ✅ (W4) | ✅ (daemon-native; P4 retired bash bridge) | W4-fu → P4 |
-| `vm stop` | ✅ (`down`) | ✅ (W4) | ✅ (daemon-native; P4 retired bash bridge) | W4-fu → P4 |
-| `vm restart` | ✅ | ✅ (W4) | ✅ (daemon-native; P4 retired bash bridge) | W4-fu → P4 |
-| `vm list` | — | ✅ (W4) | ✅ (daemon-native; P4 promoted from placeholder) | W4-fu → P4 |
-| `build` | ✅ | ✅ (W7) | n/a (non-destructive) | W7b-fu |
-| `generations` | ✅ | ✅ (W7) | n/a (non-destructive) | W7b-fu |
-| `switch` | ✅ | ✅ (W7) | ✅ (broker `RunActivation`) | W7-fu |
-| `boot` | ✅ | ✅ (W7) | ✅ (broker `RunActivation`) | W7-fu |
-| `test` | ✅ | ✅ (W7) | ✅ (broker `RunActivation`) | W7-fu |
-| `rollback` | ✅ | ✅ (W7) | ✅ (broker `RunActivation`) | W7-fu |
-| `gc` | ✅ | ✅ (W7) | ✅ (broker `RunGc`; admin-auth) | W7c-fu |
-| `keys list` | ✅ | ✅ (W8) | ✅ (read-only) | — |
-| `keys show` | ✅ | ✅ (W8) | ✅ (read-only) | — |
-| `keys rotate` | ✅ | ✅ (W8) | ✅ (broker `RunKeysRotate`; admin-auth) | W8-fu |
-| `rotate-known-host` | ✅ | ✅ (W8) | ✅ (broker `RunRotateKnownHost`; admin-auth) | W8-fu |
-| `trust` | ✅ | ✅ (W8) | ✅ (broker `RunHostKeyTrust`; admin-auth) | W8-fu |
-| `audio on\|off` | ✅ | ✅ (P-phase) | ✅ (daemon-native; P6 retired bash shim) | W5-fu → P-phase |
-| `audio mic\|speaker on\|off` | ✅ | ✅ (P-phase) | ✅ (daemon-native; P6 retired bash shim) | W5-fu → P-phase |
-| `audio status` | ✅ | ✅ (P-phase) | ✅ (daemon-native; P6 retired bash shim) | W5-fu → P-phase |
-| `console <vm>` | ✅ | ✅ (P-phase) | ✅ (daemon-native; P6 retired bash shim) | W7-fu → P-phase |
-| `debug bundle` | ✅ | ✅ (P-phase) | ✅ (daemon-native; P6 retired bash shim) | W6-fu → P-phase |
-| `usb <vm>` | ✅ | ✅ (W6/W13) | ✅ (broker `UsbipBindFirewallRule` + per-busid lock) | W6-fu |
-| `migrate` | ✅ | ✅ (W15) | ✅ (daemon → broker `RunMigrate`) | — |
+| Verb | Bash (legacy) | Native | Live --apply (final) |
+| --- | --- | --- | --- |
+| `list` | ✅ | ✅ | ✅ (read-only) |
+| `status` | ✅ | ✅ | ✅ (read-only) |
+| `status --check-bridges` | ✅ | ✅ | ✅ (read-only) |
+| `audit` | ✅ | ✅ | ✅ (read-only) |
+| `auth status` | ✅ | ✅ | ✅ (read-only) |
+| `host check` | ✅ | ✅ | ✅ (read-only) |
+| `host prepare` | ✅ | ✅ | ✅ (daemon-side host-prep) |
+| `host destroy` | ✅ | ✅ | ✅ (daemon-side host-prep) |
+| `host doctor` | ✅ | ✅ | ✅ (read-only) |
+| `host install` | — | ✅ | ✅ (daemon → broker `RunHostInstall`) |
+| `vm start` | ✅ (`up`) | ✅ | ✅ (daemon-native; retired bash bridge) |
+| `vm stop` | ✅ (`down`) | ✅ | ✅ (daemon-native; retired bash bridge) |
+| `vm restart` | ✅ | ✅ | ✅ (daemon-native; retired bash bridge) |
+| `vm list` | — | ✅ | ✅ (daemon-native; promoted from placeholder) |
+| `build` | ✅ | ✅ | n/a (non-destructive) |
+| `generations` | ✅ | ✅ | n/a (non-destructive) |
+| `switch` | ✅ | ✅ | ✅ (broker `RunActivation`) |
+| `boot` | ✅ | ✅ | ✅ (broker `RunActivation`) |
+| `test` | ✅ | ✅ | ✅ (broker `RunActivation`) |
+| `rollback` | ✅ | ✅ | ✅ (broker `RunActivation`) |
+| `gc` | ✅ | ✅ | ✅ (broker `RunGc`; admin-auth) |
+| `keys list` | ✅ | ✅ | ✅ (read-only) |
+| `keys show` | ✅ | ✅ | ✅ (read-only) |
+| `keys rotate` | ✅ | ✅ | ✅ (broker `RunKeysRotate`; admin-auth) |
+| `rotate-known-host` | ✅ | ✅ | ✅ (broker `RunRotateKnownHost`; admin-auth) |
+| `trust` | ✅ | ✅ | ✅ (broker `RunHostKeyTrust`; admin-auth) |
+| `audio on\|off` | ✅ | ✅ | ✅ (daemon-native; retired bash shim) |
+| `audio mic\|speaker on\|off` | ✅ | ✅ | ✅ (daemon-native; retired bash shim) |
+| `audio status` | ✅ | ✅ | ✅ (daemon-native; retired bash shim) |
+| `console <vm>` | ✅ | ✅ | ✅ (daemon-native; retired bash shim) |
+| `debug bundle` | ✅ | ✅ | ✅ (daemon-native; retired bash shim) |
+| `usb <vm>` | ✅ | ✅ | ✅ (broker `UsbipBindFirewallRule` + per-busid lock) |
+| `migrate` | ✅ | ✅ | ✅ (daemon → broker `RunMigrate`) |
 
 Legend (historical): `✅` = implemented and live in that revision;
-`—` = no follow-up planned (verb is read-only, daemon-only from
-the start, or didn't apply). The "Bash" column reads as deleted
-in P6 across every row.
+`—` = the verb is read-only, daemon-only from
+the start, or didn't apply. The "Bash" column reads as deleted
+across every row.
 
 ## References
 
@@ -230,8 +230,8 @@ in P6 across every row.
 - [`../reference/cli-contract.md`](../reference/cli-contract.md)
   — authoritative per-verb CLI surface.
 - [`../reference/wave-evidence-schema.md`](../reference/wave-evidence-schema.md)
-  — JSON schema for the W18 evidence files.
+  — JSON schema for the per-wave evidence files.
 - [`../reference/host-validate.md`](../reference/host-validate.md)
   — the `nixling host validate` verb that writes those files.
-- [Daemon experimental mode (W2)](daemon-experimental.md)
-- [Daemon lifecycle (W4 main)](daemon-lifecycle.md)
+- [Daemon experimental mode](daemon-experimental.md)
+- [Daemon lifecycle](daemon-lifecycle.md)
