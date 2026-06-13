@@ -51,8 +51,10 @@ pub struct WriteStdinOutcome {
     pub stdin_closed: bool,
 }
 
-/// Outcome of a `ReadOutput` transport call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Outcome of a `ReadOutput` transport call. `Debug` is redacted so a stray
+/// `{:?}` can never leak the guest output bytes (WR12); only the length and the
+/// framing flags are observable.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ReadOutputOutcome {
     pub data: Vec<u8>,
     pub next_offset: u64,
@@ -60,6 +62,19 @@ pub struct ReadOutputOutcome {
     pub dropped_bytes: u64,
     pub truncated: bool,
     pub timed_out: bool,
+}
+
+impl std::fmt::Debug for ReadOutputOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOutputOutcome")
+            .field("data_len", &self.data.len())
+            .field("next_offset", &self.next_offset)
+            .field("eof", &self.eof)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("timed_out", &self.timed_out)
+            .finish()
+    }
 }
 
 /// Terminal disposition of the guest command.
@@ -1034,13 +1049,25 @@ impl SessionTable {
 
 /// RAII guard for a reserved session slot. Dropping it releases the slot
 /// (every failure path drops the guard, so the slot is always released).
-#[derive(Debug)]
+/// `Debug` is redacted so a stray `{:?}` can never leak the unguessable
+/// session handle capability token (WR12); only the leak-safe uid / vm /
+/// released fields are observable.
 pub struct SessionSlot {
     handle: String,
     uid: u32,
     vm: String,
     table: Arc<SessionTable>,
     released: bool,
+}
+
+impl std::fmt::Debug for SessionSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionSlot")
+            .field("uid", &self.uid)
+            .field("vm", &self.vm)
+            .field("released", &self.released)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionSlot {
@@ -2173,6 +2200,43 @@ mod tests {
             !table.owned_by(&handle, 7),
             "released handle is not reusable / lookupable"
         );
+    }
+
+    #[test]
+    fn session_slot_debug_redacts_the_handle() {
+        // WR12/G2: a stray `{:?}` on the reserved-slot guard must never leak the
+        // unguessable session handle; only uid / vm / released are observable.
+        let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
+        let slot = table.reserve(7, "corp-vm").expect("slot");
+        let handle = slot.handle().to_owned();
+        let rendered = format!("{slot:?}");
+        assert!(
+            !rendered.contains(&handle),
+            "SessionSlot Debug leaked the handle {handle}: {rendered}"
+        );
+        assert!(rendered.contains("corp-vm"), "vm name is observable");
+        assert!(rendered.contains("uid"), "uid is observable");
+    }
+
+    #[test]
+    fn read_output_outcome_debug_redacts_output_bytes() {
+        // WR12/G2: a stray `{:?}` on a `ReadOutput` outcome must never render
+        // the guest output bytes; only the length + framing flags are shown.
+        const SECRET_OUTPUT: &[u8] = b"SENTINEL_STDOUT_rood";
+        let outcome = ReadOutputOutcome {
+            data: SECRET_OUTPUT.to_vec(),
+            next_offset: 20,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        };
+        let rendered = format!("{outcome:?}");
+        assert!(
+            !rendered.contains("SENTINEL_STDOUT_rood"),
+            "ReadOutputOutcome Debug leaked output bytes: {rendered}"
+        );
+        assert!(rendered.contains("data_len"), "output length is observable");
     }
 
     // ---- (j) fake-clock rate limit --------------------------------------------
