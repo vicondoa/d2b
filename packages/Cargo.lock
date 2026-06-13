@@ -967,6 +967,7 @@ dependencies = [
  "nix 0.29.0",
  "nixling-core",
  "nixling-ipc",
+ "rustix 0.38.44",
  "schemars",
  "serde",
  "serde_json",
