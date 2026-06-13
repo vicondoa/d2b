@@ -184,7 +184,7 @@ metadata and (per the signed plan) from future metric labels.
 The `decision` field follows the broker default
 (`allowed` / `denied-refused` / `errored`).
 
-> **Current wiring (W4):** the success path (`ok_fast_path` /
+> **Current wiring:** the success path (`ok_fast_path` /
 > `ok_non_fast_path`) and the failure path (`failed`) both emit the signed
 > terminal record. Every `run_store_sync` attempt that reaches the handler
 > emits exactly one terminal `OperationFields::StoreSync` record — success
@@ -204,7 +204,7 @@ The `decision` field follows the broker default
 > Successful StoreSync attempts populate available per-phase timings;
 > pre-handler/failure paths still carry only the dispatch-level `total_ms`.
 
-## Observability export (W5)
+## Observability export
 
 The terminal audit record above is **host-confidential** (`0640
 root:nixlingd` under `<stateDir>/audit/broker-*.jsonl`) and carries
@@ -266,14 +266,14 @@ remain in JSON content. See
 [`components-observability.md`](./components-observability.md) and
 [`loki-label-contract.md`](./loki-label-contract.md).
 
-> **Not in this wave (W5):** there is no log-derived alert *metric*. The
+> **Out of scope (current):** there is no log-derived alert *metric*. The
 > current obs stack has no `loki.process`/`stage.metrics` log→metric
 > path, and the signed scope forbids adding a Loki ruler, Alertmanager,
 > host Alloy self-scrape, a broker `/metrics` endpoint, or a new exposed
 > port — so the existing systemd-unit-failed `NixlingStoreSyncFailure`
 > alert (Prometheus, `stack.nix`) is left unchanged.
 
-## Explicit verify surface (W6)
+## Explicit verify surface
 
 `nixling store verify <vm> [--repair] [--json]` is the operator-facing
 live-pool integrity surface. The CLI is thin: it sends `storeVerify` to

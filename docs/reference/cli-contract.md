@@ -1266,7 +1266,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 **Native**
 
 - Routes through `nixlingd` → broker `StoreVerify`.
-- W6 verifies the current marker/manifest and top-level `live/` basenames
+- Verifies the current marker/manifest and top-level `live/` basenames
   and writes host-only integrity records.
 - `--repair` never claims success from the StoreSync attempt alone; it
   returns `repaired` only after the post-repair verification is clean.

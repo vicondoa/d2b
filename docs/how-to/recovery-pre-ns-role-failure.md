@@ -35,7 +35,7 @@ reports `SpawnRunner failed at <role>`.
    | 60        | `CHILD_EXIT_PRCTL`         | `prctl(NO_NEW_PRIVS)` or similar prctl failed |
    | 61        | `CHILD_EXIT_UNSHARE`       | `unshare()` or `clone3(NEWUSER)` failed — often `EPERM` from `kernel.unprivileged_userns_clone = 0` |
    | 62        | `CHILD_EXIT_CGROUP`        | cgroup-v2 placement failed |
-   | 63        | `CHILD_EXIT_MOUNT`         | mount-namespace operation failed; in user-NS context this is usually a regression of the fu27 mount-action-skip guard |
+   | 63        | `CHILD_EXIT_MOUNT`         | mount-namespace operation failed; in user-NS context this is usually a regression of the mount-action-skip guard |
    | 70        | `CHILD_EXIT_SETGROUPS`     | `setgroups(0, NULL)` failed inside user-NS |
    | 71        | `CHILD_EXIT_SETGID`        | `setgid()` failed; uid_map / gid_map mis-written |
    | 72        | `CHILD_EXIT_SETUID`        | `setuid()` failed (same root cause as 71) |

@@ -38,7 +38,7 @@ display/wire `generation_token`):
 The guest `nl-meta` share is pointed at `store-view/meta/` only;
 `state/`, `gcroots/`, and `sync.lock` are host-only and never exposed.
 
-> **Transitional note (W2):** the shipping `nixos-modules/store.nix`
+> **Transitional note:** the shipping `nixos-modules/store.nix`
 > activation path and the legacy `build_farm`/rollback flows still use
 > the older single-root layout — `store-view/current -> generations/<N>`
 > with `generations/<N>/{system,store-paths,db.dump,marker.json}` and
@@ -147,7 +147,7 @@ Everything else is pruned:
 - hardlink-farm entries not referenced by the union of retained `store-paths`
   files.
 
-> **Transitional note (W2):** the split-layout `StoreSync` path keys
+> **Transitional note:** the split-layout `StoreSync` path keys
 > generations by `generation_id` (under `state/`/`meta/generations/<id>/`
 > and `gcroots/generation-<id>`) and currently reports
 > `cleanup_deferred: true` with `swept_count: 0` — retention/sweep for
