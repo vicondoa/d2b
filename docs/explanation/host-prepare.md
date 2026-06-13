@@ -256,7 +256,11 @@ fail-closed.
 
 ## Recovery runbook
 
-If `host prepare --apply` fails partway through, the operator runbook is:
+The mutating `host prepare --apply` / `host destroy --apply` verbs
+are **not yet wired** — they return the typed `daemon-down` envelope
+(exit 1) today, so this runbook describes the recovery flow that
+applies once the daemon-side dispatch ships. If `host prepare --apply`
+fails partway through, the operator runbook is:
 
 1. **Pause the broker**: an admin uid runs
    `nixling admin broker --pause`. The broker stops accepting new

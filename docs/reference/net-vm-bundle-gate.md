@@ -82,7 +82,7 @@ should leave the default.
 | Drift variant | Refusal envelope `message` (after redaction) | Operator action |
 | --- | --- | --- |
 | `EnvMissing` | "net VM '<vm>' has no env in manifest" | Fix `vms.json`; rebuild and reactivate the bundle. |
-| `ConfigMissing` | "dnsmasq.conf for env '<env>' is missing; bundle/dnsmasq render did not run" | Warning-only soft-defer on the current start path so a fresh host can continue. If the file should already exist, regenerate it with `nixos-rebuild switch` or `nixling host prepare --apply` and retry. |
+| `ConfigMissing` | "dnsmasq.conf for env '<env>' is missing; bundle/dnsmasq render did not run" | Warning-only soft-defer on the current start path so a fresh host can continue. If the file should already exist, regenerate it with `nixos-rebuild switch` and retry (the standalone `nixling host prepare --apply` recovery path is not yet wired — it returns `daemon-down` (exit 1) today). |
 | `ConfigReadFailed` | "dnsmasq.conf for env '<env>' could not be read: <errno detail>" | Restore the file's ownership/mode (it should be daemon-readable). |
 | `HashMismatch` | "dnsmasq.conf hash for env '<env>' diverges from bundle expectation (expected <sha256>, actual <sha256>); rebuild required" | The bundle was updated but the dnsmasq render step did not rerun. Re-render dnsmasq.conf and retry. |
 
@@ -113,9 +113,12 @@ continues the start path instead of turning a missing
 ## Recovery
 
 The canonical recovery is to re-render the dnsmasq config and retry.
-A full `nixos-rebuild switch` is sufficient, and `nixling host
-prepare --apply` is the focused recovery path when you only need to
-refresh the daemon-owned host-prep state. After the refresh:
+A full `nixos-rebuild switch` is sufficient. The focused `nixling host
+prepare --apply` recovery path — refreshing only the daemon-owned
+host-prep state — is **not yet wired**: it returns the typed
+`daemon-down` envelope (exit 1) today (use `--dry-run` to inspect the
+plan), and will land once the daemon-side dispatch ships. After the
+refresh:
 
 ```bash
 ls -l /var/lib/nixling/dnsmasq/<env>.conf

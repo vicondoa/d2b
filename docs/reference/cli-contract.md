@@ -1721,14 +1721,14 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 **Status**
 
-`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
+`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the host reconcile without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile mutation. |
+| `--apply` | boolean | `false` | Perform the host-reconcile mutation. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1742,7 +1742,7 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal, Tier-0 mixed single-writer conflict, or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`single-writer-conflict`](./error-codes.md#single-writer-conflict), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -1757,9 +1757,9 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (commit `ee6ed0b`).
+- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (broker ops staged in commit `ee6ed0b`; public-socket dispatch pending).
 
 **Bash**
 
@@ -1770,14 +1770,14 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Status**
 
-`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
+`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan removal of nixling-owned host reconcile state without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile teardown. |
+| `--apply` | boolean | `false` | Perform the host-reconcile teardown. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1791,7 +1791,7 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal or typed `broker-error` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -1806,9 +1806,9 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (commit `ee6ed0b`; reverse-order hardening in `b73e28f`).
+- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires the same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (broker ops staged in commit `ee6ed0b`; reverse-order hardening in `b73e28f`; public-socket dispatch pending).
 
 **Bash**
 
@@ -2370,8 +2370,8 @@ message pointing at `vm exec -it`.
 | `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `audit` | `rust-native` | Audit is part of the daemon surface and keeps both human and JSON output contracts. |
 | `host check` | `rust-native` | Host check is a read-only daemon RPC by design. |
-| `host prepare` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `host destroy` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the reverse-order daemon-backed host-reconcile sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
+| `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |

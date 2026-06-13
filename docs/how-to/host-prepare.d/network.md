@@ -106,7 +106,9 @@ between the step-3 write and the step-5 readback is the
 - If `nmcli -t -f DEVICE,STATE device status` reports the nixling
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
-  ID; remove or rename it and re-run `host prepare --apply`.
+  ID; remove or rename it and, once `host prepare --apply` is wired,
+  re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  to re-check).
 
 ### Fedora 40+ (Tier 1-later)
 

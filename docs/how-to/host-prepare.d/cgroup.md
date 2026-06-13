@@ -17,8 +17,10 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `nixling host prepare --apply`, confirm the host meets
-the prerequisites:
+Before running `nixling host prepare --apply` (not yet wired — it
+returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
+the "What `host prepare --apply` will do for cgroup" section below),
+confirm the host meets the prerequisites:
 
 ```bash
 # 1. Unified cgroup v2 hierarchy:
@@ -46,17 +48,20 @@ first failure is what the operator sees:
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and re-run `host prepare --apply`; verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
 | `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `nixling.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
 `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640),
 keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
-## What `host prepare --apply` does for cgroup
+## What `host prepare --apply` will do for cgroup
 
-For a successful apply, the broker performs the 8-step delegation
-sequence documented in [`cgroup-delegation.md`][ref]:
+`host prepare --apply` is **not yet wired** — it returns the typed
+`daemon-down` envelope (exit 1) today; use `--dry-run` for now. Once
+the daemon-side dispatch ships, for a successful apply the broker will
+perform the 8-step delegation sequence documented in
+[`cgroup-delegation.md`][ref]:
 
 1. probe the unified hierarchy;
 2. assert `{cpu, memory, io, pids, cpuset}` are advertised;
@@ -76,8 +81,8 @@ sequence documented in [`cgroup-delegation.md`][ref]:
    is still running as uid 0; Phase A privileged setup
    legitimately runs as root per ADR 0011 Decision item 2.
 
-After the apply, `nixling.slice` is owned by `nixlingd` and the
-delegated subtree carries every required controller in
+After the apply, `nixling.slice` will be owned by `nixlingd` and the
+delegated subtree will carry every required controller in
 `cgroup.subtree_control`. Threaded cgroups are forbidden.
 
 `cgroup.kill` is permitted only via **broker-mediated** `CgroupKill`

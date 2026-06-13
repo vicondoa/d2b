@@ -95,7 +95,10 @@ ownership model, and audit record shape are in
 
 ## How to verify cgroup delegation prerequisites
 
-Before running `nixling host prepare --apply`, confirm the host meets
+Before running `nixling host prepare --apply` (not yet wired — it
+returns `daemon-down` (exit 1) today; use `--dry-run` for now, and see
+the "What `host prepare --apply` will do for cgroup" section below),
+confirm the host meets
 the prerequisites:
 
 ```bash
@@ -124,17 +127,20 @@ first failure is what the operator sees:
 | --- | --- | --- |
 | `cgroup-v2-unified-not-present` | `/sys/fs/cgroup/cgroup.controllers` missing or unreadable. | Re-boot with the unified cgroup v2 hierarchy. NixOS: `boot.kernelParams = [ "systemd.unified_cgroup_hierarchy=1" ];`. |
 | `cgroup-controllers-missing` | One of `cpu`, `memory`, `io`, `pids`, `cpuset` is absent from `cgroup.controllers`. | Confirm `systemd-cgls --all` works on the host; ensure the kernel exposes the missing controller. |
-| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and re-run `host prepare --apply`; verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
+| `cgroup-delegation-refused` | Phase B (post-delegation) runtime mutation was attempted while the broker is still uid 0 — i.e., the broker failed to drop to `nixlingd` uid before the steady-state cgroup code path. Phase A privileged setup legitimately runs as root per ADR 0011. | Re-check the `nixlingd` user/group bootstrap and, once `host prepare --apply` is wired, re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); verify the broker's drop-priv between Phase A and Phase B is wired correctly. |
 | `cgroup-kill-on-ancestor-refused` | A broker-mediated `CgroupKill` op was requested on `nixling.slice` or an intermediate VM/host cgroup (i.e., `path_class: slice` or `vm-interior`). | This is a guard — the daemon re-requests `CgroupKill` against the specific leaf path instead. No operator action. |
 
 Every check writes a record to the broker audit log at
 `/var/lib/nixling/audit/broker-<utc-date>.jsonl` (root:nixlingd 0640),
 keyed by `operation: "DelegateCgroupV2"` or `operation: "OpenCgroupDir"`.
 
-## What `host prepare --apply` does for cgroup
+## What `host prepare --apply` will do for cgroup
 
-For a successful apply, the broker performs the 8-step delegation
-sequence documented in [`cgroup-delegation.md`][ref]:
+`host prepare --apply` is **not yet wired** — it returns the typed
+`daemon-down` envelope (exit 1) today; use `--dry-run` for now. Once
+the daemon-side dispatch ships, for a successful apply the broker will
+perform the 8-step delegation sequence documented in
+[`cgroup-delegation.md`][ref]:
 
 1. probe the unified hierarchy;
 2. assert `{cpu, memory, io, pids, cpuset}` are advertised;
@@ -154,8 +160,8 @@ sequence documented in [`cgroup-delegation.md`][ref]:
    is still running as uid 0; Phase A privileged setup
    legitimately runs as root per ADR 0011 Decision item 2.
 
-After the apply, `nixling.slice` is owned by `nixlingd` and the
-delegated subtree carries every required controller in
+After the apply, `nixling.slice` will be owned by `nixlingd` and the
+delegated subtree will carry every required controller in
 `cgroup.subtree_control`. Threaded cgroups are forbidden.
 
 `cgroup.kill` is permitted only via **broker-mediated** `CgroupKill`
@@ -331,7 +337,9 @@ between the step-3 write and the step-5 readback is the
 - If `nmcli -t -f DEVICE,STATE device status` reports the nixling
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
-  ID; remove or rename it and re-run `host prepare --apply`.
+  ID; remove or rename it and, once `host prepare --apply` is wired,
+  re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  to re-check).
 
 ### Fedora 40+ (Tier 1-later)
 
@@ -418,9 +426,12 @@ for the rationale + rejected alternatives.
 This fragment is included in `docs/how-to/host-prepare.md`.
 
 This document is the operator how-to for the `inet nixling` named
-table that the privileged broker reconciles during `nixling host
-prepare --apply` (and re-checks before every VM start). The
-authoritative chain layout reference lives at
+table that the privileged broker's host-prepare path reconciles (and
+re-checks before every VM start). The mutating `nixling host prepare
+--apply` is **not yet wired** — it returns the typed `daemon-down`
+envelope (exit 1) today; `host check` and `host prepare --dry-run`
+exercise the read-only path. The authoritative chain layout reference
+lives at
 [`../reference/inet-nixling-chains.md`](../reference/inet-nixling-chains.md);
 the architectural rationale is in
 [ADR 0013](../adr/0013-w3-firewall-coexistence-policy.md).
@@ -459,8 +470,9 @@ under its own zone-based abstractions; coexistence at the unprivileged
 
 To use nixling on a firewalld host, either:
 
-1. Stop firewalld (`systemctl disable --now firewalld`) and re-run
-   `nixling host prepare --apply`; or
+1. Stop firewalld (`systemctl disable --now firewalld`) and, once
+   `nixling host prepare --apply` is wired, re-run it to reconcile (it
+   returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); or
 2. Replace firewalld with a firewall setup where nixling owns
    `inet nixling`; otherwise nixling fails closed.
 
@@ -472,7 +484,9 @@ shadows `inet nixling`'s `forward` chain.
 
 To use nixling on a ufw host:
 
-1. `ufw disable` and re-run `nixling host prepare --apply`; or
+1. `ufw disable` and, once `nixling host prepare --apply` is wired,
+   re-run it to reconcile (it returns `daemon-down` (exit 1) today —
+   use `--dry-run` to re-check); or
 2. Replace ufw with a firewall setup where nixling owns `inet
    nixling`; otherwise the host check refuses.
 
@@ -508,7 +522,8 @@ Every VM start re-hashes `nft list table inet nixling -j` (with
 volatile `handle`/`index` fields stripped) and compares against the
 digest stored in the bundle's `host.json`. Mismatches fail closed with
 `inet-nixling-drift`; remediation is to re-run
-`nixling host prepare --apply`.
+`nixling host prepare --apply` once it is wired (it returns
+`daemon-down` (exit 1) today — use `--dry-run` to re-check the diff).
 
 ## USBIP firewall carve-out
 
@@ -523,12 +538,15 @@ separately from this firewall carve-out.
 - **`firewall-coexistence-mismatch`**: the detected manager does not
   match the bundle's declared policy. Either change the bundle (allowed
   override per the matrix above) or stop/disable the offending manager
-  and re-run `nixling host prepare --apply`.
+  and, once `nixling host prepare --apply` is wired, re-run it (it
+  returns `daemon-down` (exit 1) today — use `--dry-run` to re-check).
 - **`nft-foreign-rule-shadows-nixling`**: a foreign hook at a priority
   ≤ `-5` is active. Inspect with `nft list ruleset` and identify the
   source.
 - **`inet-nixling-drift`**: the live table no longer matches the
-  bundle digest. Re-apply with `nixling host prepare --apply`; if it
+  bundle digest. Re-apply with `nixling host prepare --apply` once it
+  is wired (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  to re-check); if it
   recurs immediately, a periodic process is rewriting the ruleset
   (`firewalld --reload`, `ufw reload`, custom cron, …).
 

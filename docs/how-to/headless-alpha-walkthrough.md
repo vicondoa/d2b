@@ -74,17 +74,19 @@ TAP interface, four virtiofs shares (`ro-store`, `nl-meta`,
 
 ```bash
 nixling host prepare --dry-run
+# `--apply` is not yet wired: it returns the typed `daemon-down`
+# envelope (exit 1) today — use `--dry-run` for now.
 nixling host prepare --apply
 ```
 
 `host prepare` reconciles host-shared state (cgroup delegation, the
 named `inet nixling` nft table, NetworkManager unmanaged drop-in,
 `/etc/hosts` managed block, sysctl ordering, kernel module probe).
-The dry-run path is complete today. In the production broker
-dispatcher, the host-reconcile ops behind `ApplyNftables` /
-`ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` are now live; the
-remaining rollout work is the public daemon-backed `host prepare
---apply` surface, not the broker executor itself.
+The dry-run path is complete today. The host-reconcile ops behind
+`ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` are
+staged in the broker executor; the remaining rollout work is the
+public daemon-backed `host prepare --apply` surface that dispatches
+them, so `--apply` returns `daemon-down` (exit 1) until that ships.
 
 ## Step 4 — Inspect the DAG
 
