@@ -513,6 +513,7 @@ mod tests {
                 "nixling_daemon_ssh_host_key_drift_total",
                 "nixling_daemon_pidfd_table_size",
                 "nixling_daemon_uptime_seconds",
+                "nixling_daemon_guest_control_exec_total",
             ]
         );
     }
@@ -591,12 +592,27 @@ mod tests {
         // an APPROVED, low-cardinality allowlist. This is an allowlist
         // (not a forbidden-list on an empty registry), so a NEW metric
         // that introduces an unapproved label key — or a guest-control
-        // closed-enum field (health_state, error_kind, ...) promoted to a
+        // closed-enum field (health_state, ...) promoted to a
         // metric label — fails this test. The allowlist is hardcoded and
         // independent of METRIC_INVENTORY so widening the inventory cannot
         // silently widen the allowlist.
-        const APPROVED_METRIC_LABEL_KEYS: &[&str] =
-            &["vm", "state", "outcome", "step", "op", "le"];
+        //
+        // `subsystem` and `error_kind` are approved ONLY as bounded
+        // closed-enum labels: `subsystem` is a per-metric constant and
+        // `error_kind` ranges over a hard-coded enum of exec failure
+        // classes. High-cardinality readiness fields (health_state,
+        // health_reason, guest_boot_id, capabilities_hash) stay forbidden
+        // below.
+        const APPROVED_METRIC_LABEL_KEYS: &[&str] = &[
+            "vm",
+            "state",
+            "outcome",
+            "step",
+            "op",
+            "le",
+            "subsystem",
+            "error_kind",
+        ];
 
         // Populate one sample of EVERY inventory metric so render() emits
         // a series (and therefore a label block) for each.
@@ -637,13 +653,14 @@ mod tests {
             }
         }
 
-        // Belt-and-suspenders: the guest-control readiness closed-enum
-        // field names must NEVER appear as a metric label key.
+        // Belt-and-suspenders: the high-cardinality / sensitive
+        // guest-control readiness closed-enum fields must NEVER appear as
+        // a metric label key. (`subsystem` and `error_kind` are allowed
+        // above as bounded exec labels and are intentionally NOT in this
+        // forbidden set.)
         for forbidden in [
             "health_state",
             "health_reason",
-            "error_kind",
-            "subsystem",
             "guest_boot_id",
             "capabilities_hash",
         ] {

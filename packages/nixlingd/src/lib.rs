@@ -483,8 +483,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
-        exec_sessions: Arc::new(exec_session::SessionTable::new(
-            exec_session::ExecSessionCaps::default(),
+        exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+            crate::exec_session::ExecSessionCaps::default(),
         )),
     };
     refresh_broker_reap_log(&state, "startup");
@@ -7748,8 +7748,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         }
     }
@@ -7775,8 +7775,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         }
     }
@@ -9089,8 +9089,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         };
         let server_socket_path = socket_path.clone();
@@ -9299,8 +9299,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         };
 
@@ -9538,8 +9538,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         };
         let opener = RecordingOpener::new();
@@ -10870,8 +10870,8 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
-            exec_sessions: Arc::new(exec_session::SessionTable::new(
-                exec_session::ExecSessionCaps::default(),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
             )),
         };
 
