@@ -7,7 +7,7 @@ the Rust CLI, daemon, and broker.
 
 ## Top-level fields
 
-- `_manifest` — manifest metadata. Contains `manifestVersion`, pinned to `4`
+- `_manifest` — manifest metadata. Contains `manifestVersion`, pinned to `5`
   in the schema and parser.
 - `_observability` — reserved observability sentinel block.
 - dynamic VM keys — every non-reserved top-level key is one VM row.

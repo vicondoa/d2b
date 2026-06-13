@@ -15,8 +15,12 @@ Every row carries three policy flags:
   mutate persistent host state. Pure-`open` device handoffs are `no`
   because the broker only opens; the daemon owns the resulting fd.
 - **secret** — `yes` for operations whose audit record may reference
-  secret-material identifiers. The currently callable surface has no
-  secret-bearing variants.
+  secret-material identifiers. The currently callable surface has one
+  secret-bearing variant, `GuestControlSign`, recorded as
+  `redacted-only`: its audit record carries only redacted
+  token-transcript metadata (`transcript_len`, `peer_cid_present`,
+  `capabilities_hash_present`), never the per-VM token or the signature
+  bytes.
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).

@@ -14,7 +14,7 @@ Current broker behavior is described in
 | Hello | callable-read-only | Daemon-only handshake; returns `HelloOk` with the broker capability list. | legacy snapshot callable |
 | ValidateBundle | callable-read-only | Sole validation entry point; calls `nixling_core::manifest::validate_bundle` and logs only opaque metadata. | legacy snapshot callable |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `nixlingd`. | legacy snapshot callable |
-| GuestControlSign | callable-read-only | Computes the per-VM HMAC-SHA256 guest-control token signature over `(vmId, role, purpose, host/guest nonces)`; returns only the signature plus opaque nonce lengths, never host state. | guest-control live callable |
+| GuestControlSign | callable-read-only | Computes the per-VM guest-control auth tag (HMAC-SHA256 over the bound transcript of `vmId`, `role`, `purpose`, host/guest nonces, peer CID, and capabilities hash); returns only the transcript-bound MAC tag, never host state, the per-VM token, or the raw transcript. | guest-control live callable |
 | ApplyNftables | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; no nft syscall or host mutation is attempted in this snapshot. | live in production broker |
 | ApplyNmUnmanaged | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; this snapshot does not manage the NetworkManager unmanaged file. | live in production broker |
 | ApplyRoute | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; no route reconciliation runs in this snapshot. | live in production broker |

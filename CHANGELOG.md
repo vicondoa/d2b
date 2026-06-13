@@ -198,9 +198,11 @@ deprecations ship one minor release before removal.
   base socket path for every VM, reserves distinct CIDs for env net VMs and
   workload VMs, and rejects consumer `--vsock` overrides so observability and
   guest-control port reservations share one authoritative per-VM vsock device.
-  This bumps the public manifest to `manifestVersion = 4` because the existing
+  This bumps the public manifest to `manifestVersion = 5` because the existing
   `observability.vsockCid` / `observability.vsockHostSocket` fields now define
-  the base Cloud Hypervisor vsock device.
+  the base Cloud Hypervisor vsock device. (`5` unifies this base-vsock change
+  with the SigNoz observability metadata that landed as `4` on a sibling
+  branch; the shipped parser/daemon/broker accept only `5`.)
 
 - `nixlingd` now has an internal Cloud Hypervisor CONNECT helper for the
   guest-control transport port. This is transport groundwork only: it does not
@@ -438,8 +440,10 @@ deprecations ship one minor release before removal.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.
-- Observability metadata in `vms.json` moves to manifest version 4 for
-  the SigNoz backend shape. Historical v3 fixtures remain frozen.
+- Observability metadata in `vms.json` moves to manifest version 5 for
+  the SigNoz backend shape (unified with the base-vsock change; the
+  intermediate `4` was never shipped on its own). Historical v3 fixtures
+  remain frozen.
 - Host and guest telemetry collection is moving from Alloy pipelines to
   OpenTelemetry Collector services that export OTLP over nixling's
   broker-supervised Unix/vsock transport.
