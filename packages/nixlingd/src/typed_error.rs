@@ -103,6 +103,17 @@ pub enum TypedError {
         path: PathBuf,
         detail: String,
     },
+    /// The privileged broker round trip (connect + write + read) did not
+    /// complete before the caller's single absolute deadline. Distinct
+    /// from [`Self::InternalBrokerUnavailable`] (a fast connect/transport
+    /// failure) so a genuine deadline exhaustion can be surfaced as a
+    /// timeout end to end — the guest-control signer maps this to
+    /// [`crate::guest_control_health::GuestControlHealthError::Timeout`]
+    /// (slug `guest-control-timeout`) instead of collapsing it into a
+    /// generic signer/transport failure.
+    InternalBrokerTimeout {
+        path: PathBuf,
+    },
     InternalConfig {
         detail: String,
     },
@@ -274,6 +285,7 @@ impl TypedError {
             Self::AuthzAuditRequiresAdmin => "authz-audit-requires-admin",
             Self::InternalAlreadyRunning { .. } => "internal-already-running",
             Self::InternalBrokerUnavailable { .. } => "internal-broker-unavailable",
+            Self::InternalBrokerTimeout { .. } => "internal-broker-timeout",
             Self::InternalConfig { .. } => "internal-config-invalid",
             Self::InternalIo { .. } => "internal-io",
             Self::InternalLockParentInvalid { .. } => "internal-lock-parent-invalid",
@@ -303,6 +315,7 @@ impl TypedError {
             Self::AuthzAuditRequiresAdmin => 32,
             Self::InternalAlreadyRunning { .. } => 41,
             Self::InternalBrokerUnavailable { .. }
+            | Self::InternalBrokerTimeout { .. }
             | Self::InternalConfig { .. }
             | Self::InternalIo { .. }
             | Self::InternalLockParentInvalid { .. } => 42,
@@ -350,6 +363,9 @@ impl TypedError {
             Self::InternalAlreadyRunning { .. } => "daemon lock is already held".to_owned(),
             Self::InternalBrokerUnavailable { .. } => {
                 "could not reach the privileged broker socket".to_owned()
+            }
+            Self::InternalBrokerTimeout { .. } => {
+                "the privileged broker round trip exceeded its deadline".to_owned()
             }
             Self::InternalConfig { .. } => "invalid daemon configuration".to_owned(),
             Self::InternalIo { .. } => "internal I/O failure".to_owned(),
@@ -439,6 +455,10 @@ impl TypedError {
             }
             Self::InternalBrokerUnavailable { .. } => {
                 "start nixling-priv-broker or disable audit requests until the broker is available"
+                    .to_owned()
+            }
+            Self::InternalBrokerTimeout { .. } => {
+                "check that nixling-priv-broker is responsive (not backlogged or half-open) and retry; the round trip exceeded the caller's deadline"
                     .to_owned()
             }
             Self::InternalConfig { .. } => {
@@ -537,6 +557,13 @@ impl TypedError {
                     "could not reach broker socket"
                 );
             }
+            Self::InternalBrokerTimeout { path } => {
+                tracing::error!(
+                    kind = self.kind(),
+                    path = %path.display(),
+                    "broker round trip exceeded its deadline"
+                );
+            }
             Self::InternalConfig { detail } => {
                 tracing::error!(
                     kind = self.kind(),
@@ -596,6 +623,7 @@ impl TypedError {
             | Self::AuthzAuditRequiresAdmin
             | Self::InternalAlreadyRunning { .. }
             | Self::InternalBrokerUnavailable { .. }
+            | Self::InternalBrokerTimeout { .. }
             | Self::InternalConfig { .. }
             | Self::InternalIo { .. }
             | Self::InternalLockParentInvalid { .. }

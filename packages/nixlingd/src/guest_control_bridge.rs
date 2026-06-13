@@ -67,15 +67,20 @@ pub fn host_nonce() -> Result<[u8; AUTH_NONCE_LEN], getrandom::Error> {
 }
 
 /// Map a broker dispatch result for a `GuestControlSign` request to the
-/// signer's typed result. Any transport error (incl. timeout / refusal),
-/// a broker `Error` response, or any non-`GuestControlSign` response
-/// collapses to [`GuestControlHealthError::Signer`]. Extracted as a pure
-/// function so the mapping is unit-testable without a live broker.
+/// signer's typed result. A round-trip deadline exhaustion
+/// ([`TypedError::InternalBrokerTimeout`]) maps to
+/// [`GuestControlHealthError::Timeout`] so a stalled/backlogged broker
+/// surfaces as the `guest-control-timeout` error end to end. Any other
+/// transport error (incl. refusal), a broker `Error` response, or any
+/// non-`GuestControlSign` response collapses to
+/// [`GuestControlHealthError::Signer`]. Extracted as a pure function so
+/// the mapping is unit-testable without a live broker.
 fn map_broker_sign_response(
     result: Result<BrokerResponse, TypedError>,
 ) -> Result<GuestControlSignResponse, GuestControlHealthError> {
     match result {
         Ok(BrokerResponse::GuestControlSign(response)) => Ok(response),
+        Err(TypedError::InternalBrokerTimeout { .. }) => Err(GuestControlHealthError::Timeout),
         Ok(_) | Err(_) => Err(GuestControlHealthError::Signer),
     }
 }
@@ -295,7 +300,9 @@ fn config_read_error_is_transient(error: &GuestFileReadError) -> bool {
 /// failures until `deadline` elapses, applying a per-attempt timeout of
 /// `min(attempt_cap, remaining_deadline)` to connect / CONNECT-ACK /
 /// ttRPC / broker-sign. A terminal (auth/protocol/file) error returns
-/// immediately. On deadline it returns the last transient error.
+/// immediately. Fails CLOSED: once the deadline has been reached (even
+/// after an overslept backoff) it does NOT start a fresh floored-to-1ms
+/// attempt — it surfaces a Timeout instead.
 pub fn run_guest_control_config_read_loop(
     probe: &dyn GuestControlProbe,
     params: &ProbeParams,
@@ -306,6 +313,13 @@ pub fn run_guest_control_config_read_loop(
 ) -> Result<Vec<u8>, GuestFileReadError> {
     loop {
         let remaining = deadline.saturating_sub(clock.elapsed());
+        // Fail closed: if the deadline has already passed (e.g. after an
+        // overslept backoff), do NOT apply the 1ms floor and start a
+        // fresh attempt AFTER the deadline. The exceeded deadline is a
+        // timeout (slug guest-control-timeout) end to end.
+        if remaining.is_zero() {
+            return Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout));
+        }
         let attempt_timeout = attempt_cap.min(remaining).max(Duration::from_millis(1));
         match probe.read_config(params, attempt_timeout) {
             Ok(bytes) => return Ok(bytes),
@@ -416,11 +430,22 @@ pub fn run_guest_control_readiness_loop(
 ) -> ReadinessProbeRun {
     let start = clock.elapsed();
     let mut attempts: u32 = 0;
+    let mut last_outcome: Option<Result<GuestControlHealthEvidence, GuestControlHealthError>> =
+        None;
     loop {
         let remaining = deadline.saturating_sub(clock.elapsed());
-        let attempt_timeout = attempt_cap
-            .min(remaining)
-            .max(Duration::from_millis(1));
+        // Fail closed: if the deadline has already passed (e.g. after an
+        // overslept backoff), do NOT apply the 1ms floor and start a
+        // fresh attempt AFTER the deadline. Return the last not-ready
+        // outcome, or a Timeout if no attempt ever ran.
+        if remaining.is_zero() {
+            return ReadinessProbeRun {
+                outcome: last_outcome.unwrap_or(Err(GuestControlHealthError::Timeout)),
+                attempts,
+                elapsed: clock.elapsed().saturating_sub(start),
+            };
+        }
+        let attempt_timeout = attempt_cap.min(remaining).max(Duration::from_millis(1));
         attempts = attempts.saturating_add(1);
         let outcome = probe.probe_health(params, attempt_timeout);
         if guest_control_health_ready(&outcome) {
@@ -439,6 +464,7 @@ pub fn run_guest_control_readiness_loop(
                 elapsed: clock.elapsed().saturating_sub(start),
             };
         }
+        last_outcome = Some(outcome);
         clock.sleep(retry_backoff);
     }
 }
@@ -639,12 +665,20 @@ mod tests {
         )));
         assert_eq!(wrong, Err(GuestControlHealthError::Signer));
 
-        // Transport/timeout error -> Signer.
-        let timeout = map_broker_sign_response(Err(TypedError::InternalIo {
+        // Transport/IO error (non-deadline) -> Signer (fail closed).
+        let transport = map_broker_sign_response(Err(TypedError::InternalIo {
             context: "recv seqpacket frame".to_owned(),
             detail: "timed out".to_owned(),
         }));
-        assert_eq!(timeout, Err(GuestControlHealthError::Signer));
+        assert_eq!(transport, Err(GuestControlHealthError::Signer));
+
+        // Round-trip deadline exhaustion -> Timeout, so a stalled/backlogged
+        // broker surfaces as the guest-control-timeout error end to end
+        // rather than collapsing into a generic Signer failure.
+        let deadline = map_broker_sign_response(Err(TypedError::InternalBrokerTimeout {
+            path: std::path::PathBuf::from("/run/nixling/priv.sock"),
+        }));
+        assert_eq!(deadline, Err(GuestControlHealthError::Timeout));
     }
 
     #[test]
@@ -764,6 +798,38 @@ mod tests {
         fn sleep(&self, duration: Duration) {
             self.elapsed_ms
                 .fetch_add(duration.as_millis() as u64, Ordering::SeqCst);
+        }
+    }
+
+    /// Fake clock whose `sleep` OVERSHOOTS: it advances the logical clock
+    /// by the requested backoff PLUS a fixed overshoot, deterministically
+    /// reproducing an oversleeping `thread::sleep` that lands past the
+    /// deadline. Used to prove the loops fail closed instead of starting a
+    /// fresh floored-to-1ms attempt after the deadline (D2).
+    struct OversleepingClock {
+        elapsed_ms: AtomicU64,
+        overshoot_ms: u64,
+    }
+
+    impl OversleepingClock {
+        fn new(overshoot_ms: u64) -> Self {
+            Self {
+                elapsed_ms: AtomicU64::new(0),
+                overshoot_ms,
+            }
+        }
+    }
+
+    impl ProbeClock for OversleepingClock {
+        fn elapsed(&self) -> Duration {
+            Duration::from_millis(self.elapsed_ms.load(Ordering::SeqCst))
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.elapsed_ms.fetch_add(
+                duration.as_millis() as u64 + self.overshoot_ms,
+                Ordering::SeqCst,
+            );
         }
     }
 
@@ -898,6 +964,56 @@ mod tests {
         assert!(run.attempts >= 5);
     }
 
+    #[test]
+    fn readiness_loop_overslept_backoff_starts_no_attempt_past_deadline() {
+        // D2: an overslept backoff that lands AT/PAST the deadline must
+        // NOT start a fresh floored-to-1ms attempt. The loop fails closed
+        // and returns the last not-ready outcome without probing again.
+        //
+        // deadline 1000ms, backoff 250ms, overshoot 1000ms: attempt 1 at
+        // t=0 fails (transient); the end-of-loop guard (0+250 < 1000) lets
+        // it sleep; the oversleeping clock jumps to t=1250 (250 + 1000
+        // overshoot); the next loop top sees zero remaining and STOPS.
+        let probe = ScriptedProbe::new(vec![Err(GuestControlHealthError::TransportIo)]);
+        let clock = OversleepingClock::new(1000);
+        let run = run_guest_control_readiness_loop(
+            &probe,
+            &test_params(),
+            Duration::from_millis(1000),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(!guest_control_health_ready(&run.outcome));
+        // Exactly ONE probe attempt — the post-deadline 1ms attempt that
+        // the old `.max(1ms)` floor would have started never happens.
+        assert_eq!(
+            probe.attempt_timeouts.lock().unwrap().len(),
+            1,
+            "no fresh attempt may start after the deadline"
+        );
+        assert_eq!(run.attempts, 1);
+    }
+
+    #[test]
+    fn readiness_loop_zero_deadline_starts_no_attempt() {
+        // D2 boundary: a deadline already at/below the clock on entry must
+        // start NO attempt and fail closed as a timeout.
+        let probe = ScriptedProbe::new(vec![Ok(healthy_evidence())]);
+        let clock = FakeClock::new();
+        let run = run_guest_control_readiness_loop(
+            &probe,
+            &test_params(),
+            Duration::ZERO,
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(matches!(run.outcome, Err(GuestControlHealthError::Timeout)));
+        assert_eq!(run.attempts, 0);
+        assert!(probe.attempt_timeouts.lock().unwrap().is_empty());
+    }
+
     /// Probe whose `read_config` returns a scripted sequence, recording
     /// each per-attempt timeout. Used to drive the config-read retry loop
     /// deterministically.
@@ -1017,6 +1133,63 @@ mod tests {
             Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo))
         ));
         assert!(probe.attempt_timeouts.lock().unwrap().len() >= 5);
+    }
+
+    #[test]
+    fn config_read_loop_overslept_backoff_starts_no_attempt_past_deadline() {
+        // D2: an overslept backoff that lands AT/PAST the deadline must
+        // NOT start a fresh floored-to-1ms config-read attempt. The loop
+        // fails closed and surfaces a Timeout (slug guest-control-timeout)
+        // without reading again. deadline 1000ms, backoff 250ms, overshoot
+        // 1000ms: attempt 1 at t=0 fails transient, sleeps; the clock
+        // jumps to t=1250; the next loop top sees zero remaining and STOPS.
+        let probe = ScriptedConfigProbe::new(vec![Err(GuestFileReadError::Probe(
+            GuestControlHealthError::TransportIo,
+        ))]);
+        let clock = OversleepingClock::new(1000);
+        let result = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::from_millis(1000),
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout))
+            ),
+            "an exceeded deadline must surface as Timeout, got {result:?}"
+        );
+        // Exactly ONE read attempt — the post-deadline 1ms attempt that
+        // the old `.max(1ms)` floor would have started never happens.
+        assert_eq!(
+            probe.attempt_timeouts.lock().unwrap().len(),
+            1,
+            "no fresh attempt may start after the deadline"
+        );
+    }
+
+    #[test]
+    fn config_read_loop_zero_deadline_starts_no_attempt() {
+        // D2 boundary: a zero deadline on entry must start NO attempt and
+        // fail closed as a timeout.
+        let probe = ScriptedConfigProbe::new(vec![Ok(b"never-read".to_vec())]);
+        let clock = FakeClock::new();
+        let result = run_guest_control_config_read_loop(
+            &probe,
+            &test_params(),
+            Duration::ZERO,
+            GUEST_CONTROL_ATTEMPT_CAP,
+            GUEST_CONTROL_RETRY_BACKOFF,
+            &clock,
+        );
+        assert!(matches!(
+            result,
+            Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout))
+        ));
+        assert!(probe.attempt_timeouts.lock().unwrap().is_empty());
     }
 
     #[test]

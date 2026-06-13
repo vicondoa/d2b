@@ -2342,37 +2342,99 @@ fn dispatch_broker_request_with_timeout(
 /// dispatchers this borrows nothing from the daemon and so can be
 /// invoked from an owned-data worker (e.g. the guest-control
 /// `BrokerSigner`, which holds only the broker socket path so it stays
-/// `Send + Sync` across a `spawn_blocking` boundary). `timeout`, when
-/// set, bounds both the write and the read.
+/// `Send + Sync` across a `spawn_blocking` boundary).
+///
+/// `timeout`, when set, bounds the ENTIRE connect + write + read round
+/// trip by a SINGLE absolute deadline (`now + timeout`). Applying
+/// `timeout` independently to connect, write, and read would let one
+/// round trip run up to ~3x `timeout`, which defeats the caller's
+/// per-attempt budget and pins worker threads / fds past a stalled or
+/// backlogged broker. We recompute the remaining budget before each
+/// blocking op and fail closed with [`TypedError::InternalBrokerTimeout`]
+/// the moment the deadline is reached (whether before an op or while one
+/// op blocked past it), so a genuine deadline exhaustion surfaces as a
+/// timeout end to end rather than as a generic transport failure.
 pub(crate) fn dispatch_broker_request_to_socket(
     socket_path: &Path,
     request: BrokerRequest,
     caller_role: BrokerCallerRole,
     timeout: Option<Duration>,
 ) -> Result<BrokerResponse, TypedError> {
-    let socket = Socket::from(connect_seqpacket_with_timeout(socket_path, timeout)?);
-    if let Some(timeout) = timeout {
-        socket
-            .set_read_timeout(Some(timeout))
-            .map_err(|err| TypedError::InternalIo {
-                context: format!("set broker read timeout to {timeout:?}"),
+    let envelope = BrokerRequestEnvelope {
+        request,
+        caller_role,
+        test_peer_uid: None,
+    };
+    let Some(timeout) = timeout else {
+        // No deadline: plain blocking connect + round trip (unchanged).
+        let socket = Socket::from(connect_seqpacket(socket_path)?);
+        write_json_frame(&socket, &envelope)?;
+        let response = read_frame(&socket)?;
+        return serde_json::from_slice(&response).map_err(|err| {
+            TypedError::InternalBrokerUnavailable {
+                path: socket_path.to_path_buf(),
                 detail: err.to_string(),
-            })?;
-        socket
-            .set_write_timeout(Some(timeout))
-            .map_err(|err| TypedError::InternalIo {
-                context: format!("set broker write timeout to {timeout:?}"),
-                detail: err.to_string(),
-            })?;
+            }
+        });
+    };
+
+    let deadline = Instant::now() + timeout;
+    let result = broker_round_trip_within_deadline(socket_path, &envelope, deadline);
+    match result {
+        Ok(response) => Ok(response),
+        // Any failure that lands at or past the single round-trip
+        // deadline is a genuine timeout (connect/write/read blocked the
+        // whole remaining budget, or the deadline lapsed between ops),
+        // not a fast broker-unavailable failure.
+        Err(_) if Instant::now() >= deadline => Err(TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        }),
+        Err(err) => Err(err),
     }
-    write_json_frame(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role,
-            test_peer_uid: None,
-        },
-    )?;
+}
+
+/// Remaining budget until `deadline`, or [`TypedError::InternalBrokerTimeout`]
+/// if the deadline has already been reached before issuing the next op.
+fn broker_remaining_before_op(
+    deadline: Instant,
+    socket_path: &Path,
+) -> Result<Duration, TypedError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        });
+    }
+    Ok(remaining)
+}
+
+/// Run connect + write + read so that each blocking op is bounded by the
+/// budget remaining until the shared `deadline`. Returns early with a
+/// timeout if the deadline lapses before any op.
+fn broker_round_trip_within_deadline(
+    socket_path: &Path,
+    envelope: &BrokerRequestEnvelope,
+    deadline: Instant,
+) -> Result<BrokerResponse, TypedError> {
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    let socket = Socket::from(connect_seqpacket_with_timeout(socket_path, Some(remaining))?);
+
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set broker write timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
+    write_json_frame(&socket, envelope)?;
+
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    socket
+        .set_read_timeout(Some(remaining))
+        .map_err(|err| TypedError::InternalIo {
+            context: format!("set broker read timeout to {remaining:?}"),
+            detail: err.to_string(),
+        })?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: socket_path.to_path_buf(),
@@ -7839,6 +7901,100 @@ mod broker_dispatch_tests {
         assert_eq!(
             recorded[0], expected,
             "BrokerSigner must forward every GuestControlSign field verbatim",
+        );
+    }
+
+    #[test]
+    fn broker_remaining_before_op_fails_closed_after_deadline() {
+        // D1: the whole-round-trip deadline check returns the remaining
+        // budget while time is left, and fails CLOSED with a broker
+        // timeout (NOT a fresh op) once the deadline is reached, so no
+        // doomed connect/write/read is issued past the caller's deadline.
+        let path = Path::new("/run/nixling/priv.sock");
+        let future = Instant::now() + Duration::from_secs(5);
+        let remaining = super::broker_remaining_before_op(future, path)
+            .expect("remaining must be positive before the deadline");
+        assert!(remaining > Duration::ZERO);
+        assert!(remaining <= Duration::from_secs(5));
+
+        let past = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("instant has 1ms of headroom");
+        let err = super::broker_remaining_before_op(past, path)
+            .expect_err("a passed deadline must fail closed");
+        assert!(matches!(
+            err,
+            crate::typed_error::TypedError::InternalBrokerTimeout { .. }
+        ));
+    }
+
+    #[test]
+    fn broker_signer_slow_broker_is_deadline_bounded_and_maps_to_timeout() {
+        // D1: a stalled/backlogged broker must NOT let one sign exceed its
+        // per-attempt deadline by multiples. The whole connect+write+read
+        // round trip is bounded by the single slice the signer draws from
+        // the shared absolute attempt budget; a deadline exhaustion
+        // surfaces as Timeout (slug guest-control-timeout) end to end, not
+        // a generic Signer failure. The fake broker reads the request then
+        // holds the connection OPEN without responding so the client's
+        // read blocks until its own deadline.
+        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
+        use crate::guest_control_health::{AttemptBudget, GuestControlHealthError, GuestControlSigner};
+        use nixling_ipc::broker_wire::{
+            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+            GuestControlSignRequest,
+        };
+        use nixling_ipc::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use nixling_ipc::types::VmId;
+
+        let attempt = Duration::from_millis(300);
+        let broker_stall = Duration::from_millis(1500);
+        let (socket_path, broker) =
+            start_test_broker_server("guest-control-sign-slow", 1, move |_, env, _fd| {
+                match env.request {
+                    BrokerRequest::GuestControlSign(_) => {
+                        // Keep the accepted connection open without a
+                        // reply so the client's read times out at its own
+                        // deadline, then drop it.
+                        thread::sleep(broker_stall);
+                    }
+                    other => panic!("unexpected broker request {other:?}"),
+                }
+            });
+        let signer = BrokerSigner::new(
+            socket_path,
+            AttemptBudget::from_now(attempt, GUEST_CONTROL_ATTEMPT_CAP),
+        );
+        let request = GuestControlSignRequest {
+            vm_id: VmId::new("corp-vm"),
+            role: GuestControlProofRole::HostProof,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: GuestControlDirection::HostToGuest,
+            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(crate::guest_control_bridge::VMADDR_CID_HOST),
+            host_nonce: vec![0x11; AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
+            guest_boot_id: GuestBootIdWire::new("boot-1"),
+            capabilities_hash: None,
+            tracing_span_id: None,
+        };
+        let started = Instant::now();
+        let result = signer.sign(request);
+        let elapsed = started.elapsed();
+        broker.join().expect("broker join");
+
+        assert_eq!(
+            result,
+            Err(GuestControlHealthError::Timeout),
+            "a stalled broker sign must surface as Timeout, not Signer"
+        );
+        // The sign returned near its OWN deadline slice, NOT after the
+        // (5x larger) broker stall: the round trip is deadline-bounded.
+        assert!(
+            elapsed < attempt * 3,
+            "sign must be deadline-bounded (no multiples of the slice); took {elapsed:?}"
         );
     }
 
