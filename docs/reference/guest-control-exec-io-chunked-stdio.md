@@ -104,7 +104,8 @@ Request fields:
 - `env`: repeated key/value entries after host-side policy filtering.
 - `tty`: bool. When true, stdout and stderr are PTY-merged into stdout;
   `ReadOutput(stream=stderr)` returns `tty-stderr-unavailable`.
-- `stdin_open`: bool. Defaults false unless CLI used `--interactive`.
+- `stdin_open`: bool. Defaults false; the CLI sets it true only for a
+  `-t`/`--tty` (interactive PTY) session.
 - `detached`: bool. Detached execs persist bounded logs after caller
   disconnect.
 - `initial_terminal_size`: optional `{rows, cols}`, valid **only** for
@@ -895,7 +896,10 @@ command result with signal metadata and shell-style status `128 + signal`.
 Typed nixling errors are reserved for transport, protocol, authorization,
 and pre-exec failures.
 
-`--interactive` opens stdin. The CLI forwards local stdin in
+`--interactive` (`-i`) opens stdin and must be paired with `--tty`
+(`-t`): the guest-control transport forwards stdin only in PTY mode, so
+`-i` without `-t` is rejected with a usage envelope. With `-it`, the CLI
+forwards local stdin in
 `max_chunk_bytes` chunks with increasing offsets and sends `CloseStdin`
 on local EOF. If `WriteStdin` returns `stdin-backpressure`, the CLI
 blocks local input reading or uses terminal flow control until retry is

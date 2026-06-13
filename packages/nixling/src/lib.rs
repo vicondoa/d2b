@@ -736,7 +736,9 @@ enum VmCommand {
 struct VmExecArgs {
     /// VM name as declared in `nixling.vms.<name>`.
     vm: String,
-    /// Forward host stdin into the guest command (`-i`).
+    /// Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`:
+    /// the guest-control transport forwards stdin only in PTY mode, so `-i`
+    /// must be paired with `-t` (e.g. `-it`).
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
     /// Allocate a PTY in the guest and put the host terminal in raw mode
@@ -3785,6 +3787,19 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
             args,
             "vm exec: --json cannot be combined with -i/-t; an interactive \
              session streams raw output and is human-only",
+        );
+    }
+    // guestd forwards guest stdin only in PTY mode: its non-TTY validators
+    // reject an open stdin, so `-i`/`--interactive` without `-t`/`--tty`
+    // would create a stdin-closed exec the CLI then tries to write to
+    // (guestd rejects the writes as StdinClosed). Require a PTY for stdin
+    // forwarding rather than fail deterministically once stdin is piped.
+    if args.interactive && !args.tty {
+        return exec_usage_terminate(
+            args,
+            "vm exec: -i/--interactive requires -t/--tty; the guest-control \
+             transport forwards stdin only in PTY mode. Use `-it`, or drop \
+             `-i` to run a stdin-closed command.",
         );
     }
     if args.command.is_empty() {

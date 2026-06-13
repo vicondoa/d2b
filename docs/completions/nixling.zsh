@@ -506,8 +506,8 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
 '--cwd=[Working directory for the guest command]:DIR:_default' \
-'-i[Forward host stdin into the guest command (\`-i\`)]' \
-'--interactive[Forward host stdin into the guest command (\`-i\`)]' \
+'-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
+'--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
 '-t[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
 '--tty[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
 '(--human)--json[Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only]' \

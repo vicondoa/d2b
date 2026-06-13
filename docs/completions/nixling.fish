@@ -211,7 +211,7 @@ complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subc
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from konsole" -s h -l help -d 'Print help'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -l env -d 'Set an environment variable in the guest command (`KEY=VALUE`). Repeatable' -r
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -l cwd -d 'Working directory for the guest command' -r
-complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -s i -l interactive -d 'Forward host stdin into the guest command (`-i`)'
+complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -s i -l interactive -d 'Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`: the guest-control transport forwards stdin only in PTY mode, so `-i` must be paired with `-t` (e.g. `-it`)'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -s t -l tty -d 'Allocate a PTY in the guest and put the host terminal in raw mode (`-t`). Implies stdin forwarding. Human-only (incompatible with `--json`)'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -l json -d 'Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only'
 complete -c nixling -n "__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec" -l human

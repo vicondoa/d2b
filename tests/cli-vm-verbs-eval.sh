@@ -338,4 +338,16 @@ if command -v jq >/dev/null 2>&1; then
 fi
 ok "vm exec (no daemon) emits guest-control-transport-unavailable via clap+dispatch"
 
+# -i/--interactive without -t/--tty is rejected (guestd forwards stdin only in
+# PTY mode); the CLI must fail-fast with a usage error, not create a
+# stdin-closed exec it then writes to.
+exec_i_rc=0
+exec_i_err="$scratch/exec-i.err"
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm exec konsole-vm -i -- /bin/true >/dev/null 2>"$exec_i_err" || exec_i_rc=$?
+[ "$exec_i_rc" = "2" ] || { fail "vm exec -i without -t should exit 2, got $exec_i_rc"; cat "$exec_i_err" >&2; exit 1; }
+grep -qiE 'requires .*-t/--tty|requires -t' "$exec_i_err" || { fail "vm exec -i without -t error must cite the -t/--tty requirement"; cat "$exec_i_err" >&2; exit 1; }
+ok "vm exec rejects -i without -t (stdin forwarding requires a PTY)"
+
 log "==> cli-vm-verbs-eval OK"
