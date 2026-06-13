@@ -785,5 +785,35 @@ mod tests {
             "the daemon must request guest root for exec; omitting it fails \
              closed as RootDenied",
         );
+        // Non-TTY exec must close stdin: guestd's non-TTY validators
+        // (`validate_and_authorize` / `_detached`) reject `stdin_open`, so a
+        // regression back to `stdin_open = true` makes every non-interactive
+        // and detached exec fail `UnsupportedMode` before spawning.
+        assert!(!request.tty, "non-tty spec must not request a tty");
+        assert!(
+            !request.stdin_open,
+            "non-tty exec must close stdin so guestd's non-TTY validator accepts it",
+        );
+    }
+
+    #[test]
+    fn exec_create_request_opens_stdin_only_for_tty() {
+        // Interactive TTY exec is the only mode guestd's
+        // `validate_and_authorize_tty` accepts with an open stdin.
+        let spec = ExecStartSpec {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: true,
+            detached: false,
+            env: Vec::new(),
+            cwd: None,
+            term_size: Some((24, 80)),
+        };
+        let request = build_exec_create_request("work", &spec);
+        assert!(request.tty, "tty spec must request a tty");
+        assert!(
+            request.stdin_open,
+            "tty exec must open stdin for guestd's interactive validator",
+        );
     }
 }
