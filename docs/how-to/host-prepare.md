@@ -8,14 +8,18 @@
 > `nixling host check`, `nixling host prepare --dry-run`,
 > `nixling host destroy --dry-run`, and
 > `nixling host doctor --read-only` exercise the broker's read-only
-> audit path. The mutating `--apply` verbs (`host prepare --apply`,
-> `host destroy --apply`) dispatch through the broker reconcile ops
-> (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`,
-> `ApplyNmUnmanaged`) on supported non-NixOS hosts. On hosts where
-> the NixOS module still owns prepare, the verb returns the typed
-> `tier-0-legacy-uses-nixos-module` envelope (exit 78). Broker
-> failures surface as `broker-error` (exit 78); daemon-unreachable
-> surfaces `daemon-down` (exit 1). See
+> audit path and are wired live. The mutating `--apply` verbs
+> (`host prepare --apply`, `host destroy --apply`) are **not yet
+> wired**: the daemon-side typed-intent dispatch and bundle resolver
+> that back them are still pending, so both return the typed
+> `daemon-down` envelope (exit 1) today — use `--dry-run` for now.
+> When the daemon-side dispatch ships, the `--apply` verbs will
+> dispatch through the broker reconcile ops (`ApplyNftables`,
+> `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`)
+> on supported non-NixOS hosts, with broker failures surfacing as
+> `broker-error` (exit 78). On hosts where the NixOS module still
+> owns prepare, `host prepare --apply` is refused with the typed
+> `tier-0-legacy-uses-nixos-module` envelope (exit 78). See
 > [`docs/reference/compatibility.md`](../reference/compatibility.md)
 > and [ADR 0015](../adr/0015-daemon-only-clean-break.md).
 
@@ -32,9 +36,9 @@ The host CLI is split across seven verbs; the canonical contract is:
 | --- | --- | --- |
 | `nixling host check` | no | n/a — read-only inventory + diff |
 | `nixling host prepare --dry-run` | no | `--dry-run` mandatory; reports only |
-| `nixling host prepare --apply` | yes (broker reconcile ops per ADR 0015) | `--apply` mandatory |
+| `nixling host prepare --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
 | `nixling host destroy --dry-run` | no | `--dry-run` mandatory; reports only |
-| `nixling host destroy --apply` | yes (broker reconcile ops per ADR 0015) | `--apply` mandatory |
+| `nixling host destroy --apply` | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | `--apply` mandatory |
 | `nixling host doctor --read-only` | no | `--read-only` mandatory |
 | `nixling host install --dry-run` | no | `--dry-run` mandatory; reports the synthesized 5-step install plan |
 | `nixling host install --apply` | yes (daemon → broker) | `--apply` mandatory; optional `--enable` + `--start`/`--no-start`; broker failures exit 78 |
@@ -43,8 +47,9 @@ The `--dry-run` and `--apply` forms are intentionally mutually
 exclusive: there is no flag-less `nixling host prepare`. Operators who
 want the read-only inventory run `nixling host check`; operators who
 want the apply-plan-without-mutation run `nixling host prepare
---dry-run`. `host destroy --apply` only withdraws nixling-owned state
-and refuses foreign ownership markers.
+--dry-run`. `host destroy --apply` is not yet wired and returns
+`daemon-down` (exit 1) today; once wired it withdraws only
+nixling-owned state and refuses foreign ownership markers.
 
 The four reconcile domains — cgroup delegation, network (bridge /
 TAP / NM / IPv6 / hosts), firewall (`inet nixling` nftables
@@ -235,28 +240,34 @@ nixling host check --json
 # Fully wired today.
 sudo nixling host prepare --dry-run
 
-# In v1.0 (per ADR 0015) `--apply` is wired live: it dispatches
-# through the broker reconcile ops (ApplyNftables, ApplyRoute,
-# ApplySysctl, UpdateHostsFile, ApplyNmUnmanaged), takes the per-VM
-# lock, applies the diff, and runs the IPv6-off readback gate,
-# failing closed on drift. Broker failures surface as the typed
-# `broker-error` envelope (exit 78); daemon-unreachable surfaces
-# `daemon-down` (exit 1).
+# `--apply` is NOT yet wired: the daemon-side typed-intent dispatch
+# and bundle resolver that back `host prepare --apply` are still
+# pending, so the verb returns the typed `daemon-down` envelope
+# (exit 1) today. Use `--dry-run` for now. When the daemon-side
+# dispatch ships, `--apply` will dispatch through the broker reconcile
+# ops (ApplyNftables, ApplyRoute, ApplySysctl, UpdateHostsFile,
+# ApplyNmUnmanaged), take the per-VM lock, apply the diff, and run the
+# IPv6-off readback gate, failing closed on drift; broker failures
+# will surface as the typed `broker-error` envelope (exit 78).
 sudo nixling host prepare --apply
 
-# Same disposition for destroy: --apply is live in v1.0 and reverses
-# the host-prepare mutations only (bridges, TAPs, NM drop-in, /etc/hosts
+# Same disposition for destroy: --apply is NOT yet wired and returns
+# `daemon-down` (exit 1) today. When it ships it will reverse the
+# host-prepare mutations only (bridges, TAPs, NM drop-in, /etc/hosts
 # managed block, IPv6 sysctls). Foreign state is never touched.
 sudo nixling host destroy --apply
 ```
 
-In v1.0 (per ADR 0015), the `--apply` invocations dispatch through
-the broker reconcile ops (`ApplyNftables`, `ApplyRoute`,
-`ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`) on every
-non-Tier-0 host; broker failures surface as the typed `broker-error`
-envelope (exit 78); daemon-unreachable surfaces `daemon-down`
-(exit 1). The `host check` and `--dry-run` reads exercise the
-broker's read-only audit path.
+The mutating `--apply` invocations are not yet wired: the daemon-side
+typed-intent dispatch and bundle resolver that back them are pending,
+so both `host prepare --apply` and `host destroy --apply` return the
+typed `daemon-down` envelope (exit 1) today — re-run with `--dry-run`
+for now. When the daemon-side dispatch ships, the `--apply` invocations
+will dispatch through the broker reconcile ops (`ApplyNftables`,
+`ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`) on
+every non-Tier-0 host, with broker failures surfacing as the typed
+`broker-error` envelope (exit 78). The `host check` and `--dry-run`
+reads already exercise the broker's read-only audit path.
 
 `host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
 one where nixling resolves no daemon-owned bundle to reconcile and

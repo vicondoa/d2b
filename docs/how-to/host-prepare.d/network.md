@@ -32,12 +32,17 @@ nixling host check --json
 # Plan-only: emits the reconcile diff without mutating host state.
 sudo nixling host prepare --dry-run
 
-# Apply: takes the per-VM lock, applies the diff, and runs the
-# IPv6-off readback gate. Fails closed on drift.
+# `--apply` is NOT yet wired: the daemon-side typed-intent dispatch
+# and bundle resolver are pending, so this returns `daemon-down`
+# (exit 1) today. Use `--dry-run` for now. Once wired it will take
+# the per-VM lock, apply the diff, and run the IPv6-off readback
+# gate, failing closed on drift.
 sudo nixling host prepare --apply
 
-# Reverses the host-prepare mutations only (bridges, TAPs, NM drop-in,
-# /etc/hosts managed block, IPv6 sysctls). Foreign state untouched.
+# Same pending disposition for destroy (`daemon-down`, exit 1, today).
+# Once wired it will reverse the host-prepare mutations only (bridges,
+# TAPs, NM drop-in, /etc/hosts managed block, IPv6 sysctls). Foreign
+# state untouched.
 sudo nixling host destroy --apply
 ```
 
