@@ -91,17 +91,20 @@ let
   readinessWaves = builtins.attrNames readinessWaveSpecs;
   every = predicate: values: lib.all predicate values;
 
-  # default-flip gate: the subset of readiness waves that, when
-  # ALL report implemented + validated + evidence-file-present, make
-  # `nixling.daemonExperimental.enable` default to `true`. The set
-  # intentionally excludes waves that legitimately ship AFTER the
-  # flip itself (p5 first-run UX, p6 clean break, p7 release cut);
-  # the flip must be able to happen once the prerequisite readiness
-  # records are green, without waiting on its own successors. Related
-  # deliverables are modelled inside the existing w4Fu (headless daemon
-  # and supervisor path), w8Fu, and w9Fu (host install + migrate)
-  # readiness records; w7Fu carries the store-lifecycle slice that
-  # landed alongside them.
+  # Readiness-wave gate set retained from the historical default-flip
+  # design: the subset of readiness waves that must ALL report
+  # implemented + validated + evidence-file-present before the
+  # daemon-only end state was considered fully attested. The set
+  # intentionally excludes waves that legitimately shipped AFTER the
+  # original flip (p5 first-run UX, p6 clean break, p7 release cut).
+  # `nixling.daemonExperimental.enable` is now an obsolete always-true
+  # compat gate (default `true`); this set no longer flips its default.
+  # The per-wave `validated` evidence still gates the readiness
+  # assertions below and `nixling host validate`. Related deliverables
+  # are modelled inside the existing w4Fu (headless daemon and
+  # supervisor path), w8Fu, and w9Fu (host install + migrate) readiness
+  # records; w7Fu carries the store-lifecycle slice that landed
+  # alongside them.
   flipGateWaves = [
     "w4Fu"
     "w5Fu"
@@ -190,11 +193,15 @@ in
       example = "/var/lib/nixling/validated";
       description = ''
         Filesystem directory holding the per-wave validation evidence
-        files (`<wave>.json`) consumed by the default-flip gate
-        and by the per-wave `validated = true` eval assertion. The
-        default `/var/lib/nixling/validated` is the canonical
-        operator-host location; the option is overridable mainly for
-        regression tests (see `tests/daemon-default-compat-eval.sh`).
+        files (`<wave>.json`) consumed by the per-wave
+        `validated = true` eval assertion and by `nixling host
+        validate`. (Historically these files also gated the
+        `nixling.daemonExperimental.enable` default-flip; that gate is
+        retired now that `daemonExperimental.enable` is an obsolete
+        always-true compat gate.) The default `/var/lib/nixling/validated`
+        is the canonical operator-host location; the option is
+        overridable mainly for regression tests (see
+        `tests/daemon-default-compat-eval.sh`).
       '';
     };
   };
