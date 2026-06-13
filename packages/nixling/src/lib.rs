@@ -7140,10 +7140,11 @@ mod host_install_dispatch_tests {
     use serde_json::{json, Value};
 
     use super::{
-        broker_error_envelope, cmd_host_install, cmd_vm_start, daemon_supported_features,
-        encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, ApiReadySimple,
-        ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag,
-        SockType, UnixAddr, UsbAttachArgs, VmStartArgs, MAX_FRAME_BYTES,
+        broker_error_envelope, cmd_host_install, cmd_vm_exec, cmd_vm_start,
+        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, send, socket,
+        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
+        MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs, VmStartArgs,
+        MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -7430,6 +7431,210 @@ mod host_install_dispatch_tests {
             dry_run: false,
             json: false,
         }
+    }
+
+    /// PATH-based `ssh`/`scp` trap: prepends a sentinel bin holding scripts
+    /// that touch a marker file when invoked. Restores PATH on drop. Guarded by
+    /// `ENV_MUTEX` so it never races a concurrent env-mutating test.
+    struct ExecSshTrap {
+        marker: PathBuf,
+        old_path: Option<OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ExecSshTrap {
+        fn install(dir: &std::path::Path) -> Self {
+            let lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+            let bin = dir.join("trap-bin");
+            std::fs::create_dir_all(&bin).expect("create trap bin");
+            let marker = dir.join("ssh-spawned.marker");
+            for tool in ["ssh", "scp"] {
+                let script = bin.join(tool);
+                std::fs::write(
+                    &script,
+                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
+                )
+                .expect("write trap script");
+                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod trap script");
+            }
+            let old_path = env::var_os("PATH");
+            let mut entries = vec![bin];
+            if let Some(existing) = &old_path {
+                entries.extend(env::split_paths(existing));
+            }
+            env::set_var("PATH", env::join_paths(entries).expect("join PATH"));
+            Self {
+                marker,
+                old_path,
+                _lock: lock,
+            }
+        }
+
+        fn ssh_was_spawned(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    impl Drop for ExecSshTrap {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(value) => env::set_var("PATH", value),
+                None => env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
+    /// hello handshake, accepts the `Start` op, and replies with the daemon
+    /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
+    /// list of post-hello frames the daemon received (the first MUST be the
+    /// `Start`; any further frame would be an illegitimate proxied op).
+    fn run_vm_exec_with_mock_daemon(
+        args: VmExecArgs,
+        error_kind: &'static str,
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>) {
+        let socket_path = test_socket_path("vm-exec", ".sock");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let (frames_tx, frames_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                // First post-hello frame: the Start op.
+                let start_bytes = recv_test_frame(accepted)?;
+                let start: Value = serde_json::from_slice(&start_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                frames_tx.send(start).expect("send start frame");
+
+                // Fail closed: reply with the old-generation error frame. The
+                // CLI MUST NOT proxy any further op after this.
+                let error_frame = serde_json::to_vec(&json!({
+                    "type": "error",
+                    "error": {
+                        "kind": error_kind,
+                        "message": "this VM generation does not support guest-control exec",
+                        "remediation": "rebuild the VM with a current nixling generation",
+                    },
+                }))
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                send_test_frame(accepted, &error_frame)?;
+
+                // Any further frame is an illegitimate proxied op; record it.
+                if let Ok(extra_bytes) = recv_test_frame(accepted) {
+                    if !extra_bytes.is_empty() {
+                        if let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes) {
+                            frames_tx.send(extra).expect("send extra frame");
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let result = cmd_vm_exec(&context, &args);
+        server.join().expect("join mock daemon thread");
+        let frames: Vec<Value> = frames_rx.try_iter().collect();
+        let _ = std::fs::remove_file(&socket_path);
+        (result, frames)
+    }
+
+    #[test]
+    fn vm_exec_old_generation_fails_closed_without_proxy_or_ssh() {
+        // Binding fail-closed invariant: `vm exec` against a VM whose
+        // generation lacks the guest-control transport must surface exit 70 +
+        // `guest-control-unavailable-old-generation`, MUST NOT proxy any exec
+        // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
+        // is the hermetic guarantee (live e2e is W19) that an unsupported
+        // generation can never silently exec over a different transport.
+        let dir = test_socket_path("vm-exec-oldgen", ".dir");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let trap = ExecSshTrap::install(&dir);
+
+        let args = VmExecArgs {
+            vm: "oldgenvm".to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
+            json: true,
+            human: false,
+            command: vec!["ls".to_owned()],
+        };
+        let (result, frames) =
+            run_vm_exec_with_mock_daemon(args, "guest-control-unavailable-old-generation");
+
+        let err = result.expect_err("old-generation exec must fail closed");
+        assert_eq!(err.exit_code, 70, "old generation maps to exit 70");
+        let rendered = err.rendered_stderr.unwrap_or_default();
+        assert!(
+            rendered.contains("guest-control-unavailable-old-generation"),
+            "old-generation surfaces its fail-closed slug: {rendered}"
+        );
+        // The daemon received exactly ONE post-hello frame (the Start). A
+        // second frame would mean the CLI proxied an exec op after the reject.
+        assert_eq!(
+            frames.len(),
+            1,
+            "exactly the rejected Start may be sent; no proxied op may follow"
+        );
+        assert_eq!(
+            frames[0].get("op").and_then(Value::as_str),
+            Some("start"),
+            "the single proxied frame is the Start op"
+        );
+        // No SSH/SCP client may be spawned on the fail-closed exec path.
+        assert!(
+            !trap.ssh_was_spawned(),
+            "old-generation exec fail-closed must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
