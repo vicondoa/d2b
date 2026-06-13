@@ -3778,17 +3778,21 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     let interactive = args.interactive || args.tty;
 
     let mut env_vars = Vec::with_capacity(args.env.len());
-    for entry in &args.env {
+    for (idx, entry) in args.env.iter().enumerate() {
+        // Redaction (WR12): never echo the raw --env entry — it may carry a
+        // secret value (e.g. `TOKEN=...` or `=secret`). Report the 1-based
+        // position only.
+        let position = idx + 1;
         let Some((key, value)) = entry.split_once('=') else {
             return exec_usage_terminate(
                 args,
-                format!("vm exec: --env expects KEY=VALUE, got '{entry}'"),
+                format!("vm exec: --env entry #{position} is not KEY=VALUE"),
             );
         };
         if key.is_empty() {
             return exec_usage_terminate(
                 args,
-                format!("vm exec: --env key must be non-empty in '{entry}'"),
+                format!("vm exec: --env entry #{position} has an empty key (expected KEY=VALUE)"),
             );
         }
         env_vars.push(ExecEnvVar {
@@ -7736,6 +7740,77 @@ mod host_install_dispatch_tests {
 
         drop(trap);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vm_exec_env_validation_redacts_supplied_value() {
+        // WR12: a malformed `--env` entry may carry a secret (e.g. `=secret`
+        // or `TOKEN=hunter2`). The operator error must report the offending
+        // position only — never the raw entry, key, or value.
+        const SECRET: &str = "sentinel-env-secret-7f3a";
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        // Human path: the CliFailure message must not leak the value. Env
+        // validation runs before any daemon connection, so /dev/null is fine.
+        let human_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: vec![format!("={SECRET}")],
+            cwd: None,
+            json: false,
+            human: false,
+            command: vec!["true".to_owned()],
+        };
+        let failure = cmd_vm_exec(&context, &human_args)
+            .expect_err("an empty-key --env entry is a usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            !failure.message.contains(SECRET),
+            "human --env error leaked the secret value: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("#1"),
+            "human --env error reports the offending position: {}",
+            failure.message
+        );
+
+        // JSON path: the single stdout envelope must not leak the value either.
+        let json_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: vec![format!("not-a-pair-{SECRET}")],
+            cwd: None,
+            json: true,
+            human: false,
+            command: vec!["true".to_owned()],
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+        let exit_code = result.expect("json usage failure returns the exit code");
+        assert_eq!(exit_code, 2);
+        let envelope: Value =
+            serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        let rendered = envelope.to_string();
+        assert!(
+            !rendered.contains(SECRET),
+            "json --env envelope leaked the secret value: {rendered}"
+        );
+        assert_eq!(envelope.get("reason").and_then(Value::as_str), Some("usage"));
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
     }
 
     fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {

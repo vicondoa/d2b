@@ -2,6 +2,7 @@ use crate::{FeatureFlag, Version};
 use nixling_core::{error::Error, host::IfName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -304,12 +305,19 @@ pub enum ExecStream {
 
 /// A single environment variable for `ExecOp::Start`. Values are forwarded
 /// verbatim into the guest exec request and are NEVER logged, traced, or
-/// audited (only the count is observable).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// audited (only the count is observable). `Debug` is redacted so a stray
+/// `{:?}` can never leak a key or secret value (WR12).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecEnvVar {
     pub key: String,
     pub value: String,
+}
+
+impl fmt::Debug for ExecEnvVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecEnvVar").finish_non_exhaustive()
+    }
 }
 
 /// Terminal window dimensions for an interactive (`tty`) exec.
@@ -325,7 +333,7 @@ pub struct ExecTermSize {
 /// the command, and the session shape. `detached` is carried so the daemon
 /// teardown semantics are unambiguous (a detached session survives owner
 /// disconnect); the W16 CLI ships non-detached + interactive `-it` only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecStartArgs {
     pub vm: String,
@@ -342,10 +350,26 @@ pub struct ExecStartArgs {
     pub term_size: Option<ExecTermSize>,
 }
 
+impl fmt::Debug for ExecStartArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction (WR12): show the VM name + shape + counts, never the raw
+        // argv / env keys+values / cwd.
+        f.debug_struct("ExecStartArgs")
+            .field("vm", &self.vm)
+            .field("tty", &self.tty)
+            .field("detached", &self.detached)
+            .field("argv_len", &self.argv.len())
+            .field("env_len", &self.env.as_ref().map_or(0, Vec::len))
+            .field("has_cwd", &self.cwd.is_some())
+            .field("term_size", &self.term_size)
+            .finish()
+    }
+}
+
 /// `WriteStdin` op args. `chunkBase64` is the standard padded base64 of a raw
 /// stdin chunk (≤ `EXEC_MAX_CHUNK_BYTES` decoded). `offset` is the client's
 /// authoritative stdin byte cursor so a lost reply is idempotently retryable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecWriteStdinArgs {
     pub session: String,
@@ -355,11 +379,24 @@ pub struct ExecWriteStdinArgs {
     pub eof: bool,
 }
 
+impl fmt::Debug for ExecWriteStdinArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction (WR12): the session handle + the raw stdin chunk (keystroke
+        // bytes) never appear; show only the offset, eof, and encoded length.
+        f.debug_struct("ExecWriteStdinArgs")
+            .field("session", &"<redacted>")
+            .field("offset", &self.offset)
+            .field("chunk_base64_len", &self.chunk_base64.len())
+            .field("eof", &self.eof)
+            .finish()
+    }
+}
+
 /// `ReadOutput` op args. A bounded long-poll: `wait` + `timeoutMs` let the
 /// guest hold the request until data arrives or the (server-side bounded)
 /// timeout elapses, so the CLI interleaves short output polls with stdin /
 /// signal forwarding without busy-looping.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecReadOutputArgs {
     pub session: String,
@@ -372,13 +409,27 @@ pub struct ExecReadOutputArgs {
     pub timeout_ms: u64,
 }
 
+impl fmt::Debug for ExecReadOutputArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction (WR12): the session handle never appears.
+        f.debug_struct("ExecReadOutputArgs")
+            .field("session", &"<redacted>")
+            .field("stream", &self.stream)
+            .field("offset", &self.offset)
+            .field("max_len", &self.max_len)
+            .field("wait", &self.wait)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
 /// `Signal` op args. The signal is delivered to the foreground process group
 /// of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to
 /// the corresponding guest signal numbers. `opId` is a stable client-assigned
 /// idempotency token: a retried Signal carries the same `opId` so the worker
 /// replays the original ack instead of delivering the signal twice. `opId == 0`
 /// means "no dedup" (legacy / unset).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecSignalArgs {
     pub session: String,
@@ -387,11 +438,21 @@ pub struct ExecSignalArgs {
     pub op_id: u64,
 }
 
+impl fmt::Debug for ExecSignalArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecSignalArgs")
+            .field("session", &"<redacted>")
+            .field("signo", &self.signo)
+            .field("op_id", &self.op_id)
+            .finish()
+    }
+}
+
 /// `Resize` op args (SIGWINCH → guest PTY window resize). `opId` is the same
 /// stable client-assigned idempotency token as `ExecSignalArgs`: a retried
 /// Resize carries the same `opId` so the worker replays the original ack
 /// instead of re-delivering the resize. `opId == 0` means "no dedup".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecResizeArgs {
     pub session: String,
@@ -401,10 +462,21 @@ pub struct ExecResizeArgs {
     pub op_id: u64,
 }
 
+impl fmt::Debug for ExecResizeArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecResizeArgs")
+            .field("session", &"<redacted>")
+            .field("rows", &self.rows)
+            .field("cols", &self.cols)
+            .field("op_id", &self.op_id)
+            .finish()
+    }
+}
+
 /// `Wait` op args. A bounded poll for the terminal status; if the command is
 /// still running after `timeoutMs` the response reports `running` so the CLI
 /// keeps draining output and polling.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecWaitArgs {
     pub session: String,
@@ -412,12 +484,29 @@ pub struct ExecWaitArgs {
     pub timeout_ms: u64,
 }
 
+impl fmt::Debug for ExecWaitArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecWaitArgs")
+            .field("session", &"<redacted>")
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
 /// `Close` op args. Idempotent: closing an already-closed/torn-down session
 /// returns success.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCloseArgs {
     pub session: String,
+}
+
+impl fmt::Debug for ExecCloseArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecCloseArgs")
+            .field("session", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Multiplexed exec operation. Closed adjacently-tagged enum (`op` + `args`);
@@ -437,13 +526,25 @@ pub enum ExecOp {
 /// `Start` op result: the daemon-issued opaque session handle plus the initial
 /// per-stream read cursors the CLI begins reading from. `tty` echoes the
 /// negotiated interactive mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecStartResult {
     pub session: String,
     pub tty: bool,
     pub stdout_offset: u64,
     pub stderr_offset: u64,
+}
+
+impl fmt::Debug for ExecStartResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction (WR12): the issued session handle never appears.
+        f.debug_struct("ExecStartResult")
+            .field("session", &"<redacted>")
+            .field("tty", &self.tty)
+            .field("stdout_offset", &self.stdout_offset)
+            .field("stderr_offset", &self.stderr_offset)
+            .finish()
+    }
 }
 
 /// `WriteStdin` op result. `acceptedLen` is the number of bytes that actually
@@ -464,7 +565,7 @@ pub struct ExecWriteStdinResult {
 /// chunk; `nextOffset` advances the CLI read cursor; `eof` marks the stream
 /// drained after the command went terminal; `timedOut` marks an empty
 /// long-poll.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecReadOutputResult {
     pub data_base64: String,
@@ -477,6 +578,21 @@ pub struct ExecReadOutputResult {
     pub truncated: bool,
     #[serde(default)]
     pub timed_out: bool,
+}
+
+impl fmt::Debug for ExecReadOutputResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction (WR12): the raw guest stdout/stderr bytes never appear; show
+        // only the encoded length + cursor/flags.
+        f.debug_struct("ExecReadOutputResult")
+            .field("data_base64_len", &self.data_base64.len())
+            .field("next_offset", &self.next_offset)
+            .field("eof", &self.eof)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("timed_out", &self.timed_out)
+            .finish()
+    }
 }
 
 /// `Signal` / `Resize` op result.
@@ -876,5 +992,127 @@ mod tests {
         let error = decode_frame::<PublicRequest>("PublicRequest", &frame)
             .expect_err("unknown field fails");
         assert!(error.message().contains("extra"));
+    }
+
+    // WR12: a stray `{:?}` on any exec DTO must never leak argv, env keys or
+    // values, cwd, raw stdio bytes, or the opaque session handle. Each sentinel
+    // below is a unique marker that, if it appeared in the formatted output,
+    // would prove a redaction regression.
+    #[test]
+    fn exec_dto_debug_redacts_secrets() {
+        use super::{
+            ExecCloseArgs, ExecEnvVar, ExecReadOutputArgs, ExecReadOutputResult, ExecResizeArgs,
+            ExecSignalArgs, ExecStartArgs, ExecStartResult, ExecStream, ExecWaitArgs,
+            ExecWriteStdinArgs,
+        };
+
+        const SECRET_ENV_KEY: &str = "SENTINEL_ENV_KEY_b6f1";
+        const SECRET_ENV_VAL: &str = "SENTINEL_ENV_VALUE_a90c";
+        const SECRET_ARGV: &str = "SENTINEL_ARGV_3d2e";
+        const SECRET_CWD: &str = "SENTINEL_CWD_77ab";
+        const SECRET_HANDLE: &str = "SENTINEL_HANDLE_c41f";
+        const SECRET_CHUNK: &str = "U0VOVElORUxfQ0hVTktfZGVhZA==";
+        const SECRET_DATA: &str = "U0VOVElORUxfREFUQV9iZWVm";
+
+        let secrets = [
+            SECRET_ENV_KEY,
+            SECRET_ENV_VAL,
+            SECRET_ARGV,
+            SECRET_CWD,
+            SECRET_HANDLE,
+            SECRET_CHUNK,
+            SECRET_DATA,
+        ];
+
+        let assert_clean = |rendered: &str, label: &str| {
+            for secret in secrets {
+                assert!(
+                    !rendered.contains(secret),
+                    "{label} Debug leaked sentinel {secret}: {rendered}"
+                );
+            }
+        };
+
+        let env_var = ExecEnvVar {
+            key: SECRET_ENV_KEY.to_owned(),
+            value: SECRET_ENV_VAL.to_owned(),
+        };
+        assert_clean(&format!("{env_var:?}"), "ExecEnvVar");
+
+        let start = ExecStartArgs {
+            vm: "corp-vm".to_owned(),
+            argv: vec!["sh".to_owned(), SECRET_ARGV.to_owned()],
+            tty: true,
+            detached: false,
+            env: Some(vec![env_var.clone()]),
+            cwd: Some(SECRET_CWD.to_owned()),
+            term_size: None,
+        };
+        let rendered = format!("{start:?}");
+        assert_clean(&rendered, "ExecStartArgs");
+        assert!(rendered.contains("corp-vm"), "vm name is observable");
+        assert!(rendered.contains("argv_len"), "argv length is observable");
+
+        let write = ExecWriteStdinArgs {
+            session: SECRET_HANDLE.to_owned(),
+            offset: 17,
+            chunk_base64: SECRET_CHUNK.to_owned(),
+            eof: false,
+        };
+        assert_clean(&format!("{write:?}"), "ExecWriteStdinArgs");
+
+        let read = ExecReadOutputArgs {
+            session: SECRET_HANDLE.to_owned(),
+            stream: ExecStream::Stdout,
+            offset: 0,
+            max_len: 4096,
+            wait: true,
+            timeout_ms: 250,
+        };
+        assert_clean(&format!("{read:?}"), "ExecReadOutputArgs");
+
+        let signal = ExecSignalArgs {
+            session: SECRET_HANDLE.to_owned(),
+            signo: 15,
+            op_id: 3,
+        };
+        assert_clean(&format!("{signal:?}"), "ExecSignalArgs");
+
+        let resize = ExecResizeArgs {
+            session: SECRET_HANDLE.to_owned(),
+            rows: 24,
+            cols: 80,
+            op_id: 4,
+        };
+        assert_clean(&format!("{resize:?}"), "ExecResizeArgs");
+
+        let wait = ExecWaitArgs {
+            session: SECRET_HANDLE.to_owned(),
+            timeout_ms: 1000,
+        };
+        assert_clean(&format!("{wait:?}"), "ExecWaitArgs");
+
+        let close = ExecCloseArgs {
+            session: SECRET_HANDLE.to_owned(),
+        };
+        assert_clean(&format!("{close:?}"), "ExecCloseArgs");
+
+        let start_result = ExecStartResult {
+            session: SECRET_HANDLE.to_owned(),
+            tty: true,
+            stdout_offset: 0,
+            stderr_offset: 0,
+        };
+        assert_clean(&format!("{start_result:?}"), "ExecStartResult");
+
+        let read_result = ExecReadOutputResult {
+            data_base64: SECRET_DATA.to_owned(),
+            next_offset: 64,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        };
+        assert_clean(&format!("{read_result:?}"), "ExecReadOutputResult");
     }
 }

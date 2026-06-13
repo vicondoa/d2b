@@ -221,8 +221,10 @@ impl Default for ExecOpDeadlines {
     }
 }
 
-/// Establishment spec resolved from a validated [`ExecOp::Start`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Establishment spec resolved from a validated [`ExecOp::Start`]. `Debug` is
+/// redacted so a stray `{:?}` can never leak argv / env keys+values / cwd
+/// (WR12).
+#[derive(Clone, PartialEq, Eq)]
 pub struct ExecStartSpec {
     pub vm: String,
     pub argv: Vec<String>,
@@ -231,6 +233,20 @@ pub struct ExecStartSpec {
     pub env: Vec<(String, String)>,
     pub cwd: Option<String>,
     pub term_size: Option<(u32, u32)>,
+}
+
+impl std::fmt::Debug for ExecStartSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExecStartSpec")
+            .field("vm", &self.vm)
+            .field("tty", &self.tty)
+            .field("detached", &self.detached)
+            .field("argv_len", &self.argv.len())
+            .field("env_len", &self.env.len())
+            .field("has_cwd", &self.cwd.is_some())
+            .field("term_size", &self.term_size)
+            .finish()
+    }
 }
 
 /// Session info reported back to the owner on a successful establish.
@@ -1080,6 +1096,36 @@ mod tests {
         ExecCloseArgs, ExecReadOutputArgs, ExecResizeArgs, ExecSignalArgs, ExecStream,
         ExecWaitArgs, ExecWriteStdinArgs,
     };
+
+    #[test]
+    fn exec_start_spec_debug_redacts_argv_env_cwd() {
+        // WR12: a stray `{:?}` on the resolved establishment spec must never
+        // leak argv, env keys/values, or cwd; only the VM name, shape, and
+        // counts are observable.
+        const SECRET_ARGV: &str = "SENTINEL_ARGV_dspc";
+        const SECRET_KEY: &str = "SENTINEL_ENV_KEY_dspc";
+        const SECRET_VAL: &str = "SENTINEL_ENV_VAL_dspc";
+        const SECRET_CWD: &str = "SENTINEL_CWD_dspc";
+        let spec = ExecStartSpec {
+            vm: "corp-vm".to_owned(),
+            argv: vec!["sh".to_owned(), SECRET_ARGV.to_owned()],
+            tty: true,
+            detached: false,
+            env: vec![(SECRET_KEY.to_owned(), SECRET_VAL.to_owned())],
+            cwd: Some(SECRET_CWD.to_owned()),
+            term_size: Some((24, 80)),
+        };
+        let rendered = format!("{spec:?}");
+        for secret in [SECRET_ARGV, SECRET_KEY, SECRET_VAL, SECRET_CWD] {
+            assert!(
+                !rendered.contains(secret),
+                "ExecStartSpec Debug leaked {secret}: {rendered}"
+            );
+        }
+        assert!(rendered.contains("corp-vm"), "vm name is observable");
+        assert!(rendered.contains("argv_len"), "argv length is observable");
+        assert!(rendered.contains("env_len"), "env length is observable");
+    }
 
     // ---- Fake clock (drives the Start rate-limit window deterministically) --
 
