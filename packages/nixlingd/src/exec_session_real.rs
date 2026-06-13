@@ -24,6 +24,8 @@ use crate::guest_control_bridge::{
     connect_and_build_client, host_nonce, ProbeParams, BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP,
     VMADDR_CID_HOST,
 };
+#[cfg(test)]
+use crate::guest_control_bridge::connect_and_build_client_for_tests;
 use crate::guest_control_health::{
     probe_guest_control_health, AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient,
 };
@@ -39,6 +41,11 @@ pub struct RealExecConnector {
     params: ProbeParams,
     broker_socket_path: PathBuf,
     deadlines: ExecOpDeadlines,
+    /// Test-only: route the connect through the relaxed-directory test policy so
+    /// a hermetic test can reach the genuine socket-missing transport branch
+    /// under a non-root tempdir. Always `false` for the production constructor.
+    #[cfg(test)]
+    allow_test_dirs: bool,
 }
 
 impl RealExecConnector {
@@ -51,7 +58,40 @@ impl RealExecConnector {
             params,
             broker_socket_path,
             deadlines,
+            #[cfg(test)]
+            allow_test_dirs: false,
         }
+    }
+
+    /// Test constructor that drives the real `establish` path but connects
+    /// through the relaxed-directory test policy.
+    #[cfg(test)]
+    fn new_for_tests(
+        params: ProbeParams,
+        broker_socket_path: PathBuf,
+        deadlines: ExecOpDeadlines,
+    ) -> Self {
+        Self {
+            params,
+            broker_socket_path,
+            deadlines,
+            allow_test_dirs: true,
+        }
+    }
+
+    /// Connect + build the guest-control client. Production always uses the
+    /// state-root-validating connect; a test connector may opt into the
+    /// relaxed-directory connect so it reaches the genuine socket-missing branch
+    /// rather than tripping ownership pre-validation.
+    fn connect_client(
+        &self,
+        budget: AttemptBudget,
+    ) -> Result<TtrpcGuestControlClient, GuestControlHealthError> {
+        #[cfg(test)]
+        if self.allow_test_dirs {
+            return connect_and_build_client_for_tests(&self.params, budget);
+        }
+        connect_and_build_client(&self.params, budget)
     }
 }
 
@@ -62,7 +102,7 @@ impl ExecGuestConnector for RealExecConnector {
         let signer = BrokerSigner::new(self.broker_socket_path.clone(), budget);
         let nonce = host_nonce().map_err(|_| ExecEstablishError::Transport)?;
         let client =
-            connect_and_build_client(&self.params, budget).map_err(map_establish_health_error)?;
+            self.connect_client(budget).map_err(map_establish_health_error)?;
         let evidence = probe_guest_control_health(
             &self.params.vm_id,
             Some(VMADDR_CID_HOST),
@@ -636,6 +676,14 @@ mod tests {
     /// with the typed unreachable error. It never returns `Ok`, never proxies
     /// an exec op, and never falls back to SSH — the connector has exactly one
     /// success path, which requires a live authenticated handshake.
+    ///
+    /// This drives the REAL `establish` path through `new_for_tests`, whose
+    /// connect uses the relaxed-directory test policy so the failure is the
+    /// GENUINE `SocketMissing` transport branch (validated below) rather than
+    /// the production state-root ownership pre-validation tripping first under a
+    /// non-root tempdir. Because `connect_client` fails before any client is
+    /// built, no `ExecCreate` (or any other exec op) is ever issued and there is
+    /// no path to an SSH/raw fallback.
     #[tokio::test]
     async fn establish_against_absent_vsock_fails_closed_with_typed_error() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -643,6 +691,21 @@ mod tests {
         // absent, modelling an old generation with no guest-control listener.
         let absent_socket = dir.path().join("guest-control.sock");
         assert!(!absent_socket.exists());
+
+        // Sanity: the relaxed-directory connect reaches the genuine
+        // socket-missing branch (NOT a directory pre-validation failure) for
+        // this exact (tempdir, absent socket) shape — so the establish failure
+        // below is the real transport-unreachable path, not a false positive.
+        let probe = crate::guest_control_vsock::connect_guest_control_vsock_for_tests(
+            &absent_socket,
+            dir.path(),
+            Duration::from_millis(200),
+        );
+        assert_eq!(
+            probe.failure(),
+            Some(&crate::guest_control_vsock::GuestControlTransportFailure::SocketMissing),
+            "the connect must fail at the genuine socket-missing branch"
+        );
 
         let params = ProbeParams {
             vm_id: "work".to_owned(),
@@ -655,7 +718,7 @@ mod tests {
         };
         // A broker socket path that is never reached: the connect fails first,
         // so no broker sign and no exec op is ever attempted.
-        let connector = RealExecConnector::new(
+        let connector = RealExecConnector::new_for_tests(
             params,
             dir.path().join("broker.sock"),
             ExecOpDeadlines::default(),
@@ -674,7 +737,8 @@ mod tests {
         let result = connector.establish(&spec).await;
 
         // Fail closed: a typed unreachable error, never Ok, never a silent
-        // SSH/raw fallback.
+        // SSH/raw fallback. (`establish` has exactly one `Ok` arm, reached only
+        // after a live authenticated handshake + `ExecCreate`.)
         assert_eq!(
             result.err(),
             Some(ExecEstablishError::Transport),

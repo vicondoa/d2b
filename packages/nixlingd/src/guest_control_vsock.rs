@@ -117,7 +117,7 @@ pub fn connect_guest_control_vsock(
 }
 
 #[cfg(test)]
-fn connect_guest_control_vsock_for_tests(
+pub(crate) fn connect_guest_control_vsock_for_tests(
     socket_path: impl AsRef<Path>,
     state_root: impl AsRef<Path>,
     setup_timeout: Duration,

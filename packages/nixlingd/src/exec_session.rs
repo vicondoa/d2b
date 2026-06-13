@@ -1397,12 +1397,19 @@ mod tests {
     fn start_worker(
         connector: Arc<dyn ExecGuestConnector>,
     ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, EstablishReply) {
+        start_worker_with_deadlines(connector, ExecOpDeadlines::default())
+    }
+
+    fn start_worker_with_deadlines(
+        connector: Arc<dyn ExecGuestConnector>,
+        deadlines: ExecOpDeadlines,
+    ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, EstablishReply) {
         let (control_tx, control_rx) = mpsc::channel(16);
         let (establish_tx, establish_rx) = oneshot::channel();
         let worker = spawn_session_worker(WorkerSpawn {
             connector,
             spec: spec(),
-            deadlines: ExecOpDeadlines::default(),
+            deadlines,
             establish_tx,
             control_rx,
             terminal_ttl: EXEC_TERMINAL_CLEANUP_TTL,
@@ -1610,6 +1617,13 @@ mod tests {
     fn backpressure_worker(
         write_outcome: WriteStdinOutcome,
     ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, Arc<FakeShared>) {
+        backpressure_worker_with_deadlines(write_outcome, ExecOpDeadlines::default())
+    }
+
+    fn backpressure_worker_with_deadlines(
+        write_outcome: WriteStdinOutcome,
+        deadlines: ExecOpDeadlines,
+    ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, Arc<FakeShared>) {
         let shared = Arc::new(FakeShared::default());
         let shared_for_builder = Arc::clone(&shared);
         let builder: Builder = Box::new(move || {
@@ -1623,7 +1637,8 @@ mod tests {
                 read_gate: None,
             }))
         });
-        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        let (control_tx, worker, reply) =
+            start_worker_with_deadlines(FakeConnector::ok(builder), deadlines);
         assert!(reply.is_ok());
         (control_tx, worker, shared)
     }
@@ -1789,18 +1804,41 @@ mod tests {
     /// session does NOT share one cumulative budget that shrinks as the session
     /// ages, so a session whose total elapsed time exceeds a single op deadline
     /// still serves later ops with a full deadline.
+    ///
+    /// This is a regression GUARD against re-introducing a shared
+    /// absolute deadline / `AttemptBudget` in the deadline-selection path. The
+    /// session is genuinely AGED past one op deadline (real wall-clock elapses
+    /// between ops via `sleep`), then we assert the recorded per-op `timeout`
+    /// the worker hands the guest is STILL the full control deadline. A shared
+    /// absolute deadline minted at establish would compute `remaining =
+    /// deadline - now` and record a value shrunk by the elapsed age (here
+    /// saturating toward zero), failing the equality below. The recorded
+    /// `timeout` is the real output of the deadline-selection seam
+    /// (`handle_inline`/`run_long_poll`), not a separate test-only value.
     #[test]
     fn each_proxied_op_draws_a_fresh_per_op_deadline_not_a_shared_session_budget() {
-        let deadlines = ExecOpDeadlines::default();
-        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
-            accepted_len: 3,
-            next_offset: 3,
-            backpressured: false,
-            stdin_closed: false,
-        });
+        // Deliberately tiny control deadline so the inter-op aging sleep is
+        // comfortably LONGER than a single op deadline: an absolute-deadline
+        // regression would record ~0 for the later ops, not the full 60ms.
+        let deadlines = ExecOpDeadlines {
+            control: Duration::from_millis(60),
+            ..ExecOpDeadlines::default()
+        };
+        let age = deadlines.control * 3;
+        let (tx, worker, shared) = backpressure_worker_with_deadlines(
+            WriteStdinOutcome {
+                accepted_len: 3,
+                next_offset: 3,
+                backpressured: false,
+                stdin_closed: false,
+            },
+            deadlines,
+        );
 
-        // Drive a sequence of ops on ONE long-lived session.
+        // Drive a sequence of ops on ONE long-lived session, AGING the session
+        // by real wall-clock time (> one op deadline) between each op.
         send_op(&tx, write_op(0, b"abc")).expect("first write");
+        std::thread::sleep(age);
         send_op(
             &tx,
             ExecOp::Signal(ExecSignalArgs {
@@ -1810,7 +1848,9 @@ mod tests {
             }),
         )
         .expect("signal");
+        std::thread::sleep(age);
         send_op(&tx, write_op(3, b"def")).expect("second write");
+        std::thread::sleep(age);
         send_op(
             &tx,
             ExecOp::Wait(ExecWaitArgs {
@@ -1825,7 +1865,8 @@ mod tests {
 
         let recorded = shared.op_timeouts.lock().unwrap().clone();
 
-        // Every control op got the FULL fresh control deadline...
+        // Every control op got the FULL fresh control deadline, even though the
+        // session has aged well past one op deadline between each...
         let control: Vec<Duration> = recorded
             .iter()
             .filter(|(kind, _)| *kind == "write" || *kind == "signal")
@@ -1835,7 +1876,9 @@ mod tests {
         for d in &control {
             assert_eq!(
                 *d, deadlines.control,
-                "each control op must draw a fresh full control deadline"
+                "each control op must draw a fresh full control deadline even \
+                 after the session has aged past one op deadline (a shared \
+                 absolute deadline would have shrunk this)"
             );
         }
         // ...and the LAST control op's deadline equals the FIRST: no shared
@@ -1847,7 +1890,8 @@ mod tests {
         );
 
         // The long-poll Wait draws its own fresh poll-based deadline, computed
-        // from THIS op's timeout_ms — not from session start.
+        // from THIS op's timeout_ms — not from session start, and not shrunk by
+        // the accumulated session age.
         let wait = recorded
             .iter()
             .find(|(kind, _)| *kind == "wait")

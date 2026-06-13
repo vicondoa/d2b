@@ -225,6 +225,32 @@ pub(crate) fn connect_and_build_client(
     Ok(TtrpcGuestControlClient::new(socket, budget))
 }
 
+/// Test-only twin of [`connect_and_build_client`] that drives the SAME connect
+/// path through the relaxed-directory test policy
+/// (`connect_guest_control_vsock_for_tests`), so a hermetic test reaches the
+/// genuine `SocketMissing` transport branch under a non-root tempdir instead of
+/// tripping the production state-root ownership pre-validation first. The
+/// `Failed(_) -> TransportIo` mapping is identical to production.
+#[cfg(test)]
+pub(crate) fn connect_and_build_client_for_tests(
+    params: &ProbeParams,
+    budget: AttemptBudget,
+) -> Result<TtrpcGuestControlClient, GuestControlHealthError> {
+    let connect_timeout = budget.next().ok_or(GuestControlHealthError::Timeout)?;
+    let connected = match crate::guest_control_vsock::connect_guest_control_vsock_for_tests(
+        &params.socket_path,
+        &params.state_root,
+        connect_timeout,
+    ) {
+        GuestControlTransportProbeResult::Connected(connected) => connected,
+        GuestControlTransportProbeResult::Failed(_) => {
+            return Err(GuestControlHealthError::TransportIo);
+        }
+    };
+    let socket = connected_stream_to_ttrpc_socket(connected)?;
+    Ok(TtrpcGuestControlClient::new(socket, budget))
+}
+
 /// One authenticated Health probe attempt. Builds a fresh host nonce, an
 /// absolute-deadline budget (`now + attempt_timeout`, capped at
 /// [`GUEST_CONTROL_ATTEMPT_CAP`]), a per-attempt broker signer sharing

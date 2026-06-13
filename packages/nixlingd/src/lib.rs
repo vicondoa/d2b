@@ -1589,6 +1589,38 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     (year, m, d)
 }
 
+/// Test-only seam letting an accept-loop test substitute the exec owner body so
+/// it can HOLD the owner session open. Without it, `run_exec_owner` fails fast
+/// at `load_bundle_resolver` under default test state and returns immediately,
+/// so a test could not distinguish an off-loop spawn from an inline call. The
+/// hook is consulted at the top of `run_exec_owner` (the owner body itself), so
+/// an inline `handle_connection` would block in it on the accept-loop thread; it
+/// is `None` in every build except a test that installs it, and production
+/// builds compile it out entirely.
+#[cfg(test)]
+mod exec_owner_test_hook {
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
+
+    fn slot() -> &'static Mutex<Option<Hook>> {
+        static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    pub(crate) fn set(hook: Hook) {
+        *slot().lock().expect("exec owner hook lock") = Some(hook);
+    }
+
+    pub(crate) fn clear() {
+        *slot().lock().expect("exec owner hook lock") = None;
+    }
+
+    pub(crate) fn active() -> Option<Hook> {
+        slot().lock().expect("exec owner hook lock").clone()
+    }
+}
+
 fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedError> {
     let hello_bytes = read_frame(&stream)?;
     let peer = match authorize_peer(&stream, state) {
@@ -2518,6 +2550,21 @@ fn run_exec_owner(
     first_op_id: u64,
     first_op: public_wire::ExecOp,
 ) {
+    // Test seam: when an accept-loop test installs the owner-body hook, run it
+    // (holding `stream` — and thus the owner session — open for as long as the
+    // hook blocks) and return without touching real bundle/guest state. Placing
+    // the hook HERE, in the owner body itself, is what lets a test distinguish
+    // an off-loop spawn from an inline call: a hypothetical inline
+    // `handle_connection` would run this body — and block in the hook — on the
+    // accept-loop thread, so its caller would never observe a prompt return.
+    #[cfg(test)]
+    {
+        if let Some(hook) = exec_owner_test_hook::active() {
+            hook();
+            drop(stream);
+            return;
+        }
+    }
     // The owner socket is read by the reader (this thread) and written by a
     // dedicated writer thread concurrently; SOCK_SEQPACKET send/recv on the
     // same fd from two threads is safe, so share it behind an `Arc`.
@@ -8747,9 +8794,54 @@ mod accept_loop_concurrency_tests {
 
     #[test]
     fn exec_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
+        use std::sync::{Condvar, Mutex};
+
         let _env = PeerOverrideEnv::admin();
         let (state, _state_dir) = admin_exec_state();
         let state = Arc::new(state);
+
+        // Install an owner-body hook that genuinely HOLDS the exec owner session
+        // open: it flags `running`, signals `entered`, then blocks until the
+        // test releases it. Because the hook runs at the top of
+        // `run_exec_owner`, a hypothetical inline `handle_connection` would block
+        // HERE on the accept-loop thread and never return — the watchdog below
+        // would fire. An off-loop spawn (the real behaviour) returns Ok promptly
+        // while this body is still blocked.
+        #[derive(Default)]
+        struct HookState {
+            entered: bool,
+            running: bool,
+            release: bool,
+        }
+        let shared = Arc::new((Mutex::new(HookState::default()), Condvar::new()));
+
+        // Clear the process-global hook on scope exit (panic-safe) so no other
+        // test ever observes it.
+        struct HookGuard;
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                exec_owner_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+
+        let hook_shared = Arc::clone(&shared);
+        let hook: exec_owner_test_hook::Hook = Arc::new(move || {
+            let (lock, cv) = &*hook_shared;
+            {
+                let mut s = lock.lock().expect("hook state lock");
+                s.entered = true;
+                s.running = true;
+                cv.notify_all();
+            }
+            let mut s = lock.lock().expect("hook state lock");
+            while !s.release {
+                s = cv.wait(s).expect("hook release wait");
+            }
+            s.running = false;
+            cv.notify_all();
+        });
+        exec_owner_test_hook::set(hook);
 
         // --- Connection A: opens a long-lived exec owner session. ---
         let (server_a, client_a) = seqpacket_pair();
@@ -8758,9 +8850,6 @@ mod accept_loop_concurrency_tests {
         write_frame(&client_a, &hello_frame()).expect("client A sends hello");
         write_frame(&client_a, &exec_start_frame(1)).expect("client A sends exec start");
         // The client deliberately keeps its end OPEN for the session's lifetime.
-        // If handle_connection ran the exec session inline (or looped reading
-        // further owner frames on the accept-loop thread), it would block here
-        // and never return — the watchdog below would fire.
 
         let state_a = Arc::clone(&state);
         let (done_tx, done_rx) = mpsc::channel();
@@ -8769,6 +8858,28 @@ mod accept_loop_concurrency_tests {
             let _ = done_tx.send(result.is_ok());
         });
 
+        // The owner body must actually be entered (the exec branch dispatched a
+        // real, blocking owner session — not a fast-failed stub).
+        {
+            let (lock, cv) = &*shared;
+            let mut s = lock.lock().expect("hook state lock");
+            let deadline = Duration::from_secs(10);
+            let start = std::time::Instant::now();
+            while !s.entered {
+                let remaining = deadline
+                    .checked_sub(start.elapsed())
+                    .expect("exec owner body was not entered within the deadline");
+                let (guard, timeout) = cv
+                    .wait_timeout(s, remaining)
+                    .expect("hook entered wait");
+                s = guard;
+                assert!(!timeout.timed_out(), "exec owner body was not entered");
+            }
+        }
+
+        // handle_connection must have returned Ok PROMPTLY even though the owner
+        // body is still blocked in the hook. An inline implementation would be
+        // stuck in the hook on this very thread's predecessor and never send.
         let returned = done_rx.recv_timeout(Duration::from_secs(10));
         assert!(
             matches!(returned, Ok(true)),
@@ -8778,9 +8889,21 @@ mod accept_loop_concurrency_tests {
         );
         handle_a.join().expect("accept-loop thread joins");
 
+        // Prove the owner session is STILL HELD OPEN (the body has not torn
+        // down) at the moment handle_connection has already returned — i.e. the
+        // dispatch was genuinely off-loop, concurrent with the accept loop.
+        {
+            let (lock, _cv) = &*shared;
+            let s = lock.lock().expect("hook state lock");
+            assert!(
+                s.running && !s.release,
+                "the exec owner session must still be held open after \
+                 handle_connection returned (off-loop dispatch)"
+            );
+        }
+
         // --- Connection B: a SECOND public.sock request is accepted and served
-        //     after the exec was dispatched on connection A (whose owner
-        //     connection is still held open). ---
+        //     while connection A's owner session is still held open. ---
         let (server_b, client_b) = seqpacket_pair();
         let client_b = std::thread::spawn(move || {
             write_frame(&client_b, &hello_frame()).expect("client B sends hello");
@@ -8811,6 +8934,18 @@ mod accept_loop_concurrency_tests {
             response["type"], "authStatusResponse",
             "second request was actually served, not merely accepted"
         );
+
+        // Release the held owner body and wait for it to finish, so the spawned
+        // owner thread is wound down before the test returns.
+        {
+            let (lock, cv) = &*shared;
+            let mut s = lock.lock().expect("hook state lock");
+            s.release = true;
+            cv.notify_all();
+            while s.running {
+                s = cv.wait(s).expect("hook finish wait");
+            }
+        }
 
         // Connection A's owner session is torn down with its client end.
         drop(client_a);
@@ -12283,6 +12418,17 @@ mod broker_dispatch_tests {
 
         let no_vsock = vec!["cloud-hypervisor".to_owned(), "--api-socket".to_owned()];
         assert_eq!(cloud_hypervisor_vsock_socket(&no_vsock), None);
+
+        // Old-generation / pre-guest-control CH argv: a `--vsock` device with no
+        // `socket=` subfield resolves to None, which `resolve_guest_control_probe_params`
+        // turns into a fail-closed `no-vsock-socket` error (no endpoint to probe,
+        // so exec never proxies and never falls back).
+        let vsock_without_socket = vec![
+            "cloud-hypervisor".to_owned(),
+            "--vsock".to_owned(),
+            "cid=42".to_owned(),
+        ];
+        assert_eq!(cloud_hypervisor_vsock_socket(&vsock_without_socket), None);
     }
 
     #[test]
