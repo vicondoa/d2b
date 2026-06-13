@@ -169,6 +169,24 @@ impl TtrpcGuestControlClient {
         // every ttRPC share one absolute deadline. A passed deadline
         // surfaces as a timeout rather than blocking at the full timeout.
         let timeout = self.budget.next().ok_or(GuestControlHealthError::Timeout)?;
+        self.unary_with_timeout(method, request, timeout).await
+    }
+
+    /// Issue a unary ttRPC with an EXPLICIT per-call timeout, independent of
+    /// the handshake [`AttemptBudget`]. The exec session worker uses this for
+    /// every proxied exec op so each op draws a FRESH absolute deadline rather
+    /// than the one-shot establishment budget (which is exhausted by the time
+    /// the first op runs).
+    pub async fn unary_with_timeout<Req, Resp>(
+        &self,
+        method: &str,
+        request: Req,
+        timeout: Duration,
+    ) -> Result<Resp, GuestControlHealthError>
+    where
+        Req: Message,
+        Resp: Message + Default,
+    {
         let timeout_nano = timeout.as_nanos().min(i64::MAX as u128) as i64;
         let mut payload = Vec::new();
         request

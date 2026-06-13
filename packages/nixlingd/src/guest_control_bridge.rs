@@ -202,7 +202,7 @@ fn build_probe_runtime() -> Result<tokio::runtime::Runtime, GuestControlHealthEr
 /// draws `min(cap, remaining)` from the shared attempt budget so it
 /// shares the same absolute deadline as the ttRPC calls; a passed
 /// deadline returns [`GuestControlHealthError::Timeout`].
-fn connect_and_build_client(
+pub(crate) fn connect_and_build_client(
     params: &ProbeParams,
     budget: AttemptBudget,
 ) -> Result<TtrpcGuestControlClient, GuestControlHealthError> {

@@ -121,6 +121,12 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         labels: &[],
         buckets_seconds: &[],
     },
+    MetricDescriptor {
+        name: "nixling_daemon_guest_control_exec_total",
+        kind: MetricKind::Counter,
+        labels: &["subsystem", "outcome", "error_kind"],
+        buckets_seconds: &[],
+    },
 ];
 
 /// Lookup a descriptor by name. `None` for any unknown name —
@@ -353,6 +359,9 @@ fn help_text(name: &str) -> &'static str {
         "nixling_daemon_ssh_host_key_drift_total" => "Per-VM SSH host-key drift detections.",
         "nixling_daemon_pidfd_table_size" => "Live pidfd entries held by the supervisor.",
         "nixling_daemon_uptime_seconds" => "Seconds since the daemon process started.",
+        "nixling_daemon_guest_control_exec_total" => {
+            "Cumulative count of guest-control exec session/op outcomes by error_kind."
+        }
         _ => "",
     }
 }

@@ -75,6 +75,8 @@ use uzers::{get_user_by_uid, get_user_groups};
 pub mod guest_control_bridge;
 pub mod guest_control_health;
 pub mod guest_control_vsock;
+pub mod exec_session;
+pub mod exec_session_real;
 pub mod supervisor;
 pub mod typed_error;
 pub mod wire;
@@ -307,6 +309,11 @@ struct ServerState {
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
+    /// In-process exec session table (caps + opaque handles) for
+    /// `nixling vm exec`. There is no per-VM unit and no broker op: a
+    /// session is a daemon-held authenticated guest-control client owned by a
+    /// spawned worker.
+    exec_sessions: Arc<exec_session::SessionTable>,
 }
 
 struct PeerOverride {
@@ -476,6 +483,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
+        exec_sessions: Arc::new(exec_session::SessionTable::new(
+            exec_session::ExecSessionCaps::default(),
+        )),
     };
     refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
@@ -1630,6 +1640,35 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 continue;
             }
         };
+        // Exec takes over the connection as the long-lived owner connection.
+        // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
+        // the connection + a cheap ServerState clone move to a SPAWNED owner
+        // handler so the serial accept loop is never blocked for the lifetime
+        // of an exec session (WR1).
+        if let wire::Request::Exec(op) = request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "exec".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            match std::thread::Builder::new()
+                .name("nixling-exec-owner".to_owned())
+                .spawn(move || {
+                    run_exec_owner(stream, owner_state, owner_peer, op);
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn exec owner handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
         let response = match dispatch_request(state, &peer, request) {
             Ok(value) => value,
             Err(error) => serde_json::to_value(wire::error_frame(&error)).map_err(|err| {
@@ -1727,6 +1766,7 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostInstall"
             | "hostReconcile"
             | "readGuestConfig"
+            | "exec"
     )
 }
 
@@ -1783,6 +1823,13 @@ fn dispatch_request(
         wire::Request::HostInstall(req) => dispatch_broker_run_host_install(state, req),
         wire::Request::HostReconcile(req) => dispatch_broker_host_reconcile(state, req),
         wire::Request::ReadGuestConfig(req) => dispatch_read_guest_config(state, req),
+        // Exec is intercepted in `handle_connection` (it takes over the
+        // connection as the long-lived owner connection and is handled on a
+        // spawned worker off the serial accept loop). Reaching dispatch_request
+        // with an Exec op is a daemon-internal contract violation.
+        wire::Request::Exec(_) => Err(TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+        }),
     }
 }
 
@@ -2290,6 +2337,348 @@ fn dispatch_read_guest_config(
             content_base64: encoded,
         },
     ))
+}
+
+const EXEC_METRIC: &str = "nixling_daemon_guest_control_exec_total";
+const EXEC_SUBSYSTEM: &str = "guest-control-exec";
+
+/// Increment the closed-label exec outcome counter. `outcome` and `error_kind`
+/// are the only labels besides the constant subsystem; all three are drawn
+/// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
+fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
+    state.metrics_registry.counter_inc(
+        EXEC_METRIC,
+        &[
+            ("subsystem", EXEC_SUBSYSTEM),
+            ("outcome", outcome),
+            ("error_kind", error_kind),
+        ],
+    );
+}
+
+/// The opaque session handle carried by a non-`Start` exec op, or `None` for
+/// `Start` (which has no session yet).
+fn exec_op_session(op: &public_wire::ExecOp) -> Option<&str> {
+    match op {
+        public_wire::ExecOp::Start(_) => None,
+        public_wire::ExecOp::WriteStdin(args) => Some(&args.session),
+        public_wire::ExecOp::ReadOutput(args) => Some(&args.session),
+        public_wire::ExecOp::Signal(args) => Some(&args.session),
+        public_wire::ExecOp::Resize(args) => Some(&args.session),
+        public_wire::ExecOp::Wait(args) => Some(&args.session),
+        public_wire::ExecOp::Close(args) => Some(&args.session),
+    }
+}
+
+fn map_exec_establish_error(error: exec_session::ExecEstablishError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::ExecEstablishError as E;
+    let kind = match error {
+        E::Transport => K::Transport,
+        E::Auth => K::Auth,
+        E::Protocol => K::Protocol,
+        E::Timeout => K::Timeout,
+        E::OldGeneration => K::OldGeneration,
+        E::Capability => K::Capability,
+        E::Guest(_) => K::GuestError,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+fn map_exec_op_error(error: exec_session::ExecOpError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::ExecOpError as E;
+    let kind = match error {
+        E::Transport => K::Transport,
+        E::Auth => K::Auth,
+        E::Protocol => K::Protocol,
+        E::Timeout => K::Timeout,
+        E::OldGeneration => K::OldGeneration,
+        E::Capability => K::Capability,
+        E::Guest(_) => K::GuestError,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+fn map_exec_reserve_error(error: exec_session::SessionReserveError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::SessionReserveError as E;
+    let kind = match error {
+        E::RateLimited => K::RateLimited,
+        _ => K::SessionCapacity,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+/// The `error_kind` metric label for a typed exec failure (closed allowlist).
+fn exec_error_kind_label(error: &TypedError) -> &'static str {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    match error {
+        TypedError::GuestControlExecFailed { kind } => match kind {
+            K::Transport => "transport",
+            K::Auth => "auth",
+            K::Protocol => "protocol",
+            K::Timeout => "timeout",
+            K::OldGeneration => "old-generation",
+            K::Capability => "capability",
+            K::SessionCapacity => "session-capacity",
+            K::RateLimited => "rate-limited",
+            K::GuestError => "guest",
+            K::Internal => "internal",
+        },
+        _ => "internal",
+    }
+}
+
+/// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
+/// the serial accept loop (WR1): the public.sock accept loop never blocks for
+/// the lifetime of an exec. SO_PEERCRED admin was verified before the spawn.
+///
+/// Lifecycle (non-detached): reserve a session slot (cap-checked BEFORE any
+/// connect/auth/ExecCreate), spawn the per-session worker, relay the establish
+/// reply, then proxy one op per frame. The connection's EOF/POLLHUP closes the
+/// command channel, which returns the worker, drops the runtime, and drops the
+/// authenticated client — prompting the guest `close_connection` and W14 PTY
+/// teardown. The slot is released when its RAII guard drops on return.
+fn run_exec_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    first_op: public_wire::ExecOp,
+) {
+    let public_wire::ExecOp::Start(start) = first_op else {
+        // A non-`Start` first op on a fresh owner connection has no session.
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+        };
+        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        exec_metric(&state, "error", "protocol");
+        return;
+    };
+
+    if start.argv.is_empty() {
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+        };
+        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        exec_metric(&state, "error", "protocol");
+        return;
+    }
+    // `detached` is carried for unambiguous teardown semantics; the W16 CLI
+    // never sets it (detached reconnect is deferred). A detached request would
+    // change teardown to "survive owner disconnect", which this non-detached
+    // handler does not implement — reject it rather than silently leak a guest
+    // process.
+    if start.detached {
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Capability,
+        };
+        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        exec_metric(&state, "error", "capability");
+        return;
+    }
+
+    let resolver = match load_bundle_resolver(&state) {
+        Ok(resolver) => resolver,
+        Err(_) => {
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Transport,
+            };
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            exec_metric(&state, "error", "transport");
+            return;
+        }
+    };
+    let params = match resolve_guest_control_probe_params(&state, &resolver, &start.vm) {
+        Ok(params) => params,
+        Err(_) => {
+            // No process DAG / no vsock socket: the VM is not a guest-control
+            // generation. Fail closed (old-generation), never SSH.
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::OldGeneration,
+            };
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            exec_metric(&state, "error", "old-generation");
+            return;
+        }
+    };
+
+    // Reserve a session slot BEFORE any connect/auth/ExecCreate (WR13). The
+    // guard releases the slot on every return path below.
+    let slot = match state.exec_sessions.reserve(peer.uid, &start.vm) {
+        Ok(slot) => slot,
+        Err(reserve_error) => {
+            let error = map_exec_reserve_error(reserve_error);
+            let kind = exec_error_kind_label(&error);
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            exec_metric(&state, "error", kind);
+            return;
+        }
+    };
+    let handle = slot.handle().to_owned();
+
+    let spec = exec_session::ExecStartSpec {
+        vm: start.vm.clone(),
+        argv: start.argv.clone(),
+        tty: start.tty,
+        detached: start.detached,
+        env: start
+            .env
+            .unwrap_or_default()
+            .into_iter()
+            .map(|var| (var.key, var.value))
+            .collect(),
+        cwd: start.cwd.clone(),
+        term_size: start.term_size.map(|size| (size.rows, size.cols)),
+    };
+
+    let deadlines = exec_session::ExecOpDeadlines::default();
+    let connector: Arc<dyn exec_session::ExecGuestConnector> =
+        Arc::new(exec_session_real::RealExecConnector::new(
+            params,
+            broker_socket_path(&state),
+            deadlines,
+        ));
+
+    let (control_tx, control_rx) = tokio::sync::mpsc::channel::<exec_session::WorkerCommand>(16);
+    let (establish_tx, establish_rx) = tokio::sync::oneshot::channel();
+    let worker =
+        exec_session::spawn_session_worker(connector, spec, deadlines, establish_tx, control_rx);
+
+    let info = match establish_rx.blocking_recv() {
+        Ok(Ok(info)) => info,
+        Ok(Err(establish_error)) => {
+            let error = map_exec_establish_error(establish_error);
+            let kind = exec_error_kind_label(&error);
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            exec_metric(&state, "error", kind);
+            drop(control_tx);
+            let _ = worker.join();
+            return;
+        }
+        Err(_) => {
+            // Worker thread vanished before replying (panic / runtime build
+            // failure already mapped to Transport). Surface an internal error.
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+            };
+            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            exec_metric(&state, "error", "internal");
+            let _ = worker.join();
+            return;
+        }
+    };
+
+    // One kind=critical session-establishment span (NO per-op span/audit).
+    tracing::info!(
+        kind = "critical",
+        subsystem = EXEC_SUBSYSTEM,
+        vm = %start.vm,
+        peer_uid = peer.uid,
+        session_handle = %handle,
+        tty = info.tty,
+        "guest-control exec session established"
+    );
+    exec_metric(&state, "established", "none");
+
+    let start_response = exec_session::start_response(&handle, &info);
+    if write_json_frame(&stream, &wire::exec_response(&start_response)).is_err() {
+        drop(control_tx);
+        let _ = worker.join();
+        exec_metric(&state, "closed", "none");
+        return;
+    }
+
+    run_exec_owner_op_loop(&stream, &state, &control_tx, &handle);
+
+    // Owner connection drained: drop the command channel so the worker returns
+    // and drops the authenticated client (prompting guest teardown), then join.
+    drop(control_tx);
+    let _ = worker.join();
+    drop(slot);
+    exec_metric(&state, "closed", "none");
+}
+
+/// Per-op proxy loop over the owner connection. One op per frame, one response
+/// per op (the CLI multiplexes with short polls; the worker spawns long-polls
+/// so it never head-of-line-blocks control ops). Returns on EOF/POLLHUP or a
+/// worker disconnect, which the caller turns into a teardown.
+fn run_exec_owner_op_loop(
+    stream: &Socket,
+    state: &ServerState,
+    control_tx: &tokio::sync::mpsc::Sender<exec_session::WorkerCommand>,
+    handle: &str,
+) {
+    loop {
+        let frame = match read_frame(stream) {
+            Ok(frame) => frame,
+            // EOF / POLLHUP / any read error closes the owner connection.
+            Err(_) => return,
+        };
+        let request = match wire::parse_request(&frame) {
+            Ok(request) => request,
+            Err(error) => {
+                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
+        let op = match request {
+            wire::Request::Exec(op) => op,
+            _ => {
+                let error = TypedError::GuestControlExecFailed {
+                    kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+                };
+                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
+                    return;
+                }
+                exec_metric(state, "op-error", "protocol");
+                continue;
+            }
+        };
+        // Bind every op to THIS session handle (peer-uid binding is implicit:
+        // the handle was minted for this connection's admin peer).
+        if exec_op_session(&op) != Some(handle) {
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+            };
+            if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
+                return;
+            }
+            exec_metric(state, "op-error", "protocol");
+            continue;
+        }
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let command = exec_session::WorkerCommand {
+            op,
+            reply: reply_tx,
+        };
+        if control_tx.blocking_send(command).is_err() {
+            // Worker gone (terminal/teardown): close the connection.
+            return;
+        }
+        let reply = match reply_rx.blocking_recv() {
+            Ok(reply) => reply,
+            Err(_) => return,
+        };
+        match reply {
+            Ok(response) => {
+                if write_json_frame(stream, &wire::exec_response(&response)).is_err() {
+                    return;
+                }
+            }
+            Err(op_error) => {
+                let error = map_exec_op_error(op_error);
+                let kind = exec_error_kind_label(&error);
+                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
+                    return;
+                }
+                exec_metric(state, "op-error", kind);
+            }
+        }
+    }
 }
 
 fn dispatch_broker_request(
@@ -7359,6 +7748,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         }
     }
 
@@ -7383,6 +7775,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         }
     }
 
@@ -8694,6 +9089,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -8901,6 +9299,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         };
 
         let listener = socket(
@@ -9137,6 +9538,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -10466,6 +10870,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
         };
 
         // Emit the same event that the timeout handler in

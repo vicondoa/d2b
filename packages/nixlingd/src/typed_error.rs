@@ -87,6 +87,121 @@ impl GuestControlReadErrorKind {
     }
 }
 
+/// Closed enum of guest-control **exec** failure classes (establishment, per-op
+/// proxy, and session-table reservation). Each maps to a distinct wire `kind`
+/// slug and a CLI-meaningful exit code; the daemon never attaches argv, env,
+/// output bytes, a session handle, or any guest-supplied string to the failure,
+/// so the public envelope is leak-free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestControlExecErrorKind {
+    /// Connect / handshake transport failure (incl. unreachable, broker signer
+    /// error).
+    Transport,
+    /// Authenticated handshake or per-op auth rejected (token / nonce / stale).
+    Auth,
+    /// Malformed or out-of-contract guest response, or an internal protocol
+    /// violation (offset/control-seq mismatch).
+    Protocol,
+    /// The per-op or establishment deadline elapsed.
+    Timeout,
+    /// The guest does not advertise exec at all (old generation / exec-disabled
+    /// build). No session, no SSH fallback.
+    OldGeneration,
+    /// The guest authenticated but does not advertise a required exec
+    /// capability (e.g. `EXEC_TTY` for an interactive session).
+    Capability,
+    /// A concurrent-session cap (global / per-uid / per-vm) was hit.
+    SessionCapacity,
+    /// The per-uid Start rate limit fired.
+    RateLimited,
+    /// A deterministic guest-side op rejection (exec already exited, etc.).
+    GuestError,
+    /// Daemon-internal failure establishing or driving the session worker.
+    Internal,
+}
+
+impl GuestControlExecErrorKind {
+    pub fn wire_kind(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control-transport-unavailable",
+            Self::Auth => "guest-control-auth-failed",
+            Self::Protocol => "guest-control-protocol-error",
+            Self::Timeout => "guest-control-timeout",
+            Self::OldGeneration => "guest-control-unavailable-old-generation",
+            Self::Capability => "guest-control-capability-unavailable",
+            Self::SessionCapacity => "exec-session-capacity",
+            Self::RateLimited => "exec-session-rate-limited",
+            Self::GuestError => "guest-control-exec-error",
+            Self::Internal => "guest-control-exec-internal",
+        }
+    }
+
+    /// Exit code surfaced in the public envelope. The CLI applies its own
+    /// exec exit-code contract on top of the wire `kind`; these values are the
+    /// fallback for a client that does not specialise exec handling.
+    fn exit_code(self) -> u8 {
+        match self {
+            Self::Transport | Self::Timeout => 69,
+            Self::OldGeneration | Self::Capability => 70,
+            Self::SessionCapacity | Self::RateLimited => 75,
+            Self::Protocol | Self::GuestError => 76,
+            Self::Auth => 77,
+            Self::Internal => 42,
+        }
+    }
+
+    fn human_message(self) -> &'static str {
+        match self {
+            Self::Transport => "guest-control transport to the VM is unavailable",
+            Self::Auth => "guest-control authentication to the VM failed",
+            Self::Protocol => "the guest returned a malformed guest-control exec response",
+            Self::Timeout => "the guest-control exec operation timed out",
+            Self::OldGeneration => {
+                "the VM generation does not support guest-control exec"
+            }
+            Self::Capability => {
+                "the guest does not advertise a required exec capability"
+            }
+            Self::SessionCapacity => "the exec session table is at capacity",
+            Self::RateLimited => "exec session starts are rate limited for this caller",
+            Self::GuestError => "the guest rejected the exec operation",
+            Self::Internal => "the daemon failed to drive the exec session",
+        }
+    }
+
+    fn remediation(self) -> &'static str {
+        match self {
+            Self::Transport | Self::Timeout => {
+                "confirm the VM is running and guest-control-health is ready (`nixling vm status <vm>`), then retry"
+            }
+            Self::Auth => {
+                "the guest rejected the authenticated handshake; rotate the VM's guest-control material and restart the VM"
+            }
+            Self::Protocol => {
+                "the guest-control protocol versions are skewed; rebuild the guest with a matching nixling generation"
+            }
+            Self::OldGeneration => {
+                "rebuild and switch the VM to the current nixling generation so guest-control exec is available; nixling does not fall back to SSH"
+            }
+            Self::Capability => {
+                "rebuild the guest with the required exec capability enabled (current nixling generation)"
+            }
+            Self::SessionCapacity => {
+                "wait for an in-flight exec session to finish or close an idle one, then retry"
+            }
+            Self::RateLimited => {
+                "reduce the rate of `nixling vm exec` invocations and retry"
+            }
+            Self::GuestError => {
+                "inspect the guest exec state; the command may have already exited or been cancelled"
+            }
+            Self::Internal => {
+                "retry; if the failure persists inspect the daemon log for the typed exec-session record"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TypedError {
     AuthzNotALauncher {
@@ -250,6 +365,12 @@ pub enum TypedError {
     GuestControlReadFailed {
         kind: GuestControlReadErrorKind,
     },
+    /// Authenticated guest-control **exec** failed (establishment, per-op proxy,
+    /// or session-table reservation). The closed-enum `kind` is the ONLY
+    /// payload — never argv, env, output, a session handle, or a guest string.
+    GuestControlExecFailed {
+        kind: GuestControlExecErrorKind,
+    },
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -305,6 +426,7 @@ impl TypedError {
             Self::NetRoutePreflightDegraded { .. } => "net-route-preflight-degraded",
             Self::UsbipStepFailed { .. } => "usbip-step-failed",
             Self::GuestControlReadFailed { kind } => kind.wire_kind(),
+            Self::GuestControlExecFailed { kind } => kind.wire_kind(),
         }
     }
 
@@ -346,6 +468,7 @@ impl TypedError {
             // Guest-control config read failures share one exit code; the
             // distinct `kind` slug carries the sub-class.
             Self::GuestControlReadFailed { .. } => 70,
+            Self::GuestControlExecFailed { kind } => kind.exit_code(),
         }
     }
 
@@ -434,6 +557,7 @@ impl TypedError {
                 )
             }
             Self::GuestControlReadFailed { kind } => kind.human_message().to_owned(),
+            Self::GuestControlExecFailed { kind } => kind.human_message().to_owned(),
         }
     }
 
@@ -515,6 +639,7 @@ impl TypedError {
                 )
             }
             Self::GuestControlReadFailed { kind } => kind.remediation().to_owned(),
+            Self::GuestControlExecFailed { kind } => kind.remediation().to_owned(),
         }
     }
 
@@ -635,7 +760,8 @@ impl TypedError {
             | Self::OtelHostBridgeReadinessTimeout { .. }
             | Self::NetRoutePreflightDegraded { .. }
             | Self::UsbipStepFailed { .. }
-            | Self::GuestControlReadFailed { .. } => "internalError",
+            | Self::GuestControlReadFailed { .. }
+            | Self::GuestControlExecFailed { .. } => "internalError",
         }
     }
 }

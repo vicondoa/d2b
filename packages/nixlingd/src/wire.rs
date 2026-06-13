@@ -54,6 +54,7 @@ pub enum Request {
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
     ReadGuestConfig(public_wire::ReadGuestConfigRequest),
+    Exec(public_wire::ExecOp),
 }
 
 impl Request {
@@ -87,6 +88,7 @@ impl Request {
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
             Self::ReadGuestConfig(_) => "readGuestConfig",
+            Self::Exec(_) => "exec",
         }
     }
 }
@@ -282,6 +284,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "readGuestConfig" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::ReadGuestConfig)
             .map_err(map_parse_error),
+        "exec" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::Exec)
+            .map_err(map_parse_error),
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
 }
@@ -440,6 +445,17 @@ pub fn read_guest_config_response(payload: public_wire::ReadGuestConfigResponse)
             "type".to_owned(),
             Value::String("readGuestConfigResponse".to_owned()),
         );
+    }
+    value
+}
+
+/// Serialize an `ExecOpResponse` as the `execResponse` daemon wire frame the
+/// CLI `vm exec` owner connection expects. The adjacently-tagged
+/// `{ "op": …, "result": … }` body is preserved and a `type` tag is added.
+pub fn exec_response(payload: &public_wire::ExecOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("type".to_owned(), Value::String("execResponse".to_owned()));
     }
     value
 }
