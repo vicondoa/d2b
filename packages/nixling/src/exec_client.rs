@@ -595,12 +595,83 @@ fn decode_error_frame(value: &Value) -> ExecClientError {
 // termios/fcntl wrappers — no `unsafe`.
 // ---------------------------------------------------------------------------
 
+/// Host stdin terminal operations behind a trait so the ordering logic in
+/// `FdStateGuard::enter` can be exercised hermetically (the production impl
+/// targets the real stdin fd, which is not a tty under test).
+trait HostTtyOps {
+    /// Switch the terminal to raw mode, remembering the original state for a
+    /// later restore.
+    fn enter_raw(&self) -> io::Result<()>;
+    /// Restore the original termios saved by `enter_raw`.
+    fn restore_termios(&self);
+    /// Add `O_NONBLOCK` to stdin if absent. Returns `true` if it was newly set.
+    fn try_add_nonblock(&self) -> io::Result<bool>;
+    /// Clear an `O_NONBLOCK` flag this guard added.
+    fn clear_nonblock(&self);
+}
+
+/// Production `HostTtyOps` over the real stdin fd. The original termios is held
+/// in interior storage so `enter_raw`/`restore_termios` can take `&self`.
+struct RealStdinTty {
+    original: std::cell::RefCell<Option<rustix::termios::Termios>>,
+}
+
+impl RealStdinTty {
+    fn new() -> Self {
+        Self {
+            original: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+impl HostTtyOps for RealStdinTty {
+    fn enter_raw(&self) -> io::Result<()> {
+        let fd = rustix::stdio::stdin();
+        let original = rustix::termios::tcgetattr(fd).map_err(errno_to_io)?;
+        let mut raw_termios = original.clone();
+        raw_termios.make_raw();
+        rustix::termios::tcsetattr(fd, rustix::termios::OptionalActions::Flush, &raw_termios)
+            .map_err(errno_to_io)?;
+        *self.original.borrow_mut() = Some(original);
+        Ok(())
+    }
+
+    fn restore_termios(&self) {
+        let fd = rustix::stdio::stdin();
+        if let Some(original) = self.original.borrow().as_ref() {
+            let _ = rustix::termios::tcsetattr(
+                fd,
+                rustix::termios::OptionalActions::Flush,
+                original,
+            );
+        }
+    }
+
+    fn try_add_nonblock(&self) -> io::Result<bool> {
+        let fd = rustix::stdio::stdin();
+        let flags = rustix::fs::fcntl_getfl(fd).map_err(errno_to_io)?;
+        if flags.contains(rustix::fs::OFlags::NONBLOCK) {
+            return Ok(false);
+        }
+        rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK).map_err(errno_to_io)?;
+        Ok(true)
+    }
+
+    fn clear_nonblock(&self) {
+        let fd = rustix::stdio::stdin();
+        if let Ok(flags) = rustix::fs::fcntl_getfl(fd) {
+            let _ = rustix::fs::fcntl_setfl(fd, flags & !rustix::fs::OFlags::NONBLOCK);
+        }
+    }
+}
+
 /// RAII guard over host stdin terminal state. On `enter` it optionally puts the
 /// terminal in raw mode and/or marks stdin non-blocking; on drop it restores
 /// the saved termios and clears any O_NONBLOCK it set. Restoration is
 /// idempotent and never panics.
 pub struct FdStateGuard {
-    original_termios: Option<rustix::termios::Termios>,
+    ops: Box<dyn HostTtyOps>,
+    raw_active: bool,
     nonblock_added: bool,
     restored: bool,
 }
@@ -610,33 +681,37 @@ impl FdStateGuard {
     /// mode (the guest owns echo/line discipline via its PTY); `nonblock`
     /// marks stdin O_NONBLOCK so the FSM can poll it without blocking.
     pub fn enter(raw: bool, nonblock: bool) -> io::Result<Self> {
-        let fd = rustix::stdio::stdin();
-        let original_termios = if raw {
-            let original = rustix::termios::tcgetattr(fd).map_err(errno_to_io)?;
-            let mut raw_termios = original.clone();
-            raw_termios.make_raw();
-            rustix::termios::tcsetattr(fd, rustix::termios::OptionalActions::Flush, &raw_termios)
-                .map_err(errno_to_io)?;
-            Some(original)
-        } else {
-            None
-        };
+        Self::enter_with(Box::new(RealStdinTty::new()), raw, nonblock)
+    }
 
-        let mut nonblock_added = false;
+    /// Core ordering shared by production and tests. The guard is constructed
+    /// (and owns its restore state) BEFORE the fallible O_NONBLOCK step, so a
+    /// failure there restores the already-applied raw mode via the guard
+    /// instead of leaving stdin stuck raw (F4).
+    fn enter_with(ops: Box<dyn HostTtyOps>, raw: bool, nonblock: bool) -> io::Result<Self> {
+        let mut guard = Self {
+            ops,
+            raw_active: false,
+            nonblock_added: false,
+            restored: false,
+        };
+        if raw {
+            // If raw-mode entry itself fails there is nothing to restore yet.
+            guard.ops.enter_raw()?;
+            guard.raw_active = true;
+        }
         if nonblock {
-            let flags = rustix::fs::fcntl_getfl(fd).map_err(errno_to_io)?;
-            if !flags.contains(rustix::fs::OFlags::NONBLOCK) {
-                rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK)
-                    .map_err(errno_to_io)?;
-                nonblock_added = true;
+            match guard.ops.try_add_nonblock() {
+                Ok(added) => guard.nonblock_added = added,
+                Err(error) => {
+                    // Raw mode is already applied: restore it before bubbling
+                    // the error so the terminal is never left in raw mode.
+                    guard.restore();
+                    return Err(error);
+                }
             }
         }
-
-        Ok(Self {
-            original_termios,
-            nonblock_added,
-            restored: false,
-        })
+        Ok(guard)
     }
 
     /// Restore the saved terminal state. Safe to call more than once.
@@ -645,18 +720,11 @@ impl FdStateGuard {
             return;
         }
         self.restored = true;
-        let fd = rustix::stdio::stdin();
-        if let Some(original) = &self.original_termios {
-            let _ = rustix::termios::tcsetattr(
-                fd,
-                rustix::termios::OptionalActions::Flush,
-                original,
-            );
+        if self.raw_active {
+            self.ops.restore_termios();
         }
         if self.nonblock_added {
-            if let Ok(flags) = rustix::fs::fcntl_getfl(fd) {
-                let _ = rustix::fs::fcntl_setfl(fd, flags & !rustix::fs::OFlags::NONBLOCK);
-            }
+            self.ops.clear_nonblock();
         }
     }
 }
@@ -1361,6 +1429,72 @@ mod tests {
         guard.restore();
         guard.restore(); // idempotent, never panics
         drop(guard); // Drop restore is also safe after explicit restore
+    }
+
+    #[derive(Default)]
+    struct RecordingTty {
+        fail_nonblock: bool,
+        events: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+    }
+
+    impl HostTtyOps for RecordingTty {
+        fn enter_raw(&self) -> io::Result<()> {
+            self.events.borrow_mut().push("raw_set");
+            Ok(())
+        }
+        fn restore_termios(&self) {
+            self.events.borrow_mut().push("raw_restored");
+        }
+        fn try_add_nonblock(&self) -> io::Result<bool> {
+            if self.fail_nonblock {
+                self.events.borrow_mut().push("nonblock_failed");
+                return Err(io::Error::from_raw_os_error(9));
+            }
+            self.events.borrow_mut().push("nonblock_set");
+            Ok(true)
+        }
+        fn clear_nonblock(&self) {
+            self.events.borrow_mut().push("nonblock_cleared");
+        }
+    }
+
+    #[test]
+    fn fd_state_guard_restores_raw_mode_when_nonblock_setup_fails() {
+        // raw=true succeeds, then the O_NONBLOCK step fails: the terminal MUST
+        // be restored out of raw mode before `enter` returns Err (F4).
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ops = RecordingTty {
+            fail_nonblock: true,
+            events: events.clone(),
+        };
+        let err = match FdStateGuard::enter_with(Box::new(ops), true, true) {
+            Ok(_) => panic!("nonblock failure must propagate"),
+            Err(err) => err,
+        };
+        assert_eq!(err.raw_os_error(), Some(9));
+        assert_eq!(
+            *events.borrow(),
+            vec!["raw_set", "nonblock_failed", "raw_restored"],
+            "raw mode must be restored on the nonblock error path"
+        );
+    }
+
+    #[test]
+    fn fd_state_guard_restores_raw_and_nonblock_on_drop() {
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ops = RecordingTty {
+            fail_nonblock: false,
+            events: events.clone(),
+        };
+        {
+            let _guard = FdStateGuard::enter_with(Box::new(ops), true, true).expect("enter ok");
+            assert_eq!(*events.borrow(), vec!["raw_set", "nonblock_set"]);
+        }
+        // Drop restores both the raw mode and the O_NONBLOCK flag it set.
+        assert_eq!(
+            *events.borrow(),
+            vec!["raw_set", "nonblock_set", "raw_restored", "nonblock_cleared"],
+        );
     }
 
     // ---- (d) exit-code table ---------------------------------------------
