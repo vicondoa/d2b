@@ -1850,7 +1850,7 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
 'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
@@ -2192,7 +2192,7 @@ _nixling__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
 'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -2211,7 +2211,7 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
 'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
