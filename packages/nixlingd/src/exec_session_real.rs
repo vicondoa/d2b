@@ -17,8 +17,8 @@ use protobuf::{EnumOrUnknown, MessageField};
 
 use crate::exec_session::{
     Established, ExecEstablishError, ExecGuestClient, ExecGuestConnector, ExecOpDeadlines,
-    ExecOpError, ExecSessionInfo, ExecStartSpec, GuestOpError, OutputStreamSel, ReadOutputOutcome,
-    TerminalKind, WaitOutcome, WriteStdinOutcome,
+    ExecOpError, ExecSessionInfo, ExecStartSpec, GuestOpError, NegotiatedCaps, OutputStreamSel,
+    ReadOutputOutcome, TerminalKind, WaitOutcome, WriteStdinOutcome,
 };
 use crate::guest_control_bridge::{
     connect_and_build_client, host_nonce, ProbeParams, BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP,
@@ -73,7 +73,7 @@ impl ExecGuestConnector for RealExecConnector {
         .await
         .map_err(map_establish_health_error)?;
 
-        gate_capabilities(&evidence.health.capabilities, spec.tty)?;
+        let caps = gate_capabilities(&evidence.health.capabilities, spec.tty)?;
 
         let op_timeout = self.deadlines.control;
         let request = build_exec_create_request(&self.params.vm_id, spec);
@@ -106,17 +106,19 @@ impl ExecGuestConnector for RealExecConnector {
                 stderr_offset: response.stderr_cursor,
             },
             control_seq: response.control_seq,
+            caps,
         })
     }
 }
 
 /// Fail closed unless the guest advertises every exec capability the session
-/// needs. Old generations that never advertised exec map to a dedicated
+/// needs, returning the negotiated cap snapshot for per-op gating (WR8/F6).
+/// Old generations that never advertised exec map to a dedicated
 /// old-generation error (exit 70, no SSH fallback).
 fn gate_capabilities(
     capabilities: &[EnumOrUnknown<pb::GuestCapability>],
     tty: bool,
-) -> Result<(), ExecEstablishError> {
+) -> Result<NegotiatedCaps, ExecEstablishError> {
     let advertises = |cap: pb::GuestCapability| {
         capabilities
             .iter()
@@ -137,7 +139,12 @@ fn gate_capabilities(
     {
         return Err(ExecEstablishError::Capability);
     }
-    Ok(())
+    Ok(NegotiatedCaps {
+        tty,
+        signals: advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+        tty_resize: advertises(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
+        output: advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
+    })
 }
 
 fn build_exec_create_request(vm_id: &str, spec: &ExecStartSpec) -> pb::ExecCreateRequest {
@@ -549,7 +556,39 @@ mod tests {
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
             cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
         ];
-        assert_eq!(gate_capabilities(&caps, false), Ok(()));
+        let negotiated = gate_capabilities(&caps, false).expect("non-tty session is allowed");
+        assert_eq!(
+            negotiated,
+            NegotiatedCaps {
+                tty: false,
+                signals: true,
+                tty_resize: false,
+                output: false,
+            }
+        );
+    }
+
+    #[test]
+    fn negotiated_caps_reflect_output_and_resize_advertisements() {
+        // The cap snapshot used for per-op gating (F6) reflects exactly what the
+        // guest advertised: ExecLogs → output, TtyResize → tty_resize.
+        let caps = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
+        ];
+        let negotiated = gate_capabilities(&caps, true).expect("full tty caps allowed");
+        assert_eq!(
+            negotiated,
+            NegotiatedCaps {
+                tty: true,
+                signals: true,
+                tty_resize: true,
+                output: true,
+            }
+        );
     }
 
     #[test]
@@ -575,12 +614,12 @@ mod tests {
             Err(ExecEstablishError::Capability)
         );
         // A non-tty session does not need the tty caps even when absent.
-        assert_eq!(gate_capabilities(&no_exec_tty, false), Ok(()));
+        assert!(gate_capabilities(&no_exec_tty, false).is_ok());
     }
 
     #[test]
     fn full_capability_set_passes_for_tty_and_non_tty() {
-        assert_eq!(gate_capabilities(&full_tty_caps(), true), Ok(()));
-        assert_eq!(gate_capabilities(&full_tty_caps(), false), Ok(()));
+        assert!(gate_capabilities(&full_tty_caps(), true).is_ok());
+        assert!(gate_capabilities(&full_tty_caps(), false).is_ok());
     }
 }

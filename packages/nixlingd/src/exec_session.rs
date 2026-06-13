@@ -241,12 +241,43 @@ pub struct ExecSessionInfo {
     pub stderr_offset: u64,
 }
 
+/// Negotiated per-session capability + shape snapshot, cached at establish so
+/// each proxied op can be gated fail-closed BEFORE it reaches the guest (WR8/
+/// F6). A guest that did not advertise the cap an op needs (or a non-tty
+/// session asked to resize) is rejected with a typed redacted `Capability`
+/// error instead of silently proxying the op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NegotiatedCaps {
+    /// The session was created with a PTY (`-it`). Required for `Resize`.
+    pub tty: bool,
+    /// Guest advertised `Signals`. Required for `Signal`.
+    pub signals: bool,
+    /// Guest advertised `TtyResize`. Required (with `tty`) for `Resize`.
+    pub tty_resize: bool,
+    /// Guest advertised `ExecLogs` (the output cap). Required for `ReadOutput`.
+    pub output: bool,
+}
+
+impl NegotiatedCaps {
+    /// All capabilities present — used by tests that exercise the happy path.
+    #[cfg(test)]
+    pub fn all() -> Self {
+        Self {
+            tty: true,
+            signals: true,
+            tty_resize: true,
+            output: true,
+        }
+    }
+}
+
 /// A freshly established session: the authenticated client, the info echoed to
 /// the owner, and the initial control sequence from `ExecCreate`.
 pub struct Established {
     pub client: Arc<dyn ExecGuestClient>,
     pub info: ExecSessionInfo,
     pub control_seq: u64,
+    pub caps: NegotiatedCaps,
 }
 
 /// Transport seam: the authenticated guest-control client, one per session.
@@ -459,6 +490,7 @@ async fn worker_main(
         client,
         info,
         control_seq,
+        caps,
     } = established;
     if establish_tx.send(Ok(info)).is_err() {
         // Owner vanished before the establish reply landed. Returning here
@@ -474,11 +506,19 @@ async fn worker_main(
         last_write: None,
         stdin_closed: false,
         control_replay: std::collections::VecDeque::new(),
+        caps,
     };
 
     while let Some(WorkerCommand { op, reply }) = control_rx.recv().await {
         match op {
             ExecOp::ReadOutput(_) | ExecOp::Wait(_) => {
+                // Fail closed before spawning a `ReadOutput` long-poll if the
+                // guest never advertised the output (`ExecLogs`) cap (WR8/F6).
+                // `Wait` is the terminal-status poll and needs no output cap.
+                if matches!(op, ExecOp::ReadOutput(_)) && !state.caps.output {
+                    let _ = reply.send(Err(ExecOpError::Capability));
+                    continue;
+                }
                 // Long-polls are spawned so the worker keeps servicing fast
                 // control ops while a poll is in flight (no head-of-line
                 // blocking). They touch no shared mutable session state.
@@ -545,6 +585,8 @@ struct WorkerState {
     // Idempotency ring for control ops keyed by the client-assigned `opId`.
     // `opId == 0` is never cached (legacy / no-dedup).
     control_replay: std::collections::VecDeque<(u64, ExecOpResponse)>,
+    // Negotiated caps + session shape for fail-closed per-op gating (WR8/F6).
+    caps: NegotiatedCaps,
 }
 
 impl WorkerState {
@@ -619,6 +661,10 @@ impl WorkerState {
                 Ok(ExecOpResponse::WriteStdin(result))
             }
             ExecOp::Signal(args) => {
+                // Fail closed if the guest never advertised the Signals cap.
+                if !self.caps.signals {
+                    return Err(ExecOpError::Capability);
+                }
                 if let Some(cached) = self.cached_control(args.op_id) {
                     return Ok(cached);
                 }
@@ -632,6 +678,11 @@ impl WorkerState {
                 Ok(resp)
             }
             ExecOp::Resize(args) => {
+                // Resize requires a PTY session AND the guest TtyResize cap; a
+                // non-tty session or a guest missing the cap fails closed (F6).
+                if !self.caps.tty || !self.caps.tty_resize {
+                    return Err(ExecOpError::Capability);
+                }
                 if let Some(cached) = self.cached_control(args.op_id) {
                     return Ok(cached);
                 }
@@ -1062,6 +1113,7 @@ mod tests {
         close_calls: AtomicUsize,
         signal_calls: AtomicUsize,
         resize_calls: AtomicUsize,
+        read_calls: AtomicUsize,
     }
 
     struct FakeClient {
@@ -1102,6 +1154,7 @@ mod tests {
             _timeout_ms: u64,
             _timeout: Duration,
         ) -> Result<ReadOutputOutcome, ExecOpError> {
+            self.shared.read_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(gate) = &self.read_gate {
                 gate.notified().await;
             }
@@ -1207,6 +1260,10 @@ mod tests {
     }
 
     fn established(client: Arc<dyn ExecGuestClient>) -> Established {
+        established_with_caps(client, NegotiatedCaps::all())
+    }
+
+    fn established_with_caps(client: Arc<dyn ExecGuestClient>, caps: NegotiatedCaps) -> Established {
         Established {
             client,
             info: ExecSessionInfo {
@@ -1215,6 +1272,7 @@ mod tests {
                 stderr_offset: 0,
             },
             control_seq: 0,
+            caps,
         }
     }
 
@@ -1462,6 +1520,142 @@ mod tests {
         let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
         assert!(reply.is_ok());
         (control_tx, worker, shared)
+    }
+
+    /// A worker whose session advertises exactly `caps`, for per-op fail-closed
+    /// gating tests (F6). The fake client records whether each op reached it.
+    fn gated_worker(
+        caps: NegotiatedCaps,
+    ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, Arc<FakeShared>) {
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
+        let builder: Builder = Box::new(move || {
+            established_with_caps(
+                Arc::new(FakeClient {
+                    alive: Arc::new(AtomicUsize::new(1)),
+                    shared: shared_for_builder,
+                    write_outcome: WriteStdinOutcome {
+                        accepted_len: 0,
+                        next_offset: 0,
+                        backpressured: false,
+                        stdin_closed: false,
+                    },
+                    stdout_reads: Mutex::new(VecDeque::new()),
+                    stderr_reads: Mutex::new(VecDeque::new()),
+                    waits: Mutex::new(VecDeque::new()),
+                    read_gate: None,
+                }),
+                caps,
+            )
+        });
+        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+        (control_tx, worker, shared)
+    }
+
+    #[test]
+    fn signal_without_signals_cap_fails_closed() {
+        let (tx, worker, shared) = gated_worker(NegotiatedCaps {
+            tty: false,
+            signals: false,
+            tty_resize: false,
+            output: true,
+        });
+        let err = send_op(
+            &tx,
+            ExecOp::Signal(ExecSignalArgs {
+                session: "h".to_owned(),
+                signo: 2,
+                op_id: 0,
+            }),
+        )
+        .expect_err("missing Signals cap fails closed");
+        assert_eq!(err, ExecOpError::Capability);
+        assert_eq!(
+            shared.signal_calls.load(Ordering::SeqCst),
+            0,
+            "signal must never reach the guest without the cap"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn resize_on_non_tty_session_fails_closed() {
+        let (tx, worker, shared) = gated_worker(NegotiatedCaps {
+            tty: false,
+            signals: true,
+            tty_resize: true,
+            output: true,
+        });
+        let err = send_op(
+            &tx,
+            ExecOp::Resize(ExecResizeArgs {
+                session: "h".to_owned(),
+                rows: 40,
+                cols: 120,
+                op_id: 0,
+            }),
+        )
+        .expect_err("resize on a non-tty session fails closed");
+        assert_eq!(err, ExecOpError::Capability);
+        assert_eq!(shared.resize_calls.load(Ordering::SeqCst), 0);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn resize_without_tty_resize_cap_fails_closed() {
+        let (tx, worker, shared) = gated_worker(NegotiatedCaps {
+            tty: true,
+            signals: true,
+            tty_resize: false,
+            output: true,
+        });
+        let err = send_op(
+            &tx,
+            ExecOp::Resize(ExecResizeArgs {
+                session: "h".to_owned(),
+                rows: 40,
+                cols: 120,
+                op_id: 0,
+            }),
+        )
+        .expect_err("missing TtyResize cap fails closed");
+        assert_eq!(err, ExecOpError::Capability);
+        assert_eq!(shared.resize_calls.load(Ordering::SeqCst), 0);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn read_output_without_output_cap_fails_closed() {
+        let (tx, worker, shared) = gated_worker(NegotiatedCaps {
+            tty: false,
+            signals: true,
+            tty_resize: false,
+            output: false,
+        });
+        let err = send_op(
+            &tx,
+            ExecOp::ReadOutput(ExecReadOutputArgs {
+                session: "h".to_owned(),
+                stream: ExecStream::Stdout,
+                offset: 0,
+                max_len: 1024,
+                wait: false,
+                timeout_ms: 0,
+            }),
+        )
+        .expect_err("missing ExecLogs/output cap fails closed");
+        assert_eq!(err, ExecOpError::Capability);
+        assert_eq!(
+            shared.read_calls.load(Ordering::SeqCst),
+            0,
+            "ReadOutput must never reach the guest without the output cap"
+        );
+        drop(tx);
+        worker.join().unwrap();
     }
 
     #[test]
