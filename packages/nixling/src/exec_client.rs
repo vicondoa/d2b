@@ -497,14 +497,18 @@ fn write_output<H: ExecHostIo>(
 }
 
 /// Encode an [`ExecOp`] as the `exec` daemon wire frame: the adjacently-tagged
-/// `{ "op": …, "args": … }` body with a `type: "exec"` discriminator.
-pub fn encode_exec_op_frame(op: &ExecOp) -> Result<Vec<u8>, ExecClientError> {
+/// `{ "op": …, "args": … }` body with a `type: "exec"` discriminator and an
+/// envelope-level `opId` correlation id (F1/WR6). The daemon echoes `opId` on
+/// the matching response so a pending long-poll and an urgent control reply can
+/// be matched out of order.
+pub fn encode_exec_op_frame(op: &ExecOp, op_id: u64) -> Result<Vec<u8>, ExecClientError> {
     let mut value = serde_json::to_value(op)
         .map_err(|error| ExecClientError::internal(format!("encoding exec op failed: {error}")))?;
     let object = value
         .as_object_mut()
         .ok_or_else(|| ExecClientError::internal("encoded exec op was not a JSON object"))?;
     object.insert("type".to_owned(), Value::String("exec".to_owned()));
+    object.insert("opId".to_owned(), Value::from(op_id));
     serde_json::to_vec(&value)
         .map_err(|error| ExecClientError::internal(format!("serializing exec op failed: {error}")))
 }
@@ -524,6 +528,9 @@ pub fn decode_exec_response_frame(bytes: &[u8]) -> Result<ExecOpResponse, ExecCl
         "execResponse" => {
             if let Some(object) = value.as_object_mut() {
                 object.remove("type");
+                // `opId` is an envelope-level correlation id, not a field of the
+                // adjacently-tagged response; strip it before deserializing.
+                object.remove("opId");
             }
             serde_json::from_value(value).map_err(|error| {
                 ExecClientError::protocol(format!("malformed execResponse body: {error}"))

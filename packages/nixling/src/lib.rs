@@ -3668,6 +3668,7 @@ fn cmd_vm_status(context: &Context, args: &VmStatusArgs) -> Result<i32, CliFailu
 /// authenticated guest-control session behind this connection.
 struct OwnerSocketTransport {
     socket: SeqpacketUnixSocket,
+    next_op_id: u64,
 }
 
 impl exec_client::ExecOwnerTransport for OwnerSocketTransport {
@@ -3675,7 +3676,9 @@ impl exec_client::ExecOwnerTransport for OwnerSocketTransport {
         &mut self,
         op: &nixling_ipc::public_wire::ExecOp,
     ) -> Result<nixling_ipc::public_wire::ExecOpResponse, exec_client::ExecClientError> {
-        let frame = exec_client::encode_exec_op_frame(op)?;
+        let op_id = self.next_op_id;
+        self.next_op_id = self.next_op_id.wrapping_add(1);
+        let frame = exec_client::encode_exec_op_frame(op, op_id)?;
         self.socket.send_frame(&frame).map_err(|err| {
             exec_client::ExecClientError::transport(format!("exec op send failed: {err}"))
         })?;
@@ -3807,7 +3810,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         term_size,
     });
     let start_frame =
-        exec_client::encode_exec_op_frame(&start_op).map_err(exec_error_to_failure)?;
+        exec_client::encode_exec_op_frame(&start_op, 0).map_err(exec_error_to_failure)?;
     socket.send_frame(&start_frame).map_err(|err| {
         CliFailure::new(
             exec_client::EXIT_EXEC_TRANSPORT,
@@ -3875,7 +3878,10 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         poll_timeout_ms: if interactive { 40 } else { 200 },
         max_chunk: exec_client::EXEC_CLI_CHUNK_BYTES,
     };
-    let mut transport = OwnerSocketTransport { socket };
+    let mut transport = OwnerSocketTransport {
+        socket,
+        next_op_id: 1,
+    };
 
     // 4. Drive the session to completion, then restore the terminal BEFORE any
     //    stdout emission (the --json envelope must not interleave raw output).

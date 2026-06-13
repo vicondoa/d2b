@@ -306,18 +306,113 @@ pub struct WorkerCommand {
 /// Establish reply shuttled back to the owner before the op loop begins.
 pub type EstablishReply = Result<ExecSessionInfo, ExecEstablishError>;
 
+/// Owner-socket teardown seam for the terminal-cleanup reaper (F5/WR13).
+/// `reap` forces the owner connection's reader to unblock (e.g. by shutting
+/// down the socket) so the session slot is released after the command has gone
+/// terminal and the cleanup TTL elapsed. It MUST be idempotent and MUST NOT be
+/// called while the command is still live.
+pub trait OwnerReaper: Send + Sync {
+    fn reap(&self);
+}
+
+/// A no-op owner reaper for unit tests / callers that drive teardown directly.
+pub struct NoopReaper;
+
+impl OwnerReaper for NoopReaper {
+    fn reap(&self) {}
+}
+
+/// Default terminal-cleanup grace (WR13): after the guest command goes
+/// terminal, a stalled owner that never closes its connection is reaped after
+/// this long so it cannot pin a session slot indefinitely. Generous enough for
+/// a well-behaved CLI to read the terminal status and close first. The reaper
+/// never kills a LIVE command — cleanup only arms once `Wait` returns terminal.
+pub const EXEC_TERMINAL_CLEANUP_TTL: Duration = Duration::from_secs(10);
+
+/// Records when the guest command first went terminal and decides — against an
+/// injected [`Clock`] — whether the terminal-cleanup TTL has since elapsed.
+/// Pure and fake-clock testable; the worker arms a real timer that consults
+/// [`TerminalReaper::due`].
+pub struct TerminalReaper {
+    clock: Arc<dyn Clock>,
+    ttl: Duration,
+    terminal_at: Mutex<Option<Instant>>,
+}
+
+impl TerminalReaper {
+    pub fn new(clock: Arc<dyn Clock>, ttl: Duration) -> Self {
+        Self {
+            clock,
+            ttl,
+            terminal_at: Mutex::new(None),
+        }
+    }
+
+    /// Record the first terminal observation. Idempotent: a later call keeps
+    /// the original instant so the TTL is always measured from when the command
+    /// FIRST went terminal. Returns `true` only on the transition.
+    pub fn mark_terminal(&self) -> bool {
+        let mut at = self.terminal_at.lock().expect("terminal reaper poisoned");
+        if at.is_none() {
+            *at = Some(self.clock.now());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether the command has been observed terminal at least once.
+    pub fn is_terminal(&self) -> bool {
+        self.terminal_at
+            .lock()
+            .expect("terminal reaper poisoned")
+            .is_some()
+    }
+
+    /// True once the command is terminal AND the TTL has elapsed since.
+    pub fn due(&self) -> bool {
+        match *self.terminal_at.lock().expect("terminal reaper poisoned") {
+            Some(at) => self.clock.now().saturating_duration_since(at) >= self.ttl,
+            None => false,
+        }
+    }
+
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+}
+
+/// Inputs to [`spawn_session_worker`].
+pub struct WorkerSpawn {
+    pub connector: Arc<dyn ExecGuestConnector>,
+    pub spec: ExecStartSpec,
+    pub deadlines: ExecOpDeadlines,
+    pub establish_tx: oneshot::Sender<EstablishReply>,
+    pub control_rx: mpsc::Receiver<WorkerCommand>,
+    /// Terminal-cleanup grace before the reaper releases a stalled owner's slot.
+    pub terminal_ttl: Duration,
+    /// Clock for the terminal-cleanup TTL (production: [`SystemClock`]).
+    pub clock: Arc<dyn Clock>,
+    /// Owner-socket teardown seam fired by the terminal-cleanup reaper.
+    pub owner_reaper: Arc<dyn OwnerReaper>,
+}
+
 /// Spawn a session worker on its own OS thread with a dedicated current-thread
 /// tokio runtime. The worker establishes the session, reports the result over
 /// `establish_tx`, then services `WorkerCommand`s until the channel closes.
 /// Dropping the sender (owner disconnect) returns the worker, drops the
 /// runtime, and drops every client clone — prompting the guest teardown.
-pub fn spawn_session_worker(
-    connector: Arc<dyn ExecGuestConnector>,
-    spec: ExecStartSpec,
-    deadlines: ExecOpDeadlines,
-    establish_tx: oneshot::Sender<EstablishReply>,
-    control_rx: mpsc::Receiver<WorkerCommand>,
-) -> JoinHandle<()> {
+pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
+    let WorkerSpawn {
+        connector,
+        spec,
+        deadlines,
+        establish_tx,
+        control_rx,
+        terminal_ttl,
+        clock,
+        owner_reaper,
+    } = spawn;
     std::thread::Builder::new()
         .name("nixling-exec".to_owned())
         .spawn(move || {
@@ -337,6 +432,8 @@ pub fn spawn_session_worker(
                 deadlines,
                 establish_tx,
                 control_rx,
+                Arc::new(TerminalReaper::new(clock, terminal_ttl)),
+                owner_reaper,
             ));
         })
         .expect("spawn exec session worker thread")
@@ -348,6 +445,8 @@ async fn worker_main(
     deadlines: ExecOpDeadlines,
     establish_tx: oneshot::Sender<EstablishReply>,
     mut control_rx: mpsc::Receiver<WorkerCommand>,
+    reaper: Arc<TerminalReaper>,
+    owner_reaper: Arc<dyn OwnerReaper>,
 ) {
     let established = match connector.establish(&spec).await {
         Ok(established) => established,
@@ -384,8 +483,22 @@ async fn worker_main(
                 // blocking). They touch no shared mutable session state.
                 let client = Arc::clone(&state.client);
                 let deadlines = state.deadlines;
+                let reaper = Arc::clone(&reaper);
+                let owner_reaper = Arc::clone(&owner_reaper);
                 tokio::spawn(async move {
+                    let is_wait = matches!(op, ExecOp::Wait(_));
                     let result = run_long_poll(client.as_ref(), op, deadlines).await;
+                    // Record terminal state when `Wait` first reports terminal,
+                    // then arm the terminal-cleanup reaper (WR13/F5). The reaper
+                    // only releases the slot AFTER the command is terminal; it
+                    // never kills a live command.
+                    if is_wait {
+                        if let Ok(ExecOpResponse::Wait(wait)) = &result {
+                            if wait.terminal_status.is_some() && reaper.mark_terminal() {
+                                arm_terminal_reap(reaper, owner_reaper);
+                            }
+                        }
+                    }
                     let _ = reply.send(result);
                 });
             }
@@ -398,6 +511,20 @@ async fn worker_main(
     // `control_rx` closed → owner disconnected → drop `state` (and its sole
     // client reference). Any still-spawned long-poll is aborted when the
     // runtime is dropped at thread exit.
+}
+
+/// Arm the terminal-cleanup timer (F5): after the TTL elapses, if the command
+/// is still terminal (the owner never closed), reap the owner socket so the
+/// session slot is released. If the owner closes first the worker is torn down
+/// and this task is aborted with the runtime, so the reaper never fires.
+fn arm_terminal_reap(reaper: Arc<TerminalReaper>, owner_reaper: Arc<dyn OwnerReaper>) {
+    let ttl = reaper.ttl();
+    tokio::spawn(async move {
+        tokio::time::sleep(ttl).await;
+        if reaper.due() {
+            owner_reaper.reap();
+        }
+    });
 }
 
 struct WorkerState {
@@ -1055,13 +1182,16 @@ mod tests {
     ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, EstablishReply) {
         let (control_tx, control_rx) = mpsc::channel(16);
         let (establish_tx, establish_rx) = oneshot::channel();
-        let worker = spawn_session_worker(
+        let worker = spawn_session_worker(WorkerSpawn {
             connector,
-            spec(),
-            ExecOpDeadlines::default(),
+            spec: spec(),
+            deadlines: ExecOpDeadlines::default(),
             establish_tx,
             control_rx,
-        );
+            terminal_ttl: EXEC_TERMINAL_CLEANUP_TTL,
+            clock: Arc::new(SystemClock),
+            owner_reaper: Arc::new(NoopReaper),
+        });
         let reply = establish_rx.blocking_recv().expect("establish reply");
         (control_tx, worker, reply)
     }
@@ -1673,5 +1803,122 @@ mod tests {
         // Advance past the window: the sliding window forgets the old starts.
         clock.advance(Duration::from_secs(11));
         let _c = table.reserve(1, "vd").expect("start after window");
+    }
+
+    // ---- (f) terminal-cleanup reaper (WR13/F5) --------------------------------
+
+    #[test]
+    fn terminal_reaper_is_not_due_before_a_terminal_observation() {
+        let clock = FakeClock::new();
+        let reaper = TerminalReaper::new(Arc::clone(&clock) as Arc<dyn Clock>, Duration::from_secs(10));
+        assert!(!reaper.is_terminal());
+        // Time passing without a terminal observation never makes it due.
+        clock.advance(Duration::from_secs(3600));
+        assert!(!reaper.due());
+    }
+
+    #[test]
+    fn terminal_reaper_becomes_due_only_after_the_ttl_elapses() {
+        let clock = FakeClock::new();
+        let reaper = TerminalReaper::new(
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            Duration::from_secs(10),
+        );
+        assert!(reaper.mark_terminal(), "first mark is the transition");
+        assert!(reaper.is_terminal());
+        // Before the TTL: not due.
+        clock.advance(Duration::from_secs(9));
+        assert!(!reaper.due());
+        // A second mark must NOT move the deadline forward.
+        assert!(!reaper.mark_terminal(), "mark is idempotent");
+        clock.advance(Duration::from_secs(1));
+        assert!(reaper.due(), "due once the TTL elapses from first terminal");
+    }
+
+    /// A recording owner reaper for the worker integration test.
+    struct RecordingReaper {
+        reaped: Arc<AtomicUsize>,
+    }
+
+    impl OwnerReaper for RecordingReaper {
+        fn reap(&self) {
+            self.reaped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn worker_reaps_a_stalled_owner_after_the_command_goes_terminal() {
+        let reaped = Arc::new(AtomicUsize::new(0));
+        let shared = Arc::new(FakeShared::default());
+        let alive = Arc::new(AtomicUsize::new(0));
+        let alive_for_builder = Arc::clone(&alive);
+        let shared_for_builder = Arc::clone(&shared);
+        let builder: Builder = Box::new(move || {
+            alive_for_builder.fetch_add(1, Ordering::SeqCst);
+            let mut waits = VecDeque::new();
+            waits.push_back(WaitOutcome {
+                running: false,
+                terminal: Some(TerminalKind::Exited(0)),
+            });
+            established(Arc::new(FakeClient {
+                alive: alive_for_builder,
+                shared: shared_for_builder,
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(VecDeque::new()),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(waits),
+                read_gate: None,
+            }))
+        });
+
+        let (control_tx, control_rx) = mpsc::channel(16);
+        let (establish_tx, establish_rx) = oneshot::channel();
+        let reaped_for_worker = Arc::clone(&reaped);
+        // A tiny terminal TTL so the test does not sleep long; the DECISION is
+        // covered by the fake-clock unit tests above.
+        let worker = spawn_session_worker(WorkerSpawn {
+            connector: FakeConnector::ok(builder),
+            spec: spec(),
+            deadlines: ExecOpDeadlines::default(),
+            establish_tx,
+            control_rx,
+            terminal_ttl: Duration::from_millis(50),
+            clock: Arc::new(SystemClock),
+            owner_reaper: Arc::new(RecordingReaper {
+                reaped: reaped_for_worker,
+            }),
+        });
+        establish_rx.blocking_recv().expect("establish").expect("ok");
+
+        // Drive a Wait that returns terminal. The owner then STALLS (never drops
+        // the channel), modelling a stuck CLI that pins the slot.
+        let response = send_op(
+            &control_tx,
+            ExecOp::Wait(ExecWaitArgs {
+                session: "h".to_owned(),
+                timeout_ms: 0,
+            }),
+        )
+        .expect("wait ok");
+        assert!(matches!(response, ExecOpResponse::Wait(_)));
+
+        // The reaper must fire after the TTL even though the owner never closed.
+        let mut reaped_seen = false;
+        for _ in 0..100 {
+            if reaped.load(Ordering::SeqCst) > 0 {
+                reaped_seen = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(reaped_seen, "terminal-cleanup reaper did not fire for a stalled owner");
+
+        drop(control_tx);
+        worker.join().expect("worker joins");
     }
 }

@@ -2124,8 +2124,9 @@ Captured output in the `--json` envelope is bounded; `stdoutTruncated` /
 `stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
 appear in any span, log, audit record, or metric label — only an
 aggregate outcome counter and a single kind=critical
-session-establishment event (carrying the VM name, peer uid, opaque
-session handle, and negotiated tty only) are emitted.
+session-establishment event (carrying the VM name, peer uid, and
+negotiated tty only) are emitted. The opaque session handle is never
+written to a span, log, audit record, or metric label.
 
 **Disposition:** `rust-native` — owner connection over the daemon public
 socket → authenticated guest-control session → `guestd` exec RPCs; no

@@ -1653,12 +1653,15 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
+            // Recover the establishing op's envelope `opId` so the Start reply
+            // (and any establish error) echoes it for client correlation.
+            let first_op_id = wire::exec_op_id(&frame);
             let owner_state = state.clone();
             let owner_peer = peer.clone();
             match std::thread::Builder::new()
                 .name("nixling-exec-owner".to_owned())
                 .spawn(move || {
-                    run_exec_owner(stream, owner_state, owner_peer, op);
+                    run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
                 }) {
                 Ok(_) => return Ok(()),
                 Err(err) => {
@@ -2346,7 +2349,18 @@ const EXEC_SUBSYSTEM: &str = "guest-control-exec";
 /// are the only labels besides the constant subsystem; all three are drawn
 /// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
 fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
-    state.metrics_registry.counter_inc(
+    exec_metric_into(&state.metrics_registry, outcome, error_kind);
+}
+
+/// Increment the exec outcome counter against a metrics registry directly. Used
+/// by the owner writer, which holds only the registry (not the full
+/// `ServerState`) so it is hermetically testable.
+fn exec_metric_into(
+    registry: &metrics::Registry,
+    outcome: &'static str,
+    error_kind: &'static str,
+) {
+    registry.counter_inc(
         EXEC_METRIC,
         &[
             ("subsystem", EXEC_SUBSYSTEM),
@@ -2433,15 +2447,15 @@ fn exec_error_kind_label(error: &TypedError) -> &'static str {
 /// Emit the single kind=critical exec session-establishment event. Kept as a
 /// free function so the redaction-safe field set can be asserted by a tracing
 /// capture test: it accepts ONLY the leak-safe identifiers (vm name, peer uid,
-/// opaque session handle, negotiated tty). argv/env/cwd/output bytes are never
-/// passed here and so can never reach a span, log, or audit record.
-fn emit_exec_established_event(vm: &str, peer_uid: u32, handle: &str, tty: bool) {
+/// negotiated tty). The opaque session handle is deliberately NOT included —
+/// per WR12/AGENTS, session handles must never reach a span, log, audit, or
+/// metric. argv/env/cwd/output bytes are never passed here either.
+fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
     tracing::info!(
         kind = "critical",
         subsystem = EXEC_SUBSYSTEM,
         vm = %vm,
         peer_uid = peer_uid,
-        session_handle = %handle,
         tty = tty,
         "guest-control exec session established"
     );
@@ -2461,14 +2475,19 @@ fn run_exec_owner(
     stream: Socket,
     state: ServerState,
     peer: PeerIdentity,
+    first_op_id: u64,
     first_op: public_wire::ExecOp,
 ) {
+    // The owner socket is read by the reader (this thread) and written by a
+    // dedicated writer thread concurrently; SOCK_SEQPACKET send/recv on the
+    // same fd from two threads is safe, so share it behind an `Arc`.
+    let stream = Arc::new(stream);
     let public_wire::ExecOp::Start(start) = first_op else {
         // A non-`Start` first op on a fresh owner connection has no session.
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
         };
-        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
         exec_metric(&state, "error", "protocol");
         return;
     };
@@ -2477,7 +2496,7 @@ fn run_exec_owner(
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
         };
-        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
         exec_metric(&state, "error", "protocol");
         return;
     }
@@ -2490,7 +2509,7 @@ fn run_exec_owner(
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Capability,
         };
-        let _ = write_json_frame(&stream, &wire::error_frame(&error));
+        let _ = write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
         exec_metric(&state, "error", "capability");
         return;
     }
@@ -2501,7 +2520,8 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Transport,
             };
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ =
+                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
             exec_metric(&state, "error", "transport");
             return;
         }
@@ -2514,7 +2534,8 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::OldGeneration,
             };
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ =
+                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
             exec_metric(&state, "error", "old-generation");
             return;
         }
@@ -2527,7 +2548,8 @@ fn run_exec_owner(
         Err(reserve_error) => {
             let error = map_exec_reserve_error(reserve_error);
             let kind = exec_error_kind_label(&error);
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ =
+                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
             exec_metric(&state, "error", kind);
             return;
         }
@@ -2557,17 +2579,33 @@ fn run_exec_owner(
             deadlines,
         ));
 
+    // The terminal-cleanup reaper (WR13/F5) shuts down the owner socket so a
+    // stalled owner that never closes after the command goes terminal does not
+    // pin the session slot. It only fires AFTER the command is terminal, never
+    // while the command is live.
+    let owner_reaper: Arc<dyn exec_session::OwnerReaper> =
+        Arc::new(SocketShutdownReaper::new(stream.as_raw_fd()));
+
     let (control_tx, control_rx) = tokio::sync::mpsc::channel::<exec_session::WorkerCommand>(16);
     let (establish_tx, establish_rx) = tokio::sync::oneshot::channel();
-    let worker =
-        exec_session::spawn_session_worker(connector, spec, deadlines, establish_tx, control_rx);
+    let worker = exec_session::spawn_session_worker(exec_session::WorkerSpawn {
+        connector,
+        spec,
+        deadlines,
+        establish_tx,
+        control_rx,
+        terminal_ttl: exec_session::EXEC_TERMINAL_CLEANUP_TTL,
+        clock: Arc::new(exec_session::SystemClock),
+        owner_reaper,
+    });
 
     let info = match establish_rx.blocking_recv() {
         Ok(Ok(info)) => info,
         Ok(Err(establish_error)) => {
             let error = map_exec_establish_error(establish_error);
             let kind = exec_error_kind_label(&error);
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ =
+                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
             exec_metric(&state, "error", kind);
             drop(control_tx);
             let _ = worker.join();
@@ -2579,7 +2617,8 @@ fn run_exec_owner(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Internal,
             };
-            let _ = write_json_frame(&stream, &wire::error_frame(&error));
+            let _ =
+                write_json_frame(stream.as_ref(), &wire::error_frame_with_id(first_op_id, &error));
             exec_metric(&state, "error", "internal");
             let _ = worker.join();
             return;
@@ -2587,62 +2626,105 @@ fn run_exec_owner(
     };
 
     // One kind=critical session-establishment span (NO per-op span/audit).
-    emit_exec_established_event(&start.vm, peer.uid, &handle, info.tty);
+    emit_exec_established_event(&start.vm, peer.uid, info.tty);
     exec_metric(&state, "established", "none");
 
     let start_response = exec_session::start_response(&handle, &info);
-    if write_json_frame(&stream, &wire::exec_response(&start_response)).is_err() {
+    if write_json_frame(
+        stream.as_ref(),
+        &wire::exec_response_with_id(first_op_id, &start_response),
+    )
+    .is_err()
+    {
         drop(control_tx);
         let _ = worker.join();
         exec_metric(&state, "closed", "none");
         return;
     }
 
-    run_exec_owner_op_loop(&stream, &state, &control_tx, &handle);
+    // Drive the owner connection: a reader (this thread) dispatches frames to
+    // the worker WITHOUT blocking on each reply, and a writer thread drains
+    // op-id-tagged replies back to the socket. `control_tx` is moved in and
+    // dropped after the reader returns, so an owner disconnect during a
+    // long-poll tears the worker down (cancelling the poll) promptly.
+    run_exec_owner_io(&stream, &state.metrics_registry, control_tx, &handle);
 
-    // Owner connection drained: drop the command channel so the worker returns
-    // and drops the authenticated client (prompting guest teardown), then join.
-    drop(control_tx);
     let _ = worker.join();
     drop(slot);
     exec_metric(&state, "closed", "none");
 }
 
-/// Per-op proxy loop over the owner connection. One op per frame, one response
-/// per op (the CLI multiplexes with short polls; the worker spawns long-polls
-/// so it never head-of-line-blocks control ops). Returns on EOF/POLLHUP or a
-/// worker disconnect, which the caller turns into a teardown.
-fn run_exec_owner_op_loop(
-    stream: &Socket,
-    state: &ServerState,
-    control_tx: &tokio::sync::mpsc::Sender<exec_session::WorkerCommand>,
+/// A reply frame the owner writer must emit, carried from the per-op awaiter to
+/// the single socket-writing task so all owner-socket sends happen on one task.
+enum ExecOwnerFrame {
+    Response(Box<public_wire::ExecOpResponse>),
+    Error {
+        error: Box<TypedError>,
+        metric_kind: &'static str,
+    },
+}
+
+/// One item handed from the owner reader to the owner writer. `Pending` carries
+/// the worker reply receiver (awaited concurrently so multiple ops, including a
+/// long-poll plus an urgent control op, are in flight at once and matched by
+/// `op_id`). `Immediate` is a reader-resolved error (parse / session-binding /
+/// non-exec frame) that needs no worker round trip.
+enum ExecWriterItem {
+    Pending {
+        op_id: u64,
+        reply_rx: tokio::sync::oneshot::Receiver<Result<public_wire::ExecOpResponse, exec_session::ExecOpError>>,
+    },
+    Immediate {
+        op_id: u64,
+        error: Box<TypedError>,
+        metric_kind: &'static str,
+    },
+}
+
+/// Bound on owner-connection ops in flight to the writer at once (WR13). The
+/// reader blocks on a full channel, applying backpressure to a flooding client
+/// without ever serializing an urgent control op behind a pending long-poll.
+const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
+
+/// Drive the owner connection's reader loop (this function runs on the owner
+/// thread). Each frame is parsed into `(op_id, op)`, bound to `handle`, and
+/// dispatched to the worker over `control_tx` WITHOUT waiting for the reply;
+/// the reply receiver is forwarded to the writer thread, which matches replies
+/// to ops by `op_id` and writes them out of order. On reader EOF/POLLHUP (owner
+/// disconnect) the loop returns, `control_tx` is dropped (tearing the worker
+/// down and cancelling any in-flight long-poll), then the writer is joined.
+fn run_exec_owner_io(
+    stream: &Arc<Socket>,
+    metrics: &Arc<metrics::Registry>,
+    control_tx: tokio::sync::mpsc::Sender<exec_session::WorkerCommand>,
     handle: &str,
 ) {
-    loop {
-        let frame = match read_frame(stream) {
-            Ok(frame) => frame,
-            // EOF / POLLHUP / any read error closes the owner connection.
-            Err(_) => return,
-        };
-        let request = match wire::parse_request(&frame) {
-            Ok(request) => request,
+    let (item_tx, item_rx) =
+        tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
+    let writer_stream = Arc::clone(stream);
+    let writer_metrics = Arc::clone(metrics);
+    let writer = std::thread::Builder::new()
+        .name("nixling-exec-writer".to_owned())
+        .spawn(move || exec_owner_writer(writer_stream, writer_metrics, item_rx))
+        .expect("spawn exec owner writer thread");
+
+    // EOF / POLLHUP / shutdown / any read error closes the connection and ends
+    // the loop, triggering the teardown below.
+    while let Ok(frame) = read_frame(stream.as_ref()) {
+        let op_id = wire::exec_op_id(&frame);
+        let op = match wire::parse_exec_op(&frame) {
+            Ok((_, op)) => op,
             Err(error) => {
-                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
-                    return;
+                if item_tx
+                    .blocking_send(ExecWriterItem::Immediate {
+                        op_id,
+                        error: Box::new(error),
+                        metric_kind: "protocol",
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-                continue;
-            }
-        };
-        let op = match request {
-            wire::Request::Exec(op) => op,
-            _ => {
-                let error = TypedError::GuestControlExecFailed {
-                    kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
-                };
-                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
-                    return;
-                }
-                exec_metric(state, "op-error", "protocol");
                 continue;
             }
         };
@@ -2652,10 +2734,16 @@ fn run_exec_owner_op_loop(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
             };
-            if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
-                return;
+            if item_tx
+                .blocking_send(ExecWriterItem::Immediate {
+                    op_id,
+                    error: Box::new(error),
+                    metric_kind: "protocol",
+                })
+                .is_err()
+            {
+                break;
             }
-            exec_metric(state, "op-error", "protocol");
             continue;
         }
 
@@ -2665,28 +2753,310 @@ fn run_exec_owner_op_loop(
             reply: reply_tx,
         };
         if control_tx.blocking_send(command).is_err() {
-            // Worker gone (terminal/teardown): close the connection.
-            return;
+            // Worker gone (terminal cleanup / teardown): close the connection.
+            break;
         }
-        let reply = match reply_rx.blocking_recv() {
-            Ok(reply) => reply,
-            Err(_) => return,
-        };
-        match reply {
-            Ok(response) => {
-                if write_json_frame(stream, &wire::exec_response(&response)).is_err() {
-                    return;
+        if item_tx
+            .blocking_send(ExecWriterItem::Pending { op_id, reply_rx })
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // Reader done. Drop `control_tx` FIRST so the worker returns and resolves
+    // every pending reply oneshot (cancelling in-flight long-polls without
+    // waiting for their deadline), THEN drop `item_tx` so the writer drains the
+    // resolved replies and exits. Joining the writer guarantees no further
+    // socket writes after this returns.
+    drop(control_tx);
+    drop(item_tx);
+    let _ = writer.join();
+}
+
+/// The owner-connection writer: a current-thread tokio runtime that awaits each
+/// op's worker reply concurrently and writes op-id-tagged frames back to the
+/// socket from a single drain task (so the socket has exactly one writer).
+fn exec_owner_writer(
+    stream: Arc<Socket>,
+    metrics: Arc<metrics::Registry>,
+    mut item_rx: tokio::sync::mpsc::Receiver<ExecWriterItem>,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => return,
+    };
+    runtime.block_on(async move {
+        let (frame_tx, mut frame_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, ExecOwnerFrame)>();
+        let drain_stream = Arc::clone(&stream);
+        let drain_metrics = Arc::clone(&metrics);
+        let drain = tokio::spawn(async move {
+            while let Some((op_id, frame)) = frame_rx.recv().await {
+                let value = match &frame {
+                    ExecOwnerFrame::Response(response) => {
+                        wire::exec_response_with_id(op_id, response)
+                    }
+                    ExecOwnerFrame::Error { error, .. } => {
+                        wire::error_frame_with_id(op_id, error)
+                    }
+                };
+                if write_json_frame(drain_stream.as_ref(), &value).is_err() {
+                    break;
+                }
+                if let ExecOwnerFrame::Error { metric_kind, .. } = &frame {
+                    exec_metric_into(&drain_metrics, "op-error", metric_kind);
                 }
             }
-            Err(op_error) => {
-                let error = map_exec_op_error(op_error);
-                let kind = exec_error_kind_label(&error);
-                if write_json_frame(stream, &wire::error_frame(&error)).is_err() {
-                    return;
+        });
+
+        while let Some(item) = item_rx.recv().await {
+            match item {
+                ExecWriterItem::Pending { op_id, reply_rx } => {
+                    let frame_tx = frame_tx.clone();
+                    tokio::spawn(async move {
+                        let frame = match reply_rx.await {
+                            Ok(Ok(response)) => ExecOwnerFrame::Response(Box::new(response)),
+                            Ok(Err(op_error)) => {
+                                let error = map_exec_op_error(op_error);
+                                let metric_kind = exec_error_kind_label(&error);
+                                ExecOwnerFrame::Error {
+                                    error: Box::new(error),
+                                    metric_kind,
+                                }
+                            }
+                            // Worker dropped the reply (teardown). The owner is
+                            // going away; emit nothing for this op.
+                            Err(_) => return,
+                        };
+                        let _ = frame_tx.send((op_id, frame));
+                    });
                 }
-                exec_metric(state, "op-error", kind);
+                ExecWriterItem::Immediate {
+                    op_id,
+                    error,
+                    metric_kind,
+                } => {
+                    let _ = frame_tx.send((op_id, ExecOwnerFrame::Error { error, metric_kind }));
+                }
             }
         }
+        // Reader closed the item channel. Drop this task's frame sender so the
+        // drain finishes once the still-pending awaiters resolve (they resolve
+        // promptly: worker teardown drops their reply oneshots).
+        drop(frame_tx);
+        let _ = drain.await;
+    });
+}
+
+/// Owner-socket teardown seam for the terminal-cleanup reaper (F5). Shutting
+/// down the socket unblocks the owner reader (`read_frame` returns), which
+/// releases the session slot. Idempotent: a second shutdown is a harmless
+/// `ENOTCONN`.
+struct SocketShutdownReaper {
+    fd: RawFd,
+}
+
+impl SocketShutdownReaper {
+    fn new(fd: RawFd) -> Self {
+        Self { fd }
+    }
+}
+
+impl exec_session::OwnerReaper for SocketShutdownReaper {
+    fn reap(&self) {
+        let _ = nix::sys::socket::shutdown(self.fd, nix::sys::socket::Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
+mod exec_owner_io_tests {
+    //! Hermetic coverage for the owner reader/writer (F1/WR6): the owner
+    //! connection dispatches frames to the worker WITHOUT blocking on each
+    //! reply, so (a) an urgent control op is serviced while a long-poll is in
+    //! flight (no head-of-line), and (b) owner disconnect tears the session
+    //! down promptly (the in-flight long-poll is cancelled, not awaited).
+
+    use super::{exec_session, metrics, read_frame, run_exec_owner_io, write_frame, Socket};
+    use nixling_ipc::public_wire::{
+        ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse, ExecSignalArgs,
+        ExecWaitArgs,
+    };
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::oneshot;
+
+    const HANDLE: &str = "h-test-owner";
+
+    fn seqpacket_pair() -> (Socket, Socket) {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
+        let mut value = serde_json::to_value(op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), json!("exec"));
+        object.insert("opId".to_owned(), json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    fn send_op(socket: &Socket, op_id: u64, op: &ExecOp) {
+        write_frame(socket, &exec_frame(op_id, op)).expect("client sends exec frame");
+    }
+
+    fn recv_reply(socket: &Socket) -> Value {
+        let bytes = read_frame(socket).expect("client reads reply");
+        serde_json::from_slice(&bytes).expect("reply is JSON")
+    }
+
+    /// A fake worker that replies to fast control ops immediately but STASHES a
+    /// long-poll (`Wait`/`ReadOutput`) reply sender so the poll stays in flight.
+    /// On channel close (owner teardown) every stashed reply sender is dropped,
+    /// modelling the production worker dropping its in-flight oneshots.
+    fn spawn_fake_worker(
+        mut control_rx: tokio::sync::mpsc::Receiver<exec_session::WorkerCommand>,
+        longpoll_seen: std::sync::mpsc::Sender<()>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut stashed: Vec<
+                oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>,
+            > = Vec::new();
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        stashed.push(reply);
+                        let _ = longpoll_seen.send(());
+                    }
+                    ExecOp::Signal(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::Signal(ExecControlResult {
+                            delivered: true,
+                        })));
+                    }
+                    ExecOp::Close(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::Close(ExecCloseResult {
+                            stdin_closed: true,
+                        })));
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+            // Owner teardown: drop the stashed long-poll reply senders so the
+            // writer's awaiters resolve `Err` (the poll is cancelled, never
+            // awaited to its deadline).
+            drop(stashed);
+        })
+    }
+
+    fn wait_op() -> ExecOp {
+        ExecOp::Wait(ExecWaitArgs {
+            session: HANDLE.to_owned(),
+            timeout_ms: 60_000,
+        })
+    }
+
+    fn signal_op() -> ExecOp {
+        ExecOp::Signal(ExecSignalArgs {
+            session: HANDLE.to_owned(),
+            signo: 2,
+        })
+    }
+
+    fn close_op() -> ExecOp {
+        ExecOp::Close(ExecCloseArgs {
+            session: HANDLE.to_owned(),
+        })
+    }
+
+    #[test]
+    fn control_op_is_serviced_while_a_long_poll_is_in_flight() {
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let worker = spawn_fake_worker(control_rx, seen_tx);
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            run_exec_owner_io(&io_daemon, &io_metrics, control_tx, HANDLE);
+        });
+
+        // A normal op completes (owner-open + unrelated request proceeds).
+        send_op(&client, 1, &close_op());
+        let close_reply = recv_reply(&client);
+        assert_eq!(close_reply["type"], "execResponse");
+        assert_eq!(close_reply["opId"], 1);
+        assert_eq!(close_reply["op"], "close");
+
+        // Park a long-poll, then send an urgent control op. The control reply
+        // must come back (out of order, by op-id) BEFORE the parked poll — proof
+        // the owner socket read is not serialized behind the long-poll reply.
+        send_op(&client, 10, &wait_op());
+        seen_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker observed the parked long-poll");
+        send_op(&client, 11, &signal_op());
+        let signal_reply = recv_reply(&client);
+        assert_eq!(signal_reply["opId"], 11, "control reply must be serviced first");
+        assert_eq!(signal_reply["op"], "signal");
+
+        // Teardown: closing the client unblocks the reader; the parked poll is
+        // cancelled (never replied), and the io thread returns promptly.
+        drop(client);
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "owner io did not tear down promptly after disconnect"
+        );
+        worker.join().expect("fake worker joins");
+    }
+
+    #[test]
+    fn disconnect_during_long_poll_tears_down_without_awaiting_the_deadline() {
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let worker = spawn_fake_worker(control_rx, seen_tx);
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            run_exec_owner_io(&io_daemon, &io_metrics, control_tx, HANDLE);
+        });
+
+        // Park a 60s long-poll, then disconnect. Teardown must NOT wait for the
+        // poll's deadline.
+        send_op(&client, 10, &wait_op());
+        seen_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker observed the parked long-poll");
+        drop(client);
+
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "teardown blocked on the long-poll deadline"
+        );
+        worker.join().expect("fake worker joins");
     }
 }
 
@@ -11401,18 +11771,19 @@ mod exec_established_tracing_tests {
 
     #[test]
     fn exec_established_event_carries_only_leak_safe_fields() {
-        // APPROVED field-name allowlist for the establishment event.
+        // APPROVED field-name allowlist for the establishment event. The opaque
+        // session handle is deliberately NOT approved — per WR12/AGENTS, session
+        // handles must never reach a span, log, audit, or metric.
         const APPROVED_FIELDS: &[&str] = &[
             "message",
             "kind",
             "subsystem",
             "vm",
             "peer_uid",
-            "session_handle",
             "tty",
         ];
-        // Field names that MUST NEVER appear (would leak the command line or
-        // guest-supplied content).
+        // Field names that MUST NEVER appear (would leak the command line, the
+        // session handle, or guest-supplied content).
         const FORBIDDEN_FIELDS: &[&str] = &[
             "argv",
             "command",
@@ -11428,6 +11799,9 @@ mod exec_established_tracing_tests {
             "auth_tag",
             "exec_id",
             "guest_boot_id",
+            "session_handle",
+            "session",
+            "handle",
         ];
         // A sentinel that would only appear if argv/env/cwd leaked into a field.
         const SENTINEL: &str = "NIXLING_ARGV_LEAK_CANARY";
@@ -11438,7 +11812,7 @@ mod exec_established_tracing_tests {
         };
         let subscriber = Registry::default().with(layer);
         tracing::subscriber::with_default(subscriber, || {
-            emit_exec_established_event("work", 1000, "h-9f3c12ab", true);
+            emit_exec_established_event("work", 1000, true);
         });
 
         let captured = events.lock().unwrap();

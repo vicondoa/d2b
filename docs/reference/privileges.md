@@ -571,9 +571,9 @@ Notes:
   caller is rejected first, with no guest-control session established.
 - The daemon emits **one** kind=critical session-establishment audit
   event per exec session carrying only redacted fields: `vm`, `peer_uid`,
-  the opaque `session_handle`, and the negotiated `tty` flag. The guest
+  and the negotiated `tty` flag. The opaque `session_handle`, the guest
   `exec_id`/`guest_boot_id`, per-stream offsets, and the op stream are
-  span/aggregate detail, never audit labels.
+  never audit labels.
 - Redaction is fail-closed: argv (hash-only), env, cwd, paths, stdio
   bytes, nonces, tokens, capability tags, and session handles never
   appear in any `Debug`/trace/audit/metric surface.

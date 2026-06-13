@@ -138,9 +138,9 @@ deprecations ship one minor release before removal.
   is human-only and is rejected together with `--json`. Detached
   reconnect is deferred; the daemon owner handler rejects `detached=true`
   for now. The exec session establishes one redacted kind=critical audit
-  event (vm / peer uid / opaque handle / tty only); argv is hash-only and
-  stdio/env/cwd/paths never reach any log, span, audit record, or metric
-  label.
+  event (vm / peer uid / tty only); the opaque session handle, argv
+  (hash-only), and stdio/env/cwd/paths never reach any log, span, audit
+  record, or metric label.
 
 - Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
   command that outlives the originating connection, supervised by the root
