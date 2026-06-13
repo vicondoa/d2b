@@ -272,11 +272,13 @@ in
     # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
     # nixlingd)` caused infinite recursion in the NixOS module system
     # because it forced evaluation of `systemd.services` from within a
-    # definition contributing to `systemd.services`. Since both this
-    # module and host-daemon.nix are gated on daemonExperimental.enable,
-    # the guard is redundant: we unconditionally merge the
-    # wants/after entries here (they no-op if host-daemon.nix is absent
-    # since systemd merges at unit-file level).
+    # definition contributing to `systemd.services`. This broker module
+    # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
+    # gated on `daemonExperimental.enable`. The guard is unnecessary: we
+    # unconditionally merge the wants/after entries here — they are
+    # harmless if the `nixlingd` unit is absent (e.g. when
+    # `daemonExperimental.enable = false` drops the daemon config),
+    # since systemd merges these at the unit-file level.
     systemd.services.nixlingd = {
       wants = [ "nixling-priv-broker.socket" ];
       after = [ "nixling-priv-broker.socket" ];
