@@ -2674,6 +2674,37 @@ fn run_exec_owner(
             tty: info.tty,
         });
 
+    // Spawn the owner writer thread BEFORE committing the session with a start
+    // response. An OS thread-spawn failure must surface as a typed internal
+    // error for the establishing op rather than panic the handler (a process
+    // exhausting its thread limit is a recoverable resource failure, not a
+    // daemon-fatal bug). With the writer up first, that failure cleanly replaces
+    // the start response.
+    let (writer, item_tx, inflight) =
+        match spawn_exec_owner_writer(&stream, &state.metrics_registry) {
+            Ok(parts) => parts,
+            Err(_) => {
+                let error = TypedError::GuestControlExecFailed {
+                    kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+                };
+                let _ = write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(first_op_id, &error),
+                );
+                exec_metric(&state, "error", "internal");
+                drop(control_tx);
+                let _ = worker.join();
+                exec_metric(&state, "closed", "none");
+                let _ = state.daemon_audit.write_event(
+                    &daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                        vm: start.vm.clone(),
+                        peer_uid: peer.uid,
+                    },
+                );
+                return;
+            }
+        };
+
     let start_response = exec_session::start_response(&handle, &info);
     if write_json_frame(
         stream.as_ref(),
@@ -2681,7 +2712,9 @@ fn run_exec_owner(
     )
     .is_err()
     {
+        drop(item_tx);
         drop(control_tx);
+        let _ = writer.join();
         let _ = worker.join();
         exec_metric(&state, "closed", "none");
         let _ = state
@@ -2694,11 +2727,11 @@ fn run_exec_owner(
     }
 
     // Drive the owner connection: a reader (this thread) dispatches frames to
-    // the worker WITHOUT blocking on each reply, and a writer thread drains
+    // the worker WITHOUT blocking on each reply, and the writer thread drains
     // op-id-tagged replies back to the socket. `control_tx` is moved in and
     // dropped after the reader returns, so an owner disconnect during a
     // long-poll tears the worker down (cancelling the poll) promptly.
-    run_exec_owner_io(&stream, &state.metrics_registry, control_tx, &handle);
+    run_exec_owner_io(&stream, control_tx, item_tx, inflight, writer, &handle);
 
     let _ = worker.join();
     drop(slot);
@@ -2725,46 +2758,142 @@ enum ExecOwnerFrame {
 /// the worker reply receiver (awaited concurrently so multiple ops, including a
 /// long-poll plus an urgent control op, are in flight at once and matched by
 /// `op_id`). `Immediate` is a reader-resolved error (parse / session-binding /
-/// non-exec frame) that needs no worker round trip.
+/// non-exec frame) that needs no worker round trip. Both variants carry the
+/// owned [`InflightPermit`] for the op so the writer releases it only after the
+/// reply frame is written (or on teardown), enforcing the real in-flight cap.
 enum ExecWriterItem {
     Pending {
         op_id: u64,
         reply_rx: tokio::sync::oneshot::Receiver<Result<public_wire::ExecOpResponse, exec_session::ExecOpError>>,
+        permit: InflightPermit,
     },
     Immediate {
         op_id: u64,
         error: Box<TypedError>,
         metric_kind: &'static str,
+        permit: InflightPermit,
     },
 }
 
-/// Bound on owner-connection ops in flight to the writer at once (WR13). The
-/// reader blocks on a full channel, applying backpressure to a flooding client
-/// without ever serializing an urgent control op behind a pending long-poll.
+/// Bound on owner-connection ops concurrently in flight (WR13). This caps the
+/// number of ops dispatched-but-not-yet-replied — including long-polls
+/// (`ReadOutput`/`Wait`) that each pin a guest RPC — NOT merely the depth of a
+/// channel the worker and writer drain as fast as the reader fills it. A
+/// flooding/pipelining admin owner is held to at most this many concurrent
+/// guest RPCs + awaiters.
 const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
+
+/// A blocking counting semaphore bounding the owner connection's actual
+/// concurrent in-flight ops (WR13). The earlier design only bounded the
+/// reader→writer channel, but the worker immediately spawns each long-poll and
+/// the writer immediately spawns each awaiter, so both channels drained as fast
+/// as the reader filled them — the reader was never backpressured and a
+/// pipelining owner could open unbounded concurrent long-polls/guest RPCs. Here
+/// a permit is taken just before an op is dispatched and HELD until its reply
+/// frame is written (or the op is torn down), so the reader BLOCKS on `acquire`
+/// once `EXEC_OWNER_INFLIGHT_CAP` ops are genuinely in flight — real
+/// backpressure. The reader runs on a plain OS thread (no tokio runtime), so a
+/// blocking std primitive is used rather than `tokio::sync::Semaphore`.
+struct InflightSemaphore {
+    available: std::sync::Mutex<usize>,
+    released: std::sync::Condvar,
+}
+
+impl InflightSemaphore {
+    fn new(permits: usize) -> Arc<Self> {
+        Arc::new(Self {
+            available: std::sync::Mutex::new(permits),
+            released: std::sync::Condvar::new(),
+        })
+    }
+
+    /// Block until a permit is free, then take it. The returned guard releases
+    /// the permit on drop (reply written, immediate error, or teardown). Mutex
+    /// poison is recovered rather than propagated as a panic — the critical
+    /// sections only increment/decrement a counter and cannot leave broken
+    /// invariants.
+    fn acquire(self: &Arc<Self>) -> InflightPermit {
+        let mut available = self
+            .available
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        while *available == 0 {
+            available = self
+                .released
+                .wait(available)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+        *available -= 1;
+        InflightPermit {
+            semaphore: Arc::clone(self),
+        }
+    }
+}
+
+/// RAII permit for [`InflightSemaphore`]. Releasing on drop covers every
+/// teardown path (reply written, immediate error frame written, owner
+/// disconnect, worker teardown dropping the reply oneshot).
+struct InflightPermit {
+    semaphore: Arc<InflightSemaphore>,
+}
+
+impl Drop for InflightPermit {
+    fn drop(&mut self) {
+        let mut available = self
+            .semaphore
+            .available
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *available += 1;
+        self.semaphore.released.notify_one();
+    }
+}
+
+/// Parts produced by [`spawn_exec_owner_writer`]: the writer join handle, the
+/// reader→writer item channel sender, and the shared in-flight semaphore.
+type ExecOwnerWriterParts = (
+    std::thread::JoinHandle<()>,
+    tokio::sync::mpsc::Sender<ExecWriterItem>,
+    Arc<InflightSemaphore>,
+);
+
+/// Spawn the owner-connection writer thread and return the channel + semaphore
+/// the reader drives it with. Returns the OS-thread-spawn error to the caller
+/// (instead of panicking) so a resource-exhausted host fails the session with a
+/// typed internal error rather than crashing the handler.
+fn spawn_exec_owner_writer(
+    stream: &Arc<Socket>,
+    metrics: &Arc<metrics::Registry>,
+) -> std::io::Result<ExecOwnerWriterParts> {
+    let (item_tx, item_rx) =
+        tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
+    let inflight = InflightSemaphore::new(EXEC_OWNER_INFLIGHT_CAP);
+    let writer_stream = Arc::clone(stream);
+    let writer_metrics = Arc::clone(metrics);
+    let writer = std::thread::Builder::new()
+        .name("nixling-exec-writer".to_owned())
+        .spawn(move || exec_owner_writer(writer_stream, writer_metrics, item_rx))?;
+    Ok((writer, item_tx, inflight))
+}
 
 /// Drive the owner connection's reader loop (this function runs on the owner
 /// thread). Each frame is parsed into `(op_id, op)`, bound to `handle`, and
 /// dispatched to the worker over `control_tx` WITHOUT waiting for the reply;
 /// the reply receiver is forwarded to the writer thread, which matches replies
-/// to ops by `op_id` and writes them out of order. On reader EOF/POLLHUP (owner
-/// disconnect) the loop returns, `control_tx` is dropped (tearing the worker
-/// down and cancelling any in-flight long-poll), then the writer is joined.
+/// to ops by `op_id` and writes them out of order. A permit from `inflight` is
+/// taken before EACH op is queued and travels with it to the writer, so the
+/// reader blocks once `EXEC_OWNER_INFLIGHT_CAP` ops are concurrently in flight.
+/// On reader EOF/POLLHUP (owner disconnect) the loop returns, `control_tx` is
+/// dropped (tearing the worker down and cancelling any in-flight long-poll),
+/// then the writer is joined.
 fn run_exec_owner_io(
     stream: &Arc<Socket>,
-    metrics: &Arc<metrics::Registry>,
     control_tx: tokio::sync::mpsc::Sender<exec_session::WorkerCommand>,
+    item_tx: tokio::sync::mpsc::Sender<ExecWriterItem>,
+    inflight: Arc<InflightSemaphore>,
+    writer: std::thread::JoinHandle<()>,
     handle: &str,
 ) {
-    let (item_tx, item_rx) =
-        tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
-    let writer_stream = Arc::clone(stream);
-    let writer_metrics = Arc::clone(metrics);
-    let writer = std::thread::Builder::new()
-        .name("nixling-exec-writer".to_owned())
-        .spawn(move || exec_owner_writer(writer_stream, writer_metrics, item_rx))
-        .expect("spawn exec owner writer thread");
-
     // EOF / POLLHUP / shutdown / any read error closes the connection and ends
     // the loop, triggering the teardown below.
     while let Ok(frame) = read_frame(stream.as_ref()) {
@@ -2772,11 +2901,16 @@ fn run_exec_owner_io(
         let op = match wire::parse_exec_op(&frame) {
             Ok((_, op)) => op,
             Err(error) => {
+                // Acquire a permit even for an immediate error so a flood of
+                // malformed frames is bounded by the same in-flight cap; it is
+                // released once the error frame is written.
+                let permit = inflight.acquire();
                 if item_tx
                     .blocking_send(ExecWriterItem::Immediate {
                         op_id,
                         error: Box::new(error),
                         metric_kind: "protocol",
+                        permit,
                     })
                     .is_err()
                 {
@@ -2791,11 +2925,13 @@ fn run_exec_owner_io(
             let error = TypedError::GuestControlExecFailed {
                 kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
             };
+            let permit = inflight.acquire();
             if item_tx
                 .blocking_send(ExecWriterItem::Immediate {
                     op_id,
                     error: Box::new(error),
                     metric_kind: "protocol",
+                    permit,
                 })
                 .is_err()
             {
@@ -2804,6 +2940,10 @@ fn run_exec_owner_io(
             continue;
         }
 
+        // Take the in-flight permit BEFORE handing the op to the worker. When
+        // the cap is reached this blocks the reader (real backpressure) instead
+        // of letting the worker/writer drain a channel as fast as we fill it.
+        let permit = inflight.acquire();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let command = exec_session::WorkerCommand {
             op,
@@ -2811,10 +2951,15 @@ fn run_exec_owner_io(
         };
         if control_tx.blocking_send(command).is_err() {
             // Worker gone (terminal cleanup / teardown): close the connection.
+            // `permit` drops here, releasing it.
             break;
         }
         if item_tx
-            .blocking_send(ExecWriterItem::Pending { op_id, reply_rx })
+            .blocking_send(ExecWriterItem::Pending {
+                op_id,
+                reply_rx,
+                permit,
+            })
             .is_err()
         {
             break;
@@ -2847,12 +2992,16 @@ fn exec_owner_writer(
         Err(_) => return,
     };
     runtime.block_on(async move {
+        // The frame channel carries the op's in-flight permit alongside the
+        // frame so the permit is released only AFTER the reply is written to the
+        // socket (in the drain task), which is what makes the cap bound ACTUAL
+        // in-flight ops rather than just the reader→writer channel depth.
         let (frame_tx, mut frame_rx) =
-            tokio::sync::mpsc::unbounded_channel::<(u64, ExecOwnerFrame)>();
+            tokio::sync::mpsc::unbounded_channel::<(u64, ExecOwnerFrame, InflightPermit)>();
         let drain_stream = Arc::clone(&stream);
         let drain_metrics = Arc::clone(&metrics);
         let drain = tokio::spawn(async move {
-            while let Some((op_id, frame)) = frame_rx.recv().await {
+            while let Some((op_id, frame, permit)) = frame_rx.recv().await {
                 let value = match &frame {
                     ExecOwnerFrame::Response(response) => {
                         wire::exec_response_with_id(op_id, response)
@@ -2861,18 +3010,29 @@ fn exec_owner_writer(
                         wire::error_frame_with_id(op_id, error)
                     }
                 };
-                if write_json_frame(drain_stream.as_ref(), &value).is_err() {
-                    break;
-                }
+                let write_result = write_json_frame(drain_stream.as_ref(), &value);
                 if let ExecOwnerFrame::Error { metric_kind, .. } = &frame {
-                    exec_metric_into(&drain_metrics, "op-error", metric_kind);
+                    if write_result.is_ok() {
+                        exec_metric_into(&drain_metrics, "op-error", metric_kind);
+                    }
+                }
+                // Release the in-flight permit only now that this op's reply has
+                // left the writer (or failed to). Explicit for clarity; `permit`
+                // would drop at the end of the iteration regardless.
+                drop(permit);
+                if write_result.is_err() {
+                    break;
                 }
             }
         });
 
         while let Some(item) = item_rx.recv().await {
             match item {
-                ExecWriterItem::Pending { op_id, reply_rx } => {
+                ExecWriterItem::Pending {
+                    op_id,
+                    reply_rx,
+                    permit,
+                } => {
                     let frame_tx = frame_tx.clone();
                     tokio::spawn(async move {
                         let frame = match reply_rx.await {
@@ -2886,18 +3046,24 @@ fn exec_owner_writer(
                                 }
                             }
                             // Worker dropped the reply (teardown). The owner is
-                            // going away; emit nothing for this op.
+                            // going away; emit nothing for this op. `permit`
+                            // drops here, releasing it.
                             Err(_) => return,
                         };
-                        let _ = frame_tx.send((op_id, frame));
+                        let _ = frame_tx.send((op_id, frame, permit));
                     });
                 }
                 ExecWriterItem::Immediate {
                     op_id,
                     error,
                     metric_kind,
+                    permit,
                 } => {
-                    let _ = frame_tx.send((op_id, ExecOwnerFrame::Error { error, metric_kind }));
+                    let _ = frame_tx.send((
+                        op_id,
+                        ExecOwnerFrame::Error { error, metric_kind },
+                        permit,
+                    ));
                 }
             }
         }
@@ -3072,7 +3238,10 @@ mod exec_owner_io_tests {
     //! flight (no head-of-line), and (b) owner disconnect tears the session
     //! down promptly (the in-flight long-poll is cancelled, not awaited).
 
-    use super::{exec_session, metrics, read_frame, run_exec_owner_io, write_frame, Socket};
+    use super::{
+        exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer,
+        write_frame, Socket, EXEC_OWNER_INFLIGHT_CAP,
+    };
     use nixling_ipc::public_wire::{
         ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse, ExecSignalArgs,
         ExecWaitArgs,
@@ -3186,7 +3355,9 @@ mod exec_owner_io_tests {
         let io_daemon = Arc::clone(&daemon);
         let io_metrics = Arc::clone(&metrics);
         let io = std::thread::spawn(move || {
-            run_exec_owner_io(&io_daemon, &io_metrics, control_tx, HANDLE);
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(&io_daemon, control_tx, item_tx, inflight, writer, HANDLE);
         });
 
         // A normal op completes (owner-open + unrelated request proceeds).
@@ -3232,7 +3403,9 @@ mod exec_owner_io_tests {
         let io_daemon = Arc::clone(&daemon);
         let io_metrics = Arc::clone(&metrics);
         let io = std::thread::spawn(move || {
-            run_exec_owner_io(&io_daemon, &io_metrics, control_tx, HANDLE);
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(&io_daemon, control_tx, item_tx, inflight, writer, HANDLE);
         });
 
         // Park a 60s long-poll, then disconnect. Teardown must NOT wait for the
@@ -3248,6 +3421,100 @@ mod exec_owner_io_tests {
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "teardown blocked on the long-poll deadline"
+        );
+        worker.join().expect("fake worker joins");
+    }
+
+    /// WR13 / G1: the in-flight cap must bound the number of ops ACTUALLY
+    /// dispatched-but-unanswered (each pins a guest RPC), not merely the depth
+    /// of a channel the worker/writer drain as fast as the reader fills it. A
+    /// pipelining owner that floods `cap + N` long-polls must see at most `cap`
+    /// reach the worker concurrently; the reader blocks acquiring the
+    /// `(cap + 1)`-th permit (real backpressure).
+    #[test]
+    fn concurrent_inflight_ops_are_bounded_by_the_cap() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        let cap = EXEC_OWNER_INFLIGHT_CAP;
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+
+        // A counting fake worker: every long-poll reply sender is parked in a
+        // shared stash (never answered) so the op holds its in-flight permit;
+        // each receipt signals `seen_tx`. `draining` lets the test switch the
+        // worker to drop replies (freeing permits) for a clean teardown.
+        type Stash = Arc<Mutex<Vec<oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>>>>;
+        let stash: Stash = Arc::new(Mutex::new(Vec::new()));
+        let draining = Arc::new(AtomicBool::new(false));
+        let worker_stash = Arc::clone(&stash);
+        let worker_draining = Arc::clone(&draining);
+        let worker = std::thread::spawn(move || {
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                if worker_draining.load(Ordering::SeqCst) {
+                    // Teardown: drop the reply so the writer awaiter resolves
+                    // `Err`, releasing the permit without re-parking it.
+                    drop(reply);
+                    continue;
+                }
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        worker_stash
+                            .lock()
+                            .expect("stash lock")
+                            .push(reply);
+                        let _ = seen_tx.send(());
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+        });
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(&io_daemon, control_tx, item_tx, inflight, writer, HANDLE);
+        });
+
+        // Pipeline well beyond the cap. The frames are tiny and fit in the
+        // socket buffer, so these client writes do not block even though the
+        // reader stalls after the cap.
+        let total = cap + 8;
+        for op_id in 0..total {
+            send_op(&client, op_id as u64, &wait_op());
+        }
+
+        // Exactly `cap` long-polls reach the worker; the reader is then blocked
+        // on the `(cap + 1)`-th permit acquisition.
+        for _ in 0..cap {
+            seen_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker observes parked long-polls up to the cap");
+        }
+        assert!(
+            seen_rx.recv_timeout(Duration::from_millis(750)).is_err(),
+            "more than the cap of {cap} ops were dispatched concurrently to the worker",
+        );
+
+        // Teardown: switch the worker to drain mode, then release the parked
+        // replies so the held permits free. The reader unblocks, drains the
+        // buffered frames (now dropped by the worker), reads EOF on the closed
+        // client, and tears down.
+        draining.store(true, Ordering::SeqCst);
+        stash.lock().expect("stash lock").clear();
+        drop(client);
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "owner io did not tear down promptly after disconnect"
         );
         worker.join().expect("fake worker joins");
     }
