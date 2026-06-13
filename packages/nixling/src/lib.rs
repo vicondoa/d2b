@@ -3105,7 +3105,10 @@ fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
 /// `host destroy` per-tier routing logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeploymentShape {
-    /// Every VM uses `supervisor = "systemd"` (Tier 0 all-legacy).
+    /// Legacy Tier-0 all-legacy shape: no daemon-owned VMs. The
+    /// per-VM `supervisor` option was removed in v1.1, so a real
+    /// bundle never resolves here; only the
+    /// `NIXLING_TEST_DEPLOYMENT_SHAPE` test override can select it.
     Tier0AllLegacy,
     /// Mixed: some VMs daemon-owned, some systemd-owned.
     Tier0Mixed,
@@ -3134,9 +3137,10 @@ fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFail
     let Some(_bundle) = bundle else {
         return Ok(DeploymentShape::Tier0AllLegacy);
     };
-    // Bundle inspection of `supervisor` is available in newer bundles;
-    // for older bundles fall back to all-daemon as documented in the
-    // per-tier routing table.
+    // The per-VM `supervisor` option was removed in v1.1: every
+    // enabled VM is daemon-supervised, so a real bundle always
+    // resolves to all-daemon. The Tier-0 shapes remain reachable only
+    // through the `NIXLING_TEST_DEPLOYMENT_SHAPE` override above.
     Ok(DeploymentShape::AllDaemon)
 }
 
@@ -3150,9 +3154,9 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                 "Tier 0 all-legacy refused: use the NixOS module path",
                 "tier-0-legacy-uses-nixos-module",
                 78,
-                "Every VM declares supervisor = \"systemd\"; the nixling NixOS module already owns host-shared reconciliation on Tier 0.",
+                "Whether this host resolves to the legacy Tier-0 all-legacy shape, which has no daemon-owned resources for the broker to reconcile.",
                 "tier-0-all-legacy",
-                "Add at least one VM with `nixling.vms.<vm>.supervisor = \"nixlingd\"` before invoking host prepare --apply on this host.",
+                "This legacy Tier-0 shape is unreachable on a daemon-only host: the per-VM `supervisor` option was removed in v1.1, so every enabled VM is daemon-supervised. Host-shared reconciliation on a genuine legacy host is owned by the nixling NixOS module; run `host prepare --dry-run` to inspect the plan.",
                 "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
             ),
             args.json,
@@ -3182,7 +3186,7 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                     "daemon-down",
                     1,
                     "Daemon connectivity at /run/nixling/public.sock and broker dispatch readiness.",
-                    "nixlingd is reachable but the host-prepare API surface is still gated behind nixling.daemonExperimental.enable; the integrator wires it on once the typed intent emitters ship.",
+                    "nixlingd is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back host prepare --apply are not yet wired through nixlingd; the broker op is staged but not yet reachable from the public socket.",
                     "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                     "docs/reference/error-codes.md#daemon-down",
                 ),
@@ -3229,9 +3233,9 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 "Tier 0 all-legacy refused: use the NixOS module path",
                 "tier-0-legacy-uses-nixos-module",
                 78,
-                "Every VM declares supervisor = \"systemd\"; host destroy is only valid when daemon-owned VMs exist.",
+                "Whether this host resolves to the legacy Tier-0 all-legacy shape; host destroy only acts on daemon-owned resources.",
                 "tier-0-all-legacy",
-                "Migrate at least one VM to supervisor = \"nixlingd\". The historical `--legacy` bash-destroy escape hatch was retired in v1.0 (per ADR 0015).",
+                "This legacy Tier-0 shape is unreachable on a daemon-only host: the per-VM `supervisor` option was removed in v1.1, so every enabled VM is daemon-supervised. The historical `--legacy` bash-destroy escape hatch was retired in v1.0 (per ADR 0015); run `host destroy --dry-run` to inspect nixling-owned resources.",
                 "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
             ),
             args.json,
@@ -3244,7 +3248,7 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 "daemon-down",
                 1,
                 "Daemon connectivity and broker destroy dispatch readiness.",
-                "nixlingd is reachable but the host-destroy API surface is still gated behind the typed-intent broker dispatch.",
+                "nixlingd is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back host destroy --apply are not yet wired through nixlingd; the broker op is staged but not yet reachable from the public socket.",
                 "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                 "docs/reference/error-codes.md#daemon-down",
             ),
