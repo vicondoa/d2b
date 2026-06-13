@@ -165,15 +165,18 @@ The intended path from a fresh host to a wave's
 5. **Rebuild.** `nixos-rebuild switch` now sees
    `defaultSwitchReadiness.<wave>.validated = true` for each
    wave whose evidence file is present, and the fail-closed eval
-   assertion passes. The daemon-backed control plane is already the
-   default regardless of these bits:
-   `nixling.daemonExperimental.enable` is an obsolete always-on gate
-   (`default = true`) and is no longer computed from wave readiness.
+   assertion passes. The wave evidence no longer computes or flips
+   the `nixling.daemonExperimental.enable` default: that option
+   defaults `true` and still functionally gates the daemon control
+   plane, independent of these `validated` bits.
 
-Setting `nixling.daemonExperimental.enable` has no current effect and
-is discouraged — the daemon-only end state is always enabled. The
-`validated` bits remain meaningful as host-local validation evidence,
-surfaced by `nixling host validate`.
+`nixling.daemonExperimental.enable` still functionally gates the
+daemon control plane: it defaults `true`, and consumers should leave
+it at its default (setting it `false` reverts the host to the
+unsupported pre-daemon legacy state). What changed is that the wave
+evidence no longer computes or flips that default. The `validated`
+bits remain meaningful as host-local validation evidence, surfaced by
+`nixling host validate`.
 
 ### Manual evidence writing (escape hatch)
 
