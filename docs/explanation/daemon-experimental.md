@@ -32,9 +32,12 @@ The daemon dispatches every mutating verb through the broker socket:
   `SpawnRunner` / `SignalRunner` + supervisor DAG (per-share virtiofsd,
   cloud-hypervisor, swtpm-flush + long-lived swtpm, vsock-relay, audio,
   GPU, video, USBIP sidecars).
-- Host reconcile: `host prepare / destroy / install` via broker
-  `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` /
-  `ApplyNmUnmanaged` / `RunHostInstall`.
+- Host reconcile: `host install` via broker `RunHostInstall` (wired
+  live). `host prepare / destroy --apply` are **not yet wired** — they
+  return `daemon-down` (exit 1) today; use `--dry-run` for now. Their
+  broker reconcile-op dispatch (`ApplyNftables` / `ApplyRoute` /
+  `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged`) is
+  forthcoming when daemon-side dispatch ships.
 - Activation: `switch / boot / test / rollback / gc` via broker
   `RunActivation` / `RunGc`.
 - Key lifecycle: `trust / rotate-known-host / keys rotate` via broker
