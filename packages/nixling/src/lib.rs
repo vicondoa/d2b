@@ -2262,7 +2262,7 @@ fn config_sync_capture_to_staging_limited(
 }
 
 /// Standard `sha256:<64-hex>` digest over `data`. Computed by the host from the
-/// RECEIVED bytes; the guest-reported size/hash is never trusted (Decision 4).
+/// RECEIVED bytes; the guest-reported size/hash is never trusted.
 fn sha256_hex(data: &[u8]) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
@@ -3719,8 +3719,8 @@ fn exec_error_to_failure(error: exec_client::ExecClientError) -> CliFailure {
 
 /// Terminate `vm exec` on a typed exec-client failure. For `--json`, emit the
 /// single terminal JSON document on STDOUT and return the CLI exit code (so
-/// nothing reaches stderr and there is exactly one JSON document on stdout —
-/// WR10). For human runs, return the plain `CliFailure` rendered to stderr.
+/// nothing reaches stderr and there is exactly one JSON document on stdout).
+/// For human runs, return the plain `CliFailure` rendered to stderr.
 fn exec_terminate(
     args: &VmExecArgs,
     error: exec_client::ExecClientError,
@@ -3735,7 +3735,7 @@ fn exec_terminate(
 }
 
 /// Terminate `vm exec` on a usage error (exit 2, `source: "cli"`). For `--json`
-/// this still emits one terminal JSON document on STDOUT (WR10); otherwise it is
+/// this still emits one terminal JSON document on STDOUT; otherwise it is
 /// a plain stderr failure.
 fn exec_usage_terminate(
     args: &VmExecArgs,
@@ -3755,7 +3755,7 @@ fn exec_usage_terminate(
     }
 }
 
-/// Run a command inside a guest-control VM (WR11 FSM). Establishes the
+/// Run a command inside a guest-control VM (FSM). Establishes the
 /// daemon-held authenticated session over `public.sock` (admin-only), then
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
@@ -3764,7 +3764,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
     //    `--json` is machine output: reject it together with ANY interactive /
-    //    TTY mode (which streams raw bytes to stdout) before raw mode (WR10).
+    //    TTY mode (which streams raw bytes to stdout) before raw mode.
     if args.json && (args.tty || args.interactive) {
         return exec_usage_terminate(
             args,
@@ -3783,7 +3783,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
 
     let mut env_vars = Vec::with_capacity(args.env.len());
     for (idx, entry) in args.env.iter().enumerate() {
-        // Redaction (WR12): never echo the raw --env entry — it may carry a
+        // Redaction: never echo the raw --env entry — it may carry a
         // secret value (e.g. `TOKEN=...` or `=secret`). Report the 1-based
         // position only.
         let position = idx + 1;
@@ -3820,7 +3820,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
     // 2. Connect + hello + Start (establish) BEFORE entering raw mode, so an
     //    establishment failure leaves the host terminal untouched. Every
     //    establishment failure is routed through `exec_terminate` so a `--json`
-    //    run still emits exactly one terminal JSON document on stdout (WR10).
+    //    run still emits exactly one terminal JSON document on stdout.
     if !context.public_socket.exists() {
         return exec_terminate(args, exec_daemon_unavailable_error());
     }
@@ -3984,8 +3984,8 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
         drop(guard);
         match result {
             Ok(outcome) => exec_json_success(args, &outcome, &host),
-            // Failure envelopes carry NO captured stdio bytes (WR12); they are
-            // printed to stdout as the single terminal JSON document (WR10).
+            // Failure envelopes carry NO captured stdio bytes; they are
+            // printed to stdout as the single terminal JSON document.
             Err(err) => exec_terminate(args, err),
         }
     } else {
@@ -4039,7 +4039,7 @@ fn exec_json_attach_output(
 /// Build the success `--json` envelope value + CLI exit code. `source` is
 /// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
 /// with a reserved transport code. The FSM resolves only true guest
-/// `WIFEXITED`/`WIFSIGNALED` terminals as a success (WR9); abnormal terminal
+/// `WIFEXITED`/`WIFSIGNALED` terminals as a success; abnormal terminal
 /// kinds surface through [`exec_terminate`] as transport/protocol failures.
 fn exec_json_success_value(
     args: &VmExecArgs,
@@ -4081,8 +4081,8 @@ fn exec_json_success(
     Ok(exit_code)
 }
 
-/// Build the failure `--json` envelope value. WR9: transport/protocol/internal
-/// failures carry `transportExitCode` + a non-`guest` `source`. WR12: a failure
+/// Build the failure `--json` envelope value. Transport/protocol/internal
+/// failures carry `transportExitCode` + a non-`guest` `source`. A failure
 /// envelope NEVER carries captured stdio bytes.
 fn exec_json_failure_value(
     args: &VmExecArgs,
@@ -6468,7 +6468,7 @@ fn stdout_is_tty() -> bool {
 // clap rejects fall through to the parse-error path. No bash exec
 // site survives in the binary crate.
 
-/// W14c daemon mutating-verb outcome from
+/// Daemon mutating-verb outcome from
 /// [`try_daemon_mutating_verb`]. The CLI uses this to decide whether
 /// to (a) print the daemon's plan and exit, (b) surface a typed
 /// `not-yet-implemented` envelope (exit 78 per ADR 0015), or (c)
@@ -6534,7 +6534,7 @@ fn daemon_mutating_verb_frame(
         .map_err(|err| CliFailure::new(1, format!("failed to serialize daemon frame: {err}")))
 }
 
-/// W14c: send a mutating-verb request frame to the daemon and parse
+/// Send a mutating-verb request frame to the daemon and parse
 /// the typed envelope reply.
 ///
 /// `request_type` is the daemon wire `type` discriminant (e.g.
@@ -7677,7 +7677,7 @@ mod host_install_dispatch_tests {
         // generation lacks the guest-control transport must surface exit 70 +
         // `guest-control-unavailable-old-generation`, MUST NOT proxy any exec
         // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
-        // is the hermetic guarantee (live e2e is W19) that an unsupported
+        // is the hermetic guarantee that an unsupported
         // generation can never silently exec over a different transport.
         let dir = test_socket_path("vm-exec-oldgen", ".dir");
         std::fs::create_dir_all(&dir).expect("scratch dir");
@@ -7696,7 +7696,7 @@ mod host_install_dispatch_tests {
         let (result, frames, stdout) =
             run_vm_exec_with_mock_daemon(args, "guest-control-unavailable-old-generation");
 
-        // WR10: a `--json` run emits exactly ONE terminal JSON document on
+        // A `--json` run emits exactly ONE terminal JSON document on
         // STDOUT for ALL outcomes (incl this old-generation establishment
         // reject) and returns the CLI exit code — nothing goes to stderr.
         let exit_code = result.expect("json exec returns the exit code, not a stderr failure");
@@ -7750,7 +7750,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn vm_exec_env_validation_redacts_supplied_value() {
-        // WR12: a malformed `--env` entry may carry a secret (e.g. `=secret`
+        // A malformed `--env` entry may carry a secret (e.g. `=secret`
         // or `TOKEN=hunter2`). The operator error must report the offending
         // position only — never the raw entry, key, or value.
         const SECRET: &str = "sentinel-env-secret-7f3a";
@@ -7821,7 +7821,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn vm_exec_missing_command_emits_usage_envelope() {
-        // G4 / WR10: a missing command is validated inside `cmd_vm_exec` (the
+        // A missing command is validated inside `cmd_vm_exec` (the
         // clap arg is NOT `required`), so a `--json` run emits a single stdout
         // usage envelope (source: cli, reason: usage, exit 2) and the human run
         // is a plain stderr usage failure — both matching error-codes.md and
@@ -9224,7 +9224,7 @@ mod exec_json_envelope_tests {
         assert_eq!(value["transportExitCode"], 70);
         // A failure envelope never carries a guestExitCode.
         assert!(value.get("guestExitCode").is_none());
-        // WR12: a failure envelope never carries captured stdio bytes.
+        // A failure envelope never carries captured stdio bytes.
         assert!(value.get("stdoutBase64").is_none());
         assert!(value.get("stderrBase64").is_none());
     }
@@ -10105,7 +10105,7 @@ mod ssh_spawn_gate {
         // partial generation) must reject with exit 70 +
         // `guest-control-unavailable-old-generation`, WITHOUT contacting
         // public.sock, WITHOUT staging/publishing, and WITHOUT taking the
-        // SSH argv path. This is not W19 live behaviour — it is the
+        // SSH argv path. This is not live behaviour — it is the
         // hermetic guarantee that an unsupported generation can never
         // silently fall back to an SSH transport or a partial write.
         let dir = scratch("config-old-generation");

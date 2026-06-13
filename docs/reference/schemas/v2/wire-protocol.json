@@ -2273,7 +2273,7 @@
       "additionalProperties": false
     },
     "ExecEnvVar": {
-      "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable). `Debug` is redacted so a stray `{:?}` can never leak a key or secret value (WR12).",
+      "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable). `Debug` is redacted so a stray `{:?}` can never leak a key or secret value.",
       "type": "object",
       "required": [
         "key",

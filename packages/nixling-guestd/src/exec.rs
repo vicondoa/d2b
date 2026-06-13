@@ -115,7 +115,7 @@ pub enum ExecError {
     RetainedLogQuotaExceeded,
     StaleSession,
     ExecExpired,
-    // Interactive TTY exec (W14). These map to existing wire kinds; no new wire
+    // Interactive TTY exec. These map to existing wire kinds; no new wire
     // enum variant is introduced.
     InvalidTerminalSize,
     TtyStderrUnavailable,
@@ -156,7 +156,7 @@ impl ExecError {
             Self::RetainedLogQuotaExceeded => WireErrorKind::RetainedLogQuotaExceeded,
             Self::StaleSession => WireErrorKind::StaleSession,
             Self::ExecExpired => WireErrorKind::ExecExpired,
-            // Interactive TTY exec (W14): reuse existing wire kinds.
+            // Interactive TTY exec: reuse existing wire kinds.
             Self::InvalidTerminalSize => WireErrorKind::ProtocolError,
             Self::TtyStderrUnavailable => WireErrorKind::TtyStderrUnavailable,
             Self::TtyRequired => WireErrorKind::TtyRequired,
@@ -1475,7 +1475,7 @@ fn spawn_tty_supervisor(
 /// terminal state. `outcome = None` => the session was cancelled (disconnect /
 /// ceiling); `Some(_)` => the child exited on its own.
 ///
-/// G1 ordering: ALL tasks that hold a master clone (the abortable writer task
+/// Master-clone ordering: ALL tasks that hold a master clone (the abortable writer task
 /// AND the merged-output reader task) are dropped/awaited BEFORE the
 /// SIGHUP→grace→KILL window, so the master `OwnedFd` is actually closed and the
 /// kernel delivers `SIGHUP` to the foreground session within the grace. The
@@ -1483,7 +1483,7 @@ fn spawn_tty_supervisor(
 /// blocked PTY write holds), so a child that stopped reading stdin cannot
 /// deadlock teardown.
 ///
-/// G9 drain: on a normal child exit (`outcome = Some`) the slave is gone, so the
+/// Drain: on a normal child exit (`outcome = Some`) the slave is gone, so the
 /// master read returns EOF/EIO on its own — the reader is given a bounded grace
 /// to drain trailing output before being aborted. On cancel/disconnect
 /// (`outcome = None`) the child may still be running, so the reader is aborted
@@ -2383,7 +2383,7 @@ mod tests {
         assert!(killed.load(Ordering::SeqCst) >= 1);
     }
 
-    // ---- W14 interactive TTY exec: fake-driven runtime matrix ----
+    // ---- interactive TTY exec: fake-driven runtime matrix ----
 
     use crate::exec_pty::{PtyControl, SessionReaper, TtySignal, VEOF};
     use tokio::io::AsyncReadExt;
@@ -3044,7 +3044,7 @@ mod tests {
 
     #[tokio::test]
     async fn tty_inspect_is_tty_aware_for_stdin_and_control_seq() {
-        // G8: a live TTY exec reports OPEN stdin + the highest admitted control
+        // A live TTY exec reports OPEN stdin + the highest admitted control
         // seq; after CloseStdin it reports CLOSED. (Non-TTY execs keep CLOSED +
         // seq 0, covered by the detached/attached paths.)
         let (rt, _hooks) = tty_runtime(None);
@@ -3178,7 +3178,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tty_default_session_runs_past_the_non_tty_runtime_ceiling() {
         // A default interactive session has NO runtime ceiling (None): it must
-        // stay Running well past the W12 non-TTY MAX_EXEC_RUNTIME_MS (6h).
+        // stay Running well past the non-TTY MAX_EXEC_RUNTIME_MS (6h).
         let (rt, _hooks) = tty_runtime(None);
         let owner = b"c1".to_vec();
         let (exec_id, ..) = rt
@@ -3198,7 +3198,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn non_tty_session_is_still_cancelled_at_the_6h_ceiling() {
-        // The W12 non-TTY wall-clock ceiling (MAX_EXEC_RUNTIME_MS) must still
+        // The non-TTY wall-clock ceiling (MAX_EXEC_RUNTIME_MS) must still
         // fire: a non-TTY exec whose child never exits on its own is Cancelled
         // once 6h elapse. This guards against the interactive-ceiling work
         // accidentally loosening the attached ceiling.

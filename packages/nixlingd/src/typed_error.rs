@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn guest_control_exec_failed_kinds_are_leak_free() {
-        // F9 / WR12: every exec failure kind (including the serde/protocol and
+        // Every exec failure kind (including the serde/protocol and
         // transport classes) must surface a non-empty, leak-free public
         // message + remediation — no host path, argv, env, output bytes, or
         // session handle. The daemon never attaches guest-supplied content to

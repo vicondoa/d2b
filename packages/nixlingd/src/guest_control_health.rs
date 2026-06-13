@@ -333,10 +333,10 @@ where
 }
 
 /// Typed outcome of an authenticated `ReadGuestFile` read. Each variant maps to
-/// an operator-actionable CLI error (Decision 12) — never a blind retry. The
+/// an operator-actionable CLI error — never a blind retry. The
 /// transport/auth/protocol variants reuse the Health probe's failure taxonomy;
 /// `CapabilityUnavailable` is the fail-closed result for an authenticated guest
-/// that never advertised `ReadGuestFile` (Decision 15 — an old/partial guest).
+/// that never advertised `ReadGuestFile` (an old/partial guest).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestFileReadError {
     /// Handshake/transport/protocol failure (incl. unreachable, old-generation
@@ -361,11 +361,11 @@ pub enum GuestFileReadError {
 /// handshake) and read the editable guest config working copy via the typed
 /// `ReadGuestFile { GuestConfig }` RPC on the SAME authenticated connection.
 ///
-/// Decision 15: the negotiated `ReadGuestFile` capability is REQUIRED — an
+/// The negotiated `ReadGuestFile` capability is REQUIRED — an
 /// authenticated guest that never advertised it fails closed
 /// (`CapabilityUnavailable`) instead of being probed for a config file.
 ///
-/// Decision 4: the returned bytes are the integrity ground truth; the guest's
+/// The returned bytes are the integrity ground truth; the guest's
 /// self-reported `size_bytes`/`sha256` are ignored here and recomputed by the
 /// host. This function returns ONLY the raw bytes (or a typed error) and never
 /// leaks them into the error path.
@@ -407,7 +407,7 @@ where
     }
     // Defense in depth: a well-behaved guest never returns content past the cap,
     // but the host re-enforces the bound on RECEIVED bytes and never trusts the
-    // guest-reported size/hash (Decision 4).
+    // guest-reported size/hash.
     if response.content.len() as u64 > READ_GUEST_FILE_MAX_BYTES {
         return Err(GuestFileReadError::Protocol);
     }
@@ -415,7 +415,7 @@ where
 }
 
 /// Exhaustive host-side mapping of a guest `ReadGuestFile` error kind to a typed
-/// read error (Decision 12 — no default `Retry`). Non-file kinds collapse to
+/// read error (no default `Retry`). Non-file kinds collapse to
 /// `Protocol` because the guest must not return them on this RPC.
 fn map_guest_file_error(kind: pb::GuestControlErrorKind) -> GuestFileReadError {
     use pb::GuestControlErrorKind as K;
@@ -429,7 +429,7 @@ fn map_guest_file_error(kind: pb::GuestControlErrorKind) -> GuestFileReadError {
 }
 
 /// Map an authenticated guest-control Health probe outcome to a framework
-/// readiness decision (W15 readiness DAG migration, Decision 5).
+/// readiness decision (readiness DAG migration).
 ///
 /// Fails CLOSED: a node is ready only when the daemon completed the full
 /// authenticated Hello + token challenge-response + Health handshake AND the

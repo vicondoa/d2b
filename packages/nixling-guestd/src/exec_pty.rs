@@ -1,4 +1,4 @@
-//! Interactive TTY exec (W14): PTY plumbing for the connection-owned,
+//! Interactive TTY exec: PTY plumbing for the connection-owned,
 //! non-durable, attached interactive exec path.
 //!
 //! Security/safety posture: nixling guest binaries are built fully static and
@@ -16,7 +16,7 @@
 //! per-session protocol state (stdin offset machine, control-seq dispatcher,
 //! teardown phase). The low-level PTY allocation/control syscalls
 //! (`openpt`/`grantpt`/`unlockpt`/`ptsname`/`TIOCSWINSZ`/`tcgetpgrp`) live here
-//! and in the runner helper, never in the W12 attached spawner
+//! and in the runner helper, never in the attached spawner
 //! (`exec.rs`/`exec_linux.rs`) — see `tests/guest-exec-runtime-static.sh`.
 
 use std::sync::{Arc, Mutex};
@@ -248,7 +248,7 @@ pub trait SessionReaper: Send + Sync {
     fn kill_session(&self);
 }
 
-/// A spawned PTY-backed interactive exec. Distinct from the W12
+/// A spawned PTY-backed interactive exec. Distinct from the
 /// [`crate::exec::SpawnedProcess`] (which only exposes stdout/stderr + killer +
 /// waiter): the PTY master is a single bidirectional fd surfaced as an
 /// independent merged-output [`AsyncRead`] half and a stdin-sink [`AsyncWrite`]
@@ -308,7 +308,7 @@ enum WriteOp {
 /// Mutable protocol state lives behind short, non-await std mutexes. The PTY
 /// master write half is owned by a dedicated, abortable **writer task** (not a
 /// handler-held lock): `WriteStdin`/`CloseStdin` submit a [`WriteOp`] over a
-/// bounded channel and await the result. This is the G1 fix — a child that
+/// bounded channel and await the result. This is the deadlock fix — a child that
 /// stops reading stdin can block the writer task on a full PTY, but teardown
 /// drops the master write clone by **aborting the writer task**, never by
 /// contending for a lock the blocked write holds.
@@ -613,7 +613,7 @@ fn phase_is_running(phase: &Arc<Mutex<TtyPhase>>) -> bool {
 }
 
 /// Validate the offset, write what can be written, and advance the cursor by
-/// exactly the bytes that landed (partial-write accounting — G2). Admission and
+/// exactly the bytes that landed (partial-write accounting). Admission and
 /// the offset-machine commit are both gated on the session still being
 /// `Running`, so the committed side effect (offset advance + success ack) is
 /// atomic w.r.t. `begin_closing`: a write that loses the race to `Closing`
@@ -1230,7 +1230,7 @@ mod tests {
         assert!(TtySignal::from_raw(0).is_none());
     }
 
-    // ---- TtyState writer-task (G1/G2/G6) coverage -------------------------
+    // ---- TtyState writer-task coverage -------------------------
 
     use std::io;
     use std::pin::Pin;
@@ -1354,7 +1354,7 @@ mod tests {
     #[tokio::test]
     async fn write_stdin_reports_full_write_delivered_in_chunks() {
         // chunk=2 forces the 5-byte payload to land in pieces, but a fully
-        // delivered write still reports accepted_len == requested length (G2).
+        // delivered write still reports accepted_len == requested length.
         let (tty, sink) = tty_state_with_sink(2, None);
         let out = tty.write_stdin(0, b"abcde", false).await.unwrap();
         assert_eq!(out.accepted_len, 5);
@@ -1367,7 +1367,7 @@ mod tests {
     async fn write_stdin_partial_write_advances_only_by_bytes_written() {
         // The sink accepts 2 bytes then errors. The offset machine must advance
         // by exactly the 2 bytes that landed; a retry at the new offset writes
-        // the remainder with NO re-delivery of the first 2 bytes (G2 dup-on-retry).
+        // the remainder with NO re-delivery of the first 2 bytes (dup-on-retry).
         let (tty, sink) = tty_state_with_sink(2, Some(2));
         let out = tty.write_stdin(0, b"abcde", false).await.unwrap();
         assert_eq!(out.accepted_len, 2);
@@ -1421,7 +1421,7 @@ mod tests {
 
     #[tokio::test]
     async fn teardown_release_writer_aborts_a_write_blocked_on_a_full_pty() {
-        // THE G1 deadlock case: a child that stops reading stdin fills the PTY,
+        // THE deadlock case: a child that stops reading stdin fills the PTY,
         // so the writer task blocks indefinitely on poll_write. Teardown's
         // release_writer() MUST drop the master write clone by aborting the task
         // — never by contending for a lock the blocked write holds — so it
@@ -1505,7 +1505,7 @@ mod tests {
 
     #[tokio::test]
     async fn out_of_allowlist_signal_does_not_consume_the_control_seq() {
-        // G6: an out-of-allowlist signal must be rejected BEFORE admit(), so the
+        // An out-of-allowlist signal must be rejected BEFORE admit(), so the
         // sequence stays available for a subsequent valid control message.
         let (tty, _sink) = tty_state_with_sink(0, None);
         assert_eq!(tty.signal(5, 11).unwrap_err(), ExecError::InvalidSignal);
@@ -1517,7 +1517,7 @@ mod tests {
 
     #[test]
     fn w14_types_do_not_leak_payload_in_debug() {
-        // Leakage canary: the W14 result/error/control types carry only counts
+        // Leakage canary: the result/error/control types carry only counts
         // and enum discriminants — never keystrokes, PTY output, argv, env,
         // exec-ids, or tokens. Formatting them must not surface caller bytes.
         // This is a regression guard: if a future change adds a byte-carrying
@@ -1533,7 +1533,7 @@ mod tests {
         assert!(!dbg.contains("S3CR3T"));
         assert!(!dbg.contains("secret"));
 
-        // Every W14 ExecError variant is a unit variant: Debug is just the name.
+        // Every ExecError variant is a unit variant: Debug is just the name.
         for (err, name) in [
             (ExecError::InvalidTerminalSize, "InvalidTerminalSize"),
             (ExecError::TtyStderrUnavailable, "TtyStderrUnavailable"),

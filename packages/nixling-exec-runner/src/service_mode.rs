@@ -231,7 +231,7 @@ pub fn supervise(
     // Drain stdout/stderr concurrently so the child never blocks on a full pipe.
     // Each drain signals clean completion on `done_tx`; the supervisor uses it
     // to bound its post-reap wait so a leaked descendant holding a pipe
-    // write-end can never stall the terminal status (F4).
+    // write-end can never stall the terminal status.
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut drains = Vec::new();
     if let Some(reader) = child.take_stdout() {
@@ -1002,7 +1002,7 @@ mod tests {
         // write end open for the duration of supervise() to mimic a leaked
         // descendant that inherited the child's stdout write-end. The drain
         // thread can never observe EOF, so an unbounded drain join would hang
-        // forever and the terminal status would never be published (F4).
+        // forever and the terminal status would never be published.
         let (read_fd, write_fd) = rustix::pipe::pipe().expect("pipe");
         let proc = FakeProc::new(None);
         // The direct child exits immediately; only the leaked pipe lingers.

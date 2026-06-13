@@ -306,7 +306,7 @@ pub enum ExecStream {
 /// A single environment variable for `ExecOp::Start`. Values are forwarded
 /// verbatim into the guest exec request and are NEVER logged, traced, or
 /// audited (only the count is observable). `Debug` is redacted so a stray
-/// `{:?}` can never leak a key or secret value (WR12).
+/// `{:?}` can never leak a key or secret value.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecEnvVar {
@@ -353,7 +353,7 @@ pub struct ExecStartArgs {
 
 impl fmt::Debug for ExecStartArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction (WR12): show the VM name + shape + counts, never the raw
+        // Redaction: show the VM name + shape + counts, never the raw
         // argv / env keys+values / cwd.
         f.debug_struct("ExecStartArgs")
             .field("vm", &self.vm)
@@ -382,7 +382,7 @@ pub struct ExecWriteStdinArgs {
 
 impl fmt::Debug for ExecWriteStdinArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction (WR12): the session handle + the raw stdin chunk (keystroke
+        // Redaction: the session handle + the raw stdin chunk (keystroke
         // bytes) never appear; show only the offset, eof, and encoded length.
         f.debug_struct("ExecWriteStdinArgs")
             .field("session", &"<redacted>")
@@ -412,7 +412,7 @@ pub struct ExecReadOutputArgs {
 
 impl fmt::Debug for ExecReadOutputArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction (WR12): the session handle never appears.
+        // Redaction: the session handle never appears.
         f.debug_struct("ExecReadOutputArgs")
             .field("session", &"<redacted>")
             .field("stream", &self.stream)
@@ -541,7 +541,7 @@ pub struct ExecStartResult {
 
 impl fmt::Debug for ExecStartResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction (WR12): the issued session handle never appears.
+        // Redaction: the issued session handle never appears.
         f.debug_struct("ExecStartResult")
             .field("session", &"<redacted>")
             .field("tty", &self.tty)
@@ -586,7 +586,7 @@ pub struct ExecReadOutputResult {
 
 impl fmt::Debug for ExecReadOutputResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction (WR12): the raw guest stdout/stderr bytes never appear; show
+        // Redaction: the raw guest stdout/stderr bytes never appear; show
         // only the encoded length + cursor/flags.
         f.debug_struct("ExecReadOutputResult")
             .field("data_base64_len", &self.data_base64.len())
@@ -999,7 +999,7 @@ mod tests {
         assert!(error.message().contains("extra"));
     }
 
-    // WR12: a stray `{:?}` on any exec DTO must never leak argv, env keys or
+    // A stray `{:?}` on any exec DTO must never leak argv, env keys or
     // values, cwd, raw stdio bytes, or the opaque session handle. Each sentinel
     // below is a unique marker that, if it appeared in the formatted output,
     // would prove a redaction regression.

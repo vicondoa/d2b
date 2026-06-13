@@ -1644,7 +1644,7 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
         // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
         // the connection + a cheap ServerState clone move to a SPAWNED owner
         // handler so the serial accept loop is never blocked for the lifetime
-        // of an exec session (WR1).
+        // of an exec session.
         if let wire::Request::Exec(op) = request {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
@@ -2169,8 +2169,8 @@ fn mutating_verb_preflight(
 
     if flags.dry_run {
         let summary = match target_vm {
-            Some(vm) => format!("nixling {verb} --dry-run: daemon-side plan for vm '{vm}' (W14b)"),
-            None => format!("nixling {verb} --dry-run: daemon-side plan (W14b)"),
+            Some(vm) => format!("nixling {verb} --dry-run: daemon-side plan for vm '{vm}'"),
+            None => format!("nixling {verb} --dry-run: daemon-side plan"),
         };
         return Some(wire::mutating_verb_response(MutatingVerbResponse {
             verb: verb.to_owned(),
@@ -2485,7 +2485,7 @@ fn exec_error_kind_label(error: &TypedError) -> &'static str {
 /// free function so the redaction-safe field set can be asserted by a tracing
 /// capture test: it accepts ONLY the leak-safe identifiers (vm name, peer uid,
 /// negotiated tty). The opaque session handle is deliberately NOT included —
-/// per WR12/AGENTS, session handles must never reach a span, log, audit, or
+/// per AGENTS, session handles must never reach a span, log, audit, or
 /// metric. argv/env/cwd/output bytes are never passed here either.
 fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
     tracing::info!(
@@ -2499,14 +2499,14 @@ fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
 }
 
 /// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
-/// the serial accept loop (WR1): the public.sock accept loop never blocks for
+/// the serial accept loop: the public.sock accept loop never blocks for
 /// the lifetime of an exec. SO_PEERCRED admin was verified before the spawn.
 ///
 /// Lifecycle (non-detached): reserve a session slot (cap-checked BEFORE any
 /// connect/auth/ExecCreate), spawn the per-session worker, relay the establish
 /// reply, then proxy one op per frame. The connection's EOF/POLLHUP closes the
 /// command channel, which returns the worker, drops the runtime, and drops the
-/// authenticated client — prompting the guest `close_connection` and W14 PTY
+/// authenticated client — prompting the guest `close_connection` and PTY
 /// teardown. The slot is released when its RAII guard drops on return.
 fn run_exec_owner(
     stream: Socket,
@@ -2578,7 +2578,7 @@ fn run_exec_owner(
         }
     };
 
-    // Reserve a session slot BEFORE any connect/auth/ExecCreate (WR13). The
+    // Reserve a session slot BEFORE any connect/auth/ExecCreate. The
     // guard releases the slot on every return path below.
     let slot = match state.exec_sessions.reserve(peer.uid, &start.vm) {
         Ok(slot) => slot,
@@ -2616,7 +2616,7 @@ fn run_exec_owner(
             deadlines,
         ));
 
-    // The terminal-cleanup reaper (WR13/F5) shuts down the owner socket so a
+    // The terminal-cleanup reaper shuts down the owner socket so a
     // stalled owner that never closes after the command goes terminal does not
     // pin the session slot. It only fires AFTER the command is terminal, never
     // while the command is live.
@@ -2775,7 +2775,7 @@ enum ExecWriterItem {
     },
 }
 
-/// Bound on owner-connection ops concurrently in flight (WR13). This caps the
+/// Bound on owner-connection ops concurrently in flight. This caps the
 /// number of ops dispatched-but-not-yet-replied — including long-polls
 /// (`ReadOutput`/`Wait`) that each pin a guest RPC — NOT merely the depth of a
 /// channel the worker and writer drain as fast as the reader fills it. A
@@ -2784,7 +2784,7 @@ enum ExecWriterItem {
 const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
 
 /// A blocking counting semaphore bounding the owner connection's actual
-/// concurrent in-flight ops (WR13). The earlier design only bounded the
+/// concurrent in-flight ops. The earlier design only bounded the
 /// reader→writer channel, but the worker immediately spawns each long-poll and
 /// the writer immediately spawns each awaiter, so both channels drained as fast
 /// as the reader filled them — the reader was never backpressured and a
@@ -3075,7 +3075,7 @@ fn exec_owner_writer(
     });
 }
 
-/// Owner-socket teardown seam for the terminal-cleanup reaper (F5). Shutting
+/// Owner-socket teardown seam for the terminal-cleanup reaper. Shutting
 /// down the socket unblocks the owner reader (`read_frame` returns), which
 /// releases the session slot. Idempotent: a second shutdown is a harmless
 /// `ENOTCONN`.
@@ -3097,7 +3097,7 @@ impl exec_session::OwnerReaper for SocketShutdownReaper {
 
 #[cfg(test)]
 mod exec_metric_tests {
-    //! WR12 / F9: the exec metric `nixling_daemon_guest_control_exec_total` is
+    //! The exec metric `nixling_daemon_guest_control_exec_total` is
     //! a HARD closed-label series. Its only labels are the constant
     //! `subsystem` plus a bounded `outcome` / `error_kind` enum — never a vm
     //! name, session handle, op id, peer uid, or argv hash. These tests assert
@@ -3232,7 +3232,7 @@ mod exec_metric_tests {
 
 #[cfg(test)]
 mod exec_owner_io_tests {
-    //! Hermetic coverage for the owner reader/writer (F1/WR6): the owner
+    //! Hermetic coverage for the owner reader/writer: the owner
     //! connection dispatches frames to the worker WITHOUT blocking on each
     //! reply, so (a) an urgent control op is serviced while a long-poll is in
     //! flight (no head-of-line), and (b) owner disconnect tears the session
@@ -3425,7 +3425,7 @@ mod exec_owner_io_tests {
         worker.join().expect("fake worker joins");
     }
 
-    /// WR13 / G1: the in-flight cap must bound the number of ops ACTUALLY
+    /// The in-flight cap must bound the number of ops ACTUALLY
     /// dispatched-but-unanswered (each pins a guest RPC), not merely the depth
     /// of a channel the worker/writer drain as fast as the reader fills it. A
     /// pipelining owner that floods `cap + N` long-polls must see at most `cap`
@@ -6544,7 +6544,7 @@ fn dispatch_broker_vm_start(
             // Post-readiness trigger. Once the per-VM DAG reports
             // overall_ok the guest is up, so it is safe to pin the host
             // pubkey into `/var/lib/nixling/known_hosts.nixling` via the
-            // broker for the retained W16 SSH-compat path. Failures here are
+            // broker for the retained SSH-compat path. Failures here are
             // warn-only — matching the legacy
             // `nixling-known-hosts-refresh@<vm>.service` behaviour, which
             // left the old pin in place rather than failing the VM start.
@@ -12232,7 +12232,7 @@ mod exec_established_tracing_tests {
     #[test]
     fn exec_established_event_carries_only_leak_safe_fields() {
         // APPROVED field-name allowlist for the establishment event. The opaque
-        // session handle is deliberately NOT approved — per WR12/AGENTS, session
+        // session handle is deliberately NOT approved — per AGENTS, session
         // handles must never reach a span, log, audit, or metric.
         const APPROVED_FIELDS: &[&str] = &[
             "message",

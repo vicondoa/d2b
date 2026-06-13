@@ -1058,7 +1058,7 @@ mod tests {
     #[test]
     fn config_read_loop_retries_transient_then_succeeds() {
         // A transient missing/refused CH vsock socket during startup must
-        // be retried, not fail config sync immediately (F5).
+        // be retried, not fail config sync immediately.
         let probe = ScriptedConfigProbe::new(vec![
             Err(GuestFileReadError::Probe(GuestControlHealthError::TransportIo)),
             Err(GuestFileReadError::Probe(GuestControlHealthError::Timeout)),
@@ -1194,7 +1194,7 @@ mod tests {
 
     #[test]
     fn expired_attempt_budget_surfaces_timeout_through_broker_signer() {
-        // F4: a genuinely expired per-attempt budget must surface as a
+        // A genuinely expired per-attempt budget must surface as a
         // Timeout from the PRODUCTION BrokerSigner WITHOUT even reaching
         // the broker socket, so a real deadline/timeout reaches the
         // documented guest-control-timeout error.
@@ -1221,7 +1221,7 @@ mod tests {
 
     #[test]
     fn config_read_timeout_maps_to_timeout_kind() {
-        // F4: a probe timeout flows through the read-error mapping as the
+        // A probe timeout flows through the read-error mapping as the
         // closed-enum Timeout kind (slug guest-control-timeout), not a
         // generic Transport collapse.
         use crate::typed_error::{GuestControlReadErrorKind, TypedError};

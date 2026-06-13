@@ -34,7 +34,7 @@ fn run(args: &[String]) -> i32 {
                 64
             }
         },
-        // Interactive TTY exec helper (W14). guestd spawns this with the PTY
+        // Interactive TTY exec helper. guestd spawns this with the PTY
         // slave on stdin and a CLOEXEC status pipe on stdout; the helper makes
         // itself the session leader with the slave as its controlling terminal,
         // then exec's the target. See `tty_helper`.

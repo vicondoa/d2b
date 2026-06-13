@@ -2,7 +2,7 @@
 //!
 //! Bridges the in-process [`crate::exec_session`] machinery to the real
 //! per-VM vsock transport: connect, run the authenticated handshake (reusing
-//! the W15 [`crate::guest_control_bridge`] connect/probe path), gate on the
+//! the [`crate::guest_control_bridge`] connect/probe path), gate on the
 //! guest's advertised exec capabilities, then issue `ExecCreate`. The
 //! returned [`RealExecClient`] proxies each subsequent exec op with a FRESH
 //! per-op deadline (never the exhausted one-shot establishment budget).
@@ -112,7 +112,7 @@ impl ExecGuestConnector for RealExecConnector {
 }
 
 /// Fail closed unless the guest advertises every exec capability the session
-/// needs, returning the negotiated cap snapshot for per-op gating (WR8/F6).
+/// needs, returning the negotiated cap snapshot for per-op gating.
 /// Old generations that never advertised exec map to a dedicated
 /// old-generation error (exit 70, no SSH fallback).
 fn gate_capabilities(
@@ -387,7 +387,7 @@ fn terminal_from_state(
                     Some(TerminalKind::Exited(*code))
                 }
                 // EXITED without a WIFEXITED code is a protocol violation, not a
-                // synthesized success (WR9).
+                // synthesized success.
                 _ => Some(TerminalKind::Error("protocol-error")),
             }
         }
@@ -506,7 +506,7 @@ fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
 }
 
 // ===========================================================================
-// Tests (WR16 matrix f: per-capability fail-closed gating). `gate_capabilities`
+// Tests (matrix f: per-capability fail-closed gating). `gate_capabilities`
 // is a pure function over the guest's advertised capability set, so the gate is
 // unit-tested directly without a live transport.
 // ===========================================================================
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn negotiated_caps_reflect_output_and_resize_advertisements() {
-        // The cap snapshot used for per-op gating (F6) reflects exactly what the
+        // The cap snapshot used for per-op gating reflects exactly what the
         // guest advertised: ExecLogs → output, TtyResize → tty_resize.
         let caps = vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),

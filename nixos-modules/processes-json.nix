@@ -104,7 +104,7 @@ EOF
   unixSocketListening = value: { kind = "unix-socket-listening"; inherit value; };
   tcpPort = host: port: { kind = "tcp-port"; value = { inherit host port; }; };
   commandReady = value: { kind = "command"; inherit value; };
-  # Authenticated guest-control Health readiness (W15). Unlike a raw TCP-22
+  # Authenticated guest-control Health readiness. Unlike a raw TCP-22
   # probe this predicate fails CLOSED: the daemon completes a full
   # Hello + token challenge-response + Health over the guest-control vsock
   # before the node is ready. The daemon resolves the per-VM vsock socket,
@@ -805,9 +805,9 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       manifest = cfg.manifest.${name};
       microvm = nl.vmRunner config name;
-      # W15: the guest-control authenticated Health probe is the framework
+      # The guest-control authenticated Health probe is the framework
       # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
-      # retained for the W16 SSH-compat window but are no longer the framework
+      # retained for the SSH-compat window but are no longer the framework
       # readiness signal, so a TCP-22 readiness node is no longer emitted.
       guestControlEnabled = vm.guest.control.enable;
       virtiofsShares = lib.filter

@@ -149,7 +149,7 @@ mod tests {
     fn concurrent_writes_to_same_target_never_collide_on_temp() {
         // Two threads writing the same target concurrently must both succeed:
         // the temp name is unique per write, so neither clobbers the other's
-        // temp (the F13 concurrent-ExecCancel `cancel.tmp` collision).
+        // temp (the concurrent-ExecCancel `cancel.tmp` collision).
         let dir = scratch();
         let target = Arc::new(dir.join("cancel"));
         let mut handles = Vec::new();

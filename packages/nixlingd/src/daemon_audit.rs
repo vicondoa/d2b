@@ -46,7 +46,7 @@ pub enum DaemonEvent {
     ///
     /// Leak-safe by construction: carries ONLY the VM name, the admin peer
     /// uid, and the negotiated tty shape. The opaque session handle, argv,
-    /// env, cwd, and any stdio bytes are NEVER recorded (WR12).
+    /// env, cwd, and any stdio bytes are NEVER recorded.
     GuestControlExecEstablished {
         /// VM name the exec session targets.
         vm: String,
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn exec_lifecycle_events_are_leak_safe() {
-        // F9 / WR12: the exec establish + terminate audit events carry ONLY
+        // The exec establish + terminate audit events carry ONLY
         // leak-safe fields (vm, peer_uid, tty). A planted sentinel standing in
         // for a session handle / argv / env / cwd must never appear, and the
         // serialized event must expose no unexpected key.

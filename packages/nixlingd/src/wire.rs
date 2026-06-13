@@ -28,7 +28,7 @@ pub enum Request {
     AuthStatus,
     KeysList,
     KeysShow(public_wire::KeysShowRequest),
-    // W14d: mutating-verb dispatch entry points. Each variant carries
+    // Mutating-verb dispatch entry points. Each variant carries
     // its public_wire request payload verbatim; `mutating_verb_preflight`
     // emits the typed dry-run/invalid-request envelope and apply
     // requests dispatch directly to the matching
@@ -285,7 +285,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             .map(Request::ReadGuestConfig)
             .map_err(map_parse_error),
         "exec" => {
-            // `opId` is an envelope-level correlation id (F1/WR6); it is not a
+            // `opId` is an envelope-level correlation id; it is not a
             // field of the adjacently-tagged `ExecOp`, so strip it before the
             // closed-enum deserialize.
             object.remove("opId");
@@ -300,7 +300,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
 /// Extract the envelope-level `opId` from an exec request frame, defaulting to
 /// `0` when absent. The owner connection echoes this id on the matching
 /// response so a long-poll reply and an urgent control reply can be correlated
-/// out of order (F1/WR6) without the CLI mismatching frames.
+/// out of order without the CLI mismatching frames.
 pub fn exec_op_id(bytes: &[u8]) -> u64 {
     serde_json::from_slice::<Value>(bytes)
         .ok()
@@ -471,8 +471,8 @@ pub fn store_verify_response(payload: public_wire::StoreVerifyResponse) -> Value
     value
 }
 
-/// W14b: serialize a `MutatingVerbResponse` as the daemon wire frame
-/// the W14c CLI client expects.
+/// Serialize a `MutatingVerbResponse` as the daemon wire frame
+/// the CLI client expects.
 pub fn mutating_verb_response(payload: public_wire::MutatingVerbResponse) -> Value {
     let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
     if let Some(obj) = value.as_object_mut() {
@@ -509,7 +509,7 @@ pub fn exec_response(payload: &public_wire::ExecOpResponse) -> Value {
     value
 }
 
-/// `execResponse` frame tagged with the correlating envelope `opId` (F1/WR6).
+/// `execResponse` frame tagged with the correlating envelope `opId`.
 pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) -> Value {
     let mut value = exec_response(payload);
     if let Some(obj) = value.as_object_mut() {
@@ -520,7 +520,7 @@ pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) 
 
 /// `error` frame tagged with the correlating envelope `opId` so the owner
 /// connection can return an out-of-order op error without the CLI mismatching
-/// it against a different in-flight op (F1/WR6).
+/// it against a different in-flight op.
 pub fn error_frame_with_id(op_id: u64, error: &TypedError) -> Value {
     let mut value =
         serde_json::to_value(error_frame(error)).unwrap_or_else(|_| json!({ "type": "error" }));

@@ -41,7 +41,7 @@ pub struct ManagedUnit {
     /// not be performed/parsed. The distinction is load-bearing: an ACTIVE
     /// unit whose identity is `Unqueried` classifies as `Unknown` (retry),
     /// never `Foreign` (destructive) — only a queried identity that actually
-    /// mismatches is `Foreign` (F1).
+    /// mismatches is `Foreign`.
     pub identity: UnitIdentity,
 }
 
@@ -50,7 +50,7 @@ pub struct ManagedUnit {
 /// `Slice=`/`ExecStart=`) is a genuine mismatch, NOT a query failure; an
 /// *unqueried* identity means the `show` step never produced a usable value
 /// (spawn failed, non-zero exit, unparsable, or no block for this unit). Only
-/// the queried case can drive a `Foreign` classification (F1).
+/// the queried case can drive a `Foreign` classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnitIdentity {
     /// `systemctl show` was read for this unit. `slice`/`exec_start` carry
@@ -255,7 +255,7 @@ impl TransientUnitManager for SystemdRunUnitManager {
         // failure (spawn error, non-zero exit, or a unit with no returned
         // block) leaves that unit's identity `Unqueried`, so an ACTIVE unit
         // classifies as `Unknown` (retry) rather than `Foreign` (destructive).
-        // Only a successfully-read identity that mismatches is `Foreign` (F1).
+        // Only a successfully-read identity that mismatches is `Foreign`.
         let mut show = tokio::process::Command::new(&self.systemctl_path);
         show.arg("show")
             .arg("--no-pager")
@@ -410,7 +410,7 @@ fn systemd_run_argv(slot: u32, ceiling_sec: u64, exec_runner_path: &Path) -> Vec
     // control-watcher ceiling (== ceiling_sec) plus the full TERM->grace->KILL->
     // reap->status window so systemd's unit-level RuntimeMaxSec SIGTERM (which
     // the no-handler runner would die on immediately) only fires after the
-    // runner already published `cancelled` (F11).
+    // runner already published `cancelled`.
     if ceiling_sec > 0 {
         let runtime_max = ceiling_sec
             .saturating_add(crate::detached_registry::TIMEOUT_STOP_SEC)
@@ -462,7 +462,7 @@ mod tests {
             .all(|a| !a.to_string_lossy().starts_with("RuntimeMaxSec=")));
         // ceiling > 0 => the backstop is emitted, and STRICTLY larger than the
         // runner's own ceiling so systemd does not SIGKILL before the runner
-        // writes `cancelled` (F11).
+        // writes `cancelled`.
         let ceiling = 3600;
         let some = systemd_run_argv(3, ceiling, &runner);
         let runtime_max: u64 = some

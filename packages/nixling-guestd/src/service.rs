@@ -542,7 +542,7 @@ impl GuestControlService {
 
     /// Resolve a `ReadGuestFile` enum key to the host-declared path and read it
     /// with the fail-closed safe-open algorithm. Returns the file bytes or a
-    /// typed `GuestControlErrorKind`. W15 supports only `GuestConfig`; any other
+    /// typed `GuestControlErrorKind`. Only `GuestConfig` is supported; any other
     /// (or `Unspecified`/unknown) key maps to `PathUnsafe` because it names no
     /// safe target.
     fn read_guest_file_inner(
@@ -781,7 +781,7 @@ fn inspect_response(snapshot: &ExecSnapshot) -> pb::ExecInspectResponse {
     let mut response = pb::ExecInspectResponse::new();
     response.state = EnumOrUnknown::new(wire_exec_state(snapshot.state));
     response.visible_terminal_status = wire_terminal_status(snapshot);
-    // TTY-aware stdin disposition (G8): a live interactive exec accepting
+    // TTY-aware stdin disposition: a live interactive exec accepting
     // WriteStdin reports OPEN, a tearing-down one CLOSING, a VEOF-closed one
     // CLOSED. Non-interactive execs have no writable stdin and keep the
     // historical CLOSED report.
@@ -838,7 +838,7 @@ fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
         }
         ExecError::StaleSession => Pb::GUEST_CONTROL_ERROR_KIND_STALE_SESSION,
         ExecError::ExecExpired => Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
-        // Interactive TTY exec (W14): reuse existing wire kinds (no regen).
+        // Interactive TTY exec: reuse existing wire kinds (no regen).
         ExecError::InvalidTerminalSize => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
         ExecError::TtyStderrUnavailable => Pb::GUEST_CONTROL_ERROR_KIND_TTY_STDERR_UNAVAILABLE,
         ExecError::TtyRequired => Pb::GUEST_CONTROL_ERROR_KIND_TTY_REQUIRED,
@@ -944,7 +944,7 @@ impl GuestControl for GuestControlService {
 
         let mut response = pb::ReadGuestFileResponse::new();
         // Echo the requested key so the host can correlate; on error this is the
-        // requested id, on success the resolved one (identical for W15).
+        // requested id, on success the resolved one (identical today).
         response.file_id = EnumOrUnknown::new(file_id);
         match outcome {
             Ok(bytes) => {
@@ -1262,7 +1262,7 @@ impl GuestControl for GuestControlService {
             Ok(out) => {
                 let mut response = pb::WriteStdinResponse::new();
                 response.accepted_offset = request.offset;
-                // Partial-write-aware (G2): report the bytes that actually
+                // Partial-write-aware: report the bytes that actually
                 // landed, not the requested length. A client retries any
                 // remainder from `next_offset`.
                 response.accepted_len = out.accepted_len;
@@ -1585,7 +1585,7 @@ fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
     use pb::HealthRemediation as R;
     let mut error = pb::GuestControlError::new();
     error.kind = EnumOrUnknown::new(kind);
-    // Per-kind operator remediation (F10). A blind RETRY is wrong for the two
+    // Per-kind operator remediation. A blind RETRY is wrong for the two
     // detached retained-log faults: a quota breach is shed by the periodic
     // reaper (advise REDUCE_LOAD + a concrete retry window), while an unsafe
     // retained-log path is an internal guestd storage fault (advise checking
@@ -2395,7 +2395,7 @@ mod tests {
                 ExecError::ExecExpired,
                 Pb::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
             ),
-            // Interactive TTY exec (W14) variants — none collapse silently; the
+            // Interactive TTY exec variants — none collapse silently; the
             // mode/validation faults map to ProtocolError deliberately.
             (
                 ExecError::InvalidTerminalSize,
@@ -2792,7 +2792,7 @@ mod tests {
 
     #[test]
     fn write_stdin_handler_budget_sheds_then_releases_on_drop() {
-        // G11: the per-connection WriteStdin handler budget sheds the
+        // The per-connection WriteStdin handler budget sheds the
         // (N+1)th concurrent handler with StdinBackpressure, and dropping a
         // guard returns the slot so a subsequent acquire succeeds.
         let service = test_service(42);
@@ -2823,7 +2823,7 @@ mod tests {
 
     #[test]
     fn write_stdin_byte_budget_exhaustion_releases_the_handler_slot() {
-        // G11: when the decoded-byte budget is exhausted, the acquire fails with
+        // When the decoded-byte budget is exhausted, the acquire fails with
         // StdinByteBudgetExhausted AND must roll back the handler-count bump it
         // made first, so the connection is not left with a leaked handler slot.
         let service = test_service(43);
@@ -2844,7 +2844,7 @@ mod tests {
         drop(held);
     }
 
-    // ---- ReadGuestFile (W15) ------------------------------------------------
+    // ---- ReadGuestFile ------------------------------------------------
 
     fn scratch_dir(tag: &str) -> PathBuf {
         // Repo convention for guest-crate tests: scratch under the system temp

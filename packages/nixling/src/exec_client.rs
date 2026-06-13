@@ -5,7 +5,7 @@
 //! guest-control session, then the remaining ops
 //! (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`) drive it. The
 //! CLI never opens a new connection per op and never allocates a host PTY —
-//! the guest owns the PTY (W14 helper-exec). This module is the pure FSM +
+//! the guest owns the PTY (helper-exec). This module is the pure FSM +
 //! host-termios safety; the real socket/signal/host wiring lives in `lib.rs`
 //! so the FSM is unit-testable against injected fakes.
 
@@ -21,7 +21,7 @@ use nixling_ipc::public_wire::{
 };
 use serde_json::Value;
 
-// Reserved exec CLI exit codes (WR9). Guest WIFEXITED 0-255 codes pass through
+// Reserved exec CLI exit codes. Guest WIFEXITED 0-255 codes pass through
 // and CAN collide with these reserved numbers (e.g. a guest that exits 70 vs.
 // the old-generation transport class); `--json` disambiguates via
 // `source`/`reason`/`guestExitCode`/`transportExitCode`. These deliberately
@@ -145,7 +145,7 @@ impl ExecClientError {
 
     /// Map an abnormal terminal slug (a closed daemon-side terminal-state
     /// constant, never a guest-supplied string) to a transport/protocol
-    /// failure (WR9). An abnormal terminal is NEVER a guest exit: it carries a
+    /// failure. An abnormal terminal is NEVER a guest exit: it carries a
     /// reserved CLI exit code with `source` `transport`/`guest-control`/
     /// `protocol`, never `guest`.
     pub fn from_abnormal_slug(slug: &str) -> Self {
@@ -179,7 +179,7 @@ impl ExecClientError {
     }
 }
 
-/// The CLI exit code + failure source for a daemon wire `kind` slug (WR9).
+/// The CLI exit code + failure source for a daemon wire `kind` slug.
 pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
     match kind {
         "guest-control-transport-unavailable" | "guest-control-timeout" => {
@@ -223,7 +223,7 @@ pub enum ExecSignal {
     Quit,
 }
 
-/// Guest signal number for a forwarded host signal (WR11 mapping).
+/// Guest signal number for a forwarded host signal.
 pub fn guest_signo(signal: ExecSignal) -> u32 {
     match signal {
         ExecSignal::Interrupt => 2,
@@ -266,7 +266,7 @@ pub struct ExecFsmConfig {
     /// Forward host stdin into the guest (`-i`).
     pub interactive: bool,
     /// Bounded long-poll timeout (ms) for `ReadOutput`/`Wait` so stdin and
-    /// signals are serviced promptly between polls (WR11 no-starve).
+    /// signals are serviced promptly between polls (no-starve).
     pub poll_timeout_ms: u64,
     /// Maximum decoded bytes per stdin/output chunk.
     pub max_chunk: u64,
@@ -289,7 +289,7 @@ pub struct ExecOutcome {
     pub terminal: ExecTerminalStatus,
 }
 
-/// The CLI process exit code for a resolved terminal status (WR9):
+/// The CLI process exit code for a resolved terminal status:
 /// WIFEXITED → code (0-255), WIFSIGNALED → 128+signo, abnormal → reserved.
 pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
     match status {
@@ -303,7 +303,7 @@ pub fn exit_code_for_terminal(status: &ExecTerminalStatus) -> i32 {
     }
 }
 
-/// Validate + resolve a wire terminal status into an [`ExecOutcome`] (WR9).
+/// Validate + resolve a wire terminal status into an [`ExecOutcome`].
 /// Only a true guest `WIFEXITED` (0–255) or `WIFSIGNALED` (valid signo)
 /// resolves as a guest outcome. An out-of-range exit code, an out-of-range
 /// signal, or an abnormal `Error` slug is a transport/protocol failure — never
@@ -381,7 +381,7 @@ fn close_op(session: &str) -> ExecOp {
 }
 
 /// Drive a single established exec session to terminal completion. One session,
-/// one exec, no per-op reconnect (WR11). Long-polls use a short bounded timeout
+/// one exec, no per-op reconnect. Long-polls use a short bounded timeout
 /// so stdin and signals are never starved behind a `ReadOutput`/`Wait` poll;
 /// output is drained to EOF on every stream before the FSM returns.
 pub fn run_exec_fsm<T, H, S>(
@@ -410,7 +410,7 @@ where
     let mut buf = vec![0_u8; chunk];
     // Unsent host stdin carried across iterations: a zero-accepted
     // (backpressured) write keeps the remainder here and retries it before
-    // reading fresh host stdin, so interactive input is never dropped (F3).
+    // reading fresh host stdin, so interactive input is never dropped.
     let mut pending_stdin: Vec<u8> = Vec::new();
     // Stable client-assigned idempotency token for control ops (Signal/Resize).
     // A single monotonic counter keeps every control op id unique within the
@@ -458,7 +458,7 @@ where
         // 2. Forward host stdin. Drain any pending (unsent) bytes from a prior
         //    backpressured write FIRST, then read fresh host stdin only when the
         //    pending buffer is empty — so a zero-accepted write never drops the
-        //    already-read remainder (F3).
+        //    already-read remainder.
         if config.interactive && !stdin_done {
             if pending_stdin.is_empty() {
                 match host.read_stdin(&mut buf) {
@@ -568,7 +568,7 @@ where
             if !wait.running {
                 // The guest reports the command is no longer running but
                 // supplied no terminal status: a protocol failure, never a
-                // synthesized guest success (WR9).
+                // synthesized guest success.
                 return Err(ExecClientError::protocol(
                     "the guest reported the command is no longer running but supplied \
                      no terminal status",
@@ -599,7 +599,7 @@ fn write_output<H: ExecHostIo>(
 
 /// Encode an [`ExecOp`] as the `exec` daemon wire frame: the adjacently-tagged
 /// `{ "op": …, "args": … }` body with a `type: "exec"` discriminator and an
-/// envelope-level `opId` correlation id (F1/WR6). The daemon echoes `opId` on
+/// envelope-level `opId` correlation id. The daemon echoes `opId` on
 /// the matching response so a pending long-poll and an urgent control reply can
 /// be matched out of order.
 pub fn encode_exec_op_frame(op: &ExecOp, op_id: u64) -> Result<Vec<u8>, ExecClientError> {
@@ -664,7 +664,7 @@ fn decode_error_frame(value: &Value) -> ExecClientError {
 }
 
 // ---------------------------------------------------------------------------
-// Host terminal safety (WR11): a guard that restores termios + O_NONBLOCK on
+// Host terminal safety: a guard that restores termios + O_NONBLOCK on
 // EVERY exit/error/disconnect/panic via Drop. Uses only the safe rustix
 // termios/fcntl wrappers — no `unsafe`.
 // ---------------------------------------------------------------------------
@@ -761,7 +761,7 @@ impl FdStateGuard {
     /// Core ordering shared by production and tests. The guard is constructed
     /// (and owns its restore state) BEFORE the fallible O_NONBLOCK step, so a
     /// failure there restores the already-applied raw mode via the guard
-    /// instead of leaving stdin stuck raw (F4).
+    /// instead of leaving stdin stuck raw.
     fn enter_with(ops: Box<dyn HostTtyOps>, raw: bool, nonblock: bool) -> io::Result<Self> {
         let mut guard = Self {
             ops,
@@ -941,7 +941,7 @@ impl ExecHostIo for CapturingHostIo {
 }
 
 // ---------------------------------------------------------------------------
-// Signal source (WR11): block the forwarded signals process-wide and let a
+// Signal source: block the forwarded signals process-wide and let a
 // dedicated thread sigwait + enqueue. Enqueue-only — no termios/syscalls in a
 // handler, and no `unsafe` (nix `SigSet` wrappers are safe).
 // ---------------------------------------------------------------------------
@@ -1016,7 +1016,7 @@ fn nix_errno_to_io(errno: nix::errno::Errno) -> io::Error {
 }
 
 // ===========================================================================
-// Tests (WR16 matrices): (c) FSM one-session/no-reconnect, Wait-timeout keeps
+// Tests (matrices): (c) FSM one-session/no-reconnect, Wait-timeout keeps
 // polling, drain-to-EOF, interactive closes stdin up front; (d) exit-code
 // table + JSON-disambiguation primitives; (e) CLI-side backpressure / offset /
 // stdout-stderr separation / tty merge; (g) signal mapping + FdStateGuard
@@ -1325,7 +1325,7 @@ mod tests {
 
     #[test]
     fn out_of_range_exit_code_is_a_protocol_failure() {
-        // WR9: a malformed terminal status (exit code outside 0-255) is a
+        // A malformed terminal status (exit code outside 0-255) is a
         // protocol failure, never synthesized as a guest success/status.
         let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 4096 });
         let mut host = FakeHostIo::default();
@@ -1368,7 +1368,7 @@ mod tests {
 
     #[test]
     fn abnormal_terminal_slugs_map_to_transport_or_protocol_not_guest() {
-        // WR9: abnormal terminal kinds carry reserved codes with a
+        // Abnormal terminal kinds carry reserved codes with a
         // transport/guest-control/protocol source, NEVER `guest`.
         let cases = [
             ("lost-guestd", EXIT_EXEC_TRANSPORT, ExecFailureSource::Transport),
@@ -1442,7 +1442,7 @@ mod tests {
     fn backpressured_stdin_is_retried_not_dropped() {
         // A zero-accepted write must NOT lose the already-read host stdin: the
         // CLI keeps it pending and retries the SAME bytes at the SAME offset
-        // before reading fresh host stdin (F3).
+        // before reading fresh host stdin.
         let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
         transport.stdout = b"ok".to_vec();
         transport.stdout_hold_until_close = true;
@@ -1605,7 +1605,7 @@ mod tests {
     #[test]
     fn fd_state_guard_restores_raw_mode_when_nonblock_setup_fails() {
         // raw=true succeeds, then the O_NONBLOCK step fails: the terminal MUST
-        // be restored out of raw mode before `enter` returns Err (F4).
+        // be restored out of raw mode before `enter` returns Err.
         let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let ops = RecordingTty {
             fail_nonblock: true,

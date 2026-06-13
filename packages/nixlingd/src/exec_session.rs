@@ -17,7 +17,7 @@
 //! Teardown contract (non-detached): when the owner connection drops, the
 //! command channel closes, the worker returns, the runtime is dropped, and
 //! every clone of the authenticated client is dropped with it. That prompts
-//! the guest's `close_connection` → W14 PTY hangup→grace→stop. The daemon
+//! the guest's `close_connection` → PTY hangup→grace→stop. The daemon
 //! never issues `ExecCancel` for a non-detached session.
 
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ pub struct WriteStdinOutcome {
 }
 
 /// Outcome of a `ReadOutput` transport call. `Debug` is redacted so a stray
-/// `{:?}` can never leak the guest output bytes (WR12); only the length and the
+/// `{:?}` can never leak the guest output bytes; only the length and the
 /// framing flags are observable.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReadOutputOutcome {
@@ -210,7 +210,7 @@ impl ExecEstablishError {
     }
 }
 
-/// Per-op absolute deadlines. Each op draws a FRESH deadline (WR3): the
+/// Per-op absolute deadlines. Each op draws a FRESH deadline: the
 /// one-shot establishment budget is exhausted by the time the first op runs,
 /// so reusing it would immediately time out.
 #[derive(Debug, Clone, Copy)]
@@ -237,8 +237,7 @@ impl Default for ExecOpDeadlines {
 }
 
 /// Establishment spec resolved from a validated [`ExecOp::Start`]. `Debug` is
-/// redacted so a stray `{:?}` can never leak argv / env keys+values / cwd
-/// (WR12).
+/// redacted so a stray `{:?}` can never leak argv / env keys+values / cwd.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExecStartSpec {
     pub vm: String,
@@ -273,8 +272,8 @@ pub struct ExecSessionInfo {
 }
 
 /// Negotiated per-session capability + shape snapshot, cached at establish so
-/// each proxied op can be gated fail-closed BEFORE it reaches the guest (WR8/
-/// F6). A guest that did not advertise the cap an op needs (or a non-tty
+/// each proxied op can be gated fail-closed BEFORE it reaches the guest.
+/// A guest that did not advertise the cap an op needs (or a non-tty
 /// session asked to resize) is rejected with a typed redacted `Capability`
 /// error instead of silently proxying the op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,7 +367,7 @@ pub struct WorkerCommand {
 /// Establish reply shuttled back to the owner before the op loop begins.
 pub type EstablishReply = Result<ExecSessionInfo, ExecEstablishError>;
 
-/// Owner-socket teardown seam for the terminal-cleanup reaper (F5/WR13).
+/// Owner-socket teardown seam for the terminal-cleanup reaper.
 /// `reap` forces the owner connection's reader to unblock (e.g. by shutting
 /// down the socket) so the session slot is released after the command has gone
 /// terminal and the cleanup TTL elapsed. It MUST be idempotent and MUST NOT be
@@ -384,7 +383,7 @@ impl OwnerReaper for NoopReaper {
     fn reap(&self) {}
 }
 
-/// Default terminal-cleanup grace (WR13): after the guest command goes
+/// Default terminal-cleanup grace: after the guest command goes
 /// terminal, a stalled owner that never closes its connection is reaped after
 /// this long so it cannot pin a session slot indefinitely. Generous enough for
 /// a well-behaved CLI to read the terminal status and close first. The reaper
@@ -544,7 +543,7 @@ async fn worker_main(
         match op {
             ExecOp::ReadOutput(_) | ExecOp::Wait(_) => {
                 // Fail closed before spawning a `ReadOutput` long-poll if the
-                // guest never advertised the output (`ExecLogs`) cap (WR8/F6).
+                // guest never advertised the output (`ExecLogs`) cap.
                 // `Wait` is the terminal-status poll and needs no output cap.
                 if matches!(op, ExecOp::ReadOutput(_)) && !state.caps.output {
                     let _ = reply.send(Err(ExecOpError::Capability));
@@ -561,7 +560,7 @@ async fn worker_main(
                     let is_wait = matches!(op, ExecOp::Wait(_));
                     let result = run_long_poll(client.as_ref(), op, deadlines).await;
                     // Record terminal state when `Wait` first reports terminal,
-                    // then arm the terminal-cleanup reaper (WR13/F5). The reaper
+                    // then arm the terminal-cleanup reaper. The reaper
                     // only releases the slot AFTER the command is terminal; it
                     // never kills a live command.
                     if is_wait {
@@ -585,7 +584,7 @@ async fn worker_main(
     // runtime is dropped at thread exit.
 }
 
-/// Arm the terminal-cleanup timer (F5): after the TTL elapses, if the command
+/// Arm the terminal-cleanup timer: after the TTL elapses, if the command
 /// is still terminal (the owner never closed), reap the owner socket so the
 /// session slot is released. If the owner closes first the worker is torn down
 /// and this task is aborted with the runtime, so the reaper never fires.
@@ -616,7 +615,7 @@ struct WorkerState {
     // Idempotency ring for control ops keyed by the client-assigned `opId`.
     // `opId == 0` is never cached (legacy / no-dedup).
     control_replay: std::collections::VecDeque<(u64, ExecOpResponse)>,
-    // Negotiated caps + session shape for fail-closed per-op gating (WR8/F6).
+    // Negotiated caps + session shape for fail-closed per-op gating.
     caps: NegotiatedCaps,
 }
 
@@ -685,7 +684,7 @@ impl WorkerState {
                 // zero-progress (backpressured) write must NOT be replay-cached:
                 // its offset never advances, so caching it would pin the session
                 // at perpetual backpressure even after the guest budget recovers
-                // and the CLI retries the same offset (F3).
+                // and the CLI retries the same offset.
                 if result.accepted_len > 0 || result.stdin_closed {
                     self.last_write = Some((args.offset, result.clone()));
                 }
@@ -710,7 +709,7 @@ impl WorkerState {
             }
             ExecOp::Resize(args) => {
                 // Resize requires a PTY session AND the guest TtyResize cap; a
-                // non-tty session or a guest missing the cap fails closed (F6).
+                // non-tty session or a guest missing the cap fails closed.
                 if !self.caps.tty || !self.caps.tty_resize {
                     return Err(ExecOpError::Capability);
                 }
@@ -815,7 +814,7 @@ pub fn start_response(handle: &str, info: &ExecSessionInfo) -> ExecOpResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Session table (WR13): global / per-uid / per-vm caps + opaque handles.
+// Session table: global / per-uid / per-vm caps + opaque handles.
 // ---------------------------------------------------------------------------
 
 /// Monotonic clock seam so the Start rate limiter can be driven deterministically
@@ -1050,7 +1049,7 @@ impl SessionTable {
 /// RAII guard for a reserved session slot. Dropping it releases the slot
 /// (every failure path drops the guard, so the slot is always released).
 /// `Debug` is redacted so a stray `{:?}` can never leak the unguessable
-/// session handle capability token (WR12); only the leak-safe uid / vm /
+/// session handle capability token; only the leak-safe uid / vm /
 /// released fields are observable.
 pub struct SessionSlot {
     handle: String,
@@ -1109,7 +1108,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 // ===========================================================================
-// Tests (WR16 hermetic matrices: session-table adversarial, worker lifecycle
+// Tests (hermetic matrices: session-table adversarial, worker lifecycle
 // + teardown, no-head-of-line concurrency, backpressure/offset/idempotency,
 // and fake-clock rate limiting). All fakes are injected; no live transport.
 // ===========================================================================
@@ -1126,7 +1125,7 @@ mod tests {
 
     #[test]
     fn exec_start_spec_debug_redacts_argv_env_cwd() {
-        // WR12: a stray `{:?}` on the resolved establishment spec must never
+        // A stray `{:?}` on the resolved establishment spec must never
         // leak argv, env keys/values, or cwd; only the VM name, shape, and
         // counts are observable.
         const SECRET_ARGV: &str = "SENTINEL_ARGV_dspc";
@@ -1596,7 +1595,7 @@ mod tests {
     }
 
     /// A worker whose session advertises exactly `caps`, for per-op fail-closed
-    /// gating tests (F6). The fake client records whether each op reached it.
+    /// gating tests. The fake client records whether each op reached it.
     fn gated_worker(
         caps: NegotiatedCaps,
     ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, Arc<FakeShared>) {
@@ -1813,7 +1812,7 @@ mod tests {
         // A zero-accepted (backpressured) write must NOT be replay-cached: its
         // offset never advances, so a retry at the same offset must re-issue to
         // the guest (observing recovered budget), not return a stale cached zero
-        // forever (F3).
+        // forever.
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,
             next_offset: 0,
@@ -2204,7 +2203,7 @@ mod tests {
 
     #[test]
     fn session_slot_debug_redacts_the_handle() {
-        // WR12/G2: a stray `{:?}` on the reserved-slot guard must never leak the
+        // A stray `{:?}` on the reserved-slot guard must never leak the
         // unguessable session handle; only uid / vm / released are observable.
         let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
         let slot = table.reserve(7, "corp-vm").expect("slot");
@@ -2220,7 +2219,7 @@ mod tests {
 
     #[test]
     fn read_output_outcome_debug_redacts_output_bytes() {
-        // WR12/G2: a stray `{:?}` on a `ReadOutput` outcome must never render
+        // A stray `{:?}` on a `ReadOutput` outcome must never render
         // the guest output bytes; only the length + framing flags are shown.
         const SECRET_OUTPUT: &[u8] = b"SENTINEL_STDOUT_rood";
         let outcome = ReadOutputOutcome {
@@ -2265,7 +2264,7 @@ mod tests {
         let _c = table.reserve(1, "vd").expect("start after window");
     }
 
-    // ---- (f) terminal-cleanup reaper (WR13/F5) --------------------------------
+    // ---- (f) terminal-cleanup reaper --------------------------------
 
     #[test]
     fn terminal_reaper_is_not_due_before_a_terminal_observation() {
