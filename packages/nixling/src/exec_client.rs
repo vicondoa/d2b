@@ -838,3 +838,581 @@ pub fn install_signals() -> io::Result<InstalledSignals> {
 fn nix_errno_to_io(errno: nix::errno::Errno) -> io::Error {
     io::Error::from_raw_os_error(errno as i32)
 }
+
+// ===========================================================================
+// Tests (WR16 matrices): (c) FSM one-session/no-reconnect, Wait-timeout keeps
+// polling, drain-to-EOF, interactive closes stdin up front; (d) exit-code
+// table + JSON-disambiguation primitives; (e) CLI-side backpressure / offset /
+// stdout-stderr separation / tty merge; (g) signal mapping + FdStateGuard
+// no-op/restore-idempotent; (h) redaction (no stdio/argv bytes in errors).
+//
+// The FSM is driven entirely through the `ExecOwnerTransport` / `ExecHostIo` /
+// `ExecSignalSource` seams against in-memory fakes — no socket, no real tty.
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nixling_ipc::public_wire::ExecControlResult;
+    use std::collections::VecDeque;
+
+    /// A scripted owner transport: records every op, answers reads from
+    /// in-memory stdout/stderr buffers, and drives `Wait` from a small running
+    /// budget. Models a single established session (no reconnect seam exists).
+    #[derive(Default)]
+    struct FakeTransport {
+        ops: Vec<ExecOp>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        /// Hold stdout at EOF=false (empty long-poll) until `Close` is seen.
+        stdout_hold_until_close: bool,
+        close_seen: bool,
+        /// Force the next stdout `ReadOutput` to return this malformed base64
+        /// (drives a protocol error for the redaction test).
+        stdout_malformed: Option<String>,
+        /// Number of `Wait` polls that report `running` before going terminal.
+        wait_running_remaining: usize,
+        terminal: Option<ExecTerminalStatus>,
+        /// Scripted `WriteStdin` replies (accepted_len, backpressured,
+        /// stdin_closed); when exhausted, accept the whole chunk.
+        write_script: VecDeque<(u64, bool, bool)>,
+    }
+
+    impl FakeTransport {
+        fn terminal(status: ExecTerminalStatus) -> Self {
+            Self {
+                terminal: Some(status),
+                ..Self::default()
+            }
+        }
+
+        fn count_ops(&self, label: &str) -> usize {
+            self.ops.iter().filter(|op| op_label(op) == label).count()
+        }
+
+        fn signals(&self) -> Vec<u32> {
+            self.ops
+                .iter()
+                .filter_map(|op| match op {
+                    ExecOp::Signal(args) => Some(args.signo),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn resizes(&self) -> Vec<(u32, u32)> {
+            self.ops
+                .iter()
+                .filter_map(|op| match op {
+                    ExecOp::Resize(args) => Some((args.rows, args.cols)),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    fn op_label(op: &ExecOp) -> &'static str {
+        match op {
+            ExecOp::Start(_) => "start",
+            ExecOp::WriteStdin(_) => "writeStdin",
+            ExecOp::ReadOutput(_) => "readOutput",
+            ExecOp::Signal(_) => "signal",
+            ExecOp::Resize(_) => "resize",
+            ExecOp::Wait(_) => "wait",
+            ExecOp::Close(_) => "close",
+        }
+    }
+
+    impl ExecOwnerTransport for FakeTransport {
+        fn round_trip(&mut self, op: &ExecOp) -> Result<ExecOpResponse, ExecClientError> {
+            self.ops.push(op.clone());
+            match op {
+                // A real exec session never re-sends Start through the FSM.
+                ExecOp::Start(_) => Err(ExecClientError::protocol("unexpected Start in FSM")),
+                ExecOp::Close(_) => {
+                    self.close_seen = true;
+                    Ok(ExecOpResponse::Close(nixling_ipc::public_wire::ExecCloseResult {
+                        stdin_closed: true,
+                    }))
+                }
+                ExecOp::WriteStdin(args) => {
+                    let chunk_len = base64_codec::decode(&args.chunk_base64)
+                        .map(|bytes| bytes.len() as u64)
+                        .unwrap_or(0);
+                    let (accepted, backpressured, stdin_closed) = self
+                        .write_script
+                        .pop_front()
+                        .unwrap_or((chunk_len, false, false));
+                    Ok(ExecOpResponse::WriteStdin(ExecWriteStdinResult {
+                        accepted_len: accepted,
+                        next_offset: args.offset + accepted,
+                        backpressured,
+                        stdin_closed,
+                    }))
+                }
+                ExecOp::ReadOutput(args) => {
+                    let is_stdout = matches!(args.stream, ExecStream::Stdout);
+                    if is_stdout {
+                        if let Some(bad) = self.stdout_malformed.take() {
+                            return Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
+                                data_base64: bad,
+                                next_offset: args.offset,
+                                eof: false,
+                                dropped_bytes: 0,
+                                truncated: false,
+                                timed_out: false,
+                            }));
+                        }
+                        if self.stdout_hold_until_close && !self.close_seen {
+                            return Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
+                                data_base64: String::new(),
+                                next_offset: args.offset,
+                                eof: false,
+                                dropped_bytes: 0,
+                                truncated: false,
+                                timed_out: true,
+                            }));
+                        }
+                    }
+                    let buf = if is_stdout { &self.stdout } else { &self.stderr };
+                    let off = (args.offset as usize).min(buf.len());
+                    let data = &buf[off..];
+                    Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
+                        data_base64: base64_codec::encode(data),
+                        next_offset: buf.len() as u64,
+                        eof: true,
+                        dropped_bytes: 0,
+                        truncated: false,
+                        timed_out: false,
+                    }))
+                }
+                ExecOp::Signal(_) => Ok(ExecOpResponse::Signal(ExecControlResult { delivered: true })),
+                ExecOp::Resize(_) => Ok(ExecOpResponse::Resize(ExecControlResult { delivered: true })),
+                ExecOp::Wait(_) => {
+                    if self.wait_running_remaining > 0 {
+                        self.wait_running_remaining -= 1;
+                        Ok(ExecOpResponse::Wait(ExecWaitResult {
+                            running: true,
+                            terminal_status: None,
+                        }))
+                    } else {
+                        Ok(ExecOpResponse::Wait(ExecWaitResult {
+                            running: false,
+                            terminal_status: self.terminal.clone(),
+                        }))
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeHostIo {
+        stdin: VecDeque<Vec<u8>>,
+        eof_sent: bool,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        window: Option<(u32, u32)>,
+    }
+
+    impl ExecHostIo for FakeHostIo {
+        fn read_stdin(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(chunk) = self.stdin.pop_front() {
+                let n = chunk.len().min(buf.len());
+                buf[..n].copy_from_slice(&chunk[..n]);
+                Ok(n)
+            } else if !self.eof_sent {
+                self.eof_sent = true;
+                Ok(0)
+            } else {
+                Err(io::Error::from(io::ErrorKind::WouldBlock))
+            }
+        }
+        fn write_stdout(&mut self, data: &[u8]) -> io::Result<()> {
+            self.stdout.extend_from_slice(data);
+            Ok(())
+        }
+        fn write_stderr(&mut self, data: &[u8]) -> io::Result<()> {
+            self.stderr.extend_from_slice(data);
+            Ok(())
+        }
+        fn window_size(&self) -> Option<(u32, u32)> {
+            self.window
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeSignals {
+        pending: VecDeque<Vec<ExecSignal>>,
+    }
+
+    impl FakeSignals {
+        fn once(signals: Vec<ExecSignal>) -> Self {
+            let mut pending = VecDeque::new();
+            pending.push_back(signals);
+            Self { pending }
+        }
+    }
+
+    impl ExecSignalSource for FakeSignals {
+        fn drain(&mut self) -> Vec<ExecSignal> {
+            self.pending.pop_front().unwrap_or_default()
+        }
+    }
+
+    fn start_result() -> ExecStartResult {
+        ExecStartResult {
+            session: "h-abc123".to_owned(),
+            tty: false,
+            stdout_offset: 0,
+            stderr_offset: 0,
+        }
+    }
+
+    fn cfg(tty: bool, interactive: bool) -> ExecFsmConfig {
+        ExecFsmConfig {
+            tty,
+            interactive,
+            poll_timeout_ms: 5,
+            max_chunk: 64,
+        }
+    }
+
+    /// Assert every op the FSM emitted references the single Start session
+    /// handle (one session, no per-op reconnect / handle drift).
+    fn assert_single_session(transport: &FakeTransport, session: &str) {
+        for op in &transport.ops {
+            let handle = match op {
+                ExecOp::WriteStdin(a) => &a.session,
+                ExecOp::ReadOutput(a) => &a.session,
+                ExecOp::Signal(a) => &a.session,
+                ExecOp::Resize(a) => &a.session,
+                ExecOp::Wait(a) => &a.session,
+                ExecOp::Close(a) => &a.session,
+                ExecOp::Start(_) => panic!("FSM must never emit Start"),
+            };
+            assert_eq!(handle, session, "op {} drifted the session handle", op_label(op));
+        }
+    }
+
+    // ---- (c) FSM lifecycle ------------------------------------------------
+
+    #[test]
+    fn non_interactive_closes_stdin_up_front_and_drains_to_terminal() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.stdout = b"output-bytes".to_vec();
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let outcome =
+            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+                .expect("fsm");
+        assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
+        // Exactly one up-front Close, and the output was drained before exit.
+        assert_eq!(transport.count_ops("close"), 1);
+        assert_eq!(host.stdout, b"output-bytes");
+        assert_single_session(&transport, &start.session);
+    }
+
+    #[test]
+    fn interactive_closes_stdin_once_on_host_eof() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.stdout = b"done".to_vec();
+        transport.stdout_hold_until_close = true;
+        let mut host = FakeHostIo::default();
+        host.stdin.push_back(b"hi".to_vec());
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let outcome =
+            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
+                .expect("fsm");
+        assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
+        // Interactive: NO up-front close; exactly one Close on stdin EOF.
+        assert_eq!(transport.count_ops("close"), 1);
+        assert_eq!(transport.count_ops("writeStdin"), 1);
+        assert_eq!(host.stdout, b"done");
+    }
+
+    #[test]
+    fn wait_timeout_keeps_polling_until_terminal() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 7 });
+        transport.wait_running_remaining = 3;
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let outcome =
+            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+                .expect("fsm");
+        assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 7 });
+        // 3 running polls + 1 terminal poll.
+        assert_eq!(transport.count_ops("wait"), 4);
+    }
+
+    // ---- (e) backpressure / offset / stream separation --------------------
+
+    #[test]
+    fn partial_write_advances_offset_and_retries_remainder() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        // First WriteStdin accepts 3 of 5; second accepts the remaining 2.
+        transport.write_script.push_back((3, false, false));
+        transport.write_script.push_back((2, false, false));
+        transport.stdout_hold_until_close = true;
+        let mut host = FakeHostIo::default();
+        host.stdin.push_back(b"hello".to_vec());
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
+            .expect("fsm");
+        // Two WriteStdin ops; offsets advance 0 -> 3 -> 5.
+        let offsets: Vec<u64> = transport
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                ExecOp::WriteStdin(a) => Some(a.offset),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offsets, vec![0, 3]);
+        assert_eq!(transport.count_ops("writeStdin"), 2);
+    }
+
+    #[test]
+    fn zero_accepted_write_surfaces_backpressure_without_error() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.write_script.push_back((0, true, false));
+        let mut host = FakeHostIo::default();
+        host.stdin.push_back(b"hi".to_vec());
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        // stdout drains immediately, so the FSM terminates cleanly even though
+        // the guest stdin budget was full (zero accepted).
+        let outcome =
+            run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
+                .expect("fsm survives backpressure");
+        assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
+        assert_eq!(transport.count_ops("writeStdin"), 1);
+    }
+
+    #[test]
+    fn stdout_and_stderr_are_written_to_separate_host_streams() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.stdout = b"to-stdout".to_vec();
+        transport.stderr = b"to-stderr".to_vec();
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect("fsm");
+        assert_eq!(host.stdout, b"to-stdout");
+        assert_eq!(host.stderr, b"to-stderr");
+    }
+
+    #[test]
+    fn tty_mode_never_reads_stderr_stream() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.stdout = b"merged".to_vec();
+        transport.stderr = b"should-not-be-read".to_vec();
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(true, true))
+            .expect("fsm");
+        // In tty mode the guest PTY merges stderr; the CLI only reads stdout.
+        let stderr_reads = transport
+            .ops
+            .iter()
+            .filter(|op| matches!(op, ExecOp::ReadOutput(a) if matches!(a.stream, ExecStream::Stderr)))
+            .count();
+        assert_eq!(stderr_reads, 0);
+        assert_eq!(host.stdout, b"merged");
+        assert!(host.stderr.is_empty());
+    }
+
+    // ---- (g) signal mapping ----------------------------------------------
+
+    #[test]
+    fn sigwinch_forwards_a_resize_in_tty_mode_only() {
+        // tty: Winch -> Resize with the host window size.
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        let mut host = FakeHostIo {
+            window: Some((40, 120)),
+            ..FakeHostIo::default()
+        };
+        let mut signals = FakeSignals::once(vec![ExecSignal::Winch]);
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(true, true))
+            .expect("fsm");
+        assert_eq!(transport.resizes(), vec![(40, 120)]);
+
+        // non-tty: Winch is dropped (no host PTY to resize).
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        let mut host = FakeHostIo {
+            window: Some((40, 120)),
+            ..FakeHostIo::default()
+        };
+        let mut signals = FakeSignals::once(vec![ExecSignal::Winch]);
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect("fsm");
+        assert!(transport.resizes().is_empty());
+    }
+
+    #[test]
+    fn host_signals_map_to_guest_signal_numbers() {
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::once(vec![
+            ExecSignal::Interrupt,
+            ExecSignal::Terminate,
+            ExecSignal::Stop,
+            ExecSignal::Hangup,
+            ExecSignal::Quit,
+        ]);
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect("fsm");
+        assert_eq!(transport.signals(), vec![2, 15, 20, 1, 3]);
+    }
+
+    #[test]
+    fn guest_signo_mapping_is_stable() {
+        assert_eq!(guest_signo(ExecSignal::Interrupt), 2);
+        assert_eq!(guest_signo(ExecSignal::Quit), 3);
+        assert_eq!(guest_signo(ExecSignal::Hangup), 1);
+        assert_eq!(guest_signo(ExecSignal::Terminate), 15);
+        assert_eq!(guest_signo(ExecSignal::Stop), 20);
+        assert_eq!(guest_signo(ExecSignal::Winch), 28);
+    }
+
+    // ---- (g) FdStateGuard no-op + idempotent restore ----------------------
+
+    #[test]
+    fn fd_state_guard_no_op_enter_restores_idempotently() {
+        // enter(raw=false, nonblock=false) touches neither termios nor flags,
+        // so it succeeds even when stdin is not a tty (test harness).
+        let mut guard = FdStateGuard::enter(false, false).expect("no-op enter");
+        guard.restore();
+        guard.restore(); // idempotent, never panics
+        drop(guard); // Drop restore is also safe after explicit restore
+    }
+
+    // ---- (d) exit-code table ---------------------------------------------
+
+    #[test]
+    fn exit_code_for_terminal_passes_through_wifexited() {
+        for code in [0, 1, 70, 125, 126, 127, 255] {
+            assert_eq!(
+                exit_code_for_terminal(&ExecTerminalStatus::Exited { code }),
+                code
+            );
+        }
+        // Out-of-range guest codes are clamped into 0..=255.
+        assert_eq!(
+            exit_code_for_terminal(&ExecTerminalStatus::Exited { code: 300 }),
+            255
+        );
+        assert_eq!(
+            exit_code_for_terminal(&ExecTerminalStatus::Exited { code: -1 }),
+            0
+        );
+    }
+
+    #[test]
+    fn exit_code_for_terminal_maps_signals_to_128_plus_signo() {
+        for (signo, expected) in [(1u32, 129), (2, 130), (9, 137), (15, 143)] {
+            assert_eq!(
+                exit_code_for_terminal(&ExecTerminalStatus::Signaled { signal: signo }),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn exit_code_for_terminal_maps_abnormal_slugs() {
+        assert_eq!(
+            exit_code_for_terminal(&ExecTerminalStatus::Error {
+                slug: "lost-guestd".to_owned()
+            }),
+            EXIT_EXEC_TRANSPORT
+        );
+        for slug in ["cancelled", "reaped", "slow-consumer-cancelled"] {
+            assert_eq!(
+                exit_code_for_terminal(&ExecTerminalStatus::Error {
+                    slug: slug.to_owned()
+                }),
+                EXIT_EXEC_CAPACITY
+            );
+        }
+        assert_eq!(
+            exit_code_for_terminal(&ExecTerminalStatus::Error {
+                slug: "anything-else".to_owned()
+            }),
+            EXIT_EXEC_PROTOCOL
+        );
+    }
+
+    #[test]
+    fn exit_for_kind_covers_every_wire_slug() {
+        use ExecFailureSource::*;
+        let cases = [
+            ("guest-control-transport-unavailable", EXIT_EXEC_TRANSPORT, Transport),
+            ("guest-control-timeout", EXIT_EXEC_TRANSPORT, Transport),
+            ("guest-control-unavailable-old-generation", EXIT_EXEC_OLD_GENERATION, GuestControl),
+            ("guest-control-capability-unavailable", EXIT_EXEC_OLD_GENERATION, GuestControl),
+            ("exec-session-capacity", EXIT_EXEC_CAPACITY, GuestControl),
+            ("exec-session-rate-limited", EXIT_EXEC_CAPACITY, GuestControl),
+            ("guest-control-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
+            ("guest-control-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
+            ("guest-control-auth-failed", EXIT_EXEC_AUTH, GuestControl),
+            ("guest-control-exec-internal", EXIT_EXEC_INTERNAL, Internal),
+            ("totally-unknown-slug", EXIT_EXEC_INTERNAL, Internal),
+        ];
+        for (slug, code, source) in cases {
+            assert_eq!(exit_for_kind(slug), (code, source), "slug {slug}");
+        }
+    }
+
+    #[test]
+    fn old_generation_and_guest_exit_70_are_distinguishable() {
+        // 70-vs-70: a guest command that exits 70 yields a *terminal* (source
+        // = guest, not an error); an old-generation guest yields an *error*
+        // with the same numeric exit. The two are disambiguated by source.
+        let guest_70 = exit_code_for_terminal(&ExecTerminalStatus::Exited { code: 70 });
+        let (old_gen_70, old_gen_source) = exit_for_kind("guest-control-unavailable-old-generation");
+        assert_eq!(guest_70, 70);
+        assert_eq!(old_gen_70, 70);
+        assert_eq!(old_gen_source, ExecFailureSource::GuestControl);
+    }
+
+    // ---- (h) redaction: no stdio / argv bytes in error surfaces -----------
+
+    #[test]
+    fn malformed_output_error_never_echoes_the_guest_bytes() {
+        const SENTINEL: &str = "NIXLING_SECRET_LEAK_CANARY";
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        // The guest returns a malformed base64 chunk carrying the sentinel.
+        transport.stdout_malformed = Some(format!("{SENTINEL}***not-base64"));
+        let mut host = FakeHostIo::default();
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        let err = run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, false))
+            .expect_err("malformed output is a protocol error");
+        let rendered = format!("{err:?} {} {} {}", err.kind, err.message, err.remediation);
+        assert!(
+            !rendered.contains(SENTINEL),
+            "error surface leaked guest bytes: {rendered}"
+        );
+        assert_eq!(err.exit_code, EXIT_EXEC_PROTOCOL);
+    }
+
+    #[test]
+    fn error_constructors_carry_only_static_remediation_text() {
+        // None of the typed constructors embed caller-supplied stdio/argv.
+        for err in [
+            ExecClientError::transport("ctx"),
+            ExecClientError::protocol("ctx"),
+            ExecClientError::internal("ctx"),
+        ] {
+            assert!(!err.kind.is_empty());
+            assert!(!err.remediation.is_empty());
+        }
+    }
+}

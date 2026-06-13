@@ -2430,6 +2430,23 @@ fn exec_error_kind_label(error: &TypedError) -> &'static str {
     }
 }
 
+/// Emit the single kind=critical exec session-establishment event. Kept as a
+/// free function so the redaction-safe field set can be asserted by a tracing
+/// capture test: it accepts ONLY the leak-safe identifiers (vm name, peer uid,
+/// opaque session handle, negotiated tty). argv/env/cwd/output bytes are never
+/// passed here and so can never reach a span, log, or audit record.
+fn emit_exec_established_event(vm: &str, peer_uid: u32, handle: &str, tty: bool) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = EXEC_SUBSYSTEM,
+        vm = %vm,
+        peer_uid = peer_uid,
+        session_handle = %handle,
+        tty = tty,
+        "guest-control exec session established"
+    );
+}
+
 /// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
 /// the serial accept loop (WR1): the public.sock accept loop never blocks for
 /// the lifetime of an exec. SO_PEERCRED admin was verified before the spawn.
@@ -2570,15 +2587,7 @@ fn run_exec_owner(
     };
 
     // One kind=critical session-establishment span (NO per-op span/audit).
-    tracing::info!(
-        kind = "critical",
-        subsystem = EXEC_SUBSYSTEM,
-        vm = %start.vm,
-        peer_uid = peer.uid,
-        session_handle = %handle,
-        tty = info.tty,
-        "guest-control exec session established"
-    );
+    emit_exec_established_event(&start.vm, peer.uid, &handle, info.tty);
     exec_metric(&state, "established", "none");
 
     let start_response = exec_session::start_response(&handle, &info);
@@ -11334,5 +11343,122 @@ mod guest_control_readiness_tracing_tests {
             not_ready_fields.contains(&"error_kind"),
             "not-ready event must carry error_kind"
         );
+    }
+}
+
+#[cfg(test)]
+mod exec_established_tracing_tests {
+    //! The single kind=critical exec session-establishment event must carry
+    //! ONLY redaction-safe identifiers. This guards against a future edit that
+    //! adds argv/env/cwd/output bytes (or any guest-supplied string) to the
+    //! span, which would leak operator command lines into the daemon log.
+
+    use super::emit_exec_established_event;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    type CapturedEvents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[derive(Default)]
+    struct FieldCollector {
+        fields: Vec<(String, String)>,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CapturingLayer {
+        events: CapturedEvents,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut collector = FieldCollector::default();
+            event.record(&mut collector);
+            self.events.lock().unwrap().push(collector.fields);
+        }
+    }
+
+    #[test]
+    fn exec_established_event_carries_only_leak_safe_fields() {
+        // APPROVED field-name allowlist for the establishment event.
+        const APPROVED_FIELDS: &[&str] = &[
+            "message",
+            "kind",
+            "subsystem",
+            "vm",
+            "peer_uid",
+            "session_handle",
+            "tty",
+        ];
+        // Field names that MUST NEVER appear (would leak the command line or
+        // guest-supplied content).
+        const FORBIDDEN_FIELDS: &[&str] = &[
+            "argv",
+            "command",
+            "cmd",
+            "env",
+            "cwd",
+            "stdin",
+            "stdout",
+            "stderr",
+            "output",
+            "nonce",
+            "token",
+            "auth_tag",
+            "exec_id",
+            "guest_boot_id",
+        ];
+        // A sentinel that would only appear if argv/env/cwd leaked into a field.
+        const SENTINEL: &str = "NIXLING_ARGV_LEAK_CANARY";
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let layer = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            emit_exec_established_event("work", 1000, "h-9f3c12ab", true);
+        });
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 1, "expected exactly one establishment event");
+        for fields in captured.iter() {
+            assert!(!fields.is_empty(), "establishment event recorded no fields");
+            for (name, value) in fields {
+                assert!(
+                    APPROVED_FIELDS.contains(&name.as_str()),
+                    "unapproved establishment tracing field: {name}={value}"
+                );
+                assert!(
+                    !FORBIDDEN_FIELDS.contains(&name.as_str()),
+                    "forbidden establishment tracing field: {name}"
+                );
+                assert!(
+                    !value.contains(SENTINEL),
+                    "argv/env/cwd sentinel leaked: {name}={value}"
+                );
+            }
+        }
     }
 }

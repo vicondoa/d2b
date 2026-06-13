@@ -491,3 +491,96 @@ fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
         ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
     }
 }
+
+// ===========================================================================
+// Tests (WR16 matrix f: per-capability fail-closed gating). `gate_capabilities`
+// is a pure function over the guest's advertised capability set, so the gate is
+// unit-tested directly without a live transport.
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cap(value: pb::GuestCapability) -> EnumOrUnknown<pb::GuestCapability> {
+        EnumOrUnknown::new(value)
+    }
+
+    /// The full capability set a TTY exec needs.
+    fn full_tty_caps() -> Vec<EnumOrUnknown<pb::GuestCapability>> {
+        vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
+        ]
+    }
+
+    #[test]
+    fn no_exec_capability_is_old_generation() {
+        // A guest advertising only health/capabilities (no exec) is an old
+        // generation: fail closed to the dedicated old-generation slug (exit
+        // 70, NO SSH fallback), never a transport error.
+        let caps = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_HEALTH),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_CAPABILITIES),
+        ];
+        assert_eq!(
+            gate_capabilities(&caps, false),
+            Err(ExecEstablishError::OldGeneration)
+        );
+        assert_eq!(
+            gate_capabilities(&caps, true),
+            Err(ExecEstablishError::OldGeneration)
+        );
+    }
+
+    #[test]
+    fn exec_without_signals_is_capability_unavailable() {
+        let caps = vec![cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED)];
+        assert_eq!(
+            gate_capabilities(&caps, false),
+            Err(ExecEstablishError::Capability)
+        );
+    }
+
+    #[test]
+    fn non_tty_session_succeeds_without_tty_caps() {
+        let caps = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+        ];
+        assert_eq!(gate_capabilities(&caps, false), Ok(()));
+    }
+
+    #[test]
+    fn tty_session_requires_exec_tty_and_tty_resize() {
+        // Missing EXEC_TTY.
+        let no_exec_tty = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
+        ];
+        assert_eq!(
+            gate_capabilities(&no_exec_tty, true),
+            Err(ExecEstablishError::Capability)
+        );
+        // Missing TTY_RESIZE.
+        let no_resize = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
+        ];
+        assert_eq!(
+            gate_capabilities(&no_resize, true),
+            Err(ExecEstablishError::Capability)
+        );
+        // A non-tty session does not need the tty caps even when absent.
+        assert_eq!(gate_capabilities(&no_exec_tty, false), Ok(()));
+    }
+
+    #[test]
+    fn full_capability_set_passes_for_tty_and_non_tty() {
+        assert_eq!(gate_capabilities(&full_tty_caps(), true), Ok(()));
+        assert_eq!(gate_capabilities(&full_tty_caps(), false), Ok(()));
+    }
+}

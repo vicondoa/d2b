@@ -3941,14 +3941,14 @@ fn exec_json_attach_output(
     );
 }
 
-/// Emit the success `--json` envelope and return the CLI exit code. `source` is
+/// Build the success `--json` envelope value + CLI exit code. `source` is
 /// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
 /// with a reserved transport code.
-fn exec_json_success(
+fn exec_json_success_value(
     args: &VmExecArgs,
     outcome: &exec_client::ExecOutcome,
     host: &exec_client::CapturingHostIo,
-) -> Result<i32, CliFailure> {
+) -> (Value, i32) {
     use nixling_ipc::public_wire::ExecTerminalStatus;
 
     let exit_code = exec_client::exit_code_for_terminal(&outcome.terminal);
@@ -3972,7 +3972,17 @@ fn exec_json_success(
         }
     }
     exec_json_attach_output(&mut map, host);
-    print_exec_json(&Value::Object(map))?;
+    (Value::Object(map), exit_code)
+}
+
+/// Emit the success `--json` envelope and return the CLI exit code.
+fn exec_json_success(
+    args: &VmExecArgs,
+    outcome: &exec_client::ExecOutcome,
+    host: &exec_client::CapturingHostIo,
+) -> Result<i32, CliFailure> {
+    let (value, exit_code) = exec_json_success_value(args, outcome, host);
+    print_exec_json(&value)?;
     Ok(exit_code)
 }
 
@@ -8710,6 +8720,71 @@ mod konsole_wrapper_tests {
         let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
         assert_eq!(code, 0);
         assert_eq!(test_konsole_spawn_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod exec_json_envelope_tests {
+    //! The `vm exec --json` envelope disambiguates a guest exit code from a
+    //! transport/old-generation failure that happens to share the same shell
+    //! status number (the 70-vs-70 case): `source` + `reason` +
+    //! `guestExitCode`/`transportExitCode` carry the distinction.
+
+    use nixling_ipc::public_wire::ExecTerminalStatus;
+
+    use super::{
+        exec_client, exec_json_failure, exec_json_success_value, VmExecArgs,
+    };
+
+    fn exec_args(vm: &str) -> VmExecArgs {
+        VmExecArgs {
+            vm: vm.to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
+            json: true,
+            human: false,
+            command: vec!["true".to_owned()],
+        }
+    }
+
+    #[test]
+    fn guest_exit_70_envelope_is_sourced_to_the_guest() {
+        let args = exec_args("work");
+        let outcome = exec_client::ExecOutcome {
+            terminal: ExecTerminalStatus::Exited { code: 70 },
+        };
+        let host = exec_client::CapturingHostIo::new(false, 1024);
+        let (value, exit_code) = exec_json_success_value(&args, &outcome, &host);
+        assert_eq!(exit_code, 70);
+        assert_eq!(value["source"], "guest");
+        assert_eq!(value["reason"], "exited");
+        assert_eq!(value["guestExitCode"], 70);
+        assert_eq!(value["exitCode"], 70);
+        // A success envelope never carries a transportExitCode.
+        assert!(value.get("transportExitCode").is_none());
+    }
+
+    #[test]
+    fn old_generation_70_envelope_is_sourced_to_guest_control() {
+        let args = exec_args("work");
+        let error = exec_client::ExecClientError::from_daemon_error(
+            "guest-control-unavailable-old-generation",
+            "this VM generation does not support guest-control exec",
+            "rebuild the VM with a current nixling generation",
+        );
+        assert_eq!(error.exit_code, 70);
+        let failure = exec_json_failure(&args, &error, None);
+        let rendered = failure.rendered_stderr.expect("json stderr");
+        let value: serde_json::Value =
+            serde_json::from_str(rendered.trim_end()).expect("valid json");
+        assert_eq!(value["source"], "guest-control");
+        assert_eq!(value["reason"], "guest-control-unavailable-old-generation");
+        assert_eq!(value["exitCode"], 70);
+        assert_eq!(value["transportExitCode"], 70);
+        // A failure envelope never carries a guestExitCode.
+        assert!(value.get("guestExitCode").is_none());
     }
 }
 

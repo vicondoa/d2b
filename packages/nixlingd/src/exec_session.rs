@@ -787,6 +787,7 @@ impl SessionTable {
 
 /// RAII guard for a reserved session slot. Dropping it releases the slot
 /// (every failure path drops the guard, so the slot is always released).
+#[derive(Debug)]
 pub struct SessionSlot {
     handle: String,
     uid: u32,
@@ -831,4 +832,846 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
     }
     out
+}
+
+// ===========================================================================
+// Tests (WR16 hermetic matrices: session-table adversarial, worker lifecycle
+// + teardown, no-head-of-line concurrency, backpressure/offset/idempotency,
+// and fake-clock rate limiting). All fakes are injected; no live transport.
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nixling_ipc::public_wire::{
+        ExecCloseArgs, ExecReadOutputArgs, ExecResizeArgs, ExecSignalArgs, ExecStream,
+        ExecWaitArgs, ExecWriteStdinArgs,
+    };
+
+    // ---- Fake clock (drives the Start rate-limit window deterministically) --
+
+    struct FakeClock {
+        now: Mutex<Instant>,
+    }
+
+    impl FakeClock {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                now: Mutex::new(Instant::now()),
+            })
+        }
+        fn advance(&self, by: Duration) {
+            let mut now = self.now.lock().unwrap();
+            *now += by;
+        }
+    }
+
+    impl Clock for FakeClock {
+        fn now(&self) -> Instant {
+            *self.now.lock().unwrap()
+        }
+    }
+
+    // ---- Fake guest client ----------------------------------------------------
+
+    #[derive(Default)]
+    struct FakeShared {
+        write_calls: AtomicUsize,
+        close_calls: AtomicUsize,
+        signal_calls: AtomicUsize,
+        resize_calls: AtomicUsize,
+    }
+
+    struct FakeClient {
+        alive: Arc<AtomicUsize>,
+        shared: Arc<FakeShared>,
+        write_outcome: WriteStdinOutcome,
+        stdout_reads: Mutex<VecDeque<ReadOutputOutcome>>,
+        stderr_reads: Mutex<VecDeque<ReadOutputOutcome>>,
+        waits: Mutex<VecDeque<WaitOutcome>>,
+        read_gate: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    impl Drop for FakeClient {
+        fn drop(&mut self) {
+            self.alive.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl ExecGuestClient for FakeClient {
+        async fn write_stdin(
+            &self,
+            _offset: u64,
+            _data: Vec<u8>,
+            _eof: bool,
+            _timeout: Duration,
+        ) -> Result<WriteStdinOutcome, ExecOpError> {
+            self.shared.write_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.write_outcome.clone())
+        }
+
+        async fn read_output(
+            &self,
+            stream: OutputStreamSel,
+            _offset: u64,
+            _max_len: u64,
+            _wait: bool,
+            _timeout_ms: u64,
+            _timeout: Duration,
+        ) -> Result<ReadOutputOutcome, ExecOpError> {
+            if let Some(gate) = &self.read_gate {
+                gate.notified().await;
+            }
+            let queue = match stream {
+                OutputStreamSel::Stdout => &self.stdout_reads,
+                OutputStreamSel::Stderr => &self.stderr_reads,
+            };
+            let outcome = queue.lock().unwrap().pop_front();
+            Ok(outcome.unwrap_or(ReadOutputOutcome {
+                data: Vec::new(),
+                next_offset: 0,
+                eof: true,
+                dropped_bytes: 0,
+                truncated: false,
+                timed_out: false,
+            }))
+        }
+
+        async fn signal(
+            &self,
+            _control_seq: u64,
+            _signo: u32,
+            _timeout: Duration,
+        ) -> Result<(), ExecOpError> {
+            self.shared.signal_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn resize(
+            &self,
+            _control_seq: u64,
+            _rows: u32,
+            _cols: u32,
+            _timeout: Duration,
+        ) -> Result<(), ExecOpError> {
+            self.shared.resize_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn wait(
+            &self,
+            _timeout_ms: u64,
+            _timeout: Duration,
+        ) -> Result<WaitOutcome, ExecOpError> {
+            let outcome = self.waits.lock().unwrap().pop_front();
+            Ok(outcome.unwrap_or(WaitOutcome {
+                running: false,
+                terminal: Some(TerminalKind::Exited(0)),
+            }))
+        }
+
+        async fn close_stdin(&self, _offset: u64, _timeout: Duration) -> Result<(), ExecOpError> {
+            self.shared.close_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    // ---- Fake connector (establish once from a builder closure) ----------------
+
+    type Builder = Box<dyn FnOnce() -> Established + Send>;
+
+    struct FakeConnector {
+        builder: Mutex<Option<Builder>>,
+        error: Option<ExecEstablishError>,
+    }
+
+    impl FakeConnector {
+        fn ok(builder: Builder) -> Arc<Self> {
+            Arc::new(Self {
+                builder: Mutex::new(Some(builder)),
+                error: None,
+            })
+        }
+        fn failing(error: ExecEstablishError) -> Arc<Self> {
+            Arc::new(Self {
+                builder: Mutex::new(None),
+                error: Some(error),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ExecGuestConnector for FakeConnector {
+        async fn establish(&self, _spec: &ExecStartSpec) -> Result<Established, ExecEstablishError> {
+            if let Some(error) = self.error {
+                return Err(error);
+            }
+            let builder = self.builder.lock().unwrap().take().expect("establish once");
+            Ok(builder())
+        }
+    }
+
+    fn spec() -> ExecStartSpec {
+        ExecStartSpec {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: false,
+            detached: false,
+            env: Vec::new(),
+            cwd: None,
+            term_size: None,
+        }
+    }
+
+    fn established(client: Arc<dyn ExecGuestClient>) -> Established {
+        Established {
+            client,
+            info: ExecSessionInfo {
+                tty: false,
+                stdout_offset: 0,
+                stderr_offset: 0,
+            },
+            control_seq: 0,
+        }
+    }
+
+    /// Drive one op through a worker over the sync command channel exactly like
+    /// the owner connection does (blocking_send + blocking_recv).
+    fn send_op(
+        tx: &mpsc::Sender<WorkerCommand>,
+        op: ExecOp,
+    ) -> Result<ExecOpResponse, ExecOpError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.blocking_send(WorkerCommand { op, reply: reply_tx })
+            .expect("worker accepts command");
+        reply_rx.blocking_recv().expect("worker replies")
+    }
+
+    fn start_worker(
+        connector: Arc<dyn ExecGuestConnector>,
+    ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, EstablishReply) {
+        let (control_tx, control_rx) = mpsc::channel(16);
+        let (establish_tx, establish_rx) = oneshot::channel();
+        let worker = spawn_session_worker(
+            connector,
+            spec(),
+            ExecOpDeadlines::default(),
+            establish_tx,
+            control_rx,
+        );
+        let reply = establish_rx.blocking_recv().expect("establish reply");
+        (control_tx, worker, reply)
+    }
+
+    // ---- (a) disconnect lifecycle / teardown ----------------------------------
+
+    #[test]
+    fn dropping_owner_channel_drops_the_authenticated_client() {
+        let alive = Arc::new(AtomicUsize::new(0));
+        let alive_for_builder = Arc::clone(&alive);
+        let shared = Arc::new(FakeShared::default());
+        let builder: Builder = Box::new(move || {
+            alive_for_builder.fetch_add(1, Ordering::SeqCst);
+            established(Arc::new(FakeClient {
+                alive: alive_for_builder,
+                shared,
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(VecDeque::new()),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(VecDeque::new()),
+                read_gate: None,
+            }))
+        });
+        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+        assert_eq!(alive.load(Ordering::SeqCst), 1, "client alive after establish");
+
+        // Owner disconnects: drop the channel, join the worker.
+        drop(control_tx);
+        worker.join().expect("worker joins");
+        assert_eq!(
+            alive.load(Ordering::SeqCst),
+            0,
+            "client dropped on teardown (prompts guest close_connection)"
+        );
+    }
+
+    #[test]
+    fn dropping_channel_mid_long_poll_aborts_and_drops_client() {
+        let alive = Arc::new(AtomicUsize::new(0));
+        let alive_for_builder = Arc::clone(&alive);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let gate_for_builder = Arc::clone(&gate);
+        let builder: Builder = Box::new(move || {
+            alive_for_builder.fetch_add(1, Ordering::SeqCst);
+            established(Arc::new(FakeClient {
+                alive: alive_for_builder,
+                shared: Arc::new(FakeShared::default()),
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(VecDeque::new()),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(VecDeque::new()),
+                // Never released: the long-poll parks forever until teardown.
+                read_gate: Some(gate_for_builder),
+            }))
+        });
+        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+
+        // Fire a long-poll that will park on the gate, then tear down without
+        // ever releasing it. The runtime drop must abort the parked task and
+        // drop its client clone.
+        let (reply_tx, _reply_rx) = oneshot::channel();
+        control_tx
+            .blocking_send(WorkerCommand {
+                op: ExecOp::ReadOutput(ExecReadOutputArgs {
+                    session: "h".to_owned(),
+                    stream: ExecStream::Stdout,
+                    offset: 0,
+                    max_len: 1024,
+                    wait: true,
+                    timeout_ms: 60_000,
+                }),
+                reply: reply_tx,
+            })
+            .expect("send long-poll");
+
+        drop(control_tx);
+        let _ = gate; // keep the notify alive; it must not keep the client alive
+        worker.join().expect("worker joins");
+        assert_eq!(
+            alive.load(Ordering::SeqCst),
+            0,
+            "parked long-poll's client clone dropped at runtime teardown"
+        );
+    }
+
+    #[test]
+    fn establish_failure_reports_error_and_joins_clean() {
+        let connector = FakeConnector::failing(ExecEstablishError::OldGeneration);
+        let (control_tx, worker, reply) = start_worker(connector);
+        assert_eq!(reply, Err(ExecEstablishError::OldGeneration));
+        drop(control_tx);
+        worker.join().expect("worker joins after establish failure");
+    }
+
+    // ---- (i) no head-of-line: fast op serviced while a long-poll is parked -----
+
+    #[test]
+    fn fast_control_op_completes_while_long_poll_is_parked() {
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let gate_for_builder = Arc::clone(&gate);
+        let alive = Arc::new(AtomicUsize::new(0));
+        let alive_for_builder = Arc::clone(&alive);
+        let mut stdout_reads = VecDeque::new();
+        stdout_reads.push_back(ReadOutputOutcome {
+            data: b"late".to_vec(),
+            next_offset: 4,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        });
+        let builder: Builder = Box::new(move || {
+            alive_for_builder.fetch_add(1, Ordering::SeqCst);
+            established(Arc::new(FakeClient {
+                alive: alive_for_builder,
+                shared: shared_for_builder,
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(stdout_reads),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(VecDeque::new()),
+                read_gate: Some(gate_for_builder),
+            }))
+        });
+        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+
+        // 1. Enqueue a long-poll that parks on the gate (reply held, not read).
+        let (poll_reply_tx, poll_reply_rx) = oneshot::channel();
+        control_tx
+            .blocking_send(WorkerCommand {
+                op: ExecOp::ReadOutput(ExecReadOutputArgs {
+                    session: "h".to_owned(),
+                    stream: ExecStream::Stdout,
+                    offset: 0,
+                    max_len: 1024,
+                    wait: true,
+                    timeout_ms: 60_000,
+                }),
+                reply: poll_reply_tx,
+            })
+            .expect("send long-poll");
+
+        // 2. A fast Signal must complete promptly even though the poll parks.
+        let signal = send_op(
+            &control_tx,
+            ExecOp::Signal(ExecSignalArgs {
+                session: "h".to_owned(),
+                signo: 2,
+            }),
+        );
+        assert!(matches!(signal, Ok(ExecOpResponse::Signal(_))));
+        assert_eq!(shared.signal_calls.load(Ordering::SeqCst), 1);
+
+        // 3. Release the gate; the long-poll now resolves with its data.
+        gate.notify_one();
+        let poll = poll_reply_rx.blocking_recv().expect("poll resolves");
+        match poll {
+            Ok(ExecOpResponse::ReadOutput(result)) => {
+                assert_eq!(base64_codec::decode(&result.data_base64).unwrap(), b"late");
+            }
+            other => panic!("expected ReadOutput, got {other:?}"),
+        }
+
+        drop(control_tx);
+        worker.join().expect("worker joins");
+    }
+
+    // ---- (e) backpressure / offset / idempotency ------------------------------
+
+    fn write_op(offset: u64, chunk: &[u8]) -> ExecOp {
+        ExecOp::WriteStdin(ExecWriteStdinArgs {
+            session: "h".to_owned(),
+            offset,
+            chunk_base64: base64_codec::encode(chunk),
+            eof: false,
+        })
+    }
+
+    fn backpressure_worker(
+        write_outcome: WriteStdinOutcome,
+    ) -> (mpsc::Sender<WorkerCommand>, JoinHandle<()>, Arc<FakeShared>) {
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
+        let builder: Builder = Box::new(move || {
+            established(Arc::new(FakeClient {
+                alive: Arc::new(AtomicUsize::new(1)),
+                shared: shared_for_builder,
+                write_outcome,
+                stdout_reads: Mutex::new(VecDeque::new()),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(VecDeque::new()),
+                read_gate: None,
+            }))
+        });
+        let (control_tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+        (control_tx, worker, shared)
+    }
+
+    #[test]
+    fn partial_write_reports_accepted_len_and_advances_offset() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 3,
+            next_offset: 3,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let resp = send_op(&tx, write_op(0, b"abcdef")).expect("write ok");
+        match resp {
+            ExecOpResponse::WriteStdin(result) => {
+                assert_eq!(result.accepted_len, 3);
+                assert_eq!(result.next_offset, 3);
+            }
+            other => panic!("expected WriteStdin, got {other:?}"),
+        }
+        assert_eq!(shared.write_calls.load(Ordering::SeqCst), 1);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn duplicate_write_at_same_offset_is_idempotent_without_reissuing() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 3,
+            next_offset: 3,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let _ = send_op(&tx, write_op(0, b"abc")).expect("write ok");
+        // A retry at the SAME offset returns the cached result and must NOT
+        // call the transport again.
+        let resp = send_op(&tx, write_op(0, b"abc")).expect("retry ok");
+        assert!(matches!(resp, ExecOpResponse::WriteStdin(_)));
+        assert_eq!(
+            shared.write_calls.load(Ordering::SeqCst),
+            1,
+            "idempotent retry must not reissue the write"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn write_at_wrong_offset_is_rejected_as_offset_mismatch() {
+        let (tx, worker, _shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 3,
+            next_offset: 3,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let err = send_op(&tx, write_op(99, b"abc")).expect_err("offset mismatch");
+        assert_eq!(err, ExecOpError::Guest(GuestOpError::OffsetMismatch));
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn zero_accepted_write_surfaces_backpressure() {
+        let (tx, worker, _shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: true,
+            stdin_closed: false,
+        });
+        let resp = send_op(&tx, write_op(0, b"abc")).expect("write ok");
+        match resp {
+            ExecOpResponse::WriteStdin(result) => {
+                assert_eq!(result.accepted_len, 0);
+                assert!(result.backpressured);
+            }
+            other => panic!("expected WriteStdin, got {other:?}"),
+        }
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn oversized_chunk_is_rejected_before_the_transport() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let big = vec![0_u8; (EXEC_MAX_CHUNK_BYTES + 1) as usize];
+        let err = send_op(&tx, write_op(0, &big)).expect_err("too big");
+        assert_eq!(err, ExecOpError::Guest(GuestOpError::MaxChunkExceeded));
+        assert_eq!(
+            shared.write_calls.load(Ordering::SeqCst),
+            0,
+            "oversized chunk must never reach the transport"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn close_is_idempotent_and_issued_once() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let close = ExecOp::Close(ExecCloseArgs {
+            session: "h".to_owned(),
+        });
+        let r1 = send_op(&tx, close.clone()).expect("close ok");
+        assert!(matches!(r1, ExecOpResponse::Close(_)));
+        let r2 = send_op(&tx, close).expect("close idempotent");
+        assert!(matches!(r2, ExecOpResponse::Close(_)));
+        assert_eq!(
+            shared.close_calls.load(Ordering::SeqCst),
+            1,
+            "second close must be a no-op on the transport"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn stdout_and_stderr_reads_are_separated_with_flags_passed_through() {
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
+        let mut stdout_reads = VecDeque::new();
+        stdout_reads.push_back(ReadOutputOutcome {
+            data: b"OUT".to_vec(),
+            next_offset: 3,
+            eof: false,
+            dropped_bytes: 7,
+            truncated: true,
+            timed_out: false,
+        });
+        let mut stderr_reads = VecDeque::new();
+        stderr_reads.push_back(ReadOutputOutcome {
+            data: b"ERR".to_vec(),
+            next_offset: 3,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        });
+        let builder: Builder = Box::new(move || {
+            established(Arc::new(FakeClient {
+                alive: Arc::new(AtomicUsize::new(1)),
+                shared: shared_for_builder,
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(stdout_reads),
+                stderr_reads: Mutex::new(stderr_reads),
+                waits: Mutex::new(VecDeque::new()),
+                read_gate: None,
+            }))
+        });
+        let (tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+
+        let out = send_op(
+            &tx,
+            ExecOp::ReadOutput(ExecReadOutputArgs {
+                session: "h".to_owned(),
+                stream: ExecStream::Stdout,
+                offset: 0,
+                max_len: 1024,
+                wait: false,
+                timeout_ms: 0,
+            }),
+        )
+        .expect("stdout read");
+        match out {
+            ExecOpResponse::ReadOutput(result) => {
+                assert_eq!(base64_codec::decode(&result.data_base64).unwrap(), b"OUT");
+                assert_eq!(result.dropped_bytes, 7);
+                assert!(result.truncated);
+            }
+            other => panic!("expected ReadOutput, got {other:?}"),
+        }
+
+        let err = send_op(
+            &tx,
+            ExecOp::ReadOutput(ExecReadOutputArgs {
+                session: "h".to_owned(),
+                stream: ExecStream::Stderr,
+                offset: 0,
+                max_len: 1024,
+                wait: false,
+                timeout_ms: 0,
+            }),
+        )
+        .expect("stderr read");
+        match err {
+            ExecOpResponse::ReadOutput(result) => {
+                assert_eq!(base64_codec::decode(&result.data_base64).unwrap(), b"ERR");
+            }
+            other => panic!("expected ReadOutput, got {other:?}"),
+        }
+
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn resize_is_serviced_inline() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let resp = send_op(
+            &tx,
+            ExecOp::Resize(ExecResizeArgs {
+                session: "h".to_owned(),
+                rows: 40,
+                cols: 120,
+            }),
+        )
+        .expect("resize ok");
+        assert!(matches!(resp, ExecOpResponse::Resize(_)));
+        assert_eq!(shared.resize_calls.load(Ordering::SeqCst), 1);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn wait_timeout_then_terminal_keeps_polling() {
+        let shared = Arc::new(FakeShared::default());
+        let shared_for_builder = Arc::clone(&shared);
+        let mut waits = VecDeque::new();
+        waits.push_back(WaitOutcome {
+            running: true,
+            terminal: None,
+        });
+        waits.push_back(WaitOutcome {
+            running: false,
+            terminal: Some(TerminalKind::Exited(7)),
+        });
+        let builder: Builder = Box::new(move || {
+            established(Arc::new(FakeClient {
+                alive: Arc::new(AtomicUsize::new(1)),
+                shared: shared_for_builder,
+                write_outcome: WriteStdinOutcome {
+                    accepted_len: 0,
+                    next_offset: 0,
+                    backpressured: false,
+                    stdin_closed: false,
+                },
+                stdout_reads: Mutex::new(VecDeque::new()),
+                stderr_reads: Mutex::new(VecDeque::new()),
+                waits: Mutex::new(waits),
+                read_gate: None,
+            }))
+        });
+        let (tx, worker, reply) = start_worker(FakeConnector::ok(builder));
+        assert!(reply.is_ok());
+
+        let wait_op = ExecOp::Wait(ExecWaitArgs {
+            session: "h".to_owned(),
+            timeout_ms: 50,
+        });
+        let first = send_op(&tx, wait_op.clone()).expect("first wait");
+        match first {
+            ExecOpResponse::Wait(result) => {
+                assert!(result.running);
+                assert!(result.terminal_status.is_none());
+            }
+            other => panic!("expected Wait, got {other:?}"),
+        }
+        let second = send_op(&tx, wait_op).expect("second wait");
+        match second {
+            ExecOpResponse::Wait(result) => {
+                assert_eq!(
+                    result.terminal_status,
+                    Some(ExecTerminalStatus::Exited { code: 7 })
+                );
+            }
+            other => panic!("expected Wait, got {other:?}"),
+        }
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    // ---- (b) session-table adversarial ----------------------------------------
+
+    fn caps(global: usize, per_uid: usize, per_vm: usize) -> ExecSessionCaps {
+        ExecSessionCaps {
+            global,
+            per_uid,
+            per_vm,
+            start_burst: 1024,
+            start_window: Duration::from_secs(10),
+        }
+    }
+
+    #[test]
+    fn per_vm_cap_is_enforced_and_released_on_drop() {
+        let table = Arc::new(SessionTable::new(caps(8, 8, 1)));
+        let slot = table.reserve(1, "work").expect("first slot");
+        let err = table.reserve(1, "work").expect_err("second blocked");
+        assert_eq!(err, SessionReserveError::PerVmCap);
+        assert_eq!(table.len(), 1);
+        drop(slot);
+        assert_eq!(table.len(), 0);
+        // The slot released, so a fresh reserve succeeds again.
+        let _slot = table.reserve(1, "work").expect("reserve after release");
+    }
+
+    #[test]
+    fn per_uid_and_global_caps_are_enforced() {
+        // per-uid cap (global high enough not to mask it).
+        let uid_table = Arc::new(SessionTable::new(caps(8, 2, 8)));
+        let _a = uid_table.reserve(5, "va").expect("a");
+        let _b = uid_table.reserve(5, "vb").expect("b");
+        let uid_err = uid_table.reserve(5, "vc").expect_err("per-uid");
+        assert_eq!(uid_err, SessionReserveError::PerUidCap);
+        // A different uid is unaffected by another uid's per-uid cap.
+        let _other = uid_table.reserve(6, "vd").expect("other uid ok");
+
+        // global cap, checked before per-uid: two live sessions exhaust it
+        // even across distinct uids/vms.
+        let global_table = Arc::new(SessionTable::new(caps(2, 8, 8)));
+        let _x = global_table.reserve(5, "va").expect("x");
+        let _y = global_table.reserve(6, "vb").expect("y");
+        let global_err = global_table.reserve(7, "vc").expect_err("global");
+        assert_eq!(global_err, SessionReserveError::GlobalCap);
+    }
+
+    #[test]
+    fn handle_collision_and_exhaustion_fail_closed_without_leaking_a_slot() {
+        let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
+        // A generator that always returns the SAME bytes: the first reserve
+        // succeeds, the second collides every retry → HandleExhausted.
+        let fixed = [7_u8; 16];
+        let _first = table
+            .reserve_with(1, "work", || Some(fixed))
+            .expect("first mints handle");
+        let collide = table
+            .reserve_with(1, "work", || Some(fixed))
+            .expect_err("collision");
+        assert_eq!(collide, SessionReserveError::HandleExhausted);
+        // A generator that cannot produce entropy fails closed too.
+        let exhausted = table
+            .reserve_with(2, "work", || None)
+            .expect_err("no entropy");
+        assert_eq!(exhausted, SessionReserveError::HandleExhausted);
+        // Neither failure leaked a slot: only the first reserve is live.
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn owned_by_binds_handle_to_reserving_uid() {
+        let table = Arc::new(SessionTable::new(caps(8, 8, 8)));
+        let slot = table.reserve(7, "work").expect("slot");
+        let handle = slot.handle().to_owned();
+        assert!(table.owned_by(&handle, 7));
+        assert!(!table.owned_by(&handle, 8), "wrong peer uid is rejected");
+        assert!(!table.owned_by("deadbeef", 7), "unknown handle is rejected");
+        drop(slot);
+        assert!(
+            !table.owned_by(&handle, 7),
+            "released handle is not reusable / lookupable"
+        );
+    }
+
+    // ---- (j) fake-clock rate limit --------------------------------------------
+
+    #[test]
+    fn start_rate_limit_uses_the_clock_window() {
+        let clock = FakeClock::new();
+        let table = Arc::new(SessionTable::with_clock(
+            ExecSessionCaps {
+                global: 64,
+                per_uid: 64,
+                per_vm: 64,
+                start_burst: 2,
+                start_window: Duration::from_secs(10),
+            },
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        ));
+        // Two starts in the window are allowed; the third is rate limited.
+        let _a = table.reserve(1, "va").expect("start 1");
+        let _b = table.reserve(1, "vb").expect("start 2");
+        let limited = table.reserve(1, "vc").expect_err("rate limited");
+        assert_eq!(limited, SessionReserveError::RateLimited);
+
+        // Advance past the window: the sliding window forgets the old starts.
+        clock.advance(Duration::from_secs(11));
+        let _c = table.reserve(1, "vd").expect("start after window");
+    }
 }
