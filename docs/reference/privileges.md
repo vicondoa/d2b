@@ -534,17 +534,25 @@ is in the machine-readable public-operation matrix
 
 | Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `config` | VM (guest-editable config layer) | per VM | none | no (staging/review only) | no | `nixling-launcher` + `nixling-admin` | yes | deny |
+| `config` | VM (guest-editable config layer) | per VM | none | no (staging/review only) | no | `nixling-launcher` + `nixling-admin` for the local review sub-verbs; `sync` is `nixling-admin` only (see notes) | yes | deny |
 
 Notes:
 
-- `sync` reads the guest-editable config over the authenticated
-  **guest-control** vsock (the daemon's `ReadGuestConfig` →
-  `ReadGuestFile` path), not over SSH, and writes only into the
-  host-side staging copy; it never evaluates or imports the guest
-  bytes. It fails **closed**: a VM whose running generation predates
-  guest-control (or that does not advertise `ReadGuestFile`) returns a
-  typed error rather than silently falling back to SSH.
+- `sync` is **admin-only**: it dispatches the daemon's `ReadGuestConfig`
+  verb, which is gated to the `nixling-admin` role at `SO_PEERCRED`
+  accept time (`verb_requires_admin("readGuestConfig")`). A
+  launcher-role caller is rejected with the typed `authz-not-admin`
+  error (exit `75`) before any guest read. The local review sub-verbs
+  (`diff` / `approve` / `reject` / `status`) operate on the host-side
+  staging copy and dispatch no daemon verb, so a launcher can run
+  them — which is why the schema models the `config` group as
+  `nixling-launcher` + `nixling-admin`. `sync` reads the guest-editable
+  config over the authenticated **guest-control** vsock (the daemon's
+  `ReadGuestConfig` → `ReadGuestFile` path), not over SSH, and writes
+  only into the host-side staging copy; it never evaluates or imports
+  the guest bytes. It fails **closed**: a VM whose running generation
+  predates guest-control (or that does not advertise `ReadGuestFile`)
+  returns a typed error rather than silently falling back to SSH.
 - `approve` / `reject` are the trust transition and are
   **host-operator-only** in the handler (the guest can never approve
   its own config); they write only the operator-named `--to` path.

@@ -2147,6 +2147,12 @@ content.
 
 Fail-closed behaviour:
 
+- `config sync` is **admin-only**: `readGuestConfig` is gated to the
+  `nixling-admin` role (`nixling.site.adminUsers`) at the daemon's
+  `SO_PEERCRED` accept time. A launcher-role caller is rejected with the
+  typed `authz-not-admin` error (exit `75`, AUTH) before any socket
+  request reads guest bytes. The staging-only verbs (`diff`/`approve`/
+  `reject`/`status`) dispatch no daemon verb and are not admin-gated.
 - A known VM whose generation does not declare the guest-control transport
   (old or partial generation) is rejected with
   `guest-control-unavailable-old-generation` (exit `70`); no socket request
@@ -2218,6 +2224,7 @@ All `config` verbs share these exit codes:
 | `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
 | `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
 | `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
+| `75` | `config sync` only. The caller is not in `nixling.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error — exit `75`, the daemon's reserved authz code — before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
 
 With `--json` each verb emits a single stdout object:
 
@@ -2244,7 +2251,8 @@ authenticated guest-control vsock session to the VM's `guestd`, and the
 two endpoints multiplex the exec over a typed `exec` verb. There is **no
 SSH** and **no host PTY** — the guest owns the PTY. The command is
 admin-only (the same `SO_PEERCRED` admin gate as the other privileged
-verbs); a launcher-role caller is rejected before any session is
+verbs); a launcher-role caller is rejected with the typed
+`authz-not-admin` error (exit `77`, AUTH) before any session is
 established.
 
 Modes:
@@ -2285,7 +2293,7 @@ guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`; `SIGTERM` → `15`;
 | `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`). No SSH fallback. |
 | `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
 | `76` | protocol | The guest returned a malformed/out-of-contract response, or rejected the op (`guest-control-protocol-error`, `guest-control-exec-error`). |
-| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`). |
+| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), or the daemon's admin gate refused a non-admin caller (`authz-not-admin`) — `vm exec` is admin-only. Both are authorization failures and map to the AUTH reserved code. |
 | `42` | internal | Daemon-internal or CLI-internal failure driving the session. |
 
 A guest command that itself exits `70` (or any reserved transport
