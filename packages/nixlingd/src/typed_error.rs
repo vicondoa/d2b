@@ -870,6 +870,49 @@ mod tests {
     }
 
     #[test]
+    fn guest_control_exec_failed_kinds_are_leak_free() {
+        // F9 / WR12: every exec failure kind (including the serde/protocol and
+        // transport classes) must surface a non-empty, leak-free public
+        // message + remediation — no host path, argv, env, output bytes, or
+        // session handle. The daemon never attaches guest-supplied content to
+        // a `GuestControlExecFailed` envelope, so iterating the closed enum is
+        // sufficient sentinel coverage for the failure path.
+        let kinds = [
+            GuestControlExecErrorKind::Transport,
+            GuestControlExecErrorKind::Auth,
+            GuestControlExecErrorKind::Protocol,
+            GuestControlExecErrorKind::Timeout,
+            GuestControlExecErrorKind::OldGeneration,
+            GuestControlExecErrorKind::Capability,
+            GuestControlExecErrorKind::SessionCapacity,
+            GuestControlExecErrorKind::RateLimited,
+            GuestControlExecErrorKind::GuestError,
+            GuestControlExecErrorKind::Internal,
+        ];
+        for kind in kinds {
+            let err = TypedError::GuestControlExecFailed { kind };
+            let slug = err.kind();
+            assert!(
+                slug.starts_with("guest-control-") || slug.starts_with("exec-session-"),
+                "slug={slug} does not use a guest-control / exec-session prefix"
+            );
+            assert!(!err.message().is_empty(), "kind={slug} message empty");
+            assert!(!err.remediation().is_empty(), "kind={slug} remediation empty");
+            assert_no_path_leak(slug, &err.message());
+            assert_no_path_leak(slug, &err.remediation());
+            // The public envelope must never carry guest-supplied tokens.
+            for surface in [err.message(), err.remediation()] {
+                for forbidden in ["argv", "stdout", "stderr", "session=", "handle="] {
+                    assert!(
+                        !surface.contains(forbidden),
+                        "kind={slug} leaks {forbidden:?}: {surface:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn envelope_kind_matches_expected_discriminant() {
         let cases: Vec<(TypedError, &str)> = vec![
             (

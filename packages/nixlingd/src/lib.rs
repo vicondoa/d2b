@@ -2345,6 +2345,31 @@ fn dispatch_read_guest_config(
 const EXEC_METRIC: &str = "nixling_daemon_guest_control_exec_total";
 const EXEC_SUBSYSTEM: &str = "guest-control-exec";
 
+/// Closed allowlist of `outcome` label values for the exec metric. Any value
+/// emitted outside this set is a hard bug (caught by `debug_assert` below and
+/// the metric-label allowlist test) — `outcome` MUST stay a bounded enum so the
+/// `nixling_daemon_guest_control_exec_total` series cannot explode in
+/// cardinality or leak a free-form string.
+const EXEC_OUTCOME_LABELS: &[&str] = &["established", "closed", "error", "op-error"];
+
+/// Closed allowlist of `error_kind` label values for the exec metric. Mirrors
+/// the literals at the `exec_metric` call sites plus every value
+/// [`exec_error_kind_label`] can return. `none` is the sentinel for a
+/// non-error outcome (establish/close).
+const EXEC_ERROR_KIND_LABELS: &[&str] = &[
+    "none",
+    "transport",
+    "auth",
+    "protocol",
+    "timeout",
+    "old-generation",
+    "capability",
+    "session-capacity",
+    "rate-limited",
+    "guest",
+    "internal",
+];
+
 /// Increment the closed-label exec outcome counter. `outcome` and `error_kind`
 /// are the only labels besides the constant subsystem; all three are drawn
 /// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
@@ -2360,6 +2385,18 @@ fn exec_metric_into(
     outcome: &'static str,
     error_kind: &'static str,
 ) {
+    // Fail-closed in debug/test builds: the only labels are the constant
+    // subsystem plus a closed `outcome` / `error_kind` enum. A stray value
+    // (e.g. a vm name, session handle, or op id mistakenly threaded through)
+    // would be caught here and by `exec_metric_labels_are_closed_enum`.
+    debug_assert!(
+        EXEC_OUTCOME_LABELS.contains(&outcome),
+        "exec metric outcome {outcome:?} is not in the closed allowlist"
+    );
+    debug_assert!(
+        EXEC_ERROR_KIND_LABELS.contains(&error_kind),
+        "exec metric error_kind {error_kind:?} is not in the closed allowlist"
+    );
     registry.counter_inc(
         EXEC_METRIC,
         &[
@@ -2628,6 +2665,14 @@ fn run_exec_owner(
     // One kind=critical session-establishment span (NO per-op span/audit).
     emit_exec_established_event(&start.vm, peer.uid, info.tty);
     exec_metric(&state, "established", "none");
+    // Bounded lifecycle audit (leak-safe: vm + admin uid + tty only).
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlExecEstablished {
+            vm: start.vm.clone(),
+            peer_uid: peer.uid,
+            tty: info.tty,
+        });
 
     let start_response = exec_session::start_response(&handle, &info);
     if write_json_frame(
@@ -2639,6 +2684,12 @@ fn run_exec_owner(
         drop(control_tx);
         let _ = worker.join();
         exec_metric(&state, "closed", "none");
+        let _ = state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+            });
         return;
     }
 
@@ -2652,6 +2703,12 @@ fn run_exec_owner(
     let _ = worker.join();
     drop(slot);
     exec_metric(&state, "closed", "none");
+    let _ = state
+        .daemon_audit
+        .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
+            vm: start.vm.clone(),
+            peer_uid: peer.uid,
+        });
 }
 
 /// A reply frame the owner writer must emit, carried from the per-op awaiter to
@@ -2869,6 +2926,141 @@ impl SocketShutdownReaper {
 impl exec_session::OwnerReaper for SocketShutdownReaper {
     fn reap(&self) {
         let _ = nix::sys::socket::shutdown(self.fd, nix::sys::socket::Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
+mod exec_metric_tests {
+    //! WR12 / F9: the exec metric `nixling_daemon_guest_control_exec_total` is
+    //! a HARD closed-label series. Its only labels are the constant
+    //! `subsystem` plus a bounded `outcome` / `error_kind` enum — never a vm
+    //! name, session handle, op id, peer uid, or argv hash. These tests assert
+    //! the descriptor shape, the closed value sets, and that a rendered series
+    //! carries nothing else.
+
+    use super::{
+        exec_error_kind_label, exec_metric_into, metrics, EXEC_ERROR_KIND_LABELS, EXEC_METRIC,
+        EXEC_OUTCOME_LABELS, EXEC_SUBSYSTEM,
+    };
+    use crate::typed_error::{GuestControlExecErrorKind, TypedError};
+
+    /// Every `GuestControlExecErrorKind` the daemon can surface (closed enum).
+    const ALL_EXEC_ERROR_KINDS: &[GuestControlExecErrorKind] = &[
+        GuestControlExecErrorKind::Transport,
+        GuestControlExecErrorKind::Auth,
+        GuestControlExecErrorKind::Protocol,
+        GuestControlExecErrorKind::Timeout,
+        GuestControlExecErrorKind::OldGeneration,
+        GuestControlExecErrorKind::Capability,
+        GuestControlExecErrorKind::SessionCapacity,
+        GuestControlExecErrorKind::RateLimited,
+        GuestControlExecErrorKind::GuestError,
+        GuestControlExecErrorKind::Internal,
+    ];
+
+    #[test]
+    fn exec_metric_descriptor_has_only_three_closed_labels() {
+        // The inventory descriptor for the exec metric must declare EXACTLY
+        // the three closed keys — adding `vm`, `session`, `op_id`, or any
+        // per-session identifier here is the regression this guards.
+        let descriptor = metrics::descriptor(EXEC_METRIC).expect("exec metric is in the inventory");
+        assert_eq!(
+            descriptor.labels,
+            &["subsystem", "outcome", "error_kind"],
+            "exec metric must carry only the closed subsystem/outcome/error_kind labels"
+        );
+    }
+
+    #[test]
+    fn exec_error_kind_label_is_within_closed_allowlist() {
+        // Every typed exec error maps to a label inside the closed set, so the
+        // `error_kind` cardinality can never exceed the enum.
+        for kind in ALL_EXEC_ERROR_KINDS {
+            let error = TypedError::GuestControlExecFailed { kind: *kind };
+            let label = exec_error_kind_label(&error);
+            assert!(
+                EXEC_ERROR_KIND_LABELS.contains(&label),
+                "exec_error_kind_label returned {label:?} which is outside the closed allowlist"
+            );
+        }
+        // A non-exec TypedError defaults to the `internal` bucket (still closed).
+        assert_eq!(
+            exec_error_kind_label(&TypedError::AuthzNotAdmin {
+                verb: "exec".to_owned()
+            }),
+            "internal"
+        );
+    }
+
+    #[test]
+    fn exec_metric_labels_are_closed_enum() {
+        // Emit one sample for EVERY (outcome, error_kind) pair in the closed
+        // sets, render, and assert the rendered exec series carries only the
+        // three approved keys, the constant subsystem, and closed values —
+        // and never a forbidden per-session identifier.
+        let registry = metrics::Registry::new();
+        for &outcome in EXEC_OUTCOME_LABELS {
+            for &error_kind in EXEC_ERROR_KIND_LABELS {
+                exec_metric_into(&registry, outcome, error_kind);
+            }
+        }
+        let body = registry.render();
+
+        let mut saw_exec_series = false;
+        for line in body.lines() {
+            if !line.starts_with(EXEC_METRIC) {
+                continue;
+            }
+            let (Some(open), Some(close)) = (line.find('{'), line.find('}')) else {
+                continue;
+            };
+            saw_exec_series = true;
+            let inner = &line[open + 1..close];
+            for pair in inner.split(',') {
+                let mut kv = pair.splitn(2, '=');
+                let key = kv.next().unwrap_or("").trim();
+                let value = kv.next().unwrap_or("").trim().trim_matches('"');
+                match key {
+                    "subsystem" => assert_eq!(
+                        value, EXEC_SUBSYSTEM,
+                        "exec subsystem label must be the constant guest-control-exec"
+                    ),
+                    "outcome" => assert!(
+                        EXEC_OUTCOME_LABELS.contains(&value),
+                        "exec outcome label {value:?} is outside the closed allowlist"
+                    ),
+                    "error_kind" => assert!(
+                        EXEC_ERROR_KIND_LABELS.contains(&value),
+                        "exec error_kind label {value:?} is outside the closed allowlist"
+                    ),
+                    other => panic!(
+                        "exec metric leaked an unapproved label key {other:?}: {line}"
+                    ),
+                }
+            }
+        }
+        assert!(saw_exec_series, "expected the exec metric to render a series");
+
+        // Belt-and-suspenders: no per-session identifier may ever appear as a
+        // label key on the exec metric.
+        for forbidden in [
+            "vm=\"",
+            "session=\"",
+            "handle=\"",
+            "op_id=\"",
+            "op-id=\"",
+            "peer_uid=\"",
+            "uid=\"",
+            "argv=\"",
+            "argv_hash=\"",
+        ] {
+            for line in body.lines().filter(|l| l.starts_with(EXEC_METRIC)) {
+                assert!(
+                    !line.contains(forbidden),
+                    "exec metric leaked forbidden label {forbidden:?}: {line}"
+                );
+            }
+        }
     }
 }
 
