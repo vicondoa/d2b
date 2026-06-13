@@ -189,7 +189,7 @@ ok "nixling list is native (exit $top_list_rc, no bash fallback)"
 
 # --- (5) vm konsole --dry-run --json shape (guest-control transport) ---
 #
-# `vm konsole` now hosts `nixling vm exec -it <vm> -- bash -l` over the
+# `vm konsole` now hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` over the
 # authenticated guest-control transport (no SSH). Asserts the --dry-run
 # JSON shape without spawning a terminal or contacting a socket. Layer 1
 # (no socket, no fork).
@@ -244,8 +244,8 @@ if command -v jq >/dev/null 2>&1; then
   [ "$argv0" = "konsole" ] || { fail "vm konsole .argv[0]='$argv0' (want 'konsole' terminal)"; exit 1; }
   # konsole hosts `nixling vm exec -it <vm> -- bash -l` over guest-control.
   case "$argv_joined" in
-    *"vm exec -it konsole-vm -- bash -l") : ;;
-    *) fail "vm konsole .argv must host 'vm exec -it konsole-vm -- bash -l' (got '$argv_joined')"; exit 1 ;;
+    *"vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l") : ;;
+    *) fail "vm konsole .argv must host 'vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l' (got '$argv_joined')"; exit 1 ;;
   esac
   # The retired SSH fields must be absent from the JSON entirely.
   [ "$has_host" = "false" ] || { fail "vm konsole must not emit SSH .host"; exit 1; }
@@ -303,5 +303,39 @@ if [ "$konsole_unknown_rc" = "0" ]; then
   exit 1
 fi
 ok "vm konsole rejects unknown vm name with non-zero exit"
+
+# --- (6) vm exec black-box: clap parse + top-level dispatch ---
+#
+# Exercises `nixling vm exec` through real clap parsing and dispatch (not the
+# Rust unit tests that build VmExecArgs directly). Hermetic: no daemon, no
+# guest. Asserts (a) the cli/usage envelope for a missing command and (b) the
+# guest-control-transport-unavailable envelope when the daemon socket is
+# absent — proving the primary operator command reaches cmd_vm_exec.
+
+exec_usage_out="$scratch/exec-usage.json"
+exec_usage_rc=0
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm exec konsole-vm --json > "$exec_usage_out" 2>/dev/null || exec_usage_rc=$?
+[ "$exec_usage_rc" = "2" ] || { fail "vm exec (no command) should exit 2, got $exec_usage_rc"; cat "$exec_usage_out" >&2; exit 1; }
+if command -v jq >/dev/null 2>&1; then
+  [ "$(jq -r '.command' "$exec_usage_out")" = "vm exec" ] || { fail "vm exec usage .command (want 'vm exec')"; exit 1; }
+  [ "$(jq -r '.source' "$exec_usage_out")" = "cli" ] || { fail "vm exec usage .source (want 'cli')"; exit 1; }
+  [ "$(jq -r '.reason' "$exec_usage_out")" = "usage" ] || { fail "vm exec usage .reason (want 'usage')"; exit 1; }
+fi
+ok "vm exec (missing command) emits the cli/usage envelope via clap+dispatch"
+
+exec_transport_out="$scratch/exec-transport.json"
+exec_transport_rc=0
+NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_PUBLIC_SOCKET="$socket_missing" \
+  "$cli" vm exec konsole-vm --json -- /bin/true > "$exec_transport_out" 2>/dev/null || exec_transport_rc=$?
+[ "$exec_transport_rc" != "0" ] || { fail "vm exec with no daemon should exit non-zero"; exit 1; }
+if command -v jq >/dev/null 2>&1; then
+  [ "$(jq -r '.command' "$exec_transport_out")" = "vm exec" ] || { fail "vm exec transport .command (want 'vm exec')"; exit 1; }
+  [ "$(jq -r '.source' "$exec_transport_out")" = "transport" ] || { fail "vm exec transport .source (want 'transport')"; exit 1; }
+  [ "$(jq -r '.reason' "$exec_transport_out")" = "guest-control-transport-unavailable" ] || { fail "vm exec transport .reason (want 'guest-control-transport-unavailable')"; exit 1; }
+fi
+ok "vm exec (no daemon) emits guest-control-transport-unavailable via clap+dispatch"
 
 log "==> cli-vm-verbs-eval OK"

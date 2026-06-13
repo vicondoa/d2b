@@ -713,7 +713,7 @@ enum VmCommand {
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
     /// Open an interactive guest session in a host terminal. Thin wrapper
-    /// that hosts `nixling vm exec -it <vm> -- bash -l` in the chosen
+    /// that hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in the chosen
     /// terminal emulator (default `konsole`, overridable via `--terminal`)
     /// over the authenticated guest-control transport. There is no SSH; the
     /// retired SSH-only flags `--host`/`--key`/`--user` are rejected with a
@@ -4127,6 +4127,11 @@ fn print_exec_json(value: &Value) -> Result<(), CliFailure> {
     Ok(())
 }
 
+/// Absolute path to the guest login shell hosted by `vm konsole`. guestd
+/// performs no PATH lookup and rejects a relative argv[0]; on a nixling
+/// (NixOS) guest the system bash always resolves here.
+const GUEST_LOGIN_SHELL: &str = "/run/current-system/sw/bin/bash";
+
 /// `nixling vm konsole <vm>` — open an interactive guest session in a host
 /// terminal. This is now a thin wrapper that hosts
 /// `nixling vm exec -it <vm> -- <login-shell>` inside the chosen terminal
@@ -4178,8 +4183,10 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
     })?;
 
     let terminal = &args.terminal;
-    // Host `nixling vm exec -it <vm> -- bash -l` in the terminal. The terminal
-    // owns the interactive session; the guest owns the PTY.
+    // Host `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in
+    // the terminal. The terminal owns the interactive session; the guest owns
+    // the PTY. guestd requires an absolute argv[0] (it performs no PATH
+    // lookup), so use the canonical NixOS system bash path inside the guest.
     let argv: Vec<String> = vec![
         terminal.clone(),
         "-e".to_owned(),
@@ -4189,7 +4196,7 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
         "-it".to_owned(),
         args.vm.clone(),
         "--".to_owned(),
-        "bash".to_owned(),
+        GUEST_LOGIN_SHELL.to_owned(),
         "-l".to_owned(),
     ];
 
@@ -9021,6 +9028,8 @@ mod konsole_wrapper_tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use super::GUEST_LOGIN_SHELL;
+
     use serde_json::{json, Value};
 
     use super::{
@@ -9110,7 +9119,7 @@ mod konsole_wrapper_tests {
         // The wrapper must re-exec this binary into `vm exec -it` and must
         // not contain any SSH token. We can only assert the static suffix
         // (the self-exe path is the test harness binary at runtime).
-        let argv_suffix = ["vm", "exec", "-it", "work", "--", "bash", "-l"];
+        let argv_suffix = ["vm", "exec", "-it", "work", "--", GUEST_LOGIN_SHELL, "-l"];
         // Reconstruct the argv the wrapper would build, mirroring the
         // production logic, and assert no "ssh" token appears.
         let self_exe = std::env::current_exe().expect("self exe");
@@ -9123,7 +9132,7 @@ mod konsole_wrapper_tests {
             "-it".to_owned(),
             "work".to_owned(),
             "--".to_owned(),
-            "bash".to_owned(),
+            GUEST_LOGIN_SHELL.to_owned(),
             "-l".to_owned(),
         ];
         assert!(argv.iter().all(|a| !a.contains("ssh")));

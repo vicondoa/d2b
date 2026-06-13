@@ -216,7 +216,13 @@ fn build_exec_create_request(vm_id: &str, spec: &ExecStartSpec) -> pb::ExecCreat
         })
         .collect();
     request.tty = spec.tty;
-    request.stdin_open = true;
+    // guestd accepts an open stdin only in interactive TTY mode
+    // (`validate_and_authorize_tty`); both non-TTY validators
+    // (`validate_and_authorize` / `_detached`) reject `stdin_open` as
+    // `UnsupportedMode`. Mirror that contract: open stdin iff a PTY was
+    // requested. Hardcoding `true` made every non-TTY `vm exec` (and every
+    // detached exec) fail `ExecCreate` before the guest process could spawn.
+    request.stdin_open = spec.tty;
     request.detached = spec.detached;
     if let Some((rows, cols)) = spec.term_size {
         let mut size = pb::TerminalSize::new();

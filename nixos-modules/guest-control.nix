@@ -179,7 +179,7 @@ in
     systemd.services = {
       nixling-guestd = lib.mkIf cfg.enable {
         description = "nixling guest control daemon";
-        wantedBy = [ ];
+        wantedBy = [ "multi-user.target" ];
         unitConfig.RequiresMountsFor = [ "/run/nixling-guest-control-host" ];
         serviceConfig = {
           Type = "exec";
