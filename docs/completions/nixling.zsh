@@ -515,7 +515,7 @@ _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
 ':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
-'*::command -- The command and its arguments, after `--`:_default' \
+'*::command -- The command and its arguments, after `--`. NOT a clap `required` argument\: a missing command is validated inside `cmd_vm_exec` so a `--json` run still emits the single terminal `source\: "cli"`, `reason\: "usage"` envelope on stdout instead of a clap stderr error (matching docs/reference/{error-codes,cli-contract}.md):_default' \
 && ret=0
 ;;
 (help)
