@@ -1,9 +1,11 @@
 # Default switch and deprecation — historical record
 
 > **Status: historical record.** The daemon-experimental rollout this
-> page describes is closed. `nixling.daemonExperimental.enable` is now
-> an obsolete always-on compatibility gate (`default = true`); it no
-> longer flips through an evidence gate. The bash CLI is gone, and
+> page describes is closed. `nixling.daemonExperimental.enable` now
+> defaults `true` and no longer flips through an evidence gate, but it
+> still functionally gates the daemon control plane (setting it `false`
+> reverts the host to the unsupported pre-daemon legacy state). The
+> bash CLI is gone, and
 > there are no framework-declared per-VM lifecycle templates. See
 > [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 > for the rationale, alternatives considered, consequences, and
@@ -27,7 +29,7 @@
 
 | Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
-| `nixling.daemonExperimental.enable = false` as the shipped default | Now an obsolete always-on compatibility gate: `default = true`, unconditionally. It is no longer computed from wave readiness; the per-wave evidence files instead gate the `nixling.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
+| `nixling.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane — setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `nixling.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
 | W14c three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after P6. |
 | The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in P6 (`ph6-p6-cli-nix-migrations`, `ph6-remove-systemd-emission`). Rust CLI is the only CLI. |
 | Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in P6. |
@@ -83,8 +85,11 @@ W18 originally turned `nixling.daemonExperimental.enable` into a
 computed default that evaluated to `true` only when every wave in the
 **W18 flip-gate subset** had both readiness bits green AND a matching
 evidence file on disk. That coupling is **no longer wired**:
-`nixling.daemonExperimental.enable` is now an obsolete always-on gate
-(`default = true`). The flip-gate subset is still computed in
+`nixling.daemonExperimental.enable` now defaults `true` and is no
+longer evidence-auto-flipped, but it still functionally gates the
+daemon control plane (setting it `false` reverts the host to the
+unsupported pre-daemon legacy state). The flip-gate subset is still
+computed in
 `nixos-modules/options-daemon.nix`, and the per-wave evidence files
 are still live — but what they gate today is the per-wave
 `nixling.defaultSwitchReadiness.<wave>.validated = true` eval

@@ -2,9 +2,10 @@
 
 Canonical reference for the host-local proof files that gate
 `nixling.defaultSwitchReadiness.<wave>.validated = true`. (These files
-no longer drive `nixling.daemonExperimental.enable`, which is now an
-obsolete always-on gate; they remain live for the per-wave `validated`
-assertion and for `nixling host validate`.)
+no longer drive `nixling.daemonExperimental.enable`, which now defaults
+`true` and is no longer evidence-auto-flipped but still functionally
+gates the daemon control plane; they remain live for the per-wave
+`validated` assertion and for `nixling host validate`.)
 
 The schema is implicitly defined by the cargo-checked validator in
 [`nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)

@@ -21,17 +21,13 @@ order:
    for the rationale.
 
 2. **Remove `nixling.daemonExperimental.enable`** from the
-   consumer flake (or set it `false` — but `remove` is the
-   canonical instruction). Leaving the option set in v1.1+
-   emits an eval-time deprecation warning via the v1.1 assertion in
-   `nixos-modules/assertions.nix`. The warning
-   text — emitted verbatim by `nixos-rebuild` AND locked into
-   this guide — is:
-
-   > `nixling.daemonExperimental.enable` is obsolete in v1.1;
-   > remove this option from your consumer flake because the
-   > broker socket/service are enabled by default. Leaving it
-   > set has no effect.
+   consumer flake — or leave it at its `default = true`. Do **not**
+   set it `false`: the option still functionally gates the daemon
+   control plane, and setting it `false` reverts the host to the
+   unsupported pre-daemon legacy state. The broker socket/service are
+   enabled by default in v1.1+, so removing the option (or leaving it
+   at its default `true`) is the canonical instruction. No eval-time
+   warning is emitted for this option today.
 
 3. **Optional**: snapshot `/etc/nixos` / consumer-flake state
    before the upgrade in case you need to roll back.

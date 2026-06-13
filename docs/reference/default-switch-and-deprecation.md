@@ -29,8 +29,10 @@ After the clean break, the only contract worth recording here is:
    per-wave `nixling.defaultSwitchReadiness.<wave>.validated = true`
    eval assertion (and that `nixling host validate` materialises). It
    no longer decides whether `nixling.daemonExperimental.enable`
-   evaluates to `true`: that option is an obsolete always-on
-   compatibility gate (`default = true`). The evidence gate is a guard
+   evaluates to `true`: that option now defaults `true` and is no longer
+   evidence-auto-flipped, but it still functionally gates the daemon
+   control plane (setting it `false` reverts the host to the
+   unsupported pre-daemon legacy state). The evidence gate is a guard
    that refuses to let an operator assert `validated = true` for a wave
    without the recorded evidence file.
 3. Cross-references to the docs that own the live surface
@@ -86,9 +88,10 @@ the typed envelope catalog, see
 ## Per-wave evidence gate (still live)
 
 `nixling.daemonExperimental.enable` is no longer computed from wave
-readiness. It is an obsolete compatibility gate with an unconditional
-`default = true`; the daemon-only end state is always enabled and
-consumers should not set it. The flip-gate subset
+readiness (no longer evidence-auto-flipped). It now defaults `true`,
+but it still functionally gates the daemon control plane — setting it
+`false` reverts the host to the unsupported pre-daemon legacy state, so
+consumers should leave it at its default. The flip-gate subset
 `{w4Fu, w5Fu, w6Fu, w7Fu, w8Fu, w9Fu, p0, p0Fu, p1, p2, p3, p4}` is
 still computed in `nixos-modules/options-daemon.nix` for downstream
 readers, but it does not drive that default.

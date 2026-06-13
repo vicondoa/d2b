@@ -4,8 +4,11 @@
 //! This module ships the operator-facing one-command preflight that
 //! must run after a fresh `nixos-rebuild switch` to record the
 //! per-wave validation evidence the readiness assertions consume.
-//! (`nixling.daemonExperimental.enable` is an obsolete always-true
-//! compat gate; there is no default to flip.) It iterates the known
+//! (`nixling.daemonExperimental.enable` defaults `true` and is no
+//! longer evidence-auto-flipped — there is no default to flip — but it
+//! still functionally gates the daemon control plane; setting it
+//! `false` reverts the host to the unsupported pre-daemon legacy
+//! state.) It iterates the known
 //! readiness waves (mirrored from
 //! `nixos-modules/options-daemon.nix:readinessWaveSpecs`) in a
 //! deterministic order; for each wave it discovers the per-wave

@@ -6,8 +6,10 @@ validation evidence. It is the umbrella verb that produces the
 per-wave evidence records consumed by the per-wave
 `defaultSwitchReadiness.<wave>.validated` assertion
 (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
-(`nixling.daemonExperimental.enable` is now an obsolete always-on
-gate and no longer depends on this evidence.)
+(`nixling.daemonExperimental.enable` defaults `true` and no longer
+depends on this evidence — it is no longer evidence-auto-flipped — but
+it still functionally gates the daemon control plane, so leave it at
+its default.)
 
 ## What it does
 
@@ -138,7 +140,8 @@ sudo nixling host validate --apply
 #    The per-wave defaultSwitchReadiness.<wave>.validated assertion
 #    passes because every <wave>.json record exists with the canonical
 #    schema. (The daemon-backed control plane is already the default;
-#    nixling.daemonExperimental.enable is an obsolete always-on gate.)
+#    nixling.daemonExperimental.enable defaults true and is no longer
+#    evidence-auto-flipped, but it still functionally gates the daemon.)
 sudo nixos-rebuild switch --flake .#myhost
 ```
 

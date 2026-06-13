@@ -97,8 +97,11 @@ let
   # daemon-only end state was considered fully attested. The set
   # intentionally excludes waves that legitimately shipped AFTER the
   # original flip (p5 first-run UX, p6 clean break, p7 release cut).
-  # `nixling.daemonExperimental.enable` is now an obsolete always-true
-  # compat gate (default `true`); this set no longer flips its default.
+  # `nixling.daemonExperimental.enable` now defaults `true` and is no
+  # longer evidence-auto-flipped by this set, but it still functionally
+  # gates the daemon control plane (setting it `false` reverts the host
+  # to the unsupported pre-daemon legacy state); this set no longer
+  # flips its default.
   # The per-wave `validated` evidence still gates the readiness
   # assertions below and `nixling host validate`. Related deliverables
   # are modelled inside the existing w4Fu (headless daemon and

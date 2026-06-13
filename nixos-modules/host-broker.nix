@@ -58,10 +58,16 @@ in
 {
   # the broker NixOS module was previously gated behind
   # `cfg.daemonExperimental.enable`. v1.1 makes the broker
-  # socket/service default-on (ADR 0015 daemon-only clean break);
-  # the `daemonExperimental.enable` toggle is now a no-op (consumer
-  # flakes that still set it receive an eval-time warning emitted via
-  # `nixos-modules/assertions.nix`).
+  # socket/service default-on (ADR 0015 daemon-only clean break), so
+  # this broker module is no longer gated by the toggle. The toggle
+  # itself is NOT a no-op: it defaults `true` and still functionally
+  # gates the daemon control plane (`nixlingd`, daemon-config, and the
+  # bundle-artifact group ownership) in `nixos-modules/host-daemon.nix`
+  # and the `*-json.nix` emitters — setting it `false` reverts the host
+  # to the unsupported pre-daemon legacy state. It is no longer
+  # evidence-auto-flipped; `nixos-modules/assertions.nix` deliberately
+  # does not warn on it (the option default makes `isDefined` true even
+  # when consumers do not set it).
   # The module body always materializes the broker — there is no
   # `mkIf` wrapper. The legacy gating semantics are documented in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
