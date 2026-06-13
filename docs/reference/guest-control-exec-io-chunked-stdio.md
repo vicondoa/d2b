@@ -879,10 +879,11 @@ payload bytes, or guest free-form error text.
 > (`ExecCreate`/`WriteStdin`/`CloseStdin`/`ReadOutput`/`TtyWinResize`/
 > `ExecSignal`/`ExecInspect`/`ExecWait`/`ExecCancel`) is the shipped
 > contract. The `nixling vm exec` **CLI** described below — including the
-> `--interactive`, `--tty`, and `--detach` flags and the interactive
-> `exec -it` flow — is the planned operator front-end and is **not yet
-> shipped**. The behaviors below specify the intended CLI
-> mapping onto the existing RPC surface, not a currently available command.
+> `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
+> flow — is shipped and drives that RPC surface (admin-only). The
+> `--detach` *CLI flag* is not yet exposed; detached exec is currently
+> reachable only through the service surface. The behaviors below
+> specify the CLI mapping onto the RPC surface.
 
 ### Attached exec
 

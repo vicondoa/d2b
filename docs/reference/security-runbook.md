@@ -147,8 +147,8 @@ Pick the narrowest effective move first:
 
 - remove the affected user from `launcherUsers` / `adminUsers` and rebuild;
 - or stop `nixlingd` while you investigate;
-- or, on NixOS, temporarily revert daemon-managed VMs back to
-  `supervisor = "systemd"` and/or set `daemonExperimental.enable = false`.
+- or, on NixOS, stop the affected VMs (`nixling vm stop <vm> --apply`)
+  and stop/mask `nixlingd.service` to halt reconciliation.
 
 ### 2. Preserve evidence before cleanup
 

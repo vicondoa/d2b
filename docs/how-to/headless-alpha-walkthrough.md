@@ -107,13 +107,13 @@ is stable; `--apply` routes through the daemon-native dispatch
       {"id": "store-preflight",     "role": "store-virtiofs-preflight"},
       {"id": "virtiofsd-ro-store",  "role": "virtiofsd"},
       {"id": "ch",                  "role": "cloud-hypervisor-runner"},
-      {"id": "ssh-ready",           "role": "guest-ssh-readiness"}
+      {"id": "guest-control-health", "role": "guest-control-health"}
     ],
     "edges": [
       {"from": "host-reconcile",     "to": "store-preflight"},
       {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
       {"from": "virtiofsd-ro-store", "to": "ch"},
-      {"from": "ch",                 "to": "ssh-ready"}
+      {"from": "ch",                 "to": "guest-control-health"}
     ]
   },
   "notes": "vm dry-run reports the DAG the supervisor would drive; --apply routes through the daemon-native dispatch (v1.0 daemon-only per ADR 0015)."
@@ -139,8 +139,11 @@ is different from the original draft:
    `SpawnRunner` handler is live and returns pidfds over SCM_RIGHTS;
    the daemon can re-open / re-adopt them through the live
    `OpenPidfd` path.
-4. `ssh-ready` — the daemon (when kept on the native path) probes the
-   guest SSH surface on the allocated static IP.
+4. `guest-control-health` — the daemon runs the authenticated
+   guest-control Health probe (Hello + token challenge-response +
+   Health over the guest-control vsock) on guest-control-capable VMs.
+   It fails closed; the legacy raw TCP-22 `ssh-ready` node is no longer
+   emitted.
 
 The operator-facing routing changed: `nixling vm start corp-vm --apply`
 no longer stops at the old `daemon-down` placeholder by default.

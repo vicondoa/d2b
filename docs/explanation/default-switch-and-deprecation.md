@@ -1,19 +1,21 @@
 # Default switch and deprecation — historical record
 
 > **Status: historical record.** The daemon-experimental rollout this
-> page describes is closed. `nixling.daemonExperimental.enable` now
-> flips through the evidence gate, the bash CLI is gone, and there
-> are no framework-declared per-VM lifecycle templates. See
+> page describes is closed. `nixling.daemonExperimental.enable` is now
+> an obsolete always-on compatibility gate (`default = true`); it no
+> longer flips through an evidence gate. The bash CLI is gone, and
+> there are no framework-declared per-VM lifecycle templates. See
 > [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 > for the rationale, alternatives considered, consequences, and
 > rollback limits.
 >
 > This page is preserved because (a) historical CHANGELOG entries
-> link to it, (b) the auto-flip gate semantics it documents still
-> drive how `nixling.daemonExperimental.enable` resolves on fresh
-> consumer hosts, and (c) the "why we did NOT keep a bash
-> coexistence path" framing is easier to read against the rollout
-> shape that came before it.
+> link to it, (b) the per-wave evidence-gate semantics it documents
+> still gate the `nixling.defaultSwitchReadiness.<wave>.validated`
+> assertion (even though they no longer drive
+> `nixling.daemonExperimental.enable`), and (c) the "why we did NOT
+> keep a bash coexistence path" framing is easier to read against the
+> rollout shape that came before it.
 >
 > The active per-verb surface lives in the reference companion
 > [`../reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md)
@@ -25,12 +27,12 @@
 
 | Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
-| `nixling.daemonExperimental.enable = false` as the shipped default | Auto-flip to `true` once the W18 flip-gate subset is green (see below). Explicit operator override in either direction still wins. |
+| `nixling.daemonExperimental.enable = false` as the shipped default | Now an obsolete always-on compatibility gate: `default = true`, unconditionally. It is no longer computed from wave readiness; the per-wave evidence files instead gate the `nixling.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
 | W14c three-mode bridge (`default` daemon-first-with-bash-fallback / `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after P6. |
 | The bash CLI (`scripts/nixling`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in P6 (`ph6-p6-cli-nix-migrations`, `ph6-remove-systemd-emission`). Rust CLI is the only CLI. |
 | Per-VM `nixling@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`nixlingd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in P6. |
 | `W10-fu + 30/60/90/180 days` bash deprecation calendar (warning → fail-loud → binary removed) | Clean break. The clean-break framing is the deprecation: there is no warn-then-remove cadence because there is no coexistence period. |
-| `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Retained in v1.0 source (default `"systemd"`) for backward-compat with consumer flakes pinning pre-v1.0 manifests; the v1.0-intended hard removal + eval-time rejection assertion is **scheduled for v1.1-P2** (see ADR 0015 § Decision and the v1.1 plan). Setting `supervisor = "nixlingd"` requires `nixling.daemonExperimental.enable = true`. |
+| `nixling.vms.<vm>.supervisor` option (per-VM choice between systemd backend and daemon backend) | Removed. The option no longer exists; setting it fails eval with a typed message (`nixos-modules/assertions.nix`). Every enabled VM is daemon-supervised (see ADR 0015 § Decision). |
 | ADR 0007 (bash coexistence + migration plan) | Superseded by ADR 0015. ADR 0007 remains in the tree as historical context. |
 
 ## Why a clean break instead of the original deprecation cycle
@@ -75,13 +77,20 @@ The trade-off explicitly accepted by ADR 0015:
   the operator responsible for not invoking the daemon-native
   verbs.
 
-## W18 auto-flip semantics (still live)
+## W18 flip-gate subset and per-wave evidence (evidence gate still live)
 
-W18 turns `nixling.daemonExperimental.enable` into a computed
-default: it evaluates to `true` only when every wave in the
-**W18 flip-gate subset** has both readiness bits green AND a
-matching evidence file on disk. Otherwise the default remains
-`false`.
+W18 originally turned `nixling.daemonExperimental.enable` into a
+computed default that evaluated to `true` only when every wave in the
+**W18 flip-gate subset** had both readiness bits green AND a matching
+evidence file on disk. That coupling is **no longer wired**:
+`nixling.daemonExperimental.enable` is now an obsolete always-on gate
+(`default = true`). The flip-gate subset is still computed in
+`nixos-modules/options-daemon.nix`, and the per-wave evidence files
+are still live — but what they gate today is the per-wave
+`nixling.defaultSwitchReadiness.<wave>.validated = true` eval
+assertion (fail-closed without the evidence file), not the
+`daemonExperimental.enable` default. The subset and evidence schema
+below remain accurate for that assertion.
 
 ### Flip-gate subset (P5 narrowing)
 

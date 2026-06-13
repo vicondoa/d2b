@@ -20,7 +20,7 @@ host-reconcile
    └─→ store-preflight
          └─→ virtiofsd-ro-store
                └─→ ch
-                     └─→ ssh-ready
+                     └─→ guest-control-health
 ```
 
 Roles, from
@@ -36,8 +36,15 @@ Roles, from
   `nl-hkeys`, and `nl-ssh-host`.
 - `cloud-hypervisor-runner` — the CH binary launched against the
   argv emitted by [`nixling_host::ch_argv`](../../packages/nixling-host/src/ch_argv.rs).
-- `guest-ssh-readiness` — daemon-side probe that the guest is
-  reachable on the allocated TAP + static IP.
+- `guest-control-health` — daemon-side authenticated guest-control
+  Health probe (full Hello + token challenge-response + Health over the
+  guest-control vsock). It is the framework readiness gate on
+  guest-control-capable VMs (`nixling.vms.<vm>.guest.control.enable =
+  true`) and fails **closed**: never ready for an old-generation,
+  unreachable, auth-failed, or timed-out guest. Per-VM sshd/host-keys
+  are retained for the SSH-compat window but are no longer the framework
+  readiness signal, so the legacy raw TCP-22 `ssh-ready` /
+  `guest-ssh-readiness` node is no longer emitted.
 
 Optional roles wired by per-VM features:
 
@@ -90,7 +97,14 @@ Supported predicate kinds (per
 - `unix-socket-exists: <path>` — daemon-side stat of the path.
   Used for virtiofsd / swtpm sockets.
 - `tcp-port: { host, port }` — TCP `connect()` against
-  `host:port`. Used for the guest SSH readiness probe.
+  `host:port`. A generic predicate kind retained for old-generation
+  compatibility; the framework no longer emits it as the readiness
+  signal (see `guest-control-health` below).
+- `guest-control-health: { vm }` — daemon-side authenticated
+  guest-control Health probe. Fails **closed**: ready only when the
+  daemon completes the authenticated Hello + token challenge-response +
+  Health exchange over the guest-control vsock. This is the framework
+  readiness gate for guest-control-capable VMs.
 - `command: [argv...]` — daemon-spawned probe child exits 0.
 - `component-specific: <name>` — escape hatch named by the role's
   emitter; the supervisor delegates the check.

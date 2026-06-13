@@ -8,9 +8,10 @@ builds on the non-interactive contract in the
 
 > **Scope note.** This document specifies the interactive TTY exec
 > *RPC/service* surface served by `nixling-guestd`. The operator-facing
-> `nixling vm exec -it` / `--tty` **CLI** front-end is planned but **not yet
-> shipped**; the contract below is the service behavior the
-> future CLI will drive, not a currently available command.
+> `nixling vm exec -it` / `--tty` **CLI** front-end is shipped and
+> drives this contract (admin-only, over the authenticated
+> guest-control vsock; see
+> [`cli-contract.md`](./cli-contract.md) for the verb surface).
 
 ## Mode selection
 

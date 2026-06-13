@@ -25,11 +25,14 @@ After the clean break, the only contract worth recording here is:
 1. The **post-clean-break per-verb matrix** — every CLI verb ships
    exactly one path (daemon-native or pure Rust). The "legacy bash
    path" column collapses to a single `no` cell.
-2. The **auto-flip gate** — still the mechanism that decides whether
-   `nixling.daemonExperimental.enable` evaluates to `true` on a
-   fresh consumer host. It is no longer a rollout valve; it is now a
-   guard that refuses to flip on a host that has not recorded the
-   required evidence files.
+2. The **per-wave evidence gate** — the mechanism that now gates the
+   per-wave `nixling.defaultSwitchReadiness.<wave>.validated = true`
+   eval assertion (and that `nixling host validate` materialises). It
+   no longer decides whether `nixling.daemonExperimental.enable`
+   evaluates to `true`: that option is an obsolete always-on
+   compatibility gate (`default = true`). The evidence gate is a guard
+   that refuses to let an operator assert `validated = true` for a wave
+   without the recorded evidence file.
 3. Cross-references to the docs that own the live surface
    (`cli-contract.md`, `wave-evidence-schema.md`, ADR 0015,
    `host-validate.md`).
@@ -80,35 +83,31 @@ signal semantics, see [`cli-contract.md`](./cli-contract.md). For
 the typed envelope catalog, see
 [`error-codes.md`](./error-codes.md).
 
-## Auto-flip gate (still live)
+## Per-wave evidence gate (still live)
 
-`nixling.daemonExperimental.enable` defaults to `true` on a fresh
-consumer host only when every wave in the **flip-gate subset**
-`{w4Fu, w5Fu, w6Fu, w7Fu, w8Fu, w9Fu, p0, p0Fu, p1, p2, p3, p4}`
-satisfies ALL THREE of:
+`nixling.daemonExperimental.enable` is no longer computed from wave
+readiness. It is an obsolete compatibility gate with an unconditional
+`default = true`; the daemon-only end state is always enabled and
+consumers should not set it. The flip-gate subset
+`{w4Fu, w5Fu, w6Fu, w7Fu, w8Fu, w9Fu, p0, p0Fu, p1, p2, p3, p4}` is
+still computed in `nixos-modules/options-daemon.nix` for downstream
+readers, but it does not drive that default.
 
-1. `nixling.defaultSwitchReadiness.<wave>.implemented = true`,
-2. `nixling.defaultSwitchReadiness.<wave>.validated = true`, AND
-3. an evidence file `<defaultFlipEvidenceDir>/<wave>.json` exists
-   carrying the canonical `{wave, timestamp, operatorSignature}`
-   schema — see [`wave-evidence-schema.md`](./wave-evidence-schema.md)
-   for the full schema and validator.
+What the evidence files **do** still gate is the per-wave readiness
+assertion. For each wave, an operator may set
+`nixling.defaultSwitchReadiness.<wave>.validated = true` only when an
+evidence file `<defaultFlipEvidenceDir>/<wave>.json` exists carrying
+the canonical `{wave, timestamp, operatorSignature}` schema — see
+[`wave-evidence-schema.md`](./wave-evidence-schema.md) for the full
+schema and validator. The eval-time assertion is fail-closed:
+asserting `validated = true` without the evidence file is rejected.
 
 `defaultFlipEvidenceDir` defaults to `/var/lib/nixling/validated`
 and is overridable via
 `nixling.daemonExperimental.defaultFlipEvidenceDir` for tests.
-Waves outside the flip-gate subset (e.g. `p5`, `p6`, `p7`) do not
-gate the auto-flip but do participate in `allReady` for other
-consumers.
-
-Explicit operator config still wins either way:
-`lib.mkDefault false`, `lib.mkForce false`, and `lib.mkForce true`
-all override the computed default unchanged. Per ADR 0015,
-`lib.mkForce false` no longer selects "legacy bash/systemd mode"
-because that mode no longer exists; it simply disables the
-nixling-managed bits that gate on `daemonExperimental.enable` and
-leaves the operator responsible for not invoking any nixling verb
-that requires a running daemon.
+Waves outside the flip-gate subset (e.g. `p5`, `p6`, `p7`) still carry
+their own `defaultSwitchReadiness.<wave>` keys and evidence-gated
+`validated` assertion.
 
 The operator-facing one-command preflight that materialises the
 evidence files is `nixling host validate --apply`; see

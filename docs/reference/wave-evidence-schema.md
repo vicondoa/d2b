@@ -1,8 +1,10 @@
 # Wave validation evidence schema
 
 Canonical reference for the host-local proof files that gate
-`nixling.defaultSwitchReadiness.<wave>.validated = true` and, by
-extension, the W18 auto-flip of `nixling.daemonExperimental.enable`.
+`nixling.defaultSwitchReadiness.<wave>.validated = true`. (These files
+no longer drive `nixling.daemonExperimental.enable`, which is now an
+obsolete always-on gate; they remain live for the per-wave `validated`
+assertion and for `nixling host validate`.)
 
 The schema is implicitly defined by the cargo-checked validator in
 [`nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)
@@ -117,7 +119,8 @@ Cross-dependencies enforced by additional assertions in
 
 ## Operator workflow
 
-The intended path from a fresh host to `daemonExperimental.enable = true`:
+The intended path from a fresh host to a wave's
+`defaultSwitchReadiness.<wave>.validated = true`:
 
 1. **Land the code.** `nixos-rebuild switch` to a nixling version
    that ships the wave's implementation (`implemented = true`
@@ -161,15 +164,16 @@ The intended path from a fresh host to `daemonExperimental.enable = true`:
 
 5. **Rebuild.** `nixos-rebuild switch` now sees
    `defaultSwitchReadiness.<wave>.validated = true` for each
-   wave whose evidence file is present. Once every wave's
-   `{implemented, validated}` pair is `true`,
-   `nixling.daemonExperimental.enable` defaults to `true` and the
-   daemon-backed control plane is the default.
+   wave whose evidence file is present, and the fail-closed eval
+   assertion passes. The daemon-backed control plane is already the
+   default regardless of these bits:
+   `nixling.daemonExperimental.enable` is an obsolete always-on gate
+   (`default = true`) and is no longer computed from wave readiness.
 
-Explicit operator override always wins:
-`nixling.daemonExperimental.enable = false` keeps the legacy path
-even after every readiness bit is green;
-`nixling.daemonExperimental.enable = true` opts in early.
+Setting `nixling.daemonExperimental.enable` has no current effect and
+is discouraged — the daemon-only end state is always enabled. The
+`validated` bits remain meaningful as host-local validation evidence,
+surfaced by `nixling host validate`.
 
 ### Manual evidence writing (escape hatch)
 
@@ -198,7 +202,7 @@ that the three fields are present and well-typed.
   `nixling host validate` verb (P5 sibling deliverable) that
   writes these files.
 - [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)
-  — the W18 auto-flip surface this evidence feeds.
+  — the per-wave evidence gate this evidence feeds.
 - [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
   — the per-wave readiness matrix and the design rationale.
 - [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md)

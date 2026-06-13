@@ -3,7 +3,8 @@
 Use the smallest rollback that solves the problem:
 
 - **bad VM generation only** -> use `nixling rollback <vm>`;
-- **daemon-owned lifecycle issue** -> move VMs back to `supervisor = "systemd"`;
+- **daemon-owned lifecycle issue** -> stop the VM (`nixling vm stop <vm>`),
+  or stop/disable `nixlingd`, or remove the VM from your host config;
 - **full framework removal** -> remove nixling from host config / host-install
   artifacts and then delete state only after backup.
 
@@ -32,39 +33,38 @@ nixling status <vm>
 That keeps nixling installed and only moves the VM back to its prior retained
 generation.
 
-## Remove daemon-owned lifecycle on NixOS
+## Stop daemon-owned lifecycle on NixOS
 
-If you want to keep nixling but stop using `nixlingd` as the VM owner:
+In v1.1 every VM is daemon-supervised by `nixlingd` — there is no
+`nixling.vms.<vm>.supervisor` option to switch back to a systemd
+backend (the option was removed in v1.1 per ADR 0015; setting it fails
+eval). To stop using `nixlingd` as the VM owner without fully
+uninstalling:
 
-1. move affected VMs back to the legacy supervisor:
+1. stop the running VMs:
 
-   ```nix
-   {
-     nixling.vms.work.supervisor = "systemd";
-   }
+   ```bash
+   sudo nixling vm stop work --apply
    ```
 
-2. if no VMs should stay daemon-owned, also disable the gate:
+2. stop (and, if desired, mask) the daemon so it does not re-reconcile:
 
-   ```nix
-   {
-     nixling.daemonExperimental.enable = false;
-   }
+   ```bash
+   sudo systemctl stop nixlingd.service
    ```
 
-3. rebuild:
+   There are no per-VM `nixling@<vm>.service` / `microvm@<vm>.service`
+   units to stop — the daemon supervises every VM in-process.
+
+3. to keep the VM declared but not auto-started, set
+   `nixling.vms.<vm>.autostart = false` and rebuild:
 
    ```bash
    sudo nixos-rebuild switch
    ```
 
-4. stop any leftover daemon-owned instance before restarting through the legacy
-   wrapper:
-
-   ```bash
-   sudo systemctl stop nixlingd.service
-   sudo systemctl stop nixling@work.service microvm@work.service
-   ```
+   To remove a VM entirely, delete its `nixling.vms.<vm>` block from
+   your host config and rebuild.
 
 ## Fully uninstall from a NixOS host
 

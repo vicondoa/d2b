@@ -346,7 +346,7 @@ records the former systemd template that no longer exists.
 | `host-prep.bridge` | `microvm-tap-interfaces@<vm>.service` (bridge-port subset); replaced by `SetBridgePortFlags` broker dispatch | `SetBridgePortFlags` | after `host-prep.sysctl`, before `host-prep.spawn` |
 | `host-prep.pci-devices` | `microvm-pci-devices@<vm>.service`; replaced by `OpenDevice` broker dispatch | `OpenDevice` | parallel with `host-prep.tap` chain; joins before `host-prep.spawn` |
 | `host-prep.store-sync` | `nixling-<vm>-store-sync.service` + activation-time `nixling-store-sync` call from `store.nix`; replaced by `StoreSync` broker dispatch | `StoreSync` (live) | before any per-VM runner spawn; for the host-install/apply path, runs as part of `host install --apply` |
-| `host-prep.known-hosts-refresh` | `nixling-known-hosts-refresh@<vm>.service`; current replacement is the planned `SshKeygenProbe` broker dispatch | `SshKeygenProbe` (future work) | after `vm.sshReady`, not in the cold-start chain |
+| `host-prep.known-hosts-refresh` | `nixling-known-hosts-refresh@<vm>.service`; current replacement is the planned `SshKeygenProbe` broker dispatch | `SshKeygenProbe` (future work) | after `vm.guest-control-health`, not in the cold-start chain |
 | `vm.set-booted` | `microvm-set-booted@<vm>.service`; replaced by pure-daemon `supervisor::state::record_booted(<vm>, <closure>)` (no broker op) | — (pure daemon: `supervisor::state::record_booted(<vm>, <closure>)`) | after runner reports ready; no broker call |
 | `host-prep.spawn` | — (final join) | `SpawnRunner` | after every preceding `host-prep.*` node completes; carries SCM_RIGHTS handoff of fds from `CreateTapFd` / `OpenDevice` / `OpenKvm` / etc. |
 
@@ -538,9 +538,13 @@ is in the machine-readable public-operation matrix
 
 Notes:
 
-- `sync` reaches into the guest over the **existing** per-VM SSH key
-  and writes only into the host-side staging copy; it never evaluates
-  or imports the guest bytes.
+- `sync` reads the guest-editable config over the authenticated
+  **guest-control** vsock (the daemon's `ReadGuestConfig` →
+  `ReadGuestFile` path), not over SSH, and writes only into the
+  host-side staging copy; it never evaluates or imports the guest
+  bytes. It fails **closed**: a VM whose running generation predates
+  guest-control (or that does not advertise `ReadGuestFile`) returns a
+  typed error rather than silently falling back to SSH.
 - `approve` / `reject` are the trust transition and are
   **host-operator-only** in the handler (the guest can never approve
   its own config); they write only the operator-named `--to` path.
