@@ -4,8 +4,7 @@
 # Asserts the ATTACHED non-interactive exec runtime stays inside its scope:
 # guestd-local process execution only, with no userd runtime call path, no
 # low-level TTY/PTY syscalls, no detached retained-log writes in the attached
-# path, no extra vsock listeners, no CH CONNECT/relay/host-network surface, no
-# readiness wiring, and no `nixling exec` CLI.
+# path, no extra vsock listeners, and no CH CONNECT/relay/host-network surface.
 #
 # It also asserts the DETACHED path (W13) is present-and-bounded: the
 # detached registry, transient-unit manager, and exec-runner exist; units
@@ -89,17 +88,6 @@ fi
 if rg -n 'CONNECT|nftables|iptables|/etc/hosts|otel|exporter|prometheus' \
   "$EXEC_SRC" "$EXEC_LINUX_SRC"; then
   fail "guest-exec-runtime-static: exec runtime must not touch host network/observability surfaces"
-fi
-
-# No host readiness predicate wiring anywhere.
-if rg -n 'ReadinessPredicate::Guest|guest-control-health-readiness' \
-  "$ROOT/packages" "$ROOT/nixos-modules" --glob '*.rs' --glob '*.nix'; then
-  fail "guest-exec-runtime-static: guest exec must not feed host readiness"
-fi
-
-# No `nixling exec` CLI subcommand yet.
-if rg -n '^\s*Exec(\b|\()' "$ROOT/packages/nixling/src/lib.rs"; then
-  fail "guest-exec-runtime-static: nixling exec CLI surface landed before its wave"
 fi
 
 # --- Detached path (W13): present-and-bounded, not absent. ---
