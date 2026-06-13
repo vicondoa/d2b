@@ -416,7 +416,10 @@ enum NativeCommand {
     Host(HostArgs),
     /// Authorisation introspection.
     Auth(AuthArgs),
-    /// Per-VM lifecycle verbs (start / stop / restart / list / status / konsole).
+    /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
+    /// admin-only guest-control sub-verbs `exec` and `konsole`, which run
+    /// commands or an interactive session inside a VM over the authenticated
+    /// guest-control transport (no SSH).
     Vm(VmArgs),
     /// Alias for `vm start <vm>`.
     Up(VmStartArgs),

@@ -1301,7 +1301,7 @@ _nixling_commands() {
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verbs \`exec\` and \`konsole\`, which run commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
 'restart:Alias for \`vm restart <vm>\`' \
@@ -1545,7 +1545,7 @@ _nixling__subcmd__help_commands() {
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verbs \`exec\` and \`konsole\`, which run commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
 'restart:Alias for \`vm restart <vm>\`' \
