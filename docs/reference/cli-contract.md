@@ -1941,33 +1941,50 @@ denied commands:
 
 **Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
 
-Pulls the VM's in-guest edited `guestConfigFile` (default
-`/var/lib/nixling-guest/guest-config.nix`) over the framework-managed
-per-VM SSH key into a host-side **staging** file
+<a id="config-sync-guest-control-transport"></a>
+On a guest-control-capable VM, `config sync` reads the VM's canonical
+guest config working copy (default `/var/lib/nixling-guest/guest-config.nix`)
+over the authenticated **guest-control transport** — a typed
+`readGuestConfig` request to `nixlingd` over the daemon public socket.
+There is no SSH: no ssh/scp process is spawned, and the SSH-shaped flags
+(`--host`/`--user`/`--key`/`--known-hosts`) and a non-default
+`--guest-path` are rejected up front with `guest-control-ssh-flag-rejected`
+(exit `2`). JSON responses carry `transport: "guest-control"`.
+
+The host treats the received bytes as untrusted data: the read is bounded
+(1 MiB hard cap + a per-attempt timeout, so a hostile guest cannot
+OOM/hang the host), the host re-enforces the size cap and recomputes size
++ sha256 from the received bytes (never a guest-reported value), the
+content is validated (non-empty, valid UTF-8), and the result is
+atomically written to a host-side **staging** file
 (`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
-The host treats the pulled bytes as untrusted data: the pull is bounded
-(1 MiB hard cap + 120 s timeout, so a hostile guest cannot OOM/hang the
-host), validated (non-empty, valid UTF-8), and the staging copy is never
-evaluated until approved. The VM's host key is verified against
-`--known-hosts` (default `/var/lib/nixling/known_hosts.nixling`) with
-`StrictHostKeyChecking=accept-new` (pins on first use; refuses a changed
-key). The SSH user comes from `--user` or the manifest `ssh_user`
-(set `nixling.vms.<vm>.ssh.user`); there is no `$USER` fallback.
-`--dry-run` prints the SSH command without running it.
+The staging copy is never evaluated until approved.
 
-**Disposition:** `rust-native` — host-initiated SSH copy; reuses the
-existing per-VM key + manifest `static_ip` / `ssh_user`. No new
-privileged surface, no virtiofs.
+`--dry-run` selects and reports the transport WITHOUT contacting the
+daemon or reading any guest bytes: it emits `transport: "guest-control"`
+plus the planned staging target only — never an SSH argv and never guest
+content.
 
-**Guest-control compatibility note:** <a id="config-sync-guest-control-transport"></a>
-ADR 0028 reserves the future
-guest-control implementation path for `config sync`. Once a running VM
-advertises healthy guest-control, `config sync` prefers guestd. During the
-old-generation compatibility window, VMs without guest-control capability
-continue using the existing SSH path and JSON responses include bounded
-compatibility metadata such as `transport: "ssh-compat"` plus a
-remediation command. The new generic `nixling exec` surface never falls
-back to SSH.
+Fail-closed behaviour:
+
+- A known VM whose generation does not declare the guest-control transport
+  (old or partial generation) is rejected with
+  `guest-control-unavailable-old-generation` (exit `70`); no socket request
+  is sent and nothing is staged. The operator SSH-compatibility transport
+  is not wired into this command.
+- When the daemon socket is unreachable, the command reports
+  `guest-control-transport-unavailable` (exit `70`).
+- Per-kind read errors surfaced by the daemon
+  (`guest-control-file-not-found`, `guest-control-file-too-large`,
+  `guest-control-path-unsafe`, `guest-control-read-denied`,
+  `guest-control-timeout`, `guest-control-protocol-error`,
+  `guest-control-auth-failed`, `guest-control-capability-unavailable`)
+  each map to exit `70` with their slug and never echo guest content,
+  paths, or transport detail.
+
+**Disposition:** `rust-native` — host-initiated typed `readGuestConfig`
+over the daemon public socket; no SSH, no virtiofs, no new privileged
+surface.
 
 ### `config diff`
 
@@ -2018,14 +2035,14 @@ All `config` verbs share these exit codes:
 | Exit | Meaning |
 | --- | --- |
 | `0` | Success (including `diff` whether or not files differ). |
-| `1` | Runtime error: nothing staged, SSH failure, size-cap/timeout, missing `ssh.user`, missing `--to`/`--against` target dir, I/O error. |
-| `2` | Usage error (bad/missing arguments; surfaced by `clap`). |
-| `70` | `config sync` only: the VM is not declared in the active manifest (`require_known_vm` emits the typed `not-yet-implemented` host-error envelope). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest and so never return `70`. |
+| `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
+| `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
+| `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
 
 With `--json` each verb emits a single stdout object:
 
-- `config sync` → `{ "command": "config sync", "vm", "staging", "bytes" }`
-  (or `{ …, "mode": "dry-run", "argv", "staging" }` under `--dry-run`).
+- `config sync` → `{ "command": "config sync", "vm", "transport": "guest-control", "staging", "bytes", "sha256" }`
+  (or `{ "command": "config sync", "mode": "dry-run", "vm", "transport": "guest-control", "staging", "guestFile" }` under `--dry-run` — no SSH argv, no guest bytes).
 - `config diff` → `{ "command": "config diff", "vm", "against", "staging", "differs": <bool>, "diff": <string> }`.
 - `config approve` → `{ "command": "config approve", "vm", "target", "bytes" }`.
 - `config reject` → `{ "command": "config reject", "vm", "removed": <bool> }`.

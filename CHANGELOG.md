@@ -37,9 +37,13 @@ deprecations ship one minor release before removal.
   runtime with per-attempt timeouts. Spawning a guest-control VM's
   cloud-hypervisor runner now grants the unprivileged daemon a minimal,
   single-uid ACL (`--x` traversal on the per-VM state dir, `rw` on
-  `vsock.sock`) scoped to the current socket inode, revoked when the
-  runner stops; both grant and revoke are audited with hash-only fields
-  (no raw paths).
+  `vsock.sock`) scoped to the current socket inode. Because there is no
+  CH-stop teardown hook carrying the socket path, the ACL is refreshed as
+  a revoke-then-grant on each cloud-hypervisor (re)spawn — any stale grant
+  left on a replaced or disabled socket inode is revoked before the live
+  grant, so a prior generation cannot retain access (stop-time teardown is
+  future work). Both the revoke and grant are audited with hash-only
+  fields (no raw paths).
 
 - New admin-only `public.sock` verb `ReadGuestConfig { vm }`: returns the
   editable guest config working copy of a guest-control VM as a bounded
