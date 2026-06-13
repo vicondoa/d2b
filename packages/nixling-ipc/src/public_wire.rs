@@ -330,9 +330,10 @@ pub struct ExecTermSize {
 
 /// `Start` op args. The daemon resolves the per-VM vsock socket + peer
 /// credentials from the trusted bundle; the client supplies only the VM name,
-/// the command, and the session shape. `detached` is carried so the daemon
-/// teardown semantics are unambiguous (a detached session survives owner
-/// disconnect); the W16 CLI ships non-detached + interactive `-it` only.
+/// the command, and the session shape. `detached` is reserved: the daemon
+/// rejects a `detached = true` request in this release (a detached/reconnect
+/// lifecycle is not implemented), and the CLI never sets it — it ships
+/// non-detached interactive (`-it`) and non-interactive sessions only.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecStartArgs {
@@ -424,7 +425,7 @@ impl fmt::Debug for ExecReadOutputArgs {
 }
 
 /// `Signal` op args. The signal is delivered to the foreground process group
-/// of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to
+/// of the exec; the CLI maps host SIGINT/SIGTSTP/SIGTERM to
 /// the corresponding guest signal numbers. `opId` is a stable client-assigned
 /// idempotency token: a retried Signal carries the same `opId` so the worker
 /// replays the original ack instead of delivering the signal twice. `opId == 0`
@@ -493,8 +494,11 @@ impl fmt::Debug for ExecWaitArgs {
     }
 }
 
-/// `Close` op args. Idempotent: closing an already-closed/torn-down session
-/// returns success.
+/// `Close` op args. Half-closes the session's stdin (the daemon issues a
+/// guest stdin close, NOT a session teardown): the command keeps running and
+/// its output keeps flowing until it exits or the owner disconnects. The
+/// result reports `stdinClosed`. Idempotent: closing stdin on a session whose
+/// stdin is already closed/torn-down returns success.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCloseArgs {
@@ -625,7 +629,8 @@ pub struct ExecWaitResult {
     pub terminal_status: Option<ExecTerminalStatus>,
 }
 
-/// `Close` op result.
+/// `Close` op result. `stdinClosed` confirms the session's stdin is now
+/// half-closed; the command continues running until it exits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecCloseResult {

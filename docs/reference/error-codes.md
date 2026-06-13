@@ -96,6 +96,32 @@ Note: the `tier-0-legacy-uses-nixos-module` and
 originate as broker-side audit decisions; the CLI re-uses the same
 docs anchors when intercepting them before reaching the broker.
 
+## `vm exec` exit codes
+
+`nixling vm exec` applies its own reserved exit-code contract on top
+of the daemon wire `kind`, so the CLI exit is stable regardless of the
+daemon's fallback `exitCode`. A guest command's own `WIFEXITED` status
+(0-255) passes through unchanged and CAN collide with these reserved
+numbers; a `--json` run disambiguates via `source` + `reason` +
+`guestExitCode` / `transportExitCode` (see
+[`cli-contract.md`](cli-contract.md#vm-exec)). The reserved numbers
+avoid the pre-existing CLI exits `2`/`3`/`33`/`78`.
+
+| docs anchor | wire kind | exit code | source | meaning |
+| --- | --- | --- | --- | --- |
+| <a id="exec-transport"></a>`#exec-transport` | `guest-control-transport-unavailable`, `guest-control-timeout` | `69` | `transport` | The vsock connect / authenticated handshake to the guest was unreachable, or a per-op / establishment deadline elapsed. The `lost-guestd` abnormal terminal maps here too. |
+| <a id="exec-old-generation"></a>`#exec-old-generation` | `guest-control-unavailable-old-generation`, `guest-control-capability-unavailable` | `70` | `guest-control` | The VM generation does not advertise guest-control exec, or it lacks a required exec capability. Fail-closed: no SSH fallback. |
+| <a id="exec-capacity"></a>`#exec-capacity` | `exec-session-capacity`, `exec-session-rate-limited` | `75` | `guest-control` | The exec session table is at its global / per-uid / per-vm cap, or the per-uid Start rate limit fired. The `cancelled` / `reaped` abnormal terminals map here too. |
+| <a id="exec-protocol"></a>`#exec-protocol` | `guest-control-protocol-error`, `guest-control-exec-error` | `76` | `protocol` | The guest returned a malformed / out-of-contract response, or deterministically rejected the op. A missing or out-of-range terminal status is also a protocol failure (never synthesized as a guest success). |
+| <a id="exec-auth"></a>`#exec-auth` | `guest-control-auth-failed`, `authz-not-admin` | `77` | `guest-control` | The authenticated guest-control handshake was rejected, OR the daemon's admin gate refused the caller (`vm exec` is admin-gated). `authz-not-admin` is an authorization failure, not an internal bug, so it maps to the AUTH reserved code rather than the internal default. |
+| <a id="exec-internal"></a>`#exec-internal` | `guest-control-exec-internal`, any unrecognized exec slug | `42` | `internal` | A daemon-internal or CLI-internal failure driving the session. The `42` default is reserved for genuinely-internal failures only; every known authorization / transport / protocol class above maps to its own reserved code. |
+
+`vm exec --json` always emits exactly one terminal JSON document on
+stdout for every outcome (including early transport / auth /
+old-generation establishment failures); a usage error (bad `--env`,
+`--json` combined with `-i`/`-t`, missing command) is `source: "cli"`,
+`reason: "usage"`, exit `2`.
+
 ## Host-prepare audit decision codes
 
 The host-prepare path (cgroup delegation + pidfd handoff, network

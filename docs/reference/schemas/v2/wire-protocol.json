@@ -2238,7 +2238,7 @@
       }
     },
     "ExecCloseArgs": {
-      "description": "`Close` op args. Idempotent: closing an already-closed/torn-down session returns success.",
+      "description": "`Close` op args. Half-closes the session's stdin (the daemon issues a guest stdin close, NOT a session teardown): the command keeps running and its output keeps flowing until it exits or the owner disconnects. The result reports `stdinClosed`. Idempotent: closing stdin on a session whose stdin is already closed/torn-down returns success.",
       "type": "object",
       "required": [
         "session"
@@ -2251,7 +2251,7 @@
       "additionalProperties": false
     },
     "ExecCloseResult": {
-      "description": "`Close` op result.",
+      "description": "`Close` op result. `stdinClosed` confirms the session's stdin is now half-closed; the command continues running until it exits.",
       "type": "object",
       "properties": {
         "stdinClosed": {
@@ -2273,7 +2273,7 @@
       "additionalProperties": false
     },
     "ExecEnvVar": {
-      "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable).",
+      "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable). `Debug` is redacted so a stray `{:?}` can never leak a key or secret value (WR12).",
       "type": "object",
       "required": [
         "key",
@@ -2659,7 +2659,7 @@
       "additionalProperties": false
     },
     "ExecSignalArgs": {
-      "description": "`Signal` op args. The signal is delivered to the foreground process group of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to the corresponding guest signal numbers. `opId` is a stable client-assigned idempotency token: a retried Signal carries the same `opId` so the worker replays the original ack instead of delivering the signal twice. `opId == 0` means \"no dedup\" (legacy / unset).",
+      "description": "`Signal` op args. The signal is delivered to the foreground process group of the exec; the CLI maps host SIGINT/SIGTSTP/SIGTERM to the corresponding guest signal numbers. `opId` is a stable client-assigned idempotency token: a retried Signal carries the same `opId` so the worker replays the original ack instead of delivering the signal twice. `opId == 0` means \"no dedup\" (legacy / unset).",
       "type": "object",
       "required": [
         "session",
@@ -2684,7 +2684,7 @@
       "additionalProperties": false
     },
     "ExecStartArgs": {
-      "description": "`Start` op args. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name, the command, and the session shape. `detached` is carried so the daemon teardown semantics are unambiguous (a detached session survives owner disconnect); the W16 CLI ships non-detached + interactive `-it` only.",
+      "description": "`Start` op args. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name, the command, and the session shape. `detached` is reserved: the daemon rejects a `detached = true` request in this release (a detached/reconnect lifecycle is not implemented), and the CLI never sets it — it ships non-detached interactive (`-it`) and non-interactive sessions only.",
       "type": "object",
       "required": [
         "argv",

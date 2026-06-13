@@ -52,7 +52,8 @@ pub enum ExecFailureSource {
     /// vsock connect / handshake transport, or a deadline.
     Transport,
     /// The guest authenticated but the VM/guest rejected the request
-    /// (old-generation, capability, capacity, rate-limit, auth).
+    /// (old-generation, capability, capacity, rate-limit, auth), or the
+    /// daemon's guest-control admin gate refused the caller (not-admin).
     GuestControl,
     /// Malformed or out-of-contract response.
     Protocol,
@@ -194,6 +195,11 @@ pub fn exit_for_kind(kind: &str) -> (i32, ExecFailureSource) {
             (EXIT_EXEC_PROTOCOL, ExecFailureSource::Protocol)
         }
         "guest-control-auth-failed" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
+        // The daemon's admin gate refused the caller before any guest contact
+        // (caller not in `nixling.site.adminUsers`). It is an authorization
+        // failure, NOT an internal bug — map it to the AUTH reserved code so
+        // it does not fall through to the internal (42) default.
+        "authz-not-admin" => (EXIT_EXEC_AUTH, ExecFailureSource::GuestControl),
         "guest-control-exec-internal" => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
         _ => (EXIT_EXEC_INTERNAL, ExecFailureSource::Internal),
     }
@@ -1703,6 +1709,7 @@ mod tests {
             ("guest-control-protocol-error", EXIT_EXEC_PROTOCOL, Protocol),
             ("guest-control-exec-error", EXIT_EXEC_PROTOCOL, Protocol),
             ("guest-control-auth-failed", EXIT_EXEC_AUTH, GuestControl),
+            ("authz-not-admin", EXIT_EXEC_AUTH, GuestControl),
             ("guest-control-exec-internal", EXIT_EXEC_INTERNAL, Internal),
             ("totally-unknown-slug", EXIT_EXEC_INTERNAL, Internal),
         ];

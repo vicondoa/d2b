@@ -142,7 +142,7 @@ pub enum ProcessRole {
     OtelHostBridge,
     /// Guest SSH readiness probe.
     ///
-    /// Retained for the W16 SSH-compatibility window (old-generation VMs that
+    /// Retained for the SSH-compatibility window (old-generation VMs that
     /// predate guestd). New generations use [`ProcessRole::GuestControlHealth`]
     /// for framework readiness instead.
     GuestSshReadiness,

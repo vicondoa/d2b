@@ -343,7 +343,7 @@
           ]
         },
         {
-          "description": "Guest SSH readiness probe.\n\nRetained for the W16 SSH-compatibility window (old-generation VMs that predate guestd). New generations use [`ProcessRole::GuestControlHealth`] for framework readiness instead.",
+          "description": "Guest SSH readiness probe.\n\nRetained for the SSH-compatibility window (old-generation VMs that predate guestd). New generations use [`ProcessRole::GuestControlHealth`] for framework readiness instead.",
           "type": "string",
           "enum": [
             "guest-ssh-readiness"

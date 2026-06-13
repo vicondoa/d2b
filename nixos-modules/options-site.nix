@@ -220,10 +220,13 @@
       default = [ ];
       example = [ "alice" ];
       description = ''
-        Users allowed to request privileged read-only daemon operations
-        such as `nixling audit`. Admin users still need to connect over
-        the daemon public socket, so they SHOULD also be present in
-        `launcherUsers`.
+        Users allowed to request admin-gated daemon operations. This
+        covers privileged read-only operations such as `nixling audit`
+        AND admin-gated, potentially destructive lifecycle operations
+        such as `nixling vm exec` and `nixling vm konsole` (which open
+        an authenticated command/console session inside a guest).
+        Admin users still need to connect over the daemon public
+        socket, so they SHOULD also be present in `launcherUsers`.
       '';
     };
 

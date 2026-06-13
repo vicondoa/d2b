@@ -2537,11 +2537,11 @@ fn run_exec_owner(
         exec_metric(&state, "error", "protocol");
         return;
     }
-    // `detached` is carried for unambiguous teardown semantics; the W16 CLI
-    // never sets it (detached reconnect is deferred). A detached request would
-    // change teardown to "survive owner disconnect", which this non-detached
-    // handler does not implement — reject it rather than silently leak a guest
-    // process.
+    // `detached` is carried for unambiguous teardown semantics; the CLI never
+    // sets it (a detached reconnect lifecycle is not implemented). A detached
+    // request would change teardown to "survive owner disconnect", which this
+    // non-detached handler does not implement — reject it rather than silently
+    // leak a guest process.
     if start.detached {
         let error = TypedError::GuestControlExecFailed {
             kind: crate::typed_error::GuestControlExecErrorKind::Capability,
