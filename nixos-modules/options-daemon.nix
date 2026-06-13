@@ -181,9 +181,14 @@ in
         true
       '';
       description = ''
-        Obsolete compatibility gate for the daemon-backed control plane.
-        The daemon-only end state is always enabled; consumers should
-        not set this option.
+        Master switch for the daemon-only control plane. Defaults to
+        `true` and still functionally gates the daemon: setting it
+        `false` reverts the host to the unsupported pre-daemon legacy
+        state, so consumers should leave it at its default. Retained
+        for compatibility; it is no longer evidence-auto-flipped (the
+        per-wave `defaultSwitchReadiness.<wave>.validated` evidence
+        gates the readiness assertions and `nixling host validate`
+        separately).
       '';
     };
 
@@ -197,8 +202,9 @@ in
         `validated = true` eval assertion and by `nixling host
         validate`. (Historically these files also gated the
         `nixling.daemonExperimental.enable` default-flip; that gate is
-        retired now that `daemonExperimental.enable` is an obsolete
-        always-true compat gate.) The default `/var/lib/nixling/validated`
+        retired — `daemonExperimental.enable` now simply defaults
+        `true` and is no longer evidence-auto-flipped.) The default
+        `/var/lib/nixling/validated`
         is the canonical operator-host location; the option is
         overridable mainly for regression tests (see
         `tests/daemon-default-compat-eval.sh`).
