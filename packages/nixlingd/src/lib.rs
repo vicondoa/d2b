@@ -2972,6 +2972,7 @@ mod exec_owner_io_tests {
         ExecOp::Signal(ExecSignalArgs {
             session: HANDLE.to_owned(),
             signo: 2,
+            op_id: 0,
         })
     }
 

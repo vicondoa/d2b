@@ -338,6 +338,14 @@ where
     let mut stderr_eof = config.tty;
     let chunk = config.max_chunk.max(1) as usize;
     let mut buf = vec![0_u8; chunk];
+    // Unsent host stdin carried across iterations: a zero-accepted
+    // (backpressured) write keeps the remainder here and retries it before
+    // reading fresh host stdin, so interactive input is never dropped (F3).
+    let mut pending_stdin: Vec<u8> = Vec::new();
+    // Stable client-assigned idempotency token for control ops (Signal/Resize).
+    // A single monotonic counter keeps every control op id unique within the
+    // session so the daemon's replay cache can dedup a re-delivered op (F3b).
+    let mut next_control_op_id: u64 = 1;
 
     // Non-interactive: close the guest stdin up front so a command reading
     // stdin observes EOF immediately (idempotent on the daemon side).
@@ -354,70 +362,89 @@ where
                 ExecSignal::Winch => {
                     if config.tty {
                         if let Some((rows, cols)) = host.window_size() {
+                            let op_id = next_control_op_id;
+                            next_control_op_id += 1;
                             transport.round_trip(&ExecOp::Resize(ExecResizeArgs {
                                 session: session.to_owned(),
                                 rows,
                                 cols,
+                                op_id,
                             }))?;
                         }
                     }
                 }
                 other => {
+                    let op_id = next_control_op_id;
+                    next_control_op_id += 1;
                     transport.round_trip(&ExecOp::Signal(ExecSignalArgs {
                         session: session.to_owned(),
                         signo: guest_signo(other),
+                        op_id,
                     }))?;
                 }
             }
         }
 
-        // 2. Forward whatever host stdin is ready (non-blocking).
+        // 2. Forward host stdin. Drain any pending (unsent) bytes from a prior
+        //    backpressured write FIRST, then read fresh host stdin only when the
+        //    pending buffer is empty — so a zero-accepted write never drops the
+        //    already-read remainder (F3).
         if config.interactive && !stdin_done {
-            match host.read_stdin(&mut buf) {
-                Ok(0) => {
-                    if !stdin_closed {
-                        transport.round_trip(&close_op(session))?;
-                        stdin_closed = true;
-                    }
-                    stdin_done = true;
-                }
-                Ok(read) => {
-                    let mut sent = 0_usize;
-                    while sent < read {
-                        let end = (sent + chunk).min(read);
-                        let resp = transport.round_trip(&ExecOp::WriteStdin(ExecWriteStdinArgs {
-                            session: session.to_owned(),
-                            offset: stdin_offset,
-                            chunk_base64: base64_codec::encode(&buf[sent..end]),
-                            eof: false,
-                        }))?;
-                        let written = expect_write(resp)?;
-                        stdin_offset = written.next_offset;
-                        let accepted = written.accepted_len as usize;
-                        sent += accepted;
-                        if written.stdin_closed {
-                            stdin_done = true;
+            if pending_stdin.is_empty() {
+                match host.read_stdin(&mut buf) {
+                    Ok(0) => {
+                        if !stdin_closed {
+                            transport.round_trip(&close_op(session))?;
                             stdin_closed = true;
-                            break;
                         }
-                        // Zero-accepted (backpressure / full guest budget):
-                        // stop pushing this batch and re-poll output so the
-                        // guest drains, then retry the remainder next loop.
-                        if accepted == 0 {
-                            break;
-                        }
+                        stdin_done = true;
+                    }
+                    Ok(read) => {
+                        pending_stdin.extend_from_slice(&buf[..read]);
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => {
+                        return Err(ExecClientError::internal(format!(
+                            "reading host stdin failed: {error}"
+                        )));
                     }
                 }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) => {}
-                Err(error) => {
-                    return Err(ExecClientError::internal(format!(
-                        "reading host stdin failed: {error}"
-                    )));
+            }
+
+            // Push as much of the pending buffer as the guest accepts this turn.
+            // A zero-accepted (backpressure) write stops the push and KEEPS the
+            // unsent remainder in `pending_stdin` for the next iteration, after
+            // the output drain lets the guest budget recover.
+            let mut sent = 0_usize;
+            while sent < pending_stdin.len() {
+                let end = (sent + chunk).min(pending_stdin.len());
+                let resp = transport.round_trip(&ExecOp::WriteStdin(ExecWriteStdinArgs {
+                    session: session.to_owned(),
+                    offset: stdin_offset,
+                    chunk_base64: base64_codec::encode(&pending_stdin[sent..end]),
+                    eof: false,
+                }))?;
+                let written = expect_write(resp)?;
+                stdin_offset = written.next_offset;
+                let accepted = written.accepted_len as usize;
+                sent += accepted;
+                if written.stdin_closed {
+                    stdin_done = true;
+                    stdin_closed = true;
+                    pending_stdin.clear();
+                    sent = 0;
+                    break;
                 }
+                if accepted == 0 {
+                    break;
+                }
+            }
+            if sent > 0 {
+                pending_stdin.drain(..sent);
             }
         }
 
@@ -1197,6 +1224,41 @@ mod tests {
                 .expect("fsm survives backpressure");
         assert_eq!(outcome.terminal, ExecTerminalStatus::Exited { code: 0 });
         assert_eq!(transport.count_ops("writeStdin"), 1);
+    }
+
+    #[test]
+    fn backpressured_stdin_is_retried_not_dropped() {
+        // A zero-accepted write must NOT lose the already-read host stdin: the
+        // CLI keeps it pending and retries the SAME bytes at the SAME offset
+        // before reading fresh host stdin (F3).
+        let mut transport = FakeTransport::terminal(ExecTerminalStatus::Exited { code: 0 });
+        transport.stdout = b"ok".to_vec();
+        transport.stdout_hold_until_close = true;
+        // First write is fully backpressured (0 accepted); second accepts all 5.
+        transport.write_script.push_back((0, true, false));
+        transport.write_script.push_back((5, false, false));
+        let mut host = FakeHostIo::default();
+        host.stdin.push_back(b"hello".to_vec());
+        let mut signals = FakeSignals::default();
+        let start = start_result();
+        run_exec_fsm(&mut transport, &mut host, &mut signals, &start, &cfg(false, true))
+            .expect("fsm");
+
+        let writes: Vec<(u64, Vec<u8>)> = transport
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                ExecOp::WriteStdin(a) => {
+                    Some((a.offset, base64_codec::decode(&a.chunk_base64).unwrap()))
+                }
+                _ => None,
+            })
+            .collect();
+        // Exactly two writes; both carry the SAME "hello" bytes at offset 0 —
+        // the backpressured remainder was retried, not replaced by fresh stdin.
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0], (0, b"hello".to_vec()));
+        assert_eq!(writes[1], (0, b"hello".to_vec()));
     }
 
     #[test]

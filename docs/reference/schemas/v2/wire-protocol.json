@@ -2628,7 +2628,7 @@
       "additionalProperties": false
     },
     "ExecResizeArgs": {
-      "description": "`Resize` op args (SIGWINCH → guest PTY window resize).",
+      "description": "`Resize` op args (SIGWINCH → guest PTY window resize). `opId` is the same stable client-assigned idempotency token as `ExecSignalArgs`: a retried Resize carries the same `opId` so the worker replays the original ack instead of re-delivering the resize. `opId == 0` means \"no dedup\".",
       "type": "object",
       "required": [
         "cols",
@@ -2639,6 +2639,12 @@
         "cols": {
           "type": "integer",
           "format": "uint32",
+          "minimum": 0.0
+        },
+        "opId": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
           "minimum": 0.0
         },
         "rows": {
@@ -2653,13 +2659,19 @@
       "additionalProperties": false
     },
     "ExecSignalArgs": {
-      "description": "`Signal` op args. The signal is delivered to the foreground process group of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to the corresponding guest signal numbers.",
+      "description": "`Signal` op args. The signal is delivered to the foreground process group of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to the corresponding guest signal numbers. `opId` is a stable client-assigned idempotency token: a retried Signal carries the same `opId` so the worker replays the original ack instead of delivering the signal twice. `opId == 0` means \"no dedup\" (legacy / unset).",
       "type": "object",
       "required": [
         "session",
         "signo"
       ],
       "properties": {
+        "opId": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "session": {
           "type": "string"
         },

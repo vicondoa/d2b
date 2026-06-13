@@ -374,21 +374,31 @@ pub struct ExecReadOutputArgs {
 
 /// `Signal` op args. The signal is delivered to the foreground process group
 /// of the exec (W14 semantics); the CLI maps host SIGINT/SIGTSTP/SIGTERM to
-/// the corresponding guest signal numbers.
+/// the corresponding guest signal numbers. `opId` is a stable client-assigned
+/// idempotency token: a retried Signal carries the same `opId` so the worker
+/// replays the original ack instead of delivering the signal twice. `opId == 0`
+/// means "no dedup" (legacy / unset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecSignalArgs {
     pub session: String,
     pub signo: u32,
+    #[serde(default)]
+    pub op_id: u64,
 }
 
-/// `Resize` op args (SIGWINCH → guest PTY window resize).
+/// `Resize` op args (SIGWINCH → guest PTY window resize). `opId` is the same
+/// stable client-assigned idempotency token as `ExecSignalArgs`: a retried
+/// Resize carries the same `opId` so the worker replays the original ack
+/// instead of re-delivering the resize. `opId == 0` means "no dedup".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecResizeArgs {
     pub session: String,
     pub rows: u32,
     pub cols: u32,
+    #[serde(default)]
+    pub op_id: u64,
 }
 
 /// `Wait` op args. A bounded poll for the terminal status; if the command is

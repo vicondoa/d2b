@@ -473,6 +473,7 @@ async fn worker_main(
         control_seq,
         last_write: None,
         stdin_closed: false,
+        control_replay: std::collections::VecDeque::new(),
     };
 
     while let Some(WorkerCommand { op, reply }) = control_rx.recv().await {
@@ -527,6 +528,13 @@ fn arm_terminal_reap(reaper: Arc<TerminalReaper>, owner_reaper: Arc<dyn OwnerRea
     });
 }
 
+/// Bounded replay cache depth for control ops (Signal/Resize). A retried
+/// control op (same client `opId`) replays the cached ack instead of being
+/// re-delivered to the guest, so a lost reply never causes a duplicate
+/// signal/resize. Interactive sessions issue very few control ops, so a small
+/// ring is sufficient.
+const CONTROL_REPLAY_CAP: usize = 16;
+
 struct WorkerState {
     client: Arc<dyn ExecGuestClient>,
     deadlines: ExecOpDeadlines,
@@ -534,6 +542,34 @@ struct WorkerState {
     control_seq: u64,
     last_write: Option<(u64, ExecWriteStdinResult)>,
     stdin_closed: bool,
+    // Idempotency ring for control ops keyed by the client-assigned `opId`.
+    // `opId == 0` is never cached (legacy / no-dedup).
+    control_replay: std::collections::VecDeque<(u64, ExecOpResponse)>,
+}
+
+impl WorkerState {
+    /// Return a cached control-op ack for a previously-served `opId`, if any.
+    fn cached_control(&self, op_id: u64) -> Option<ExecOpResponse> {
+        if op_id == 0 {
+            return None;
+        }
+        self.control_replay
+            .iter()
+            .find(|(id, _)| *id == op_id)
+            .map(|(_, resp)| resp.clone())
+    }
+
+    /// Record a control-op ack so an idempotent retry replays it. `opId == 0`
+    /// is not cached.
+    fn remember_control(&mut self, op_id: u64, resp: ExecOpResponse) {
+        if op_id == 0 {
+            return;
+        }
+        if self.control_replay.len() >= CONTROL_REPLAY_CAP {
+            self.control_replay.pop_front();
+        }
+        self.control_replay.push_back((op_id, resp));
+    }
 }
 
 impl WorkerState {
@@ -572,24 +608,41 @@ impl WorkerState {
                     backpressured: outcome.backpressured,
                     stdin_closed: outcome.stdin_closed,
                 };
-                self.last_write = Some((args.offset, result.clone()));
+                // Only cache writes that made progress or closed stdin. A
+                // zero-progress (backpressured) write must NOT be replay-cached:
+                // its offset never advances, so caching it would pin the session
+                // at perpetual backpressure even after the guest budget recovers
+                // and the CLI retries the same offset (F3).
+                if result.accepted_len > 0 || result.stdin_closed {
+                    self.last_write = Some((args.offset, result.clone()));
+                }
                 Ok(ExecOpResponse::WriteStdin(result))
             }
             ExecOp::Signal(args) => {
+                if let Some(cached) = self.cached_control(args.op_id) {
+                    return Ok(cached);
+                }
                 self.control_seq = self.control_seq.saturating_add(1);
                 let timeout = self.deadlines.control;
                 self.client
                     .signal(self.control_seq, args.signo, timeout)
                     .await?;
-                Ok(ExecOpResponse::Signal(ExecControlResult { delivered: true }))
+                let resp = ExecOpResponse::Signal(ExecControlResult { delivered: true });
+                self.remember_control(args.op_id, resp.clone());
+                Ok(resp)
             }
             ExecOp::Resize(args) => {
+                if let Some(cached) = self.cached_control(args.op_id) {
+                    return Ok(cached);
+                }
                 self.control_seq = self.control_seq.saturating_add(1);
                 let timeout = self.deadlines.control;
                 self.client
                     .resize(self.control_seq, args.rows, args.cols, timeout)
                     .await?;
-                Ok(ExecOpResponse::Resize(ExecControlResult { delivered: true }))
+                let resp = ExecOpResponse::Resize(ExecControlResult { delivered: true });
+                self.remember_control(args.op_id, resp.clone());
+                Ok(resp)
             }
             ExecOp::Close(_) => {
                 if self.stdin_closed {
@@ -1359,6 +1412,7 @@ mod tests {
             ExecOp::Signal(ExecSignalArgs {
                 session: "h".to_owned(),
                 signo: 2,
+                op_id: 0,
             }),
         );
         assert!(matches!(signal, Ok(ExecOpResponse::Signal(_))));
@@ -1483,6 +1537,107 @@ mod tests {
             }
             other => panic!("expected WriteStdin, got {other:?}"),
         }
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn zero_progress_write_is_not_replay_cached() {
+        // A zero-accepted (backpressured) write must NOT be replay-cached: its
+        // offset never advances, so a retry at the same offset must re-issue to
+        // the guest (observing recovered budget), not return a stale cached zero
+        // forever (F3).
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: true,
+            stdin_closed: false,
+        });
+        let _ = send_op(&tx, write_op(0, b"abc")).expect("write ok");
+        let _ = send_op(&tx, write_op(0, b"abc")).expect("retry ok");
+        assert_eq!(
+            shared.write_calls.load(Ordering::SeqCst),
+            2,
+            "zero-progress write must re-issue on retry, not serve a cached zero"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn control_op_retry_with_same_op_id_replays_cached_ack() {
+        // A Signal retried with the SAME client opId must replay the original
+        // ack WITHOUT re-delivering the signal to the guest (F3b idempotency).
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let sig = ExecOp::Signal(ExecSignalArgs {
+            session: "h".to_owned(),
+            signo: 2,
+            op_id: 7,
+        });
+        let r1 = send_op(&tx, sig.clone()).expect("signal ok");
+        assert!(matches!(r1, ExecOpResponse::Signal(_)));
+        let r2 = send_op(&tx, sig).expect("signal retry ok");
+        assert!(matches!(r2, ExecOpResponse::Signal(_)));
+        assert_eq!(
+            shared.signal_calls.load(Ordering::SeqCst),
+            1,
+            "retried Signal with same opId must not re-deliver"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn control_op_without_op_id_is_never_deduped() {
+        // opId == 0 means "no dedup": two Signals with op_id 0 both deliver.
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let sig = ExecOp::Signal(ExecSignalArgs {
+            session: "h".to_owned(),
+            signo: 2,
+            op_id: 0,
+        });
+        let _ = send_op(&tx, sig.clone()).expect("signal ok");
+        let _ = send_op(&tx, sig).expect("signal again");
+        assert_eq!(
+            shared.signal_calls.load(Ordering::SeqCst),
+            2,
+            "opId 0 must never be deduped"
+        );
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn resize_retry_with_same_op_id_replays_cached_ack() {
+        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
+            accepted_len: 0,
+            next_offset: 0,
+            backpressured: false,
+            stdin_closed: false,
+        });
+        let resize = ExecOp::Resize(ExecResizeArgs {
+            session: "h".to_owned(),
+            rows: 40,
+            cols: 120,
+            op_id: 11,
+        });
+        let _ = send_op(&tx, resize.clone()).expect("resize ok");
+        let _ = send_op(&tx, resize).expect("resize retry ok");
+        assert_eq!(
+            shared.resize_calls.load(Ordering::SeqCst),
+            1,
+            "retried Resize with same opId must not re-deliver"
+        );
         drop(tx);
         worker.join().unwrap();
     }
@@ -1630,6 +1785,7 @@ mod tests {
                 session: "h".to_owned(),
                 rows: 40,
                 cols: 120,
+                op_id: 0,
             }),
         )
         .expect("resize ok");
