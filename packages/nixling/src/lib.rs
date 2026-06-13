@@ -6363,12 +6363,24 @@ thread_local! {
     static TEST_STDOUT_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
         const { std::cell::RefCell::new(None) };
 }
+// Process-wide serialization for `with_test_stdout_capture`. The thread-local
+// buffer above isolates captured BYTES, but the capturing tests also mutate
+// process-global state (an `EnvVarGuard` over `NIXLING_CONFIG_STAGING_DIR`,
+// `PATH`, ...). Holding this lock across the closure serializes those tests so
+// their env mutations cannot race each other under cargo's parallel harness.
+#[cfg(test)]
+static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
+    // Recover a poisoned lock: a panicking capturing test must not cascade into
+    // every later test failing to acquire the serialization lock.
+    let _guard = TEST_STDOUT_CAPTURE_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     TEST_STDOUT_CAPTURE.with(|capture| {
         *capture.borrow_mut() = Some(Vec::new());
     });
