@@ -9,14 +9,20 @@
 > The conceptual model below describes the current host-prepare
 > design. `host check` and `host prepare --dry-run` /
 > `host destroy --dry-run` exercise the broker's read-only audit
-> path. The mutating `host prepare --apply` /
-> `host destroy --apply` verbs dispatch through the broker reconcile
+> path and are wired live. The mutating `host prepare --apply` /
+> `host destroy --apply` verbs are **not yet wired**: the daemon-side
+> typed-intent dispatch and bundle resolver that back them are still
+> pending, so both return the typed `daemon-down` envelope (exit 1)
+> today — use `--dry-run` for now. When the daemon-side dispatch
+> ships, the `--apply` verbs will dispatch through the broker reconcile
 > ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
-> `UpdateHostsFile`, `ApplyNmUnmanaged`). Broker failures surface a
-> typed `broker-error` envelope (exit 78); daemon-unreachable
-> surfaces `daemon-down` (exit 1). On hosts where every VM keeps
-> `supervisor = "systemd"`, the verb returns
-> `tier-0-legacy-uses-nixos-module` (exit 78). See
+> `UpdateHostsFile`, `ApplyNmUnmanaged`), with broker failures
+> surfacing a typed `broker-error` envelope (exit 78). On a Tier 0
+> NixOS-legacy host — one with no loadable daemon-owned nixling
+> bundle — `host prepare --apply` is refused with
+> `tier-0-legacy-uses-nixos-module` (exit 78). The per-VM
+> `nixling.vms.<vm>.supervisor` option was removed in v1.1 (ADR 0015);
+> every enabled VM is daemon-supervised. See
 > [`docs/reference/compatibility.md`](../reference/compatibility.md)
 > and ADR 0015.
 
@@ -111,7 +117,10 @@ verbs (canonical contract in
   `O_WRONLY` fd outside its own scratch directory.
 - `nixling host prepare --dry-run` — no mutation. Emits the reconcile
   diff the `--apply` form would execute. Mandatory `--dry-run` flag.
-- `nixling host prepare --apply` — mutates exactly the **nixling-owned**
+- `nixling host prepare --apply` — not yet wired; returns the typed
+  `daemon-down` envelope (exit 1) today because the daemon-side
+  typed-intent dispatch and bundle resolver are still pending. Once
+  wired it mutates exactly the **nixling-owned**
   state. The owned set is identified by ownership markers — see
   ADRs 0011/0012/0013 — typically:
 
@@ -131,7 +140,9 @@ verbs (canonical contract in
   `nm-managed-foreign-conflict`, `foreign-nft-rule-preserved`).
 - `nixling host destroy --dry-run` — no mutation. Reports the
   nixling-owned set that `--apply` would withdraw.
-- `nixling host destroy --apply` — withdraws the nixling-owned state
+- `nixling host destroy --apply` — not yet wired; returns
+  `daemon-down` (exit 1) today. Once wired it withdraws the
+  nixling-owned state
   in reverse dependency order. Mandatory `--apply` flag. Refuses if
   any matching VM is still running (`vm-still-running-refused`). Never
   touches foreign ownership markers.
@@ -225,14 +236,15 @@ Conceptually:
 - **Ubuntu 24.04 hosts**: `host check` and `host prepare --dry-run`
   enumerate the full reconcile plan (including the five-step
   IPv6-off ordering with NetworkManager 1.46 reload, ADR 0012);
-  `--apply` dispatches through the broker reconcile ops
-  (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`, `UpdateHostsFile`,
-  `ApplyNmUnmanaged`) per ADR 0015.
+  `--apply` is not yet wired and returns `daemon-down` (exit 1)
+  today. When the daemon-side dispatch ships it will dispatch through
+  the broker reconcile ops (`ApplyNftables`, `ApplyRoute`,
+  `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`) per ADR 0015.
 - **Best-effort hosts**: `host check` and `--dry-run` still apply
-  every fail-closed check; `--apply` routes through the same broker
-  live ops with the same exit-78 typed-envelope behaviour on
-  failure. The audit log is the system of record across the support
-  matrix.
+  every fail-closed check; `--apply` carries the same pending
+  disposition (`daemon-down`, exit 1, today) and, once wired, the
+  same exit-78 typed-envelope behaviour on failure. The audit log is
+  the system of record across the support matrix.
 
 ## Mixed legacy/daemon operation
 
@@ -244,7 +256,11 @@ fail-closed.
 
 ## Recovery runbook
 
-If `host prepare --apply` fails partway through, the operator runbook is:
+The mutating `host prepare --apply` / `host destroy --apply` verbs
+are **not yet wired** — they return the typed `daemon-down` envelope
+(exit 1) today, so this runbook describes the recovery flow that
+applies once the daemon-side dispatch ships. If `host prepare --apply`
+fails partway through, the operator runbook is:
 
 1. **Pause the broker**: an admin uid runs
    `nixling admin broker --pause`. The broker stops accepting new

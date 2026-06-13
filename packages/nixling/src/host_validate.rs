@@ -2,8 +2,13 @@
 //! preflight verb.
 //!
 //! This module ships the operator-facing one-command preflight that
-//! must run after a fresh `nixos-rebuild switch` and before flipping
-//! `nixling.daemonExperimental.enable = true`. It iterates the known
+//! must run after a fresh `nixos-rebuild switch` to record the
+//! per-wave validation evidence the readiness assertions consume.
+//! (`nixling.daemonExperimental.enable` defaults `true` and is no
+//! longer evidence-auto-flipped — there is no default to flip — but it
+//! still functionally gates the daemon control plane; setting it
+//! `false` reverts the host to the unsupported pre-daemon legacy
+//! state.) It iterates the known
 //! readiness waves (mirrored from
 //! `nixos-modules/options-daemon.nix:readinessWaveSpecs`) in a
 //! deterministic order; for each wave it discovers the per-wave
@@ -23,9 +28,10 @@
 //!     `hostname | wave | bundle_path | timestamp` unless the
 //!     operator overrides it via `--operator-signature <sig>`.
 //!
-//! The daemon's default-switch auto-flip gate consumes these evidence
-//! files — see the Critical-subsystems "Control plane" row in AGENTS.md
-//! and `docs/reference/default-switch-and-deprecation.md`.
+//! The per-wave `validated = true` readiness assertions consume these
+//! evidence files (the historical daemonExperimental auto-flip gate is
+//! retired) — see the Critical-subsystems "Control plane" row in
+//! AGENTS.md and `docs/reference/default-switch-and-deprecation.md`.
 //!
 //! This verb is intentionally a thin orchestrator: it does NOT
 //! execute the per-wave shell validators itself (those are Layer-2
@@ -135,7 +141,7 @@ pub const WAVE_CATALOG: &[WaveSpec] = &[
     },
     WaveSpec {
         wave: "p2",
-        summary: "Daemon-side host-prep + ownership matrix + manifestVersion=3.",
+        summary: "Daemon-side host-prep + ownership matrix + manifestVersion=4.",
         validators: &[
             "per-vm-state-ownership-eval.sh",
             "daemon-autostart-eval.sh",

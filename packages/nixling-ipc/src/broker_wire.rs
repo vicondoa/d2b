@@ -8,6 +8,7 @@
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `nixling_ipc::types` for the newtype set.
 
+use crate::guest_auth::AUTH_NONCE_LEN;
 use crate::types::{
     BundleClosureRef, BundleOpId, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId, VmId,
 };
@@ -34,6 +35,7 @@ pub enum BrokerRequest {
     /// the bootstrap `Hello` shape so the connection layer doesn't need
     /// a side-channel.
     Hello(HelloRequest),
+    GuestControlSign(GuestControlSignRequest),
     InjectSecretById(SecretByIdRequest),
     LaunchMinijailChild(LaunchMinijailChildRequest),
     ModprobeIfAllowed(ModprobeIfAllowedRequest),
@@ -161,6 +163,7 @@ impl BrokerRequest {
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
             Self::Hello(_) => "Hello",
+            Self::GuestControlSign(_) => "GuestControlSign",
             Self::InjectSecretById(_) => "InjectSecretById",
             Self::LaunchMinijailChild(_) => "LaunchMinijailChild",
             Self::ModprobeIfAllowed(_) => "ModprobeIfAllowed",
@@ -215,6 +218,7 @@ impl BrokerRequest {
     pub fn opaque_target_id(&self) -> &'static str {
         match self {
             Self::Hello(_) => "daemon-handshake",
+            Self::GuestControlSign(_) => "guest-control-auth",
             Self::ValidateBundle => "bundle",
             Self::ExportBrokerAudit(_) => "audit-log",
             Self::PollChildReaped => "pidfd-reap-buffer",
@@ -408,6 +412,7 @@ pub enum BrokerResponse {
     /// capability-negotiate and the broker can audit the connection
     /// without a separate side-channel.
     Hello(HelloResponse),
+    GuestControlSign(GuestControlSignResponse),
     /// OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS
     /// on the same frame; the JSON body confirms which `(pid,
     /// start_time_ticks)` the broker verified.
@@ -573,6 +578,114 @@ pub struct BrokerAuditFilter {
     pub env: Option<String>,
     pub operation: Option<String>,
     pub vm: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestControlProofRole {
+    HostProof,
+    GuestProof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestControlDirection {
+    HostToGuest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuestControlAuthPurpose {
+    GuestControlAuthV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GuestBootIdWire(pub String);
+
+impl GuestBootIdWire {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl JsonSchema for GuestBootIdWire {
+    fn schema_name() -> String {
+        "GuestBootIdWire".to_owned()
+    }
+
+    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::Schema::Object(schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            string: Some(Box::new(schemars::schema::StringValidation {
+                min_length: Some(1),
+                max_length: Some(128),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestControlSignRequest {
+    pub vm_id: VmId,
+    pub role: GuestControlProofRole,
+    pub protocol_version: u32,
+    pub direction: GuestControlDirection,
+    pub purpose: GuestControlAuthPurpose,
+    pub guest_control_port: u32,
+    #[serde(default)]
+    pub peer_cid: Option<u32>,
+    #[schemars(length(min = 32, max = 32))]
+    pub host_nonce: Vec<u8>,
+    #[schemars(length(min = 32, max = 32))]
+    pub guest_nonce: Vec<u8>,
+    pub guest_boot_id: GuestBootIdWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities_hash: Option<String>,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+impl GuestControlSignRequest {
+    pub fn validate_shape(&self) -> Result<(), &'static str> {
+        if self.host_nonce.len() != AUTH_NONCE_LEN || self.guest_nonce.len() != AUTH_NONCE_LEN {
+            return Err("nonce-length");
+        }
+        if self.guest_boot_id.as_str().is_empty() || self.guest_boot_id.as_str().len() > 128 {
+            return Err("guest-boot-id");
+        }
+        match self.role {
+            GuestControlProofRole::HostProof if self.capabilities_hash.is_some() => {
+                Err("host-proof-capabilities-hash")
+            }
+            GuestControlProofRole::GuestProof => {
+                let Some(hash) = self.capabilities_hash.as_ref() else {
+                    return Err("guest-proof-missing-capabilities-hash");
+                };
+                if hash.is_empty() || hash.len() > 128 {
+                    return Err("capabilities-hash");
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GuestControlSignResponse {
+    #[schemars(length(min = 32, max = 32))]
+    pub tag: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1015,8 +1128,8 @@ pub enum RunnerRole {
     /// Cloud Hypervisor headless / hybrid VM. Broker invokes
     /// `nixling_host::ch_argv::generate_ch_argv`.
     CloudHypervisor,
-    /// virtiofsd sidecar; one per `microvm.shares` row. Broker invokes
-    /// `nixling_host::virtiofsd_argv::generate_virtiofsd_argv`.
+    /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
+    /// provides argv from `nixos-modules/processes-json.nix`.
     Virtiofsd,
     /// swtpm sidecar (long-lived `swtpm socket ...` process).
     Swtpm,

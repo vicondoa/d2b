@@ -72,6 +72,11 @@ use supervisor::pidfd_table::{
 };
 use uzers::{get_user_by_uid, get_user_groups};
 
+pub mod exec_session;
+pub mod exec_session_real;
+pub mod guest_control_bridge;
+pub mod guest_control_health;
+pub mod guest_control_vsock;
 pub mod supervisor;
 pub mod typed_error;
 pub mod wire;
@@ -304,6 +309,11 @@ struct ServerState {
     /// Daemon-side audit log for supervisor events (e.g. api-ready
     /// timeout) that are not emitted by the broker.
     daemon_audit: Arc<daemon_audit::DaemonAuditLog>,
+    /// In-process exec session table (caps + opaque handles) for
+    /// `nixling vm exec`. There is no per-VM unit and no broker op: a
+    /// session is a daemon-held authenticated guest-control client owned by a
+    /// spawned worker.
+    exec_sessions: Arc<exec_session::SessionTable>,
 }
 
 struct PeerOverride {
@@ -473,6 +483,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         pidfd_table,
         broker_reap_log,
         metrics_registry: Arc::new(crate::metrics::Registry::new()),
+        exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+            crate::exec_session::ExecSessionCaps::default(),
+        )),
     };
     refresh_broker_reap_log(&state, "startup");
     adopt_orphaned_runners_on_startup(&state);
@@ -1576,6 +1589,38 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     (year, m, d)
 }
 
+/// Test-only seam letting an accept-loop test substitute the exec owner body so
+/// it can HOLD the owner session open. Without it, `run_exec_owner` fails fast
+/// at `load_bundle_resolver` under default test state and returns immediately,
+/// so a test could not distinguish an off-loop spawn from an inline call. The
+/// hook is consulted at the top of `run_exec_owner` (the owner body itself), so
+/// an inline `handle_connection` would block in it on the accept-loop thread; it
+/// is `None` in every build except a test that installs it, and production
+/// builds compile it out entirely.
+#[cfg(test)]
+mod exec_owner_test_hook {
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
+
+    fn slot() -> &'static Mutex<Option<Hook>> {
+        static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    pub(crate) fn set(hook: Hook) {
+        *slot().lock().expect("exec owner hook lock") = Some(hook);
+    }
+
+    pub(crate) fn clear() {
+        *slot().lock().expect("exec owner hook lock") = None;
+    }
+
+    pub(crate) fn active() -> Option<Hook> {
+        slot().lock().expect("exec owner hook lock").clone()
+    }
+}
+
 fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedError> {
     let hello_bytes = read_frame(&stream)?;
     let peer = match authorize_peer(&stream, state) {
@@ -1627,6 +1672,38 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 continue;
             }
         };
+        // Exec takes over the connection as the long-lived owner connection.
+        // Admin (SO_PEERCRED) is verified here, BEFORE any session work; then
+        // the connection + a cheap ServerState clone move to a SPAWNED owner
+        // handler so the serial accept loop is never blocked for the lifetime
+        // of an exec session.
+        if let wire::Request::Exec(op) = request {
+            if !matches!(peer.role, PeerRole::Admin) {
+                let error = TypedError::AuthzNotAdmin {
+                    verb: "exec".to_owned(),
+                };
+                let _ = write_json_frame(&stream, &wire::error_frame(&error));
+                continue;
+            }
+            // Recover the establishing op's envelope `opId` so the Start reply
+            // (and any establish error) echoes it for client correlation.
+            let first_op_id = wire::exec_op_id(&frame);
+            let owner_state = state.clone();
+            let owner_peer = peer.clone();
+            match std::thread::Builder::new()
+                .name("nixling-exec-owner".to_owned())
+                .spawn(move || {
+                    run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
+                }) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    return Err(TypedError::InternalIo {
+                        context: "spawn exec owner handler".to_owned(),
+                        detail: err.to_string(),
+                    });
+                }
+            }
+        }
         let response = match dispatch_request(state, &peer, request) {
             Ok(value) => value,
             Err(error) => serde_json::to_value(wire::error_frame(&error)).map_err(|err| {
@@ -1723,6 +1800,8 @@ fn verb_requires_admin(verb: &str) -> bool {
             | "hostDestroy"
             | "hostInstall"
             | "hostReconcile"
+            | "readGuestConfig"
+            | "exec"
     )
 }
 
@@ -1778,6 +1857,14 @@ fn dispatch_request(
         wire::Request::HostDestroy(req) => dispatch_broker_host_destroy(state, req),
         wire::Request::HostInstall(req) => dispatch_broker_run_host_install(state, req),
         wire::Request::HostReconcile(req) => dispatch_broker_host_reconcile(state, req),
+        wire::Request::ReadGuestConfig(req) => dispatch_read_guest_config(state, req),
+        // Exec is intercepted in `handle_connection` (it takes over the
+        // connection as the long-lived owner connection and is handled on a
+        // spawned worker off the serial accept loop). Reaching dispatch_request
+        // with an Exec op is a daemon-internal contract violation.
+        wire::Request::Exec(_) => Err(TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+        }),
     }
 }
 
@@ -2114,8 +2201,8 @@ fn mutating_verb_preflight(
 
     if flags.dry_run {
         let summary = match target_vm {
-            Some(vm) => format!("nixling {verb} --dry-run: daemon-side plan for vm '{vm}' (W14b)"),
-            None => format!("nixling {verb} --dry-run: daemon-side plan (W14b)"),
+            Some(vm) => format!("nixling {verb} --dry-run: daemon-side plan for vm '{vm}'"),
+            None => format!("nixling {verb} --dry-run: daemon-side plan"),
         };
         return Some(wire::mutating_verb_response(MutatingVerbResponse {
             verb: verb.to_owned(),
@@ -2135,6 +2222,1656 @@ fn broker_socket_path(state: &ServerState) -> PathBuf {
         PathBuf::from(BROKER_SOCKET_PATH)
     } else {
         state.config.broker_socket_path.clone()
+    }
+}
+
+/// Canonical group owning the per-VM state directory `<stateDir>/vms/<vm>`.
+/// The tmpfiles seed line uses `microvm:kvm`, but host activation chowns the
+/// per-VM directory to `<daemon-user>:users` mode 2770, so the runtime owner
+/// is `nixlingd:users`. Existing-code-is-canon: the probe reconciles its
+/// `expected_state_root_uid/gid` to the actual runtime owner; the tmpfiles vs
+/// activation divergence is to be confirmed against a live host.
+const GUEST_CONTROL_STATE_ROOT_GROUP: &str = "users";
+
+/// Resolve the canonical runtime owner `(uid, gid)` of the per-VM state
+/// directory for the guest-control probe's `expected_state_root_uid/gid`.
+/// Derived independently of the peer-credential identity. Fails CLOSED if
+/// either identity is unresolvable.
+fn resolve_guest_control_state_root_owner(state: &ServerState) -> Result<(u32, u32), String> {
+    let uid = User::from_name(&state.config.daemon_user)
+        .ok()
+        .flatten()
+        .map(|user| user.uid.as_raw())
+        .ok_or_else(|| {
+            format!(
+                "guest-control-probe:unresolved-state-root-user:{}",
+                state.config.daemon_user
+            )
+        })?;
+    let gid = Group::from_name(GUEST_CONTROL_STATE_ROOT_GROUP)
+        .ok()
+        .flatten()
+        .map(|group| group.gid.as_raw())
+        .ok_or_else(|| {
+            format!(
+                "guest-control-probe:unresolved-state-root-group:{GUEST_CONTROL_STATE_ROOT_GROUP}"
+            )
+        })?;
+    Ok((uid, gid))
+}
+
+/// Extract the cloud-hypervisor `--vsock socket=<path>` argument from a CH
+/// runner argv. Returns the resolved socket path, or `None` if absent.
+fn cloud_hypervisor_vsock_socket(argv: &[String]) -> Option<PathBuf> {
+    argv.windows(2).find_map(|pair| {
+        if pair[0] != "--vsock" {
+            return None;
+        }
+        pair[1]
+            .split(',')
+            .find_map(|field| field.strip_prefix("socket=").map(PathBuf::from))
+    })
+}
+
+/// Resolve the guest-control probe parameters for `vm` from the trusted
+/// bundle: the per-VM vsock socket path + its parent state-root, the
+/// cloud-hypervisor runner's peer credentials (principal
+/// `nixling-<vm>-runner`), and the canonical state-root owner. Fails CLOSED if
+/// any identity is unresolvable.
+fn resolve_guest_control_probe_params(
+    state: &ServerState,
+    resolver: &BundleResolver,
+    vm: &str,
+) -> Result<guest_control_bridge::ProbeParams, String> {
+    let dag = resolver
+        .find_process_vm(vm)
+        .ok_or_else(|| "guest-control-probe:no-process-dag".to_owned())?;
+    let ch = dag
+        .nodes
+        .iter()
+        .find(|node| node.role == ProcessRole::CloudHypervisorRunner)
+        .ok_or_else(|| "guest-control-probe:no-cloud-hypervisor-node".to_owned())?;
+    let socket_path = cloud_hypervisor_vsock_socket(&ch.argv)
+        .ok_or_else(|| "guest-control-probe:no-vsock-socket".to_owned())?;
+    let state_root = socket_path
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "guest-control-probe:vsock-socket-no-parent".to_owned())?;
+    let (expected_state_root_uid, expected_state_root_gid) =
+        resolve_guest_control_state_root_owner(state)?;
+    Ok(guest_control_bridge::ProbeParams {
+        vm_id: vm.to_owned(),
+        socket_path,
+        state_root,
+        expected_state_root_uid,
+        expected_state_root_gid,
+        expected_peer_uid: ch.profile.uid,
+        expected_peer_gid: ch.profile.gid,
+    })
+}
+
+/// Map a guest-control config read error to the closed-enum daemon error kind.
+/// The mapping is exhaustive and never embeds a path, byte, or guest string.
+fn map_guest_file_read_error(error: guest_control_health::GuestFileReadError) -> TypedError {
+    use crate::typed_error::GuestControlReadErrorKind as K;
+    use guest_control_health::{GuestControlHealthError as H, GuestFileReadError as E};
+    let kind = match error {
+        E::Probe(H::TransportIo) | E::Probe(H::Signer) => K::Transport,
+        E::Probe(H::Ttrpc) => K::Transport,
+        E::Probe(H::Timeout) => K::Timeout,
+        E::Probe(H::AuthFailed) => K::AuthFailed,
+        E::Probe(H::StaleSession) => K::AuthFailed,
+        E::Probe(H::Protocol) => K::Protocol,
+        E::CapabilityUnavailable => K::CapabilityUnavailable,
+        E::FileNotFound => K::FileNotFound,
+        E::FileTooLarge => K::FileTooLarge,
+        E::PathUnsafe => K::PathUnsafe,
+        E::ReadDenied => K::ReadDenied,
+        E::Protocol => K::Protocol,
+    };
+    TypedError::GuestControlReadFailed { kind }
+}
+
+/// ADMIN-ONLY public.sock verb: read the editable guest config working copy of
+/// `vm` over the authenticated guest-control bridge and return it as a base64
+/// string. The admin authorization gate runs in `dispatch_request` BEFORE this
+/// handler. The orchestration runs on a dedicated OS thread (the
+/// synchronous-verb runtime boundary). The encoded payload is bounded so it fits both transport frames;
+/// any guest content is never echoed into an error.
+fn dispatch_read_guest_config(
+    state: &ServerState,
+    request: public_wire::ReadGuestConfigRequest,
+) -> Result<Value, TypedError> {
+    let resolver = load_bundle_resolver(state)?;
+    let params =
+        resolve_guest_control_probe_params(state, &resolver, &request.vm).map_err(|detail| {
+            tracing::warn!(
+                kind = "critical",
+                subsystem = "guest-control-health",
+                error_kind = "transport-io",
+                "guest-control config read: probe params unresolved: {detail}"
+            );
+            TypedError::GuestControlReadFailed {
+                kind: crate::typed_error::GuestControlReadErrorKind::Transport,
+            }
+        })?;
+    let broker_path = broker_socket_path(state);
+    let bytes = guest_control_bridge::run_config_read_on_dedicated_thread(
+        params,
+        broker_path,
+        guest_control_bridge::GUEST_CONTROL_CONFIG_READ_TIMEOUT,
+    )
+    .map_err(map_guest_file_read_error)?;
+    let encoded = nixling_core::base64_codec::encode(&bytes);
+    if !nixling_ipc::guest_wire::guest_config_encoded_within_frame_caps(encoded.len()) {
+        return Err(TypedError::GuestControlReadFailed {
+            kind: crate::typed_error::GuestControlReadErrorKind::FileTooLarge,
+        });
+    }
+    Ok(wire::read_guest_config_response(
+        public_wire::ReadGuestConfigResponse {
+            content_base64: encoded,
+        },
+    ))
+}
+
+const EXEC_METRIC: &str = "nixling_daemon_guest_control_exec_total";
+const EXEC_SUBSYSTEM: &str = "guest-control-exec";
+
+/// Closed allowlist of `outcome` label values for the exec metric. Any value
+/// emitted outside this set is a hard bug (caught by `debug_assert` below and
+/// the metric-label allowlist test) — `outcome` MUST stay a bounded enum so the
+/// `nixling_daemon_guest_control_exec_total` series cannot explode in
+/// cardinality or leak a free-form string.
+const EXEC_OUTCOME_LABELS: &[&str] = &["established", "closed", "error", "op-error"];
+
+/// Closed allowlist of `error_kind` label values for the exec metric. Mirrors
+/// the literals at the `exec_metric` call sites plus every value
+/// [`exec_error_kind_label`] can return. `none` is the sentinel for a
+/// non-error outcome (establish/close); `inflight-cap-exceeded` is the
+/// owner-reader signal emitted when a session is closed for exceeding the
+/// per-connection in-flight op cap.
+const EXEC_ERROR_KIND_LABELS: &[&str] = &[
+    "none",
+    "transport",
+    "auth",
+    "protocol",
+    "timeout",
+    "old-generation",
+    "capability",
+    "session-capacity",
+    "rate-limited",
+    "guest",
+    "internal",
+    "inflight-cap-exceeded",
+];
+
+/// Increment the closed-label exec outcome counter. `outcome` and `error_kind`
+/// are the only labels besides the constant subsystem; all three are drawn
+/// from a hard allowlist (no vm/uid/handle/argv ever becomes a label).
+fn exec_metric(state: &ServerState, outcome: &'static str, error_kind: &'static str) {
+    exec_metric_into(&state.metrics_registry, outcome, error_kind);
+}
+
+/// Increment the exec outcome counter against a metrics registry directly. Used
+/// by the owner writer, which holds only the registry (not the full
+/// `ServerState`) so it is hermetically testable.
+fn exec_metric_into(registry: &metrics::Registry, outcome: &'static str, error_kind: &'static str) {
+    // Fail-closed in debug/test builds: the only labels are the constant
+    // subsystem plus a closed `outcome` / `error_kind` enum. A stray value
+    // (e.g. a vm name, session handle, or op id mistakenly threaded through)
+    // would be caught here and by `exec_metric_labels_are_closed_enum`.
+    debug_assert!(
+        EXEC_OUTCOME_LABELS.contains(&outcome),
+        "exec metric outcome {outcome:?} is not in the closed allowlist"
+    );
+    debug_assert!(
+        EXEC_ERROR_KIND_LABELS.contains(&error_kind),
+        "exec metric error_kind {error_kind:?} is not in the closed allowlist"
+    );
+    registry.counter_inc(
+        EXEC_METRIC,
+        &[
+            ("subsystem", EXEC_SUBSYSTEM),
+            ("outcome", outcome),
+            ("error_kind", error_kind),
+        ],
+    );
+}
+
+/// The opaque session handle carried by a non-`Start` exec op, or `None` for
+/// `Start` (which has no session yet).
+fn exec_op_session(op: &public_wire::ExecOp) -> Option<&str> {
+    match op {
+        public_wire::ExecOp::Start(_) => None,
+        public_wire::ExecOp::WriteStdin(args) => Some(&args.session),
+        public_wire::ExecOp::ReadOutput(args) => Some(&args.session),
+        public_wire::ExecOp::Signal(args) => Some(&args.session),
+        public_wire::ExecOp::Resize(args) => Some(&args.session),
+        public_wire::ExecOp::Wait(args) => Some(&args.session),
+        public_wire::ExecOp::Close(args) => Some(&args.session),
+    }
+}
+
+fn map_exec_establish_error(error: exec_session::ExecEstablishError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::ExecEstablishError as E;
+    let kind = match error {
+        E::Transport => K::Transport,
+        E::Auth => K::Auth,
+        E::Protocol => K::Protocol,
+        E::Timeout => K::Timeout,
+        E::OldGeneration => K::OldGeneration,
+        E::Capability => K::Capability,
+        E::Guest(_) => K::GuestError,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+fn map_exec_op_error(error: exec_session::ExecOpError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::ExecOpError as E;
+    let kind = match error {
+        E::Transport => K::Transport,
+        E::Auth => K::Auth,
+        E::Protocol => K::Protocol,
+        E::Timeout => K::Timeout,
+        E::OldGeneration => K::OldGeneration,
+        E::Capability => K::Capability,
+        E::Guest(_) => K::GuestError,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+fn map_exec_reserve_error(error: exec_session::SessionReserveError) -> TypedError {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::SessionReserveError as E;
+    let kind = match error {
+        E::RateLimited => K::RateLimited,
+        _ => K::SessionCapacity,
+    };
+    TypedError::GuestControlExecFailed { kind }
+}
+
+/// The `error_kind` metric label for a typed exec failure (closed allowlist).
+fn exec_error_kind_label(error: &TypedError) -> &'static str {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    match error {
+        TypedError::GuestControlExecFailed { kind } => match kind {
+            K::Transport => "transport",
+            K::Auth => "auth",
+            K::Protocol => "protocol",
+            K::Timeout => "timeout",
+            K::OldGeneration => "old-generation",
+            K::Capability => "capability",
+            K::SessionCapacity => "session-capacity",
+            K::RateLimited => "rate-limited",
+            K::GuestError => "guest",
+            K::Internal => "internal",
+        },
+        _ => "internal",
+    }
+}
+
+/// Emit the single kind=critical exec session-establishment event. Kept as a
+/// free function so the redaction-safe field set can be asserted by a tracing
+/// capture test: it accepts ONLY the leak-safe identifiers (vm name, peer uid,
+/// negotiated tty). The opaque session handle is deliberately NOT included —
+/// per AGENTS, session handles must never reach a span, log, audit, or
+/// metric. argv/env/cwd/output bytes are never passed here either.
+fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = EXEC_SUBSYSTEM,
+        vm = %vm,
+        peer_uid = peer_uid,
+        tty = tty,
+        "guest-control exec session established"
+    );
+}
+
+/// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
+/// the serial accept loop: the public.sock accept loop never blocks for
+/// the lifetime of an exec. SO_PEERCRED admin was verified before the spawn.
+///
+/// Lifecycle (non-detached): reserve a session slot (cap-checked BEFORE any
+/// connect/auth/ExecCreate), spawn the per-session worker, relay the establish
+/// reply, then proxy one op per frame. The connection's EOF/POLLHUP closes the
+/// command channel, which returns the worker, drops the runtime, and drops the
+/// authenticated client — prompting the guest `close_connection` and PTY
+/// teardown. The slot is released when its RAII guard drops on return.
+fn run_exec_owner(
+    stream: Socket,
+    state: ServerState,
+    peer: PeerIdentity,
+    first_op_id: u64,
+    first_op: public_wire::ExecOp,
+) {
+    // Test seam: when an accept-loop test installs the owner-body hook, run it
+    // (holding `stream` — and thus the owner session — open for as long as the
+    // hook blocks) and return without touching real bundle/guest state. Placing
+    // the hook HERE, in the owner body itself, is what lets a test distinguish
+    // an off-loop spawn from an inline call: a hypothetical inline
+    // `handle_connection` would run this body — and block in the hook — on the
+    // accept-loop thread, so its caller would never observe a prompt return.
+    #[cfg(test)]
+    {
+        if let Some(hook) = exec_owner_test_hook::active() {
+            hook();
+            drop(stream);
+            return;
+        }
+    }
+    // The owner socket is read by the reader (this thread) and written by a
+    // dedicated writer thread concurrently; SOCK_SEQPACKET send/recv on the
+    // same fd from two threads is safe, so share it behind an `Arc`.
+    let stream = Arc::new(stream);
+    let public_wire::ExecOp::Start(start) = first_op else {
+        // A non-`Start` first op on a fresh owner connection has no session.
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+        };
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
+        exec_metric(&state, "error", "protocol");
+        return;
+    };
+
+    if start.argv.is_empty() {
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+        };
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
+        exec_metric(&state, "error", "protocol");
+        return;
+    }
+    // `detached` is carried for unambiguous teardown semantics; the CLI never
+    // sets it (a detached reconnect lifecycle is not implemented). A detached
+    // request would change teardown to "survive owner disconnect", which this
+    // non-detached handler does not implement — reject it rather than silently
+    // leak a guest process.
+    if start.detached {
+        let error = TypedError::GuestControlExecFailed {
+            kind: crate::typed_error::GuestControlExecErrorKind::Capability,
+        };
+        let _ = write_json_frame(
+            stream.as_ref(),
+            &wire::error_frame_with_id(first_op_id, &error),
+        );
+        exec_metric(&state, "error", "capability");
+        return;
+    }
+
+    let resolver = match load_bundle_resolver(&state) {
+        Ok(resolver) => resolver,
+        Err(_) => {
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Transport,
+            };
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            exec_metric(&state, "error", "transport");
+            return;
+        }
+    };
+    let params = match resolve_guest_control_probe_params(&state, &resolver, &start.vm) {
+        Ok(params) => params,
+        Err(_) => {
+            // No process DAG / no vsock socket: the VM is not a guest-control
+            // generation. Fail closed (old-generation), never SSH.
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::OldGeneration,
+            };
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            exec_metric(&state, "error", "old-generation");
+            return;
+        }
+    };
+
+    // Reserve a session slot BEFORE any connect/auth/ExecCreate. The
+    // guard releases the slot on every return path below.
+    let slot = match state.exec_sessions.reserve(peer.uid, &start.vm) {
+        Ok(slot) => slot,
+        Err(reserve_error) => {
+            let error = map_exec_reserve_error(reserve_error);
+            let kind = exec_error_kind_label(&error);
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            exec_metric(&state, "error", kind);
+            return;
+        }
+    };
+    let handle = slot.handle().to_owned();
+
+    let spec = exec_session::ExecStartSpec {
+        vm: start.vm.clone(),
+        argv: start.argv.clone(),
+        tty: start.tty,
+        detached: start.detached,
+        env: start
+            .env
+            .unwrap_or_default()
+            .into_iter()
+            .map(|var| (var.key, var.value))
+            .collect(),
+        cwd: start.cwd.clone(),
+        term_size: start.term_size.map(|size| (size.rows, size.cols)),
+    };
+
+    let deadlines = exec_session::ExecOpDeadlines::default();
+    let connector: Arc<dyn exec_session::ExecGuestConnector> = Arc::new(
+        exec_session_real::RealExecConnector::new(params, broker_socket_path(&state), deadlines),
+    );
+
+    // The terminal-cleanup reaper shuts down the owner socket so a
+    // stalled owner that never closes after the command goes terminal does not
+    // pin the session slot. It only fires AFTER the command is terminal, never
+    // while the command is live.
+    let owner_reaper: Arc<dyn exec_session::OwnerReaper> =
+        Arc::new(SocketShutdownReaper::new(stream.as_raw_fd()));
+
+    let (control_tx, control_rx) = tokio::sync::mpsc::channel::<exec_session::WorkerCommand>(16);
+    let (establish_tx, establish_rx) = tokio::sync::oneshot::channel();
+    let worker = exec_session::spawn_session_worker(exec_session::WorkerSpawn {
+        connector,
+        spec,
+        deadlines,
+        establish_tx,
+        control_rx,
+        terminal_ttl: exec_session::EXEC_TERMINAL_CLEANUP_TTL,
+        clock: Arc::new(exec_session::SystemClock),
+        owner_reaper,
+    });
+
+    let info = match establish_rx.blocking_recv() {
+        Ok(Ok(info)) => info,
+        Ok(Err(establish_error)) => {
+            let error = map_exec_establish_error(establish_error);
+            let kind = exec_error_kind_label(&error);
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            exec_metric(&state, "error", kind);
+            drop(control_tx);
+            let _ = worker.join();
+            return;
+        }
+        Err(_) => {
+            // Worker thread vanished before replying (panic / runtime build
+            // failure already mapped to Transport). Surface an internal error.
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+            };
+            let _ = write_json_frame(
+                stream.as_ref(),
+                &wire::error_frame_with_id(first_op_id, &error),
+            );
+            exec_metric(&state, "error", "internal");
+            let _ = worker.join();
+            return;
+        }
+    };
+
+    // One kind=critical session-establishment span (NO per-op span/audit).
+    emit_exec_established_event(&start.vm, peer.uid, info.tty);
+    exec_metric(&state, "established", "none");
+    // Bounded lifecycle audit (leak-safe: vm + admin uid + tty only).
+    let _ =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecEstablished {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+                tty: info.tty,
+            });
+
+    // Spawn the owner writer thread BEFORE committing the session with a start
+    // response. An OS thread-spawn failure must surface as a typed internal
+    // error for the establishing op rather than panic the handler (a process
+    // exhausting its thread limit is a recoverable resource failure, not a
+    // daemon-fatal bug). With the writer up first, that failure cleanly replaces
+    // the start response.
+    let (writer, item_tx, inflight) =
+        match spawn_exec_owner_writer(&stream, &state.metrics_registry) {
+            Ok(parts) => parts,
+            Err(_) => {
+                let error = TypedError::GuestControlExecFailed {
+                    kind: crate::typed_error::GuestControlExecErrorKind::Internal,
+                };
+                let _ = write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(first_op_id, &error),
+                );
+                exec_metric(&state, "error", "internal");
+                drop(control_tx);
+                let _ = worker.join();
+                exec_metric(&state, "closed", "none");
+                let _ = state.daemon_audit.write_event(
+                    &daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                        vm: start.vm.clone(),
+                        peer_uid: peer.uid,
+                    },
+                );
+                return;
+            }
+        };
+
+    let start_response = exec_session::start_response(&handle, &info);
+    if write_json_frame(
+        stream.as_ref(),
+        &wire::exec_response_with_id(first_op_id, &start_response),
+    )
+    .is_err()
+    {
+        drop(item_tx);
+        drop(control_tx);
+        let _ = writer.join();
+        let _ = worker.join();
+        exec_metric(&state, "closed", "none");
+        let _ = state.daemon_audit.write_event(
+            &daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+            },
+        );
+        return;
+    }
+
+    // Drive the owner connection: a reader (this thread) dispatches frames to
+    // the worker WITHOUT blocking on each reply, and the writer thread drains
+    // op-id-tagged replies back to the socket. `control_tx` is moved in and
+    // dropped after the reader returns, so an owner disconnect during a
+    // long-poll tears the worker down (cancelling the poll) promptly.
+    run_exec_owner_io(
+        &stream,
+        control_tx,
+        item_tx,
+        inflight,
+        writer,
+        &state.metrics_registry,
+        &handle,
+    );
+
+    let _ = worker.join();
+    drop(slot);
+    exec_metric(&state, "closed", "none");
+    let _ =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecTerminated {
+                vm: start.vm.clone(),
+                peer_uid: peer.uid,
+            });
+}
+
+/// A reply frame the owner writer must emit, carried from the per-op awaiter to
+/// the single socket-writing task so all owner-socket sends happen on one task.
+enum ExecOwnerFrame {
+    Response(Box<public_wire::ExecOpResponse>),
+    Error {
+        error: Box<TypedError>,
+        metric_kind: &'static str,
+    },
+}
+
+/// One item handed from the owner reader to the owner writer. `Pending` carries
+/// the worker reply receiver (awaited concurrently so multiple ops, including a
+/// long-poll plus an urgent control op, are in flight at once and matched by
+/// `op_id`). `Immediate` is a reader-resolved error (parse / session-binding /
+/// non-exec frame) that needs no worker round trip. Both variants carry the
+/// owned [`InflightPermit`] for the op so the writer releases it only after the
+/// reply frame is written (or on teardown), enforcing the real in-flight cap.
+enum ExecWriterItem {
+    Pending {
+        op_id: u64,
+        reply_rx: tokio::sync::oneshot::Receiver<
+            Result<public_wire::ExecOpResponse, exec_session::ExecOpError>,
+        >,
+        permit: InflightPermit,
+    },
+    Immediate {
+        op_id: u64,
+        error: Box<TypedError>,
+        metric_kind: &'static str,
+        permit: InflightPermit,
+    },
+}
+
+/// Bound on owner-connection ops concurrently in flight. This is a HARD
+/// per-connection limit on the number of ops dispatched-but-not-yet-replied —
+/// including long-polls (`ReadOutput`/`Wait`) that each pin a guest RPC. A
+/// backpressure-aware owner (the real CLI is strictly sequential — one op,
+/// await its reply, then the next) stays at 1–2 in flight and never approaches
+/// this cap; a flooding/pipelining owner that exceeds it has its session closed
+/// promptly (the reader never blocks acquiring a permit).
+const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
+
+/// Bounded grace for the owner writer to flush its last resolved replies (e.g. a
+/// final exit-status `Wait`) during teardown before the owner socket is
+/// force–shut-down. A healthy writer exits in microseconds; this only bounds the
+/// wait for a writer wedged on a blocking `send` to an owner that stopped
+/// reading, after which the socket is shut down so the send fails and the writer
+/// can exit (otherwise `join()` would hang and strand the owner thread + slot).
+const EXEC_OWNER_WRITER_DRAIN_GRACE: Duration = Duration::from_millis(250);
+const EXEC_OWNER_WRITER_DRAIN_POLL: Duration = Duration::from_millis(5);
+
+/// A non-blocking counting semaphore bounding the owner connection's actual
+/// concurrent in-flight ops. The earlier design only bounded the
+/// reader→writer channel, but the worker immediately spawns each long-poll and
+/// the writer immediately spawns each awaiter, so both channels drained as fast
+/// as the reader filled them — the reader was never bounded and a pipelining
+/// owner could open unbounded concurrent long-polls/guest RPCs. Here a permit
+/// is taken just before an op is dispatched and HELD until its reply frame is
+/// written (or the op is torn down), so the cap hard-bounds the number of ops
+/// genuinely in flight. A permit is taken with the NON-BLOCKING
+/// [`InflightSemaphore::try_acquire`]: a well-behaved (backpressure-aware) owner
+/// stays far below the cap, and an owner that exceeds it has its session closed
+/// promptly rather than the reader BLOCKING on a permit (which would delay
+/// observing owner EOF/POLLHUP under saturation). The reader runs on a plain OS
+/// thread (no tokio runtime), so a plain `Mutex<usize>` is used rather than
+/// `tokio::sync::Semaphore`.
+struct InflightSemaphore {
+    available: std::sync::Mutex<usize>,
+}
+
+impl InflightSemaphore {
+    fn new(permits: usize) -> Arc<Self> {
+        Arc::new(Self {
+            available: std::sync::Mutex::new(permits),
+        })
+    }
+
+    /// Take a permit WITHOUT blocking. Returns `Some(permit)` iff one is free,
+    /// else `None` (the cap is saturated). The returned guard releases the
+    /// permit on drop (reply written, immediate error, or teardown). Never
+    /// blocks: the reader must always be free to return to `read_frame` and
+    /// observe owner EOF/POLLHUP. Mutex poison is recovered rather than
+    /// propagated as a panic — the critical section only increments/decrements
+    /// a counter and cannot leave broken invariants.
+    fn try_acquire(self: &Arc<Self>) -> Option<InflightPermit> {
+        let mut available = self
+            .available
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if *available == 0 {
+            return None;
+        }
+        *available -= 1;
+        Some(InflightPermit {
+            semaphore: Arc::clone(self),
+        })
+    }
+}
+
+/// RAII permit for [`InflightSemaphore`]. Releasing on drop covers every
+/// teardown path (reply written, immediate error frame written, owner
+/// disconnect, worker teardown dropping the reply oneshot).
+struct InflightPermit {
+    semaphore: Arc<InflightSemaphore>,
+}
+
+impl Drop for InflightPermit {
+    fn drop(&mut self) {
+        let mut available = self
+            .semaphore
+            .available
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *available += 1;
+    }
+}
+
+/// Parts produced by [`spawn_exec_owner_writer`]: the writer join handle, the
+/// reader→writer item channel sender, and the shared in-flight semaphore.
+type ExecOwnerWriterParts = (
+    std::thread::JoinHandle<()>,
+    tokio::sync::mpsc::Sender<ExecWriterItem>,
+    Arc<InflightSemaphore>,
+);
+
+/// Spawn the owner-connection writer thread and return the channel + semaphore
+/// the reader drives it with. Returns the OS-thread-spawn error to the caller
+/// (instead of panicking) so a resource-exhausted host fails the session with a
+/// typed internal error rather than crashing the handler.
+fn spawn_exec_owner_writer(
+    stream: &Arc<Socket>,
+    metrics: &Arc<metrics::Registry>,
+) -> std::io::Result<ExecOwnerWriterParts> {
+    let (item_tx, item_rx) = tokio::sync::mpsc::channel::<ExecWriterItem>(EXEC_OWNER_INFLIGHT_CAP);
+    let inflight = InflightSemaphore::new(EXEC_OWNER_INFLIGHT_CAP);
+    let writer_stream = Arc::clone(stream);
+    let writer_metrics = Arc::clone(metrics);
+    let writer = std::thread::Builder::new()
+        .name("nixling-exec-writer".to_owned())
+        .spawn(move || exec_owner_writer(writer_stream, writer_metrics, item_rx))?;
+    Ok((writer, item_tx, inflight))
+}
+
+/// Emit the closed-allowlist observability signal for an owner connection that
+/// exceeded the in-flight op cap and is being closed. A leak-safe metric
+/// (closed `outcome`/`error_kind` labels — no vm/handle/uid/argv) plus a
+/// rate-bounded structured log carrying only the constant cap. No wire frame is
+/// written from the reader thread (the writer thread is the sole socket
+/// writer).
+fn signal_owner_inflight_cap_exceeded(metrics: &metrics::Registry) {
+    exec_metric_into(metrics, "op-error", "inflight-cap-exceeded");
+    tracing::warn!(
+        kind = "critical",
+        subsystem = EXEC_SUBSYSTEM,
+        error_kind = "inflight-cap-exceeded",
+        cap = EXEC_OWNER_INFLIGHT_CAP,
+        "guest-control-exec: owner connection exceeded the in-flight op cap; closing the session",
+    );
+}
+
+/// Drive the owner connection's reader loop (this function runs on the owner
+/// thread). Each frame is parsed into `(op_id, op)`, bound to `handle`, and
+/// dispatched to the worker over `control_tx` WITHOUT waiting for the reply;
+/// the reply receiver is forwarded to the writer thread, which matches replies
+/// to ops by `op_id` and writes them out of order. A permit from `inflight` is
+/// taken (NON-BLOCKING) before EACH op is queued and travels with it to the
+/// writer. The reader NEVER blocks on a permit: a well-behaved owner stays far
+/// below the cap, and an owner that exceeds `EXEC_OWNER_INFLIGHT_CAP` ops in
+/// flight has its session closed through the single teardown path below
+/// (after emitting an observability signal). Because the reader never blocks
+/// acquiring a permit, owner EOF/POLLHUP is always observed promptly — even
+/// when the cap is fully saturated by parked long-polls.
+/// On reader EOF/POLLHUP (owner disconnect) or over-cap close the loop returns,
+/// `control_tx` is dropped (tearing the worker down and cancelling any
+/// in-flight long-poll), then the writer is joined.
+fn run_exec_owner_io(
+    stream: &Arc<Socket>,
+    control_tx: tokio::sync::mpsc::Sender<exec_session::WorkerCommand>,
+    item_tx: tokio::sync::mpsc::Sender<ExecWriterItem>,
+    inflight: Arc<InflightSemaphore>,
+    writer: std::thread::JoinHandle<()>,
+    metrics: &Arc<metrics::Registry>,
+    handle: &str,
+) {
+    // EOF / POLLHUP / shutdown / any read error closes the connection and ends
+    // the loop, triggering the teardown below.
+    while let Ok(frame) = read_frame(stream.as_ref()) {
+        let op_id = wire::exec_op_id(&frame);
+        let op = match wire::parse_exec_op(&frame) {
+            Ok((_, op)) => op,
+            Err(error) => {
+                // Take a permit even for an immediate error so a flood of
+                // malformed frames is bounded by the same in-flight cap; it is
+                // released once the error frame is written. Over-cap closes the
+                // session (the reader never blocks).
+                let Some(permit) = inflight.try_acquire() else {
+                    signal_owner_inflight_cap_exceeded(metrics);
+                    break;
+                };
+                if item_tx
+                    .blocking_send(ExecWriterItem::Immediate {
+                        op_id,
+                        error: Box::new(error),
+                        metric_kind: "protocol",
+                        permit,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+        };
+        // Bind every op to THIS session handle (peer-uid binding is implicit:
+        // the handle was minted for this connection's admin peer).
+        if exec_op_session(&op) != Some(handle) {
+            let error = TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+            };
+            let Some(permit) = inflight.try_acquire() else {
+                signal_owner_inflight_cap_exceeded(metrics);
+                break;
+            };
+            if item_tx
+                .blocking_send(ExecWriterItem::Immediate {
+                    op_id,
+                    error: Box::new(error),
+                    metric_kind: "protocol",
+                    permit,
+                })
+                .is_err()
+            {
+                break;
+            }
+            continue;
+        }
+
+        // Take the in-flight permit BEFORE handing the op to the worker. When
+        // the cap is reached this does NOT block: it closes the session (a
+        // backpressure-aware owner never reaches the cap), so the reader is
+        // always free to observe owner EOF/POLLHUP promptly.
+        let Some(permit) = inflight.try_acquire() else {
+            signal_owner_inflight_cap_exceeded(metrics);
+            break;
+        };
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let command = exec_session::WorkerCommand {
+            op,
+            reply: reply_tx,
+        };
+        if control_tx.blocking_send(command).is_err() {
+            // Worker gone (terminal cleanup / teardown): close the connection.
+            // `permit` drops here, releasing it.
+            break;
+        }
+        if item_tx
+            .blocking_send(ExecWriterItem::Pending {
+                op_id,
+                reply_rx,
+                permit,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // Reader done. Drop `control_tx` FIRST so the worker returns and resolves
+    // every pending reply oneshot (cancelling in-flight long-polls without
+    // waiting for their deadline), THEN drop `item_tx` so the writer drains the
+    // resolved replies and exits. Joining the writer guarantees no further
+    // socket writes after this returns.
+    drop(control_tx);
+    drop(item_tx);
+    // Give the writer a brief, bounded grace to flush its last resolved replies
+    // and exit on its own, then force teardown: a misbehaving owner that stopped
+    // reading and filled its socket receive buffer would wedge the writer's
+    // blocking `send`, so `join()` would hang forever and strand the owner
+    // thread + session slot. Shutting the owner socket down makes the wedged
+    // send fail promptly so the writer can exit. A healthy writer finishes well
+    // within the grace and never reaches the shutdown.
+    let drain_deadline = Instant::now() + EXEC_OWNER_WRITER_DRAIN_GRACE;
+    while !writer.is_finished() && Instant::now() < drain_deadline {
+        std::thread::sleep(EXEC_OWNER_WRITER_DRAIN_POLL);
+    }
+    if !writer.is_finished() {
+        let _ = nix::sys::socket::shutdown(
+            stream.as_ref().as_raw_fd(),
+            nix::sys::socket::Shutdown::Both,
+        );
+    }
+    let _ = writer.join();
+}
+
+/// The owner-connection writer: a current-thread tokio runtime that awaits each
+/// op's worker reply concurrently and writes op-id-tagged frames back to the
+/// socket from a single drain task (so the socket has exactly one writer).
+fn exec_owner_writer(
+    stream: Arc<Socket>,
+    metrics: Arc<metrics::Registry>,
+    mut item_rx: tokio::sync::mpsc::Receiver<ExecWriterItem>,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => return,
+    };
+    runtime.block_on(async move {
+        // The frame channel carries the op's in-flight permit alongside the
+        // frame so the permit is released only AFTER the reply is written to the
+        // socket (in the drain task), which is what makes the cap bound ACTUAL
+        // in-flight ops rather than just the reader→writer channel depth.
+        let (frame_tx, mut frame_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, ExecOwnerFrame, InflightPermit)>();
+        let drain_stream = Arc::clone(&stream);
+        let drain_metrics = Arc::clone(&metrics);
+        let drain = tokio::spawn(async move {
+            while let Some((op_id, frame, permit)) = frame_rx.recv().await {
+                let value = match &frame {
+                    ExecOwnerFrame::Response(response) => {
+                        wire::exec_response_with_id(op_id, response)
+                    }
+                    ExecOwnerFrame::Error { error, .. } => wire::error_frame_with_id(op_id, error),
+                };
+                let write_result = write_json_frame(drain_stream.as_ref(), &value);
+                if let ExecOwnerFrame::Error { metric_kind, .. } = &frame {
+                    if write_result.is_ok() {
+                        exec_metric_into(&drain_metrics, "op-error", metric_kind);
+                    }
+                }
+                // Release the in-flight permit only now that this op's reply has
+                // left the writer (or failed to). Explicit for clarity; `permit`
+                // would drop at the end of the iteration regardless.
+                drop(permit);
+                if write_result.is_err() {
+                    break;
+                }
+            }
+        });
+
+        while let Some(item) = item_rx.recv().await {
+            match item {
+                ExecWriterItem::Pending {
+                    op_id,
+                    reply_rx,
+                    permit,
+                } => {
+                    let frame_tx = frame_tx.clone();
+                    tokio::spawn(async move {
+                        let frame = match reply_rx.await {
+                            Ok(Ok(response)) => ExecOwnerFrame::Response(Box::new(response)),
+                            Ok(Err(op_error)) => {
+                                let error = map_exec_op_error(op_error);
+                                let metric_kind = exec_error_kind_label(&error);
+                                ExecOwnerFrame::Error {
+                                    error: Box::new(error),
+                                    metric_kind,
+                                }
+                            }
+                            // Worker dropped the reply (teardown). The owner is
+                            // going away; emit nothing for this op. `permit`
+                            // drops here, releasing it.
+                            Err(_) => return,
+                        };
+                        let _ = frame_tx.send((op_id, frame, permit));
+                    });
+                }
+                ExecWriterItem::Immediate {
+                    op_id,
+                    error,
+                    metric_kind,
+                    permit,
+                } => {
+                    let _ = frame_tx.send((
+                        op_id,
+                        ExecOwnerFrame::Error { error, metric_kind },
+                        permit,
+                    ));
+                }
+            }
+        }
+        // Reader closed the item channel. Drop this task's frame sender so the
+        // drain finishes once the still-pending awaiters resolve (they resolve
+        // promptly: worker teardown drops their reply oneshots).
+        drop(frame_tx);
+        let _ = drain.await;
+    });
+}
+
+/// Owner-socket teardown seam for the terminal-cleanup reaper. Shutting
+/// down the socket unblocks the owner reader (`read_frame` returns), which
+/// releases the session slot. Idempotent: a second shutdown is a harmless
+/// `ENOTCONN`.
+struct SocketShutdownReaper {
+    fd: RawFd,
+}
+
+impl SocketShutdownReaper {
+    fn new(fd: RawFd) -> Self {
+        Self { fd }
+    }
+}
+
+impl exec_session::OwnerReaper for SocketShutdownReaper {
+    fn reap(&self) {
+        let _ = nix::sys::socket::shutdown(self.fd, nix::sys::socket::Shutdown::Both);
+    }
+}
+
+#[cfg(test)]
+mod exec_metric_tests {
+    //! The exec metric `nixling_daemon_guest_control_exec_total` is
+    //! a HARD closed-label series. Its only labels are the constant
+    //! `subsystem` plus a bounded `outcome` / `error_kind` enum — never a vm
+    //! name, session handle, op id, peer uid, or argv hash. These tests assert
+    //! the descriptor shape, the closed value sets, and that a rendered series
+    //! carries nothing else.
+
+    use super::{
+        exec_error_kind_label, exec_metric_into, metrics, EXEC_ERROR_KIND_LABELS, EXEC_METRIC,
+        EXEC_OUTCOME_LABELS, EXEC_SUBSYSTEM,
+    };
+    use crate::typed_error::{GuestControlExecErrorKind, TypedError};
+
+    /// Every `GuestControlExecErrorKind` the daemon can surface (closed enum).
+    const ALL_EXEC_ERROR_KINDS: &[GuestControlExecErrorKind] = &[
+        GuestControlExecErrorKind::Transport,
+        GuestControlExecErrorKind::Auth,
+        GuestControlExecErrorKind::Protocol,
+        GuestControlExecErrorKind::Timeout,
+        GuestControlExecErrorKind::OldGeneration,
+        GuestControlExecErrorKind::Capability,
+        GuestControlExecErrorKind::SessionCapacity,
+        GuestControlExecErrorKind::RateLimited,
+        GuestControlExecErrorKind::GuestError,
+        GuestControlExecErrorKind::Internal,
+    ];
+
+    #[test]
+    fn exec_metric_descriptor_has_only_three_closed_labels() {
+        // The inventory descriptor for the exec metric must declare EXACTLY
+        // the three closed keys — adding `vm`, `session`, `op_id`, or any
+        // per-session identifier here is the regression this guards.
+        let descriptor = metrics::descriptor(EXEC_METRIC).expect("exec metric is in the inventory");
+        assert_eq!(
+            descriptor.labels,
+            &["subsystem", "outcome", "error_kind"],
+            "exec metric must carry only the closed subsystem/outcome/error_kind labels"
+        );
+    }
+
+    #[test]
+    fn exec_error_kind_label_is_within_closed_allowlist() {
+        // Every typed exec error maps to a label inside the closed set, so the
+        // `error_kind` cardinality can never exceed the enum.
+        for kind in ALL_EXEC_ERROR_KINDS {
+            let error = TypedError::GuestControlExecFailed { kind: *kind };
+            let label = exec_error_kind_label(&error);
+            assert!(
+                EXEC_ERROR_KIND_LABELS.contains(&label),
+                "exec_error_kind_label returned {label:?} which is outside the closed allowlist"
+            );
+        }
+        // A non-exec TypedError defaults to the `internal` bucket (still closed).
+        assert_eq!(
+            exec_error_kind_label(&TypedError::AuthzNotAdmin {
+                verb: "exec".to_owned()
+            }),
+            "internal"
+        );
+    }
+
+    #[test]
+    fn exec_metric_labels_are_closed_enum() {
+        // Emit one sample for EVERY (outcome, error_kind) pair in the closed
+        // sets, render, and assert the rendered exec series carries only the
+        // three approved keys, the constant subsystem, and closed values —
+        // and never a forbidden per-session identifier.
+        let registry = metrics::Registry::new();
+        for &outcome in EXEC_OUTCOME_LABELS {
+            for &error_kind in EXEC_ERROR_KIND_LABELS {
+                exec_metric_into(&registry, outcome, error_kind);
+            }
+        }
+        let body = registry.render();
+
+        let mut saw_exec_series = false;
+        for line in body.lines() {
+            if !line.starts_with(EXEC_METRIC) {
+                continue;
+            }
+            let (Some(open), Some(close)) = (line.find('{'), line.find('}')) else {
+                continue;
+            };
+            saw_exec_series = true;
+            let inner = &line[open + 1..close];
+            for pair in inner.split(',') {
+                let mut kv = pair.splitn(2, '=');
+                let key = kv.next().unwrap_or("").trim();
+                let value = kv.next().unwrap_or("").trim().trim_matches('"');
+                match key {
+                    "subsystem" => assert_eq!(
+                        value, EXEC_SUBSYSTEM,
+                        "exec subsystem label must be the constant guest-control-exec"
+                    ),
+                    "outcome" => assert!(
+                        EXEC_OUTCOME_LABELS.contains(&value),
+                        "exec outcome label {value:?} is outside the closed allowlist"
+                    ),
+                    "error_kind" => assert!(
+                        EXEC_ERROR_KIND_LABELS.contains(&value),
+                        "exec error_kind label {value:?} is outside the closed allowlist"
+                    ),
+                    other => panic!("exec metric leaked an unapproved label key {other:?}: {line}"),
+                }
+            }
+        }
+        assert!(
+            saw_exec_series,
+            "expected the exec metric to render a series"
+        );
+
+        // Belt-and-suspenders: no per-session identifier may ever appear as a
+        // label key on the exec metric.
+        for forbidden in [
+            "vm=\"",
+            "session=\"",
+            "handle=\"",
+            "op_id=\"",
+            "op-id=\"",
+            "peer_uid=\"",
+            "uid=\"",
+            "argv=\"",
+            "argv_hash=\"",
+        ] {
+            for line in body.lines().filter(|l| l.starts_with(EXEC_METRIC)) {
+                assert!(
+                    !line.contains(forbidden),
+                    "exec metric leaked forbidden label {forbidden:?}: {line}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod exec_owner_io_tests {
+    //! Hermetic coverage for the owner reader/writer: the owner
+    //! connection dispatches frames to the worker WITHOUT blocking on each
+    //! reply, so (a) an urgent control op is serviced while a long-poll is in
+    //! flight (no head-of-line), and (b) owner disconnect tears the session
+    //! down promptly (the in-flight long-poll is cancelled, not awaited).
+
+    use super::{
+        exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer, write_frame,
+        Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE,
+    };
+    use nixling_ipc::public_wire::{
+        ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
+        ExecReadOutputResult, ExecSignalArgs, ExecWaitArgs,
+    };
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::oneshot;
+
+    const HANDLE: &str = "h-test-owner";
+
+    fn seqpacket_pair() -> (Socket, Socket) {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
+        let mut value = serde_json::to_value(op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), json!("exec"));
+        object.insert("opId".to_owned(), json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    fn send_op(socket: &Socket, op_id: u64, op: &ExecOp) {
+        write_frame(socket, &exec_frame(op_id, op)).expect("client sends exec frame");
+    }
+
+    fn recv_reply(socket: &Socket) -> Value {
+        let bytes = read_frame(socket).expect("client reads reply");
+        serde_json::from_slice(&bytes).expect("reply is JSON")
+    }
+
+    /// A fake worker that replies to fast control ops immediately but STASHES a
+    /// long-poll (`Wait`/`ReadOutput`) reply sender so the poll stays in flight.
+    /// On channel close (owner teardown) every stashed reply sender is dropped,
+    /// modelling the production worker dropping its in-flight oneshots.
+    fn spawn_fake_worker(
+        mut control_rx: tokio::sync::mpsc::Receiver<exec_session::WorkerCommand>,
+        longpoll_seen: std::sync::mpsc::Sender<()>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mut stashed: Vec<
+                oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>,
+            > = Vec::new();
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        stashed.push(reply);
+                        let _ = longpoll_seen.send(());
+                    }
+                    ExecOp::Signal(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::Signal(ExecControlResult {
+                            delivered: true,
+                        })));
+                    }
+                    ExecOp::Close(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::Close(ExecCloseResult {
+                            stdin_closed: true,
+                        })));
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+            // Owner teardown: drop the stashed long-poll reply senders so the
+            // writer's awaiters resolve `Err` (the poll is cancelled, never
+            // awaited to its deadline).
+            drop(stashed);
+        })
+    }
+
+    fn wait_op() -> ExecOp {
+        ExecOp::Wait(ExecWaitArgs {
+            session: HANDLE.to_owned(),
+            timeout_ms: 60_000,
+        })
+    }
+
+    fn signal_op() -> ExecOp {
+        ExecOp::Signal(ExecSignalArgs {
+            session: HANDLE.to_owned(),
+            signo: 2,
+            op_id: 0,
+        })
+    }
+
+    fn close_op() -> ExecOp {
+        ExecOp::Close(ExecCloseArgs {
+            session: HANDLE.to_owned(),
+        })
+    }
+
+    #[test]
+    fn control_op_is_serviced_while_a_long_poll_is_in_flight() {
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let worker = spawn_fake_worker(control_rx, seen_tx);
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // A normal op completes (owner-open + unrelated request proceeds).
+        send_op(&client, 1, &close_op());
+        let close_reply = recv_reply(&client);
+        assert_eq!(close_reply["type"], "execResponse");
+        assert_eq!(close_reply["opId"], 1);
+        assert_eq!(close_reply["op"], "close");
+
+        // Park a long-poll, then send an urgent control op. The control reply
+        // must come back (out of order, by op-id) BEFORE the parked poll — proof
+        // the owner socket read is not serialized behind the long-poll reply.
+        send_op(&client, 10, &wait_op());
+        seen_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker observed the parked long-poll");
+        send_op(&client, 11, &signal_op());
+        let signal_reply = recv_reply(&client);
+        assert_eq!(
+            signal_reply["opId"], 11,
+            "control reply must be serviced first"
+        );
+        assert_eq!(signal_reply["op"], "signal");
+
+        // Teardown: closing the client unblocks the reader; the parked poll is
+        // cancelled (never replied), and the io thread returns promptly.
+        drop(client);
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "owner io did not tear down promptly after disconnect"
+        );
+        worker.join().expect("fake worker joins");
+    }
+
+    #[test]
+    fn disconnect_during_long_poll_tears_down_without_awaiting_the_deadline() {
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let worker = spawn_fake_worker(control_rx, seen_tx);
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // Park a 60s long-poll, then disconnect. Teardown must NOT wait for the
+        // poll's deadline.
+        send_op(&client, 10, &wait_op());
+        seen_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker observed the parked long-poll");
+        drop(client);
+
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "teardown blocked on the long-poll deadline"
+        );
+        worker.join().expect("fake worker joins");
+    }
+
+    /// The in-flight cap must bound the number of ops ACTUALLY
+    /// dispatched-but-unanswered (each pins a guest RPC), not merely the depth
+    /// of a channel the worker/writer drain as fast as the reader fills it. A
+    /// pipelining owner that floods `cap + N` long-polls must see at most `cap`
+    /// reach the worker concurrently; the `(cap + 1)`-th op finds NO free permit
+    /// and — crucially — the reader does NOT block on it. Instead the session is
+    /// closed PROMPTLY (the over-cap observability signal is emitted and the
+    /// reader returns through the single teardown path). This proves both that
+    /// the cap hard-bounds concurrent in-flight work AND that the reader never
+    /// parks acquiring a permit, so owner EOF/POLLHUP is always observable.
+    #[test]
+    fn concurrent_inflight_ops_are_bounded_by_the_cap() {
+        use std::sync::Mutex;
+
+        let cap = EXEC_OWNER_INFLIGHT_CAP;
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+
+        // A counting fake worker: every long-poll reply sender is parked in a
+        // shared stash (never answered) so the op holds its in-flight permit;
+        // each receipt signals `seen_tx`. The stash is also held by the test so
+        // it can release the parked senders to let the writer awaiters resolve
+        // for a clean teardown.
+        type Stash =
+            Arc<Mutex<Vec<oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>>>>;
+        let stash: Stash = Arc::new(Mutex::new(Vec::new()));
+        let worker_stash = Arc::clone(&stash);
+        let worker = std::thread::spawn(move || {
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        worker_stash.lock().expect("stash lock").push(reply);
+                        let _ = seen_tx.send(());
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+        });
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // Pipeline well beyond the cap. The frames are tiny and fit in the
+        // socket buffer, so these client writes do not block even though the
+        // reader closes the session after the cap is exceeded.
+        let total = cap + 8;
+        for op_id in 0..total {
+            send_op(&client, op_id as u64, &wait_op());
+        }
+
+        // Exactly `cap` long-polls reach the worker. The `(cap + 1)`-th op finds
+        // no permit and the reader closes the session rather than dispatching it
+        // — so no more than `cap` are ever seen.
+        for _ in 0..cap {
+            seen_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker observes parked long-polls up to the cap");
+        }
+        assert!(
+            seen_rx.recv_timeout(Duration::from_millis(750)).is_err(),
+            "more than the cap of {cap} ops were dispatched concurrently to the worker",
+        );
+
+        // The over-cap close path emits the closed-allowlist observability
+        // signal. Poll briefly: the reader breaks just after the cap-th
+        // dispatch, so the metric appears within a short window.
+        let mut saw_signal = false;
+        for _ in 0..50 {
+            if metrics.render().lines().any(|line| {
+                line.starts_with(EXEC_METRIC)
+                    && line.contains("outcome=\"op-error\"")
+                    && line.contains("error_kind=\"inflight-cap-exceeded\"")
+            }) {
+                saw_signal = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            saw_signal,
+            "over-cap close must emit the inflight-cap-exceeded exec metric",
+        );
+
+        // The reader did NOT block on the over-cap permit: the session is
+        // already closing on its own. Release the parked replies so the held
+        // permits free and the writer awaiters resolve, then the io thread joins
+        // PROMPTLY — without the test ever dropping the client.
+        stash.lock().expect("stash lock").clear();
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "owner io did not close the session promptly after exceeding the cap",
+        );
+        drop(client);
+        worker.join().expect("fake worker joins");
+    }
+
+    /// Prompt teardown under saturation: when the in-flight cap is FULLY held
+    /// (every permit taken by a parked long-poll), an owner disconnect must
+    /// still tear the session down promptly. The reader is parked in
+    /// `read_frame` (never in a permit acquisition), so owner EOF is observed at
+    /// once: `control_tx` is dropped, the worker cancels its parked polls, and
+    /// the io thread returns without waiting for any poll deadline.
+    #[test]
+    fn disconnect_while_inflight_cap_saturated_tears_down_promptly() {
+        let cap = EXEC_OWNER_INFLIGHT_CAP;
+        let (daemon, client) = seqpacket_pair();
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(16);
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<()>();
+
+        // Parked long-poll senders live in a stash owned by the worker thread;
+        // dropping them on worker-loop exit (owner teardown) models the
+        // production worker dropping its in-flight oneshots so the polls are
+        // cancelled rather than awaited.
+        let worker = std::thread::spawn(move || {
+            let mut stashed: Vec<
+                oneshot::Sender<Result<ExecOpResponse, exec_session::ExecOpError>>,
+            > = Vec::new();
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        stashed.push(reply);
+                        let _ = seen_tx.send(());
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+            drop(stashed);
+        });
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer thread spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // Saturate EXACTLY to the cap (do not exceed it): all `cap` permits are
+        // taken by parked long-polls, and the reader is now parked in
+        // `read_frame` awaiting the next frame.
+        for op_id in 0..cap {
+            send_op(&client, op_id as u64, &wait_op());
+        }
+        for _ in 0..cap {
+            seen_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker observes parked long-polls up to the cap");
+        }
+
+        // Disconnect while fully saturated. The reader (parked in read_frame,
+        // NOT in a permit acquisition) observes EOF immediately and tears down.
+        drop(client);
+        let start = Instant::now();
+        io.join().expect("owner io thread joins");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "saturated owner disconnect did not tear down promptly (reader blocked?)",
+        );
+        let _ = &metrics;
+        worker.join().expect("fake worker joins");
+    }
+
+    #[test]
+    fn over_cap_teardown_completes_when_owner_stops_reading() {
+        // A misbehaving owner that pipelines past the cap while NEVER reading
+        // replies fills the daemon's owner-socket send buffer, wedging the
+        // writer's blocking `send`. Teardown must still complete: the bounded
+        // drain grace elapses, the owner socket is shut down to unblock the
+        // wedged send, and the io thread joins — instead of hanging forever and
+        // stranding the owner thread + session slot.
+        let cap = EXEC_OWNER_INFLIGHT_CAP;
+        let (daemon, client) = seqpacket_pair();
+        // Squeeze both buffers so a couple of unread ~1 KiB replies fill the pipe
+        // and wedge the writer well before the cap is reached.
+        let _ = daemon.set_send_buffer_size(1024);
+        let _ = client.set_recv_buffer_size(1024);
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(16);
+
+        // Resolve EVERY long-poll immediately with a ~1 KiB reply so the writer
+        // actively sends; with the owner never reading, the send buffer backs up
+        // and the writer's blocking `send` wedges.
+        let worker = std::thread::spawn(move || {
+            let payload = "x".repeat(1024);
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
+                            data_base64: payload.clone(),
+                            next_offset: 0,
+                            eof: false,
+                            dropped_bytes: 0,
+                            truncated: false,
+                            timed_out: false,
+                        })));
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+        });
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let started = Instant::now();
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // Pipeline far past the cap WITHOUT ever reading a reply, from a thread so
+        // a backed-up client send (once the reader over-caps and stops reading)
+        // cannot wedge the test itself. Hold the client socket OPEN so teardown is
+        // an over-cap close, NOT an EOF (which would unblock the writer for free).
+        let sender = std::thread::spawn(move || {
+            for op_id in 0..(cap * 2) {
+                if write_frame(&client, &exec_frame(op_id as u64, &wait_op())).is_err() {
+                    break;
+                }
+            }
+            client
+        });
+
+        // The io thread must JOIN — proving teardown did not hang on the wedged
+        // send. Poll up to 10s (the bounded grace is sub-second).
+        let mut joined = false;
+        for _ in 0..400 {
+            if io.is_finished() {
+                joined = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            joined,
+            "owner teardown hung: the wedged writer's send was never unblocked",
+        );
+        io.join().expect("io thread joins");
+
+        // The teardown waited the full bounded grace, proving the writer was
+        // genuinely wedged (a healthy writer exits in microseconds, far under the
+        // grace) and the shutdown path — not a free EOF — released it.
+        assert!(
+            started.elapsed() >= EXEC_OWNER_WRITER_DRAIN_GRACE,
+            "expected the bounded drain grace to elapse on a wedged writer; got {:?}",
+            started.elapsed(),
+        );
+
+        let client = sender.join().expect("sender thread joins");
+        drop(client);
+        worker.join().expect("fake worker joins");
     }
 }
 
@@ -2180,30 +3917,113 @@ fn dispatch_broker_request_with_timeout(
     timeout: Duration,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket(&socket_path)?);
+    dispatch_broker_request_to_socket(&socket_path, request, Default::default(), Some(timeout))
+}
+
+/// Dispatch a single broker request over a freshly-connected seqpacket
+/// socket identified only by its path. Unlike the `ServerState`-based
+/// dispatchers this borrows nothing from the daemon and so can be
+/// invoked from an owned-data worker (e.g. the guest-control
+/// `BrokerSigner`, which holds only the broker socket path so it stays
+/// `Send + Sync` across a `spawn_blocking` boundary).
+///
+/// `timeout`, when set, bounds the ENTIRE connect + write + read round
+/// trip by a SINGLE absolute deadline (`now + timeout`). Applying
+/// `timeout` independently to connect, write, and read would let one
+/// round trip run up to ~3x `timeout`, which defeats the caller's
+/// per-attempt budget and pins worker threads / fds past a stalled or
+/// backlogged broker. We recompute the remaining budget before each
+/// blocking op and fail closed with [`TypedError::InternalBrokerTimeout`]
+/// the moment the deadline is reached (whether before an op or while one
+/// op blocked past it), so a genuine deadline exhaustion surfaces as a
+/// timeout end to end rather than as a generic transport failure.
+pub(crate) fn dispatch_broker_request_to_socket(
+    socket_path: &Path,
+    request: BrokerRequest,
+    caller_role: BrokerCallerRole,
+    timeout: Option<Duration>,
+) -> Result<BrokerResponse, TypedError> {
+    let envelope = BrokerRequestEnvelope {
+        request,
+        caller_role,
+        test_peer_uid: None,
+    };
+    let Some(timeout) = timeout else {
+        // No deadline: plain blocking connect + round trip (unchanged).
+        let socket = Socket::from(connect_seqpacket(socket_path)?);
+        write_json_frame(&socket, &envelope)?;
+        let response = read_frame(&socket)?;
+        return serde_json::from_slice(&response).map_err(|err| {
+            TypedError::InternalBrokerUnavailable {
+                path: socket_path.to_path_buf(),
+                detail: err.to_string(),
+            }
+        });
+    };
+
+    let deadline = Instant::now() + timeout;
+    let result = broker_round_trip_within_deadline(socket_path, &envelope, deadline);
+    match result {
+        Ok(response) => Ok(response),
+        // Any failure that lands at or past the single round-trip
+        // deadline is a genuine timeout (connect/write/read blocked the
+        // whole remaining budget, or the deadline lapsed between ops),
+        // not a fast broker-unavailable failure.
+        Err(_) if Instant::now() >= deadline => Err(TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+/// Remaining budget until `deadline`, or [`TypedError::InternalBrokerTimeout`]
+/// if the deadline has already been reached before issuing the next op.
+fn broker_remaining_before_op(
+    deadline: Instant,
+    socket_path: &Path,
+) -> Result<Duration, TypedError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(TypedError::InternalBrokerTimeout {
+            path: socket_path.to_path_buf(),
+        });
+    }
+    Ok(remaining)
+}
+
+/// Run connect + write + read so that each blocking op is bounded by the
+/// budget remaining until the shared `deadline`. Returns early with a
+/// timeout if the deadline lapses before any op.
+fn broker_round_trip_within_deadline(
+    socket_path: &Path,
+    envelope: &BrokerRequestEnvelope,
+    deadline: Instant,
+) -> Result<BrokerResponse, TypedError> {
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
+    let socket = Socket::from(connect_seqpacket_with_timeout(
+        socket_path,
+        Some(remaining),
+    )?);
+
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
     socket
-        .set_read_timeout(Some(timeout))
+        .set_write_timeout(Some(remaining))
         .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker read timeout to {timeout:?}"),
+            context: format!("set broker write timeout to {remaining:?}"),
             detail: err.to_string(),
         })?;
+    write_json_frame(&socket, envelope)?;
+
+    let remaining = broker_remaining_before_op(deadline, socket_path)?;
     socket
-        .set_write_timeout(Some(timeout))
+        .set_read_timeout(Some(remaining))
         .map_err(|err| TypedError::InternalIo {
-            context: format!("set broker write timeout to {timeout:?}"),
+            context: format!("set broker read timeout to {remaining:?}"),
             detail: err.to_string(),
         })?;
-    write_json_frame(
-        &socket,
-        &BrokerRequestEnvelope {
-            request,
-            caller_role: Default::default(),
-            test_peer_uid: None,
-        },
-    )?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
-        path: socket_path,
+        path: socket_path.to_path_buf(),
         detail: err.to_string(),
     })
 }
@@ -2246,7 +4066,7 @@ fn dispatch_broker_request_with_fds_timeout(
     timeout: Duration,
 ) -> Result<(BrokerResponse, Vec<RawFd>), TypedError> {
     let socket_path = broker_socket_path(state);
-    let socket = Socket::from(connect_seqpacket(&socket_path)?);
+    let socket = Socket::from(connect_seqpacket_with_timeout(&socket_path, Some(timeout))?);
     socket
         .set_read_timeout(Some(timeout))
         .map_err(|err| TypedError::InternalIo {
@@ -2614,7 +4434,8 @@ fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
         ProcessRole::WaylandProxy => VmStartNodeMode::LongLived(RunnerRole::WaylandProxy),
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness => VmStartNodeMode::ReadinessOnly,
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth => VmStartNodeMode::ReadinessOnly,
     }
 }
 
@@ -2652,6 +4473,43 @@ fn resolve_store_view_intent_for_vm<'a>(
     resolver
         .find_store_view_intent(vm)
         .ok_or_else(|| "bundle-intent-missing:store-view".to_owned())
+}
+
+/// Emit the guest-control readiness observation as a structured tracing
+/// event. Every field is drawn from the closed-enum / numeric projection
+/// in [`guest_control_bridge::ReadinessObservation`]; by construction the
+/// event can never carry guest content, store/socket/state-dir paths,
+/// nonces, tokens, auth tags, `guest_boot_id`, or `capabilities_hash`.
+/// Kept as a free function so the leak-safe field set can be asserted by
+/// a tracing-capture test without driving the full supervisor.
+fn emit_guest_control_readiness_event(
+    obs: &guest_control_bridge::ReadinessObservation,
+    ready: bool,
+) {
+    if ready {
+        tracing::info!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe completed"
+        );
+    } else {
+        tracing::warn!(
+            kind = "critical",
+            subsystem = obs.subsystem,
+            outcome = obs.outcome,
+            error_kind = obs.error_kind,
+            health_state = obs.health_state,
+            health_reason = obs.health_reason,
+            attempt_count = obs.attempt_count,
+            duration_ms = obs.duration_ms,
+            "guest-control readiness probe failed"
+        );
+    }
 }
 
 impl VmStartRunner<'_> {
@@ -2877,6 +4735,55 @@ impl VmStartRunner<'_> {
         }
         Ok(())
     }
+
+    /// State-aware readiness for a `GuestControlHealth` node. Resolves the
+    /// per-VM probe parameters from the trusted bundle and runs the
+    /// authenticated Health probe on a dedicated current-thread runtime
+    /// inside `spawn_blocking` (a strict runtime boundary: no `Handle::current`,
+    /// `block_in_place`, or nested runtime; nothing borrowed from
+    /// `ServerState` crosses the boundary). The retry loop is bounded by
+    /// `budget.readiness`; `guest_control_health_ready` decides ready.
+    async fn wait_for_guest_control_health(
+        &self,
+        vm: &str,
+        node: &ProcessNode,
+        budget: supervisor::dag::NodeBudget,
+    ) -> Result<(), String> {
+        let params = resolve_guest_control_probe_params(self.state, self.resolver, vm)?;
+        let broker_path = broker_socket_path(self.state);
+        let deadline = budget.readiness;
+        let node_id = node.id.0.clone();
+        let run = tokio::task::spawn_blocking(move || {
+            let probe = guest_control_bridge::RealGuestControlProbe::new(broker_path);
+            let clock = guest_control_bridge::RealProbeClock::new();
+            guest_control_bridge::run_guest_control_readiness_loop(
+                &probe,
+                &params,
+                deadline,
+                guest_control_bridge::GUEST_CONTROL_ATTEMPT_CAP,
+                guest_control_bridge::GUEST_CONTROL_RETRY_BACKOFF,
+                &clock,
+            )
+        })
+        .await
+        .map_err(|error| format!("guest-control-readiness-join:{error}"))?;
+
+        let ready = guest_control_health::guest_control_health_ready(&run.outcome);
+        let obs = guest_control_bridge::ReadinessObservation::from_run(&run);
+        emit_guest_control_readiness_event(&obs, ready);
+
+        if ready {
+            tracing::info!(
+                vm = %vm,
+                node = %node_id,
+                role_id = %tracked_role_id(node),
+                "guest-control-health node ready"
+            );
+            Ok(())
+        } else {
+            Err(format!("guest-control-health-not-ready:{node_id}"))
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -2888,6 +4795,14 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
         readiness: &[ReadinessPredicate],
         budget: supervisor::dag::NodeBudget,
     ) -> Result<(), String> {
+        // The authenticated guest-control Health node is readiness-only but
+        // needs daemon state (per-VM vsock socket, peer credentials, the
+        // broker-backed signer), so it cannot go through the stateless
+        // `wait_for_readiness` path. Intercept it here; this also covers the
+        // `spawn_and_check_process_alive` fall-through, which delegates here.
+        if node.role == ProcessRole::GuestControlHealth {
+            return self.wait_for_guest_control_health(vm, node, budget).await;
+        }
         match vm_start_node_mode(&node.role) {
             VmStartNodeMode::ReadinessOnly => {
                 if node.role == ProcessRole::StoreVirtiofsPreflight {
@@ -2991,6 +4906,17 @@ fn readiness_predicate_ready(predicate: &ReadinessPredicate) -> Result<bool, Str
         ReadinessPredicate::TcpPort { host, port } => Ok(tcp_port_ready(host, *port)),
         ReadinessPredicate::Command(command) => command_ready(command),
         ReadinessPredicate::ComponentSpecific(_) => Ok(true),
+        // The authenticated guest-control Health probe is evaluated through a
+        // daemon-state-aware path (it needs the per-VM vsock socket, peer
+        // credentials, and a broker-backed signer that this stateless helper
+        // cannot reach). The live readiness path intercepts
+        // `GuestControlHealth` nodes in `VmStartRunner::spawn_and_wait_ready`
+        // before this generic evaluation is reached, so hitting this arm means
+        // the state-aware routing regressed. Fail LOUD rather than silently
+        // never-ready so the regression surfaces immediately.
+        ReadinessPredicate::GuestControlHealth { .. } => {
+            Err("guest-control-health-needs-state-aware-path".to_owned())
+        }
     }
 }
 
@@ -4973,16 +6899,13 @@ fn dispatch_broker_vm_start(
                     );
                 }
             }
-            // Post-readiness trigger. The per-VM DAG's
-            // `GuestSshReadiness` node is the
-            // canonical sd_notify-from-guest signal; once the DAG
-            // reports overall_ok we know sshd inside the VM has
-            // accepted at least one probe, so it is safe to pin the
-            // host pubkey into `/var/lib/nixling/known_hosts.nixling`
-            // via the broker. Failures here are warn-only — matching
-            // the legacy `nixling-known-hosts-refresh@<vm>.service`
-            // behaviour, which left the old pin in place rather than
-            // failing the VM start.
+            // Post-readiness trigger. Once the per-VM DAG reports
+            // overall_ok the guest is up, so it is safe to pin the host
+            // pubkey into `/var/lib/nixling/known_hosts.nixling` via the
+            // broker for the retained SSH-compat path. Failures here are
+            // warn-only — matching the legacy
+            // `nixling-known-hosts-refresh@<vm>.service` behaviour, which
+            // left the old pin in place rather than failing the VM start.
             let outcome = known_hosts_refresh::refresh_known_hosts(
                 &request.vm,
                 &resolver.manifest,
@@ -6412,6 +8335,49 @@ fn connect_seqpacket(path: &Path) -> Result<OwnedFd, TypedError> {
     Ok(fd)
 }
 
+/// Connect a `SOCK_SEQPACKET` unix socket to `path`, bounding the connect
+/// itself by `timeout` when set.
+///
+/// A plain blocking `connect(2)` on a backlogged / half-open broker
+/// socket can stall unbounded, which defeats the readiness / config-sync
+/// deadline that the caller is trying to honour. When `timeout` is set we
+/// drive the connect nonblocking and poll for completion for at most
+/// `timeout` (socket2's `connect_timeout` sets the fd nonblocking,
+/// issues the connect, polls writability with the budget, checks
+/// `SO_ERROR`, then restores blocking mode), so the subsequent
+/// read/write-timeout-bounded I/O behaves exactly as before. With
+/// `timeout == None` it falls back to the plain blocking connect.
+fn connect_seqpacket_with_timeout(
+    path: &Path,
+    timeout: Option<Duration>,
+) -> Result<OwnedFd, TypedError> {
+    let Some(timeout) = timeout else {
+        return connect_seqpacket(path);
+    };
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|err| TypedError::InternalIo {
+        context: "create seqpacket socket".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let address = SockAddr::unix(path).map_err(|err| TypedError::InternalIo {
+        context: "encode seqpacket socket path".to_owned(),
+        detail: err.to_string(),
+    })?;
+    let socket = Socket::from(fd);
+    socket.connect_timeout(&address, timeout).map_err(|err| {
+        TypedError::InternalBrokerUnavailable {
+            path: path.to_path_buf(),
+            detail: err.to_string(),
+        }
+    })?;
+    Ok(OwnedFd::from(socket))
+}
+
 fn round_trip(socket: &impl AsRawFd, frame_json: &str) -> Result<Vec<u8>, TypedError> {
     write_frame(socket, frame_json.as_bytes())?;
     read_frame(socket)
@@ -6865,6 +8831,272 @@ mod runtime_acl_tests {
     fn _ensure_types_in_scope(_: Uid, _: Gid) {}
 }
 
+/// The public.sock accept loop is serial: it accepts one connection, runs
+/// `handle_connection`, then accepts the next. An exec session's owner
+/// connection is long-lived, so `handle_connection` MUST hand the exec session
+/// off to a spawned owner thread and return immediately — otherwise the single
+/// accept loop would be pinned for the entire lifetime of one exec session and
+/// no other client could be served. These hermetic tests drive
+/// `handle_connection` over a real `SOCK_SEQPACKET` pair (no live VM) and prove
+/// the exec branch spawns-and-returns while a second request is still served.
+#[cfg(test)]
+mod accept_loop_concurrency_tests {
+    use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
+    use super::*;
+
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use nixling_ipc::public_wire::{ExecOp, ExecStartArgs};
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn seqpacket_pair() -> (Socket, Socket) {
+        use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    /// A `ServerState` whose config admits a single admin/launcher principal so
+    /// the test SO_PEERCRED override resolves to `PeerRole::Admin` (exec
+    /// requires admin). Returns the live `TempDir` so it outlives the daemon.
+    fn admin_exec_state() -> (ServerState, TempDir) {
+        let dir = tempfile::tempdir().expect("daemon state dir");
+        let broker_reap_log = BrokerReapLog::new();
+        let config = DaemonConfig {
+            launcher_users: vec!["execadmin".to_owned()],
+            admin_users: vec!["execadmin".to_owned()],
+            ..DaemonConfig::default()
+        };
+        let state = ServerState {
+            config,
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: dir.path().to_path_buf(),
+            pidfd_table: Arc::new(
+                PidfdTable::new(dir.path().join("pidfd-table.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(
+                exec_session::ExecSessionCaps::default(),
+            )),
+        };
+        (state, dir)
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0",
+        }))
+        .expect("encode hello frame")
+    }
+
+    fn exec_start_frame(op_id: u64) -> Vec<u8> {
+        let op = ExecOp::Start(ExecStartArgs {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: false,
+            detached: false,
+            env: None,
+            cwd: None,
+            term_size: None,
+        });
+        let mut value = serde_json::to_value(&op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), json!("exec"));
+        object.insert("opId".to_owned(), json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    /// Scoped guard for the test SO_PEERCRED override env vars so a panic still
+    /// restores process-global state. Only `handle_connection` reads these, and
+    /// only these accept-loop tests drive `handle_connection`.
+    struct PeerOverrideEnv;
+
+    impl PeerOverrideEnv {
+        fn admin() -> Self {
+            std::env::set_var("NIXLINGD_TEST_PEER_UID", "4242");
+            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "execadmin");
+            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
+            Self
+        }
+    }
+
+    impl Drop for PeerOverrideEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
+            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
+            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+        }
+    }
+
+    #[test]
+    fn exec_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
+        use std::sync::{Condvar, Mutex};
+
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        let state = Arc::new(state);
+
+        // Install an owner-body hook that genuinely HOLDS the exec owner session
+        // open: it flags `running`, signals `entered`, then blocks until the
+        // test releases it. Because the hook runs at the top of
+        // `run_exec_owner`, a hypothetical inline `handle_connection` would block
+        // HERE on the accept-loop thread and never return — the watchdog below
+        // would fire. An off-loop spawn (the real behaviour) returns Ok promptly
+        // while this body is still blocked.
+        #[derive(Default)]
+        struct HookState {
+            entered: bool,
+            running: bool,
+            release: bool,
+        }
+        let shared = Arc::new((Mutex::new(HookState::default()), Condvar::new()));
+
+        // Clear the process-global hook on scope exit (panic-safe) so no other
+        // test ever observes it.
+        struct HookGuard;
+        impl Drop for HookGuard {
+            fn drop(&mut self) {
+                exec_owner_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+
+        let hook_shared = Arc::clone(&shared);
+        let hook: exec_owner_test_hook::Hook = Arc::new(move || {
+            let (lock, cv) = &*hook_shared;
+            {
+                let mut s = lock.lock().expect("hook state lock");
+                s.entered = true;
+                s.running = true;
+                cv.notify_all();
+            }
+            let mut s = lock.lock().expect("hook state lock");
+            while !s.release {
+                s = cv.wait(s).expect("hook release wait");
+            }
+            s.running = false;
+            cv.notify_all();
+        });
+        exec_owner_test_hook::set(hook);
+
+        // --- Connection A: opens a long-lived exec owner session. ---
+        let (server_a, client_a) = seqpacket_pair();
+        // SOCK_SEQPACKET preserves message boundaries, so both datagrams can be
+        // buffered before the daemon reads them.
+        write_frame(&client_a, &hello_frame()).expect("client A sends hello");
+        write_frame(&client_a, &exec_start_frame(1)).expect("client A sends exec start");
+        // The client deliberately keeps its end OPEN for the session's lifetime.
+
+        let state_a = Arc::clone(&state);
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_a = std::thread::spawn(move || {
+            let result = handle_connection(server_a, &state_a);
+            let _ = done_tx.send(result.is_ok());
+        });
+
+        // The owner body must actually be entered (the exec branch dispatched a
+        // real, blocking owner session — not a fast-failed stub).
+        {
+            let (lock, cv) = &*shared;
+            let mut s = lock.lock().expect("hook state lock");
+            let deadline = Duration::from_secs(10);
+            let start = std::time::Instant::now();
+            while !s.entered {
+                let remaining = deadline
+                    .checked_sub(start.elapsed())
+                    .expect("exec owner body was not entered within the deadline");
+                let (guard, timeout) = cv.wait_timeout(s, remaining).expect("hook entered wait");
+                s = guard;
+                assert!(!timeout.timed_out(), "exec owner body was not entered");
+            }
+        }
+
+        // handle_connection must have returned Ok PROMPTLY even though the owner
+        // body is still blocked in the hook. An inline implementation would be
+        // stuck in the hook on this very thread's predecessor and never send.
+        let returned = done_rx.recv_timeout(Duration::from_secs(10));
+        assert!(
+            matches!(returned, Ok(true)),
+            "handle_connection must spawn the exec owner off the serial accept \
+             loop and return Ok promptly, not run the session inline (got \
+             {returned:?})"
+        );
+        handle_a.join().expect("accept-loop thread joins");
+
+        // Prove the owner session is STILL HELD OPEN (the body has not torn
+        // down) at the moment handle_connection has already returned — i.e. the
+        // dispatch was genuinely off-loop, concurrent with the accept loop.
+        {
+            let (lock, _cv) = &*shared;
+            let s = lock.lock().expect("hook state lock");
+            assert!(
+                s.running && !s.release,
+                "the exec owner session must still be held open after \
+                 handle_connection returned (off-loop dispatch)"
+            );
+        }
+
+        // --- Connection B: a SECOND public.sock request is accepted and served
+        //     while connection A's owner session is still held open. ---
+        let (server_b, client_b) = seqpacket_pair();
+        let client_b = std::thread::spawn(move || {
+            write_frame(&client_b, &hello_frame()).expect("client B sends hello");
+            let hello_ok = read_frame(&client_b).expect("client B reads helloOk");
+            let hello_ok: serde_json::Value =
+                serde_json::from_slice(&hello_ok).expect("helloOk is JSON");
+            assert_eq!(hello_ok["type"], "helloOk", "second connection negotiates");
+            write_frame(
+                &client_b,
+                &serde_json::to_vec(&json!({ "type": "authStatus" })).unwrap(),
+            )
+            .expect("client B sends authStatus");
+            let response = read_frame(&client_b).expect("client B reads response");
+            let response: serde_json::Value =
+                serde_json::from_slice(&response).expect("response is JSON");
+            // Dropping client_b on return signals EOF so handle_connection ends.
+            response
+        });
+
+        let result_b = handle_connection(server_b, &state);
+        assert!(
+            result_b.is_ok(),
+            "the second connection must be served while the exec owner is held \
+             open: {result_b:?}"
+        );
+        let response = client_b.join().expect("client B thread joins");
+        assert_eq!(
+            response["type"], "authStatusResponse",
+            "second request was actually served, not merely accepted"
+        );
+
+        // Release the held owner body and wait for it to finish, so the spawned
+        // owner thread is wound down before the test returns.
+        {
+            let (lock, cv) = &*shared;
+            let mut s = lock.lock().expect("hook state lock");
+            s.release = true;
+            cv.notify_all();
+            while s.running {
+                s = cv.wait(s).expect("hook finish wait");
+            }
+        }
+
+        // Connection A's owner session is torn down with its client end.
+        drop(client_a);
+    }
+}
+
 #[cfg(test)]
 mod broker_dispatch_tests {
     use std::fs::File;
@@ -6979,6 +9211,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         }
     }
 
@@ -7003,6 +9238,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         }
     }
 
@@ -7083,7 +9321,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 4 },
+                "_manifest": { "manifestVersion": 5 },
                 "_observability": {
                     "enabled": false,
                     "signozUrl": "http://127.0.0.1:8080",
@@ -7283,7 +9521,7 @@ mod broker_dispatch_tests {
         write_json_file(
             &manifest_path,
             &json!({
-                "_manifest": { "manifestVersion": 4 },
+                "_manifest": { "manifestVersion": 5 },
                 "_observability": {
                     "enabled": false,
                     "signozUrl": "http://127.0.0.1:8080",
@@ -7454,6 +9692,171 @@ mod broker_dispatch_tests {
             fs::remove_file(&server_socket_path).ok();
         });
         (socket_path, join)
+    }
+
+    /// The production `BrokerSigner` must forward a `GuestControlSign`
+    /// request to the broker byte-for-byte (every field), not just the
+    /// subset a `RecordingSigner` would observe in-process. This drives
+    /// the real `dispatch_broker_request_to_socket` framing path against
+    /// a fake seqpacket broker that records the decoded request.
+    #[test]
+    fn broker_signer_forwards_guest_control_sign_request_verbatim() {
+        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
+        use crate::guest_control_health::{AttemptBudget, GuestControlSigner};
+        use nixling_ipc::broker_wire::{
+            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+            GuestControlSignRequest, GuestControlSignResponse,
+        };
+        use nixling_ipc::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use nixling_ipc::types::VmId;
+
+        let request = GuestControlSignRequest {
+            vm_id: VmId::new("corp-vm"),
+            role: GuestControlProofRole::GuestProof,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: GuestControlDirection::HostToGuest,
+            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(7),
+            host_nonce: vec![0x11; AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
+            guest_boot_id: GuestBootIdWire::new("boot-xyz"),
+            capabilities_hash: Some("caps-sha256".to_owned()),
+            tracing_span_id: None,
+        };
+        let expected = request.clone();
+        let recorded: Arc<Mutex<Vec<GuestControlSignRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded_server = Arc::clone(&recorded);
+        let response_tag = vec![0xCDu8; 32];
+        let response_tag_server = response_tag.clone();
+        let (socket_path, broker) = start_test_broker_server(
+            "guest-control-sign-verbatim",
+            1,
+            move |_, env, fd| match env.request {
+                BrokerRequest::GuestControlSign(req) => {
+                    recorded_server.lock().unwrap().push(req);
+                    write_test_json_frame(
+                        fd,
+                        &BrokerResponse::GuestControlSign(GuestControlSignResponse {
+                            tag: response_tag_server.clone(),
+                        }),
+                    )
+                    .expect("write sign response");
+                }
+                other => panic!("unexpected broker request {other:?}"),
+            },
+        );
+        let signer = BrokerSigner::new(
+            socket_path,
+            AttemptBudget::from_now(Duration::from_secs(10), GUEST_CONTROL_ATTEMPT_CAP),
+        );
+        let response = signer.sign(request).expect("broker signer succeeds");
+        broker.join().expect("broker join");
+
+        assert_eq!(response.tag, response_tag);
+        let recorded = recorded.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "exactly one request forwarded");
+        assert_eq!(
+            recorded[0], expected,
+            "BrokerSigner must forward every GuestControlSign field verbatim",
+        );
+    }
+
+    #[test]
+    fn broker_remaining_before_op_fails_closed_after_deadline() {
+        // D1: the whole-round-trip deadline check returns the remaining
+        // budget while time is left, and fails CLOSED with a broker
+        // timeout (NOT a fresh op) once the deadline is reached, so no
+        // doomed connect/write/read is issued past the caller's deadline.
+        let path = Path::new("/run/nixling/priv.sock");
+        let future = Instant::now() + Duration::from_secs(5);
+        let remaining = super::broker_remaining_before_op(future, path)
+            .expect("remaining must be positive before the deadline");
+        assert!(remaining > Duration::ZERO);
+        assert!(remaining <= Duration::from_secs(5));
+
+        let past = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("instant has 1ms of headroom");
+        let err = super::broker_remaining_before_op(past, path)
+            .expect_err("a passed deadline must fail closed");
+        assert!(matches!(
+            err,
+            crate::typed_error::TypedError::InternalBrokerTimeout { .. }
+        ));
+    }
+
+    #[test]
+    fn broker_signer_slow_broker_is_deadline_bounded_and_maps_to_timeout() {
+        // D1: a stalled/backlogged broker must NOT let one sign exceed its
+        // per-attempt deadline by multiples. The whole connect+write+read
+        // round trip is bounded by the single slice the signer draws from
+        // the shared absolute attempt budget; a deadline exhaustion
+        // surfaces as Timeout (slug guest-control-timeout) end to end, not
+        // a generic Signer failure. The fake broker reads the request then
+        // holds the connection OPEN without responding so the client's
+        // read blocks until its own deadline.
+        use crate::guest_control_bridge::{BrokerSigner, GUEST_CONTROL_ATTEMPT_CAP};
+        use crate::guest_control_health::{
+            AttemptBudget, GuestControlHealthError, GuestControlSigner,
+        };
+        use nixling_ipc::broker_wire::{
+            GuestBootIdWire, GuestControlAuthPurpose, GuestControlDirection, GuestControlProofRole,
+            GuestControlSignRequest,
+        };
+        use nixling_ipc::guest_auth::{AUTH_NONCE_LEN, GUEST_CONTROL_AUTH_PORT};
+        use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
+        use nixling_ipc::types::VmId;
+
+        let attempt = Duration::from_millis(300);
+        let broker_stall = Duration::from_millis(1500);
+        let (socket_path, broker) =
+            start_test_broker_server("guest-control-sign-slow", 1, move |_, env, _fd| {
+                match env.request {
+                    BrokerRequest::GuestControlSign(_) => {
+                        // Keep the accepted connection open without a
+                        // reply so the client's read times out at its own
+                        // deadline, then drop it.
+                        thread::sleep(broker_stall);
+                    }
+                    other => panic!("unexpected broker request {other:?}"),
+                }
+            });
+        let signer = BrokerSigner::new(
+            socket_path,
+            AttemptBudget::from_now(attempt, GUEST_CONTROL_ATTEMPT_CAP),
+        );
+        let request = GuestControlSignRequest {
+            vm_id: VmId::new("corp-vm"),
+            role: GuestControlProofRole::HostProof,
+            protocol_version: GUEST_CONTROL_PROTOCOL_VERSION,
+            direction: GuestControlDirection::HostToGuest,
+            purpose: GuestControlAuthPurpose::GuestControlAuthV1,
+            guest_control_port: GUEST_CONTROL_AUTH_PORT,
+            peer_cid: Some(crate::guest_control_bridge::VMADDR_CID_HOST),
+            host_nonce: vec![0x11; AUTH_NONCE_LEN],
+            guest_nonce: vec![0x22; AUTH_NONCE_LEN],
+            guest_boot_id: GuestBootIdWire::new("boot-1"),
+            capabilities_hash: None,
+            tracing_span_id: None,
+        };
+        let started = Instant::now();
+        let result = signer.sign(request);
+        let elapsed = started.elapsed();
+        broker.join().expect("broker join");
+
+        assert_eq!(
+            result,
+            Err(GuestControlHealthError::Timeout),
+            "a stalled broker sign must surface as Timeout, not Signer"
+        );
+        // The sign returned near its OWN deadline slice, NOT after the
+        // (5x larger) broker stall: the round trip is deadline-bounded.
+        assert!(
+            elapsed < attempt * 3,
+            "sign must be deadline-bounded (no multiples of the slice); took {elapsed:?}"
+        );
     }
 
     fn read_child_start_time(child: &Child) -> u64 {
@@ -8152,6 +10555,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -8359,6 +10765,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         };
 
         let listener = socket(
@@ -8595,6 +11004,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -9924,6 +12336,9 @@ mod broker_dispatch_tests {
             ),
             broker_reap_log,
             metrics_registry: Arc::new(crate::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
         };
 
         // Emit the same event that the timeout handler in
@@ -10043,5 +12458,480 @@ mod broker_dispatch_tests {
             node_requires_disk_init_dispatch(&node),
             "plan_ops contains DiskInit → MUST dispatch BrokerRequest::DiskInit before SpawnRunner; otherwise CH boots without overlay file and fatals with NotFound (the original D9 hole — closed by fu46, regression-pinned by this test)"
         );
+    }
+
+    #[test]
+    fn stateless_readiness_for_guest_control_health_fails_loud() {
+        use super::readiness_predicate_ready;
+        use nixling_core::processes::ReadinessPredicate;
+
+        // The live readiness path intercepts `GuestControlHealth` nodes in
+        // `VmStartRunner::spawn_and_wait_ready` and never reaches the stateless
+        // helper. If the stateless arm is ever hit, the state-aware routing
+        // regressed, so it MUST fail loud (not silently never-ready).
+        let predicate = ReadinessPredicate::GuestControlHealth {
+            vm: "work".to_owned(),
+        };
+        let result = readiness_predicate_ready(&predicate);
+        assert_eq!(
+            result,
+            Err("guest-control-health-needs-state-aware-path".to_owned()),
+            "stateless guest-control readiness MUST be a loud Err so a routing regression cannot masquerade as a benign never-ready"
+        );
+    }
+
+    #[test]
+    fn guest_control_health_is_readiness_only_node_mode() {
+        use super::{vm_start_node_mode, VmStartNodeMode};
+        use nixling_core::processes::ProcessRole;
+
+        // GuestControlHealth must remain a readiness-only node (no runner is
+        // spawned for it); the state-aware probe is driven by the readiness
+        // interception, not by a long-lived/one-shot spawn.
+        assert!(matches!(
+            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            VmStartNodeMode::ReadinessOnly
+        ));
+    }
+
+    #[test]
+    fn guest_control_health_empty_readiness_fallthrough_is_intercepted() {
+        use super::{vm_start_node_mode, wait_for_readiness, VmStartNodeMode};
+        use nixling_core::processes::{NodeId, ProcessNode, ProcessRole};
+        use std::time::Duration;
+
+        let node = ProcessNode {
+            id: NodeId("guest-control-health".to_owned()),
+            role: ProcessRole::GuestControlHealth,
+            unit: None,
+            binary_path: None,
+            argv: vec![],
+            env: vec![],
+            plan_ops: vec![],
+            profile: nixling_core::test_support::RoleProfileBuilder::new()
+                .with_profile_id("gc-health")
+                .with_uid(0)
+                .with_gid(0)
+                .build(),
+            readiness: vec![],
+        };
+
+        // HAZARD: the stateless readiness helper treats an EMPTY predicate
+        // slice as TRIVIALLY ready — it returns Ok without running any
+        // probe. `spawn_and_check_process_alive` (the process-alive fast
+        // path, e.g. `--no-wait-api`) delegates the node to
+        // `spawn_and_wait_ready(vm, node, &[], budget)` with exactly this
+        // empty slice. If a GuestControlHealth node ever reached
+        // `wait_for_readiness`, an absent/auth-failing guest-control
+        // listener would be reported "ready" with NO authenticated probe.
+        assert_eq!(
+            wait_for_readiness(&node, &[], Duration::from_millis(0)),
+            Ok(()),
+            "empty readiness is trivially ready; the authenticated probe \
+             must be reached via the GuestControlHealth interception, never \
+             via this helper"
+        );
+
+        // GUARD: GuestControlHealth is a ReadinessOnly node, so
+        // `spawn_and_check_process_alive` does NOT take the LongLived
+        // process-alive-only short-circuit (which registers a node as alive
+        // after spawn with no probe at all). It falls through to
+        // `spawn_and_wait_ready`, whose `node.role == GuestControlHealth`
+        // special case runs `wait_for_guest_control_health` BEFORE the empty
+        // readiness slice can reach the trivially-ready `wait_for_readiness`.
+        // Were GuestControlHealth ever made LongLived, or the interception
+        // removed, the authenticated probe would be bypassed on this path.
+        assert!(matches!(
+            vm_start_node_mode(&ProcessRole::GuestControlHealth),
+            VmStartNodeMode::ReadinessOnly
+        ));
+    }
+
+    #[test]
+    fn cloud_hypervisor_vsock_socket_extracts_socket_field() {
+        use super::cloud_hypervisor_vsock_socket;
+        use std::path::PathBuf;
+
+        let argv = vec![
+            "cloud-hypervisor".to_owned(),
+            "--vsock".to_owned(),
+            "cid=42,socket=/var/lib/nixling/vms/work/vsock.sock".to_owned(),
+            "--api-socket".to_owned(),
+            "/var/lib/nixling/vms/work/api.sock".to_owned(),
+        ];
+        assert_eq!(
+            cloud_hypervisor_vsock_socket(&argv),
+            Some(PathBuf::from("/var/lib/nixling/vms/work/vsock.sock"))
+        );
+
+        let no_vsock = vec!["cloud-hypervisor".to_owned(), "--api-socket".to_owned()];
+        assert_eq!(cloud_hypervisor_vsock_socket(&no_vsock), None);
+
+        // Old-generation / pre-guest-control CH argv: a `--vsock` device with no
+        // `socket=` subfield resolves to None, which `resolve_guest_control_probe_params`
+        // turns into a fail-closed `no-vsock-socket` error (no endpoint to probe,
+        // so exec never proxies and never falls back).
+        let vsock_without_socket = vec![
+            "cloud-hypervisor".to_owned(),
+            "--vsock".to_owned(),
+            "cid=42".to_owned(),
+        ];
+        assert_eq!(cloud_hypervisor_vsock_socket(&vsock_without_socket), None);
+    }
+
+    #[test]
+    fn read_guest_config_verb_is_admin_only() {
+        use super::verb_requires_admin;
+        // The verb crosses into the guest over the authenticated transport, so
+        // a launcher / non-admin peer MUST be denied BEFORE any probe / sign /
+        // read runs (the gate is enforced in `dispatch_request`).
+        assert!(verb_requires_admin("readGuestConfig"));
+    }
+
+    #[test]
+    fn read_guest_config_dispatch_denies_launcher_before_any_side_effect() {
+        // The broker socket is unreachable. If the admin gate did NOT
+        // short-circuit, dispatch_read_guest_config would load the bundle
+        // resolver, resolve probe params, BrokerSign, and read guest bytes —
+        // producing a transport / broker error, never AuthzNotAdmin.
+        // Receiving AuthzNotAdmin proves the launcher was denied at the gate
+        // BEFORE any bundle load / probe / sign / guest-byte read.
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "read-guest-config-authz",
+        ));
+        let request = super::wire::Request::ReadGuestConfig(
+            nixling_ipc::public_wire::ReadGuestConfigRequest {
+                vm: "vm-a".to_owned(),
+            },
+        );
+        let err = dispatch_request(&state, &launcher_peer(), request)
+            .expect_err("launcher must be denied readGuestConfig");
+        match &err {
+            super::typed_error::TypedError::AuthzNotAdmin { verb } => {
+                assert_eq!(verb, "readGuestConfig");
+            }
+            other => panic!("expected AuthzNotAdmin for readGuestConfig, got {other:?}"),
+        }
+        assert_eq!(err.exit_code(), 75);
+    }
+
+    #[test]
+    fn read_guest_config_dispatch_admin_clears_gate_and_reaches_handler() {
+        // The admin peer clears the authz gate, so dispatch reaches the
+        // handler and fails LATER (the bundle vm has no guest-control node /
+        // the broker is unreachable) with a guest-control read or transport
+        // error — never an authz error. This proves the gate is the only
+        // thing denying the launcher above, not some unrelated failure.
+        let state = test_state_with_broker_socket(unreachable_broker_socket_path(
+            "read-guest-config-admin",
+        ));
+        let request = super::wire::Request::ReadGuestConfig(
+            nixling_ipc::public_wire::ReadGuestConfigRequest {
+                vm: "vm-a".to_owned(),
+            },
+        );
+        let err = dispatch_request(&state, &admin_peer(), request)
+            .expect_err("the read must fail after the gate is cleared");
+        assert!(
+            !matches!(err, super::typed_error::TypedError::AuthzNotAdmin { .. }),
+            "admin must clear the authz gate, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn guest_file_read_error_maps_to_closed_daemon_kinds() {
+        use super::map_guest_file_read_error;
+        use crate::guest_control_health::{GuestControlHealthError as H, GuestFileReadError as E};
+        use crate::typed_error::GuestControlReadErrorKind as K;
+
+        let cases = [
+            (E::Probe(H::TransportIo), K::Transport),
+            (E::Probe(H::Signer), K::Transport),
+            (E::Probe(H::Ttrpc), K::Transport),
+            (E::Probe(H::Timeout), K::Timeout),
+            (E::Probe(H::AuthFailed), K::AuthFailed),
+            (E::Probe(H::StaleSession), K::AuthFailed),
+            (E::Probe(H::Protocol), K::Protocol),
+            (E::CapabilityUnavailable, K::CapabilityUnavailable),
+            (E::FileNotFound, K::FileNotFound),
+            (E::FileTooLarge, K::FileTooLarge),
+            (E::PathUnsafe, K::PathUnsafe),
+            (E::ReadDenied, K::ReadDenied),
+            (E::Protocol, K::Protocol),
+        ];
+        for (input, expected) in cases {
+            match map_guest_file_read_error(input) {
+                crate::typed_error::TypedError::GuestControlReadFailed { kind } => {
+                    assert_eq!(kind, expected);
+                }
+                other => panic!("expected GuestControlReadFailed, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod guest_control_readiness_tracing_tests {
+    use super::emit_guest_control_readiness_event;
+    use crate::guest_control_bridge::ReadinessObservation;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    /// Captured events: one inner vec of `(field_name, value)` pairs per
+    /// recorded tracing event.
+    type CapturedEvents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[derive(Default)]
+    struct FieldCollector {
+        fields: Vec<(String, String)>,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CapturingLayer {
+        events: CapturedEvents,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut collector = FieldCollector::default();
+            event.record(&mut collector);
+            self.events.lock().unwrap().push(collector.fields);
+        }
+    }
+
+    fn observation(error_kind: &'static str, outcome: &'static str) -> ReadinessObservation {
+        ReadinessObservation {
+            subsystem: "guest-control-health",
+            outcome,
+            health_state: "degraded",
+            health_reason: "quota-exceeded",
+            error_kind,
+            attempt_count: 3,
+            duration_ms: 1234,
+        }
+    }
+
+    #[test]
+    fn readiness_tracing_events_carry_only_leak_safe_fields() {
+        // APPROVED field-name allowlist for the readiness observation
+        // events. Hardcoded (not derived from the call site) so that
+        // adding a new field to the `tracing::info!`/`warn!` macro — e.g.
+        // a raw path, nonce, or guest-supplied string — fails this test.
+        const APPROVED_FIELDS: &[&str] = &[
+            "message",
+            "kind",
+            "subsystem",
+            "outcome",
+            "health_state",
+            "health_reason",
+            "error_kind",
+            "attempt_count",
+            "duration_ms",
+        ];
+        // Field names that MUST NEVER appear on a readiness event.
+        const FORBIDDEN_FIELDS: &[&str] = &[
+            "vm",
+            "env",
+            "node",
+            "role_id",
+            "path",
+            "socket",
+            "state_dir",
+            "store_path",
+            "nonce",
+            "token",
+            "auth_tag",
+            "guest_boot_id",
+            "capabilities_hash",
+            "peer_cid",
+            "guest_bytes",
+            "content",
+            "error",
+            "error_message",
+        ];
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let layer = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            // Exercise BOTH the ready and not-ready arms so both call
+            // sites are covered.
+            emit_guest_control_readiness_event(&observation("none", "ready"), true);
+            emit_guest_control_readiness_event(&observation("auth-failed", "not-ready"), false);
+        });
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2, "expected exactly two readiness events");
+        for fields in captured.iter() {
+            assert!(!fields.is_empty(), "readiness event recorded no fields");
+            for (name, value) in fields {
+                assert!(
+                    APPROVED_FIELDS.contains(&name.as_str()),
+                    "unapproved readiness tracing field: {name}={value}"
+                );
+                assert!(
+                    !FORBIDDEN_FIELDS.contains(&name.as_str()),
+                    "forbidden readiness tracing field: {name}"
+                );
+                assert!(
+                    !value.contains('/'),
+                    "path-like value leaked: {name}={value}"
+                );
+                assert!(
+                    !value.contains("SENTINEL"),
+                    "guest content leaked: {name}={value}"
+                );
+            }
+        }
+
+        // The ready arm must NOT carry error_kind; the not-ready arm MUST.
+        let ready_fields: Vec<&str> = captured[0].iter().map(|(n, _)| n.as_str()).collect();
+        let not_ready_fields: Vec<&str> = captured[1].iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !ready_fields.contains(&"error_kind"),
+            "ready event must not carry error_kind"
+        );
+        assert!(
+            not_ready_fields.contains(&"error_kind"),
+            "not-ready event must carry error_kind"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exec_established_tracing_tests {
+    //! The single kind=critical exec session-establishment event must carry
+    //! ONLY redaction-safe identifiers. This guards against a future edit that
+    //! adds argv/env/cwd/output bytes (or any guest-supplied string) to the
+    //! span, which would leak operator command lines into the daemon log.
+
+    use super::emit_exec_established_event;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::{Layer, Registry};
+
+    type CapturedEvents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[derive(Default)]
+    struct FieldCollector {
+        fields: Vec<(String, String)>,
+    }
+    impl Visit for FieldCollector {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &Field, value: i64) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+        fn record_bool(&mut self, field: &Field, value: bool) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    struct CapturingLayer {
+        events: CapturedEvents,
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CapturingLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut collector = FieldCollector::default();
+            event.record(&mut collector);
+            self.events.lock().unwrap().push(collector.fields);
+        }
+    }
+
+    #[test]
+    fn exec_established_event_carries_only_leak_safe_fields() {
+        // APPROVED field-name allowlist for the establishment event. The opaque
+        // session handle is deliberately NOT approved — per AGENTS, session
+        // handles must never reach a span, log, audit, or metric.
+        const APPROVED_FIELDS: &[&str] = &["message", "kind", "subsystem", "vm", "peer_uid", "tty"];
+        // Field names that MUST NEVER appear (would leak the command line, the
+        // session handle, or guest-supplied content).
+        const FORBIDDEN_FIELDS: &[&str] = &[
+            "argv",
+            "command",
+            "cmd",
+            "env",
+            "cwd",
+            "stdin",
+            "stdout",
+            "stderr",
+            "output",
+            "nonce",
+            "token",
+            "auth_tag",
+            "exec_id",
+            "guest_boot_id",
+            "session_handle",
+            "session",
+            "handle",
+        ];
+        // A sentinel that would only appear if argv/env/cwd leaked into a field.
+        const SENTINEL: &str = "NIXLING_ARGV_LEAK_CANARY";
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let layer = CapturingLayer {
+            events: events.clone(),
+        };
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            emit_exec_established_event("work", 1000, true);
+        });
+
+        let captured = events.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "expected exactly one establishment event"
+        );
+        for fields in captured.iter() {
+            assert!(!fields.is_empty(), "establishment event recorded no fields");
+            for (name, value) in fields {
+                assert!(
+                    APPROVED_FIELDS.contains(&name.as_str()),
+                    "unapproved establishment tracing field: {name}={value}"
+                );
+                assert!(
+                    !FORBIDDEN_FIELDS.contains(&name.as_str()),
+                    "forbidden establishment tracing field: {name}"
+                );
+                assert!(
+                    !value.contains(SENTINEL),
+                    "argv/env/cwd sentinel leaked: {name}={value}"
+                );
+            }
+        }
     }
 }

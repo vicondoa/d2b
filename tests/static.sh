@@ -38,14 +38,20 @@ export NL_STATIC_CACHE="$ROOT/.static-cache.bootstrap"
 # sees one Layer-1 evaluator at a time.
 #
 # Implementation note (flock-fd fix): we use `flock(1)` as an exec
-# wrapper around a re-entry of this script ($0 --internal-locked). That
-# way the lock fd is OWNED BY THE flock(1) PROCESS, not by the inner
-# bash. Children spawned inside the gate (broker test daemons, etc.) do
-# NOT inherit the lock fd via fork+exec, so a leaked-child daemon can't
-# keep the lock alive past its parent's exit. The prior in-shell
-# `exec {fd}>file; flock -x $fd` pattern leaked fd 10 into every child
-# and caused multi-minute deadlocks when test broker daemons outlived
-# their spawning shell.
+# wrapper around a re-entry of this script ($0 --internal-locked), and
+# we pass `-o`/`--close` so flock closes the lock fd in the spawned
+# child before it runs. flock(1) itself stays alive as the parent
+# holding the lock for the duration of the run, while the inner bash
+# and EVERY descendant (broker test daemons, sccache, parallel-gate
+# test subprocesses, nix/crosvm grandchildren, etc.) run WITHOUT the
+# lock fd. That is what actually prevents a leaked/orphaned child from
+# keeping the lock alive past static.sh's exit — and it holds even if
+# static.sh is SIGKILLed, since no descendant ever owned the fd. The
+# prior in-shell `exec {fd}>file; flock -x $fd` pattern leaked fd 10
+# into every child; an earlier `flock` wrapper WITHOUT `-o` still
+# leaked the inherited lock fd (fd 3) into every descendant and caused
+# recurring multi-minute deadlocks when an orphaned parallel-gate test
+# (or test broker daemon) outlived its spawning shell.
 #
 # Bypass the lock with NL_STATIC_NO_LOCK=1 when known-safe (e.g. CI
 # already isolates the worktree).
@@ -54,16 +60,16 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
    && command -v flock >/dev/null 2>&1; then
   _STATIC_LOCK="$ROOT/.static-sh.lock"
   : > "$_STATIC_LOCK"
-  # Leaked-sccache safety net. Cargo's `sccache` server
-  # daemonises off the bash that ran cargo and inherits the gate's
-  # flock fd (fd 3). If a previous gate run didn't run `sccache
-  # --stop-server` at exit, that sccache is still alive holding fd
-  # 3 → our new flock blocks indefinitely on a phantom holder. Scan
-  # for any sccache that has the lock file open and kill it before
-  # we even try to acquire. The post-gate cleanup at the bottom
-  # of static.sh now also runs `sccache --stop-server` so this
-  # safety net is normally a no-op; it's here for the recovery
-  # path when an older static.sh exited without stopping sccache.
+  # Leaked-holder safety net (recovery path for pre-`-o` runs and any
+  # other process that still has the lock file open). With the `-o`
+  # flag below, descendants of THIS run never inherit the lock fd, so
+  # going forward sccache/daemons cannot leak it. But an sccache server
+  # daemonised by an OLDER static.sh that ran without `-o` may still be
+  # alive holding the inherited fd 3 → a fresh flock would block on that
+  # phantom holder. Scan for any sccache that has the lock file open and
+  # kill it before we try to acquire. The post-gate cleanup at the
+  # bottom of static.sh also runs `sccache --stop-server`, so this is
+  # normally a no-op; it's the cross-version recovery path.
   if command -v sccache >/dev/null 2>&1; then
     _sccache_inode=$(stat -c '%i' "$_STATIC_LOCK" 2>/dev/null || true)
     if [ -n "$_sccache_inode" ]; then
@@ -89,7 +95,7 @@ if [ -z "${NL_STATIC_NO_LOCK:-}" ] \
       unset _sccache_inode _candidate_pid _pid _fd _target
     fi
   fi
-  exec flock -x "$_STATIC_LOCK" "$0" --internal-locked "$@"
+  exec flock -o -x "$_STATIC_LOCK" "$0" --internal-locked "$@"
 fi
 # When we reach here we are either NL_STATIC_NO_LOCK=1 or we are the
 # inner locked re-entry. In the latter case, strip the sentinel arg.
@@ -914,7 +920,7 @@ if [ -f "$ROOT/docs/reference/manifest-schema.json" ] && [ -f "$ROOT/tests/smoke
     let
       pkgs = import <nixpkgs> {};
       lib = pkgs.lib;
-      flake = builtins.getFlake (toString $ROOT);
+      flake = builtins.getFlake \"git+file://$ROOT\";
       nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
       nixos = nixosSystem {
         system = builtins.currentSystem;
@@ -1224,6 +1230,26 @@ nl_smoke_bundle_privileges_json >/dev/null
 # `path '//$ROOT/.vms-json-parity.XXXXXX' does not exist`.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
+if [ -x "$HERE/guest-proto-bindings.sh" ]; then
+  nl_time_begin "tests/guest-proto-bindings.sh"
+  if bash "$HERE/guest-proto-bindings.sh" >/dev/null 2>&1; then
+    ok "guest-proto-bindings"
+  else
+    bash "$HERE/guest-proto-bindings.sh" 2>&1 | tail -80 >&2 || true
+    fail "guest-proto-bindings"
+  fi
+  nl_time_end "tests/guest-proto-bindings.sh"
+fi
+if [ -x "$HERE/guest-ttrpc-bindings.sh" ]; then
+  nl_time_begin "tests/guest-ttrpc-bindings.sh"
+  if bash "$HERE/guest-ttrpc-bindings.sh" >/dev/null 2>&1; then
+    ok "guest-ttrpc-bindings"
+  else
+    bash "$HERE/guest-ttrpc-bindings.sh" 2>&1 | tail -80 >&2 || true
+    fail "guest-ttrpc-bindings"
+  fi
+  nl_time_end "tests/guest-ttrpc-bindings.sh"
+fi
 if [ -x "$HERE/bundle-drift.sh" ]; then nl_static_parallel_script "tests/bundle-drift.sh" "$HERE/bundle-drift.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
 if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
@@ -1231,6 +1257,16 @@ if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests
 # pass the Rust looks_nixling_owned format gate.
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
+if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
+if [ -x "$HERE/guest-control-auth-nongoals.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-nongoals.sh" "$HERE/guest-control-auth-nongoals.sh"; fi
+if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
+if [ -x "$HERE/guest-control-vsock-helper-static.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-helper-static.sh" "$HERE/guest-control-vsock-helper-static.sh"; fi
+if [ -x "$HERE/guest-exec-runtime-static.sh" ]; then nl_static_parallel_script "tests/guest-exec-runtime-static.sh" "$HERE/guest-exec-runtime-static.sh"; fi
+if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
+if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
+if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_script "tests/guest-control-token-materializer.sh" "$HERE/guest-control-token-materializer.sh"; fi
+if [ -x "$HERE/guest-static-elf.sh" ]; then nl_static_parallel_script "tests/guest-static-elf.sh" "$HERE/guest-static-elf.sh"; fi
+if [ -x "$HERE/guest-static-consumption-eval.sh" ]; then nl_static_parallel_script "tests/guest-static-consumption-eval.sh" "$HERE/guest-static-consumption-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script "tests/static-invariant-broad-caps.sh" "$HERE/static-invariant-broad-caps.sh"; fi
 if [ -x "$HERE/static-invariant-writable-paths.sh" ]; then nl_static_parallel_script "tests/static-invariant-writable-paths.sh" "$HERE/static-invariant-writable-paths.sh"; fi
@@ -1402,14 +1438,17 @@ nl_static_gate_end "tests/harness-ubuntu-eval.sh"
 
 # -----------------------------------------------------------------------------
 # 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`
-# pins `nixling.url = "path:../.."` so this runs the in-tree framework
-# without a network fetch. Eval-only (`--no-build --all-systems`); a
-# build-level gate already lives in the root flake's
-# `checks.<system>.*` (also 7b). `--no-write-lock-file` keeps the
-# gate read-only so validation never rewrites an example's pinned lock.
-# Adds templates/default/ to the same check surface. Skips gracefully
-# if examples/ or templates/default/ don't exist (some downstream consumers
-# may strip them).
+# pins `nixling.url = "path:../.."`, but we `--override-input nixling`
+# to `git+file://$ROOT` so the check runs the in-tree framework WITHOUT
+# copying the whole working tree (incl. the multi-GiB cargo `target/`)
+# into the store on every run — `git+file://` only ships git-tracked
+# files. Eval-only (`--no-build --all-systems`); a build-level gate
+# already lives in the root flake's `checks.<system>.*` (also 7b).
+# `--no-write-lock-file` keeps the gate read-only so validation never
+# rewrites an example's pinned lock. Adds templates/default/ to the
+# same check surface. Skips gracefully if examples/ or
+# templates/default/ don't exist (some downstream consumers may strip
+# them).
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "per-example/template flake check" "per-example/template flake check"
 if [ -d "$ROOT/examples/with-entra-id" ] && [ -f "$ROOT/examples/with-entra-id/flake.lock" ] && [ -z "${NL_SKIP_WITH_ENTRA_ID:-}" ]; then
@@ -1426,7 +1465,7 @@ if [ -d "$ROOT/examples" ]; then
     if [ "$name" = "with-entra-id" ]; then
       continue
     fi
-    nl_static_parallel_spawn "example flake check: $name" bash -lc "cd '$ex' && nix flake check --no-build --all-systems --no-write-lock-file"
+    nl_static_parallel_spawn "example flake check: $name" bash -lc "cd '$ex' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
   done
   shopt -u nullglob
 else
@@ -1494,7 +1533,7 @@ NIX
   # wiring, not only the root eval-template check. The copied scratch
   # flake differs only by adding a test-only module that neutralizes
   # intentional TODO sentinels and by overriding nixling to this tree.
-  nl_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'path:$ROOT'"
+  nl_static_parallel_spawn "template flake check: default" bash -lc "cd '$template_check_dir' && nix flake check --no-build --all-systems --no-write-lock-file --override-input nixling 'git+file://$ROOT'"
 else
   log "  (no templates/default/flake.nix — skipping)"
 fi

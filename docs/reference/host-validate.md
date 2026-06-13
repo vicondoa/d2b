@@ -1,11 +1,15 @@
 # `nixling host validate` — composite default-switch readiness preflight
 
 `nixling host validate` is the operator-facing one-command preflight
-the operator runs after `nixos-rebuild switch` and before flipping
-`nixling.daemonExperimental.enable = true`. It is the umbrella verb
-that produces the per-wave evidence records consumed by the
-default-switch auto-flip gate
+the operator runs after `nixos-rebuild switch` to record per-wave
+validation evidence. It is the umbrella verb that produces the
+per-wave evidence records consumed by the per-wave
+`defaultSwitchReadiness.<wave>.validated` assertion
 (`nixos-modules/options-daemon.nix:validationEvidencePresent`).
+(`nixling.daemonExperimental.enable` defaults `true` and no longer
+depends on this evidence — it is no longer evidence-auto-flipped — but
+it still functionally gates the daemon control plane, so leave it at
+its default.)
 
 ## What it does
 
@@ -115,7 +119,7 @@ v1.0 docs blast-radius pass), not by per-host attestation.
 
 ## Operator workflow
 
-A typical first-flip workflow on a fresh host:
+A typical validation workflow on a fresh host:
 
 ```bash
 # 1. Activate the new closure.
@@ -132,9 +136,12 @@ sudo NL_LIVE=1 bash tests/minijail-validator-swtpm.sh
 # 4. Write the umbrella evidence records.
 sudo nixling host validate --apply
 
-# 5. Now flip the gate.
-#    nixling.daemonExperimental.enable now defaults to true because
-#    every <wave>.json record exists with the canonical schema.
+# 5. Rebuild to apply the validated bits.
+#    The per-wave defaultSwitchReadiness.<wave>.validated assertion
+#    passes because every <wave>.json record exists with the canonical
+#    schema. (The daemon-backed control plane is already the default;
+#    nixling.daemonExperimental.enable defaults true and is no longer
+#    evidence-auto-flipped, but it still functionally gates the daemon.)
 sudo nixos-rebuild switch --flake .#myhost
 ```
 
@@ -151,7 +158,7 @@ implementation has already shipped in-tree.
 ## Related
 
 - [`AGENTS.md` § "Critical subsystems / Control plane"](../../AGENTS.md) — default-switch contract.
-- [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) — full flip timeline.
+- [`docs/reference/default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) — per-wave evidence gate reference.
 - [`docs/reference/error-codes.md`](./error-codes.md) — `--apply-or-dry-run-required` and `unknown-wave` envelopes.
 - [`tests/host-validate-verb-eval.sh`](../../tests/host-validate-verb-eval.sh) — Layer-1 regression gate.
 - [`packages/nixling/src/host_validate.rs`](../../packages/nixling/src/host_validate.rs) — verb implementation + per-wave catalog.

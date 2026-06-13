@@ -5,6 +5,12 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub mod broker_wire;
+pub mod generated;
+pub mod guest_auth;
+pub mod guest_proto {
+    pub use crate::generated::guest_control::*;
+}
+pub mod guest_wire;
 pub mod public_wire;
 pub mod types;
 
@@ -409,6 +415,58 @@ mod tests {
     fn frame_too_large_is_rejected() {
         let oversized = "x".repeat(MAX_FRAME_SIZE + 1);
         let error = encode_frame(&oversized).expect_err("oversized frame fails");
+        assert_eq!(error.kind().as_str(), "wire-frame-too-large");
+    }
+
+    #[test]
+    fn encode_frame_public_sock_cap_boundary_is_exact() {
+        // A JSON string of N chars serializes to N+2 bytes (two quotes), so
+        // drive the encoded body length to exactly cap-1, cap, and cap+1 to
+        // pin the public.sock frame boundary. Removing the `> MAX_FRAME_SIZE`
+        // check would let the cap+1 case through and fail this test.
+        let body_len = |n: usize| serde_json::to_vec(&"x".repeat(n)).expect("serialize").len();
+        // cap - 1 and cap fit.
+        let below = "x".repeat(MAX_FRAME_SIZE - 3);
+        assert_eq!(body_len(MAX_FRAME_SIZE - 3), MAX_FRAME_SIZE - 1);
+        let frame = encode_frame(&below).expect("cap-1 body encodes");
+        assert_eq!(frame.len(), 4 + (MAX_FRAME_SIZE - 1));
+
+        let at = "x".repeat(MAX_FRAME_SIZE - 2);
+        assert_eq!(body_len(MAX_FRAME_SIZE - 2), MAX_FRAME_SIZE);
+        let frame = encode_frame(&at).expect("cap body encodes");
+        assert_eq!(frame.len(), 4 + MAX_FRAME_SIZE);
+
+        // cap + 1 fails closed.
+        let over = "x".repeat(MAX_FRAME_SIZE - 1);
+        assert_eq!(body_len(MAX_FRAME_SIZE - 1), MAX_FRAME_SIZE + 1);
+        let error = encode_frame(&over).expect_err("cap+1 body fails");
+        assert_eq!(error.kind().as_str(), "wire-frame-too-large");
+    }
+
+    #[test]
+    fn decode_frame_public_sock_cap_boundary_is_exact() {
+        // The declared length prefix is bounded against MAX_FRAME_SIZE before
+        // the body is read. A prefix at cap must NOT be rejected as
+        // frame-too-large (it fails later for the length mismatch / json),
+        // while cap+1 is rejected as frame-too-large. Removing the
+        // `declared_length > MAX_FRAME_SIZE` check would change the cap+1
+        // error kind and fail this test.
+        let mut at_cap = Vec::new();
+        at_cap.extend_from_slice(&(MAX_FRAME_SIZE as u32).to_le_bytes());
+        at_cap.extend_from_slice(b"{}"); // body shorter than declared on purpose
+        let error =
+            decode_frame::<crate::HelloOk>("HelloOk", &at_cap).expect_err("cap prefix still fails");
+        assert_ne!(
+            error.kind().as_str(),
+            "wire-frame-too-large",
+            "a cap-sized declared length must not be rejected as too large"
+        );
+
+        let mut over_cap = Vec::new();
+        over_cap.extend_from_slice(&((MAX_FRAME_SIZE + 1) as u32).to_le_bytes());
+        over_cap.extend_from_slice(b"{}");
+        let error =
+            decode_frame::<crate::HelloOk>("HelloOk", &over_cap).expect_err("cap+1 prefix fails");
         assert_eq!(error.kind().as_str(), "wire-frame-too-large");
     }
 

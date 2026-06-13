@@ -71,10 +71,15 @@ minimal root-owned `nixling-priv-broker` (see ADRs 0001-0008 under
 [`docs/adr/`](docs/adr/)). The new trust boundaries the daemon work
 will introduce are:
 
-- A public CLI socket at `/run/nixling/nixlingd.sock` ACL'd to
-  `nixling` (daily lifecycle) and `nixling-admin`
-  (destructive ops), authenticated by `SO_PEERCRED` plus the system
-  account database — not by polkit at runtime.
+- A single public CLI socket at `/run/nixling/public.sock`, mode
+  `0660` group `nixling`. Membership in the `nixling` group (populated
+  from `nixling.site.launcherUsers`) is the only *connection* gate —
+  there is no second `nixling-admin` socket or group. Destructive /
+  admin verbs (`vm exec`, `vm konsole`, `audit`, and `config sync`'s
+  guest read) are gated a second time *inside the daemon*: the
+  `SO_PEERCRED` peer identity must also appear in
+  `nixling.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
+  system account database — never polkit at runtime.
 - A private broker socket at `/run/nixling/priv.sock` reachable only
   by the `nixlingd` service uid. The broker re-derives every
   privileged parameter from its own copy of the root-owned bundle
@@ -90,14 +95,16 @@ will introduce are:
   > is RETIRED. virtiofsd profiles now declare zero host
   > capabilities (`capabilities = []`), `requiresStartRoot = false`,
   > and a `userNamespace` block mapping in-NS UID/GID 0 to the
-  > per-VM runner principal. The broker pre-establishes the
+  > per-share principal. Normal VM shares map to the per-VM runner
+  > principal; the guest-control token share maps to the narrower
+  > `nixling-<vm>-gctlfs` principal. The broker pre-establishes the
   > namespace via `clone3(CLONE_NEWUSER)` + `/proc/<pid>/uid_map`
   > writes before exec; virtiofsd runs fake-root only inside the
-  > per-runner user NS. This is strictly stronger than v1.1.1: a
+  > per-share user NS. This is strictly stronger than v1.1.1: a
   > compromised virtiofsd cannot access host resources outside its
   > bind-mounted share, even with kernel exploits that bypass the
   > sandbox, because the host kernel sees its credentials as the
-  > unprivileged runner principal — there are no in-host caps to
+  > unprivileged share principal — there are no in-host caps to
   > escalate from.
 
 The first non-NixOS target is Ubuntu 24.04 LTS x86_64 with kernel
@@ -164,6 +171,40 @@ The new trust-boundary statements are:
   `UsbipProxyReconcile`) is explicitly out of scope for this
   trust-boundary delta; only the per-busid
   `UsbipBindFirewallRule` skeleton is covered.
+
+### Guest-control exec trust boundary
+
+`nixling vm exec` / `nixling vm konsole` run a command inside a VM over
+the authenticated guest-control vsock channel — there is no SSH. The
+trust-boundary statements are:
+
+- **Admin-only, destructive.** Guest exec is a destructive verb: the
+  `SO_PEERCRED` caller must be in `nixling.site.adminUsers` (the
+  daemon-side role gate above), on top of the `nixling`-group
+  connection gate. Per-VM exec must also be enabled in the bundle
+  (`guest.control.enable` + the guest exec policy); today guestd serves
+  **guest-root** exec (`guest.exec.allowRoot = true`), with the
+  non-root `guest.exec.users` allowlist validated but reserved for a
+  future wave.
+- **Leak-safe daemon-side audit.** The daemon records exec *lifecycle*
+  events (`GuestControlExecEstablished` / `GuestControlExecTerminated`)
+  to its own `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM
+  name, the admin `peer_uid`, and the negotiated `tty` shape. The
+  session handle, argv, env, cwd, exit status, and any stdin/stdout/
+  stderr bytes are NEVER recorded. This daemon-side exec audit is
+  distinct from the broker `OpAuditRecord` stream (which covers
+  privileged host mutation, not guest exec).
+- **Containment / DoS limits.** Exec is bounded at multiple layers:
+  per-VM concurrent session caps; detached-exec slot and retained-log
+  quotas; bounded per-op deadlines (each long-poll op gets a fresh
+  deadline rather than an aging shared one); a hard in-flight op cap
+  whose over-cap response is **close-only** — the owner session is torn
+  down through the single existing teardown path with no reader-side
+  socket write, preserving the single-writer invariant — so a stalled
+  or abusive owner cannot pin unbounded work, and owner EOF/POLLHUP is
+  always observed promptly; and bounded teardown on disconnect. Known
+  limitation: these bounds are in-session only — a detached exec is not
+  reaped if its owning daemon session is lost (no orphan reaper yet).
 
 ## See also
 

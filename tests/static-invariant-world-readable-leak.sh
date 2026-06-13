@@ -25,7 +25,7 @@ fi
 positive=$scratch/positive.json
 negative=$scratch/negative.json
 cat > "$positive" <<'JSON'
-{"_manifest":{"manifestVersion":3},"corp-vm":{"name":"corp-vm","env":"work","index":10,"sshUser":"alice","sshPort":22,"ipv4":"10.20.0.10","mac":"02:00:00:00:00:0a","isNetVm":false}}
+{"_manifest":{"manifestVersion":4},"corp-vm":{"name":"corp-vm","env":"work","index":10,"sshUser":"alice","sshPort":22,"ipv4":"10.20.0.10","mac":"02:00:00:00:00:0a","isNetVm":false}}
 JSON
 cat > "$negative" <<'JSON'
 {"corp-vm":{"name":"corp-vm","privateKeyPath":"/var/lib/nixling/vms/corp-vm/id_ed25519"}}

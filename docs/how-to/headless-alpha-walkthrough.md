@@ -74,17 +74,19 @@ TAP interface, four virtiofs shares (`ro-store`, `nl-meta`,
 
 ```bash
 nixling host prepare --dry-run
+# `--apply` is not yet wired: it returns the typed `daemon-down`
+# envelope (exit 1) today — use `--dry-run` for now.
 nixling host prepare --apply
 ```
 
 `host prepare` reconciles host-shared state (cgroup delegation, the
 named `inet nixling` nft table, NetworkManager unmanaged drop-in,
 `/etc/hosts` managed block, sysctl ordering, kernel module probe).
-The dry-run path is complete today. In the production broker
-dispatcher, the host-reconcile ops behind `ApplyNftables` /
-`ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` are now live; the
-remaining rollout work is the public daemon-backed `host prepare
---apply` surface, not the broker executor itself.
+The dry-run path is complete today. The host-reconcile ops behind
+`ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` are
+staged in the broker executor; the remaining rollout work is the
+public daemon-backed `host prepare --apply` surface that dispatches
+them, so `--apply` returns `daemon-down` (exit 1) until that ships.
 
 ## Step 4 — Inspect the DAG
 
@@ -107,13 +109,13 @@ is stable; `--apply` routes through the daemon-native dispatch
       {"id": "store-preflight",     "role": "store-virtiofs-preflight"},
       {"id": "virtiofsd-ro-store",  "role": "virtiofsd"},
       {"id": "ch",                  "role": "cloud-hypervisor-runner"},
-      {"id": "ssh-ready",           "role": "guest-ssh-readiness"}
+      {"id": "guest-control-health", "role": "guest-control-health"}
     ],
     "edges": [
       {"from": "host-reconcile",     "to": "store-preflight"},
       {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
       {"from": "virtiofsd-ro-store", "to": "ch"},
-      {"from": "ch",                 "to": "ssh-ready"}
+      {"from": "ch",                 "to": "guest-control-health"}
     ]
   },
   "notes": "vm dry-run reports the DAG the supervisor would drive; --apply routes through the daemon-native dispatch (v1.0 daemon-only per ADR 0015)."
@@ -139,8 +141,12 @@ is different from the original draft:
    `SpawnRunner` handler is live and returns pidfds over SCM_RIGHTS;
    the daemon can re-open / re-adopt them through the live
    `OpenPidfd` path.
-4. `ssh-ready` — the daemon (when kept on the native path) probes the
-   guest SSH surface on the allocated static IP.
+4. `guest-control-health` — the daemon runs the authenticated
+   guest-control Health probe (Hello + token challenge-response +
+   Health over the guest-control vsock) on guest-control-capable VMs.
+   It fails closed and is the guest-readiness gate; SSH is a compat
+   surface only, so the legacy raw TCP-22 `ssh-ready` /
+   `guest-ssh-readiness` node was removed and is no longer emitted.
 
 The operator-facing routing changed: `nixling vm start corp-vm --apply`
 no longer stops at the old `daemon-down` placeholder by default.
@@ -189,7 +195,7 @@ are no-ops in v1.0; the bash CLI itself was retired in v1.0.
 | Component                 | Wire-stable | Live today | Remaining rollout |
 |---------------------------|:-----------:|:----------:|:-----------------:|
 | `ch_argv` generator       | ✅                  | ✅         | — |
-| `virtiofsd_argv` generator| ✅                  | ✅         | — |
+| virtiofsd argv / shares   | ✅                  | ✅         | emitted by `nixos-modules/processes-json.nix`; see `docs/reference/store-virtiofs.md` |
 | `swtpm_argv` generator    | ✅                  | ✅ (opt-in)| — |
 | Supervisor DAG executor   | ✅                  | ✅ (pure)  | native-only end-to-end ownership |
 | Broker host-reconcile ops (`ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile`) | ✅ | ✅ (non-bootstrap dispatch) | public `host prepare --apply` rollout |

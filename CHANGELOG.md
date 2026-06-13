@@ -12,6 +12,252 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- `ReadGuestFile` guest-control RPC: a single-shot, bounded, enum-keyed
+  (initially `GuestConfig`-only) RPC for the host to read a small,
+  trusted in-guest file over the authenticated vsock channel.
+  `nixling-guestd` resolves the path with a safe `openat` from a trusted
+  directory fd (`O_RDONLY | O_CLOEXEC | O_NOFOLLOW`, rejecting symlinks /
+  `..` / non-regular files) and enforces a size cap before allocating;
+  the response is bounded below both the ttRPC and `public.sock` frame
+  budgets. The capability is negotiated as
+  `GuestCapability::ReadGuestFile`, and an authenticated guest that does
+  not advertise it fails closed. File-specific typed errors
+  (`FileNotFound` / `FileTooLarge` / `PathUnsafe` / `ReadDenied`) carry
+  operator-actionable remediations rather than a blind retry. The
+  guest-control protocol version is bumped accordingly. See
+  [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
+
+- Production guest-control transport bridge: the host daemon now drives
+  the authenticated vsock channel to guest-control VMs end-to-end. A
+  broker-backed signer forwards each guest-control sign request verbatim
+  to the privileged broker over a timeout-bounded dispatch, and a probe
+  orchestrator resolves the per-VM vsock socket and peer credentials from
+  the trusted bundle, connects to the host CID, and runs the
+  authenticated Hello / Authenticate / Health handshake on a dedicated
+  runtime with per-attempt timeouts. Spawning a guest-control VM's
+  cloud-hypervisor runner now grants the unprivileged daemon a minimal,
+  single-uid ACL (`--x` traversal on the per-VM state dir, `rw` on
+  `vsock.sock`) scoped to the current socket inode. Because there is no
+  CH-stop teardown hook carrying the socket path, the ACL is refreshed as
+  a revoke-then-grant on each cloud-hypervisor (re)spawn — any stale grant
+  left on a replaced or disabled socket inode is revoked before the live
+  grant, so a prior generation cannot retain access (stop-time teardown is
+  future work). Both the revoke and grant are audited with hash-only
+  fields (no raw paths).
+
+- New admin-only `public.sock` verb `ReadGuestConfig { vm }`: returns the
+  editable guest config working copy of a guest-control VM as a bounded
+  base64 string over the authenticated bridge. The daemon enforces the
+  admin role before any probe / sign / read, recomputes size and sha256
+  from the received bytes (never trusting guest-reported values), and
+  bounds the encoded payload below both the ttRPC and `public.sock`
+  frames.
+
+  `tty=true && detach=false` now routes to a PTY-backed,
+  connection-owned, non-durable attached exec. PTY setup keeps
+  `unsafe_code = "forbid"` via a helper-exec pattern — a new `--tty-exec`
+  mode of the static `nixling-exec-runner` performs the
+  `setsid` + `TIOCSCTTY` + `tcsetwinsize` + `dup2` + `execve` handshake in
+  safe `rustix`, so `nixling-guestd` never acquires a controlling
+  terminal. stdout/stderr are merged onto the stdout stream
+  (`ReadOutput(stderr)` returns a typed stderr-unavailable error);
+  `CloseStdin` injects VEOF (`0x04`) and keeps the master open;
+  `TtyWinResize` and `ExecSignal` are serialized through the per-exec
+  control sequence, with signals restricted to the foreground process
+  group (resolved via `tcgetpgrp` at delivery) and the
+  `INT/TERM/HUP/QUIT/WINCH/USR1/USR2/KILL/TSTP/CONT` allowlist. An absent
+  `initial_terminal_size` defaults to 24×80. Interactive sessions run
+  indefinitely by default; teardown drops the master (SIGHUP), waits a
+  bounded grace, then SIGKILLs the whole TTY session (in-session
+  no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
+  limitation). `tty=true && detach=true` is rejected as an unsupported
+  mode. See
+  [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
+  and the interactive-exec section of
+  [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
+  guest-control wire contract is unchanged (the TTY surface was already
+  present).
+
+- New per-VM option `nixling.vms.<vm>.guest.exec.interactiveMaxRuntimeSec`
+  (default `0` = unlimited) caps interactive TTY exec runtime
+  independently of the non-interactive attached ceiling. It is mirrored
+  read-only into the guest config and forced from the host module, and
+  emitted to `nixling-guestd` as `--interactive-max-runtime-sec`
+  alongside the detached exec surface.
+
+### Fixed
+
+- The privileged broker now compiles under the `layer1-bootstrap`
+  feature (and thus `--all-features`): the guest-control `GuestControlSign`
+  audit-redaction arm in `request_fields_value` is gated to the real-wire
+  build, since under `layer1-bootstrap` `BrokerRequest` aliases to the
+  bootstrap `BootstrapCall`, which has no such variant. The `Read` and
+  `FileTypeExt` imports it uses are gated the same way so the bootstrap
+  build stays warning-clean.
+
+- The broker's non-socket-activated (test-mode / legacy) self-bind path
+  now constrains the creation umask so the socket is materialized at
+  `0o660` directly. `fchmod()` on an `AF_UNIX` socket fd does not change
+  the bound path's mode on some kernels/filesystems, so the prior
+  `fchmod`-only approach could leave the socket world-traversable
+  (`0o755`). Production is unaffected (it uses socket activation, where
+  systemd owns the socket mode).
+
+- Guest-control chunked stdio docs now account for protobuf `bytes`
+  allocation before handler entry by specifying ttRPC receive caps,
+  bounded post-decode byte semaphores, and per-exec stdin permits for
+  malicious concurrent `WriteStdin` fan-in.
+
+- TPM-enabled guests now flush stale loaded/saved TPM sessions during
+  early boot before SRK provisioning. This prevents swtpm session-handle
+  exhaustion from breaking TPM-bound credentials while preserving NVRAM
+  and persistent handles.
+
+### Added
+
+- `nixling vm exec <vm> -- <cmd…>` (and `-it` for an interactive TTY):
+  an admin-only operator command that runs a command inside a running
+  guest over the authenticated guest-control transport — CLI → daemon
+  `public.sock` → authenticated guest-control vsock → `guestd` exec
+  RPCs. There is no SSH and no host PTY (the guest owns the PTY); the
+  host only flips termios via an RAII raw-mode guard restored on every
+  exit, error, disconnect, or panic. Non-interactive mode streams
+  stdout/stderr separately; `-it` allocates a guest PTY, merges stderr
+  into stdout, and forwards `SIGWINCH`/`SIGINT`/`SIGQUIT`/`SIGHUP`/
+  `SIGTERM`/`SIGTSTP` to the guest foreground process group (signal
+  handlers enqueue only). The daemon holds an in-process exec session
+  table whose per-session workers own one persistent authenticated
+  guest-control client with fresh per-op deadlines; session-table caps
+  (global / per-UID / per-VM) and `Start` rate limiting are enforced
+  before connect/auth, and an old or non-guest-control generation fails
+  closed with exit `70` (no proxy, no SSH fallback). Guest exit status
+  passes through unchanged (`128+N` for signal death); transport, auth,
+  capacity, protocol, old-generation, and internal failures map to
+  reserved CLI exit codes that `--json` disambiguates from a guest exit
+  code via `source`/`reason`/`guestExitCode`/`transportExitCode`. `-it`
+  is human-only and is rejected together with `--json`. Detached
+  reconnect is deferred; the daemon owner handler rejects `detached=true`
+  for now. The exec session establishes one redacted kind=critical audit
+  event (vm / peer uid / tty only); the opaque session handle, argv
+  (hash-only), and stdio/env/cwd/paths never reach any log, span, audit
+  record, or metric label.
+
+- Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
+  command that outlives the originating connection, supervised by the root
+  guest daemon through slot-based `systemd-run` transient units
+  (`nixling-exec-<NN>.service`, scoped to a guest-internal `nixling-exec`
+  slice). Unit names and argv carry only the slot index — never the exec id,
+  argv, environment, or cwd. stdout/stderr are retained in slot-keyed files
+  under a root-owned, 0700, boot-scoped `/run/nixling-exec` parent with
+  drop-oldest truncation accounting: 4 MiB per stream, an exact 256 MiB
+  VM-global quota (32 retained slots × 2 streams × 4 MiB), and 8 active
+  execs per VM. Detached execs run indefinitely by default
+  (`guest.exec.detachedMaxRuntimeSec = 0`), with an optional per-VM runtime
+  ceiling. Cancellation is a two-phase, control-file mechanism with no
+  in-process signal handler. Terminal records are retained for 30 minutes
+  then garbage-collected; a running detached job is never reaped. guestd
+  re-adopts live detached execs across a guestd restart within one boot.
+
+- `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
+  discovery call that enumerates the caller's detached execs for the same
+  VM token + boot (bounded ≤32). Each entry carries the exec id, slot,
+  state, create time, an argv SHA-256 hash (never raw argv), and per-stream
+  truncation/dropped-byte counters.
+
+- `ExecExpired` guest-control error kind, distinguishing a retention-evicted
+  detached record from `StaleSession` (boot mismatch) and `ExecNotFound`
+  (unknown id).
+
+- Host VM option `nixling.vms.<vm>.guest.exec.detachedMaxRuntimeSec`
+  (unsigned, default 0 = indefinite) plumbed through to the guest exec
+  runtime as a per-exec `RuntimeMaxSec` backstop when non-zero.
+
+
+  `packages/nixling-ipc/proto/guest_control.proto` — generated schema plus
+  protobuf source for the ADR 0028 ttRPC contract, covering health, Hello,
+  capabilities, exec lifecycle, chunked stdio RPC shapes, bounded health
+  labels, bounded string identifiers/payload metadata, oneof-style terminal
+  status, structured stdio error results, and descriptor-shape drift checks.
+
+- Initial guest-side Rust crates for the guest control plane:
+  `nixling-guestd`, `nixling-userd`, and `nixling-exec-runner`, with
+  fail-closed binaries, fakeable daemon/user/session traits, and bounded
+  runner input validation.
+
+- Bootstrap/fail-closed guest-static package outputs `nixling-guestd-static`,
+  `nixling-userd-static`, and `nixling-exec-runner-static`, plus an ELF check
+  proving the guest binaries have no interpreter or dynamic dependencies.
+  Guest VM evals now consume these static outputs through the guest-control
+  module, with a static-fast eval gate proving the package references.
+
+- Opt-in guest-control auth token delivery wiring: per-VM runtime token path
+  option, framework-owned materialized token file, read-only guest credential
+  share, and guestd `LoadCredential` wiring with eval coverage.
+
+- Host-owned Cloud Hypervisor vsock allocation now uses the manifest's
+  base socket path for every VM, reserves distinct CIDs for env net VMs and
+  workload VMs, and rejects consumer `--vsock` overrides so observability and
+  guest-control port reservations share one authoritative per-VM vsock device.
+  This bumps the public manifest to `manifestVersion = 5` because the existing
+  `observability.vsockCid` / `observability.vsockHostSocket` fields now define
+  the base Cloud Hypervisor vsock device. (`5` unifies this base-vsock change
+  with the SigNoz observability metadata that landed as `4` on a sibling
+  branch; the shipped parser/daemon/broker accept only `5`.)
+
+- `nixlingd` now has an internal Cloud Hypervisor CONNECT helper for the
+  guest-control transport port. This is transport groundwork only: it does not
+  change VM readiness, status output, CLI help, or exec behavior.
+
+- `packages/nixling-ipc/src/generated/guest_control.rs` now contains committed
+  protobuf message bindings generated from
+  `packages/nixling-ipc/proto/guest_control.proto` via
+  `cargo run --locked --manifest-path packages/Cargo.toml -p xtask -- gen-guest-proto`.
+  The new
+  `tests/guest-proto-bindings.sh` gate verifies the generated bindings are
+  deterministic, unsafe-free, and message-only (no ttRPC runtime stubs).
+
+- Guest-control protobuf now has an authenticated `Authenticate` handshake:
+  `Hello` is challenge-only, authenticated health/capabilities are returned
+  only after proof-of-possession, and `nixling-guestd` has a pure auth core
+  with fixed-size HMAC transcript tests. No listener, readiness, or exec CLI
+  behavior is enabled yet.
+
+- `nixling-guestd` now owns generated ttRPC service bindings and a dormant
+  `--serve --vm-id <vm>` service mode for Hello challenge, Authenticate, and
+  authenticated Health/Capabilities. The guest service remains opt-in manual-start only
+  (`wantedBy = []`) and does not enable host readiness or exec behavior.
+
+- The privileged broker now exposes a structured guest-control HMAC signer, and
+  `nixlingd` has a host-side authenticated Health probe helper. The helper
+  produces daemon-local health evidence only; it does not replace SSH readiness
+  or enable exec.
+
+- Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
+  now validate exec allowlist defaults: generic exec is off by default, root
+  exec is separately denied by default, and non-root users must be explicitly
+  listed. This is dormant policy wiring only; no exec runtime/CLI behavior is
+  enabled by these options yet.
+
+- Guest-control retained-log security requirements and canary-based
+  redaction test coverage for stdout/stderr logs, telemetry, health, and
+  CLI JSON.
+
+- `proofs/chunked-stdio-conformance` — executable safe-Rust proof for
+  the selected Kata-style chunked stdio exec I/O protocol, covering
+  byte-exact offset reads, idempotent stdin writes, slow-consumer bounds,
+  concurrent attached fairness, stale sessions, EOF, resize, and signal
+  exit mapping.
+
+- Strengthened PTY/job-control proof coverage for guest-control exec,
+  including session leadership, controlling-terminal foreground process
+  groups, PTY close/drain behavior, SIGWINCH resize semantics, and
+  protocol-side TTY `CloseStdin`.
+
+- `docs/reference/guest-control-exec-io-credit-window.md` — bounded ttRPC
+  duplex-stream exec I/O design using nixling `TerminalFrame` messages,
+  explicit byte credit, close/EOF, resize/signal/exit/error frames, CLI
+  behavior, conformance matrix, risks, and required tests.
+
 - Guest systemd-journal log collection. The per-VM OpenTelemetry
   collector now tails the guest journal through the contrib `journald`
   receiver and forwards it to SigNoz as logs tagged with the VM's
@@ -164,11 +410,45 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Framework readiness for a guest-control-capable VM is now the
+  authenticated guest-control Health probe rather than a raw TCP-22 SSH
+  connect. The per-VM DAG node `guest-ssh-readiness` is replaced by
+  `guest-control-health` (`ProcessRole::GuestControlHealth` +
+  `ReadinessPredicate::GuestControlHealth`), which fails closed: a VM is
+  ready only once the daemon completes the full authenticated handshake
+  and the guest reports `Healthy` or `Degraded`. Old-generation /
+  unreachable / auth-failed / timed-out guests are never marked ready.
+  Per-VM guest sshd and host keys remain for the SSH compatibility
+  window but no longer drive framework readiness. See
+  [ADR 0029](docs/adr/0029-framework-ssh-to-typed-guest-rpc.md).
+- `nixling config sync` on a guest-control VM now pulls the editable
+  guest config over the authenticated guest-control bridge (the new
+  `ReadGuestConfig` daemon verb) instead of an SSH transfer. The host
+  computes size and sha256 from the received bytes and keeps the existing
+  atomic temp+fsync+rename staging. `--dry-run` reports
+  `transport: "guest-control"` and the planned target without reading any
+  guest bytes or printing an SSH command, and SSH-only flags
+  (`--host` / `--user` / `--key` / `--known-hosts` / `--guest-path`) are
+  rejected on the guest-control path with a remediation pointing at the
+  operator SSH compatibility transport. Old-generation VMs that predate
+  guest-control fail closed with `guest-control-unavailable-old-generation`.
+- The framework readiness label is now the canonical `guest-control-health`
+  (no per-VM suffix) across `status`, `vm list`, and the start preview;
+  the start-preview DAG no longer hard-codes an `ssh-ready` node.
+- `nixling vm konsole` is now a thin wrapper around `nixling vm exec -it`:
+  it opens the interactive guest session in a terminal emulator
+  (default `konsole`, overridable with `--terminal`) over the
+  authenticated guest-control transport. The historical operator-SSH
+  path and its allowlist site were removed; the SSH-only flags
+  (`--host` / `--key` / `--user`) are now rejected with a migration
+  message pointing at `vm exec -it`. No SSH process is spawned.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.
-- Observability metadata in `vms.json` moves to manifest version 4 for
-  the SigNoz backend shape. Historical v3 fixtures remain frozen.
+- Observability metadata in `vms.json` moves to manifest version 5 for
+  the SigNoz backend shape (unified with the base-vsock change; the
+  intermediate `4` was never shipped on its own). Historical v3 fixtures
+  remain frozen.
 - Host and guest telemetry collection is moving from Alloy pipelines to
   OpenTelemetry Collector services that export OTLP over nixling's
   broker-supervised Unix/vsock transport.
@@ -919,19 +1199,14 @@ block. A new `AGENTS.md` policy makes the panel-review process a
   names are removed.
 - **Stable relay-binary interface.**
   `nixling.observability.transport.relayPackage` still
-  requires a `bin/socat`-compatible CLI today. A future
-  release will define a stable interface so non-socat relays
-  (e.g. a purpose-built Rust binary) can be swapped in
-  without socat-compat shims, and the socat-compatible path
-  will remain supported for at least one minor release after
-  that lands.
+  requires a `bin/socat`-compatible CLI today. Non-socat
+  relays need a dedicated compatibility interface before the
+  socat-compatible path can be removed.
 - **VM-runner abstraction.** Today the framework leaks the
   runner-unit name (`microvm@<vm>` for headless,
   `nixling-<vm>-gpu` for graphics) into the relay wiring, and
-  the observability code has to wire to both. v0.3.0 will
-  introduce a runner-agnostic abstraction (e.g.
-  `nixling-vm-runner@<vm>.service` aliased by whichever
-  concrete runner is used) so per-VM sidecar wiring stays
+  the observability code has to wire to both. A runner-agnostic
+  abstraction is required before per-VM sidecar wiring can stay
   on a single name.
 
 
@@ -1626,7 +1901,7 @@ seam.
   the two trees meet at `nixling.vms.<vm>.config.imports`
   without either flake depending on the other.
 - **`templates/default/`** — `nix flake init` scaffold with
-  seven numbered `TODO:` markers and a matching
+  seven numbered placeholder markers and a matching
   `assertions = [ … ]` block. `nix flake check` on an un-edited
   scaffold fails with actionable messages until each sentinel is
   replaced.
@@ -1639,7 +1914,7 @@ seam.
     system catches schema regressions at eval time.
   - `docs/reference/manifest-schema.md` + `docs/reference/manifest-schema.json`
     (JSON Schema Draft 2020-12) — the v1 public manifest contract
-    for downstream consumers (e.g. the future Rust CLI port). The
+    for downstream consumers such as the Rust CLI. The
     JSON Schema is the canonical type spec; the prose doc is a
     field-by-field walkthrough + compatibility policy.
   - `docs/reference/cli-contract.md` — behavioural contract for any

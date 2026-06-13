@@ -16,6 +16,7 @@ let
   cfg = config.nixling;
   obsCfg = cfg.observability;
   obsVsockCid = 1000;
+  u32Max = 4294967295;
   nl = import ./lib.nix { inherit lib; };
   inherit (nl) parseCidr subnetIp volumeSerialIssues;
 
@@ -174,22 +175,20 @@ let
     (d: !(lib.hasSuffix "/nixos-modules/observability-vm.nix" d.file))
     obsVmDefinitions;
 
-  workloadObsCidPairs = lib.mapAttrsToList
+  vmVsockCidPairs = lib.mapAttrsToList
     (name: _vm: {
       inherit name;
       cid = config.nixling.manifest.${name}.observability.vsockCid;
     })
-    (lib.filterAttrs
-      (name: vm: vm.enable && vm.observability.enable && name != obsCfg.vmName)
-      cfg.vms);
+    (lib.filterAttrs (_name: vm: vm.enable) cfg.vms);
 
-  workloadObsCidGroups = lib.groupBy
+  vmVsockCidGroups = lib.groupBy
     (pair: toString pair.cid)
-    workloadObsCidPairs;
+    vmVsockCidPairs;
 
-  collidingWorkloadObsCidGroups = lib.filterAttrs
+  collidingVmVsockCidGroups = lib.filterAttrs
     (_: pairs: builtins.length pairs > 1)
-    workloadObsCidGroups;
+    vmVsockCidGroups;
 
   mkCidCollisionPairs = pairs:
     if pairs == [ ] then [ ] else
@@ -204,11 +203,33 @@ let
     }) rest)
     ++ mkCidCollisionPairs rest;
 
-  workloadObsCidCollisions =
-    lib.flatten (map mkCidCollisionPairs (lib.attrValues collidingWorkloadObsCidGroups));
+  vmVsockCidCollisions =
+    lib.flatten (map mkCidCollisionPairs (lib.attrValues collidingVmVsockCidGroups));
+
+  invalidVmVsockCidUsers = lib.filter
+    (pair: builtins.elem pair.cid [ 0 1 2 u32Max ])
+    vmVsockCidPairs;
 
   reservedObsCidUsers = map (pair: pair.name)
-    (lib.filter (pair: pair.cid == obsVsockCid) workloadObsCidPairs);
+    (lib.filter
+      (pair: pair.cid == obsVsockCid && !(obsCfg.enable && pair.name == obsCfg.vmName))
+      vmVsockCidPairs);
+
+  vmVsockSocketPairs = lib.mapAttrsToList
+    (name: _vm: {
+      inherit name;
+      socket = config.nixling.manifest.${name}.observability.vsockHostSocket;
+    })
+    (lib.filterAttrs (_name: vm: vm.enable) cfg.vms);
+
+  socketPathTooLong = path: builtins.stringLength path > 107;
+
+  tooLongVmVsockSockets = lib.filter
+    (pair:
+      socketPathTooLong pair.socket
+      || socketPathTooLong "${pair.socket}_${toString nl.observabilityOtlpVsockPort}"
+      || socketPathTooLong "${pair.socket}_${toString nl.guestControlVsockPort}")
+    vmVsockSocketPairs;
 
   vmAssertions = lib.mapAttrsToList
     (name: vm: [
@@ -240,7 +261,7 @@ let
       }
       {
         assertion = !(vm.enable && vm.observability.enable && !obsCfg.enable);
-        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs-stack telemetry sink).";
+        message = "VM ${name} has observability.enable = true but nixling.observability.enable is false. Per-VM observability requires the framework-level toggle (auto-declares the sys-obs telemetry sink).";
       }
       {
         assertion = !(vm.enable && vm.audit.enable && !vm.observability.enable);
@@ -392,19 +413,40 @@ let
       ])
     cfg.envs;
 
-  observabilityAssertions =
+  vsockAssertions =
     map
       (collision: {
         assertion = false;
         message = "Vsock CID collision: VMs ${collision.vm1}, ${collision.vm2} both compute to CID ${toString collision.cid}. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.";
       })
-      workloadObsCidCollisions
+      vmVsockCidCollisions
+    ++ map
+      (pair: {
+        assertion = false;
+        message = ''
+          nixling.vms.${pair.name}: derived Cloud Hypervisor vsock CID
+          ${toString pair.cid} is reserved by Linux/AF_VSOCK. Rename the VM or
+          adjust env/index so nixling derives a guest CID outside 0, 1, 2, and
+          ${toString u32Max}.
+        '';
+      })
+      invalidVmVsockCidUsers
     ++ lib.optional (obsCfg.enable && reservedObsCidUsers != [ ]) {
       assertion = false;
       message = ''
         Vsock CID 1000 is reserved for nixling.observability.vmName (${obsCfg.vmName}), but VMs ${lib.concatStringsSep ", " reservedObsCidUsers} also compute to CID 1000. Adjust nixling.vms.<vm>.index in the affected env or rename one VM.
       '';
-    };
+    }
+    ++ map
+      (pair: {
+        assertion = false;
+        message = ''
+          nixling.vms.${pair.name}: Cloud Hypervisor vsock socket path is too
+          long for Linux AF_UNIX after port suffixes are considered:
+          ${pair.socket}. Shorten nixling.site.stateDir or the VM name.
+        '';
+      })
+      tooLongVmVsockSockets;
 
   # Site-level assertions (host-specific bias was extracted
   # into `nixling.site.*`; these checks make sure the consumer actually
@@ -581,7 +623,7 @@ in
   assertions = lib.flatten (
     vmAssertions
     ++ envAssertions
-    ++ observabilityAssertions
+    ++ vsockAssertions
     ++ siteAssertions
     ++ siteAuthorizedKeyAssertions
     ++ perVmAuthorizedKeyAssertions

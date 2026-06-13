@@ -18,7 +18,7 @@
 let
   inherit (pkgs) lib;
 
-  flake = builtins.getFlake (toString ./..);
+  flake = builtins.getFlake "git+file://${toString ./..}";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
   nixos = nixosSystem {

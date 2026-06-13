@@ -141,7 +141,18 @@ pub enum ProcessRole {
     /// Host-to-observability-VM OTLP bridge.
     OtelHostBridge,
     /// Guest SSH readiness probe.
+    ///
+    /// Retained for the SSH-compatibility window (old-generation VMs that
+    /// predate guestd). New generations use [`ProcessRole::GuestControlHealth`]
+    /// for framework readiness instead.
     GuestSshReadiness,
+    /// Authenticated guest-control Health readiness probe.
+    ///
+    /// Replaces [`ProcessRole::GuestSshReadiness`] as the framework readiness
+    /// gate on guest-control-capable VMs: readiness is a full authenticated
+    /// Hello + token challenge-response + Health over the guest-control vsock,
+    /// not a raw TCP-22 probe. It fails CLOSED.
+    GuestControlHealth,
     /// USBIP proxy or attach helper.
     Usbip,
     /// Host-jailed Wayland filter proxy. Runs as `nixling-<vm>-wlproxy`
@@ -232,6 +243,16 @@ pub enum ReadinessPredicate {
     Command(Vec<String>),
     /// Component-specific predicate named by the emitter.
     ComponentSpecific(String),
+    /// Authenticated guest-control Health probe. Readiness requires a
+    /// full Hello + token challenge-response + Health over the guest-control
+    /// vsock — the host-side probe. Unlike [`Self::ComponentSpecific`]
+    /// (which reports ready unconditionally and would fail OPEN), this predicate
+    /// fails CLOSED: it is ready only when the daemon completes the
+    /// authenticated probe and the guest reports a healthy/degraded state, and
+    /// never ready for an old-generation / unreachable / auth-failed / timed-out
+    /// guest. The daemon resolves the per-VM vsock socket, peer credentials, and
+    /// broker-backed signer from its own trusted state.
+    GuestControlHealth { vm: String },
 }
 
 /// v0.4.0 invariants preserved in the process contract.

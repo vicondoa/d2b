@@ -343,10 +343,17 @@
           ]
         },
         {
-          "description": "Guest SSH readiness probe.",
+          "description": "Guest SSH readiness probe.\n\nRetained for the SSH-compatibility window (old-generation VMs that predate guestd). New generations use [`ProcessRole::GuestControlHealth`] for framework readiness instead.",
           "type": "string",
           "enum": [
             "guest-ssh-readiness"
+          ]
+        },
+        {
+          "description": "Authenticated guest-control Health readiness probe.\n\nReplaces [`ProcessRole::GuestSshReadiness`] as the framework readiness gate on guest-control-capable VMs: readiness is a full authenticated Hello + token challenge-response + Health over the guest-control vsock, not a raw TCP-22 probe. It fails CLOSED.",
+          "type": "string",
+          "enum": [
+            "guest-control-health"
           ]
         },
         {
@@ -515,6 +522,33 @@
             },
             "value": {
               "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Authenticated guest-control Health probe. Readiness requires a full Hello + token challenge-response + Health over the guest-control vsock — the host-side probe. Unlike [`Self::ComponentSpecific`] (which reports ready unconditionally and would fail OPEN), this predicate fails CLOSED: it is ready only when the daemon completes the authenticated probe and the guest reports a healthy/degraded state, and never ready for an old-generation / unreachable / auth-failed / timed-out guest. The daemon resolves the per-VM vsock socket, peer credentials, and broker-backed signer from its own trusted state.",
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "guest-control-health"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "vm"
+              ],
+              "properties": {
+                "vm": {
+                  "type": "string"
+                }
+              }
             }
           }
         }

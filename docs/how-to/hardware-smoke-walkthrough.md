@@ -100,11 +100,11 @@ you only want the documented scaffold shape.
 | --- | --- |
 | preflight | Ubuntu + root + KVM + Nix prerequisites |
 | install | release build + `host install --apply` scaffold path |
-| host prepare | public host-prepare apply path under the manual Tier-1 harness |
+| host prepare | host-prepare apply leg under the manual Tier-1 harness (returns `daemon-down` (exit 1) until daemon-side dispatch ships) |
 | vm start | `vm start minimal-vm --apply` |
 | probe | guest reachability over SSH |
 | vm stop | stop path + pidfd-table drain expectation |
-| host destroy | rollback of host reconcile state |
+| host destroy | host-reconcile rollback leg (returns `daemon-down` (exit 1) until daemon-side dispatch ships) |
 | audit replay | required audit rows + installer artifacts |
 
 Use `NIXLING_UBUNTU_TIER1_STRICT=1` if missing audit rows or installer

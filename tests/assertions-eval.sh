@@ -315,7 +315,6 @@ BATCHED_CASES=(
   graphics-with-autostart
   graphics-xwayland-unsupported
   audit-without-observability
-  observability-reserved-cid
   principal-uid-collision
 )
 
@@ -395,11 +394,20 @@ test_tmpdir_tmpfiles_rule() {
 }
 
 test_default_path_literals_are_allowed() {
+  # Use STRING literals, not Nix path literals, for the default values.
+  # `nixling.{site,store}.stateDir` are `types.path` whose defaults are
+  # the strings "/var/lib/nixling" / "/var/lib/nixling/vms", and the
+  # reserved-path assertion compares via `toString`. A Nix *path literal*
+  # (/var/lib/nixling) would make the framework's per-VM socket-path
+  # concatenation a path, and string-interpolating it forces Nix to copy
+  # the live host state dir into the store — which aborts eval with
+  # "unsupported type" the moment a running VM has left a socket there.
+  # Strings exercise the same assertion contract hermetically.
   if run_eval_json \
       "default-path-literals-allowed" \
       '({ ... }: {
-         nixling.site.stateDir = /var/lib/nixling;
-         nixling.store.stateDir = /var/lib/nixling/vms;
+         nixling.site.stateDir = "/var/lib/nixling";
+         nixling.store.stateDir = "/var/lib/nixling/vms";
        })' \
       'builtins.length (builtins.filter (a: !a.assertion) nixos.config.assertions)'; then
     if jq -e '. == 0' "$EVAL_OUT_FILE" >/dev/null 2>&1; then

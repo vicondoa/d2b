@@ -13,7 +13,7 @@ FIXTURE_DIR=${FIXTURE_DIR:-$ROOT/tests/fixtures/deny-unknown}
 # shellcheck source=lib.sh
 . "$HERE/lib.sh"
 
-schemas=(privileges.json processes.json minijail-profile.json bundle.json host.json closures.json)
+schemas=(privileges.json processes.json minijail-profile.json bundle.json host.json closures.json guest-control.json)
 for schema in "${schemas[@]}"; do
   if [ ! -f "$SCHEMA_DIR/$schema" ]; then
     log "schemas absent — skipping static-invariant-deny-unknown-fields"
@@ -83,15 +83,151 @@ def synth(s):
         for name in s.get("required", []):
             obj[name] = synth(props.get(name, {"type": "string"}))
         return obj
-    if typ == "array":
-        return []
     if typ == "integer":
-        return 0
+        return int(s.get("minimum", 0) or 0)
     if typ == "number":
-        return 0
+        return s.get("minimum", 0) or 0
     if typ == "boolean":
         return False
+    if typ == "array":
+        item = synth(s.get("items", {"type": "string"}))
+        # Honor the actual minItems count, not just presence: fixed-size
+        # byte arrays like the 32-byte GuestNonce/GuestAuthTag declare
+        # minItems == maxItems == 32, so a single-element fixture is "too
+        # short". Emit exactly minItems copies (still <= maxItems for any
+        # valid schema).
+        min_items = int(s.get("minItems", 0) or 0)
+        return [item] * min_items if min_items > 0 else []
     return "fixture"
+
+
+def iter_object_schemas(s, path, seen):
+    s = resolve(s)
+    marker = id(s)
+    if marker in seen:
+        return
+    seen.add(marker)
+
+    if s.get("type") == "object" or "properties" in s:
+        yield path, s
+
+    for name, sub in s.get("definitions", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/definitions/{name}", seen)
+    for name, sub in s.get("$defs", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/$defs/{name}", seen)
+    for name, sub in s.get("properties", {}).items():
+        yield from iter_object_schemas(sub, f"{path}/properties/{name}", seen)
+    items = s.get("items")
+    if isinstance(items, dict):
+        yield from iter_object_schemas(items, f"{path}/items", seen)
+    for key in ("oneOf", "anyOf", "allOf"):
+        for idx, sub in enumerate(s.get(key, [])):
+            yield from iter_object_schemas(sub, f"{path}/{key}/{idx}", seen)
+
+
+def assert_nested_unknowns_rejected():
+    if schema_path.name != "guest-control.json":
+        return
+
+    for path, sub_schema in iter_object_schemas(schema, "#", set()):
+        instance = synth(sub_schema)
+        if not isinstance(instance, dict):
+            continue
+        invalid = copy.deepcopy(instance)
+        invalid["__nixling_unknown_field__"] = True
+        subvalidator = validator.evolve(schema=sub_schema)
+        errors = list(subvalidator.iter_errors(invalid))
+        if not errors:
+            print(f"unknown field accepted at {path}", file=sys.stderr)
+            sys.exit(6)
+        if not any(
+            "Additional properties" in err.message or "Unevaluated properties" in err.message
+            for err in errors
+        ):
+            for err in errors[:5]:
+                print(f"unexpected nested validation error at {path}: {err.message}", file=sys.stderr)
+            sys.exit(7)
+
+
+def assert_guest_control_string_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    expected = {
+        "GuestSchemaVersion": 32,
+        "GuestConnectRequestLine": 64,
+        "GuestConnectAckLine": 64,
+        "GuestVmId": 128,
+        "RequestId": 128,
+        "ExecId": 128,
+        "GuestBootId": 128,
+        "CapabilitiesHash": 128,
+        "GuestArg": 4096,
+        "GuestUser": 128,
+        "GuestCwd": 4096,
+        "EnvKey": 128,
+        "EnvValue": 8192,
+    }
+
+    definitions = schema.get("definitions", {})
+    for name, max_length in expected.items():
+        node = resolve(definitions.get(name, {}))
+        if node.get("type") != "string":
+            print(f"{name} is not emitted as a string schema", file=sys.stderr)
+            sys.exit(8)
+        if node.get("minLength") != 1 or node.get("maxLength") != max_length:
+            print(
+                f"{name} lost bounds: minLength={node.get('minLength')} maxLength={node.get('maxLength')}",
+                file=sys.stderr,
+            )
+            sys.exit(9)
+
+
+def assert_guest_control_chunk_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    checks = {
+        ("WriteStdinRequest", "data"): {"minItems": 1, "maxItems": 1048576},
+        ("ReadOutputResponse", "data"): {"maxItems": 1048576},
+        ("ExecLogsResponse", "data"): {"maxItems": 1048576},
+        ("ReadOutputRequest", "maxLen"): {"minimum": 1.0, "maximum": 1048576.0},
+        ("ExecLogsRequest", "maxLen"): {"minimum": 1.0, "maximum": 1048576.0},
+    }
+
+    for (definition, field), expected in checks.items():
+        node = resolve(schema.get("definitions", {}).get(definition, {}))
+        prop = resolve(node.get("properties", {}).get(field, {}))
+        for key, value in expected.items():
+            if prop.get(key) != value:
+                print(
+                    f"{definition}.{field} lost {key}: got {prop.get(key)!r}, want {value!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(10)
+        if field == "data":
+            item = resolve(prop.get("items", {}))
+            if item.get("format") != "uint8" or item.get("minimum") != 0.0 or item.get("maximum") != 255.0:
+                print(f"{definition}.{field} byte item bounds drifted: {item}", file=sys.stderr)
+                sys.exit(11)
+
+
+def assert_guest_control_terminal_bounds():
+    if schema_path.name != "guest-control.json":
+        return
+
+    checks = (
+        ("TerminalSize", "rows"),
+        ("TerminalSize", "cols"),
+        ("TtyWinResizeRequest", "rows"),
+        ("TtyWinResizeRequest", "cols"),
+    )
+    for definition, field in checks:
+        node = resolve(schema.get("definitions", {}).get(definition, {}))
+        prop = resolve(node.get("properties", {}).get(field, {}))
+        if prop.get("minimum") != 1.0 or prop.get("maximum") != 65535.0:
+            print(f"{definition}.{field} terminal geometry bounds drifted: {prop}", file=sys.stderr)
+            sys.exit(12)
 
 
 if valid_path is None:
@@ -121,6 +257,11 @@ if not any("Additional properties" in err.message or "Unevaluated properties" in
     for err in unknown_errors[:5]:
         print(f"unexpected validation error: {err.message}", file=sys.stderr)
     sys.exit(5)
+
+assert_nested_unknowns_rejected()
+assert_guest_control_string_bounds()
+assert_guest_control_chunk_bounds()
+assert_guest_control_terminal_bounds()
 PY
 )
 

@@ -62,11 +62,6 @@ let
     lib.imap0 (i: name: { inherit name; value = i; }) envNames
   );
 
-  # Legacy env-less VMs keep a deterministic fallback CID so the always-
-  # emitted observability block stays a no-op when observability is off.
-  legacyObsVsockCid = name:
-    4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
-
   netVmOfEnv = envName:
     let n = config.nixling.envs.${envName}.netName or "sys-${envName}-net";
     in n;
@@ -101,11 +96,18 @@ let
       usbipdHostIp =
         if m != null then m.hostUplinkIp
         else null;
-      obsVsockCid =
-        if envName != null && envIndexMap ? ${envName}
-        then 100 + (envIndexMap.${envName} * 100) + vm.index
-        else legacyObsVsockCid name;
       stateRoot = "${config.nixling.store.stateDir}/${name}";
+      envIndex =
+        if envName != null && envIndexMap ? ${envName}
+        then envIndexMap.${envName}
+        else null;
+      baseVsockCid = nl.guestControlVsockCid {
+        inherit name envIndex;
+        index = vm.index;
+        isNetVm = asNetVmForEnv != null;
+        isObservabilityVm = obsCfg.enable && name == obsCfg.vmName;
+      };
+      baseVsockHostSocket = nl.guestControlVsockHostSocket stateRoot;
     in
     {
       inherit name;
@@ -128,8 +130,8 @@ let
       audioService = "nixling-${name}-snd.service";
       observability = {
         enabled = vm.observability.enable;
-        vsockCid = obsVsockCid;
-        vsockHostSocket = "${stateRoot}/vsock.sock";
+        vsockCid = baseVsockCid;
+        vsockHostSocket = baseVsockHostSocket;
         agentSocket = "/run/nixling/otlp.sock";
       };
       staticIp =
@@ -167,7 +169,8 @@ let
       enabled = obsCfg.enable;
       vmName = obsCfg.vmName;
       obsVsockCid = 1000;
-      obsVsockHostSocket = "${config.nixling.store.stateDir}/${obsCfg.vmName}/vsock.sock";
+      obsVsockHostSocket =
+        nl.guestControlVsockHostSocket "${config.nixling.store.stateDir}/${obsCfg.vmName}";
       signozUrl = "http://${obsCfg.signoz.listenAddress}:${toString obsCfg.signoz.listenPort}";
       signozOtlpGrpcPort = obsCfg.signoz.otlpGrpcPort;
       signozOtlpHttpPort = obsCfg.signoz.otlpHttpPort;
@@ -192,9 +195,11 @@ let
       vsockCid = lib.mkOption {
         type = lib.types.ints.unsigned;
         description = ''
-          Deterministic observability vsock CID for this VM. Env-backed
-          VMs use `100 + envIndex * 100 + index`; legacy env-less VMs
-          keep a deterministic fallback so the field stays a no-op when
+          Deterministic base Cloud Hypervisor vsock CID for this VM.
+          Env-backed VMs use `100 + envIndex * 1000 + slot`, where
+          slot 1 is reserved for the env net VM and workload VMs use
+          `nixling.vms.<vm>.index`; legacy env-less VMs keep a
+          deterministic fallback so the field stays a no-op when
           observability is disabled.
         '';
       };
@@ -452,7 +457,7 @@ in
 
   options.nixling._manifestVersion = lib.mkOption {
     type = lib.types.ints.unsigned;
-    default = 4;
+    default = 5;
     internal = true;
     description = ''
       Internal: the integer schema version stamped into
@@ -476,10 +481,26 @@ in
         * 3 — daemon-only end-state break. Drops per-VM systemd-unit
           reference fields that become meaningless once supervisor
           mode is retired and the daemon owns every per-VM lifecycle
-          transition. Pinned by `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`;
-          the broker / daemon refuse any other value with a
+          transition.
+        * 4 — base Cloud Hypervisor vsock semantics. Keeps the v3
+          shape, but defines per-VM `observability.vsockCid` and
+          `observability.vsockHostSocket` as the host-owned base
+          vsock device used by observability today and guest control in
+          later waves. Pinned by
+          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`; the
+          broker / daemon refuse any other value with a
           `manifest-version-mismatch` typed error (no legacy
           compatibility window).
+        * 5 — combines two independent contract changes that each
+          landed as a `4` on separate branches: the base Cloud
+          Hypervisor vsock semantics above, and the native SigNoz
+          observability backend, which replaces the top-level
+          `_observability` Grafana / Cloud Hypervisor exporter metadata
+          (`grafanaUrl`, `chExporter`) with SigNoz UI and
+          collector-ingress metadata (`signozUrl`, `signozOtlpGrpcPort`,
+          `signozOtlpHttpPort`). The vsock transport contract is
+          unchanged. Pinned by
+          `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT`.
     '';
   };
 

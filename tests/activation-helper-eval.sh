@@ -231,6 +231,18 @@ else
     fail "setfacl-on-path on symlink expected exit 2, got $rc"
   fi
 
+  # --- (12b) clear-acl-on-path: symlink refusal ---
+  set +e
+  "$BIN" clear-acl-on-path --path "$SCRATCH/evil-acl.txt" \
+    --setfacl-bin "$setfacl_bin" 2>/dev/null
+  rc=$?
+  set -e
+  if [ "$rc" = "2" ]; then
+    ok "clear-acl-on-path refuses symlink with exit 2"
+  else
+    fail "clear-acl-on-path on symlink expected exit 2, got $rc"
+  fi
+
   # --- (13) setfacl-on-path: require-kind refusal on wrong type ---
   mkdir "$SCRATCH/aclrequire-dir"
   set +e

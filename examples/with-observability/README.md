@@ -14,7 +14,7 @@ No container runtime is used.
 ```text
 host: demo
 ├─ work env (declared)
-│  └─ work-app (10.20.0.10, obs vsock CID 210)
+│  └─ work-app (10.20.0.10, obs vsock CID 1110)
 └─ obs env (auto-declared)
    └─ sys-obs (SigNoz http://10.40.0.10:8080, obs vsock CID 1000)
 
@@ -38,7 +38,7 @@ host OTel collector
 | Item | Value |
 | --- | --- |
 | SigNoz URL | `http://10.40.0.10:8080` |
-| `work-app` observability vsock CID | `210` |
+| `work-app` observability vsock CID | `1110` |
 | Observability VM vsock CID | `1000` |
 | Host obs ingress vsock port | `14317` |
 | `work-app` obs ingress vsock port | `14318` |

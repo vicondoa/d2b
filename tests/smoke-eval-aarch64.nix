@@ -36,7 +36,7 @@ let
 
   # Import the flake-as-source via getFlake. Path relative to this
   # file so the test works regardless of caller cwd.
-  flake = builtins.getFlake (toString ./..);
+  flake = builtins.getFlake "git+file://${toString ./..}";
 
   # Cross-evaluate by asking the flake's nixpkgs for an aarch64
   # instance directly, rather than relying on `import <nixpkgs>`

@@ -159,6 +159,14 @@ pub enum OperationFields {
     UsbipBindFirewallRule {
         bundle_usbip_firewall_intent_ref: String,
     },
+    GuestControlSign {
+        vm_id: String,
+        role: String,
+        purpose: String,
+        transcript_len: usize,
+        peer_cid_present: bool,
+        capabilities_hash_present: bool,
+    },
     ApplyNmUnmanaged {
         bundle_nm_intent_ref: String,
         scope_id: String,
@@ -403,6 +411,14 @@ impl OperationFields {
             "UsbipProxyReconcile" => parse_fields!(value => UsbipProxyReconcile {}),
             "UsbipBindFirewallRule" => parse_fields!(value => UsbipBindFirewallRule {
                 bundle_usbip_firewall_intent_ref: String,
+            }),
+            "GuestControlSign" => parse_fields!(value => GuestControlSign {
+                vm_id: String,
+                role: String,
+                purpose: String,
+                transcript_len: usize,
+                peer_cid_present: bool,
+                capabilities_hash_present: bool,
             }),
             "ApplyNmUnmanaged" => parse_fields!(value => ApplyNmUnmanaged {
                 bundle_nm_intent_ref: String,
@@ -741,6 +757,18 @@ mod tests {
         "UsbipBindFirewallRule",
         OperationFields::UsbipBindFirewallRule {
             bundle_usbip_firewall_intent_ref: "usbip-firewall:1-2.3".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        guest_control_sign_round_trip,
+        "GuestControlSign",
+        OperationFields::GuestControlSign {
+            vm_id: "corp-vm".to_owned(),
+            role: "Health".to_owned(),
+            purpose: "Readiness".to_owned(),
+            transcript_len: 96,
+            peer_cid_present: true,
+            capabilities_hash_present: false,
         }
     );
     roundtrip_test!(

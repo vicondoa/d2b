@@ -188,12 +188,16 @@ let
         let
           shareTag = builtins.unsafeDiscardStringContext share.tag;
           shareNodeId = "virtiofsd-${shareTag}";
+          principal =
+            if shareTag == "nl-gctl"
+            then "nixling-${name}-gctlfs"
+            else "nixling-${name}-runner";
         in {
           name = profileIdFor name shareNodeId;
           value = mkProfile {
             profileId = profileIdFor name shareNodeId;
             role = "virtiofsd";
-            principal = "nixling-${name}-runner";
+            inherit principal;
             # (ADR 0021): with broker-pre-NS, virtiofsd
             # runs fake-root INSIDE its own user namespace. All
             # caps within the NS scope are available implicitly;
@@ -202,11 +206,15 @@ let
             # no CAP_SETUID, no CAP_SYS_ADMIN on the host.
             capabilities = [ ];
             seccompPolicyRef = "w1-virtiofsd";
-            readOnlyPaths = [ "/nix/store" ];
-            writablePaths = [
-              (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
-              (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
-            ];
+            readOnlyPaths = [ "/nix/store" ]
+              ++ lib.optional (shareTag == "nl-gctl") share.source;
+            writablePaths =
+              if shareTag == "nl-gctl" then [
+                (mkWritablePath "${audioRuntimeDirOf name}/guest-control" "Expose the guest-control token virtiofs socket.")
+              ] else [
+                (mkWritablePath (stateDirOf name) "Materialize virtiofs sockets and VM-local store state.")
+                (mkWritablePath (runtimeDirOf name) "Expose broker-prepared virtiofs runtime sockets.")
+              ];
             cgroupSubtree = "nixling.slice/${name}/${shareNodeId}";
             controllers = serviceControllers;
             # (ADR 0021): broker pre-creates a user NS
@@ -216,8 +224,8 @@ let
             # with correct mode/UID semantics and `--sandbox=chroot`
             # works without host CAP_SYS_ADMIN.
             userNamespace = {
-              hostUidForZero = stablePrincipalId "nixling-${name}-runner";
-              hostGidForZero = stablePrincipalId "nixling-${name}-runner";
+              hostUidForZero = stablePrincipalId principal;
+              hostGidForZero = stablePrincipalId principal;
             };
             requiresStartRoot = false;
             exceptionRef = virtiofsdRootException;
@@ -328,12 +336,12 @@ let
         controllers = serviceControllers;
       };
 
-      "${profileIdFor name "guest-ssh-readiness"}" = mkProfile {
-        profileId = profileIdFor name "guest-ssh-readiness";
-        role = "guest-ssh-readiness";
+      "${profileIdFor name "guest-control-health"}" = mkProfile {
+        profileId = profileIdFor name "guest-control-health";
+        role = "guest-control-health";
         principal = "nixlingd";
-        seccompPolicyRef = "w1-guest-ssh-readiness";
-        cgroupSubtree = "nixling.slice/${name}/guest-ssh-readiness";
+        seccompPolicyRef = "w1-guest-control-health";
+        cgroupSubtree = "nixling.slice/${name}/guest-control-health";
       };
     }
     // lib.optionalAttrs vm.tpm.enable {

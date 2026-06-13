@@ -207,7 +207,7 @@ fn all_known_policy_refs_compile_to_some() {
         "w1-virtiofsd",
         "w1-host-reconcile",
         "w1-store-virtiofs-preflight",
-        "w1-guest-ssh-readiness",
+        "w1-guest-control-health",
         "w1-swtpm",
         "w1-gpu",
         "w1-gpu-render-node",

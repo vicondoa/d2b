@@ -27,5 +27,22 @@ if [ -z "${NIXLING_MANIFEST_FUZZ_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/
     --command bash "$0" "$@"
 fi
 
-(cd "$ROOT/packages" && CARGO_TARGET_DIR="$(nl_cargo_target_dir workspace)" cargo test --release -p nixling-core --features fuzz -- --runs 10000)
+# Run the bolero fuzz harnesses (harness=false binaries under
+# fuzz/src/bin/) bounded to 10000 runs each. Target them explicitly by
+# `--test` name rather than `cargo test -p nixling-core` for the whole
+# package: regular libtest integration tests in the crate (e.g.
+# bundle-resolver-tamper, bundle-resolver-runner-intents) reject the
+# bolero-only `--runs` flag with "Unrecognized option: 'runs'".
+(
+  cd "$ROOT/packages"
+  target_dir="$(nl_cargo_target_dir workspace)"
+  for fuzz_test in \
+    nixling-core-fuzz-manifest \
+    nixling-core-fuzz-bundle \
+    nixling-core-fuzz-host \
+    nixling-core-fuzz-privileges; do
+    CARGO_TARGET_DIR="$target_dir" \
+      cargo test --release -p nixling-core --features fuzz --test "$fuzz_test" -- --runs 10000
+  done
+)
 ok "bounded manifest fuzz harness completed 10000 runs"

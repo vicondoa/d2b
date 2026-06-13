@@ -65,6 +65,10 @@ from pathlib import Path
 ) = sys.argv[1:]
 
 DOC = Path(doc_path).read_text(encoding="utf-8")
+# console + audio {status,mic,speaker,off} are `rust-native shim`: the Rust CLI
+# parses them natively and returns a typed `not-yet-implemented` envelope. They
+# are not legacy-bash dispatches, so the `legacy-bash` help-output comparison
+# below never applies to them.
 EXPECTED_DISPOSITION = {
     "list": "rust-native",
     "vm start": "rust-native",
@@ -75,11 +79,11 @@ EXPECTED_DISPOSITION = {
     "usb attach": "rust-native",
     "usb detach": "rust-native",
     "usb probe": "rust-native",
-    "console": "legacy-bash",
-    "audio status": "legacy-bash",
-    "audio mic": "legacy-bash",
-    "audio speaker": "legacy-bash",
-    "audio off": "legacy-bash",
+    "console": "rust-native shim",
+    "audio status": "rust-native shim",
+    "audio mic": "rust-native shim",
+    "audio speaker": "rust-native shim",
+    "audio off": "rust-native shim",
     "build": "rust-native",
     "switch": "rust-native",
     "boot": "rust-native",

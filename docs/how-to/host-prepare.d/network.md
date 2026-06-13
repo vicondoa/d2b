@@ -32,18 +32,25 @@ nixling host check --json
 # Plan-only: emits the reconcile diff without mutating host state.
 sudo nixling host prepare --dry-run
 
-# Apply: takes the per-VM lock, applies the diff, and runs the
-# IPv6-off readback gate. Fails closed on drift.
+# `--apply` is NOT yet wired: the daemon-side typed-intent dispatch
+# and bundle resolver are pending, so this returns `daemon-down`
+# (exit 1) today. Use `--dry-run` for now. Once wired it will take
+# the per-VM lock, apply the diff, and run the IPv6-off readback
+# gate, failing closed on drift.
 sudo nixling host prepare --apply
 
-# Reverses the host-prepare mutations only (bridges, TAPs, NM drop-in,
-# /etc/hosts managed block, IPv6 sysctls). Foreign state untouched.
+# Same pending disposition for destroy (`daemon-down`, exit 1, today).
+# Once wired it will reverse the host-prepare mutations only (bridges,
+# TAPs, NM drop-in, /etc/hosts managed block, IPv6 sysctls). Foreign
+# state untouched.
 sudo nixling host destroy --apply
 ```
 
-`host prepare --apply` is refused on Tier 0 NixOS-legacy hosts unless
-at least one VM in the bundle declares
-`nixling.vms.<vm>.supervisor = "nixlingd"`.
+`host prepare --apply` is refused on a Tier 0 NixOS-legacy host —
+one where nixling resolves no daemon-owned bundle to reconcile. The
+per-VM `nixling.vms.<vm>.supervisor` option was removed in v1.1 (per
+ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
+host resolves to the daemon path.
 
 ## Ownership markers (foreign-rule preservation guarantees)
 
@@ -99,7 +106,9 @@ between the step-3 write and the step-5 readback is the
 - If `nmcli -t -f DEVICE,STATE device status` reports the nixling
   ifname as `connected` after the reload, the failure mode is
   `nm-managed-foreign-conflict`. Audit log lists the foreign profile
-  ID; remove or rename it and re-run `host prepare --apply`.
+  ID; remove or rename it and, once `host prepare --apply` is wired,
+  re-run it (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  to re-check).
 
 ### Fedora 40+ (Tier 1-later)
 

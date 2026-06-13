@@ -491,15 +491,31 @@ _arguments "${_arguments_options[@]}" : \
 (konsole)
 _arguments "${_arguments_options[@]}" : \
 '--terminal=[Terminal emulator binary to spawn. Must accept \`-e\` to execute a command. Tested\: konsole, alacritty, foot, gnome-terminal, xterm. Default\: konsole]:TERMINAL:_default' \
-'--user=[SSH user inside the guest. Defaults to the per-VM \`ssh_user\` from the manifest; falls back to \`\$USER\` if the manifest entry is absent. Override for ad-hoc per-user sessions]:USER:_default' \
-'--host=[Override the SSH host (IP or hostname). Default\: manifest \`static_ip\` (bundle-resolved LAN address)]:HOST:_default' \
-'--key=[Override the SSH key path. Default\: the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides). Legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is only the fallback when no bundle is staged]:KEY:_files' \
+'--user=[Retired SSH-only flag. Rejected with a migration message; guest-control exec runs as the guest-control principal]:USER:_default' \
+'--host=[Retired SSH-only flag. Rejected with a migration message; the transport is resolved from the trusted bundle]:HOST:_default' \
+'--key=[Retired SSH-only flag. Rejected with a migration message; guest-control exec needs no SSH key]:KEY:_files' \
 '--dry-run[Print the would-be command without executing]' \
 '(--human)--json[]' \
 '(--json)--human[]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
+&& ret=0
+;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+'*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
+'--cwd=[Working directory for the guest command]:DIR:_default' \
+'-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
+'--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
+'-t[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
+'--tty[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
+'(--human)--json[Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only]' \
+'(--json)--human[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
+'*::command -- The command and its arguments, after `--`. NOT a clap `required` argument\: a missing command is validated inside `cmd_vm_exec` so a `--json` run still emits the single terminal `source\: "cli"`, `reason\: "usage"` envelope on stdout instead of a clap stderr error (matching docs/reference/{error-codes,cli-contract}.md):_default' \
 && ret=0
 ;;
 (help)
@@ -535,6 +551,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (konsole)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(exec)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -834,15 +854,15 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (sync)
 _arguments "${_arguments_options[@]}" : \
-'--guest-path=[Path of the editable guest config INSIDE the VM to pull]:GUEST_PATH:_default' \
-'--host=[Override the SSH host (defaults to the manifest \`static_ip\`)]:HOST:_default' \
-'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`)]:USER:_default' \
-'--key=[Override the SSH private key path]:KEY:_files' \
-'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`)]:KNOWN_HOSTS:_files' \
-'--dry-run[Print the SSH command instead of running it]' \
+'--guest-path=[Path of the editable guest config INSIDE the VM to pull. Honored only by the legacy operator SSH transport; on guest-control VMs the canonical guest config working copy is read by file id and this flag is rejected]:GUEST_PATH:_default' \
+'--host=[Override the SSH host (defaults to the manifest \`static_ip\`). SSH transport only; rejected on guest-control VMs]:HOST:_default' \
+'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`). SSH transport only; rejected on guest-control VMs]:USER:_default' \
+'--key=[Override the SSH private key path. SSH transport only; rejected on guest-control VMs]:KEY:_files' \
+'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/nixling/known_hosts.nixling\`). SSH transport only; rejected on guest-control VMs]:KNOWN_HOSTS:_files' \
+'--dry-run[Print the planned action instead of running it]' \
 '--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 ':vm -- VM name (must match the static manifest):_default' \
 && ret=0
 ;;
@@ -1113,6 +1133,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -1277,7 +1301,7 @@ _nixling_commands() {
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verbs \`exec\` and \`konsole\`, which run commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
 'restart:Alias for \`vm restart <vm>\`' \
@@ -1521,7 +1545,7 @@ _nixling__subcmd__help_commands() {
 'audit:Tail the broker audit log' \
 'host:Host-side preflight, install, doctor, and reconcile verbs' \
 'auth:Authorisation introspection' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status / konsole)' \
+'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verbs \`exec\` and \`konsole\`, which run commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
 'up:Alias for \`vm start <vm>\`' \
 'down:Alias for \`vm stop <vm>\`' \
 'restart:Alias for \`vm restart <vm>\`' \
@@ -1826,9 +1850,15 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__exec_commands] )) ||
+_nixling__subcmd__help__subcmd__vm__subcmd__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling help vm exec commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__help__subcmd__vm__subcmd__konsole_commands] )) ||
 _nixling__subcmd__help__subcmd__vm__subcmd__konsole_commands() {
@@ -2162,10 +2192,16 @@ _nixling__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__exec_commands] )) ||
+_nixling__subcmd__vm__subcmd__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm exec commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__help_commands] )) ||
 _nixling__subcmd__vm__subcmd__help_commands() {
@@ -2175,10 +2211,16 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'konsole:Open an SSH session to the VM in a host terminal. Resolves the per-VM SSH key from the bundle'\''s \`managed_keys.effective_key_path(<vm>)\` (honors \`nixling.site.keysDir\` + per-VM overrides; legacy \`/var/lib/nixling/keys/<vm>_ed25519\` is the fallback) and the IP from the manifest'\''s \`static_ip\`. Default terminal\: konsole' \
+'konsole:Open an interactive guest session in a host terminal. Thin wrapper that hosts \`nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l\` in the chosen terminal emulator (default \`konsole\`, overridable via \`--terminal\`) over the authenticated guest-control transport. There is no SSH; the retired SSH-only flags \`--host\`/\`--key\`/\`--user\` are rejected with a migration message' \
+'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm help commands' commands "$@"
+}
+(( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__exec_commands] )) ||
+_nixling__subcmd__vm__subcmd__help__subcmd__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'nixling vm help exec commands' commands "$@"
 }
 (( $+functions[_nixling__subcmd__vm__subcmd__help__subcmd__help_commands] )) ||
 _nixling__subcmd__vm__subcmd__help__subcmd__help_commands() {

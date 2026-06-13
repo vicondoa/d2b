@@ -77,7 +77,7 @@ CANONICAL_CAPS=(
 # needed; this is purely a host-broker module test.
 EXPR=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

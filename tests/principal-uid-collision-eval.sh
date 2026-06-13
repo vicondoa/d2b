@@ -60,7 +60,7 @@ EXPR=$(cat <<EOF
 let
   pkgs = import <nixpkgs> { system = "x86_64-linux"; };
   inherit (pkgs) lib;
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   pkgsForSystem = import flake.inputs.nixpkgs {
     system = "x86_64-linux";

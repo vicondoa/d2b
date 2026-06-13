@@ -92,7 +92,10 @@ EOF
     else cfg._bundle.minijailProfiles.${profileIdFor name nodeId}.roleProfile;
   vsockSocketForPort = socketPath: port: "${socketPath}_${toString port}";
   shareNodeId = share: "virtiofsd-${clean share.tag}";
-  shareSocketPath = name: share: "/run/nixling/vms/${name}/${clean share.tag}.sock";
+  shareSocketPath = name: share:
+    if share.tag == "nl-gctl"
+    then "/run/nixling/vms/${name}/guest-control/${clean share.tag}.sock"
+    else "/run/nixling/vms/${name}/${clean share.tag}.sock";
   volumeHostPath = name: volume: nl.volumeHostPath cfg.store.stateDir name volume;
 
   componentReady = value: { kind = "component-specific"; inherit value; };
@@ -101,6 +104,12 @@ EOF
   unixSocketListening = value: { kind = "unix-socket-listening"; inherit value; };
   tcpPort = host: port: { kind = "tcp-port"; value = { inherit host port; }; };
   commandReady = value: { kind = "command"; inherit value; };
+  # Authenticated guest-control Health readiness. Unlike a raw TCP-22
+  # probe this predicate fails CLOSED: the daemon completes a full
+  # Hello + token challenge-response + Health over the guest-control vsock
+  # before the node is ready. The daemon resolves the per-VM vsock socket,
+  # peer credentials, and broker-backed signer from its own trusted state.
+  guestControlHealthReady = vmName: { kind = "guest-control-health"; value = { vm = vmName; }; };
 
   extractOptValues = optFlag: extraArgs:
     let
@@ -207,10 +216,13 @@ EOF
     let
       microvm = nl.vmRunner config name;
       extraArgs = microvm.cloud-hypervisor.extraArgs;
+      hasUserVsockExtraArg = lib.any
+        (arg: arg == "--vsock" || lib.hasPrefix "--vsock=" arg)
+        extraArgs;
       processedExtraArgs = builtins.foldl'
         (args: opt: (extractOptValues opt args).args)
         extraArgs
-        [ "--vsock" "--platform" ];
+        [ "--platform" ];
       hasUserConsole = (extractOptValues "--console" extraArgs).values != [ ];
       userSerialValues = (extractOptValues "--serial" extraArgs).values;
       hasUserSerial = userSerialValues != [ ];
@@ -233,22 +245,12 @@ EOF
       kernelCmdLine = lib.concatStringsSep " " (
         lib.filter (value: value != "") ([ kernelConsole "reboot=t" "panic=-1" ] ++ microvm.kernelParams)
       );
-      userVSockOpts = (extractOptValues "--vsock" extraArgs).values;
-      userVSockStr = if userVSockOpts == [ ] then null else builtins.head userVSockOpts;
-      userVSockPath = extractParamValue "socket" userVSockStr;
-      userVSockCID = extractParamValue "cid" userVSockStr;
-      vsockCID =
-        if microvm.vsock.cid != null && userVSockCID != null then
-          throw "Cannot set microvm.vsock.cid and --vsock cid= ... via microvm.cloud-hypervisor.extraArgs at the same time"
-        else if microvm.vsock.cid != null then
-          microvm.vsock.cid
-        else
-          userVSockCID;
-      supportsNotifySocket = vsockCID != null;
-      vsockPath = if userVSockPath != null then userVSockPath else "/var/lib/nixling/vms/${name}/notify.vsock";
+      vsockCID = microvm.vsock.cid;
+      vsockPath = microvm.vsock.socket;
+      supportsNotifySocket = true;
       vsockOpts =
-        if vsockCID == null then
-          null
+        if hasUserVsockExtraArg then
+          throw "nixling.vms.${name}.config.microvm.cloud-hypervisor.extraArgs must not set --vsock; nixling owns the Cloud Hypervisor vsock device for guest control and observability"
         else
           "cid=${toString vsockCID},socket=${vsockPath}";
       virtiofsShares = lib.filter (share: (share.proto or "virtiofs") == "virtiofs") microvm.shares;
@@ -389,7 +391,7 @@ EOF
     ]
     ++ lib.optionals (!hasUserConsole) [ "--console" "null" ]
     ++ lib.optionals (!hasUserSerial) [ "--serial" "tty" ]
-    ++ lib.optionals (vsockOpts != null) [ "--vsock" vsockOpts ]
+    ++ [ "--vsock" vsockOpts ]
     ++ lib.optionals vm.graphics.enable [ "--gpu" "socket=${microvm.graphics.socket}" ]
     ++ lib.optionals microvm.balloon [ "--balloon" balloonOps ]
     ++ variadicFlagArgs "--disk" diskParams
@@ -803,7 +805,11 @@ use devices::virtio::vhost_user_backend::run_video_device;'
     let
       manifest = cfg.manifest.${name};
       microvm = nl.vmRunner config name;
-      guestSshEnabled = manifest.sshUser != null && manifest.staticIp != null;
+      # The guest-control authenticated Health probe is the framework
+      # readiness gate on guest-control-capable VMs. Per-VM sshd/host-keys are
+      # retained for the SSH-compat window but are no longer the framework
+      # readiness signal, so a TCP-22 readiness node is no longer emitted.
+      guestControlEnabled = vm.guest.control.enable;
       virtiofsShares = lib.filter
         (share: (share.proto or "virtiofs") == "virtiofs")
         microvm.shares;
@@ -968,10 +974,10 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         unit = "nixling-otel-host-bridge.service";
         readiness = [ (unixSocketExists "/run/nixling/otel/host-egress.sock") ];
       } // otelHostBridgeRunner manifest))
-      ++ lib.optional guestSshEnabled (node name {
-        id = "guest-ssh-readiness";
-        role = "guest-ssh-readiness";
-        readiness = [ (tcpPort manifest.staticIp 22) ];
+      ++ lib.optional guestControlEnabled (node name {
+        id = "guest-control-health";
+        role = "guest-control-health";
+        readiness = [ (guestControlHealthReady name) ];
       });
       edges = [
         (edge "host-reconcile" "store-virtiofs-preflight" "Host reconciliation must complete before store and virtiofs preflight runs.")
@@ -1005,8 +1011,8 @@ use devices::virtio::vhost_user_backend::run_video_device;'
         edgesFromNodes optionalSidecarBaseNodeIds "audio" "The audio sidecar starts only after every prerequisite sidecar is ready."
       )
       ++ edgesFromNodes preVmmNodeIds "cloud-hypervisor" "Cloud Hypervisor starts only after every prerequisite sidecar is ready."
-      ++ lib.optional guestSshEnabled
-        (edge "cloud-hypervisor" "guest-ssh-readiness" "SSH readiness is checked only after Cloud Hypervisor is running.");
+      ++ lib.optional guestControlEnabled
+        (edge "cloud-hypervisor" "guest-control-health" "Authenticated guest-control Health readiness is probed only after Cloud Hypervisor is running.");
       invariants = {
         perVmAuditPipeline = true;
         swtpmPreStartFlush = true;

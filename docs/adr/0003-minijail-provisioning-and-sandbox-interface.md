@@ -47,7 +47,9 @@ that introduces the actual crates.
    > `clone3(CLONE_NEWUSER)` before exec; virtiofsd profiles declare
    > `requiresStartRoot = false`, zero host capabilities
    > (`capabilities = []`), and a `userNamespace` block mapping in-NS
-   > UID/GID 0 to the per-VM runner principal. virtiofsd runs fake-root
+   > UID/GID 0 to a per-share principal. Normal VM shares use the
+   > per-VM runner principal; the guest-control token share uses
+   > `nixling-<vm>-gctlfs` for narrower token access. virtiofsd runs fake-root
    > only inside the namespace. virtiofsd is the only role currently
    > moved to this model; future roles (gpu/audio/swtpm) may follow
    > pending device-bind compatibility analysis.

@@ -53,3 +53,5 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde_json.workspace = true
 tempfile = "3"
+tokio = { version = "1", features = ["net"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }

@@ -1,5 +1,6 @@
 #![doc = "Canonical data transfer objects for nixling bundle artifacts."]
 
+pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;

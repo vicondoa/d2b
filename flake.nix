@@ -44,6 +44,108 @@
 
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
+        guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages/nixling-core} $out/packages/nixling-core
+          cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
+          cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
+          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
+          cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
+          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
+          chmod -R u+w $out/packages/nixling-core
+          cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
+          [package]
+          name = "nixling-core"
+          version = "0.0.0-bootstrap"
+          edition = "2021"
+          publish = false
+          license.workspace = true
+
+          [lib]
+          test = false
+          doctest = false
+
+          [lints]
+          workspace = true
+
+          [features]
+          test-support = []
+
+          [dependencies]
+          serde.workspace = true
+          serde_json.workspace = true
+          schemars.workspace = true
+          semver = "1"
+          rustix = { workspace = true }
+          sha2 = { workspace = true }
+          EOF
+          cat > $out/packages/Cargo.toml <<'EOF'
+          [workspace]
+          resolver = "2"
+          members = [
+            "nixling-core",
+            "nixling-ipc",
+            "nixling-guestd",
+            "nixling-userd",
+            "nixling-exec-runner",
+          ]
+
+          [workspace.package]
+          license = "Apache-2.0"
+
+          [workspace.lints.clippy]
+          all = "warn"
+
+          [workspace.lints.rust]
+          unsafe_code = "forbid"
+          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+          [workspace.dependencies]
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          schemars = { version = "0.8", features = ["derive"] }
+          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
+          sha2 = "0.10"
+          EOF
+        '';
+        cargoLock = {
+          lockFile = ./packages/Cargo.guest.lock;
+        };
+        guestStaticPackage = packageName: binName:
+          pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+            pname = "${binName}-static";
+            version = "0.0.0-bootstrap";
+            src = guestRustPackagesSrc;
+            sourceRoot = "nixling-guest-rust-src/packages";
+            inherit cargoLock;
+            cargoBuildFlags = [ "--package" packageName "--bin" binName ];
+            doCheck = false;
+            RUSTC_WRAPPER = "";
+            SCCACHE_DIR = "";
+            nativeBuildInputs = [ pkgs.binutils ];
+            postInstall = ''
+              bin="$out/bin/${binName}"
+              test -x "$bin"
+              readelf -h "$bin" >/dev/null
+              readelf -l "$bin" > "$TMPDIR/${binName}.program-headers"
+              if grep -q 'Requesting program interpreter' "$TMPDIR/${binName}.program-headers"; then
+                echo "${binName}: unexpected ELF interpreter" >&2
+                cat "$TMPDIR/${binName}.program-headers" >&2
+                exit 1
+              fi
+              if readelf -d "$bin" > "$TMPDIR/${binName}.dynamic" 2> "$TMPDIR/${binName}.dynamic.err"; then
+                if grep -q '(NEEDED)' "$TMPDIR/${binName}.dynamic"; then
+                  echo "${binName}: unexpected dynamic dependency" >&2
+                  cat "$TMPDIR/${binName}.dynamic" >&2
+                  exit 1
+                fi
+              elif ! grep -qi 'no dynamic section' "$TMPDIR/${binName}.dynamic.err"; then
+                echo "${binName}: readelf -d failed unexpectedly" >&2
+                cat "$TMPDIR/${binName}.dynamic.err" >&2
+                exit 1
+              fi
+            '';
+          };
       in {
         manpages = pkgs.runCommand "nixling-manpages" { } ''
           install -Dm644 ${./docs/manpages/nixling.1} "$out/share/man/man1/nixling.1"
@@ -55,6 +157,10 @@
           install -Dm644 ${./docs/completions/nixling.zsh}  "$out/share/zsh/site-functions/_nixling"
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
         '';
+        nixling-guestd-static = guestStaticPackage "nixling-guestd" "nixling-guestd";
+        nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
+        nixling-exec-runner-static =
+          guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
 
         signoz = import ./pkgs/signoz { inherit pkgs; };
         signozOtelCollector = import ./pkgs/signoz-otel-collector { inherit pkgs; };
@@ -115,6 +221,70 @@
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
         '';
+        guestRustPackagesSrc = pkgs.runCommand "nixling-guest-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages/nixling-core} $out/packages/nixling-core
+          cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
+          cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
+          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
+          cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
+          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
+          chmod -R u+w $out/packages/nixling-core
+          cat > $out/packages/nixling-core/Cargo.toml <<'EOF'
+          [package]
+          name = "nixling-core"
+          version = "0.0.0-bootstrap"
+          edition = "2021"
+          publish = false
+          license.workspace = true
+
+          [lib]
+          test = false
+          doctest = false
+
+          [lints]
+          workspace = true
+
+          [features]
+          test-support = []
+
+          [dependencies]
+          serde.workspace = true
+          serde_json.workspace = true
+          schemars.workspace = true
+          semver = "1"
+          rustix = { workspace = true }
+          sha2 = { workspace = true }
+          EOF
+          cat > $out/packages/Cargo.toml <<'EOF'
+          [workspace]
+          resolver = "2"
+          members = [
+            "nixling-core",
+            "nixling-ipc",
+            "nixling-guestd",
+            "nixling-userd",
+            "nixling-exec-runner",
+          ]
+
+          [workspace.package]
+          license = "Apache-2.0"
+
+          [workspace.lints.clippy]
+          all = "warn"
+
+          [workspace.lints.rust]
+          unsafe_code = "forbid"
+          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+          [workspace.dependencies]
+          serde = { version = "1", features = ["derive"] }
+          serde_json = "1"
+          schemars = { version = "0.8", features = ["derive"] }
+          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
+          sha2 = "0.10"
+          EOF
+        '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "nixling-rust-workspace";
           version = "0.0.0-bootstrap";
@@ -143,6 +313,7 @@
         '';
         assertRustSupplyChainInputs = ''
           test -f ${rustPackagesSrc}/packages/Cargo.lock
+          test -f ${rustPackagesSrc}/packages/Cargo.guest.lock
           test -f ${rustPackagesSrc}/packages/deny.toml
           test -f ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock
           test -f ${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml
@@ -221,6 +392,71 @@
           '';
         };
 
+        guest-static-elf = pkgs.runCommand "nixling-guest-static-elf" {
+          nativeBuildInputs = [ pkgs.binutils ];
+        } ''
+          for bin in \
+            ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
+            ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
+            ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
+          do
+            test -x "$bin"
+            name="$(basename "$bin")"
+            readelf -h "$bin" >/dev/null
+            readelf -l "$bin" > "$TMPDIR/$name.program-headers"
+            if grep -q 'Requesting program interpreter' "$TMPDIR/$name.program-headers"; then
+              echo "$bin: unexpected ELF interpreter" >&2
+              cat "$TMPDIR/$name.program-headers" >&2
+              exit 1
+            fi
+            if readelf -d "$bin" > "$TMPDIR/$name.dynamic" 2> "$TMPDIR/$name.dynamic.err"; then
+              if grep -q '(NEEDED)' "$TMPDIR/$name.dynamic"; then
+                echo "$bin: unexpected dynamic dependency" >&2
+                cat "$TMPDIR/$name.dynamic" >&2
+                exit 1
+              fi
+            elif ! grep -qi 'no dynamic section' "$TMPDIR/$name.dynamic.err"; then
+              echo "$bin: readelf -d failed unexpectedly" >&2
+              cat "$TMPDIR/$name.dynamic.err" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$out"
+          echo ok > "$out/guest-static-elf"
+        '';
+
+        guest-static-consumption = let
+          evidence = import ./tests/guest-static-consumption-eval.nix {
+            inherit system pkgs;
+            flake = self;
+          };
+        in pkgs.runCommand "nixling-guest-static-consumption" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-static-consumption.json"
+        '';
+
+        guest-exec-policy = let
+          evidence = import ./tests/guest-exec-policy-eval.nix {
+            inherit system pkgs;
+            flake = self;
+            scenario = "enabled";
+          };
+        in pkgs.runCommand "nixling-guest-exec-policy" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-exec-policy.json"
+        '';
+
+        guest-control-vsock = let
+          evidence = import ./tests/guest-control-vsock-eval.nix {
+            inherit system pkgs;
+            flake = self;
+            scenario = "base";
+          };
+        in pkgs.runCommand "nixling-guest-control-vsock" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/guest-control-vsock.json"
+        '';
+
         # Real cargo-deny gate: bans, licenses, and sources for both
         # the main workspace and the broker workspace.  Advisory
         # checks are handled by rust-audit below (cargo-deny requires
@@ -254,9 +490,9 @@
           export HOME="$TMPDIR"
 
           run_deny() {
-            local label=$1 manifest=$2 vendor_cfg=$3 deny_cfg=$4
+            local label=$1 src=$2 manifest=$3 vendor_cfg=$4 deny_cfg=$5
             local ws="$TMPDIR/$label"
-            cp -r "${rustPackagesSrc}/packages" "$ws"
+            cp -r "$src/packages" "$ws"
             chmod -R u+w "$ws"
             # Override all .cargo/config.toml files to disable sccache
             # and enable vendored dependencies.
@@ -271,11 +507,13 @@
           }
 
           run_deny "main" \
+            "${rustPackagesSrc}" \
             "Cargo.toml" \
             '${cargoConfig mainVendor}' \
             "${rustPackagesSrc}/packages/deny.toml"
 
           run_deny "broker" \
+            "${rustPackagesSrc}" \
             "nixling-priv-broker/Cargo.toml" \
             '${cargoConfig brokerVendor}' \
             "${rustPackagesSrc}/packages/nixling-priv-broker/deny.toml"
@@ -283,7 +521,31 @@
           echo ok > $out
         '';
 
-        # Real cargo-audit gate: vulnerability scan of both lockfiles
+        guest-rust-deny = let
+          guestVendor = pkgs.rustPlatform.importCargoLock {
+            lockFile = ./packages/Cargo.guest.lock;
+          };
+          cargoConfig = ''
+            [source.crates-io]
+            replace-with = "vendored-sources"
+            [source.vendored-sources]
+            directory = "${guestVendor}"
+          '';
+        in pkgs.runCommand "nixling-guest-rust-deny" {
+          nativeBuildInputs = [ pkgs.cargo-deny pkgs.cargo pkgs.rustc ];
+        } ''
+          export HOME="$TMPDIR"
+          ws="$TMPDIR/guest"
+          cp -r "${guestRustPackagesSrc}/packages" "$ws"
+          chmod -R u+w "$ws"
+          mkdir -p "$ws/.cargo"
+          printf '%s\n' '${cargoConfig}' > "$ws/.cargo/config.toml"
+          cargo-deny --manifest-path "$ws/Cargo.toml" \
+            check --config "${rustPackagesSrc}/packages/deny.toml" bans licenses sources
+          echo ok > "$out"
+        '';
+
+        # Real cargo-audit gate: vulnerability scan of every committed lockfile
         # against the pinned advisory DB snapshot.  Runs offline via
         # --no-fetch with the bundled git-repo copy of the RustSec DB.
         rust-audit = pkgs.runCommand "nixling-rust-audit" {
@@ -292,6 +554,7 @@
           export HOME="$TMPDIR"
           for lock in \
             ${rustPackagesSrc}/packages/Cargo.lock \
+            ${rustPackagesSrc}/packages/Cargo.guest.lock \
             ${rustPackagesSrc}/packages/nixling-priv-broker/Cargo.lock; do
             echo "==> cargo audit ($(basename "$(dirname "$lock")"))"
             cargo-audit audit --file "$lock" \
@@ -299,6 +562,16 @@
           done
           echo ok > $out
         '';
+
+        guest-static-dependency-policy =
+          pkgs.runCommand "nixling-guest-static-dependency-policy" { } ''
+            lock=${./packages/Cargo.guest.lock}
+            if grep -E 'name = "(cc|cmake|pkg-config|openssl|openssl-sys|native-tls|libsystemd|systemd)"' "$lock"; then
+              echo "guest static lock contains a native-link/build-script dependency" >&2
+              exit 1
+            fi
+            echo ok > "$out"
+          '';
 
         harness-ubuntu-skeleton = (import ./harness/ubuntu/default.nix) {
           pkgs = nixpkgsFor.${system};

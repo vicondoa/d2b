@@ -97,8 +97,33 @@ OBIT_START=$(grep -n '^## Legacy systemd surface obituary' "$DOC" | head -1 | cu
 OBIT_END=$(awk -v s="$OBIT_START" 'NR>s && /^## / {print NR; exit}' "$DOC")
 [[ -n "$OBIT_END" ]] || OBIT_END=$(wc -l < "$DOC")
 
-extract_obit() { sed -n "${OBIT_START},${OBIT_END}p" "$DOC"; }
-extract_live() { sed -n "1,$((OBIT_START - 1))p; $((OBIT_END + 1)),\$p" "$DOC"; }
+# Read the doc ONCE into memory and pre-build the obituary region as a
+# single string plus the live region as a line-indexed array. The
+# per-pattern matching below then uses bash `[[ =~ ]]` and forks NO
+# subprocesses. The previous design re-ran `sed`/`grep` over the whole
+# doc for every legacy pattern (~60 forks); under peak static.sh memory
+# pressure a single `sed` fork could fail, and with `set -o pipefail`
+# the `if extract_obit | grep` test then silently evaluated false —
+# misreading a present obituary row as absent and producing an
+# intermittent false "no obituary row" failure (different unit each
+# run). In-memory matching removes that fork-failure surface entirely.
+mapfile -t DOC_LINES < "$DOC"
+DOC_TOTAL=${#DOC_LINES[@]}
+[[ "$DOC_TOTAL" -gt 0 ]] || fail "doc read produced no lines: $DOC"
+
+# OBIT_START/OBIT_END are 1-based line numbers; arrays are 0-based.
+OBIT_TEXT=""
+for ((i = OBIT_START - 1; i < OBIT_END; i++)); do
+  OBIT_TEXT+="${DOC_LINES[i]}"$'\n'
+done
+LIVE_LINES=()
+for ((i = 0; i < DOC_TOTAL; i++)); do
+  ln=$((i + 1))
+  if ((ln >= OBIT_START && ln <= OBIT_END)); then
+    continue
+  fi
+  LIVE_LINES+=("${DOC_LINES[i]}")
+done
 
 # A line in the live region carries an obituary marker if it
 # mentions any of these phrases — they signal "this row is the
@@ -122,27 +147,29 @@ for pat in "${LEGACY_UNITS[@]}"; do
   doc_pat="${pat}(\\.(service|socket|timer|\\{)|@|<vm>\\.)"
 
   in_obit=0
-  if extract_obit | grep -Eq "${doc_pat}"; then in_obit=1; fi
+  [[ $OBIT_TEXT =~ $doc_pat ]] && in_obit=1
 
   # Count live-region mentions whose surrounding ±3 lines lack any
   # obituary marker. ±3 lines is enough to span the table-row line
   # plus the prose-paragraph context that introduces a retired-unit
-  # list across multiple lines.
-  live_tmp=$(mktemp)
-  extract_live > "$live_tmp"
+  # list across multiple lines. All matching is in-memory (no fork).
   bare_live_hits=0
-  while IFS= read -r ln; do
-    [[ -z "$ln" ]] && continue
-    lo=$((ln - 3)); [[ "$lo" -lt 1 ]] && lo=1
-    hi=$((ln + 3))
-    if ! sed -n "${lo},${hi}p" "$live_tmp" | grep -qE "${LIVE_OBIT_MARKERS}"; then
-      bare_live_hits=$((bare_live_hits + 1))
-    fi
-  done < <(grep -nE "${doc_pat}" "$live_tmp" | cut -d: -f1 || true)
-  rm -f "$live_tmp"
-
   in_live_any=0
-  if extract_live | grep -Eq "${doc_pat}"; then in_live_any=1; fi
+  live_n=${#LIVE_LINES[@]}
+  for ((li = 0; li < live_n; li++)); do
+    [[ ${LIVE_LINES[li]} =~ $doc_pat ]] || continue
+    in_live_any=1
+    lo=$((li - 3)); ((lo < 0)) && lo=0
+    hi=$((li + 3)); ((hi >= live_n)) && hi=$((live_n - 1))
+    marked=0
+    for ((wi = lo; wi <= hi; wi++)); do
+      if [[ ${LIVE_LINES[wi]} =~ $LIVE_OBIT_MARKERS ]]; then
+        marked=1
+        break
+      fi
+    done
+    ((marked == 0)) && bare_live_hits=$((bare_live_hits + 1))
+  done
 
   # Failure (1): emitted by nixos-modules/ but undocumented.
   if [[ "$emitted" -eq 1 && "$in_live_any" -eq 0 && "$in_obit" -eq 0 ]]; then

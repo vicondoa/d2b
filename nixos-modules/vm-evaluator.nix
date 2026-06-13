@@ -48,6 +48,7 @@ let
       modules = [
         ./vm-options.nix
         ./vm-guest-base.nix
+        ./guest-control.nix
         # inherit the host's nixpkgs.config so per-VM evals
         # honor the consumer's allowUnfree / allowUnfreePredicate /
         # permittedInsecurePackages settings without re-stating them
@@ -55,7 +56,10 @@ let
         { nixpkgs.config = config.nixpkgs.config; }
         { _module.args.name = name; }
       ] ++ composedModules;
-      specialArgs = { inherit inputs; } // cfg.site.extraSpecialArgs;
+      specialArgs =
+        { inherit inputs; }
+        // cfg.site.extraSpecialArgs
+        // { nixlingInputs = inputs; };
       inherit (pkgs.stdenv.hostPlatform) system;
     };
 

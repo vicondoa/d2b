@@ -29,9 +29,11 @@
       ],
       "properties": {
         "manifestVersion": {
+          "description": "Manifest schema version. Must equal the parser's supported version.",
           "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
+          "enum": [
+            5
+          ]
         }
       },
       "additionalProperties": false

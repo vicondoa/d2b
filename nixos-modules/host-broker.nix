@@ -58,10 +58,16 @@ in
 {
   # the broker NixOS module was previously gated behind
   # `cfg.daemonExperimental.enable`. v1.1 makes the broker
-  # socket/service default-on (ADR 0015 daemon-only clean break);
-  # the `daemonExperimental.enable` toggle is now a no-op (consumer
-  # flakes that still set it receive an eval-time warning emitted via
-  # `nixos-modules/assertions.nix`).
+  # socket/service default-on (ADR 0015 daemon-only clean break), so
+  # this broker module is no longer gated by the toggle. The toggle
+  # itself is NOT a no-op: it defaults `true` and still functionally
+  # gates the daemon control plane (`nixlingd`, daemon-config, and the
+  # bundle-artifact group ownership) in `nixos-modules/host-daemon.nix`
+  # and the `*-json.nix` emitters — setting it `false` reverts the host
+  # to the unsupported pre-daemon legacy state. It is no longer
+  # evidence-auto-flipped; `nixos-modules/assertions.nix` deliberately
+  # does not warn on it (the option default makes `isDefined` true even
+  # when consumers do not set it).
   # The module body always materializes the broker — there is no
   # `mkIf` wrapper. The legacy gating semantics are documented in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
@@ -246,7 +252,8 @@ in
           "${brokerPackage}/bin/nixling-priv-broker serve " +
           "--audit-dir /var/lib/nixling/audit " +
           "--audit-retention-days ${toString auditRetentionDays} " +
-          "--bundle-path ${bundleManifestPath}";
+          "--bundle-path ${bundleManifestPath} " +
+          "--state-dir ${cfg.site.stateDir}";
 
         Restart = "on-failure";
         RestartSec = "2s";
@@ -265,11 +272,13 @@ in
     # NOTE: The previous guard `lib.mkIf (config.systemd.services ?
     # nixlingd)` caused infinite recursion in the NixOS module system
     # because it forced evaluation of `systemd.services` from within a
-    # definition contributing to `systemd.services`. Since both this
-    # module and host-daemon.nix are gated on daemonExperimental.enable,
-    # the guard is redundant: we unconditionally merge the
-    # wants/after entries here (they no-op if host-daemon.nix is absent
-    # since systemd merges at unit-file level).
+    # definition contributing to `systemd.services`. This broker module
+    # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
+    # gated on `daemonExperimental.enable`. The guard is unnecessary: we
+    # unconditionally merge the wants/after entries here — they are
+    # harmless if the `nixlingd` unit is absent (e.g. when
+    # `daemonExperimental.enable = false` drops the daemon config),
+    # since systemd merges these at the unit-file level.
     systemd.services.nixlingd = {
       wants = [ "nixling-priv-broker.socket" ];
       after = [ "nixling-priv-broker.socket" ];

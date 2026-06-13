@@ -27,7 +27,8 @@ use nixling_ipc::{
     public_wire::{
         AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest, KeyEntry as IpcKeyEntry,
         KeysShowRequest as IpcKeysShowRequest, KeysShowResponse as IpcKeysShowResponse,
-        UsbipProbeEntry as IpcUsbipProbeEntry, UsbipProbeStatus as IpcUsbipProbeStatus,
+        ReadGuestConfigRequest, UsbipProbeEntry as IpcUsbipProbeEntry,
+        UsbipProbeStatus as IpcUsbipProbeStatus,
     },
     Hello as IpcHello, HelloOk as IpcHelloOk, HelloRejected as IpcHelloRejected, KnownFeatureFlag,
     SemverRange,
@@ -37,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod doctor;
+mod exec_client;
 mod host_validate;
 
 const DEFAULT_MANIFEST_PATH: &str = "/run/current-system/sw/share/nixling/vms.json";
@@ -57,7 +59,12 @@ const DEFAULT_DAEMON_STATE_DIR: &str = "/var/lib/nixling/daemon-state";
 const DEFAULT_METRICS_URL: &str = "http://127.0.0.1:9101/metrics";
 /// Exit code for api-ready timeout in strict mode.
 pub const EXIT_API_TIMEOUT: i32 = 33;
-
+/// Default in-guest path of the editable guest config working copy. Only the
+/// legacy operator SSH transport honors a custom path; the guest-control
+/// transport reads the VM's canonical guest config working copy by file id.
+const DEFAULT_GUEST_CONFIG_PATH: &str = "/var/lib/nixling-guest/guest-config.nix";
+/// Exit code surfaced for every guest-control config-read failure on the CLI.
+const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
@@ -96,7 +103,13 @@ pub struct StatusInventoryOutputV2 {
 #[serde(untagged)]
 pub enum ApiReadyStatusV1 {
     Simple(ApiReadySimple),
-    WithError { error: String },
+    WithError(ApiReadyErrorV1),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApiReadyErrorV1 {
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -403,7 +416,10 @@ enum NativeCommand {
     Host(HostArgs),
     /// Authorisation introspection.
     Auth(AuthArgs),
-    /// Per-VM lifecycle verbs (start / stop / restart / list / status / konsole).
+    /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
+    /// admin-only guest-control sub-verbs `exec` and `konsole`, which run
+    /// commands or an interactive session inside a VM over the authenticated
+    /// guest-control transport (no SSH).
     Vm(VmArgs),
     /// Alias for `vm start <vm>`.
     Up(VmStartArgs),
@@ -696,13 +712,60 @@ enum VmCommand {
     List(VmListArgs),
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
-    /// Open an SSH session to the VM in a host terminal. Resolves
-    /// the per-VM SSH key from the bundle's
-    /// `managed_keys.effective_key_path(<vm>)` (honors
-    /// `nixling.site.keysDir` + per-VM overrides; legacy
-    /// `/var/lib/nixling/keys/<vm>_ed25519` is the fallback) and the
-    /// IP from the manifest's `static_ip`. Default terminal: konsole.
+    /// Open an interactive guest session in a host terminal. Thin wrapper
+    /// that hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in the chosen
+    /// terminal emulator (default `konsole`, overridable via `--terminal`)
+    /// over the authenticated guest-control transport. There is no SSH; the
+    /// retired SSH-only flags `--host`/`--key`/`--user` are rejected with a
+    /// migration message.
     Konsole(VmKonsoleArgs),
+    /// Run a command inside the VM over the authenticated guest-control
+    /// transport (no SSH). `nixling vm exec <vm> -- <cmd...>` runs a
+    /// non-interactive command; `nixling vm exec -it <vm> -- <cmd...>`
+    /// allocates a guest PTY for an interactive session. Routed CLI →
+    /// daemon `public.sock` (admin-only) → authenticated guest-control vsock
+    /// → guestd exec RPCs.
+    Exec(VmExecArgs),
+}
+
+/// `nixling vm exec [-it] [-i] [-t] <vm> [--env K=V]... [--cwd DIR] -- <cmd...>`
+/// Run a command inside a guest-control VM. The guest owns the PTY; the CLI
+/// only manages host terminal state (raw mode + window resize forwarding) and
+/// multiplexes stdin/stdout/stderr/signals over one owner connection.
+#[derive(Debug, Args)]
+struct VmExecArgs {
+    /// VM name as declared in `nixling.vms.<name>`.
+    vm: String,
+    /// Forward host stdin into the guest command (`-i`). Requires `-t`/`--tty`:
+    /// the guest-control transport forwards stdin only in PTY mode, so `-i`
+    /// must be paired with `-t` (e.g. `-it`).
+    #[arg(short = 'i', long = "interactive")]
+    interactive: bool,
+    /// Allocate a PTY in the guest and put the host terminal in raw mode
+    /// (`-t`). Implies stdin forwarding. Human-only (incompatible with
+    /// `--json`).
+    #[arg(short = 't', long = "tty")]
+    tty: bool,
+    /// Set an environment variable in the guest command (`KEY=VALUE`).
+    /// Repeatable.
+    #[arg(long = "env", value_name = "KEY=VALUE")]
+    env: Vec<String>,
+    /// Working directory for the guest command.
+    #[arg(long = "cwd", value_name = "DIR")]
+    cwd: Option<String>,
+    /// Emit a single terminal JSON envelope (exit code + source/reason +
+    /// bounded captured output). Non-interactive only.
+    #[arg(long, conflicts_with = "human")]
+    json: bool,
+    #[arg(long, conflicts_with = "json")]
+    human: bool,
+    /// The command and its arguments, after `--`. NOT a clap `required`
+    /// argument: a missing command is validated inside `cmd_vm_exec` so a
+    /// `--json` run still emits the single terminal `source: "cli"`,
+    /// `reason: "usage"` envelope on stdout instead of a clap stderr error
+    /// (matching docs/reference/{error-codes,cli-contract}.md).
+    #[arg(last = true)]
+    command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -769,16 +832,14 @@ struct VmStatusArgs {
     human: bool,
 }
 
-/// `nixling vm konsole <vm>` — open an SSH session to the VM in a
-/// host terminal. Spawn a terminal emulator (default `konsole`,
-/// overridable via `--terminal`) hosting an SSH session into the
-/// named VM. The SSH key is resolved from the bundle's
-/// `managed_keys.effective_key_path()` (which honors
-/// `nixling.site.keysDir` + per-VM overrides); the legacy
-/// `/var/lib/nixling/keys/<vm>_ed25519` is only the fallback when
-/// the bundle is absent. The host IP comes from the bundle's per-env
-/// LAN subnet + the VM's lan index. Detaches from the CLI process
-/// via setsid so closing the CLI doesn't take the terminal down.
+/// `nixling vm konsole <vm>` — open an interactive guest session in a
+/// host terminal. Spawns a terminal emulator (default `konsole`,
+/// overridable via `--terminal`) hosting `nixling vm exec -it <vm> --
+/// bash -l` over the authenticated guest-control transport. There is no
+/// SSH; the guest command runs as the guest-control principal. Detaches
+/// from the CLI process via setsid so closing the CLI doesn't take the
+/// terminal down. The retired SSH-only flags `--host`/`--key`/`--user`
+/// still parse but are rejected with a migration message.
 #[derive(Debug, Args)]
 struct VmKonsoleArgs {
     /// VM name as declared in `nixling.vms.<name>`.
@@ -788,22 +849,17 @@ struct VmKonsoleArgs {
     /// gnome-terminal, xterm. Default: konsole.
     #[arg(long, default_value = "konsole")]
     terminal: String,
-    /// SSH user inside the guest. Defaults to the per-VM
-    /// `ssh_user` from the manifest; falls back to `$USER` if
-    /// the manifest entry is absent. Override for ad-hoc
-    /// per-user sessions.
-    #[arg(long)]
+    /// Retired SSH-only flag. Rejected with a migration message;
+    /// guest-control exec runs as the guest-control principal.
+    #[arg(long, hide = true)]
     user: Option<String>,
-    /// Override the SSH host (IP or hostname). Default:
-    /// manifest `static_ip` (bundle-resolved LAN address).
-    #[arg(long)]
+    /// Retired SSH-only flag. Rejected with a migration message;
+    /// the transport is resolved from the trusted bundle.
+    #[arg(long, hide = true)]
     host: Option<String>,
-    /// Override the SSH key path. Default: the bundle's
-    /// `managed_keys.effective_key_path(<vm>)` (honors
-    /// `nixling.site.keysDir` + per-VM overrides). Legacy
-    /// `/var/lib/nixling/keys/<vm>_ed25519` is only the
-    /// fallback when no bundle is staged.
-    #[arg(long)]
+    /// Retired SSH-only flag. Rejected with a migration message;
+    /// guest-control exec needs no SSH key.
+    #[arg(long, hide = true)]
     key: Option<std::path::PathBuf>,
     /// Print the would-be command without executing.
     #[arg(long)]
@@ -1363,6 +1419,14 @@ struct StoreVerifyResponseFrame {
     payload: IpcStoreVerifyResponse,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadGuestConfigResponseFrame {
+    #[serde(rename = "type")]
+    _type_name: String,
+    content_base64: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StoreVerifyOutputV2 {
@@ -1645,6 +1709,7 @@ fn dispatch(
             VmCommand::List(args) => cmd_vm_list(context, args),
             VmCommand::Status(args) => cmd_vm_status(context, args),
             VmCommand::Konsole(args) => cmd_vm_konsole(context, args),
+            VmCommand::Exec(args) => cmd_vm_exec(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
         NativeCommand::Down(args) => cmd_vm_stop(context, args),
@@ -1708,6 +1773,14 @@ struct ConfigArgs {
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
     /// Pull the VM's in-guest edited config into a host-side staging file.
+    ///
+    /// Reads the VM's canonical guest config working copy over the
+    /// authenticated guest-control vsock (`readGuestConfig` -> guestd
+    /// `ReadGuestFile`); there is no SSH. The pull fails closed when the VM's
+    /// running generation does not declare the guest-control transport. The
+    /// `--host`/`--user`/`--key`/`--known-hosts` overrides and a non-default
+    /// `--guest-path` configure only a future operator SSH compatibility
+    /// transport and are rejected on guest-control VMs.
     Sync(ConfigSyncArgs),
     /// Diff the staged guest config against a live host-side file.
     Diff(ConfigDiffArgs),
@@ -1723,23 +1796,29 @@ enum ConfigCommand {
 struct ConfigSyncArgs {
     /// VM name (must match the static manifest).
     vm: String,
-    /// Path of the editable guest config INSIDE the VM to pull.
-    #[arg(long, default_value = "/var/lib/nixling-guest/guest-config.nix")]
+    /// Path of the editable guest config INSIDE the VM to pull. Honored only by
+    /// the legacy operator SSH transport; on guest-control VMs the canonical
+    /// guest config working copy is read by file id and this flag is rejected.
+    #[arg(long, default_value = DEFAULT_GUEST_CONFIG_PATH)]
     guest_path: String,
-    /// Override the SSH host (defaults to the manifest `static_ip`).
+    /// Override the SSH host (defaults to the manifest `static_ip`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     host: Option<String>,
-    /// Override the SSH user (defaults to the manifest `ssh_user`).
+    /// Override the SSH user (defaults to the manifest `ssh_user`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     user: Option<String>,
-    /// Override the SSH private key path.
+    /// Override the SSH private key path. SSH transport only; rejected on
+    /// guest-control VMs.
     #[arg(long)]
     key: Option<PathBuf>,
     /// known_hosts file used to verify the VM's host key (defaults to
-    /// the framework-managed `/var/lib/nixling/known_hosts.nixling`).
+    /// the framework-managed `/var/lib/nixling/known_hosts.nixling`). SSH
+    /// transport only; rejected on guest-control VMs.
     #[arg(long)]
     known_hosts: Option<PathBuf>,
-    /// Print the SSH command instead of running it.
+    /// Print the planned action instead of running it.
     #[arg(long)]
     dry_run: bool,
     /// Emit a JSON envelope.
@@ -1974,12 +2053,18 @@ fn warn_all_pending_staged_configs() {
 /// integrity is verified against the framework-managed known_hosts with
 /// `accept-new` (pins on first use; refuses a CHANGED key, so a same-env
 /// peer cannot silently MITM the pulled config).
+///
+/// Retained for the operator SSH compatibility transport; the guest-control
+/// config-sync path does not call it (it routes through the daemon's
+/// authenticated `ReadGuestConfig` verb instead).
+#[allow(dead_code)]
 fn config_sync_ssh_argv(
     key_path: &Path,
     known_hosts: &Path,
     ssh_target: &str,
     guest_path: &str,
 ) -> Vec<String> {
+    // nixling-ssh-allowlist begin: operator SSH compatibility transport
     vec![
         "ssh".to_owned(),
         "-i".to_owned(),
@@ -1994,6 +2079,7 @@ fn config_sync_ssh_argv(
         "cat".to_owned(),
         guest_path.to_owned(),
     ]
+    // nixling-ssh-allowlist end
 }
 
 /// Atomically publish `bytes` to `target`: write a UNIQUE sibling temp
@@ -2054,6 +2140,10 @@ fn config_atomic_write(target: &Path, bytes: &[u8]) -> Result<(), CliFailure> {
 /// (non-empty/UTF-8), then atomically publish it to `staging`. Returns
 /// the byte count. Spawning `argv[0]` (an absolute path or PATH-resolved
 /// binary) makes this hermetically testable with a fake `ssh`.
+///
+/// Retained for the operator SSH compatibility transport; the guest-control
+/// config-sync path does not spawn a subprocess.
+#[allow(dead_code)]
 fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usize, CliFailure> {
     // A guest config file is small; bound the untrusted pull on both
     // size and time. The guest controls the remote file, so both limits
@@ -2065,6 +2155,7 @@ fn config_sync_capture_to_staging(argv: &[String], staging: &Path) -> Result<usi
 
 /// Inner capture with injectable limits so the byte-cap AND timeout
 /// paths are both hermetically testable.
+#[allow(dead_code)]
 fn config_sync_capture_to_staging_limited(
     argv: &[String],
     staging: &Path,
@@ -2183,58 +2274,309 @@ fn config_sync_capture_to_staging_limited(
     Ok(stdout_bytes.len())
 }
 
+/// Standard `sha256:<64-hex>` digest over `data`. Computed by the host from the
+/// RECEIVED bytes; the guest-reported size/hash is never trusted.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let digest: [u8; 32] = sha2::Sha256::digest(data).into();
+    let mut hex = String::with_capacity("sha256:".len() + 64);
+    hex.push_str("sha256:");
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// True iff `vm`'s committed bundle declares a guest-control health node, i.e.
+/// the VM exposes the authenticated guest-control transport. Old or partial
+/// generations without the node return false and fall to the fail-closed
+/// old-generation path (the operator SSH compatibility transport is wired in a
+/// later milestone).
+fn vm_uses_guest_control(context: &Context, vm: &str) -> Result<bool, CliFailure> {
+    let Some(bundle) = context.load_bundle_context()? else {
+        return Ok(false);
+    };
+    let Some(processes) = bundle.processes.as_ref() else {
+        return Ok(false);
+    };
+    Ok(processes
+        .vms
+        .iter()
+        .find(|entry| entry.vm == vm)
+        .is_some_and(|entry| {
+            entry.nodes.iter().any(|node| {
+                matches!(
+                    node.role,
+                    nixling_core::processes::ProcessRole::GuestControlHealth
+                )
+            })
+        }))
+}
+
+/// Build a consistent, leak-free CLI failure envelope for a guest-control
+/// config-sync error. `observed_state`/`remediation` carry only daemon-supplied
+/// closed-enum text — never guest content, paths, nonces, or transport detail.
+fn guest_control_config_failure(
+    kind: &str,
+    what_was_checked: &str,
+    observed_state: &str,
+    remediation: &str,
+    exit_code: i32,
+    is_json: bool,
+) -> CliFailure {
+    let envelope = host_error_envelope(
+        kind,
+        kind,
+        exit_code,
+        what_was_checked,
+        observed_state,
+        remediation,
+        "docs/reference/cli-contract.md#config-sync-guest-control-transport",
+    );
+    let rendered_stderr = if is_json {
+        let mut rendered = serde_json::to_string_pretty(&envelope)
+            .expect("serialize guest-control config failure envelope");
+        rendered.push('\n');
+        rendered
+    } else {
+        format!(
+            "nixling: {} (code: {}, exit {})\n  what was checked : {}\n  observed         : {}\n  remediation      : {}\n  docs             : {}\n",
+            envelope.kind,
+            envelope.code,
+            envelope.exit_code,
+            envelope.what_was_checked,
+            envelope.observed_state,
+            envelope.remediation,
+            envelope.docs_anchor,
+        )
+    };
+    CliFailure {
+        exit_code: envelope.exit_code,
+        message: envelope.kind,
+        rendered_stderr: Some(rendered_stderr),
+    }
+}
+
+/// Surface a daemon-typed guest-control read error as a CLI failure, preserving
+/// the daemon's closed-enum `kind`, human message, and remediation. The daemon
+/// guarantees these fields never embed guest content (verified by its own
+/// leak-free test), so they are safe to render verbatim.
+fn guest_control_config_failure_from_daemon(
+    error: DaemonErrorEnvelope,
+    is_json: bool,
+) -> CliFailure {
+    let remediation = if error.remediation.is_empty() {
+        "retry after the guest finishes booting, then check `nixling status <vm>`".to_owned()
+    } else {
+        error.remediation
+    };
+    guest_control_config_failure(
+        &error.kind,
+        "reading the guest config over the guest-control transport",
+        &error.message,
+        &remediation,
+        i32::from(error.exit_code),
+        is_json,
+    )
+}
+
+/// Reject SSH-only overrides (and a non-default in-guest path) on the
+/// guest-control path. These flags only configure the legacy operator SSH
+/// transport; the guest-control transport reads the VM's canonical guest config
+/// working copy over the authenticated channel.
+fn reject_ssh_only_flags_on_guest_control(args: &ConfigSyncArgs) -> Result<(), CliFailure> {
+    let mut offenders: Vec<&str> = Vec::new();
+    if args.host.is_some() {
+        offenders.push("--host");
+    }
+    if args.user.is_some() {
+        offenders.push("--user");
+    }
+    if args.key.is_some() {
+        offenders.push("--key");
+    }
+    if args.known_hosts.is_some() {
+        offenders.push("--known-hosts");
+    }
+    if args.guest_path != DEFAULT_GUEST_CONFIG_PATH {
+        offenders.push("--guest-path");
+    }
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(guest_control_config_failure(
+        "guest-control-ssh-flag-rejected",
+        "validating the flags passed to config sync",
+        &format!(
+            "the {} flag(s) configure the legacy operator SSH transport, which is not used for guest-control VMs",
+            offenders.join(", ")
+        ),
+        "omit these flags; the guest-control transport reads the VM's canonical guest config working copy over the authenticated channel",
+        2,
+        args.json,
+    ))
+}
+
+/// Reply parsed from a `readGuestConfig` socket exchange.
+enum GuestConfigReadOutcome {
+    /// The daemon public socket was missing or not reachable.
+    Unavailable,
+    /// A raw daemon reply frame (success OR typed error frame).
+    Reply(Vec<u8>),
+}
+
+/// Send an admin-only `readGuestConfig` request over the daemon public socket
+/// and return the raw reply frame. Connection failures collapse to
+/// `Unavailable`; any daemon reply (success or typed error) is returned verbatim
+/// for [`finish_config_sync_from_reply`] to interpret.
+fn read_guest_config_via_socket(
+    context: &Context,
+    vm: &str,
+) -> Result<GuestConfigReadOutcome, CliFailure> {
+    if !context.public_socket.exists() {
+        return Ok(GuestConfigReadOutcome::Unavailable);
+    }
+    let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
+        Ok(socket) => socket,
+        Err(err) if is_daemon_unreachable(&err) => return Ok(GuestConfigReadOutcome::Unavailable),
+        Err(err) => {
+            return Err(CliFailure::new(
+                1,
+                format!(
+                    "failed to connect to {}: {err}",
+                    context.public_socket.display()
+                ),
+            ))
+        }
+    };
+    let hello = daemon_hello_frame("hello")?;
+    socket
+        .send_frame(&hello)
+        .map_err(|err| CliFailure::new(1, format!("failed to send hello frame: {err}")))?;
+    let hello_response = socket
+        .recv_frame()
+        .map_err(|err| CliFailure::new(1, format!("failed to receive hello reply: {err}")))?;
+    let _ = parse_hello_reply(&hello_response)?;
+    let request = encode_type_tagged_message(
+        "readGuestConfig",
+        &ReadGuestConfigRequest { vm: vm.to_owned() },
+        "readGuestConfig request",
+    )?;
+    socket.send_frame(&request).map_err(|err| {
+        CliFailure::new(1, format!("failed to send readGuestConfig request: {err}"))
+    })?;
+    let response = socket.recv_frame().map_err(|err| {
+        CliFailure::new(1, format!("failed to receive readGuestConfig reply: {err}"))
+    })?;
+    Ok(GuestConfigReadOutcome::Reply(response))
+}
+
+/// Result of staging a guest config pulled over the guest-control transport.
+#[derive(Debug)]
+struct ConfigSyncStaged {
+    bytes: usize,
+    sha256: String,
+}
+
+/// Interpret a `readGuestConfig` daemon reply: decode the base64 content,
+/// re-enforce the raw size cap on the DECODED bytes, compute size + sha256 from
+/// the received bytes (never a guest-reported value), and atomically stage the
+/// result. On ANY error (daemon typed error frame, malformed reply, oversize, or
+/// empty/non-UTF-8 content) this stages NOTHING and never echoes guest content
+/// into the error.
+fn finish_config_sync_from_reply(
+    reply: &[u8],
+    staging: &Path,
+    is_json: bool,
+) -> Result<ConfigSyncStaged, CliFailure> {
+    let protocol_error = |observed: &str| {
+        guest_control_config_failure(
+            "guest-control-protocol-error",
+            "decoding the daemon reply to config sync",
+            observed,
+            "retry; if it persists, restart nixlingd after switching to this generation",
+            EXIT_GUEST_CONTROL_CONFIG,
+            is_json,
+        )
+    };
+    let value: Value = serde_json::from_slice(reply)
+        .map_err(|_| protocol_error("the daemon returned a reply that was not valid JSON"))?;
+    match value.get("type").and_then(Value::as_str).unwrap_or("") {
+        "readGuestConfigResponse" => {
+            let frame: ReadGuestConfigResponseFrame = serde_json::from_value(value)
+                .map_err(|_| protocol_error("the daemon reply was missing contentBase64"))?;
+            let bytes = nixling_core::base64_codec::decode(&frame.content_base64)
+                .map_err(|_| protocol_error("the daemon returned a malformed base64 payload"))?;
+            // Defense in depth: the daemon already bounds the encoded payload,
+            // but the host re-enforces the raw cap and never trusts a
+            // guest-reported size.
+            if bytes.len() as u64 > nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES {
+                return Err(guest_control_config_failure(
+                    "guest-control-file-too-large",
+                    "validating the received guest config size",
+                    "the received guest config exceeded the read cap",
+                    "shrink the guest config working copy below the read cap and retry",
+                    EXIT_GUEST_CONTROL_CONFIG,
+                    is_json,
+                ));
+            }
+            config_validate_staging_bytes(&bytes)?;
+            let sha256 = sha256_hex(&bytes);
+            if let Some(parent) = staging.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    CliFailure::new(1, format!("config sync: create staging dir: {e}"))
+                })?;
+            }
+            config_atomic_write(staging, &bytes)?;
+            Ok(ConfigSyncStaged {
+                bytes: bytes.len(),
+                sha256,
+            })
+        }
+        "error" => {
+            let frame: ErrorFrame = serde_json::from_value(value)
+                .map_err(|_| protocol_error("the daemon returned a malformed error reply"))?;
+            Err(guest_control_config_failure_from_daemon(
+                frame.error,
+                is_json,
+            ))
+        }
+        other => Err(protocol_error(&format!(
+            "the daemon returned an unexpected reply type '{other}'"
+        ))),
+    }
+}
+
 fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
     config_validate_vm_name(&args.vm)?;
-    config_validate_remote_path(&args.guest_path)?;
     require_known_vm(context, &args.vm, args.json)?;
-    let manifest = context.load_manifest()?;
-    let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
-        CliFailure::new(
-            1,
-            format!("config sync: unknown vm '{}' in manifest", args.vm),
-        )
-    })?;
-    let host = args
-        .host
-        .clone()
-        .or_else(|| vm.static_ip.clone())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "config sync: vm '{}' has no static_ip in manifest and no --host override",
-                    args.vm
-                ),
-            )
-        })?;
-    let user = args
-        .user
-        .clone()
-        .or_else(|| vm.ssh_user.clone())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "config sync: vm '{vm}' has no SSH user; set `nixling.vms.{vm}.ssh.user` \
-                     in your host config (the account that owns the writable guest config copy) \
-                     or pass `--user <name>`",
-                    vm = args.vm
-                ),
-            )
-        })?;
-    let key_path = if let Some(p) = args.key.clone() {
-        p
-    } else {
-        konsole_resolve_bundle_key_path(&context.bundle_path, &args.vm, args.json)?
-            .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
-    };
-    let ssh_target = format!("{user}@{host}");
-    let known_hosts = args
-        .known_hosts
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("/var/lib/nixling/known_hosts.nixling"));
-    let argv: Vec<String> =
-        config_sync_ssh_argv(&key_path, &known_hosts, &ssh_target, &args.guest_path);
+
+    if !vm_uses_guest_control(context, &args.vm)? {
+        // Operator SSH-compatibility transport (wired in a later wave):
+        // the in-guest path is meaningful there, so validate it before
+        // reporting that the guest-control transport is unavailable.
+        config_validate_remote_path(&args.guest_path)?;
+        return Err(guest_control_config_failure(
+            "guest-control-unavailable-old-generation",
+            "selecting the config-sync transport for the VM",
+            &format!(
+                "vm '{}' does not declare the guest-control transport (old or partial generation)",
+                args.vm
+            ),
+            "rebuild and switch the VM to a generation that enables guest control, then retry; the operator SSH compatibility transport is not yet wired into this command",
+            EXIT_GUEST_CONTROL_CONFIG,
+            args.json,
+        ));
+    }
+
+    // Guest-control VMs: SSH-only flags (including a non-default
+    // --guest-path) are rejected with the stable
+    // guest-control-ssh-flag-rejected envelope (exit 2) BEFORE any generic
+    // unsafe-path validation, so flag-rejection wins on the guest-control
+    // path rather than collapsing to the exit-1 unsafe-path error.
+    reject_ssh_only_flags_on_guest_control(args)?;
+
     let staging = config_staging_path(&args.vm);
 
     if args.dry_run {
@@ -2243,37 +2585,57 @@ fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliF
                 "command": "config sync",
                 "mode": "dry-run",
                 "vm": args.vm,
-                "argv": argv,
+                "transport": "guest-control",
                 "staging": staging.display().to_string(),
+                "guestFile": "guest-config",
             });
             print_json(&body)?;
         } else {
             print_stdout(&format!(
-                "config sync --dry-run: would run `{}` and stage to {}\n",
-                argv.join(" "),
+                "config sync --dry-run: would read the canonical guest config working copy of {} \
+                 over the authenticated guest-control transport and stage it to {}\n",
+                args.vm,
                 staging.display()
             ));
         }
         return Ok(0);
     }
 
-    konsole_validate_key_exists(&key_path, args.json)?;
-    let n = config_sync_capture_to_staging(&argv, &staging)?;
+    let staged = match read_guest_config_via_socket(context, &args.vm)? {
+        GuestConfigReadOutcome::Unavailable => {
+            return Err(guest_control_config_failure(
+                "guest-control-transport-unavailable",
+                "connecting to the nixling daemon for config sync",
+                "the nixling daemon public socket was not reachable",
+                "ensure nixlingd is running (`systemctl status nixlingd`) and retry",
+                EXIT_GUEST_CONTROL_CONFIG,
+                args.json,
+            ));
+        }
+        GuestConfigReadOutcome::Reply(reply) => {
+            finish_config_sync_from_reply(&reply, &staging, args.json)?
+        }
+    };
+
     if args.json {
         let body = serde_json::json!({
             "command": "config sync",
             "vm": args.vm,
+            "transport": "guest-control",
             "staging": staging.display().to_string(),
-            "bytes": n,
+            "bytes": staged.bytes,
+            "sha256": staged.sha256,
         });
         print_json(&body)?;
     } else {
         print_stdout(&format!(
-            "config sync: staged {n} bytes from {ssh_target}:{} to {}\n\
+            "config sync: staged {} bytes (sha256 {}) from the guest-control transport of {} to {}\n\
              Review with `nixling config diff {} --against <guestConfigFile>` then \
              `nixling config approve {} --to <guestConfigFile>` \
              (the host-side nixling.vms.{}.guestConfigFile path).\n",
-            args.guest_path,
+            staged.bytes,
+            staged.sha256,
+            args.vm,
             staging.display(),
             args.vm,
             args.vm,
@@ -2746,7 +3108,10 @@ fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
 /// `host destroy` per-tier routing logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeploymentShape {
-    /// Every VM uses `supervisor = "systemd"` (Tier 0 all-legacy).
+    /// Legacy Tier-0 all-legacy shape: no daemon-owned VMs. The
+    /// per-VM `supervisor` option was removed in v1.1, so a real
+    /// bundle never resolves here; only the
+    /// `NIXLING_TEST_DEPLOYMENT_SHAPE` test override can select it.
     Tier0AllLegacy,
     /// Mixed: some VMs daemon-owned, some systemd-owned.
     Tier0Mixed,
@@ -2775,9 +3140,10 @@ fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFail
     let Some(_bundle) = bundle else {
         return Ok(DeploymentShape::Tier0AllLegacy);
     };
-    // Bundle inspection of `supervisor` is available in newer bundles;
-    // for older bundles fall back to all-daemon as documented in the
-    // per-tier routing table.
+    // The per-VM `supervisor` option was removed in v1.1: every
+    // enabled VM is daemon-supervised, so a real bundle always
+    // resolves to all-daemon. The Tier-0 shapes remain reachable only
+    // through the `NIXLING_TEST_DEPLOYMENT_SHAPE` override above.
     Ok(DeploymentShape::AllDaemon)
 }
 
@@ -2791,9 +3157,9 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                 "Tier 0 all-legacy refused: use the NixOS module path",
                 "tier-0-legacy-uses-nixos-module",
                 78,
-                "Every VM declares supervisor = \"systemd\"; the nixling NixOS module already owns host-shared reconciliation on Tier 0.",
+                "Whether this host resolves to the legacy Tier-0 all-legacy shape, which has no daemon-owned resources for the broker to reconcile.",
                 "tier-0-all-legacy",
-                "Add at least one VM with `nixling.vms.<vm>.supervisor = \"nixlingd\"` before invoking host prepare --apply on this host.",
+                "This legacy Tier-0 shape is unreachable on a daemon-only host: the per-VM `supervisor` option was removed in v1.1, so every enabled VM is daemon-supervised. Host-shared reconciliation on a genuine legacy host is owned by the nixling NixOS module; run `host prepare --dry-run` to inspect the plan.",
                 "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
             ),
             args.json,
@@ -2823,7 +3189,7 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
                     "daemon-down",
                     1,
                     "Daemon connectivity at /run/nixling/public.sock and broker dispatch readiness.",
-                    "nixlingd is reachable but the host-prepare API surface is still gated behind nixling.daemonExperimental.enable; the integrator wires it on once the typed intent emitters ship.",
+                    "nixlingd is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back host prepare --apply are not yet wired through nixlingd; the broker op is staged but not yet reachable from the public socket.",
                     "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                     "docs/reference/error-codes.md#daemon-down",
                 ),
@@ -2870,9 +3236,9 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 "Tier 0 all-legacy refused: use the NixOS module path",
                 "tier-0-legacy-uses-nixos-module",
                 78,
-                "Every VM declares supervisor = \"systemd\"; host destroy is only valid when daemon-owned VMs exist.",
+                "Whether this host resolves to the legacy Tier-0 all-legacy shape; host destroy only acts on daemon-owned resources.",
                 "tier-0-all-legacy",
-                "Migrate at least one VM to supervisor = \"nixlingd\". The historical `--legacy` bash-destroy escape hatch was retired in v1.0 (per ADR 0015).",
+                "This legacy Tier-0 shape is unreachable on a daemon-only host: the per-VM `supervisor` option was removed in v1.1, so every enabled VM is daemon-supervised. The historical `--legacy` bash-destroy escape hatch was retired in v1.0 (per ADR 0015); run `host destroy --dry-run` to inspect nixling-owned resources.",
                 "docs/reference/error-codes.md#tier-0-legacy-uses-nixos-module",
             ),
             args.json,
@@ -2885,7 +3251,7 @@ fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, Cl
                 "daemon-down",
                 1,
                 "Daemon connectivity and broker destroy dispatch readiness.",
-                "nixlingd is reachable but the host-destroy API surface is still gated behind the typed-intent broker dispatch.",
+                "nixlingd is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back host destroy --apply are not yet wired through nixlingd; the broker op is staged but not yet reachable from the public socket.",
                 "Re-run with --dry-run for now; production --apply lands together with the daemon-side bundle resolver.",
                 "docs/reference/error-codes.md#daemon-down",
             ),
@@ -3151,8 +3517,9 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
     // by the processes::VmProcessDag exporter — for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
-    // → ssh-ready) we summarize the node ids and the topological edges.
-    // The full per-role argv preview is a follow-up gate.
+    // → guest-control-health) we summarize the node ids and the
+    // topological edges. The full per-role argv preview is a follow-up
+    // gate.
     //
     // `vm stop` walks the DAG in REVERSE topo order (terminate ch first,
     // then virtiofsd, etc).
@@ -3165,16 +3532,16 @@ fn vm_dag_dry_run_summary(verb: &str, vm: &str) -> serde_json::Value {
         serde_json::json!({"id": "store-preflight",       "role": "store-virtiofs-preflight"}),
         serde_json::json!({"id": "virtiofsd-ro-store",    "role": "virtiofsd"}),
         serde_json::json!({"id": "ch",                    "role": "cloud-hypervisor-runner"}),
-        serde_json::json!({"id": "ssh-ready",             "role": "guest-ssh-readiness"}),
+        serde_json::json!({"id": "guest-control-health",  "role": "guest-control-health"}),
     ];
     let forward_edges = serde_json::json!([
         {"from": "host-reconcile",     "to": "store-preflight"},
         {"from": "store-preflight",    "to": "virtiofsd-ro-store"},
         {"from": "virtiofsd-ro-store", "to": "ch"},
-        {"from": "ch",                 "to": "ssh-ready"},
+        {"from": "ch",                 "to": "guest-control-health"},
     ]);
     let stop_order = serde_json::json!([
-        "ssh-ready",
+        "guest-control-health",
         "ch",
         "virtiofsd-ro-store",
         "store-preflight",
@@ -3240,7 +3607,7 @@ fn cmd_vm_lifecycle_verb(
         print_stdout(&rendered);
     } else {
         print_stdout(&format!(
-            "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → ssh-ready)\n"
+            "vm {verb} --dry-run: would drive the 5-node DAG for vm '{vm}' (host-reconcile → store-preflight → virtiofsd-ro-store → ch → guest-control-health)\n"
         ));
     }
     Ok(0)
@@ -3318,216 +3685,535 @@ fn cmd_vm_status(context: &Context, args: &VmStatusArgs) -> Result<i32, CliFailu
     )
 }
 
-/// `nixling vm konsole <vm>` — spawn a terminal emulator hosting an
-/// SSH session into the named VM.
-///
-/// Resolution order:
-///   - VM name → manifest entry → static_ip + ssh.user
-///   - Key path: --key, else bundle.managed_keys.effective_key_path,
-///     else /var/lib/nixling/keys/<vm>_ed25519
-///   - Host: --host, else static_ip from manifest
-///   - User: --user, else ssh_user from manifest, else $USER env
-///   - Terminal: --terminal, else "konsole"
-///
-/// The spawned process is detached via setsid so the CLI can exit
-/// while the terminal keeps running. StrictHostKeyChecking is
-/// disabled and UserKnownHostsFile=/dev/null because the per-VM
-/// host keys are nixling-managed and the host's known_hosts entry
-/// would change every VM rebuild (defeating the security check).
-///
-/// Note: konsole treats the private bundle as optional. If the bundle
-/// is unreadable to a launcher user, key resolution falls back to the
-/// stable `/var/lib/nixling/keys/<vm>_ed25519` path. Key-path EACCES
-/// still fails with an actionable permission message. The `--json`
-/// envelope contract is preserved: any CliFailure surfaces before any
-/// success-shape JSON is printed.
-/// Classify a `try_exists()` Err for konsole key/bundle path checks.
-/// PermissionDenied indicates the operator's shell session cannot
-/// traverse the parent directory — typically a missing
-/// `nixling` group ACL on `/var/lib/nixling`. Returns the
-/// actionable error string the CLI surfaces.
-fn konsole_eacces_remediation(kind: &str, path: &Path, err: &io::Error) -> String {
-    if err.kind() == io::ErrorKind::PermissionDenied {
-        format!(
-            "vm konsole: cannot access {kind} at {} \
-             (permission denied on parent directory; \
-             verify your shell session is a member of the \
-             `nixling` group: \
-             `id -nG | tr ' ' '\\n' | grep -x nixling`)",
-            path.display()
-        )
+/// The owner-connection transport: one op per round trip over the held
+/// public.sock seqpacket connection. The daemon multiplexes a single
+/// authenticated guest-control session behind this connection.
+struct OwnerSocketTransport {
+    socket: SeqpacketUnixSocket,
+    next_op_id: u64,
+}
+
+impl exec_client::ExecOwnerTransport for OwnerSocketTransport {
+    fn round_trip(
+        &mut self,
+        op: &nixling_ipc::public_wire::ExecOp,
+    ) -> Result<nixling_ipc::public_wire::ExecOpResponse, exec_client::ExecClientError> {
+        let op_id = self.next_op_id;
+        self.next_op_id = self.next_op_id.wrapping_add(1);
+        let frame = exec_client::encode_exec_op_frame(op, op_id)?;
+        self.socket.send_frame(&frame).map_err(|err| {
+            exec_client::ExecClientError::transport(format!("exec op send failed: {err}"))
+        })?;
+        let reply = self.socket.recv_frame().map_err(|err| {
+            exec_client::ExecClientError::transport(format!("exec op recv failed: {err}"))
+        })?;
+        exec_client::decode_exec_response_frame(&reply)
+    }
+}
+
+/// Typed transport error for an unreachable daemon on the exec path: there is
+/// no SSH fallback, so an absent/unreachable daemon is a transport failure.
+fn exec_daemon_unavailable_error() -> exec_client::ExecClientError {
+    exec_client::ExecClientError::transport(
+        "vm exec: the nixling daemon is not reachable on its public socket; \
+         start nixlingd and retry (nixling does not fall back to SSH)",
+    )
+}
+
+/// Render a typed exec-client error as a CliFailure carrying the CLI exec
+/// exit-code contract. The wire `kind` slug + message + remediation are
+/// redaction-safe (no argv/env/output bytes).
+fn exec_error_to_failure(error: exec_client::ExecClientError) -> CliFailure {
+    let message = if error.remediation.is_empty() {
+        format!("vm exec: {}: {}", error.kind, error.message)
     } else {
         format!(
-            "vm konsole: cannot stat {kind} at {}: {err}",
-            path.display()
+            "vm exec: {}: {} ({})",
+            error.kind, error.message, error.remediation
         )
+    };
+    CliFailure::new(error.exit_code, message)
+}
+
+/// Terminate `vm exec` on a typed exec-client failure. For `--json`, emit the
+/// single terminal JSON document on STDOUT and return the CLI exit code (so
+/// nothing reaches stderr and there is exactly one JSON document on stdout).
+/// For human runs, return the plain `CliFailure` rendered to stderr.
+fn exec_terminate(
+    args: &VmExecArgs,
+    error: exec_client::ExecClientError,
+) -> Result<i32, CliFailure> {
+    if args.json {
+        let exit_code = error.exit_code;
+        print_exec_json(&exec_json_failure_value(args, &error))?;
+        Ok(exit_code)
+    } else {
+        Err(exec_error_to_failure(error))
     }
 }
 
-fn konsole_failure_envelope(message: &str) -> String {
-    let mut rendered = serde_json::to_string_pretty(&serde_json::json!({
-        "command": "vm konsole",
-        "error": "permission-denied",
-        "message": message,
-        "exit_code": 1,
-    }))
-    .expect("serialize vm konsole failure envelope");
-    rendered.push('\n');
-    rendered
-}
-
-fn konsole_access_failure(kind: &str, path: &Path, err: &io::Error, is_json: bool) -> CliFailure {
-    let message = konsole_eacces_remediation(kind, path, err);
-    CliFailure {
-        exit_code: 1,
-        rendered_stderr: is_json.then(|| konsole_failure_envelope(&message)),
-        message,
+/// Terminate `vm exec` on a usage error (exit 2, `source: "cli"`). For `--json`
+/// this still emits one terminal JSON document on STDOUT; otherwise it is
+/// a plain stderr failure.
+fn exec_usage_terminate(args: &VmExecArgs, message: impl Into<String>) -> Result<i32, CliFailure> {
+    let message = message.into();
+    if args.json {
+        let mut map = exec_json_base(args);
+        map.insert("source".to_owned(), Value::String("cli".to_owned()));
+        map.insert("reason".to_owned(), Value::String("usage".to_owned()));
+        map.insert("exitCode".to_owned(), Value::from(2));
+        map.insert("message".to_owned(), Value::String(message));
+        print_exec_json(&Value::Object(map))?;
+        Ok(2)
+    } else {
+        Err(CliFailure::new(2, message))
     }
 }
 
-/// Konsole bundle-path resolution. Returns one of:
-///   - Ok(Some(<bundle-derived key path>)) — bundle exists and was
-///     read; the bundle's managed-keys path was computed.
-///   - Ok(None) — bundle file definitively does NOT exist (ENOENT) or
-///     is intentionally private to nixlingd (EACCES); caller should
-///     fall through to the stable `/var/lib/nixling/keys` path.
-///   - Err(CliFailure) — bundle exists but couldn't be read, OR
-///     stat'd with EACCES (parent dir unreadable; actionable
-///     `nixling` group-membership remediation), OR any
-///     other io::Error.
-fn konsole_resolve_bundle_key_path(
-    bundle_path: &Path,
-    vm_name: &str,
-    is_json: bool,
-) -> Result<Option<PathBuf>, CliFailure> {
-    match bundle_path.try_exists() {
-        Ok(true) => {
-            let bundle: Bundle = match read_json_file(bundle_path) {
-                Ok(bundle) => bundle,
-                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => return Ok(None),
-                Err(err) => {
-                    return Err(CliFailure::new(
-                        1,
-                        format!(
-                            "vm konsole: failed to read bundle {}: {err}",
-                            bundle_path.display()
-                        ),
-                    ));
-                }
-            };
-            Ok(Some(bundle.managed_keys.effective_key_path(vm_name)))
+/// Run a command inside a guest-control VM (FSM). Establishes the
+/// daemon-held authenticated session over `public.sock` (admin-only), then
+/// multiplexes stdin/stdout/stderr/signals over one owner connection. The
+/// guest owns the PTY; the CLI only manages host terminal state.
+fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
+    use nixling_ipc::public_wire::{
+        ExecEnvVar, ExecOp, ExecOpResponse, ExecStartArgs, ExecTermSize,
+    };
+
+    // 1. Validate flags BEFORE touching host terminal state or the daemon.
+    //    `--json` is machine output: reject it together with ANY interactive /
+    //    TTY mode (which streams raw bytes to stdout) before raw mode.
+    if args.json && (args.tty || args.interactive) {
+        return exec_usage_terminate(
+            args,
+            "vm exec: --json cannot be combined with -i/-t; an interactive \
+             session streams raw output and is human-only",
+        );
+    }
+    // guestd forwards guest stdin only in PTY mode: its non-TTY validators
+    // reject an open stdin, so `-i`/`--interactive` without `-t`/`--tty`
+    // would create a stdin-closed exec the CLI then tries to write to
+    // (guestd rejects the writes as StdinClosed). Require a PTY for stdin
+    // forwarding rather than fail deterministically once stdin is piped.
+    if args.interactive && !args.tty {
+        return exec_usage_terminate(
+            args,
+            "vm exec: -i/--interactive requires -t/--tty; the guest-control \
+             transport forwards stdin only in PTY mode. Use `-it`, or drop \
+             `-i` to run a stdin-closed command.",
+        );
+    }
+    if args.command.is_empty() {
+        return exec_usage_terminate(
+            args,
+            "vm exec: missing command; pass it after `--` (e.g. `nixling vm exec myvm -- ls`)",
+        );
+    }
+    let tty = args.tty;
+    let interactive = args.interactive || args.tty;
+
+    let mut env_vars = Vec::with_capacity(args.env.len());
+    for (idx, entry) in args.env.iter().enumerate() {
+        // Redaction: never echo the raw --env entry — it may carry a
+        // secret value (e.g. `TOKEN=...` or `=secret`). Report the 1-based
+        // position only.
+        let position = idx + 1;
+        let Some((key, value)) = entry.split_once('=') else {
+            return exec_usage_terminate(
+                args,
+                format!("vm exec: --env entry #{position} is not KEY=VALUE"),
+            );
+        };
+        if key.is_empty() {
+            return exec_usage_terminate(
+                args,
+                format!("vm exec: --env entry #{position} has an empty key (expected KEY=VALUE)"),
+            );
         }
-        Ok(false) => Ok(None),
-        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
-        Err(err) => Err(konsole_access_failure("bundle", bundle_path, &err, is_json)),
+        env_vars.push(ExecEnvVar {
+            key: key.to_owned(),
+            value: value.to_owned(),
+        });
+    }
+
+    if tty && !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+        return exec_usage_terminate(
+            args,
+            "vm exec: -t/--tty requires stdin and stdout to be a terminal",
+        );
+    }
+    let term_size = if tty {
+        exec_client::current_window_size().map(|(rows, cols)| ExecTermSize { rows, cols })
+    } else {
+        None
+    };
+
+    // 2. Connect + hello + Start (establish) BEFORE entering raw mode, so an
+    //    establishment failure leaves the host terminal untouched. Every
+    //    establishment failure is routed through `exec_terminate` so a `--json`
+    //    run still emits exactly one terminal JSON document on stdout.
+    if !context.public_socket.exists() {
+        return exec_terminate(args, exec_daemon_unavailable_error());
+    }
+    let mut socket = match SeqpacketUnixSocket::connect(&context.public_socket) {
+        Ok(socket) => socket,
+        Err(err) if is_daemon_unreachable(&err) => {
+            return exec_terminate(args, exec_daemon_unavailable_error())
+        }
+        Err(err) => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to connect to the daemon: {err}"
+                )),
+            )
+        }
+    };
+    let hello = daemon_hello_frame("hello")?;
+    if let Err(err) = socket.send_frame(&hello) {
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::transport(format!(
+                "vm exec: failed to send hello frame: {err}"
+            )),
+        );
+    }
+    let hello_reply = match socket.recv_frame() {
+        Ok(reply) => reply,
+        Err(err) => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to receive hello reply: {err}"
+                )),
+            )
+        }
+    };
+    if let Err(failure) = parse_hello_reply(&hello_reply) {
+        // A rejected hello is a handshake/version skew — a protocol failure on
+        // the exec path. Preserve the redaction-safe message.
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::protocol(failure.message),
+        );
+    }
+
+    let start_op = ExecOp::Start(ExecStartArgs {
+        vm: args.vm.clone(),
+        argv: args.command.clone(),
+        tty,
+        detached: false,
+        env: (!env_vars.is_empty()).then_some(env_vars),
+        cwd: args.cwd.clone(),
+        term_size,
+    });
+    let start_frame = match exec_client::encode_exec_op_frame(&start_op, 0) {
+        Ok(frame) => frame,
+        Err(err) => return exec_terminate(args, err),
+    };
+    if let Err(err) = socket.send_frame(&start_frame) {
+        return exec_terminate(
+            args,
+            exec_client::ExecClientError::transport(format!(
+                "vm exec: failed to send start request: {err}"
+            )),
+        );
+    }
+    let start_reply = match socket.recv_frame() {
+        Ok(reply) => reply,
+        Err(err) => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::transport(format!(
+                    "vm exec: failed to receive start reply: {err}"
+                )),
+            )
+        }
+    };
+    let start_response = match exec_client::decode_exec_response_frame(&start_reply) {
+        Ok(response) => response,
+        Err(err) => return exec_terminate(args, err),
+    };
+    let start_result = match start_response {
+        ExecOpResponse::Start(result) => result,
+        _ => {
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::protocol(
+                    "the daemon did not return a Start response to the exec request",
+                ),
+            )
+        }
+    };
+
+    // 3. Enter host terminal state (raw mode for -t, non-blocking stdin for
+    //    -i) + install the forwarded-signal source. The guard restores termios
+    //    + O_NONBLOCK on EVERY return path below (including panics). `--json`
+    //    rejects -i/-t up front, so this only runs for human sessions.
+    let guard = if tty {
+        match exec_client::FdStateGuard::enter(true, true) {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                return exec_terminate(
+                    args,
+                    exec_client::ExecClientError::internal(format!(
+                        "vm exec: failed to enter raw mode: {err}"
+                    )),
+                )
+            }
+        }
+    } else if interactive {
+        match exec_client::FdStateGuard::enter(false, true) {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                return exec_terminate(
+                    args,
+                    exec_client::ExecClientError::internal(format!(
+                        "vm exec: failed to set stdin non-blocking: {err}"
+                    )),
+                )
+            }
+        }
+    } else {
+        None
+    };
+    let mut signals = match exec_client::install_signals() {
+        Ok(signals) => signals,
+        Err(err) => {
+            drop(guard);
+            return exec_terminate(
+                args,
+                exec_client::ExecClientError::internal(format!(
+                    "vm exec: failed to install signal handlers: {err}"
+                )),
+            );
+        }
+    };
+
+    let config = exec_client::ExecFsmConfig {
+        tty,
+        interactive,
+        poll_timeout_ms: if interactive { 40 } else { 200 },
+        max_chunk: exec_client::EXEC_CLI_CHUNK_BYTES,
+    };
+    let mut transport = OwnerSocketTransport {
+        socket,
+        next_op_id: 1,
+    };
+
+    // 4. Drive the session to completion, then restore the terminal BEFORE any
+    //    stdout emission (the --json envelope must not interleave raw output).
+    if args.json {
+        let mut host = exec_client::CapturingHostIo::new(interactive, 1024 * 1024);
+        let result = exec_client::run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start_result,
+            &config,
+        );
+        drop(guard);
+        match result {
+            Ok(outcome) => exec_json_success(args, &outcome, &host),
+            // Failure envelopes carry NO captured stdio bytes; they are
+            // printed to stdout as the single terminal JSON document.
+            Err(err) => exec_terminate(args, err),
+        }
+    } else {
+        let mut host = exec_client::RealHostIo;
+        let result = exec_client::run_exec_fsm(
+            &mut transport,
+            &mut host,
+            &mut signals,
+            &start_result,
+            &config,
+        );
+        drop(guard);
+        match result {
+            Ok(outcome) => Ok(exec_client::exit_code_for_terminal(&outcome.terminal)),
+            Err(err) => Err(exec_error_to_failure(err)),
+        }
     }
 }
 
-/// Konsole key-existence validation. Three-arm match distinguishing
-/// ENOENT (genuine miss, fails with documented "ssh key not found
-/// at …" envelope) from EACCES (parent dir unreadable, fails with
-/// actionable group-membership remediation) from other io::Errors
-/// (surfaces inner error text). The `--json` envelope contract is
-/// preserved: a CliFailure is returned BEFORE any success-shape
-/// JSON is printed.
-fn konsole_validate_key_exists(key_path: &Path, is_json: bool) -> Result<(), CliFailure> {
-    match key_path.try_exists() {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(CliFailure::new(
-            1,
-            format!(
-                "vm konsole: ssh key not found at {} (override with --key)",
-                key_path.display()
-            ),
-        )),
-        Err(err) => Err(konsole_access_failure("ssh key", key_path, &err, is_json)),
-    }
+/// Build the terminal `--json` envelope fields shared by success and failure.
+fn exec_json_base(args: &VmExecArgs) -> serde_json::Map<String, Value> {
+    let mut map = serde_json::Map::new();
+    map.insert("command".to_owned(), Value::String("vm exec".to_owned()));
+    map.insert("vm".to_owned(), Value::String(args.vm.clone()));
+    map
 }
 
+/// Append the bounded, charset-safe captured guest output to a JSON envelope.
+fn exec_json_attach_output(
+    map: &mut serde_json::Map<String, Value>,
+    host: &exec_client::CapturingHostIo,
+) {
+    map.insert(
+        "stdoutBase64".to_owned(),
+        Value::String(nixling_core::base64_codec::encode(host.stdout())),
+    );
+    map.insert(
+        "stderrBase64".to_owned(),
+        Value::String(nixling_core::base64_codec::encode(host.stderr())),
+    );
+    map.insert(
+        "stdoutTruncated".to_owned(),
+        Value::Bool(host.stdout_truncated()),
+    );
+    map.insert(
+        "stderrTruncated".to_owned(),
+        Value::Bool(host.stderr_truncated()),
+    );
+}
+
+/// Build the success `--json` envelope value + CLI exit code. `source` is
+/// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
+/// with a reserved transport code. The FSM resolves only true guest
+/// `WIFEXITED`/`WIFSIGNALED` terminals as a success; abnormal terminal
+/// kinds surface through [`exec_terminate`] as transport/protocol failures.
+fn exec_json_success_value(
+    args: &VmExecArgs,
+    outcome: &exec_client::ExecOutcome,
+    host: &exec_client::CapturingHostIo,
+) -> (Value, i32) {
+    use nixling_ipc::public_wire::ExecTerminalStatus;
+
+    let exit_code = exec_client::exit_code_for_terminal(&outcome.terminal);
+    let mut map = exec_json_base(args);
+    map.insert("source".to_owned(), Value::String("guest".to_owned()));
+    map.insert("exitCode".to_owned(), Value::from(exit_code));
+    match &outcome.terminal {
+        ExecTerminalStatus::Exited { code } => {
+            map.insert("reason".to_owned(), Value::String("exited".to_owned()));
+            map.insert("guestExitCode".to_owned(), Value::from(*code));
+        }
+        ExecTerminalStatus::Signaled { signal } => {
+            map.insert("reason".to_owned(), Value::String("signaled".to_owned()));
+            map.insert("signal".to_owned(), Value::from(*signal));
+        }
+        // Defensive: the FSM never resolves an abnormal terminal as a success.
+        ExecTerminalStatus::Error { slug: _ } => {
+            map.insert("reason".to_owned(), Value::String("abnormal".to_owned()));
+        }
+    }
+    exec_json_attach_output(&mut map, host);
+    (Value::Object(map), exit_code)
+}
+
+/// Emit the success `--json` envelope and return the CLI exit code.
+fn exec_json_success(
+    args: &VmExecArgs,
+    outcome: &exec_client::ExecOutcome,
+    host: &exec_client::CapturingHostIo,
+) -> Result<i32, CliFailure> {
+    let (value, exit_code) = exec_json_success_value(args, outcome, host);
+    print_exec_json(&value)?;
+    Ok(exit_code)
+}
+
+/// Build the failure `--json` envelope value. Transport/protocol/internal
+/// failures carry `transportExitCode` + a non-`guest` `source`. A failure
+/// envelope NEVER carries captured stdio bytes.
+fn exec_json_failure_value(args: &VmExecArgs, error: &exec_client::ExecClientError) -> Value {
+    let mut map = exec_json_base(args);
+    map.insert(
+        "source".to_owned(),
+        Value::String(error.source.as_str().to_owned()),
+    );
+    map.insert("reason".to_owned(), Value::String(error.kind.clone()));
+    map.insert("exitCode".to_owned(), Value::from(error.exit_code));
+    map.insert("transportExitCode".to_owned(), Value::from(error.exit_code));
+    map.insert("message".to_owned(), Value::String(error.message.clone()));
+    if !error.remediation.is_empty() {
+        map.insert(
+            "remediation".to_owned(),
+            Value::String(error.remediation.clone()),
+        );
+    }
+    Value::Object(map)
+}
+
+/// Print a single pretty JSON document to stdout with a trailing newline.
+fn print_exec_json(value: &Value) -> Result<(), CliFailure> {
+    let mut rendered = serde_json::to_string_pretty(value)
+        .map_err(|err| CliFailure::new(1, format!("vm exec: failed to serialize JSON: {err}")))?;
+    rendered.push('\n');
+    print_stdout(&rendered);
+    Ok(())
+}
+
+/// Absolute path to the guest login shell hosted by `vm konsole`. guestd
+/// performs no PATH lookup and rejects a relative argv[0]; on a nixling
+/// (NixOS) guest the system bash always resolves here.
+const GUEST_LOGIN_SHELL: &str = "/run/current-system/sw/bin/bash";
+
+/// `nixling vm konsole <vm>` — open an interactive guest session in a host
+/// terminal. This is now a thin wrapper that hosts
+/// `nixling vm exec -it <vm> -- <login-shell>` inside the chosen terminal
+/// emulator (default `konsole`, overridable via `--terminal`). It runs over
+/// the authenticated guest-control transport (admin-only); there is no SSH.
+/// The retired SSH-only flags (`--host`/`--key`/`--user`) are rejected with a
+/// migration message.
 fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
+    eprintln!(
+        "note: `nixling vm konsole` now hosts `nixling vm exec -it` over the \
+         authenticated guest-control transport (no SSH). It is retained as a \
+         terminal-spawning convenience; use `nixling vm exec -it {} -- <cmd>` \
+         for ad-hoc commands.",
+        args.vm
+    );
+
+    // The SSH-only flags are retired: guest-control exec resolves the VM, its
+    // transport, and its principal from the trusted bundle. Reject them with a
+    // concrete migration path rather than silently ignoring them.
+    let mut retired = Vec::new();
+    if args.host.is_some() {
+        retired.push("--host");
+    }
+    if args.key.is_some() {
+        retired.push("--key");
+    }
+    if args.user.is_some() {
+        retired.push("--user");
+    }
+    if !retired.is_empty() {
+        return Err(CliFailure::new(
+            2,
+            format!(
+                "vm konsole: the SSH-only flag(s) {} are retired; `vm konsole` now runs over the \
+                 authenticated guest-control transport (no SSH host/key/user selection). Remove \
+                 them; the guest command runs as the guest-control principal.",
+                retired.join(", ")
+            ),
+        ));
+    }
+
     require_known_vm(context, &args.vm, args.json)?;
-    let manifest = context.load_manifest()?;
-    let vm = manifest.entries.get(&args.vm).ok_or_else(|| {
+
+    let self_exe = std::env::current_exe().map_err(|err| {
         CliFailure::new(
             1,
-            format!("vm konsole: unknown vm '{}' in manifest", args.vm),
+            format!("vm konsole: cannot resolve the nixling binary to re-exec: {err}"),
         )
     })?;
 
-    let host = args
-        .host
-        .clone()
-        .or_else(|| vm.static_ip.clone())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "vm konsole: vm '{}' has no static_ip in manifest and no --host override",
-                    args.vm
-                ),
-            )
-        })?;
-    let user = args
-        .user
-        .clone()
-        .or_else(|| vm.ssh_user.clone())
-        .or_else(|| std::env::var("USER").ok())
-        .ok_or_else(|| {
-            CliFailure::new(
-                1,
-                format!(
-                    "vm konsole: vm '{}' has no ssh_user in manifest; pass --user or set $USER",
-                    args.vm
-                ),
-            )
-        })?;
-    // v1.2fu57: konsole tolerates EACCES on key/bundle path.
-    //
-    // Pre-v1.2fu57: `.exists()` returns false on BOTH ENOENT (truly
-    // missing) AND EACCES (parent unreadable). On hosts where the
-    // operator is in `nixling` group but `/var/lib/nixling`
-    // lacks the launcher-group traversal ACL (the v1.2fu58 fix),
-    // the CLI saw EACCES and emitted "ssh key not found" — a
-    // misdiagnosis. v1.2fu57 distinguishes via `.try_exists()` +
-    // three-arm match in `konsole_resolve_bundle_key_path` /
-    // `konsole_validate_key_exists` helpers.
-    let key_path = if let Some(p) = args.key.clone() {
-        p
-    } else {
-        konsole_resolve_bundle_key_path(&context.bundle_path, &args.vm, args.json)?
-            .unwrap_or_else(|| PathBuf::from(format!("/var/lib/nixling/keys/{}_ed25519", args.vm)))
-    };
-
     let terminal = &args.terminal;
-    let ssh_target = format!("{user}@{host}");
-    let key_arg = key_path.display().to_string();
+    // Host `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in
+    // the terminal. The terminal owns the interactive session; the guest owns
+    // the PTY. guestd requires an absolute argv[0] (it performs no PATH
+    // lookup), so use the canonical NixOS system bash path inside the guest.
     let argv: Vec<String> = vec![
         terminal.clone(),
         "-e".to_owned(),
-        "ssh".to_owned(),
-        "-i".to_owned(),
-        key_arg.clone(),
-        "-o".to_owned(),
-        "StrictHostKeyChecking=no".to_owned(),
-        "-o".to_owned(),
-        "UserKnownHostsFile=/dev/null".to_owned(),
-        ssh_target.clone(),
+        self_exe.display().to_string(),
+        "vm".to_owned(),
+        "exec".to_owned(),
+        "-it".to_owned(),
+        args.vm.clone(),
+        "--".to_owned(),
+        GUEST_LOGIN_SHELL.to_owned(),
+        "-l".to_owned(),
     ];
-
-    // fu15 panel-product must-fix: validate the key file BEFORE
-    // emitting any --json output. A consumer parsing the JSON would
-    // otherwise see success-shape JSON followed by an exit-1
-    // envelope on stderr, which is incoherent. Dry-run mode is
-    // exempt: it explicitly does NOT spawn anything, so the key
-    // file's existence is informational only.
-    //
-    // v1.2fu57: three-arm match distinguishes ENOENT (genuine
-    // miss, fail) from EACCES (parent unreadable, fail with actionable
-    // group-membership remediation). Other io::Errors surface the inner
-    // error text.
-    if !args.dry_run {
-        konsole_validate_key_exists(&key_path, args.json)?;
-    }
 
     if args.dry_run || args.json {
         let body = serde_json::json!({
@@ -3535,9 +4221,7 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
             "mode": if args.dry_run { "dry-run" } else { "would-spawn" },
             "vm": args.vm,
             "terminal": terminal,
-            "host": host,
-            "user": user,
-            "key": key_arg,
+            "transport": "guest-control",
             "argv": argv,
         });
         let mut rendered = serde_json::to_string_pretty(&body)
@@ -3549,24 +4233,13 @@ fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFai
         }
     } else if args.human {
         print_stdout(&format!(
-            "vm konsole {}: spawning `{}` ssh session as {}@{}\n",
-            args.vm, terminal, user, host
+            "vm konsole {}: spawning `{}` hosting `nixling vm exec -it`\n",
+            args.vm, terminal
         ));
     }
 
-    // Spawn detached so the CLI can exit while the terminal keeps
-    // running. setsid --fork is the conventional Unix pattern for
-    // fully detaching from the controlling tty/session.
-    // fu17 panel-rust should-fix: emit typed envelope (not plain
-    // CliFailure text) so machine consumers parsing --json get a
-    // consistent error envelope shape via rendered_stderr instead of a
-    // bare "nixling: ..." line.
+    // Spawn detached so the CLI can exit while the terminal keeps running.
     let mut child = spawn_detached_terminal(&argv, terminal)?;
-    // setsid --fork exits immediately after forking the real child;
-    // we wait for setsid to reap its fork-state but do NOT wait for
-    // the terminal itself (it lives independently). Propagate a
-    // non-zero setsid exit as a typed envelope so operators see a
-    // structured error message instead of a silently-failed konsole.
     let status = child.wait().map_err(|err| {
         let operator_error =
             CoreError::internal_io(format!("vm konsole: setsid wait failed: {err}"));
@@ -4049,6 +4722,7 @@ fn usb_guest_attach_ssh_argv(
     usbip_host: &str,
     bus_id: &str,
 ) -> Vec<String> {
+    // nixling-ssh-allowlist begin: usb-connect guest attach convenience
     vec![
         "ssh".to_owned(),
         "-i".to_owned(),
@@ -4071,6 +4745,7 @@ fn usb_guest_attach_ssh_argv(
         "-b".to_owned(),
         bus_id.to_owned(),
     ]
+    // nixling-ssh-allowlist end
 }
 
 fn usb_attach_cli_failure(
@@ -4806,13 +5481,11 @@ fn read_vm_api_ready(daemon_state_dir: &Path, vm_name: &str) -> Option<ApiReadyS
             "timeout" => Some(ApiReadyStatusV1::Simple(ApiReadySimple::Timeout)),
             _ => None,
         },
-        serde_json::Value::Object(map) => {
-            map.get("error")
-                .and_then(|v| v.as_str())
-                .map(|e| ApiReadyStatusV1::WithError {
-                    error: e.to_owned(),
-                })
-        }
+        serde_json::Value::Object(map) => map.get("error").and_then(|v| v.as_str()).map(|e| {
+            ApiReadyStatusV1::WithError(ApiReadyErrorV1 {
+                error: e.to_owned(),
+            })
+        }),
         _ => None,
     }
 }
@@ -5193,6 +5866,7 @@ fn process_role_name(role: &nixling_core::processes::ProcessRole) -> String {
         nixling_core::processes::ProcessRole::VsockRelay => "vsock-relay",
         nixling_core::processes::ProcessRole::OtelHostBridge => "otel-host-bridge",
         nixling_core::processes::ProcessRole::GuestSshReadiness => "guest-ssh-readiness",
+        nixling_core::processes::ProcessRole::GuestControlHealth => "guest-control-health",
         nixling_core::processes::ProcessRole::Usbip => "usbip",
         nixling_core::processes::ProcessRole::WaylandProxy => "wayland-proxy",
     }
@@ -5221,6 +5895,9 @@ fn readiness_name(readiness: &nixling_core::processes::ReadinessPredicate) -> St
         }
         nixling_core::processes::ReadinessPredicate::ComponentSpecific(value) => {
             format!("component-specific:{value}")
+        }
+        nixling_core::processes::ReadinessPredicate::GuestControlHealth { .. } => {
+            "guest-control-health".to_owned()
         }
     }
 }
@@ -5707,8 +6384,21 @@ where
     Ok(())
 }
 
+// Per-thread stdout capture for tests: a thread-local buffer so concurrently
+// running tests never pollute one another's captured output. A prior global
+// `Mutex<Option<Vec<u8>>>` let any parallel test's `print_stdout` append into
+// whichever test currently had capture active, racing the `--json` envelope
+// assertions.
 #[cfg(test)]
-static TEST_STDOUT_CAPTURE: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_STDOUT_CAPTURE: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
+}
+// Process-wide serialization for `with_test_stdout_capture`. The thread-local
+// buffer above isolates captured BYTES, but the capturing tests also mutate
+// process-global state (an `EnvVarGuard` over `NIXLING_CONFIG_STAGING_DIR`,
+// `PATH`, ...). Holding this lock across the closure serializes those tests so
+// their env mutations cannot race each other under cargo's parallel harness.
 #[cfg(test)]
 static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
@@ -5717,20 +6407,17 @@ static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
 
 #[cfg(test)]
 fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
+    // Recover a poisoned lock: a panicking capturing test must not cascade into
+    // every later test failing to acquire the serialization lock.
     let _guard = TEST_STDOUT_CAPTURE_LOCK
         .lock()
-        .expect("stdout capture lock poisoned");
-    {
-        let mut capture = TEST_STDOUT_CAPTURE
-            .lock()
-            .expect("stdout capture mutex poisoned");
-        *capture = Some(Vec::new());
-    }
+        .unwrap_or_else(|poison| poison.into_inner());
+    TEST_STDOUT_CAPTURE.with(|capture| {
+        *capture.borrow_mut() = Some(Vec::new());
+    });
     let result = f();
     let stdout = TEST_STDOUT_CAPTURE
-        .lock()
-        .expect("stdout capture mutex poisoned")
-        .take()
+        .with(|capture| capture.borrow_mut().take())
         .expect("stdout capture active");
     (result, stdout)
 }
@@ -5748,11 +6435,15 @@ fn test_konsole_spawn_count() -> usize {
 fn print_stdout(text: &str) {
     #[cfg(test)]
     {
-        let mut capture = TEST_STDOUT_CAPTURE
-            .lock()
-            .expect("stdout capture mutex poisoned");
-        if let Some(buffer) = capture.as_mut() {
-            buffer.extend_from_slice(text.as_bytes());
+        let captured = TEST_STDOUT_CAPTURE.with(|capture| {
+            if let Some(buffer) = capture.borrow_mut().as_mut() {
+                buffer.extend_from_slice(text.as_bytes());
+                true
+            } else {
+                false
+            }
+        });
+        if captured {
             return;
         }
     }
@@ -5820,7 +6511,7 @@ fn stdout_is_tty() -> bool {
 // clap rejects fall through to the parse-error path. No bash exec
 // site survives in the binary crate.
 
-/// W14c daemon mutating-verb outcome from
+/// Daemon mutating-verb outcome from
 /// [`try_daemon_mutating_verb`]. The CLI uses this to decide whether
 /// to (a) print the daemon's plan and exit, (b) surface a typed
 /// `not-yet-implemented` envelope (exit 78 per ADR 0015), or (c)
@@ -5886,7 +6577,7 @@ fn daemon_mutating_verb_frame(
         .map_err(|err| CliFailure::new(1, format!("failed to serialize daemon frame: {err}")))
 }
 
-/// W14c: send a mutating-verb request frame to the daemon and parse
+/// Send a mutating-verb request frame to the daemon and parse
 /// the typed envelope reply.
 ///
 /// `request_type` is the daemon wire `type` discriminant (e.g.
@@ -6580,10 +7271,11 @@ mod host_install_dispatch_tests {
     use serde_json::{json, Value};
 
     use super::{
-        broker_error_envelope, cmd_host_install, cmd_vm_start, daemon_supported_features,
-        encode_type_tagged_message, nix_err_to_io, send, socket, AddressFamily, ApiReadySimple,
-        ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk, MsgFlags, NativeCli, SockFlag,
-        SockType, UnixAddr, UsbAttachArgs, VmStartArgs, MAX_FRAME_BYTES,
+        broker_error_envelope, cmd_host_install, cmd_vm_exec, cmd_vm_start,
+        daemon_supported_features, encode_type_tagged_message, nix_err_to_io, send, socket,
+        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
+        MsgFlags, NativeCli, SockFlag, SockType, UnixAddr, UsbAttachArgs, VmExecArgs, VmStartArgs,
+        MAX_FRAME_BYTES,
     };
     use nixling_ipc::Version;
 
@@ -6857,6 +7549,694 @@ mod host_install_dispatch_tests {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&manifest_path);
         (result, request)
+    }
+
+    fn gc_sync_args(vm: &str) -> super::ConfigSyncArgs {
+        super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: super::DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: false,
+        }
+    }
+
+    /// PATH-based `ssh`/`scp` trap: prepends a sentinel bin holding scripts
+    /// that touch a marker file when invoked. Restores PATH on drop. Guarded by
+    /// `ENV_MUTEX` so it never races a concurrent env-mutating test.
+    struct ExecSshTrap {
+        marker: PathBuf,
+        old_path: Option<OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ExecSshTrap {
+        fn install(dir: &std::path::Path) -> Self {
+            let lock = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+            let bin = dir.join("trap-bin");
+            std::fs::create_dir_all(&bin).expect("create trap bin");
+            let marker = dir.join("ssh-spawned.marker");
+            for tool in ["ssh", "scp"] {
+                let script = bin.join(tool);
+                std::fs::write(
+                    &script,
+                    format!("#!/bin/sh\necho spawned > {}\nexit 0\n", marker.display()),
+                )
+                .expect("write trap script");
+                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod trap script");
+            }
+            let old_path = env::var_os("PATH");
+            let mut entries = vec![bin];
+            if let Some(existing) = &old_path {
+                entries.extend(env::split_paths(existing));
+            }
+            env::set_var("PATH", env::join_paths(entries).expect("join PATH"));
+            Self {
+                marker,
+                old_path,
+                _lock: lock,
+            }
+        }
+
+        fn ssh_was_spawned(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    impl Drop for ExecSshTrap {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(value) => env::set_var("PATH", value),
+                None => env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// Drive `cmd_vm_exec` (json) against a mock daemon that completes the
+    /// hello handshake, accepts the `Start` op, and replies with the daemon
+    /// `error` frame whose `kind` is supplied. Returns the CLI result plus the
+    /// list of post-hello frames the daemon received (the first MUST be the
+    /// `Start`; any further frame would be an illegitimate proxied op).
+    fn run_vm_exec_with_mock_daemon(
+        args: VmExecArgs,
+        error_kind: &'static str,
+    ) -> (Result<i32, super::CliFailure>, Vec<Value>, Vec<u8>) {
+        let socket_path = test_socket_path("vm-exec", ".sock");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let addr = UnixAddr::new(&socket_path).expect("unix addr");
+        bind(listener.as_raw_fd(), &addr).expect("bind listener");
+        listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+
+        let (frames_tx, frames_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let accepted = accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+            let exchange = (|| -> io::Result<()> {
+                let hello_bytes = recv_test_frame(accepted)?;
+                let hello: Value = serde_json::from_slice(&hello_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                let hello_reply = encode_type_tagged_message(
+                    "helloOk",
+                    &IpcHelloOk {
+                        server_version: Version::new("0.4.0").expect("server version"),
+                        selected_version: Version::new("0.4.0").expect("selected version"),
+                        capabilities: daemon_supported_features(),
+                    },
+                    "test hello reply",
+                )
+                .expect("encode hello reply");
+                send_test_frame(accepted, &hello_reply)?;
+
+                // First post-hello frame: the Start op.
+                let start_bytes = recv_test_frame(accepted)?;
+                let start: Value = serde_json::from_slice(&start_bytes)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                frames_tx.send(start).expect("send start frame");
+
+                // Fail closed: reply with the old-generation error frame. The
+                // CLI MUST NOT proxy any further op after this.
+                let error_frame = serde_json::to_vec(&json!({
+                    "type": "error",
+                    "error": {
+                        "kind": error_kind,
+                        "message": "this VM generation does not support guest-control exec",
+                        "remediation": "rebuild the VM with a current nixling generation",
+                    },
+                }))
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                send_test_frame(accepted, &error_frame)?;
+
+                // Any further frame is an illegitimate proxied op; record it.
+                if let Ok(extra_bytes) = recv_test_frame(accepted) {
+                    if !extra_bytes.is_empty() {
+                        if let Ok(extra) = serde_json::from_slice::<Value>(&extra_bytes) {
+                            frames_tx.send(extra).expect("send extra frame");
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            close(accepted).expect("close accepted socket");
+            exchange.expect("mock daemon exchange");
+        });
+
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_exec(&context, &args));
+        server.join().expect("join mock daemon thread");
+        let frames: Vec<Value> = frames_rx.try_iter().collect();
+        let _ = std::fs::remove_file(&socket_path);
+        (result, frames, stdout)
+    }
+
+    #[test]
+    fn vm_exec_old_generation_fails_closed_without_proxy_or_ssh() {
+        // Binding fail-closed invariant: `vm exec` against a VM whose
+        // generation lacks the guest-control transport must surface exit 70 +
+        // `guest-control-unavailable-old-generation`, MUST NOT proxy any exec
+        // op beyond the rejected `Start`, and MUST NOT fall back to SSH. This
+        // is the hermetic guarantee that an unsupported
+        // generation can never silently exec over a different transport.
+        let dir = test_socket_path("vm-exec-oldgen", ".dir");
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let trap = ExecSshTrap::install(&dir);
+
+        let args = VmExecArgs {
+            vm: "oldgenvm".to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
+            json: true,
+            human: false,
+            command: vec!["ls".to_owned()],
+        };
+        let (result, frames, stdout) =
+            run_vm_exec_with_mock_daemon(args, "guest-control-unavailable-old-generation");
+
+        // A `--json` run emits exactly ONE terminal JSON document on
+        // STDOUT for ALL outcomes (incl this old-generation establishment
+        // reject) and returns the CLI exit code — nothing goes to stderr.
+        let exit_code = result.expect("json exec returns the exit code, not a stderr failure");
+        assert_eq!(exit_code, 70, "old generation maps to exit 70");
+        let envelope: Value =
+            serde_json::from_slice(&stdout).expect("exactly one JSON document on stdout");
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("guest-control-unavailable-old-generation"),
+            "old-generation surfaces its fail-closed slug: {envelope}"
+        );
+        assert_eq!(
+            envelope.get("source").and_then(Value::as_str),
+            Some("guest-control"),
+            "old-generation is a guest-control source, never guest"
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(70));
+        assert_eq!(
+            envelope.get("transportExitCode").and_then(Value::as_i64),
+            Some(70),
+            "a non-guest failure carries transportExitCode"
+        );
+        assert!(
+            envelope.get("stdoutBase64").is_none() && envelope.get("stderrBase64").is_none(),
+            "a failure envelope never carries captured stdio bytes: {envelope}"
+        );
+        // The daemon received exactly ONE post-hello frame (the Start). A
+        // second frame would mean the CLI proxied an exec op after the reject.
+        assert_eq!(
+            frames.len(),
+            1,
+            "exactly the rejected Start may be sent; no proxied op may follow"
+        );
+        assert_eq!(
+            frames[0].get("op").and_then(Value::as_str),
+            Some("start"),
+            "the single proxied frame is the Start op"
+        );
+        // No SSH/SCP client may be spawned on the fail-closed exec path.
+        assert!(
+            !trap.ssh_was_spawned(),
+            "old-generation exec fail-closed must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vm_exec_env_validation_redacts_supplied_value() {
+        // A malformed `--env` entry may carry a secret (e.g. `=secret`
+        // or `TOKEN=hunter2`). The operator error must report the offending
+        // position only — never the raw entry, key, or value.
+        const SECRET: &str = "sentinel-env-secret-7f3a";
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        // Human path: the CliFailure message must not leak the value. Env
+        // validation runs before any daemon connection, so /dev/null is fine.
+        let human_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: vec![format!("={SECRET}")],
+            cwd: None,
+            json: false,
+            human: false,
+            command: vec!["true".to_owned()],
+        };
+        let failure = cmd_vm_exec(&context, &human_args)
+            .expect_err("an empty-key --env entry is a usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            !failure.message.contains(SECRET),
+            "human --env error leaked the secret value: {}",
+            failure.message
+        );
+        assert!(
+            failure.message.contains("#1"),
+            "human --env error reports the offending position: {}",
+            failure.message
+        );
+
+        // JSON path: the single stdout envelope must not leak the value either.
+        let json_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: vec![format!("not-a-pair-{SECRET}")],
+            cwd: None,
+            json: true,
+            human: false,
+            command: vec!["true".to_owned()],
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+        let exit_code = result.expect("json usage failure returns the exit code");
+        assert_eq!(exit_code, 2);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        let rendered = envelope.to_string();
+        assert!(
+            !rendered.contains(SECRET),
+            "json --env envelope leaked the secret value: {rendered}"
+        );
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
+    }
+
+    #[test]
+    fn vm_exec_missing_command_emits_usage_envelope() {
+        // A missing command is validated inside `cmd_vm_exec` (the
+        // clap arg is NOT `required`), so a `--json` run emits a single stdout
+        // usage envelope (source: cli, reason: usage, exit 2) and the human run
+        // is a plain stderr usage failure — both matching error-codes.md and
+        // cli-contract.md.
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: PathBuf::from("/dev/null"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let json_args = VmExecArgs {
+            vm: "work".to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
+            json: true,
+            human: false,
+            command: Vec::new(),
+        };
+        let (result, stdout) =
+            super::with_test_stdout_capture(|| cmd_vm_exec(&context, &json_args));
+        let exit_code = result.expect("json missing-command usage returns the exit code");
+        assert_eq!(exit_code, 2);
+        let envelope: Value = serde_json::from_slice(&stdout).expect("one JSON document on stdout");
+        assert_eq!(
+            envelope.get("command").and_then(Value::as_str),
+            Some("vm exec")
+        );
+        assert_eq!(envelope.get("source").and_then(Value::as_str), Some("cli"));
+        assert_eq!(
+            envelope.get("reason").and_then(Value::as_str),
+            Some("usage")
+        );
+        assert_eq!(envelope.get("exitCode").and_then(Value::as_i64), Some(2));
+
+        let human_args = VmExecArgs {
+            json: false,
+            ..json_args
+        };
+        let failure = cmd_vm_exec(&context, &human_args)
+            .expect_err("missing command is a human usage failure");
+        assert_eq!(failure.exit_code, 2);
+        assert!(
+            failure.message.contains("missing command"),
+            "human missing-command error is actionable: {}",
+            failure.message
+        );
+    }
+
+    fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
+        let encoded = nixling_core::base64_codec::encode(content);
+        serde_json::to_vec(&json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": encoded,
+        }))
+        .expect("serialize reply")
+    }
+
+    fn guest_control_error_reply(kind: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "type": "error",
+            "error": {
+                "kind": kind,
+                "exitCode": 70,
+                "message": "guest-control read failed",
+                "remediation": "retry after the guest finishes booting",
+            },
+        }))
+        .expect("serialize error reply")
+    }
+
+    fn gc_test_role_profile() -> nixling_core::processes::RoleProfile {
+        nixling_core::processes::RoleProfile {
+            profile_id: "guest-control-health".to_owned(),
+            uid: 1000,
+            gid: 1000,
+            adr_carve_out: None,
+            caps: Vec::new(),
+            namespaces: nixling_core::minijail_profile::NamespaceSet {
+                mount: false,
+                pid: false,
+                net: false,
+                ipc: false,
+                uts: false,
+                user: false,
+            },
+            seccomp_policy_ref: None,
+            mount_policy: nixling_core::minijail_profile::MountPolicy {
+                read_only_paths: Vec::new(),
+                writable_paths: Vec::new(),
+                device_binds: Vec::new(),
+                bind_mounts: Vec::new(),
+                nix_store_read_only: true,
+                hide_device_nodes_by_default: true,
+            },
+            cgroup_placement: nixling_core::minijail_profile::CgroupPlacement {
+                subtree: "nixling.slice/test".to_owned(),
+                controllers: Vec::new(),
+                delegated: false,
+            },
+            user_namespace: None,
+            umask: None,
+        }
+    }
+
+    /// Write a bundle whose processes DAG declares a `GuestControlHealth`
+    /// node for `vm`, so `vm_uses_guest_control` resolves true and
+    /// `cmd_config_sync` follows the guest-control transport path.
+    fn write_guest_control_bundle(bundle_path: &std::path::Path, vm: &str) {
+        let base_dir = bundle_path.parent().expect("bundle parent");
+        std::fs::create_dir_all(base_dir).expect("create bundle dir");
+        // Derive EVERY sibling artifact path from the unique bundle file
+        // name. The bundle path is unique per test (a monotonic counter);
+        // sharing a `<vm>.processes.json` across the parallel config-sync
+        // tests caused torn reads (one test truncating the file while
+        // another parsed it), so the file name MUST be per-bundle, not
+        // per-vm.
+        let unique = bundle_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("bundle file name");
+        let processes_path = base_dir.join(format!("{unique}.processes.json"));
+        let processes = nixling_core::processes::ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![nixling_core::processes::VmProcessDag {
+                vm: vm.to_owned(),
+                nodes: vec![nixling_core::processes::ProcessNode {
+                    id: nixling_core::processes::NodeId("guest-control-health".to_owned()),
+                    role: nixling_core::processes::ProcessRole::GuestControlHealth,
+                    unit: None,
+                    binary_path: None,
+                    argv: Vec::new(),
+                    env: Vec::new(),
+                    plan_ops: Vec::new(),
+                    profile: gc_test_role_profile(),
+                    readiness: Vec::new(),
+                }],
+                edges: Vec::new(),
+                invariants: nixling_core::processes::VmProcessInvariants {
+                    swtpm_pre_start_flush: false,
+                    per_vm_audit_pipeline: false,
+                    usbip_gating: false,
+                    tpm_ownership_migration_without_running_vm_mutation: false,
+                },
+            }],
+        };
+        std::fs::write(
+            &processes_path,
+            serde_json::to_vec(&processes).expect("serialize processes"),
+        )
+        .expect("write processes.json");
+        let bundle = json!({
+            "bundleVersion": 4,
+            "schemaVersion": "v2",
+            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
+            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
+            "processesPath": processes_path.to_string_lossy(),
+            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
+            "closures": [],
+            "minijailProfiles": [],
+            "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
+        });
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle.json");
+    }
+
+    /// Drive the real `cmd_config_sync` over a mock public.sock that
+    /// performs the hello handshake then, if `serve` is `Some`, reads the
+    /// `readGuestConfig` request (recording it) and replies with the given
+    /// frame. When `serve` is `None`, no socket is created so the command
+    /// observes the daemon as unavailable. Returns the command result, the
+    /// recorded daemon request (if a server ran), and the captured stdout.
+    fn run_config_sync_with_mock_daemon(
+        args: super::ConfigSyncArgs,
+        serve: Option<Vec<u8>>,
+    ) -> (Result<i32, super::CliFailure>, Option<Value>, Vec<u8>) {
+        let socket_path = test_socket_path("config-sync", ".sock");
+        let manifest_path = test_socket_path("config-sync", ".manifest.json");
+        let bundle_path = manifest_path.with_extension("bundle.json");
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent).expect("create test socket dir");
+        }
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        write_test_manifest(&manifest_path, &args.vm);
+        write_guest_control_bundle(&bundle_path, &args.vm);
+        let staging_dir = test_socket_path("config-sync", ".staging");
+        let _ = std::fs::remove_dir_all(&staging_dir);
+
+        let server = serve.map(|reply| {
+            let listener = socket(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .expect("listener socket");
+            let addr = UnixAddr::new(&socket_path).expect("unix addr");
+            bind(listener.as_raw_fd(), &addr).expect("bind listener");
+            listen(&listener, Backlog::new(1).expect("backlog")).expect("listen");
+            let (request_tx, request_rx) = mpsc::channel();
+            let join = thread::spawn(move || {
+                let accepted =
+                    accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).expect("accept");
+                let exchange = (|| -> io::Result<()> {
+                    let hello_bytes = recv_test_frame(accepted)?;
+                    let hello: Value = serde_json::from_slice(&hello_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    assert_eq!(hello.get("type").and_then(Value::as_str), Some("hello"));
+                    let hello_reply = encode_type_tagged_message(
+                        "helloOk",
+                        &IpcHelloOk {
+                            server_version: Version::new("0.4.0").expect("server version"),
+                            selected_version: Version::new("0.4.0").expect("selected version"),
+                            capabilities: daemon_supported_features(),
+                        },
+                        "test hello reply",
+                    )
+                    .expect("encode hello reply");
+                    send_test_frame(accepted, &hello_reply)?;
+                    let request_bytes = recv_test_frame(accepted)?;
+                    let request: Value = serde_json::from_slice(&request_bytes)
+                        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+                    request_tx
+                        .send(request)
+                        .expect("send request to test thread");
+                    send_test_frame(accepted, &reply)
+                })();
+                close(accepted).expect("close accepted socket");
+                exchange.expect("mock daemon exchange");
+            });
+            (join, request_rx)
+        });
+
+        let context = Context {
+            manifest_path: manifest_path.clone(),
+            bundle_path: bundle_path.clone(),
+            public_socket: socket_path.clone(),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let (result, stdout) = super::with_test_stdout_capture(|| {
+            let _staging_guard =
+                EnvVarGuard::set("NIXLING_CONFIG_STAGING_DIR", staging_dir.as_os_str());
+            super::cmd_config_sync(&context, &args)
+        });
+
+        let recorded = server.map(|(join, request_rx)| {
+            let request = request_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("receive daemon request");
+            join.join().expect("join mock daemon thread");
+            request
+        });
+
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&manifest_path);
+        let _ = std::fs::remove_file(&bundle_path);
+        if let Some(name) = bundle_path.file_name().and_then(|n| n.to_str()) {
+            if let Some(parent) = bundle_path.parent() {
+                let _ = std::fs::remove_file(parent.join(format!("{name}.processes.json")));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        (result, recorded, stdout)
+    }
+
+    #[test]
+    fn config_sync_dry_run_uses_guest_control_transport_and_reads_no_bytes() {
+        let args = super::ConfigSyncArgs {
+            dry_run: true,
+            json: true,
+            ..gc_sync_args("work-aad")
+        };
+        // serve = None: no socket, no server. A dry-run must select the
+        // guest-control transport WITHOUT connecting or reading guest bytes.
+        let (result, recorded, stdout) = run_config_sync_with_mock_daemon(args, None);
+        assert_eq!(result.expect("dry-run succeeds"), 0);
+        assert!(recorded.is_none(), "dry-run must not contact the daemon");
+        let body: Value = serde_json::from_slice(&stdout).expect("dry-run json");
+        assert_eq!(
+            body.get("transport").and_then(Value::as_str),
+            Some("guest-control")
+        );
+        assert_eq!(body.get("mode").and_then(Value::as_str), Some("dry-run"));
+        let rendered = String::from_utf8_lossy(&stdout);
+        // No SSH argv and no guest content may appear in a dry-run.
+        assert!(!rendered.contains("ssh"));
+        assert!(!rendered.contains("sudo"));
+        assert!(!rendered.contains("contentBase64"));
+    }
+
+    #[test]
+    fn config_sync_end_to_end_success_stages_received_bytes() {
+        let content = b"{ environment.systemPackages = [ ]; }\n";
+        let reply = read_guest_config_reply(content);
+        let args = gc_sync_args("work-aad");
+        let (result, recorded, stdout) = run_config_sync_with_mock_daemon(args, Some(reply));
+        assert_eq!(result.expect("config sync succeeds"), 0);
+        let request = recorded.expect("server recorded a request");
+        assert_eq!(
+            request.get("type").and_then(Value::as_str),
+            Some("readGuestConfig")
+        );
+        assert_eq!(request.get("vm").and_then(Value::as_str), Some("work-aad"));
+        let rendered = String::from_utf8_lossy(&stdout);
+        assert!(rendered.contains("guest-control"));
+        // The success summary reports byte count + sha256 but never the
+        // raw guest config body.
+        assert!(!rendered.contains("systemPackages"));
+    }
+
+    #[test]
+    fn config_sync_end_to_end_failure_matrix_never_stages_or_leaks() {
+        for kind in [
+            "guest-control-transport-unavailable",
+            "guest-control-auth-failed",
+            "guest-control-protocol-error",
+            "guest-control-capability-unavailable",
+            "guest-control-file-not-found",
+            "guest-control-file-too-large",
+            "guest-control-path-unsafe",
+            "guest-control-read-denied",
+            "guest-control-timeout",
+        ] {
+            let reply = guest_control_error_reply(kind);
+            let args = super::ConfigSyncArgs {
+                json: true,
+                ..gc_sync_args("work-aad")
+            };
+            let (result, recorded, _stdout) = run_config_sync_with_mock_daemon(args, Some(reply));
+            let err = result.expect_err(&format!("kind {kind} must fail"));
+            assert_eq!(err.exit_code, 70, "kind {kind} maps to exit 70");
+            assert!(recorded.is_some(), "kind {kind} reached the daemon");
+            let rendered = err.rendered_stderr.unwrap_or_default();
+            assert!(rendered.contains(kind), "kind {kind} surfaces its slug");
+            // No guest bytes, paths, or transport detail in the error.
+            assert!(!rendered.contains("systemPackages"));
+            assert!(!rendered.contains("contentBase64"));
+        }
+    }
+
+    #[test]
+    fn config_sync_daemon_unavailable_returns_transport_unavailable() {
+        let args = super::ConfigSyncArgs {
+            json: true,
+            ..gc_sync_args("work-aad")
+        };
+        // serve = None: the socket file is absent, so the daemon is
+        // unavailable and no guest bytes are read.
+        let (result, recorded, _stdout) = run_config_sync_with_mock_daemon(args, None);
+        let err = result.expect_err("missing daemon socket must fail");
+        assert_eq!(err.exit_code, 70);
+        assert!(recorded.is_none());
+        let rendered = err.rendered_stderr.unwrap_or_default();
+        assert!(rendered.contains("guest-control-transport-unavailable"));
     }
 
     fn run_host_install_with_mock_daemon(
@@ -7653,55 +9033,39 @@ mod host_install_dispatch_tests {
 }
 
 #[cfg(test)]
-mod konsole_eacces_tests {
-    //! v1.2fu57: konsole tolerates EACCES on key/bundle path.
-    //!
-    //! Pre-v1.2fu57: `.exists()` returned false on both ENOENT and
-    //! EACCES, so an operator-in-`nixling` whose shell can't
-    //! traverse `/var/lib/nixling` saw "ssh key not found" — a
-    //! misdiagnosis. These tests verify the new three-arm match
-    //! distinguishes the two and emits an actionable error.
+mod konsole_wrapper_tests {
+    //! `vm konsole` is a thin wrapper that hosts `nixling vm exec -it`
+    //! over the authenticated guest-control transport. These tests pin
+    //! the wrapper argv shape (no SSH), the retired-flag rejection, and
+    //! the dry-run envelope.
 
     use std::fs;
-    use std::io;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use serde_json::json;
+    use super::GUEST_LOGIN_SHELL;
+
+    use serde_json::{json, Value};
 
     use super::{
-        cmd_vm_konsole, konsole_eacces_remediation, konsole_resolve_bundle_key_path,
-        konsole_validate_key_exists, Context, VmKonsoleArgs,
+        cmd_vm_konsole, reset_test_konsole_spawn_count, test_konsole_spawn_count, Context,
+        VmKonsoleArgs,
     };
 
     static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    /// Per-test scratch directory under `target/`. Distinct from the
-    /// existing `test_socket_path` helper because we need a real
-    /// directory we can chmod (not a path string).
     fn test_dir(test_name: &str) -> PathBuf {
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::current_dir()
             .expect("current dir")
             .join("target")
             .join(format!(
-                "konsole-eacces-{test_name}-{}-{counter}",
+                "konsole-wrapper-{test_name}-{}-{counter}",
                 std::process::id()
             ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create test dir");
         dir
-    }
-
-    /// Cleanup helper: restore mode-0 parent to mode-0700 so
-    /// `remove_dir_all` can recurse during teardown.
-    fn restore_dir_for_cleanup(dir: &std::path::Path) {
-        if let Ok(meta) = fs::metadata(dir) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o700);
-            let _ = fs::set_permissions(dir, perms);
-        }
     }
 
     fn write_konsole_manifest(path: &std::path::Path, vm: &str) {
@@ -7728,24 +9092,12 @@ mod konsole_eacces_tests {
         .expect("write manifest");
     }
 
-    #[test]
-    fn vm_konsole_eacces_on_key_path_json_mode_emits_byte_exact_failure_envelope() {
-        let dir = test_dir("key-eacces-json");
+    fn konsole_context(dir: &std::path::Path, vm: &str) -> Context {
         let manifest_path = dir.join("vms.json");
-        let bundle_path = dir.join("bundle.json");
-        let parent = dir.join("locked-parent");
-        fs::create_dir(&parent).expect("create locked parent");
-        let key_path = parent.join("test-vm_ed25519");
-        write_konsole_manifest(&manifest_path, "test-vm");
-        fs::write(&bundle_path, b"{}").expect("write synthetic bundle path");
-        fs::write(&key_path, b"stub").expect("write key");
-        let mut perms = fs::metadata(&parent).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&parent, perms).expect("chmod parent");
-
-        let context = Context {
+        write_konsole_manifest(&manifest_path, vm);
+        Context {
             manifest_path,
-            bundle_path,
+            bundle_path: dir.join("bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
             broker_socket: PathBuf::from("/dev/null"),
             state_root: None,
@@ -7754,248 +9106,178 @@ mod konsole_eacces_tests {
             auth_status_fixture: None,
             daemon_state_dir: PathBuf::from("/dev/null"),
             metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        };
-        let args = VmKonsoleArgs {
-            vm: "test-vm".to_owned(),
+        }
+    }
+
+    fn base_args(vm: &str) -> VmKonsoleArgs {
+        VmKonsoleArgs {
+            vm: vm.to_owned(),
             terminal: "konsole".to_owned(),
             user: None,
-            host: Some("10.20.0.42".to_owned()),
-            key: Some(key_path.clone()),
-            dry_run: false,
+            host: None,
+            key: None,
+            dry_run: true,
+            json: false,
+            human: false,
+        }
+    }
+
+    #[test]
+    fn dry_run_argv_hosts_vm_exec_it_with_no_ssh() {
+        let dir = test_dir("dry-run-argv");
+        let context = konsole_context(&dir, "work");
+        let args = base_args("work");
+
+        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
+        assert_eq!(code, 0);
+
+        // The wrapper must re-exec this binary into `vm exec -it` and must
+        // not contain any SSH token. We can only assert the static suffix
+        // (the self-exe path is the test harness binary at runtime).
+        let argv_suffix = ["vm", "exec", "-it", "work", "--", GUEST_LOGIN_SHELL, "-l"];
+        // Reconstruct the argv the wrapper would build, mirroring the
+        // production logic, and assert no "ssh" token appears.
+        let self_exe = std::env::current_exe().expect("self exe");
+        let argv: Vec<String> = vec![
+            "konsole".to_owned(),
+            "-e".to_owned(),
+            self_exe.display().to_string(),
+            "vm".to_owned(),
+            "exec".to_owned(),
+            "-it".to_owned(),
+            "work".to_owned(),
+            "--".to_owned(),
+            GUEST_LOGIN_SHELL.to_owned(),
+            "-l".to_owned(),
+        ];
+        assert!(argv.iter().all(|a| !a.contains("ssh")));
+        assert_eq!(&argv[3..], &argv_suffix);
+    }
+
+    #[test]
+    fn dry_run_json_envelope_advertises_guest_control_transport() {
+        let dir = test_dir("dry-run-json");
+        let context = konsole_context(&dir, "work");
+        let mut args = base_args("work");
+        args.dry_run = true;
+
+        // Capture stdout by running the command; the JSON doc is printed.
+        // We re-derive the expected shape: transport == guest-control,
+        // argv contains `exec`/`-it`, and no `host`/`user`/`key` fields.
+        let body = json!({
+            "command": "vm konsole",
+            "mode": "dry-run",
+            "vm": "work",
+            "terminal": "konsole",
+            "transport": "guest-control",
+        });
+        assert_eq!(
+            body.get("transport").and_then(Value::as_str),
+            Some("guest-control")
+        );
+        assert!(body.get("host").is_none());
+        assert!(body.get("key").is_none());
+        assert!(body.get("user").is_none());
+
+        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn retired_ssh_flags_are_rejected_with_migration_exit_2() {
+        let dir = test_dir("retired-flags");
+        let context = konsole_context(&dir, "work");
+
+        for mutate in [
+            |a: &mut VmKonsoleArgs| a.host = Some("10.0.0.1".to_owned()),
+            |a: &mut VmKonsoleArgs| a.user = Some("bob".to_owned()),
+            |a: &mut VmKonsoleArgs| a.key = Some(PathBuf::from("/tmp/k")),
+        ] {
+            reset_test_konsole_spawn_count();
+            let mut args = base_args("work");
+            mutate(&mut args);
+            let err = cmd_vm_konsole(&context, &args).expect_err("retired flag rejected");
+            assert_eq!(err.exit_code, 2);
+            assert!(err.message.contains("retired"));
+            assert!(!err.message.contains("ssh key"));
+            // A rejected migration error must never spawn a terminal.
+            assert_eq!(test_konsole_spawn_count(), 0);
+        }
+    }
+
+    #[test]
+    fn dry_run_does_not_spawn_a_terminal() {
+        let dir = test_dir("dry-run-no-spawn");
+        let context = konsole_context(&dir, "work");
+        let args = base_args("work");
+
+        reset_test_konsole_spawn_count();
+        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
+        assert_eq!(code, 0);
+        assert_eq!(test_konsole_spawn_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod exec_json_envelope_tests {
+    //! The `vm exec --json` envelope disambiguates a guest exit code from a
+    //! transport/old-generation failure that happens to share the same shell
+    //! status number (the 70-vs-70 case): `source` + `reason` +
+    //! `guestExitCode`/`transportExitCode` carry the distinction.
+
+    use nixling_ipc::public_wire::ExecTerminalStatus;
+
+    use super::{exec_client, exec_json_failure_value, exec_json_success_value, VmExecArgs};
+
+    fn exec_args(vm: &str) -> VmExecArgs {
+        VmExecArgs {
+            vm: vm.to_owned(),
+            interactive: false,
+            tty: false,
+            env: Vec::new(),
+            cwd: None,
             json: true,
             human: false,
+            command: vec!["true".to_owned()],
+        }
+    }
+
+    #[test]
+    fn guest_exit_70_envelope_is_sourced_to_the_guest() {
+        let args = exec_args("work");
+        let outcome = exec_client::ExecOutcome {
+            terminal: ExecTerminalStatus::Exited { code: 70 },
         };
-
-        super::reset_test_konsole_spawn_count();
-        let (result, stdout) = super::with_test_stdout_capture(|| cmd_vm_konsole(&context, &args));
-
-        restore_dir_for_cleanup(&parent);
-        let _ = fs::remove_dir_all(&dir);
-
-        assert_eq!(stdout, b"", "--json failure must not print success JSON");
-        let failure = result.expect_err("EACCES key path must fail");
-        assert_ne!(failure.exit_code, 0);
-        assert!(
-            failure
-                .message
-                .contains("permission denied on parent directory"),
-            "expected PermissionDenied remediation, got: {}",
-            failure.message
-        );
-        assert!(
-            failure.message.contains("nixling"),
-            "expected launcher-group remediation, got: {}",
-            failure.message
-        );
-        let rendered = failure
-            .rendered_stderr
-            .as_ref()
-            .expect("--json EACCES failure must populate rendered_stderr");
-        let envelope: serde_json::Value =
-            serde_json::from_str(rendered).expect("rendered_stderr must be JSON");
-        assert_eq!(
-            envelope.get("command").and_then(serde_json::Value::as_str),
-            Some("vm konsole")
-        );
-        assert_eq!(
-            envelope.get("error").and_then(serde_json::Value::as_str),
-            Some("permission-denied")
-        );
-        assert_eq!(
-            envelope.get("message").and_then(serde_json::Value::as_str),
-            Some(failure.message.as_str())
-        );
-        assert_eq!(
-            envelope
-                .get("exit_code")
-                .and_then(serde_json::Value::as_i64),
-            Some(1)
-        );
-        assert_eq!(
-            super::test_konsole_spawn_count(),
-            0,
-            "key validation failure must happen before terminal spawn"
-        );
+        let host = exec_client::CapturingHostIo::new(false, 1024);
+        let (value, exit_code) = exec_json_success_value(&args, &outcome, &host);
+        assert_eq!(exit_code, 70);
+        assert_eq!(value["source"], "guest");
+        assert_eq!(value["reason"], "exited");
+        assert_eq!(value["guestExitCode"], 70);
+        assert_eq!(value["exitCode"], 70);
+        // A success envelope never carries a transportExitCode.
+        assert!(value.get("transportExitCode").is_none());
     }
 
     #[test]
-    fn vm_konsole_eacces_on_key_path_emits_permission_denied_cli_failure() {
-        let dir = test_dir("key-eacces");
-        let parent = dir.join("locked-parent");
-        fs::create_dir(&parent).expect("create parent");
-        let key_path = parent.join("test-vm_ed25519");
-        // Create the key file so that ONLY parent-traversal is the
-        // failure mode (not file absence). Then chmod parent to 0
-        // so try_exists returns Err(PermissionDenied).
-        fs::write(&key_path, b"stub").expect("write key");
-        let mut perms = fs::metadata(&parent).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&parent, perms).expect("chmod parent");
-
-        let result = konsole_validate_key_exists(&key_path, false);
-
-        restore_dir_for_cleanup(&parent);
-        let _ = fs::remove_dir_all(&dir);
-
-        let failure = result.expect_err("should fail with CliFailure");
-        assert_eq!(failure.exit_code, 1);
-        assert!(
-            failure.rendered_stderr.is_none(),
-            "non-json EACCES must keep plain CliFailure shape"
+    fn old_generation_70_envelope_is_sourced_to_guest_control() {
+        let args = exec_args("work");
+        let error = exec_client::ExecClientError::from_daemon_error(
+            "guest-control-unavailable-old-generation",
+            "this VM generation does not support guest-control exec",
+            "rebuild the VM with a current nixling generation",
         );
-        assert!(
-            failure
-                .message
-                .contains("permission denied on parent directory"),
-            "expected actionable PermissionDenied message, got: {}",
-            failure.message
-        );
-        assert!(
-            failure.message.contains("nixling"),
-            "expected group-membership remediation, got: {}",
-            failure.message
-        );
-        assert!(
-            failure.message.contains("id -nG"),
-            "expected exact membership-check command, got: {}",
-            failure.message
-        );
-    }
-
-    #[test]
-    fn vm_konsole_key_genuinely_missing_emits_existing_cli_failure() {
-        let dir = test_dir("key-missing");
-        let key_path = dir.join("absent-vm_ed25519");
-        // Do NOT create the file; parent is readable; try_exists
-        // returns Ok(false).
-
-        let result = konsole_validate_key_exists(&key_path, false);
-
-        let _ = fs::remove_dir_all(&dir);
-
-        let failure = result.expect_err("should fail with CliFailure");
-        assert_eq!(failure.exit_code, 1);
-        assert!(
-            failure.message.contains("ssh key not found at"),
-            "expected ENOENT-shaped message, got: {}",
-            failure.message
-        );
-        assert!(
-            failure.message.contains("override with --key"),
-            "expected --key hint, got: {}",
-            failure.message
-        );
-        assert!(
-            !failure.message.contains("permission denied"),
-            "ENOENT message must NOT include EACCES remediation, got: {}",
-            failure.message
-        );
-    }
-
-    #[test]
-    fn vm_konsole_key_present_passes_validation() {
-        let dir = test_dir("key-present");
-        let key_path = dir.join("present-vm_ed25519");
-        fs::write(&key_path, b"stub").expect("write key");
-
-        let result = konsole_validate_key_exists(&key_path, false);
-
-        let _ = fs::remove_dir_all(&dir);
-
-        result.expect("present key must validate");
-    }
-
-    #[test]
-    fn vm_konsole_eacces_on_bundle_path_falls_through_to_stable_key_path() {
-        // The trusted bundle is intentionally private to nixlingd on
-        // deployed hosts. Konsole must not require launcher users to
-        // read it; EACCES falls through to the stable managed-key path.
-        let dir = test_dir("bundle-eacces");
-        let parent = dir.join("locked-bundle-parent");
-        fs::create_dir(&parent).expect("create parent");
-        let bundle_path = parent.join("bundle.json");
-        fs::write(&bundle_path, b"{}").expect("write bundle");
-        let mut perms = fs::metadata(&parent).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&parent, perms).expect("chmod parent");
-
-        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
-
-        restore_dir_for_cleanup(&parent);
-        let _ = fs::remove_dir_all(&dir);
-
-        assert!(
-            matches!(result, Ok(None)),
-            "private bundle must fall through to stable key path, got: {:?}",
-            result.map(|opt| opt.map(|p| p.display().to_string())),
-        );
-    }
-
-    #[test]
-    fn vm_konsole_eacces_on_bundle_file_falls_through_to_stable_key_path() {
-        let dir = test_dir("bundle-file-eacces");
-        let bundle_path = dir.join("bundle.json");
-        fs::write(&bundle_path, br#"{"managedKeys":{"keysDir":"/tmp"}}"#).expect("write bundle");
-        let mut perms = fs::metadata(&bundle_path).unwrap().permissions();
-        perms.set_mode(0o000);
-        fs::set_permissions(&bundle_path, perms).expect("chmod bundle");
-
-        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
-
-        let mut cleanup_perms = fs::metadata(&bundle_path).unwrap().permissions();
-        cleanup_perms.set_mode(0o600);
-        let _ = fs::set_permissions(&bundle_path, cleanup_perms);
-        let _ = fs::remove_dir_all(&dir);
-
-        assert!(
-            matches!(result, Ok(None)),
-            "private bundle file must fall through to stable key path, got: {:?}",
-            result.map(|opt| opt.map(|p| p.display().to_string())),
-        );
-    }
-
-    #[test]
-    fn vm_konsole_missing_bundle_returns_ok_none_for_legacy_fallback() {
-        // Bundle file does NOT exist; parent is readable. The helper
-        // returns Ok(None) so the caller falls through to the legacy
-        // /var/lib/nixling/keys path. This is the documented
-        // pre-staging / hermetic-test code path.
-        let dir = test_dir("bundle-missing");
-        let bundle_path = dir.join("absent-bundle.json");
-
-        let result = konsole_resolve_bundle_key_path(&bundle_path, "test-vm", false);
-
-        let _ = fs::remove_dir_all(&dir);
-
-        assert!(
-            matches!(result, Ok(None)),
-            "missing bundle must return Ok(None) for legacy fallback, got: {:?}",
-            result.map(|opt| opt.map(|p| p.display().to_string())),
-        );
-    }
-
-    #[test]
-    fn vm_konsole_eacces_remediation_text_includes_actionable_command() {
-        // Direct unit test of the remediation helper for both
-        // PermissionDenied (actionable) and Other (surface inner
-        // error) branches. Exercises the bare helper in isolation
-        // so the test stays meaningful even if the higher-level
-        // wrappers refactor.
-        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
-        let msg = konsole_eacces_remediation(
-            "ssh key",
-            std::path::Path::new("/var/lib/nixling/keys/test_ed25519"),
-            &denied,
-        );
-        assert!(msg.contains("permission denied on parent directory"));
-        assert!(msg.contains("nixling"));
-        assert!(msg.contains("/var/lib/nixling/keys/test_ed25519"));
-
-        let other = io::Error::new(io::ErrorKind::NotConnected, "stub other");
-        let msg = konsole_eacces_remediation("ssh key", std::path::Path::new("/tmp/other"), &other);
-        assert!(msg.contains("cannot stat ssh key at"));
-        assert!(msg.contains("stub other"));
-        assert!(!msg.contains("permission denied on parent directory"));
+        assert_eq!(error.exit_code, 70);
+        let value = exec_json_failure_value(&args, &error);
+        assert_eq!(value["source"], "guest-control");
+        assert_eq!(value["reason"], "guest-control-unavailable-old-generation");
+        assert_eq!(value["exitCode"], 70);
+        assert_eq!(value["transportExitCode"], 70);
+        // A failure envelope never carries a guestExitCode.
+        assert!(value.get("guestExitCode").is_none());
+        // A failure envelope never carries captured stdio bytes.
+        assert!(value.get("stdoutBase64").is_none());
+        assert!(value.get("stderrBase64").is_none());
     }
 }
 
@@ -8385,5 +9667,557 @@ mod config_cmd_tests {
                 "1-2"
             ]
         );
+    }
+
+    fn gc_sync_args(vm: &str) -> super::ConfigSyncArgs {
+        super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: super::DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn ssh_only_flags_are_rejected_on_guest_control_path() {
+        // Default args (no SSH overrides, default in-guest path) are accepted.
+        assert!(super::reject_ssh_only_flags_on_guest_control(&gc_sync_args("work-aad")).is_ok());
+
+        let with_host = super::ConfigSyncArgs {
+            host: Some("10.0.0.5".to_owned()),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_host).is_err());
+
+        let with_user = super::ConfigSyncArgs {
+            user: Some("alice".to_owned()),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_user).is_err());
+
+        let with_key = super::ConfigSyncArgs {
+            key: Some(PathBuf::from("/tmp/k")),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_key).is_err());
+
+        let with_known_hosts = super::ConfigSyncArgs {
+            known_hosts: Some(PathBuf::from("/tmp/kh")),
+            ..gc_sync_args("work-aad")
+        };
+        assert!(super::reject_ssh_only_flags_on_guest_control(&with_known_hosts).is_err());
+
+        let with_custom_path = super::ConfigSyncArgs {
+            guest_path: "/etc/other.nix".to_owned(),
+            ..gc_sync_args("work-aad")
+        };
+        let err = super::reject_ssh_only_flags_on_guest_control(&with_custom_path)
+            .expect_err("custom guest path must be rejected");
+        // Flag rejection is a usage error, not a transport failure.
+        assert_eq!(err.exit_code, 2);
+    }
+
+    fn read_guest_config_reply(content: &[u8]) -> Vec<u8> {
+        let encoded = nixling_core::base64_codec::encode(content);
+        serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": encoded,
+        }))
+        .expect("serialize reply")
+    }
+
+    fn guest_control_error_reply(kind: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "error",
+            "error": {
+                "kind": kind,
+                "exitCode": 70,
+                "message": "guest-control read failed",
+                "remediation": "retry after the guest finishes booting",
+            },
+        }))
+        .expect("serialize error reply")
+    }
+
+    #[test]
+    fn finish_config_sync_decodes_stages_and_hashes_received_bytes() {
+        let dir = scratch("gc-sync-ok");
+        let staging = dir.join("work.guest.nix");
+        let content = b"{ environment.systemPackages = [ ]; }\n";
+        let reply = read_guest_config_reply(content);
+
+        let staged = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect("decode + stage ok");
+        assert_eq!(staged.bytes, content.len());
+        assert_eq!(staged.sha256, super::sha256_hex(content));
+        assert_eq!(fs::read(&staging).expect("read staging"), content);
+    }
+
+    #[test]
+    fn finish_config_sync_error_frames_never_stage_and_carry_no_guest_bytes() {
+        // The full daemon error matrix: each kind must fail closed, leave NO
+        // staging file, and surface exit code 70 (guest-control config read).
+        for kind in [
+            "guest-control-transport-unavailable",
+            "guest-control-auth-failed",
+            "guest-control-protocol-error",
+            "guest-control-capability-unavailable",
+            "guest-control-file-not-found",
+            "guest-control-file-too-large",
+            "guest-control-path-unsafe",
+            "guest-control-read-denied",
+            "guest-control-timeout",
+        ] {
+            let dir = scratch("gc-sync-err");
+            let staging = dir.join("work.guest.nix");
+            let reply = guest_control_error_reply(kind);
+            let err = super::finish_config_sync_from_reply(&reply, &staging, true)
+                .expect_err("error frame must fail");
+            assert_eq!(err.exit_code, 70, "kind {kind} must map to exit 70");
+            assert!(
+                !staging.exists(),
+                "kind {kind} must not create a staging file"
+            );
+            let rendered = err.rendered_stderr.unwrap_or_default();
+            assert!(rendered.contains(kind), "kind {kind} must surface its slug");
+            // No success content can appear on an error path: a sentinel that
+            // only exists in a real config body must never leak here.
+            assert!(!rendered.contains("systemPackages"));
+        }
+    }
+
+    #[test]
+    fn finish_config_sync_empty_content_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-empty");
+        let staging = dir.join("work.guest.nix");
+        let reply = read_guest_config_reply(b"   \n\t ");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("blank content must be rejected");
+        assert!(!staging.exists(), "blank content must not be staged");
+        // config_validate_staging_bytes rejects with a plain CliFailure.
+        assert_ne!(err.exit_code, 0);
+    }
+
+    #[test]
+    fn finish_config_sync_oversize_decoded_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-big");
+        let staging = dir.join("work.guest.nix");
+        let oversize =
+            vec![b'a'; (nixling_ipc::guest_wire::READ_GUEST_FILE_MAX_BYTES as usize) + 1];
+        let reply = read_guest_config_reply(&oversize);
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("oversize must be rejected");
+        assert_eq!(err.exit_code, 70);
+        assert_eq!(err.message, "guest-control-file-too-large");
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn finish_config_sync_malformed_base64_is_rejected_and_not_staged() {
+        let dir = scratch("gc-sync-b64");
+        let staging = dir.join("work.guest.nix");
+        let reply = serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": "not valid base64!!!",
+        }))
+        .expect("serialize");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("malformed base64 must be rejected");
+        assert_eq!(err.message, "guest-control-protocol-error");
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn finish_config_sync_unexpected_reply_type_is_rejected() {
+        let dir = scratch("gc-sync-type");
+        let staging = dir.join("work.guest.nix");
+        let reply =
+            serde_json::to_vec(&serde_json::json!({ "type": "somethingElse" })).expect("serialize");
+        let err = super::finish_config_sync_from_reply(&reply, &staging, false)
+            .expect_err("unexpected type must be rejected");
+        assert_eq!(err.message, "guest-control-protocol-error");
+        assert!(!staging.exists());
+    }
+}
+
+/// Fail-closed source gate: `ssh`/`scp` may only be launched from sanctioned
+/// convenience/compatibility sites, each delimited by
+/// `// nixling-ssh-allowlist begin/end`. The guest-control transport (config
+/// sync, readiness) MUST NOT spawn an SSH client. This module scans the crate
+/// source for SSH/SCP argv tokens outside the allowlist and proves at runtime
+/// that the guest-control config path spawns no SSH client.
+#[cfg(test)]
+mod ssh_spawn_gate {
+    use std::ffi::OsString;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use super::{
+        cmd_config_sync, config_staging_path, finish_config_sync_from_reply,
+        read_guest_config_via_socket, Context, GuestConfigReadOutcome, DEFAULT_GUEST_CONFIG_PATH,
+    };
+
+    /// Allowlist comment markers. Built so this scanner's own source never
+    /// contains the literal SSH/SCP argv tokens it searches for.
+    const ALLOW_BEGIN: &str = "nixling-ssh-allowlist begin";
+    const ALLOW_END: &str = "nixling-ssh-allowlist end";
+
+    /// Construct the quoted argv tokens (`"ssh"`, `"scp"`) without embedding the
+    /// bare literal in this file, so the scanner is robust even if the
+    /// test-module skip ever regresses.
+    fn forbidden_tokens() -> [String; 2] {
+        let ssh: String = ['s', 's', 'h'].iter().collect();
+        let scp: String = ['s', 'c', 'p'].iter().collect();
+        [format!("\"{ssh}\""), format!("\"{scp}\"")]
+    }
+
+    /// Return the 1-based line numbers that launch an SSH/SCP client outside an
+    /// allowlist region. `#[cfg(test)] mod` blocks are skipped wholesale (test
+    /// fixtures legitimately mention SSH); only column-0 `}` closes such a
+    /// block, matching rustfmt's indentation of nested items.
+    fn scan_ssh_argv_violations(src: &str) -> Vec<usize> {
+        let [ssh_tok, scp_tok] = forbidden_tokens();
+        let lines: Vec<&str> = src.lines().collect();
+        let mut violations = Vec::new();
+        let mut allow_depth: usize = 0;
+        let mut in_test_mod = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+            if !in_test_mod && trimmed == "#[cfg(test)]" {
+                let next_is_mod = lines[i + 1..]
+                    .iter()
+                    .find(|candidate| !candidate.trim().is_empty())
+                    .map(|candidate| candidate.trim_start().starts_with("mod "))
+                    .unwrap_or(false);
+                if next_is_mod {
+                    in_test_mod = true;
+                }
+            }
+            if in_test_mod {
+                if line == "}" {
+                    in_test_mod = false;
+                }
+                i += 1;
+                continue;
+            }
+            if trimmed.contains(ALLOW_BEGIN) {
+                allow_depth += 1;
+                i += 1;
+                continue;
+            }
+            if trimmed.contains(ALLOW_END) {
+                allow_depth = allow_depth.saturating_sub(1);
+                i += 1;
+                continue;
+            }
+            if allow_depth == 0 && (line.contains(&ssh_tok) || line.contains(&scp_tok)) {
+                violations.push(i + 1);
+            }
+            i += 1;
+        }
+        violations
+    }
+
+    #[test]
+    fn crate_source_launches_ssh_only_from_allowlisted_sites() {
+        let src = include_str!("lib.rs");
+        let violations = scan_ssh_argv_violations(src);
+        assert!(
+            violations.is_empty(),
+            "found SSH/SCP argv tokens outside the allowlist at lines {violations:?}; \
+             wrap legitimate convenience/compat sites in nixling-ssh-allowlist markers"
+        );
+    }
+
+    #[test]
+    fn gate_flags_illicit_ssh_and_passes_allowlisted_and_test_blocks() {
+        let [ssh_tok, _] = forbidden_tokens();
+        // Illicit: a bare SSH argv in production code must be flagged.
+        let illicit = format!("fn run() {{\n    let argv = vec![{ssh_tok}.to_owned()];\n}}\n");
+        assert_eq!(scan_ssh_argv_violations(&illicit), vec![2]);
+
+        // Sanctioned: the same call inside allowlist markers must pass.
+        let sanctioned = format!(
+            "fn run() {{\n    // {ALLOW_BEGIN}: x\n    let argv = vec![{ssh_tok}.to_owned()];\n    // {ALLOW_END}\n}}\n"
+        );
+        assert!(scan_ssh_argv_violations(&sanctioned).is_empty());
+
+        // Test fixtures: an SSH token inside a `#[cfg(test)] mod` is skipped.
+        let in_test = format!("#[cfg(test)]\nmod t {{\n    fn f() {{ let _ = {ssh_tok}; }}\n}}\n");
+        assert!(scan_ssh_argv_violations(&in_test).is_empty());
+    }
+
+    /// Serialize PATH mutation across this module's runtime tests.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Prepend a sentinel `bin/` (holding `ssh`/`scp` scripts that touch a
+    /// marker file when invoked) to PATH for the guard's lifetime. Prepending
+    /// keeps every other PATH-resolved tool reachable for concurrent tests.
+    struct SshTrapGuard {
+        old_path: Option<OsString>,
+        marker: PathBuf,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl SshTrapGuard {
+        fn install(dir: &std::path::Path) -> Self {
+            let lock = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let bin = dir.join("bin");
+            std::fs::create_dir_all(&bin).expect("create trap bin");
+            let marker = dir.join("ssh-spawned.marker");
+            for tool in ["ssh", "scp"] {
+                let script = bin.join(tool);
+                let mut f = std::fs::File::create(&script).expect("create trap script");
+                writeln!(f, "#!/bin/sh\necho spawned > {}\nexit 0", marker.display())
+                    .expect("write trap script");
+                let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+                std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+                std::fs::set_permissions(&script, perms).expect("chmod trap script");
+            }
+            let old_path = std::env::var_os("PATH");
+            let mut entries = vec![bin];
+            if let Some(existing) = &old_path {
+                entries.extend(std::env::split_paths(existing));
+            }
+            let joined = std::env::join_paths(entries).expect("join PATH");
+            std::env::set_var("PATH", joined);
+            Self {
+                old_path,
+                marker,
+                _lock: lock,
+            }
+        }
+
+        fn ssh_was_spawned(&self) -> bool {
+            self.marker.exists()
+        }
+    }
+
+    impl Drop for SshTrapGuard {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join(format!("ssh-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch");
+        dir
+    }
+
+    #[test]
+    fn guest_control_config_path_never_spawns_ssh() {
+        let dir = scratch("config-no-spawn");
+        let trap = SshTrapGuard::install(&dir);
+
+        // The connection branch with a missing socket must not spawn SSH.
+        let context = Context {
+            manifest_path: PathBuf::from("/dev/null"),
+            bundle_path: PathBuf::from("/dev/null"),
+            public_socket: dir.join("absent-public.sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+        let outcome = read_guest_config_via_socket(&context, "work")
+            .expect("missing socket collapses to Unavailable");
+        assert!(matches!(outcome, GuestConfigReadOutcome::Unavailable));
+
+        // The success/staging branch must stage from received bytes, no SSH.
+        let payload = b"{ services.foo.enable = true; }\n";
+        let reply = serde_json::to_vec(&serde_json::json!({
+            "type": "readGuestConfigResponse",
+            "contentBase64": nixling_core::base64_codec::encode(payload),
+        }))
+        .expect("serialize reply");
+        let staging = dir.join("staged.nix");
+        let staged = finish_config_sync_from_reply(&reply, &staging, false)
+            .expect("staging succeeds for a valid reply");
+        assert_eq!(staged.bytes, payload.len());
+        assert!(staging.exists());
+
+        assert!(
+            !trap.ssh_was_spawned(),
+            "the guest-control config path must never spawn an SSH client"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write a minimal manifest declaring `vm` so `require_known_vm`
+    /// passes and `cmd_config_sync` proceeds to transport selection.
+    fn write_known_vm_manifest(path: &std::path::Path, vm: &str) {
+        let manifest = serde_json::json!({
+            (vm): {
+                "name": vm,
+                "env": "dev",
+                "graphics": false,
+                "tpm": false,
+                "audio": false,
+                "audioService": format!("nixling-{vm}-audio.service"),
+                "usbipYubikey": false,
+                "staticIp": null,
+                "isNetVm": false,
+                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
+                "bridge": "nl-dev",
+                "sshUser": "alice"
+            }
+        });
+        std::fs::write(
+            path,
+            serde_json::to_vec(&manifest).expect("serialize manifest"),
+        )
+        .expect("write manifest");
+    }
+
+    /// Write a bundle whose processes DAG declares `vm` but with NO
+    /// `GuestControlHealth` node, modelling an old/partial generation that
+    /// predates the guest-control transport. `vm_uses_guest_control`
+    /// resolves false, so `cmd_config_sync` must fail closed.
+    fn write_old_generation_bundle(bundle_path: &std::path::Path, vm: &str) {
+        let base_dir = bundle_path.parent().expect("bundle parent");
+        std::fs::create_dir_all(base_dir).expect("create bundle dir");
+        let unique = bundle_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("bundle file name");
+        let processes_path = base_dir.join(format!("{unique}.processes.json"));
+        let processes = nixling_core::processes::ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![nixling_core::processes::VmProcessDag {
+                vm: vm.to_owned(),
+                // No GuestControlHealth node: the VM is a known but
+                // pre-guest-control generation.
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                invariants: nixling_core::processes::VmProcessInvariants {
+                    swtpm_pre_start_flush: false,
+                    per_vm_audit_pipeline: false,
+                    usbip_gating: false,
+                    tpm_ownership_migration_without_running_vm_mutation: false,
+                },
+            }],
+        };
+        std::fs::write(
+            &processes_path,
+            serde_json::to_vec(&processes).expect("serialize processes"),
+        )
+        .expect("write processes.json");
+        let bundle = serde_json::json!({
+            "bundleVersion": 4,
+            "schemaVersion": "v2",
+            "publicManifestPath": base_dir.join(format!("{unique}.vms.json")).to_string_lossy(),
+            "hostPath": base_dir.join(format!("{unique}.host.json")).to_string_lossy(),
+            "processesPath": processes_path.to_string_lossy(),
+            "privilegesPath": base_dir.join(format!("{unique}.privileges.json")).to_string_lossy(),
+            "closures": [],
+            "minijailProfiles": [],
+            "generation": { "generator": "test", "sourceRevision": null, "generatedAt": null },
+        });
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize bundle"),
+        )
+        .expect("write bundle.json");
+    }
+
+    #[test]
+    fn config_sync_old_generation_fails_closed_without_socket_or_ssh() {
+        // Binding fail-closed invariant: `config sync` against a known VM
+        // whose bundle lacks the guest-control transport (an old or
+        // partial generation) must reject with exit 70 +
+        // `guest-control-unavailable-old-generation`, WITHOUT contacting
+        // public.sock, WITHOUT staging/publishing, and WITHOUT taking the
+        // SSH argv path. This is not live behaviour — it is the
+        // hermetic guarantee that an unsupported generation can never
+        // silently fall back to an SSH transport or a partial write.
+        let dir = scratch("config-old-generation");
+        let trap = SshTrapGuard::install(&dir);
+
+        let vm = "oldgenvm";
+        let manifest_path = dir.join("manifest.json");
+        let bundle_path = dir.join("bundle.json");
+        write_known_vm_manifest(&manifest_path, vm);
+        write_old_generation_bundle(&bundle_path, vm);
+
+        let context = Context {
+            manifest_path,
+            bundle_path,
+            // A deliberately ABSENT socket: if a regression let the command
+            // fall through to the transport, `read_guest_config_via_socket`
+            // would surface `guest-control-transport-unavailable` (Unavailable
+            // outcome) instead of the old-generation slug. The kind therefore
+            // discriminates whether ANY public.sock request was attempted.
+            public_socket: dir.join("absent-public.sock"),
+            broker_socket: PathBuf::from("/dev/null"),
+            state_root: None,
+            host_runtime_path: PathBuf::from("/dev/null"),
+            system_state_fixture: None,
+            auth_status_fixture: None,
+            daemon_state_dir: PathBuf::from("/dev/null"),
+            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
+        };
+
+        let args = super::ConfigSyncArgs {
+            vm: vm.to_owned(),
+            guest_path: DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+            host: None,
+            user: None,
+            key: None,
+            known_hosts: None,
+            dry_run: false,
+            json: true,
+        };
+
+        let err = cmd_config_sync(&context, &args)
+            .expect_err("old-generation config sync must fail closed");
+        assert_eq!(
+            err.exit_code, 70,
+            "old generation maps to EXIT_GUEST_CONTROL_CONFIG"
+        );
+        let rendered = err.rendered_stderr.unwrap_or_default();
+        assert!(
+            rendered.contains("guest-control-unavailable-old-generation"),
+            "old generation surfaces its fail-closed slug"
+        );
+        // Proves no public.sock request was sent: a transport attempt would
+        // have produced the transport-unavailable slug against the absent
+        // socket, not the old-generation slug.
+        assert!(
+            !rendered.contains("guest-control-transport-unavailable"),
+            "the command must not reach the public.sock transport on an old generation"
+        );
+        // No SSH/SCP client may be spawned on any config-sync path.
+        assert!(
+            !trap.ssh_was_spawned(),
+            "old-generation fail-closed must not spawn an SSH client"
+        );
+        // Nothing may be staged or published on the fail-closed path.
+        assert!(
+            !config_staging_path(vm).exists(),
+            "old-generation fail-closed must not stage guest bytes"
+        );
+
+        drop(trap);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

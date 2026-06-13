@@ -15,8 +15,12 @@ Every row carries three policy flags:
   mutate persistent host state. Pure-`open` device handoffs are `no`
   because the broker only opens; the daemon owns the resulting fd.
 - **secret** — `yes` for operations whose audit record may reference
-  secret-material identifiers. The currently callable surface has no
-  secret-bearing variants.
+  secret-material identifiers. The currently callable surface has one
+  secret-bearing variant, `GuestControlSign`, recorded as
+  `redacted-only`: its audit record carries only redacted
+  token-transcript metadata (`transcript_len`, `peer_cid_present`,
+  `capabilities_hash_present`), never the per-VM token or the signature
+  bytes.
 
 Unknown variants and unknown fields in security-sensitive artifacts
 are denied (`defaultForUnknown: deny`).
@@ -110,6 +114,7 @@ The currently implemented broker operation catalog. Every row carries
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `PrepareStoreView` | fs (store view) | per VM | live | yes | no | `nixling-launcher` + `nixling-admin` | yes | deny | `generation`, `hardlink_farm_path`, `target_view_path` |
 | `StoreSync` | fs (hardlink farm) | per VM | live | yes (atomic `current` symlink swap) | no | `nixling-launcher` + `nixling-admin` | yes | deny | `bundle_closure_ref`, `generation`, `closure_count`, `hardlink_farm_path` |
+| `GuestControlSign` | guest-control token | per VM | live | no | redacted-only | `nixlingd` | yes | deny | `vm_id`, `role`, `purpose`, `transcript_len`, `peer_cid_present`, `capabilities_hash_present` |
 | `SetupMountNamespace` | mount ns | per VM / role | live | partial (mount-root prep + bind target) | no | `nixling-launcher` + `nixling-admin` | yes | deny | `role_id`, `mount_root`, `mount_view_path`, `source_view_path` |
 | `DeregisterRunnerPidfd` | process registry | per VM / role | live | no | no | `nixling-launcher` + `nixling-admin` | yes | deny | `vm_id`, `role_id`, `removed` |
 
@@ -180,6 +185,21 @@ non-bootstrap dispatch surface as typed per-op payloads:
 - `SignalRunner { vm_id, role_id, signal }`
 - `DeregisterRunnerPidfd { vm_id, role_id }`
 - `SpawnRunner { bundle_runner_intent_ref, vm_id, role_id, role, runtime_allocations }`
+  — when the runner is the cloud-hypervisor role of a guest-control VM,
+  spawning it also grants the unprivileged `nixlingd` daemon uid a
+  narrow ACL on the per-VM vsock transport (traversal `--x` on the
+  non-public state-dir components, `rw` on `vsock.sock`) so the daemon
+  can drive the authenticated guest-control bridge. The grant runs as a
+  revoke-then-grant at each cloud-hypervisor (re-)spawn: any stale
+  daemon grant left on a replaced/disabled socket inode is revoked
+  first, then the traversal chain and the live-socket `rw` grant are
+  (re-)established, so a disabled or replaced socket cannot retain a
+  stale daemon grant. (A dedicated stop-time teardown revoke hook is
+  future work: `SignalRunner` carries no socket path.) This ACL is
+  a SpawnRunner **side-effect**, not a separate broker op. Both the grant
+  and the revoke emit a hash-only audit record carrying `target_class`
+  (`state-dir`, `ancestor`, or `vsock-socket`), the `daemon_principal`,
+  and `acl_diff_hash` + `result` — never the raw socket / state-dir path.
 - `RunHostInstall { bundle_installer_intent_ref, enable, start, no_start }`
 - `RunMigrate { bundle_migrate_intent_ref }`
 - `RunActivation { bundle_activation_intent_ref, mode, vm }`
@@ -330,7 +350,7 @@ records the former systemd template that no longer exists.
 | `host-prep.bridge` | `microvm-tap-interfaces@<vm>.service` (bridge-port subset); replaced by `SetBridgePortFlags` broker dispatch | `SetBridgePortFlags` | after `host-prep.sysctl`, before `host-prep.spawn` |
 | `host-prep.pci-devices` | `microvm-pci-devices@<vm>.service`; replaced by `OpenDevice` broker dispatch | `OpenDevice` | parallel with `host-prep.tap` chain; joins before `host-prep.spawn` |
 | `host-prep.store-sync` | `nixling-<vm>-store-sync.service` + activation-time `nixling-store-sync` call from `store.nix`; replaced by `StoreSync` broker dispatch | `StoreSync` (live) | before any per-VM runner spawn; for the host-install/apply path, runs as part of `host install --apply` |
-| `host-prep.known-hosts-refresh` | `nixling-known-hosts-refresh@<vm>.service`; current replacement is the planned `SshKeygenProbe` broker dispatch | `SshKeygenProbe` (future work) | after `vm.sshReady`, not in the cold-start chain |
+| `host-prep.known-hosts-refresh` | `nixling-known-hosts-refresh@<vm>.service`; current replacement is the planned `SshKeygenProbe` broker dispatch | `SshKeygenProbe` (future work) | after `vm.guest-control-health`, not in the cold-start chain |
 | `vm.set-booted` | `microvm-set-booted@<vm>.service`; replaced by pure-daemon `supervisor::state::record_booted(<vm>, <closure>)` (no broker op) | — (pure daemon: `supervisor::state::record_booted(<vm>, <closure>)`) | after runner reports ready; no broker call |
 | `host-prep.spawn` | — (final join) | `SpawnRunner` | after every preceding `host-prep.*` node completes; carries SCM_RIGHTS handoff of fds from `CreateTapFd` / `OpenDevice` / `OpenKvm` / etc. |
 
@@ -350,7 +370,7 @@ completeness, not because they are broker ops.
 | --- | --- | --- | --- | --- |
 | `OwnershipMatrixCheck` | `/var/lib/nixling/vms/<vm>/` ownership matrix | — (pure `fstatat` traversal; the daemon already has `CAP_DAC_READ_SEARCH` for its state dir, no new caps) | refuses VM start with typed `daemon.ownership-matrix-drift` envelope citing the first drifted leaf (path, expected `owner:group mode`, observed) | Checks `/var/lib/nixling/vms/<vm>/` owner/group/mode invariants before start. |
 | `SshHostKeyPreflight` | `<vm>/sshd-host-keys/ssh_host_*_key` | — (`O_NOFOLLOW` `openat`, `fstat`) | refuses VM start with typed `daemon.ssh-host-key-drift` envelope on: symlink, owner/group != root, mode != `0400` | Ensures host keys are regular root-owned `0400` files. |
-| `DnsmasqLeaseHashPreflight` (net VMs only) | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/nixling/dnsmasq/<env>.conf`) vs bundle `hosts_intent` + `route_intent[env:<env>:*]` + `nft_intent[env:<env>]` | — (pure `read()` + SHA-256; the daemon already has read access to its state dir) | refuses net-VM start with typed `daemon.bundle-dnsmasq-drift` envelope (exit code `63`); covers `EnvMissing`, `ConfigMissing`, `ConfigReadFailed`, `HashMismatch`. **Remediation**: re-render `dnsmasq.conf` and retry, or run `nixling host prepare --apply` / `nixos-rebuild switch`. See [`docs/reference/net-vm-bundle-gate.md`](./net-vm-bundle-gate.md). | Compares the rendered dnsmasq config to the bundle's host, route, and nft intents. |
+| `DnsmasqLeaseHashPreflight` (net VMs only) | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/nixling/dnsmasq/<env>.conf`) vs bundle `hosts_intent` + `route_intent[env:<env>:*]` + `nft_intent[env:<env>]` | — (pure `read()` + SHA-256; the daemon already has read access to its state dir) | refuses net-VM start with typed `daemon.bundle-dnsmasq-drift` envelope (exit code `63`); covers `EnvMissing`, `ConfigMissing`, `ConfigReadFailed`, `HashMismatch`. **Remediation**: re-render `dnsmasq.conf` and retry, or run `nixos-rebuild switch` (the standalone `nixling host prepare --apply` recovery path is not yet wired — it returns `daemon-down` (exit 1) today). See [`docs/reference/net-vm-bundle-gate.md`](./net-vm-bundle-gate.md). | Compares the rendered dnsmasq config to the bundle's host, route, and nft intents. |
 | `HostModuleMatrixPreflight` | trusted host kernel modules: `kvm_intel`/`kvm_amd`, `vhost`, `vhost_vsock`, `vhost_net`, `tun`, `bridge`, `nf_tables`, `nf_conntrack`, plus per-env `usbip-host` | — (reads `/proc/modules`) | refuses VM start with `daemon.host-module-missing` envelope; remediation suggests `ModprobeIfAllowed` (broker op, separate path) | Reads `/proc/modules` and checks the trusted host module set before start. `virtio_media` is a guest driver for video-enabled VMs and is validated in the guest closure, not in host `/proc/modules`. |
 
 The four preflights run in fixed order on every `nixling vm start
@@ -390,6 +410,7 @@ enforces fail-closed before fork/exec.
 | --- | --- | --- | --- | --- |
 | `OtelHostBridge` | `nixling-otel-host-bridge.service`; replaced by broker `SpawnRunner{role: OtelHostBridge, …}` | empty | host-scoped (singleton — exactly one runner per host) | Broker refuses `SpawnRunner{role: OtelHostBridge, …}` fail-closed via `Broker.OtelHostBridgeIntentInvalid` unless the bundle's `OtelHostBridge` runner intent points at a VM whose `vm_name` equals `manifest._observability.vmName`. Readiness gate: `/run/nixling/otel` exists with expected ownership, stale `host-egress.sock` is removed, and the obs VM base `vsock.sock` exists; exponential backoff applies on host-OTLP unreachable. Broker waits for the readiness gate before exec; `supervisor::pidfd` respawns on relay exit. Pre-opened vsock fds only; `socket(AF_VSOCK)` is denied by `w1-otel-host-bridge` seccomp. |
 | `Usbip` | per-env singletons `nixling-sys-<env>-usbipd-{proxy,backend}.{service,socket}`; replaced by broker `SpawnRunner{role: Usbip, vm_id: sys-<env>-usbipd, …}` | backend: scoped host-root carve-out with `CAP_NET_RAW`; proxy: empty | **per env** — two runners per USBIP-enabled env (`vm_id` = `sys-<env>-usbipd`, roles `backend` and `proxy`) | `nixling usb attach --apply` dispatches `UsbipBind(busid, vm)` first so broker allowlist validation and the per-busid lock succeed before any listener is exposed, then applies `UsbipBindFirewallRule`, ensures the per-env backend (`usbipd -4 --tcp-port <backendPort>`) and bounded proxy (`socat TCP-LISTEN:3240,bind=<env.hostUplinkIp>,fork,max-children=4,reuseaddr ...`) are spawned and TCP-ready, then runs `UsbipProxyReconcile`. Host kernel module is `usbip-host` (not `vhci_hcd`, which is the guest module). |
+| `CloudHypervisor` (guest-control VM) | `nixling@<vm>.service` runner; replaced by broker `SpawnRunner{role: CloudHypervisor, vm_id: <vm>, …}` | empty | per VM | On a guest-control-enabled VM the broker, as a SpawnRunner **side-effect**, grants the unprivileged `nixlingd` daemon uid a minimal ACL on the per-VM vsock transport so the daemon can run the authenticated readiness/config-read bridge: traversal `--x` on every non-public component of the per-VM state dir and `rw` on `vsock.sock`. The grant is scoped to the **current** socket inode/dev (the broker re-fstats after the fd-based setfacl and aborts+retries if the path is replaced mid-grant), grants **only** that single daemon uid (no `g:`, no default, no blanket entry), and retries until bound while cloud-hypervisor finishes creating the socket. It runs as a revoke-then-grant at each cloud-hypervisor (re-)spawn — any stale daemon grant on a replaced/disabled socket inode is revoked first — so a disabled or replaced socket cannot retain a stale daemon grant; a dedicated stop-time teardown revoke hook is future work (`SignalRunner` carries no socket path). The shared traversal `--x` grants on non-public ancestors are retained, since the daemon also needs them for the per-VM api-socket and sibling VMs depend on them. Both grant and revoke emit hash-only audit records (`target_class` ∈ {`state-dir`, `ancestor`, `vsock-socket`}, `daemon_principal`, `acl_diff_hash`, `result`); raw socket / state-dir paths are never recorded. |
 
 ### Metrics endpoint
 
@@ -517,19 +538,64 @@ is in the machine-readable public-operation matrix
 
 | Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `config` | VM (guest-editable config layer) | per VM | none | no (staging/review only) | no | `nixling-launcher` + `nixling-admin` | yes | deny |
+| `config` | VM (guest-editable config layer) | per VM | none | no (staging/review only) | no | `nixling-launcher` + `nixling-admin` for the local review sub-verbs; `sync` is `nixling-admin` only (see notes) | yes | deny |
 
 Notes:
 
-- `sync` reaches into the guest over the **existing** per-VM SSH key
-  and writes only into the host-side staging copy; it never evaluates
-  or imports the guest bytes.
+- `sync` is **admin-only**: it dispatches the daemon's `ReadGuestConfig`
+  verb, which is gated to the `nixling-admin` role at `SO_PEERCRED`
+  accept time (`verb_requires_admin("readGuestConfig")`). A
+  launcher-role caller is rejected with the typed `authz-not-admin`
+  error (exit `75`) before any guest read. The local review sub-verbs
+  (`diff` / `approve` / `reject` / `status`) operate on the host-side
+  staging copy and dispatch no daemon verb, so a launcher can run
+  them — which is why the schema models the `config` group as
+  `nixling-launcher` + `nixling-admin`. `sync` reads the guest-editable
+  config over the authenticated **guest-control** vsock (the daemon's
+  `ReadGuestConfig` → `ReadGuestFile` path), not over SSH, and writes
+  only into the host-side staging copy; it never evaluates or imports
+  the guest bytes. It fails **closed**: a VM whose running generation
+  predates guest-control (or that does not advertise `ReadGuestFile`)
+  returns a typed error rather than silently falling back to SSH.
 - `approve` / `reject` are the trust transition and are
   **host-operator-only** in the handler (the guest can never approve
   its own config); they write only the operator-named `--to` path.
 - No new host mutation flows through the broker for any `config` verb,
   so there is no `OpAuditRecord`; the daemon logs the public-operation
   decision instead.
+
+## Public `exec` operation (daemon-handled, no broker dispatch)
+
+The `nixling vm exec` verb (and its `vm konsole` wrapper) is a
+**public** operation handled entirely by the unprivileged daemon and
+CLI. It dispatches **no** broker request (`brokerRequired: false`): the
+daemon holds an in-process exec **session table** and proxies typed exec
+ops over the authenticated guest-control vsock to the VM's `guestd`. It
+is in the machine-readable public-operation matrix
+([`schemas/v2/privileges.json`](schemas/v2/privileges.json),
+`publicOperations[].operation = "exec"`).
+
+| Operation | Subject | Scope | Broker dispatch | Destructive | Secret access | Allowed authz | Audit | Default-for-unknown |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `exec` | VM (guest process) | per VM | none | yes (runs a guest command) | no | `nixling-admin` only | yes | deny |
+
+Notes:
+
+- `exec` is **admin-only**: the daemon checks the `SO_PEERCRED` admin
+  role on the owner connection **before** any session lookup, slot
+  reservation, transport connect, or `ExecCreate`. A launcher-role
+  caller is rejected first, with no guest-control session established.
+- The daemon emits **one** kind=critical session-establishment audit
+  event per exec session carrying only redacted fields: `vm`, `peer_uid`,
+  and the negotiated `tty` flag. The opaque `session_handle`, the guest
+  `exec_id`/`guest_boot_id`, per-stream offsets, and the op stream are
+  never audit labels.
+- Redaction is fail-closed: argv (hash-only), env, cwd, paths, stdio
+  bytes, nonces, tokens, capability tags, and session handles never
+  appear in any `Debug`/trace/audit/metric surface.
+- No host mutation flows through the broker for `exec`, so there is no
+  `OpAuditRecord`; the daemon records the public-operation decision and
+  the session-establishment event instead.
 
 ## Cross-references
 
@@ -649,7 +715,7 @@ validator (`tests/minijail-validator-<role>.sh`) which writes
 | Role | Profile id pattern | Caps (steady-state) | Setup-time carve-out / device binds | Validator |
 | --- | --- | --- | --- | --- |
 | `cloud-hypervisor` | `vm-<vm>-cloud-hypervisor` | `CAP_NET_ADMIN` (transient — runner drops it after the SCM_RIGHTS tap-fd recv path before entering its main loop; static minijail allowlist cannot express "transient", so the profile declares the setup-time union) | `/dev/kvm`, `/dev/net/tun` (optional `/dev/dri/renderD128` + `/dev/nvidia0` when graphics/accelerator passthrough is bound to this runner) | `tests/minijail-validator-cloud-hypervisor.sh` |
-| `virtiofsd` | `vm-<vm>-virtiofsd-<tag>` | empty | startup carve-out: `CAP_SYS_ADMIN`, `CAP_SETPCAP`, `CAP_CHOWN`, `CAP_FOWNER`, `CAP_FSETID`, `CAP_SETUID`, `CAP_SETGID`, `CAP_DAC_OVERRIDE`, `CAP_MKNOD`, `CAP_SETFCAP` — required transiently during `virtiofsd --sandbox=namespace` setup before the daemon drops to an empty bounding set inside its own user namespace; ADR 0003 (`virtiofsdRootException` marker on the profile) | `tests/minijail-validator-virtiofsd.sh` (positive: `virtiofsd --version` under the carve-out profile; negative: `ptrace` probe under the `w1-virtiofsd` seccomp policy must exit with SIGSYS) |
+| `virtiofsd` | `vm-<vm>-virtiofsd-<tag>` | empty | ADR 0021 broker-pre-established single-entry user namespace; `requiresStartRoot = false`, zero host capabilities, `--sandbox=chroot --inode-file-handles=never`. Normal shares map to `nixling-<vm>-runner`; `nl-gctl` maps to `nixling-<vm>-gctlfs` and is read-only. | `tests/minijail-validator-virtiofsd.sh` (positive: virtiofsd profile accepts the zero-host-capability user-NS shape; negative: `ptrace` probe under the `w1-virtiofsd` seccomp policy must exit with SIGSYS) |
 | `swtpm` (long-lived sidecar) | `vm-<vm>-swtpm` | empty | **CRITICAL** RW bind of `/var/lib/nixling/vms/<vm>/swtpm` (TPM 2.0 NVRAM + EK seed) + `/run/nixling/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) (control socket). MUST be real RW bind, NOT tmpfs. Wiping or losing the bind forces Entra/Intune re-enrollment for work-aad. | `tests/minijail-validator-swtpm.sh` + `tests/swtpm-persistence-smoke.sh` (write/stop/daemon-restart/read-back persistence regression) |
 | `swtpm-flush` (pre-start one-shot) | `vm-<vm>-swtpm-flush` | empty | Same `/var/lib/nixling/vms/<vm>/swtpm` + `/run/nixling/vms/<vm>/` (the TPM socket + flush socket live here as `tpm.sock` and `tpm-flush.sock` respectively) binds as the long-lived `swtpm` sidecar; runs `swtpm_ioctl -i` flush before the sidecar adopts state. | shares the swtpm validator + persistence smoke |
 | `gpu` | `vm-<vm>-gpu` | empty (per-role smoke proves virgl/venus/cross-domain run under SCHED_OTHER) | device binds: `/dev/kvm`, `/dev/dri/renderD128`, `/dev/nvidiactl`, `/dev/nvidia0`, `/dev/nvidia-uvm`, `/dev/udmabuf`; mount `/run/user/<uid>/wayland-0` → `/run/nixling-gpu/<vm>/wayland-0`; ioctls: full `DRM_IOCTL_VIRTGPU_*` family (via DeviceClass::Dri) | `tests/minijail-validator-gpu.sh` (positive: DRM_IOCTL_VIRTGPU_GET_CAPS under profile; negative: ptrace → SIGSYS) |

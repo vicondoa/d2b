@@ -12,7 +12,7 @@ world-readable system profile.
 
 | Artifact | Visibility | Mode | Purpose |
 | --- | --- | --- | --- |
-| `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; keeps `manifestVersion = 2`. |
+| `vms.json` | public compatibility surface | world-readable, existing installation path | VM list and public capability metadata; see `docs/reference/manifest-schema.md` for the current `manifestVersion`. |
 | `bundle.json` | private bundle index | root:`nixlingd` `0640` | Bundle version, artifact paths, hashes, and compatibility policy. |
 | `host.json` | private host intent | root:`nixlingd` `0640` | Host requirements, network intent, kernel/device/fd requirements, and support tier. |
 | `processes.json` | private supervisor intent | root:`nixlingd` `0640` | Per-VM process DAG, readiness predicates, cgroup placement, and minijail profile IDs. |
@@ -30,7 +30,7 @@ inputs to `nixlingd` and the privileged broker described by
 | --- | --- | --- |
 | `bundleVersion` | Entire private bundle | Bump for any breaking change that affects daemon or broker compatibility across the artifact set. |
 | `schemaVersion` | One artifact schema | Bump for artifact-local schema evolution, including additive optional fields. |
-| `_manifest.manifestVersion` | Public `vms.json` only | Remains `2` for the private-bundle baseline. A breaking public-manifest change requires an intentional manifest-version bump. |
+| `_manifest.manifestVersion` | Public `vms.json` only | Bump for breaking public-manifest changes; private bundle versioning does not replace this public compatibility gate. |
 
 The policy is defined by
 [ADR 0006](../adr/0006-manifest-bundle-versioning.md). The current
@@ -41,14 +41,14 @@ bundle keeps `schemaVersion = "v2"` and bumps `bundleVersion = 4`
 for the additive USBIP `busIds` wiring). Each artifact now carries a
 matching v2 markdown companion beside the committed JSON schema.
 `cargo xtask gen-schemas` regenerates the JSON files under
-`schemas/v2/` from the Rust DTOs in `nixling-core`; keep the
-markdown companions in sync in the same commit whenever the schema
-changes.
+`schemas/v2/` from the Rust DTOs in `nixling-core` and
+`nixling-ipc`; keep the markdown companions in sync in the same
+commit whenever the schema changes.
 
 ## Drift policy
 
-The committed schema files are derived from Rust DTOs in `nixling-core`.
-The drift gate is:
+The committed schema files are derived from Rust DTOs in `nixling-core`
+and `nixling-ipc`. The drift gate is:
 
 ```bash
 cargo xtask gen-schemas
@@ -78,7 +78,7 @@ Consumers that only need the compatibility manifest must read
 implementations consume this bundle reference and the per-artifact schema
 references below.
 
-## Per-artifact references
+## Per-artifact and wire references
 
 | Artifact | Prose reference | JSON Schema (current `v2` baseline) |
 | --- | --- | --- |
@@ -90,3 +90,4 @@ references below.
 | `minijail-profile.json` | [`schemas/v2/minijail-profile.md`](./schemas/v2/minijail-profile.md) | `schemas/v2/minijail-profile.json` |
 | `manifest_v04.json` | [`schemas/v2/manifest_v04.md`](./schemas/v2/manifest_v04.md) | `schemas/v2/manifest_v04.json` |
 | `wire-protocol.json` | [`schemas/v2/wire-protocol.md`](./schemas/v2/wire-protocol.md) | `schemas/v2/wire-protocol.json` |
+| guest-control protocol | [`schemas/v2/guest-control.md`](./schemas/v2/guest-control.md) | `schemas/v2/guest-control.json` |

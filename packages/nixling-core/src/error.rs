@@ -36,10 +36,9 @@ pub enum Kind {
     #[serde(rename = "manifest-parse-error")]
     ManifestParseError,
     /// Bundle's emitted manifestVersion is not the version the running
-    /// daemon supports (after the v2→v3 clean break, v2 bundles MUST
-    /// be rejected with this distinct
-    /// kind so operators can correlate the failure to a re-render of
-    /// the bundle, not to a parse-side regression).
+    /// daemon supports. Stale bundles MUST be rejected with this distinct
+    /// kind so operators can correlate the failure to a re-render of the
+    /// bundle, not to a parse-side regression.
     #[serde(rename = "manifest-version-mismatch")]
     ManifestVersionMismatch,
     #[serde(rename = "internal-io")]
@@ -158,7 +157,7 @@ static ERROR_KIND_RECORDS: [ErrorKindRecord; 13] = [
         message_template:
             "manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason})",
         remediation:
-            "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break does not ship a compatibility window.",
+            "Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window.",
         docs_anchor: "#manifest-version-mismatch",
     },
     ErrorKindRecord {

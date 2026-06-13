@@ -20,7 +20,7 @@ null
 --serial
 tty
 --vsock
-cid=7616218,socket=/var/lib/nixling/vms/personal-dev/notify.vsock
+cid=110,socket=/var/lib/nixling/vms/personal-dev/vsock.sock
 --fs
 socket=/run/nixling/vms/personal-dev/ro-store.sock,tag=ro-store
 socket=/run/nixling/vms/personal-dev/nl-meta.sock,tag=nl-meta

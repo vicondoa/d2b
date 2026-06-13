@@ -10,6 +10,7 @@
 #   * preflight-disk-space
 #   * nix-instantiate --parse on every .nix file
 #   * shellcheck --severity=warning on every .sh
+#   * guest-static ELF build/inspection for the current host system
 #   * nix flake check --no-build --all-systems
 #   * rust-workspace-checks (cargo workspace check / clippy / fmt)
 #   * bundle/schema static gates (12 tests, ~3 min)
@@ -51,9 +52,12 @@ export NL_STATIC_CACHE="$ROOT/.static-fast-cache.bootstrap"
 # static-fast.sh invocations don't trample the nix-daemon socket.
 # Use a separate lock file from tests/static.sh so the two gates can
 # run concurrently if needed (e.g. running static.sh in one terminal
-# and static-fast.sh in another).
+# and static-fast.sh in another). `-o`/`--close` closes the lock fd in
+# the spawned child so no descendant (sccache, broker daemons, nix
+# evals) inherits it and can leak the lock past our exit; see the
+# longer note in tests/static.sh.
 if [ -z "${NL_STATIC_NO_LOCK:-}" ] && [ "${1:-}" != "--internal-locked" ]; then
-  exec flock -x -E 0 -w 5 "$ROOT/.static-fast.lock" "$0" --internal-locked
+  exec flock -o -x -E 0 -w 5 "$ROOT/.static-fast.lock" "$0" --internal-locked
 fi
 # Drop the --internal-locked arg before downstream gates see it.
 if [ "${1:-}" = "--internal-locked" ]; then
@@ -138,6 +142,18 @@ run_gate "tests/legacy-group-name-denylist-self-test.sh" "bash '$ROOT/tests/lega
 run_gate "tests/legacy-group-name-denylist.sh" "bash '$ROOT/tests/legacy-group-name-denylist.sh'"
 run_gate "tests/group-rename-semantic-eval.sh" "bash '$ROOT/tests/group-rename-semantic-eval.sh'"
 run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-migration-fresh-install-eval.sh'"
+run_gate "tests/guest-control-proto.sh" "bash '$ROOT/tests/guest-control-proto.sh'"
+run_gate "tests/guest-proto-bindings.sh" "bash '$ROOT/tests/guest-proto-bindings.sh'"
+run_gate "tests/guest-ttrpc-bindings.sh" "bash '$ROOT/tests/guest-ttrpc-bindings.sh'"
+run_gate "tests/guest-control-auth-eval.sh" "bash '$ROOT/tests/guest-control-auth-eval.sh'"
+run_gate "tests/guest-control-auth-nongoals.sh" "bash '$ROOT/tests/guest-control-auth-nongoals.sh'"
+run_gate "tests/guest-control-token-materializer.sh" "bash '$ROOT/tests/guest-control-token-materializer.sh'"
+run_gate "tests/guest-control-vsock-eval.sh" "bash '$ROOT/tests/guest-control-vsock-eval.sh'"
+run_gate "tests/guest-control-vsock-helper-static.sh" "bash '$ROOT/tests/guest-control-vsock-helper-static.sh'"
+run_gate "tests/guest-exec-runtime-static.sh" "bash '$ROOT/tests/guest-exec-runtime-static.sh'"
+run_gate "tests/guest-exec-policy-eval.sh" "bash '$ROOT/tests/guest-exec-policy-eval.sh'"
+run_gate "tests/guest-static-elf.sh" "bash '$ROOT/tests/guest-static-elf.sh'"
+run_gate "tests/guest-static-consumption-eval.sh" "bash '$ROOT/tests/guest-static-consumption-eval.sh'"
 
 run_gate "nix flake check --no-build --all-systems" '
   nix flake check "'$ROOT'" --no-build --all-systems

@@ -1,0 +1,2086 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GuestControlSchema",
+  "type": "object",
+  "required": [
+    "authenticate",
+    "authenticated",
+    "capabilities",
+    "capabilitiesRequest",
+    "closeStdin",
+    "closeStdinResult",
+    "controlAck",
+    "error",
+    "execCancel",
+    "execCreate",
+    "execCreated",
+    "execInspect",
+    "execInspected",
+    "execList",
+    "execListed",
+    "execLogChunk",
+    "execLogs",
+    "execSignal",
+    "execWait",
+    "execWaited",
+    "health",
+    "healthRequest",
+    "hello",
+    "helloOk",
+    "limits",
+    "outputChunk",
+    "protocolVersion",
+    "readGuestFile",
+    "readGuestFileResult",
+    "readOutput",
+    "schemaVersion",
+    "transport",
+    "ttyWinResize",
+    "writeStdin",
+    "writeStdinResult"
+  ],
+  "properties": {
+    "authenticate": {
+      "$ref": "#/definitions/AuthenticateRequest"
+    },
+    "authenticated": {
+      "$ref": "#/definitions/AuthenticateResponse"
+    },
+    "capabilities": {
+      "$ref": "#/definitions/CapabilitiesResponse"
+    },
+    "capabilitiesRequest": {
+      "$ref": "#/definitions/CapabilitiesRequest"
+    },
+    "closeStdin": {
+      "$ref": "#/definitions/CloseStdinRequest"
+    },
+    "closeStdinResult": {
+      "$ref": "#/definitions/CloseStdinResponse"
+    },
+    "controlAck": {
+      "$ref": "#/definitions/ControlAck"
+    },
+    "error": {
+      "$ref": "#/definitions/GuestControlError"
+    },
+    "execCancel": {
+      "$ref": "#/definitions/ExecCancelRequest"
+    },
+    "execCreate": {
+      "$ref": "#/definitions/ExecCreateRequest"
+    },
+    "execCreated": {
+      "$ref": "#/definitions/ExecCreateResponse"
+    },
+    "execInspect": {
+      "$ref": "#/definitions/ExecInspectRequest"
+    },
+    "execInspected": {
+      "$ref": "#/definitions/ExecInspectResponse"
+    },
+    "execList": {
+      "$ref": "#/definitions/ExecListRequest"
+    },
+    "execListed": {
+      "$ref": "#/definitions/ExecListResponse"
+    },
+    "execLogChunk": {
+      "$ref": "#/definitions/ExecLogsResponse"
+    },
+    "execLogs": {
+      "$ref": "#/definitions/ExecLogsRequest"
+    },
+    "execSignal": {
+      "$ref": "#/definitions/ExecSignalRequest"
+    },
+    "execWait": {
+      "$ref": "#/definitions/ExecWaitRequest"
+    },
+    "execWaited": {
+      "$ref": "#/definitions/ExecWaitResponse"
+    },
+    "health": {
+      "$ref": "#/definitions/HealthResponse"
+    },
+    "healthRequest": {
+      "$ref": "#/definitions/HealthRequest"
+    },
+    "hello": {
+      "$ref": "#/definitions/HelloRequest"
+    },
+    "helloOk": {
+      "$ref": "#/definitions/HelloResponse"
+    },
+    "limits": {
+      "$ref": "#/definitions/GuestEffectiveLimits"
+    },
+    "outputChunk": {
+      "$ref": "#/definitions/ReadOutputResponse"
+    },
+    "protocolVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "readGuestFile": {
+      "$ref": "#/definitions/ReadGuestFileRequest"
+    },
+    "readGuestFileResult": {
+      "$ref": "#/definitions/ReadGuestFileResponse"
+    },
+    "readOutput": {
+      "$ref": "#/definitions/ReadOutputRequest"
+    },
+    "schemaVersion": {
+      "$ref": "#/definitions/GuestSchemaVersion"
+    },
+    "transport": {
+      "$ref": "#/definitions/GuestTransportSchema"
+    },
+    "ttyWinResize": {
+      "$ref": "#/definitions/TtyWinResizeRequest"
+    },
+    "writeStdin": {
+      "$ref": "#/definitions/WriteStdinRequest"
+    },
+    "writeStdinResult": {
+      "$ref": "#/definitions/WriteStdinResponse"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ArgvSha256": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
+    "AuthenticateRequest": {
+      "type": "object",
+      "required": [
+        "guestBootId",
+        "guestNonce",
+        "hostAuthTag",
+        "hostNonce",
+        "metadata",
+        "transcriptVersion"
+      ],
+      "properties": {
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "guestNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "hostAuthTag": {
+          "$ref": "#/definitions/GuestAuthTag"
+        },
+        "hostNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "transcriptVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuthenticateResponse": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapabilitiesResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilitiesHash": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CapabilitiesHash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "guestAuthTag": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestAuthTag"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HealthResponse"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CapabilitiesHash": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "CapabilitiesRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CapabilitiesResponse": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "limits",
+        "protocolVersion"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GuestCapability"
+          },
+          "maxItems": 32
+        },
+        "limits": {
+          "$ref": "#/definitions/GuestEffectiveLimits"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CloseStdinRequest": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "offset"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CloseStdinResponse": {
+      "type": "object",
+      "required": [
+        "disposition",
+        "finalOffset",
+        "stdinState"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/definitions/WriteDisposition"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finalOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdinState": {
+          "$ref": "#/definitions/StdinState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ControlAck": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "duplicate"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvKey": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "EnvValue": {
+      "type": "string",
+      "maxLength": 8192,
+      "minLength": 1
+    },
+    "EnvVar": {
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/definitions/EnvKey"
+        },
+        "value": {
+          "$ref": "#/definitions/EnvValue"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecCancelReason": {
+      "type": "string",
+      "enum": [
+        "client-disconnect",
+        "user-requested",
+        "slow-consumer",
+        "protocol-error"
+      ]
+    },
+    "ExecCancelRequest": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "metadata",
+        "reason"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "reason": {
+          "$ref": "#/definitions/ExecCancelReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecCreateRequest": {
+      "type": "object",
+      "required": [
+        "argv",
+        "detached",
+        "env",
+        "metadata",
+        "outputPolicy",
+        "stdinOpen",
+        "tty"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GuestArg"
+          },
+          "maxItems": 128,
+          "minItems": 1
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestCwd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/EnvVar"
+          },
+          "maxItems": 256
+        },
+        "initialTerminalSize": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "outputPolicy": {
+          "$ref": "#/definitions/OutputPolicy"
+        },
+        "stdinOpen": {
+          "type": "boolean"
+        },
+        "tty": {
+          "type": "boolean"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestUser"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecCreateResponse": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "createdAtMonotonicNs",
+        "effectiveLimits",
+        "state",
+        "stderrCursor",
+        "stdoutCursor"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "createdAtMonotonicNs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "effectiveLimits": {
+          "$ref": "#/definitions/GuestEffectiveLimits"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stderrCursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutCursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "ExecInspectRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecInspectResponse": {
+      "type": "object",
+      "required": [
+        "lastControlSeq",
+        "state",
+        "stateGeneration",
+        "stderrDroppedBytes",
+        "stderrEndOffset",
+        "stderrStartOffset",
+        "stderrTruncatedForRetention",
+        "stdinState",
+        "stdoutDroppedBytes",
+        "stdoutEndOffset",
+        "stdoutStartOffset",
+        "stdoutTruncatedForRetention"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastControlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stateGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrDroppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncatedForRetention": {
+          "type": "boolean"
+        },
+        "stdinState": {
+          "$ref": "#/definitions/StdinState"
+        },
+        "stdoutDroppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncatedForRetention": {
+          "type": "boolean"
+        },
+        "visibleTerminalStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecListEntry": {
+      "description": "One detached exec record summary. Discloses only bounded, non-sensitive metadata: the opaque id, slot, lifecycle state, create time, an argv hash (never the raw argv), and retained-log accounting.",
+      "type": "object",
+      "required": [
+        "argvSha256",
+        "createTimeUnix",
+        "droppedBytes",
+        "execId",
+        "slot",
+        "state",
+        "stderrTruncated",
+        "stdoutTruncated"
+      ],
+      "properties": {
+        "argvSha256": {
+          "$ref": "#/definitions/ArgvSha256"
+        },
+        "createTimeUnix": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "execId": {
+          "$ref": "#/definitions/ExecId"
+        },
+        "slot": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 31.0,
+          "minimum": 0.0
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecListRequest": {
+      "description": "Read-only listing of detached execs visible to the same VM token on the same guest boot. Carries no exec id, argv, or output; the boot id binds the request to the current guest generation.",
+      "type": "object",
+      "required": [
+        "guestBootId",
+        "metadata"
+      ],
+      "properties": {
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecListResponse": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExecListEntry"
+          },
+          "maxItems": 32
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecLogsRequest": {
+      "type": "object",
+      "required": [
+        "maxLen",
+        "metadata",
+        "offset",
+        "stream"
+      ],
+      "properties": {
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1048576.0,
+          "minimum": 1.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/OutputStream"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecLogsResponse": {
+      "type": "object",
+      "required": [
+        "data",
+        "droppedBytes",
+        "endOffset",
+        "eof",
+        "nextOffset",
+        "offset",
+        "startOffset",
+        "stream",
+        "truncated"
+      ],
+      "properties": {
+        "data": {
+          "$ref": "#/definitions/GuestOutputBytes"
+        },
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "startOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/OutputStream"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecSignalRequest": {
+      "type": "object",
+      "required": [
+        "controlSeq",
+        "metadata",
+        "signal",
+        "target"
+      ],
+      "properties": {
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "signal": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "target": {
+          "$ref": "#/definitions/SignalTarget"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecState": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "exited",
+        "signaled",
+        "cancelled",
+        "slow-consumer-cancelled",
+        "protocol-error",
+        "lost-guestd",
+        "reaped"
+      ]
+    },
+    "ExecWaitRequest": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "timeoutMs"
+      ],
+      "properties": {
+        "knownStateGeneration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecWaitResponse": {
+      "type": "object",
+      "required": [
+        "state",
+        "stateGeneration",
+        "stderrEndOffset",
+        "stderrStartOffset",
+        "stdoutEndOffset",
+        "stdoutStartOffset",
+        "timedOut"
+      ],
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ExecState"
+        },
+        "stateGeneration": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "visibleTerminalStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestArg": {
+      "type": "string",
+      "maxLength": 4096,
+      "minLength": 1
+    },
+    "GuestAuthTag": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 32,
+      "minItems": 32
+    },
+    "GuestBootId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestCapability": {
+      "type": "string",
+      "enum": [
+        "health",
+        "capabilities",
+        "exec-attached",
+        "exec-detached",
+        "exec-tty",
+        "exec-logs",
+        "tty-resize",
+        "signals",
+        "read-guest-file"
+      ]
+    },
+    "GuestConnectAckLine": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
+    "GuestConnectAckValue": {
+      "type": "string",
+      "enum": [
+        "opaque-local-port"
+      ]
+    },
+    "GuestConnectRequestLine": {
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1
+    },
+    "GuestControlError": {
+      "type": "object",
+      "required": [
+        "kind",
+        "remediation"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/GuestControlErrorKind"
+        },
+        "remediation": {
+          "$ref": "#/definitions/HealthRemediation"
+        },
+        "retryAfterMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestControlErrorKind": {
+      "type": "string",
+      "enum": [
+        "protocol-error",
+        "max-chunk-exceeded",
+        "stdin-backpressure",
+        "stdin-closed",
+        "stdin-not-open",
+        "stdin-closed-by-process",
+        "stdin-offset-mismatch",
+        "stdin-byte-budget-exhausted",
+        "offset-expired",
+        "offset-in-future",
+        "offset-exhausted",
+        "output-lost",
+        "tty-stderr-unavailable",
+        "tty-required",
+        "exec-capacity-exceeded",
+        "exec-attach-capacity-exceeded",
+        "exec-not-found",
+        "exec-already-exited",
+        "guest-exec-disabled",
+        "guest-exec-root-denied",
+        "guest-exec-user-denied",
+        "cwd-invalid",
+        "cwd-denied",
+        "retained-log-path-unsafe",
+        "retained-log-quota-exceeded",
+        "read-wait-capacity-exceeded",
+        "wait-capacity-exceeded",
+        "superseded-read-wait",
+        "rate-limited",
+        "request-id-conflict",
+        "control-seq-mismatch",
+        "slow-consumer-cancelled",
+        "stale-session",
+        "guest-control-unavailable-old-generation",
+        "auth-failed",
+        "transport-unreachable",
+        "exec-expired",
+        "file-not-found",
+        "file-too-large",
+        "path-unsafe",
+        "read-denied"
+      ]
+    },
+    "GuestCwd": {
+      "type": "string",
+      "maxLength": 4096,
+      "minLength": 1
+    },
+    "GuestEffectiveLimits": {
+      "type": "object",
+      "required": [
+        "attachedSessionsPerVm",
+        "decodedWriteStdinBytesPerConnection",
+        "detachedStderrLogBytes",
+        "detachedStdoutLogBytes",
+        "execSessionsPerVm",
+        "longPollTimeoutMs",
+        "maxChunkBytes",
+        "maxRecvMessageBytes",
+        "pendingExecWaitsPerVm",
+        "pendingReadOutputWaitsPerStream",
+        "rpcRatePerConnectionPerSecond",
+        "rpcRatePerVmBurst",
+        "slowConsumerGraceMs",
+        "stderrLiveBufferBytes",
+        "stdinQueueChunksPerExec",
+        "stdoutLiveBufferBytes",
+        "writeStdinHandlersPerConnection"
+      ],
+      "properties": {
+        "attachedSessionsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 64.0,
+          "minimum": 0.0
+        },
+        "decodedWriteStdinBytesPerConnection": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 16777216.0,
+          "minimum": 0.0
+        },
+        "detachedStderrLogBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 4194304.0,
+          "minimum": 0.0
+        },
+        "detachedStdoutLogBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 4194304.0,
+          "minimum": 0.0
+        },
+        "execSessionsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 256.0,
+          "minimum": 0.0
+        },
+        "longPollTimeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1000.0,
+          "minimum": 0.0
+        },
+        "maxChunkBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1048576.0,
+          "minimum": 1.0
+        },
+        "maxRecvMessageBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 4194304.0,
+          "minimum": 1.0
+        },
+        "pendingExecWaitsPerVm": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 512.0,
+          "minimum": 0.0
+        },
+        "pendingReadOutputWaitsPerStream": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 512.0,
+          "minimum": 0.0
+        },
+        "rpcRatePerConnectionPerSecond": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 200.0,
+          "minimum": 0.0
+        },
+        "rpcRatePerVmBurst": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1000.0,
+          "minimum": 0.0
+        },
+        "slowConsumerGraceMs": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 300000.0,
+          "minimum": 0.0
+        },
+        "stderrLiveBufferBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 8388608.0,
+          "minimum": 0.0
+        },
+        "stdinQueueChunksPerExec": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 1.0,
+          "minimum": 0.0
+        },
+        "stdoutLiveBufferBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 8388608.0,
+          "minimum": 0.0
+        },
+        "writeStdinHandlersPerConnection": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 4.0,
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestExecRequestMetadata": {
+      "type": "object",
+      "required": [
+        "common",
+        "execId",
+        "guestBootId"
+      ],
+      "properties": {
+        "common": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "execId": {
+          "$ref": "#/definitions/ExecId"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestFileBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 524288,
+      "minItems": 0
+    },
+    "GuestFileId": {
+      "description": "Closed set of host-declared guest files readable via `ReadGuestFile`. Currently ships only `GuestConfig` (the in-guest editable config working copy).",
+      "type": "string",
+      "enum": [
+        "guest-config"
+      ]
+    },
+    "GuestHostConnectShape": {
+      "type": "object",
+      "required": [
+        "ackValue",
+        "okAck",
+        "requestLine"
+      ],
+      "properties": {
+        "ackValue": {
+          "$ref": "#/definitions/GuestConnectAckValue"
+        },
+        "okAck": {
+          "$ref": "#/definitions/GuestConnectAckLine"
+        },
+        "requestLine": {
+          "$ref": "#/definitions/GuestConnectRequestLine"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestIdentityBinding": {
+      "type": "string",
+      "enum": [
+        "vm-id-cid-port-and-token-transcript"
+      ]
+    },
+    "GuestNonce": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 32,
+      "minItems": 32
+    },
+    "GuestOutputBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 1048576,
+      "minItems": 0
+    },
+    "GuestReadinessContract": {
+      "type": "object",
+      "required": [
+        "preTtrpcFailuresAreHostSynthesized",
+        "requiresConnectHelloAuthAndHealth",
+        "socketExistenceIsReadiness"
+      ],
+      "properties": {
+        "preTtrpcFailuresAreHostSynthesized": {
+          "type": "boolean"
+        },
+        "requiresConnectHelloAuthAndHealth": {
+          "type": "boolean"
+        },
+        "socketExistenceIsReadiness": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestRequestMetadata": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "vmId"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "vmId": {
+          "$ref": "#/definitions/GuestVmId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestSchemaVersion": {
+      "type": "string",
+      "maxLength": 32,
+      "minLength": 1
+    },
+    "GuestStdinBytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255.0,
+        "minimum": 0.0
+      },
+      "maxItems": 1048576,
+      "minItems": 1
+    },
+    "GuestSubsystem": {
+      "type": "string",
+      "enum": [
+        "guestd",
+        "userd",
+        "exec",
+        "log-storage",
+        "token",
+        "vsock"
+      ]
+    },
+    "GuestTransportKind": {
+      "type": "string",
+      "enum": [
+        "virtio-vsock-ttrpc"
+      ]
+    },
+    "GuestTransportSchema": {
+      "type": "object",
+      "required": [
+        "direction",
+        "guestControlVsockPort",
+        "guestToHostObservabilityPort",
+        "hostConnect",
+        "identityBinding",
+        "readiness",
+        "reservedSideChannelPort",
+        "transport",
+        "ttrpcFrameCapBytes"
+      ],
+      "properties": {
+        "direction": {
+          "$ref": "#/definitions/GuestVsockDirection"
+        },
+        "guestControlVsockPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "guestToHostObservabilityPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hostConnect": {
+          "$ref": "#/definitions/GuestHostConnectShape"
+        },
+        "identityBinding": {
+          "$ref": "#/definitions/GuestIdentityBinding"
+        },
+        "readiness": {
+          "$ref": "#/definitions/GuestReadinessContract"
+        },
+        "reservedSideChannelPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "transport": {
+          "$ref": "#/definitions/GuestTransportKind"
+        },
+        "ttrpcFrameCapBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestUser": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestVmId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestVsockDirection": {
+      "type": "string",
+      "enum": [
+        "host-to-guest"
+      ]
+    },
+    "HealthOrigin": {
+      "type": "string",
+      "enum": [
+        "guest-reported",
+        "host-synthesized"
+      ]
+    },
+    "HealthReason": {
+      "type": "string",
+      "enum": [
+        "none",
+        "old-generation",
+        "listener-absent",
+        "connect-refused",
+        "connect-timeout",
+        "eof-before-ack",
+        "malformed-ack",
+        "ack-too-long",
+        "transport-io",
+        "auth-token-rejected",
+        "protocol-version-unsupported",
+        "session-generation-mismatch",
+        "exec-subsystem-unavailable",
+        "log-storage-unavailable",
+        "quota-exceeded",
+        "rate-limited",
+        "internal-health-check-failed"
+      ]
+    },
+    "HealthRemediation": {
+      "type": "string",
+      "enum": [
+        "none",
+        "retry",
+        "restart-vm",
+        "upgrade-guest",
+        "check-auth-token",
+        "check-guestd-service",
+        "reduce-load",
+        "inspect-guest-logs"
+      ]
+    },
+    "HealthRequest": {
+      "type": "object",
+      "required": [
+        "metadata"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HealthResponse": {
+      "type": "object",
+      "required": [
+        "capabilities",
+        "degradedSubsystems",
+        "origin",
+        "protocolVersion",
+        "reason",
+        "remediation",
+        "state"
+      ],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GuestCapability"
+          },
+          "maxItems": 32
+        },
+        "degradedSubsystems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GuestSubsystem"
+          },
+          "maxItems": 16
+        },
+        "origin": {
+          "$ref": "#/definitions/HealthOrigin"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "reason": {
+          "$ref": "#/definitions/HealthReason"
+        },
+        "remediation": {
+          "$ref": "#/definitions/HealthRemediation"
+        },
+        "state": {
+          "$ref": "#/definitions/HealthState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HealthState": {
+      "type": "string",
+      "enum": [
+        "healthy",
+        "degraded",
+        "unavailable-old-generation",
+        "listener-absent",
+        "transport-unreachable",
+        "auth-failed",
+        "protocol-mismatch",
+        "stale-session"
+      ]
+    },
+    "HelloRequest": {
+      "type": "object",
+      "required": [
+        "hostNonce",
+        "metadata",
+        "transcriptVersion"
+      ],
+      "properties": {
+        "hostNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        },
+        "transcriptVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HelloResponse": {
+      "type": "object",
+      "required": [
+        "guestBootId",
+        "guestNonce",
+        "protocolVersion"
+      ],
+      "properties": {
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootId"
+        },
+        "guestNonce": {
+          "$ref": "#/definitions/GuestNonce"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutputPolicy": {
+      "type": "object",
+      "required": [
+        "maxChunkBytes",
+        "maxStderrLogBytes",
+        "maxStdoutLogBytes",
+        "slowConsumerTimeoutMs",
+        "waitTimeoutMs"
+      ],
+      "properties": {
+        "maxChunkBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "maxStderrLogBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "maxStdoutLogBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "slowConsumerTimeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "waitTimeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutputStream": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "ReadGuestFileRequest": {
+      "description": "Framework read of a host-declared guest file, keyed by a closed enum (NOT a free-form path). guestd maps the key to the host-declared target.",
+      "type": "object",
+      "required": [
+        "fileId",
+        "metadata"
+      ],
+      "properties": {
+        "fileId": {
+          "$ref": "#/definitions/GuestFileId"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestRequestMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadGuestFileResponse": {
+      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only — the host recomputes both from the received bytes.",
+      "type": "object",
+      "required": [
+        "content",
+        "fileId",
+        "sha256",
+        "sizeBytes"
+      ],
+      "properties": {
+        "content": {
+          "$ref": "#/definitions/GuestFileBytes"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileId": {
+          "$ref": "#/definitions/GuestFileId"
+        },
+        "sha256": {
+          "$ref": "#/definitions/ArgvSha256"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadOutputRequest": {
+      "type": "object",
+      "required": [
+        "maxLen",
+        "metadata",
+        "offset",
+        "stream",
+        "timeoutMs",
+        "wait"
+      ],
+      "properties": {
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 1048576.0,
+          "minimum": 1.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/OutputStream"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wait": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadOutputResponse": {
+      "type": "object",
+      "required": [
+        "data",
+        "droppedBytes",
+        "endOffset",
+        "eof",
+        "nextOffset",
+        "offset",
+        "startOffset",
+        "stream",
+        "timedOut",
+        "truncated"
+      ],
+      "properties": {
+        "data": {
+          "$ref": "#/definitions/GuestOutputBytes"
+        },
+        "droppedBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "endOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "startOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stream": {
+          "$ref": "#/definitions/OutputStream"
+        },
+        "timedOut": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RequestId": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "SignalTarget": {
+      "type": "string",
+      "enum": [
+        "foreground-process-group",
+        "process-tree"
+      ]
+    },
+    "StdinState": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closing",
+        "closed",
+        "closed-by-process",
+        "rejected-not-interactive"
+      ]
+    },
+    "TerminalSize": {
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminalStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "exitCode",
+            "outcome"
+          ],
+          "properties": {
+            "exitCode": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "exit-code"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "outcome",
+            "signal"
+          ],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "signal"
+              ]
+            },
+            "signal": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "outcome",
+            "statusCode"
+          ],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "status-code"
+              ]
+            },
+            "statusCode": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "error",
+            "outcome"
+          ],
+          "properties": {
+            "error": {
+              "$ref": "#/definitions/GuestControlErrorKind"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TtyWinResizeRequest": {
+      "type": "object",
+      "required": [
+        "cols",
+        "controlSeq",
+        "metadata",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        },
+        "controlSeq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "WriteDisposition": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "duplicate",
+        "rejected"
+      ]
+    },
+    "WriteStdinRequest": {
+      "type": "object",
+      "required": [
+        "closeAfter",
+        "data",
+        "metadata",
+        "offset"
+      ],
+      "properties": {
+        "clientDeadlineMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "closeAfter": {
+          "type": "boolean"
+        },
+        "data": {
+          "$ref": "#/definitions/GuestStdinBytes"
+        },
+        "metadata": {
+          "$ref": "#/definitions/GuestExecRequestMetadata"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "WriteStdinResponse": {
+      "type": "object",
+      "required": [
+        "acceptedLen",
+        "acceptedOffset",
+        "blockedMs",
+        "disposition",
+        "nextOffset",
+        "stdinState"
+      ],
+      "properties": {
+        "acceptedLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "acceptedOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "blockedMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "disposition": {
+          "$ref": "#/definitions/WriteDisposition"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuestControlError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdinState": {
+          "$ref": "#/definitions/StdinState"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

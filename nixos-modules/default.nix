@@ -50,6 +50,7 @@
     ./store.nix
     ./manifest.nix
     ./bundle.nix
+    ./guest-control-host.nix
     ./host-json.nix
     ./processes-json.nix
     ./privileges-json.nix

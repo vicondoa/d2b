@@ -140,7 +140,10 @@ fn open_dir_path_safe_mount_contract_helper() {
         );
     }
 
-    assert!(followed.0, "a real mount crossing must be followed: {followed:?}");
+    assert!(
+        followed.0,
+        "a real mount crossing must be followed: {followed:?}"
+    );
     assert!(
         two_crossings.0,
         "a path crossing two mounts must resolve: {two_crossings:?}"

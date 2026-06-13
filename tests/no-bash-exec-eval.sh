@@ -41,10 +41,15 @@ USAGE
   exit 2
 }
 
-mode=${1:-}
-if [ -z "$mode" ]; then
-  usage
-fi
+# Default to the comprehensive `all` mode when invoked with no
+# argument. Both gate harnesses that wire this in run gate scripts
+# bare: tests/static.sh's generic gate loop calls `bash <gate>.sh`
+# with no args, and .github/workflows/pr-eval-shell-tests.yml already
+# special-cases this gate to pass `all`. Defaulting empty -> all keeps
+# the explicit subcommands working while letting the generic arg-less
+# loop run the full invariant. A genuinely unknown mode still falls to
+# usage/exit 2 via the case statement below.
+mode=${1:-all}
 
 # Bash exec regex covers:
 #   Command::new("bash")

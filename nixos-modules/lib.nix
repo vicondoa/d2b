@@ -129,6 +129,24 @@ rec {
     neededForBoot = true;
   };
 
+  guestControlVsockPort = 14318;
+  observabilityOtlpVsockPort = 14317;
+  observabilityStackVsockCid = 1000;
+
+  # Deterministic per-VM Cloud Hypervisor vsock CID. Env-backed VMs
+  # reserve slot 1 for the env net VM and use nixling.vms.<vm>.index
+  # for workloads (10..250). The stride intentionally exceeds the
+  # maximum workload index so adjacent envs cannot collide.
+  guestControlVsockCid = { name, envIndex ? null, index ? null, isNetVm ? false, isObservabilityVm ? false }:
+    if isObservabilityVm then observabilityStackVsockCid
+    else if envIndex != null then
+      let slot = if isNetVm then 1 else index; in
+      100 + (envIndex * 1000) + slot
+    else
+      4096 + lib.fromHexString (builtins.substring 0 6 (builtins.hashString "md5" name));
+
+  guestControlVsockHostSocket = stateRoot: "${stateRoot}/vsock.sock";
+
   volumeSerialIssues = volumes:
     let
       serials = map volumeSerial volumes;
@@ -350,4 +368,3 @@ rec {
     if probe.success then probe.value
     else [ "<guestConfigFile failed to evaluate in the containment check>" ];
 }
-

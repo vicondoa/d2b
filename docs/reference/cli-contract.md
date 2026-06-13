@@ -103,7 +103,17 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
 ]
 ```
 
-**Disposition:** `rust-native` — Pure read-only inventory query; the daemon can answer it without mutating host or guest state.
+**Status**
+
+`list` is a daemon-native, read-only inventory query; the daemon answers it without mutating host or guest state.
+
+**Native**
+
+- Pure read-only manifest/inventory query; no broker op and no guest contact.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
 ### `vm start`
@@ -392,21 +402,42 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```json
 {
   "name": "corp-vm",
+  "env": "work",
   "services": {
     "nixling": "inactive",
     "microvm": "inactive",
     "virtiofsd": "inactive",
     "gpu": null,
+    "video": null,
     "snd": null,
     "swtpm": null
   },
   "current": null,
   "booted": null,
-  "pendingRestart": false
+  "pendingRestart": false,
+  "runtime": "unknown",
+  "declaredRoles": [
+    "host-reconcile",
+    "store-virtiofs-preflight"
+  ],
+  "readiness": []
 }
 ```
 
-**Disposition:** `rust-native` — Status is a read-only daemon RPC, including the frozen per-VM JSON shape.
+**Status**
+
+`status` is a read-only daemon RPC, including the frozen per-VM JSON
+shape. A negotiated guest-control state field is reserved for a future
+release and is not present in the current frozen shape; it must never
+appear as an ad hoc unversioned key.
+
+**Native**
+
+- Read-only daemon query; renders the human view or the frozen `--json` document.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `status --check-bridges`
 
@@ -442,7 +473,17 @@ br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up
 br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```
 
-**Disposition:** `rust-native` — The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
+**Status**
+
+The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
+
+**Native**
+
+- Read-only bridge-health probe; rejects `--json` and a VM selector.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb attach`
 
@@ -480,7 +521,17 @@ $ nixling usb attach corp-vm 1-2 --dry-run
 nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach
 ```
 
-**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly, then performs the guest-side `usbip attach` over the framework-managed SSH key.
+**Status**
+
+The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly.
+
+**Native**
+
+- `--apply` routes through `nixlingd` → broker. The guest-side `usbip attach` is still performed over the framework-managed per-VM SSH key: USBIP attach is the one VM-lifecycle surface that intentionally retains SSH.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb detach`
 
@@ -518,7 +569,17 @@ $ nixling usb detach corp-vm 1-2 --dry-run
 nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
 ```
 
-**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+**Status**
+
+The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+
+**Native**
+
+- `--apply` routes through `nixlingd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb probe`
 
@@ -554,7 +615,17 @@ VM                       ENV          BUSID        STATUS   OWNER
 corp-vm                  work         1-2          bound    corp-vm
 ```
 
-**Disposition:** `rust-native` — Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+**Status**
+
+Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+
+**Native**
+
+- Read-only daemon query enumerating every declared USBIP busid claim.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `console`
 
@@ -590,7 +661,17 @@ Connected to corp-vm serial console.
 Use ~. to detach.
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native foreground console handoff is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio status`
 
@@ -628,7 +709,17 @@ sidecar:  inactive
 device:   detached
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-status surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio mic`
 
@@ -669,7 +760,17 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-hotplug surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio speaker`
 
@@ -710,7 +811,17 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-speaker surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio off`
 
@@ -750,7 +861,17 @@ sidecar:  inactive
 device:   detached
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-off shorthand is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `build`
 
@@ -785,7 +906,17 @@ nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-s
   GC root: /var/lib/nixling/vms/corp-vm/result
 ```
 
-**Disposition:** `rust-native` — Build is a native non-destructive planner that renders the eval/build preview without falling back to bash.
+**Status**
+
+Build is a native non-destructive planner that renders the eval/build preview without falling back to bash.
+
+**Native**
+
+- Native eval/build planner; renders the closure preview and GC-root path.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `switch`
 
 **Synopsis:** `nixling switch <vm> [--dry-run | --apply] [--human | --json]`
@@ -1022,7 +1153,17 @@ $ nixling generations corp-vm
   (corp-vm is not running — start it and try again)
 ```
 
-**Disposition:** `rust-native` — Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash.
+**Status**
+
+Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash.
+
+**Native**
+
+- Native introspection of host-side and in-VM nix-profile generations.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `gc`
 
 **Synopsis:** `nixling gc [--dry-run | --apply] [--human | --json]`
@@ -1125,7 +1266,7 @@ surface for the ADR 0027 split store-view. The CLI is thin: it never reads
 **Native**
 
 - Routes through `nixlingd` → broker `StoreVerify`.
-- W6 verifies the current marker/manifest and top-level `live/` basenames
+- Verifies the current marker/manifest and top-level `live/` basenames
   and writes host-only integrity records.
 - `--repair` never claims success from the StoreSync attempt alone; it
   returns `repaired` only after the post-repair verification is clean.
@@ -1293,7 +1434,17 @@ corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 }
 ```
 
-**Disposition:** `rust-native` — Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash.
+**Status**
+
+Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash.
+
+**Native**
+
+- Native managed-key inventory query over the daemon public socket.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `keys show`
 
@@ -1327,7 +1478,17 @@ $ nixling keys show corp-vm
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519.pub
 ```
 
-**Disposition:** `rust-native` — Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash.
+**Status**
+
+Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash.
+
+**Native**
+
+- Native per-VM managed-key lookup over the daemon public socket.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `keys rotate`
 
 **Synopsis:** `nixling keys rotate <vm> [--dry-run | --apply] [--human | --json]`
@@ -1453,7 +1614,17 @@ $ nixling audit --human
 }
 ```
 
-**Disposition:** `rust-native` — Audit is part of the read-only daemon surface and keeps both human and JSON output contracts.
+**Status**
+
+Audit is part of the read-only daemon surface and keeps both human and JSON output contracts. `--strict` surfaces a typed `not-yet-implemented` envelope (exit `78`) pending its daemon-native implementation.
+
+**Native**
+
+- Read-only daemon query; `--json` emits the stable audit document.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `host check`
 
@@ -1531,7 +1702,17 @@ WARN
 }
 ```
 
-**Disposition:** `rust-native` — Host check is a read-only daemon RPC by design; mutation is explicitly handled by host prepare.
+**Status**
+
+Host check is a read-only daemon RPC by design; mutation is explicitly handled by host prepare.
+
+**Native**
+
+- Read-only host-posture inventory; never mutates nftables, cgroups, users, or runtime directories.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 The command never mutates nftables, cgroups, users, or runtime directories. `--read-only` is therefore part of the compatibility surface, not a capability toggle.
 ### `host prepare`
@@ -1540,14 +1721,14 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 **Status**
 
-`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
+`host prepare` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy/mixed host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` / `single-writer-conflict` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan the host reconcile without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile mutation. |
+| `--apply` | boolean | `false` | Perform the host-reconcile mutation. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1561,7 +1742,7 @@ The command never mutates nftables, cgroups, users, or runtime directories. `--r
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal, Tier-0 mixed single-writer conflict, or typed `broker-error` / `not-yet-implemented` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`single-writer-conflict`](./error-codes.md#single-writer-conflict), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -1576,9 +1757,9 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy/mixed host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: wired through `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (commit `ee6ed0b`).
+- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires `nixlingd` → broker `ApplyNftables` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNmUnmanaged` (broker ops staged in commit `ee6ed0b`; public-socket dispatch pending).
 
 **Bash**
 
@@ -1589,14 +1770,14 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 **Status**
 
-`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`; `--apply` is daemon-native.
+`host destroy` is a daemon-native host-reconcile verb. If neither mutation flag is set, stderr emits "nixling: NOTICE: defaulting to --dry-run; nixling 1.0 will require explicit --dry-run or --apply" and the CLI defaults to `--dry-run`. `--dry-run` is wired live; `--apply` is **not yet wired** — the daemon-side typed-intent dispatch and bundle resolver that back it are still pending, so it returns the typed `daemon-down` envelope (exit 1) today (use `--dry-run` for now). On a Tier-0 legacy host, `--apply` is refused with `tier-0-legacy-uses-nixos-module` (exit 78).
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
 | `--dry-run` | boolean | implicit if neither mutation flag is set | Plan removal of nixling-owned host reconcile state without mutating host state. |
-| `--apply` | boolean | `false` | Perform the host-reconcile teardown. |
+| `--apply` | boolean | `false` | Perform the host-reconcile teardown. **Not yet wired** — returns `daemon-down` (exit 1) today; use `--dry-run` for now. |
 | `--json` | boolean | `false` | Emit the dry-run summary or typed mutating-verb envelope as JSON. |
 | `--human` | boolean | `false` | Force the human summary on stdout. |
 
@@ -1610,7 +1791,7 @@ host prepare --dry-run: would reconcile nftables + routes + sysctls + /etc/hosts
 
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
-| `0` | Dry-run summary rendered or `--apply` completed successfully. | — |
+| `0` | Dry-run summary rendered. (Once `--apply` is wired, a successful apply will also exit `0`.) | — |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 | `78` | Tier-0 all-legacy refusal or typed `broker-error` (v1.0 daemon-only per ADR 0015; no bash fallback). | [`tier-0-legacy-uses-nixos-module`](./error-codes.md#tier-0-legacy-uses-nixos-module), [`broker-error`](./error-codes.md#broker-error) |
 
@@ -1625,9 +1806,9 @@ host destroy --dry-run: no nixling-owned resources to remove
 
 **Native**
 
-- `--apply`: routes through `nixlingd` → broker. Daemon-unreachable surfaces `daemon-down` exit 1; native-handler-deferred surfaces `not-yet-implemented` exit 78; `broker-error` exit 78. The historical bash fallback was retired in v1.0 (per ADR 0015).
+- `--apply`: **not yet wired** — returns the typed `daemon-down` envelope (exit 1) today; re-run with `--dry-run` for now. When the daemon-side dispatch ships, `--apply` will route through `nixlingd` → broker; daemon-unreachable will surface `daemon-down` exit 1, native-handler-deferred `not-yet-implemented` exit 78, and `broker-error` exit 78. On a Tier-0 legacy host `--apply` is refused today (exit 78). The historical bash fallback was retired in v1.0 (per ADR 0015).
 - The `NIXLING_NATIVE_ONLY=1` / `NIXLING_LEGACY_BASH_OPT_IN=1` env vars were retired in v1.0; in v1.0 (ADR 0015) the daemon-only contract is the only path. Broker failures surface on stderr with the redacted public-safe remediation from security fix `4dde2b9` and exit `78`.
-- LiveNative: same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (commit `ee6ed0b`; reverse-order hardening in `b73e28f`).
+- LiveNative (forthcoming): once the public-socket dispatch ships, `--apply` wires the same broker-op set in reverse order: `ApplyNmUnmanaged` + `ApplyRoute` + `ApplySysctl` + `UpdateHostsFile` + `ApplyNftables` (broker ops staged in commit `ee6ed0b`; reverse-order hardening in `b73e28f`; public-socket dispatch pending).
 
 **Bash**
 
@@ -1924,29 +2105,72 @@ denied commands:
 }
 ```
 
-**Disposition:** `rust-native` — Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
+**Status**
+
+Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
+
+**Native**
+
+- Read-only daemon query resolving the caller's `SO_PEERCRED` role and the allowed/denied verb set.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `config sync`
 
 **Synopsis:** `nixling config sync <vm> [--guest-path <path>] [--host <h>] [--user <u>] [--key <path>] [--known-hosts <path>] [--dry-run] [--json]`
 
-Pulls the VM's in-guest edited `guestConfigFile` (default
-`/var/lib/nixling-guest/guest-config.nix`) over the framework-managed
-per-VM SSH key into a host-side **staging** file
-(`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
-The host treats the pulled bytes as untrusted data: the pull is bounded
-(1 MiB hard cap + 120 s timeout, so a hostile guest cannot OOM/hang the
-host), validated (non-empty, valid UTF-8), and the staging copy is never
-evaluated until approved. The VM's host key is verified against
-`--known-hosts` (default `/var/lib/nixling/known_hosts.nixling`) with
-`StrictHostKeyChecking=accept-new` (pins on first use; refuses a changed
-key). The SSH user comes from `--user` or the manifest `ssh_user`
-(set `nixling.vms.<vm>.ssh.user`); there is no `$USER` fallback.
-`--dry-run` prints the SSH command without running it.
+<a id="config-sync-guest-control-transport"></a>
+On a guest-control-capable VM, `config sync` reads the VM's canonical
+guest config working copy (default `/var/lib/nixling-guest/guest-config.nix`)
+over the authenticated **guest-control transport** — a typed
+`readGuestConfig` request to `nixlingd` over the daemon public socket.
+There is no SSH: no ssh/scp process is spawned, and the SSH-shaped flags
+(`--host`/`--user`/`--key`/`--known-hosts`) and a non-default
+`--guest-path` are rejected up front with `guest-control-ssh-flag-rejected`
+(exit `2`). JSON responses carry `transport: "guest-control"`.
 
-**Disposition:** `rust-native` — host-initiated SSH copy; reuses the
-existing per-VM key + manifest `static_ip` / `ssh_user`. No new
-privileged surface, no virtiofs.
+The host treats the received bytes as untrusted data: the read is bounded
+(1 MiB hard cap + a per-attempt timeout, so a hostile guest cannot
+OOM/hang the host), the host re-enforces the size cap and recomputes size
++ sha256 from the received bytes (never a guest-reported value), the
+content is validated (non-empty, valid UTF-8), and the result is
+atomically written to a host-side **staging** file
+(`${XDG_STATE_HOME:-~/.local/state}/nixling/config-staging/<vm>.guest.nix`).
+The staging copy is never evaluated until approved.
+
+`--dry-run` selects and reports the transport WITHOUT contacting the
+daemon or reading any guest bytes: it emits `transport: "guest-control"`
+plus the planned staging target only — never an SSH argv and never guest
+content.
+
+Fail-closed behaviour:
+
+- `config sync` is **admin-only**: `readGuestConfig` is gated to the
+  `nixling-admin` role (`nixling.site.adminUsers`) at the daemon's
+  `SO_PEERCRED` accept time. A launcher-role caller is rejected with the
+  typed `authz-not-admin` error (exit `75`, AUTH) before any socket
+  request reads guest bytes. The staging-only verbs (`diff`/`approve`/
+  `reject`/`status`) dispatch no daemon verb and are not admin-gated.
+- A known VM whose generation does not declare the guest-control transport
+  (old or partial generation) is rejected with
+  `guest-control-unavailable-old-generation` (exit `70`); no socket request
+  is sent and nothing is staged. The operator SSH-compatibility transport
+  is not wired into this command.
+- When the daemon socket is unreachable, the command reports
+  `guest-control-transport-unavailable` (exit `70`).
+- Per-kind read errors surfaced by the daemon
+  (`guest-control-file-not-found`, `guest-control-file-too-large`,
+  `guest-control-path-unsafe`, `guest-control-read-denied`,
+  `guest-control-timeout`, `guest-control-protocol-error`,
+  `guest-control-auth-failed`, `guest-control-capability-unavailable`)
+  each map to exit `70` with their slug and never echo guest content,
+  paths, or transport detail.
+
+**Disposition:** `rust-native` — host-initiated typed `readGuestConfig`
+over the daemon public socket; no SSH, no virtiofs, no new privileged
+surface.
 
 ### `config diff`
 
@@ -1997,14 +2221,15 @@ All `config` verbs share these exit codes:
 | Exit | Meaning |
 | --- | --- |
 | `0` | Success (including `diff` whether or not files differ). |
-| `1` | Runtime error: nothing staged, SSH failure, size-cap/timeout, missing `ssh.user`, missing `--to`/`--against` target dir, I/O error. |
-| `2` | Usage error (bad/missing arguments; surfaced by `clap`). |
-| `70` | `config sync` only: the VM is not declared in the active manifest (`require_known_vm` emits the typed `not-yet-implemented` host-error envelope). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest and so never return `70`. |
+| `1` | Runtime error: nothing staged, a low-level public-socket I/O failure on `config sync` (send/receive frame), size-cap/timeout on the staging verbs, missing `--to`/`--against` target dir, I/O error. |
+| `2` | Usage error (bad/missing arguments; surfaced by `clap`), or `config sync` SSH-shaped flags rejected on a guest-control VM (`guest-control-ssh-flag-rejected`). |
+| `70` | `config sync` only. The VM is not declared in the active manifest (`require_known_vm`); the VM's generation does not declare the guest-control transport (`guest-control-unavailable-old-generation`); the daemon socket is unreachable (`guest-control-transport-unavailable`); or a per-kind guest-control read error (`guest-control-file-not-found`, `guest-control-file-too-large`, `guest-control-path-unsafe`, `guest-control-read-denied`, `guest-control-timeout`, `guest-control-protocol-error`, `guest-control-auth-failed`, `guest-control-capability-unavailable`). The staging-only verbs (`diff`/`approve`/`reject`/`status`) do not consult the manifest or transport and so never return `70`. |
+| `75` | `config sync` only. The caller is not in `nixling.site.adminUsers`. `config sync` dispatches the admin-only `ReadGuestConfig` daemon verb, so a launcher-role peer is rejected with the typed `authz-not-admin` (AUTH) error — exit `75`, the daemon's reserved authz code — before any guest read. The staging-only verbs (`diff`/`approve`/`reject`/`status`) dispatch no daemon verb and so never return `75`. |
 
 With `--json` each verb emits a single stdout object:
 
-- `config sync` → `{ "command": "config sync", "vm", "staging", "bytes" }`
-  (or `{ …, "mode": "dry-run", "argv", "staging" }` under `--dry-run`).
+- `config sync` → `{ "command": "config sync", "vm", "transport": "guest-control", "staging", "bytes", "sha256" }`
+  (or `{ "command": "config sync", "mode": "dry-run", "vm", "transport": "guest-control", "staging", "guestFile" }` under `--dry-run` — no SSH argv, no guest bytes).
 - `config diff` → `{ "command": "config diff", "vm", "against", "staging", "differs": <bool>, "diff": <string> }`.
 - `config approve` → `{ "command": "config approve", "vm", "target", "bytes" }`.
 - `config reject` → `{ "command": "config reject", "vm", "removed": <bool> }`.
@@ -2014,6 +2239,102 @@ With `--json` each verb emits a single stdout object:
 Pending-staging notes (`nixling status`, `nixling up`/`start`, and the
 mutating verbs) are emitted on **stderr** for human output only, so they
 never perturb a `--json` stdout envelope.
+
+### `vm exec`
+
+**Synopsis:** `nixling vm exec [-i] [-t] [--env KEY=VALUE]… [--cwd DIR] [--json] <vm> -- <cmd> [args…]`
+
+Runs a command inside a running VM over the authenticated
+**guest-control transport**: the CLI opens one owner connection to the
+daemon public socket, the daemon establishes (and holds) a single
+authenticated guest-control vsock session to the VM's `guestd`, and the
+two endpoints multiplex the exec over a typed `exec` verb. There is **no
+SSH** and **no host PTY** — the guest owns the PTY. The command is
+admin-only (the same `SO_PEERCRED` admin gate as the other privileged
+verbs); a launcher-role caller is rejected with the typed
+`authz-not-admin` error (exit `77`, AUTH) before any session is
+established.
+
+Modes:
+
+- **non-interactive** (default): stdin is closed up front; stdout and
+  stderr are streamed back as separate streams and written to the host's
+  stdout/stderr.
+- **`-i`/`--interactive`**: host stdin is forwarded to the guest command
+  (non-blocking, partial-write aware) until EOF, which closes the guest
+  stdin.
+- **`-t`/`--tty`**: allocates a PTY **in the guest** and puts the host
+  terminal in raw mode for the session (implies `-i`). stderr is merged
+  into stdout by the guest PTY. Requires stdin **and** stdout to be a
+  terminal. `-t` is human-only and is rejected together with `--json`.
+
+FSM (one session, one exec, no per-op reconnect): the CLI drains
+enqueued host signals, forwards ready stdin, then bounded-long-polls
+stdout (and, in non-tty mode, polls stderr) so stdin and signals are
+never starved behind an output poll. When both streams reach EOF it
+polls `Wait` until the terminal disposition is known, having already
+flushed all output. Host terminal state (termios + `O_NONBLOCK`) is
+restored on **every** exit, error, disconnect, or panic via an RAII
+guard.
+
+Signal forwarding (enqueue-only; handlers never touch termios or make
+syscalls): `SIGWINCH` → guest PTY `Resize` (tty mode only); `SIGINT` →
+guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`; `SIGTERM` → `15`;
+`SIGTSTP` → `20`, all delivered to the exec's foreground process group.
+
+**Exit codes:**
+
+| Exit | Source | Meaning |
+| --- | --- | --- |
+| `0`–`255` | guest | The guest command's `WIFEXITED` status passes through unchanged. |
+| `128+N` | guest | The guest command was killed by signal `N` (`WIFSIGNALED`). |
+| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, or `--json` combined with `-t`. |
+| `69` | transport | The guest-control transport was unreachable, or a per-op/establishment deadline elapsed (`guest-control-transport-unavailable`, `guest-control-timeout`). |
+| `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`). No SSH fallback. |
+| `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
+| `76` | protocol | The guest returned a malformed/out-of-contract response, or rejected the op (`guest-control-protocol-error`, `guest-control-exec-error`). |
+| `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), or the daemon's admin gate refused a non-admin caller (`authz-not-admin`) — `vm exec` is admin-only. Both are authorization failures and map to the AUTH reserved code. |
+| `42` | internal | Daemon-internal or CLI-internal failure driving the session. |
+
+A guest command that itself exits `70` (or any reserved transport
+number) is **not** ambiguous in machine-readable output: `--json` carries
+`source` plus `guestExitCode`/`transportExitCode` so a consumer
+distinguishes a guest exit code from a transport class that shares the
+shell status number.
+
+**`--json` envelope** (non-interactive only): a single terminal stdout
+object.
+
+- success → `{ "command": "vm exec", "vm", "source": "guest", "exitCode", "reason": "exited"|"signaled", "guestExitCode"?|"signal"?, "stdoutBase64", "stderrBase64", "stdoutTruncated", "stderrTruncated" }`. Only a true guest `WIFEXITED`/`WIFSIGNALED` terminal is a success.
+- failure → `{ "command": "vm exec", "vm", "source": "transport"|"guest-control"|"protocol"|"internal"|"cli", "reason": "<wire-kind>", "exitCode", "transportExitCode"?, "message", "remediation"? }`. Abnormal terminal kinds (`lost-guestd`, `cancelled`, `reaped`) and a malformed/missing terminal status are failures with a reserved code and a non-`guest` source — never a synthesized guest exit. A failure envelope never carries captured stdio bytes. Usage errors (`source: "cli"`, exit `2`) also emit one envelope.
+
+Captured output in the `--json` envelope is bounded; `stdoutTruncated` /
+`stderrTruncated` flag a clamp. argv, env, cwd, and stdio bytes never
+appear in any span, log, audit record, or metric label — only an
+aggregate outcome counter and a single kind=critical
+session-establishment event (carrying the VM name, peer uid, and
+negotiated tty only) are emitted. The opaque session handle is never
+written to a span, log, audit record, or metric label.
+
+**Disposition:** `rust-native` — owner connection over the daemon public
+socket → authenticated guest-control session → `guestd` exec RPCs; no
+SSH, no host PTY, no new privileged broker op (the session table lives
+in-process in `nixlingd`).
+
+### `vm konsole`
+
+**Synopsis:** `nixling vm konsole [--terminal <emulator>] <vm>`
+
+Opens an interactive guest session in a host terminal emulator. As of
+v1.2 this is a thin wrapper that hosts `nixling vm exec -it <vm> -- <login-shell>`
+inside the chosen emulator (default `konsole`, overridable with
+`--terminal`); it runs entirely over the authenticated guest-control
+transport. **There is no SSH.** The retired SSH-only flags
+(`--host`/`--key`/`--user`) are rejected with exit `2` and a migration
+message pointing at `vm exec -it`.
+
+**Disposition:** `rust-native` — terminal-emulator wrapper around
+`vm exec -it`; the historical SSH allowlist site was removed.
 
 ## Dispatch capability table
 
@@ -2026,7 +2347,9 @@ never perturb a `--json` stdout envelope.
 | `vm list` | `rust-native` placeholder | Reserves the daemon-side runtime-view contract, but today returns an explicit empty inventory until live runner enumeration is wired through this surface. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
-| `usb` | `rust-native` | USBIP attach/detach/probe now parse and dispatch through the native daemon path. |
+| `usb attach` | `rust-native` | USBIP attach parses and dispatches through the native daemon → broker path; the guest-side `usbip attach` still runs over the framework-managed per-VM SSH key. |
+| `usb detach` | `rust-native` | USBIP detach parses and dispatches the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path natively. |
+| `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
 | `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
@@ -2047,9 +2370,11 @@ never perturb a `--json` stdout envelope.
 | `keys rotate` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `RunKeysRotate` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `audit` | `rust-native` | Audit is part of the daemon surface and keeps both human and JSON output contracts. |
 | `host check` | `rust-native` | Host check is a read-only daemon RPC by design. |
-| `host prepare` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `host destroy` | `rust-native` | The Rust CLI owns dry-run output; `--apply` routes through the reverse-order daemon-backed host-reconcile sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
+| `host prepare` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the daemon-backed `ApplyNftables` / `ApplyRoute` / `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged` sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
+| `host destroy` | `rust-native` | The Rust CLI owns dry-run output (wired live); `--apply` is **not yet wired** — it returns the typed `daemon-down` envelope (exit `1`) today (use `--dry-run` for now). When the daemon-side dispatch ships, `--apply` will route through the reverse-order daemon-backed host-reconcile sequence, with broker failures surfacing `broker-error` (exit `78`); a Tier-0 host is refused today (exit `78`). The historical bash fallback was retired in v1.0. |
 | `host doctor` | `rust-native` | Host doctor is a read-only daemon health probe; `--read-only` is mandatory and there is no bash fallback for mutation forms. |
 | `host install` | `rust-native` | Host install owns its dry-run preview in Rust and routes `--apply` through the daemon → broker `RunHostInstall` path without broker-error fallback to bash. |
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
+| `vm exec` | `rust-native` | Owner connection over the daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op (the exec session table is in-process in `nixlingd`). |
+| `vm konsole` | `rust-native` | Thin terminal-emulator wrapper around `vm exec -it`; the SSH allowlist site was removed and the SSH-only flags are rejected with a migration message. |

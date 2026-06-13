@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# v1.1 invariant gate: assert the obsolete
-# `nixling.daemonExperimental.enable` option remains documented as
-# compatibility-only, with operator migration guidance.
+# v1.1 invariant gate: assert the `nixling.daemonExperimental.enable`
+# compatibility gate remains documented as a default-true,
+# leave-at-default option, with operator migration guidance.
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
@@ -10,7 +10,7 @@ ROOT=${ROOT:-$(dirname "$HERE")}
 options_module="$ROOT/nixos-modules/options-daemon.nix"
 migration_guide="$ROOT/docs/how-to/migrate-nixling-v1-0-to-v1-1.md"
 
-expected_option='Obsolete compatibility gate for the daemon-backed control plane.'
+expected_option='consumers should leave it at its default'
 expected_guide='Remove `nixling.daemonExperimental.enable`'
 
 if [ ! -f "$options_module" ]; then

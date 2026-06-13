@@ -1,0 +1,28 @@
+[package]
+name = "nixling-guestd"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+hmac = "0.12"
+nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+nixling-exec-runner = { path = "../nixling-exec-runner", version = "0.0.0-bootstrap" }
+protobuf = "3.7.2"
+rustix = { workspace = true }
+sha2 = { workspace = true }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
+tokio-vsock = "0.7.2"
+ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+
+[dev-dependencies]
+# `test-util` enables tokio's mock clock (`start_paused` / `time::advance`) used
+# by the interactive-exec runtime-ceiling tests; dev-only so the shipped daemon
+# never carries the test clock.
+tokio = { version = "1", features = ["test-util"] }

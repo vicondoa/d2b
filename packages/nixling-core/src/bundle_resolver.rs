@@ -2111,7 +2111,8 @@ fn runner_role_name(role: &ProcessRole) -> Option<&'static str> {
     match role {
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness => None,
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth => None,
         ProcessRole::SwtpmPreStartFlush => Some("swtpm-flush"),
         ProcessRole::Swtpm => Some("swtpm"),
         ProcessRole::Virtiofsd => Some("virtiofsd"),
@@ -2162,7 +2163,8 @@ fn legacy_runner_spec(
         ProcessRole::WaylandProxy => return None,
         ProcessRole::HostReconcile
         | ProcessRole::StoreVirtiofsPreflight
-        | ProcessRole::GuestSshReadiness => return None,
+        | ProcessRole::GuestSshReadiness
+        | ProcessRole::GuestControlHealth => return None,
     };
     Some((
         format!("/run/current-system/sw/bin/{binary_name}"),

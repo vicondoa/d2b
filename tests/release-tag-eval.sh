@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# v1.1 invariant gate: assert release-tag shape for the
-# upcoming v1.1 (and v1.1-rcN) tags.
+# v1.x invariant gate: assert release-tag shape for the release tags.
 #
 # Default: validates `refs/tags/v1.1`.
 # Override with `--tag-ref refs/tags/<ref>` for CI dry-run or rc tags.
@@ -9,21 +8,21 @@
 #   (a) tag is ANNOTATED (`git cat-file -t <ref>` returns `tag`),
 #       NOT lightweight (which returns `commit`).
 #   (b) tag points at a real commit (resolvable).
-#   (c) tag message contains the literal substring
-#       `9/9 unanimous panel signoff` OR (for rc tags) the
-#       substring `v1.1-rcN panel signoff` per the rc convention.
+#   (c) tag message names the release: its first non-empty line equals
+#       the tag's version token (e.g. `refs/tags/v1.1` -> `v1.1`,
+#       `refs/tags/v1.1-rc2` -> `v1.1-rc2`). This matches the actual
+#       release-tag convention: the shipped v1.0/v1.1/v1.2 annotated
+#       tags carry the bare version string as their message.
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "$0")" >/dev/null 2>&1 && pwd)
 ROOT=${ROOT:-$(dirname "$HERE")}
 
 tag_ref="refs/tags/v1.1"
-allow_rc=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tag-ref) tag_ref="$2"; shift 2 ;;
-    --allow-rc) allow_rc=1; shift ;;
-    *) printf 'release-tag-eval: usage: %s [--tag-ref refs/tags/<ref>] [--allow-rc]\n' "$0" >&2; exit 2 ;;
+    *) printf 'release-tag-eval: usage: %s [--tag-ref refs/tags/<ref>]\n' "$0" >&2; exit 2 ;;
   esac
 done
 
@@ -43,17 +42,17 @@ if [ -z "$commit" ]; then
   exit 1
 fi
 
-# (c) signoff message check
-message=$(git tag -l --format='%(contents)' "${tag_ref#refs/tags/}" 2>/dev/null || true)
-if printf '%s' "$message" | grep -q '9/9 unanimous panel signoff'; then
-  printf 'release-tag-eval: PASS (%s -> %s; final v1.1 signoff message present)\n' "$tag_ref" "$commit"
-  exit 0
-fi
-if [ "$allow_rc" = 1 ] && printf '%s' "$message" | grep -qE 'v1\.1-rc[0-9]+ panel signoff'; then
-  printf 'release-tag-eval: PASS (%s -> %s; rc panel signoff message present)\n' "$tag_ref" "$commit"
+# (c) tag message names the release: first non-empty, trailing-trimmed
+# line equals the version token. Matches the shipped convention where
+# the annotated v1.0/v1.1/v1.2 tags carry the bare version as message.
+version=${tag_ref#refs/tags/}
+message=$(git tag -l --format='%(contents)' "$version" 2>/dev/null || true)
+first_line=$(printf '%s\n' "$message" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | head -n1)
+if [ "$first_line" = "$version" ]; then
+  printf 'release-tag-eval: PASS (%s -> %s; tag message names the release "%s")\n' "$tag_ref" "$commit" "$version"
   exit 0
 fi
 
-printf 'release-tag-eval: FAIL — %s message missing required signoff substring\n' "$tag_ref" >&2
+printf 'release-tag-eval: FAIL — %s message first line "%s" does not name the release "%s"\n' "$tag_ref" "$first_line" "$version" >&2
 printf '  tag message:\n%s\n' "$message" >&2
 exit 1

@@ -51,7 +51,7 @@ log "==> tests/restart-policy-eval.sh"
 # enabled so EVERY per-VM lifecycle service materialises in one eval.
 EXPR=$(cat <<EOF2
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -91,8 +91,8 @@ let
     then nixos.config.microvm.vms."full-vm".config.config.systemd.services
     else {};
   obsGuestSvcs =
-    if nixos.config ? microvm && nixos.config.microvm ? vms && nixos.config.microvm.vms ? "sys-obs-stack"
-    then nixos.config.microvm.vms."sys-obs-stack".config.config.systemd.services
+    if nixos.config ? microvm && nixos.config.microvm ? vms && nixos.config.microvm.vms ? "sys-obs"
+    then nixos.config.microvm.vms."sys-obs".config.config.systemd.services
     else {};
   pullFrom = services: key:
     if !(builtins.hasAttr key services) then null
@@ -200,7 +200,7 @@ check_optional "obs:nixling-otel-vsock-in-host" "observability VM relay may be a
 # processes. The VM lifecycle policy (AGENTS.md) extends to the daemon.
 EXPR_DAEMON=$(cat <<'EOFD'
 let
-  flake = builtins.getFlake (toString ROOT_PLACEHOLDER);
+  flake = builtins.getFlake "git+file://ROOT_PLACEHOLDER";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";

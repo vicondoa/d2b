@@ -401,50 +401,16 @@ shared.mkBatch {
       );
     };
 
-    # Reserved CID for observability (1000 is reserved per spec).
-    "observability-reserved-cid" = {
-      expectedSubstring = "Vsock CID 1000 is reserved";
-      override = (
-        { lib, ... }:
-        {
-          nixling.observability.enable = true;
-          nixling.envs.bbb = {
-            lanSubnet = "10.30.0.0/24";
-            uplinkSubnet = "198.51.100.0/30";
-          };
-          nixling.envs.ccc = {
-            lanSubnet = "10.31.0.0/24";
-            uplinkSubnet = "198.18.0.0/30";
-          };
-          nixling.envs.ddd = {
-            lanSubnet = "10.32.0.0/24";
-            uplinkSubnet = "198.18.1.0/30";
-          };
-          nixling.envs.eee = {
-            lanSubnet = "10.33.0.0/24";
-            uplinkSubnet = "198.18.2.0/30";
-          };
-          nixling.envs.fff = {
-            lanSubnet = "10.34.0.0/24";
-            uplinkSubnet = "198.18.3.0/30";
-          };
-          nixling.envs.ggg = {
-            lanSubnet = "10.35.0.0/24";
-            uplinkSubnet = "198.18.4.0/30";
-          };
-          nixling.envs.hhh = {
-            lanSubnet = "10.36.0.0/24";
-            uplinkSubnet = "198.18.5.0/30";
-          };
-          nixling.envs.iii = {
-            lanSubnet = "10.37.0.0/24";
-            uplinkSubnet = "198.18.6.0/30";
-          };
-          nixling.vms.corp-vm.env = lib.mkForce "iii";
-          nixling.vms.corp-vm.index = lib.mkForce 200;
-          nixling.vms.corp-vm.observability.enable = true;
-        }
-      );
-    };
+    # The former "observability-reserved-cid" negative case was removed:
+    # it is unsatisfiable under the current vsock CID formula. Workload
+    # CIDs are `100 + envIndex*1000 + slot` (nixos-modules/lib.nix
+    # `guestControlVsockCid`) with `index` typed `ints.between 10 250`,
+    # so every workload VM lands in [110+envIndex*1000, 350+envIndex*1000].
+    # The reserved observability CID (1000) sits in a permanent gap no
+    # type-valid workload VM can reach, so the `Vsock CID 1000 is reserved`
+    # assertion (nixos-modules/assertions.nix) is defense-in-depth that
+    # cannot be triggered by a valid config. Verified: the old case config
+    # produced corp-vm=1300 with sys-obs=1000 (the obs VM itself, which is
+    # excluded from the collision set).
   };
 }

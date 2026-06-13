@@ -23,6 +23,9 @@
 //     Open P with `O_DIRECTORY|O_NOFOLLOW`, fstat to confirm it IS
 //     a directory (not a symlink-to-dir), fchown(uid,gid),
 //     fchmod(mode). If P is a symlink, refuses and exits 2.
+//   clear-acl-on-path --path P [--require-kind regular|directory|socket|any]
+//     Open P with openat2 RESOLVE_NO_SYMLINKS, verify the requested file
+//     type, then run setfacl -b against /proc/self/fd/<N>.
 //
 // Exit codes:
 //   0  - success (action applied or already-correct)
@@ -143,6 +146,7 @@ fn print_help() {
          USAGE:\n  \
            nixling-activation-helper ensure-regular-file --path P --uid U --gid G --mode M --size-mib N\n  \
            nixling-activation-helper enforce-dir-posture --path P --uid U --gid G --mode M\n  \
+           nixling-activation-helper clear-acl-on-path --path P [--require-kind regular|directory|socket|any] [--setfacl-bin PATH]\n  \
            nixling-activation-helper setfacl-on-path --path P --acl-spec A [--also-spec A2] [--require-kind regular|directory|socket|any] [--setfacl-bin PATH]\n  \
            nixling-activation-helper chown-if-orphan --path P --uid U --gid G\n  \
            nixling-activation-helper build-store-view-farm   (request JSON on stdin)\n  \
@@ -463,6 +467,10 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if meta.file_type().is_symlink() {
+        eprintln!("refusing: {} fstat says symlink", path.display());
+        return ExitCode::from(2);
+    }
     match require_kind {
         "regular" if !meta.file_type().is_file() => {
             eprintln!(
@@ -508,6 +516,96 @@ fn cmd_setfacl_on_path(args: &Args) -> ExitCode {
                 "setfacl on /proc/self/fd ({}) failed: {:?}",
                 path.display(),
                 status
+            );
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("spawn setfacl failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cmd_clear_acl_on_path(args: &Args) -> ExitCode {
+    let path = match require("path", args.path.as_ref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let require_kind = args.require_kind.as_deref().unwrap_or("any");
+    let setfacl_bin = args
+        .setfacl_bin
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("setfacl"));
+
+    let raw_fd = match open_no_symlinks(path, OFlags::PATH) {
+        Ok(fd) => fd,
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            eprintln!(
+                "refusing: {} contains a symlink at some path component (RESOLVE_NO_SYMLINKS rejected)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            eprintln!(
+                "refusing: {} crosses a bind mount (RESOLVE_NO_SYMLINKS EXDEV)",
+                path.display()
+            );
+            return ExitCode::from(2);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ExitCode::from(0);
+        }
+        Err(e) => {
+            eprintln!("open({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let fd: File = File::from(raw_fd);
+    let meta = match fd.metadata() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("fstat({}) failed: {e}", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    if meta.file_type().is_symlink() {
+        eprintln!("refusing: {} fstat says symlink", path.display());
+        return ExitCode::from(2);
+    }
+    match require_kind {
+        "regular" if !meta.file_type().is_file() => {
+            eprintln!("refusing: {} fstat says non-regular", path.display());
+            return ExitCode::from(2);
+        }
+        "directory" if !meta.file_type().is_dir() => {
+            eprintln!("refusing: {} fstat says non-directory", path.display());
+            return ExitCode::from(2);
+        }
+        "socket" if !meta.file_type().is_socket() => {
+            eprintln!("refusing: {} fstat says non-socket", path.display());
+            return ExitCode::from(2);
+        }
+        "any" | "regular" | "directory" | "socket" => {}
+        other => {
+            eprintln!("error: invalid --require-kind: {other}");
+            return ExitCode::from(1);
+        }
+    }
+    let procfd_path = format!("/proc/{}/fd/{}", std::process::id(), fd.as_raw_fd());
+    match Command::new(&setfacl_bin)
+        .arg("-b")
+        .arg(&procfd_path)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::from(0),
+        Ok(status) => {
+            eprintln!(
+                "setfacl -b on /proc/self/fd ({}) failed: {status:?}",
+                path.display()
             );
             ExitCode::from(1)
         }
@@ -799,6 +897,7 @@ fn main() -> ExitCode {
     match args.verb.as_str() {
         "ensure-regular-file" => cmd_ensure_regular_file(&args),
         "enforce-dir-posture" => cmd_enforce_dir_posture(&args),
+        "clear-acl-on-path" => cmd_clear_acl_on_path(&args),
         "setfacl-on-path" => cmd_setfacl_on_path(&args),
         "chown-if-orphan" => cmd_chown_if_orphan(&args),
         "--help" | "-h" => {

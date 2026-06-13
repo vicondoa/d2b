@@ -48,7 +48,7 @@ shape, remediation hint, and docs anchor.
 | <a id="broker-unimplemented"></a>`#broker-unimplemented` | `broker-unimplemented` | `30` | `daemon-api/broker` | broker operation {operation} is not implemented in this build | Upgrade to a build that implements this operation. |
 | <a id="broker-validation-failed"></a>`#broker-validation-failed` | `broker-validation-failed` | `31` | `daemon-api/broker` | broker validation failed for opaque target {what} | Re-render the trusted bundle artifacts and retry with the newly emitted opaque identifiers. |
 | <a id="manifest-parse-error"></a>`#manifest-parse-error` | `manifest-parse-error` | `40` | `status` | could not parse manifest artifact {artifact} (opaque reason: {opaque_reason}) | Re-render the manifest bundle and retry with the committed schema-compatible artifact set. |
-| <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. The v2→v3 clean break does not ship a compatibility window. |
+| <a id="manifest-version-mismatch"></a>`#manifest-version-mismatch` | `manifest-version-mismatch` | `41` | `status` | manifest {artifact} declared an incompatible manifestVersion (opaque reason: {opaque_reason}) | Re-run `nixos-rebuild switch` against an updated nixling input pinning the daemon's supported manifestVersion. Manifest version changes do not ship a compatibility window. |
 | <a id="internal-io"></a>`#internal-io` | `internal-io` | `50` | `daemon-api/internal` | an internal I/O step failed (opaque reason: {opaque_reason}) | Retry the command; if the error persists, inspect the daemon logs with the opaque reason token. |
 | <a id="bundle-tampered"></a>`#bundle-tampered` | `bundle-tampered` | `60` | `bundle-load` | bundle artifact {path} failed tamper-resistance check: {reason} | Re-run `nixos-rebuild switch` to restore the bundle artifacts to their signed state. |
 <!-- END AUTO-GENERATED: error-table -->
@@ -84,7 +84,7 @@ matches an `#anchor` here. The goldens are the contract.
 
 | docs anchor | code | exit code | what_was_checked | observed_state |
 | --- | --- | --- | --- | --- |
-| <a id="daemon-down"></a>`#daemon-down` | `daemon-down` | `1` | Daemon connectivity at `/run/nixling/public.sock` and broker dispatch readiness. | `nixlingd` is reachable but the requested `host prepare/destroy --apply` API surface is still gated behind `nixling.daemonExperimental.enable`. |
+| <a id="daemon-down"></a>`#daemon-down` | `daemon-down` | `1` | Daemon connectivity at `/run/nixling/public.sock` and broker dispatch readiness. | `nixlingd` is reachable, but the daemon-side typed-intent dispatch and bundle resolver that back `host prepare/destroy --apply` are not yet wired through `nixlingd` (the broker op is staged but not yet reachable from the public socket). |
 | <a id="broker-error"></a>`#broker-error` | `broker-error` | `78` | Daemon → broker execution for `nixling <verb> --apply`. | The daemon reached the live broker executor, but the broker refused or failed the request. Disk-init failures use a `broker-error:DiskInit:<broker-kind>` shape when the broker fails while creating the per-VM `store-overlay.img` via `fallocate` + `mkfs.ext4`. |
 | <a id="not-yet-implemented"></a>`#not-yet-implemented` | `not-yet-implemented` | `78` | Whether the requested native surface is shipped in this release. | The CLI/daemon has the verb shell, but the concrete backend is still deferred; the CLI returns a typed exit-78 envelope instead of falling back to bash. |
 | <a id="--read-only-required"></a>`#--read-only-required` | `--read-only-required` | `78` | `host doctor` invocation flags. | `--read-only` flag missing. The current `host doctor` verb is read-only; mutation forms are separate surfaces. |
@@ -95,6 +95,32 @@ Note: the `tier-0-legacy-uses-nixos-module` and
 "host-prepare audit decision codes" catalog because they
 originate as broker-side audit decisions; the CLI re-uses the same
 docs anchors when intercepting them before reaching the broker.
+
+## `vm exec` exit codes
+
+`nixling vm exec` applies its own reserved exit-code contract on top
+of the daemon wire `kind`, so the CLI exit is stable regardless of the
+daemon's fallback `exitCode`. A guest command's own `WIFEXITED` status
+(0-255) passes through unchanged and CAN collide with these reserved
+numbers; a `--json` run disambiguates via `source` + `reason` +
+`guestExitCode` / `transportExitCode` (see
+[`cli-contract.md`](cli-contract.md#vm-exec)). The reserved numbers
+avoid the pre-existing CLI exits `2`/`3`/`33`/`78`.
+
+| docs anchor | wire kind | exit code | source | meaning |
+| --- | --- | --- | --- | --- |
+| <a id="exec-transport"></a>`#exec-transport` | `guest-control-transport-unavailable`, `guest-control-timeout` | `69` | `transport` | The vsock connect / authenticated handshake to the guest was unreachable, or a per-op / establishment deadline elapsed. The `lost-guestd` abnormal terminal maps here too. |
+| <a id="exec-old-generation"></a>`#exec-old-generation` | `guest-control-unavailable-old-generation`, `guest-control-capability-unavailable` | `70` | `guest-control` | The VM generation does not advertise guest-control exec, or it lacks a required exec capability. Fail-closed: no SSH fallback. |
+| <a id="exec-capacity"></a>`#exec-capacity` | `exec-session-capacity`, `exec-session-rate-limited` | `75` | `guest-control` | The exec session table is at its global / per-uid / per-vm cap, or the per-uid Start rate limit fired. The `cancelled` / `reaped` abnormal terminals map here too. |
+| <a id="exec-protocol"></a>`#exec-protocol` | `guest-control-protocol-error`, `guest-control-exec-error` | `76` | `protocol` | The guest returned a malformed / out-of-contract response, or deterministically rejected the op. A missing or out-of-range terminal status is also a protocol failure (never synthesized as a guest success). |
+| <a id="exec-auth"></a>`#exec-auth` | `guest-control-auth-failed`, `authz-not-admin` | `77` | `guest-control` | The authenticated guest-control handshake was rejected, OR the daemon's admin gate refused the caller (`vm exec` is admin-gated). `authz-not-admin` is an authorization failure, not an internal bug, so it maps to the AUTH reserved code rather than the internal default. |
+| <a id="exec-internal"></a>`#exec-internal` | `guest-control-exec-internal`, any unrecognized exec slug | `42` | `internal` | A daemon-internal or CLI-internal failure driving the session. The `42` default is reserved for genuinely-internal failures only; every known authorization / transport / protocol class above maps to its own reserved code. |
+
+`vm exec --json` always emits exactly one terminal JSON document on
+stdout for every outcome (including early transport / auth /
+old-generation establishment failures); a usage error (bad `--env`,
+`--json` combined with `-i`/`-t`, missing command) is `source: "cli"`,
+`reason: "usage"`, exit `2`.
 
 ## Host-prepare audit decision codes
 

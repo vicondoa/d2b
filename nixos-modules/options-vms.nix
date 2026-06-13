@@ -618,6 +618,127 @@
           };
         };
 
+        guest.control = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable the guest-control credential/share surface and the
+              `nixling-guestd` service wiring for this VM. The static
+              guest-control binaries are installed for every VM; this option
+              opts the VM into the live guest-control plane (credential share
+              plus guestd), which serves the readiness Health probe, `config
+              sync` reads (`ReadGuestFile`), and — when `guest.exec` is also
+              enabled — admin guest exec. All of it runs over the
+              authenticated guest-control vsock, not SSH.
+            '';
+          };
+          auth.tokenFile = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "/run/secrets/nixling/work/guest-control-token";
+            description = ''
+              Absolute runtime path to an operator-managed guest-control token
+              file. Do not use Nix path literals such as `./token`; those can
+              copy secret material into `/nix/store`. When null, nixling
+              generates a stable per-VM fallback token under
+              `nixling.site.stateDir` outside the runner-writable per-VM
+              state root.
+
+              Runtime validation requires the source and its parent
+              directories to be symlink-free, the file to be regular,
+              root-owned, outside `/nix/store`, and inaccessible to
+              group/world permission bits. Nixling materializes a
+              root-owned copy readable only by the dedicated
+              `nixling-<vm>-gctlfs` guest-control virtiofsd principal.
+            '';
+          };
+        };
+
+        guest.exec = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Enable the guest-control exec runtime for this VM.
+
+              This wires the guestd exec service so admin operators (callers in
+              `nixling.site.adminUsers`) can run `nixling vm exec` and `nixling
+              vm konsole` against this VM over the authenticated guest-control
+              vsock — no SSH. Exec is off by default, and enabling it requires
+              `guest.control.enable = true` plus either `allowRoot = true` or a
+              non-root user allowlist. Today guestd serves guest-root exec only
+              (`allowRoot = true`); the non-root `users` allowlist is validated
+              and reserved but not yet honoured at runtime.
+            '';
+          };
+
+          allowRoot = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Permit the guest-control exec runtime to target root in this VM.
+
+              This is the currently-served exec target: with
+              `guest.exec.enable = true` and `allowRoot = true`, guestd runs
+              admin-requested `nixling vm exec` / `vm konsole` commands as guest
+              root. It defaults to false and is separate from the non-root user
+              allowlist.
+            '';
+          };
+
+          users = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            example = [ "alice" ];
+            description = ''
+              Non-root guest users that the guest-control exec runtime may
+              target.
+
+              No users are allowed by default, and the SSH user is not
+              implicitly added. Usernames are intentionally restricted to a
+              raw-safe lowercase subset so guest-side unit names and runtime
+              directories are unambiguous. `root` is never listed here; use
+              `allowRoot` for the separate root-exec policy gate. Note: non-root
+              exec is not yet served by guestd — these entries are validated and
+              emit per-user `nixling-userd` units, but every non-root exec
+              request is currently rejected (reserved for a future wave).
+            '';
+          };
+
+          detachedMaxRuntimeSec = lib.mkOption {
+            type = lib.types.ints.unsigned;
+            default = 0;
+            example = 86400;
+            description = ''
+              Default runtime ceiling, in seconds, for detached execs on this
+              VM. `0` (the default) means no ceiling: a detached exec may run
+              indefinitely until it exits or is cancelled.
+
+              When non-zero, guestd passes the value to the per-exec transient
+              unit as a `RuntimeMaxSec` ceiling; a detached exec exceeding it is
+              terminated and reported as expired. This is a guest-enforced
+              backstop, not a substitute for explicit cancellation.
+            '';
+          };
+
+          interactiveMaxRuntimeSec = lib.mkOption {
+            type = lib.types.ints.unsigned;
+            default = 0;
+            example = 28800;
+            description = ''
+              Default runtime ceiling, in seconds, for interactive (TTY) execs
+              on this VM. `0` (the default) means no ceiling: an interactive
+              session is connection-owned and may run indefinitely until it
+              exits or the controlling connection drops.
+
+              This ceiling applies only to interactive `tty = true`,
+              non-detached execs. Non-interactive attached execs keep their
+              fixed built-in runtime ceiling regardless of this value.
+            '';
+          };
+        };
+
         # REMOVED. The submodule path is kept ONLY so that
         # legacy consumer assignments produce a readable assertion
         # error rather than the cryptic "option does not exist"

@@ -3,9 +3,12 @@
 This fragment is included in `docs/how-to/host-prepare.md`.
 
 This document is the operator how-to for the `inet nixling` named
-table that the privileged broker reconciles during `nixling host
-prepare --apply` (and re-checks before every VM start). The
-authoritative chain layout reference lives at
+table that the privileged broker's host-prepare path reconciles (and
+re-checks before every VM start). The mutating `nixling host prepare
+--apply` is **not yet wired** — it returns the typed `daemon-down`
+envelope (exit 1) today; `host check` and `host prepare --dry-run`
+exercise the read-only path. The authoritative chain layout reference
+lives at
 [`../../reference/inet-nixling-chains.md`](../../reference/inet-nixling-chains.md);
 the architectural rationale is in
 [ADR 0013](../../adr/0013-w3-firewall-coexistence-policy.md).
@@ -44,8 +47,9 @@ under its own zone-based abstractions; coexistence at the unprivileged
 
 To use nixling on a firewalld host, either:
 
-1. Stop firewalld (`systemctl disable --now firewalld`) and re-run
-   `nixling host prepare --apply`; or
+1. Stop firewalld (`systemctl disable --now firewalld`) and, once
+   `nixling host prepare --apply` is wired, re-run it to reconcile (it
+   returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); or
 2. Replace firewalld with a firewall setup where nixling owns
    `inet nixling`; otherwise nixling fails closed.
 
@@ -57,7 +61,9 @@ shadows `inet nixling`'s `forward` chain.
 
 To use nixling on a ufw host:
 
-1. `ufw disable` and re-run `nixling host prepare --apply`; or
+1. `ufw disable` and, once `nixling host prepare --apply` is wired,
+   re-run it to reconcile (it returns `daemon-down` (exit 1) today —
+   use `--dry-run` to re-check); or
 2. Replace ufw with a firewall setup where nixling owns `inet
    nixling`; otherwise the host check refuses.
 
@@ -93,7 +99,8 @@ Every VM start re-hashes `nft list table inet nixling -j` (with
 volatile `handle`/`index` fields stripped) and compares against the
 digest stored in the bundle's `host.json`. Mismatches fail closed with
 `inet-nixling-drift`; remediation is to re-run
-`nixling host prepare --apply`.
+`nixling host prepare --apply` once it is wired (it returns
+`daemon-down` (exit 1) today — use `--dry-run` to re-check the diff).
 
 ## USBIP firewall carve-out
 
@@ -108,11 +115,14 @@ separately from this firewall carve-out.
 - **`firewall-coexistence-mismatch`**: the detected manager does not
   match the bundle's declared policy. Either change the bundle (allowed
   override per the matrix above) or stop/disable the offending manager
-  and re-run `nixling host prepare --apply`.
+  and, once `nixling host prepare --apply` is wired, re-run it (it
+  returns `daemon-down` (exit 1) today — use `--dry-run` to re-check).
 - **`nft-foreign-rule-shadows-nixling`**: a foreign hook at a priority
   ≤ `-5` is active. Inspect with `nft list ruleset` and identify the
   source.
 - **`inet-nixling-drift`**: the live table no longer matches the
-  bundle digest. Re-apply with `nixling host prepare --apply`; if it
+  bundle digest. Re-apply with `nixling host prepare --apply` once it
+  is wired (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  to re-check); if it
   recurs immediately, a periodic process is rewriting the ruleset
   (`firewalld --reload`, `ufw reload`, custom cron, …).

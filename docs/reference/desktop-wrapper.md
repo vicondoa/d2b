@@ -65,16 +65,18 @@ of the store.
    GPU sidecar connects to the host compositor socket that step 1 already
    waited for; the role-local `/run/nixling-gpu/<vm>/wayland-0` path is
    only visible inside the GPU runner's mount namespace. The daemon's
-   `ssh-ready` DAG node only guarantees sshd; the graphics socket can
-   race slightly behind on cold starts.
-4. **Wait for SSH.** Probes `<sshUser>@<staticIp>` with the per-VM
-   key (copied to a 0600 tempfile because the source is 0640
-   `root:nixling`). Classifies failure into "host key
-   mismatch" vs "not reachable" and surfaces the right remediation
-   via `notify-send`.
+   `guest-control-health` DAG node only gates guest-control readiness;
+   the graphics socket can race slightly behind on cold starts.
+4. **Wait for guest-control readiness.** Waits for the VM's
+   `guest-control-health` gate (the authenticated guest-control Health
+   probe) rather than a raw SSH probe. The historical wrapper polled
+   `<sshUser>@<staticIp>` with the per-VM key; the daemon-native path no
+   longer depends on SSH for terminal access.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole
-   running `ssh` to the VM. `StartupWMClass=org.kde.konsole` matches
-   Konsole's fixed Wayland app_id.
+   running `nixling vm konsole <vm>`, which attaches an interactive
+   guest-control session (admin-only, guest-root, no SSH).
+   `StartupWMClass=org.kde.konsole` matches Konsole's fixed Wayland
+   app_id.
 
 ## Failure envelope surfacing
 
@@ -100,9 +102,10 @@ and `journalctl -u nixlingd.service`.
   `Keywords`, `Categories`, `StartupWMClass`) is intentionally out
   of scope; that's UX styling, not a lifecycle contract. See
   `nixos-modules/cli.nix` `desktopItems`.
-- The in-VM session opened over SSH is not pinned here. The wrapper
-  hands off to Konsole + sshd; what the operator runs once they're
-  in the VM is their concern.
+- The in-VM session opened via `nixling vm konsole` is not pinned
+  here. The wrapper hands off to Konsole + the guest-control
+  interactive session; what the operator runs once they're in the VM
+  is their concern.
 - Headless VMs do not get a `.desktop` wrapper at all
   (`graphics.enable = false` is filtered out).
 - The current repository no longer emits the historical

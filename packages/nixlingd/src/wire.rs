@@ -28,7 +28,7 @@ pub enum Request {
     AuthStatus,
     KeysList,
     KeysShow(public_wire::KeysShowRequest),
-    // W14d: mutating-verb dispatch entry points. Each variant carries
+    // Mutating-verb dispatch entry points. Each variant carries
     // its public_wire request payload verbatim; `mutating_verb_preflight`
     // emits the typed dry-run/invalid-request envelope and apply
     // requests dispatch directly to the matching
@@ -53,6 +53,8 @@ pub enum Request {
     HostDestroy(public_wire::HostDestroyRequest),
     HostInstall(public_wire::HostInstallRequest),
     HostReconcile(public_wire::HostReconcileRequest),
+    ReadGuestConfig(public_wire::ReadGuestConfigRequest),
+    Exec(public_wire::ExecOp),
 }
 
 impl Request {
@@ -85,6 +87,8 @@ impl Request {
             Self::HostDestroy(_) => "hostDestroy",
             Self::HostInstall(_) => "hostInstall",
             Self::HostReconcile(_) => "hostReconcile",
+            Self::ReadGuestConfig(_) => "readGuestConfig",
+            Self::Exec(_) => "exec",
         }
     }
 }
@@ -277,8 +281,63 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
         "hostReconcile" => serde_json::from_value(Value::Object(object.clone()))
             .map(Request::HostReconcile)
             .map_err(map_parse_error),
+        "readGuestConfig" => serde_json::from_value(Value::Object(object.clone()))
+            .map(Request::ReadGuestConfig)
+            .map_err(map_parse_error),
+        "exec" => {
+            // `opId` is an envelope-level correlation id; it is not a
+            // field of the adjacently-tagged `ExecOp`, so strip it before the
+            // closed-enum deserialize.
+            object.remove("opId");
+            serde_json::from_value(Value::Object(object.clone()))
+                .map(Request::Exec)
+                .map_err(map_parse_error)
+        }
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
+}
+
+/// Extract the envelope-level `opId` from an exec request frame, defaulting to
+/// `0` when absent. The owner connection echoes this id on the matching
+/// response so a long-poll reply and an urgent control reply can be correlated
+/// out of order without the CLI mismatching frames.
+pub fn exec_op_id(bytes: &[u8]) -> u64 {
+    serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|value| value.get("opId").and_then(Value::as_u64))
+        .unwrap_or(0)
+}
+
+/// Parse an exec op frame into its correlating `opId` and the multiplexed op.
+/// Used by the owner reader so it can dispatch each op to the session worker
+/// without blocking on the previous op's reply.
+pub fn parse_exec_op(bytes: &[u8]) -> Result<(u64, public_wire::ExecOp), TypedError> {
+    let mut value: Value =
+        serde_json::from_slice(bytes).map_err(|err| TypedError::WireInvalidFrame {
+            detail: err.to_string(),
+        })?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "request frame must be a JSON object".to_owned(),
+        })?;
+    let request_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| TypedError::WireInvalidFrame {
+            detail: "missing request type".to_owned(),
+        })?
+        .to_owned();
+    if request_type != "exec" {
+        return Err(TypedError::WireUnsupportedRequest { request_type });
+    }
+    object.remove("type");
+    let op_id = object
+        .remove("opId")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let op = serde_json::from_value(Value::Object(object.clone())).map_err(map_parse_error)?;
+    Ok((op_id, op))
 }
 
 pub fn negotiate_version(
@@ -412,8 +471,8 @@ pub fn store_verify_response(payload: public_wire::StoreVerifyResponse) -> Value
     value
 }
 
-/// W14b: serialize a `MutatingVerbResponse` as the daemon wire frame
-/// the W14c CLI client expects.
+/// Serialize a `MutatingVerbResponse` as the daemon wire frame
+/// the CLI client expects.
 pub fn mutating_verb_response(payload: public_wire::MutatingVerbResponse) -> Value {
     let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
     if let Some(obj) = value.as_object_mut() {
@@ -421,6 +480,52 @@ pub fn mutating_verb_response(payload: public_wire::MutatingVerbResponse) -> Val
             "type".to_owned(),
             Value::String("mutatingVerbResponse".to_owned()),
         );
+    }
+    value
+}
+
+/// Serialize a `ReadGuestConfigResponse` as the daemon wire frame the CLI
+/// `config sync` client expects. The `contentBase64` field is the standard
+/// padded base64 of the raw guest config bytes.
+pub fn read_guest_config_response(payload: public_wire::ReadGuestConfigResponse) -> Value {
+    let mut value = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "type".to_owned(),
+            Value::String("readGuestConfigResponse".to_owned()),
+        );
+    }
+    value
+}
+
+/// Serialize an `ExecOpResponse` as the `execResponse` daemon wire frame the
+/// CLI `vm exec` owner connection expects. The adjacently-tagged
+/// `{ "op": …, "result": … }` body is preserved and a `type` tag is added.
+pub fn exec_response(payload: &public_wire::ExecOpResponse) -> Value {
+    let mut value = serde_json::to_value(payload).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("type".to_owned(), Value::String("execResponse".to_owned()));
+    }
+    value
+}
+
+/// `execResponse` frame tagged with the correlating envelope `opId`.
+pub fn exec_response_with_id(op_id: u64, payload: &public_wire::ExecOpResponse) -> Value {
+    let mut value = exec_response(payload);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("opId".to_owned(), Value::from(op_id));
+    }
+    value
+}
+
+/// `error` frame tagged with the correlating envelope `opId` so the owner
+/// connection can return an out-of-order op error without the CLI mismatching
+/// it against a different in-flight op.
+pub fn error_frame_with_id(op_id: u64, error: &TypedError) -> Value {
+    let mut value =
+        serde_json::to_value(error_frame(error)).unwrap_or_else(|_| json!({ "type": "error" }));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("opId".to_owned(), Value::from(op_id));
     }
     value
 }

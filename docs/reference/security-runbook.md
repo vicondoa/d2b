@@ -38,7 +38,7 @@ view is usually this simpler table:
 | Actor | Socket / entry point | What they can do |
 | --- | --- | --- |
 | `launcherUsers` | `/run/nixling/public.sock` via the CLI | Day-to-day public CLI traffic: read-only verbs plus mutating verbs that dispatch through nixlingd → broker (v1.0 daemon-only per ADR 0015). Treat membership as privileged host access. |
-| `adminUsers` | `/run/nixling/public.sock` via the CLI | Everything launchers can do, plus the admin-only `audit` export surface. |
+| `adminUsers` | `/run/nixling/public.sock` via the CLI | Everything launchers can do, plus the admin-only surfaces: the `audit` export, and the destructive guest-control exec verbs (`vm exec`, `vm konsole`) that run arbitrary commands as guest root over the authenticated transport. The daemon enforces the admin requirement with `SO_PEERCRED` at `public.sock` accept time, before any session work, and denies non-admin callers with an `authz-not-admin` error. |
 | `nixlingd` | `/run/nixling/priv.sock` | The **only** direct broker client. The broker re-resolves paths from the trusted bundle and emits allow/deny audit rows for privileged operations. |
 | `root` | host OS | Break-glass access outside the nixling control plane. |
 
@@ -147,8 +147,8 @@ Pick the narrowest effective move first:
 
 - remove the affected user from `launcherUsers` / `adminUsers` and rebuild;
 - or stop `nixlingd` while you investigate;
-- or, on NixOS, temporarily revert daemon-managed VMs back to
-  `supervisor = "systemd"` and/or set `daemonExperimental.enable = false`.
+- or, on NixOS, stop the affected VMs (`nixling vm stop <vm> --apply`)
+  and stop/mask `nixlingd.service` to halt reconciliation.
 
 ### 2. Preserve evidence before cleanup
 

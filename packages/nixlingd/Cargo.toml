@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive"] }
+getrandom = "0.2"
 libc = "0.2"
 nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "process"] }
 parking_lot = "0.12"
@@ -18,6 +19,7 @@ rustix = { workspace = true }
 nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
 nixling-host = { path = "../nixling-host", version = "0.0.0-bootstrap" }
 nixling-ipc = { path = "../nixling-ipc", version = "0.0.0-bootstrap" }
+protobuf = "3.7.2"
 semver = "1"
 serde.workspace = true
 sha2 = "0.10"
@@ -30,7 +32,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
+subtle = "2.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
+ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
 uzers = "0.12"
 
 [dev-dependencies]

@@ -2,6 +2,7 @@ use crate::{FeatureFlag, Version};
 use nixling_core::{error::Error, host::IfName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "payload")]
@@ -77,6 +78,23 @@ pub enum PublicRequest {
     /// `nixling host reconcile --network --apply`.
     #[serde(rename = "host reconcile")]
     HostReconcile(HostReconcileRequest),
+    /// Read the editable guest config working copy of `vm` over the
+    /// authenticated guest-control bridge and return it as a base64 string.
+    /// ADMIN-ONLY (it crosses into the guest over the authenticated
+    /// transport): the daemon enforces `PeerRole::Admin` BEFORE any probe /
+    /// sign / read. The CLI's `config sync` uses this on guest-control VMs
+    /// instead of an SSH transfer.
+    #[serde(rename = "read guest config")]
+    ReadGuestConfig(ReadGuestConfigRequest),
+    /// Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated
+    /// guest-control exec session. A single owner connection issues a
+    /// `Start` op then drives the session with the remaining ops
+    /// (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The
+    /// daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock
+    /// connect, auth, or `ExecCreate`. `nixling vm exec` (and the
+    /// `vm konsole` wrapper) drive this verb; it never crosses SSH.
+    #[serde(rename = "exec")]
+    Exec(ExecOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -104,6 +122,10 @@ pub enum PublicResponse {
     StoreVerify(StoreVerifyResponse),
     #[serde(rename = "mutating verb")]
     MutatingVerb(MutatingVerbResponse),
+    #[serde(rename = "read guest config")]
+    ReadGuestConfig(ReadGuestConfigResponse),
+    #[serde(rename = "exec")]
+    Exec(ExecOpResponse),
     #[serde(rename = "error")]
     Error(Error),
 }
@@ -244,6 +266,391 @@ pub struct StoreVerifyRequest {
 }
 
 pub type StoreVerifyResponse = crate::broker_wire::StoreVerifyResponse;
+
+/// `read guest config` request payload. The daemon resolves the per-VM vsock
+/// socket + peer credentials from the trusted bundle; the client supplies only
+/// the VM name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestConfigRequest {
+    pub vm: String,
+}
+
+/// `read guest config` response payload. `contentBase64` is the standard
+/// padded base64 of the RAW guest config bytes. The encoded payload is bounded
+/// by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from
+/// `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and
+/// ttRPC frames. The CLI decodes it and computes size + sha256 from the
+/// DECODED bytes — never from any guest-reported value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadGuestConfigResponse {
+    pub content_base64: String,
+}
+
+/// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
+/// per `ReadOutput` op (`DEFAULT_MAX_CHUNK_BYTES`). The base64 envelope of a
+/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
+/// single exec op never approaches the frame cap.
+pub const EXEC_MAX_CHUNK_BYTES: u64 = crate::guest_wire::DEFAULT_MAX_CHUNK_BYTES;
+
+/// Output stream selector for `ReadOutput`. A closed enum — the daemon never
+/// forwards an unspecified stream to the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecStream {
+    Stdout,
+    Stderr,
+}
+
+/// A single environment variable for `ExecOp::Start`. Values are forwarded
+/// verbatim into the guest exec request and are NEVER logged, traced, or
+/// audited (only the count is observable). `Debug` is redacted so a stray
+/// `{:?}` can never leak a key or secret value.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecEnvVar {
+    pub key: String,
+    pub value: String,
+}
+
+impl fmt::Debug for ExecEnvVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecEnvVar").finish_non_exhaustive()
+    }
+}
+
+/// Terminal window dimensions for an interactive (`tty`) exec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecTermSize {
+    pub rows: u32,
+    pub cols: u32,
+}
+
+/// `Start` op args. The daemon resolves the per-VM vsock socket + peer
+/// credentials from the trusted bundle; the client supplies only the VM name,
+/// the command, and the session shape. `detached` is reserved: the daemon
+/// rejects a `detached = true` request in this release (a detached/reconnect
+/// lifecycle is not implemented), and the CLI never sets it — it ships
+/// non-detached interactive (`-it`) and non-interactive sessions only.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecStartArgs {
+    pub vm: String,
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub tty: bool,
+    #[serde(default)]
+    pub detached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<ExecEnvVar>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub term_size: Option<ExecTermSize>,
+}
+
+impl fmt::Debug for ExecStartArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction: show the VM name + shape + counts, never the raw
+        // argv / env keys+values / cwd.
+        f.debug_struct("ExecStartArgs")
+            .field("vm", &self.vm)
+            .field("tty", &self.tty)
+            .field("detached", &self.detached)
+            .field("argv_len", &self.argv.len())
+            .field("env_len", &self.env.as_ref().map_or(0, Vec::len))
+            .field("has_cwd", &self.cwd.is_some())
+            .field("term_size", &self.term_size)
+            .finish()
+    }
+}
+
+/// `WriteStdin` op args. `chunkBase64` is the standard padded base64 of a raw
+/// stdin chunk (≤ `EXEC_MAX_CHUNK_BYTES` decoded). `offset` is the client's
+/// authoritative stdin byte cursor so a lost reply is idempotently retryable.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWriteStdinArgs {
+    pub session: String,
+    pub offset: u64,
+    pub chunk_base64: String,
+    #[serde(default)]
+    pub eof: bool,
+}
+
+impl fmt::Debug for ExecWriteStdinArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction: the session handle + the raw stdin chunk (keystroke
+        // bytes) never appear; show only the offset, eof, and encoded length.
+        f.debug_struct("ExecWriteStdinArgs")
+            .field("session", &"<redacted>")
+            .field("offset", &self.offset)
+            .field("chunk_base64_len", &self.chunk_base64.len())
+            .field("eof", &self.eof)
+            .finish()
+    }
+}
+
+/// `ReadOutput` op args. A bounded long-poll: `wait` + `timeoutMs` let the
+/// guest hold the request until data arrives or the (server-side bounded)
+/// timeout elapses, so the CLI interleaves short output polls with stdin /
+/// signal forwarding without busy-looping.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecReadOutputArgs {
+    pub session: String,
+    pub stream: ExecStream,
+    pub offset: u64,
+    pub max_len: u64,
+    #[serde(default)]
+    pub wait: bool,
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+impl fmt::Debug for ExecReadOutputArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction: the session handle never appears.
+        f.debug_struct("ExecReadOutputArgs")
+            .field("session", &"<redacted>")
+            .field("stream", &self.stream)
+            .field("offset", &self.offset)
+            .field("max_len", &self.max_len)
+            .field("wait", &self.wait)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+/// `Signal` op args. The signal is delivered to the foreground process group
+/// of the exec; the CLI maps host SIGINT/SIGTSTP/SIGTERM to
+/// the corresponding guest signal numbers. `opId` is a stable client-assigned
+/// idempotency token: a retried Signal carries the same `opId` so the worker
+/// replays the original ack instead of delivering the signal twice. `opId == 0`
+/// means "no dedup" (legacy / unset).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecSignalArgs {
+    pub session: String,
+    pub signo: u32,
+    #[serde(default)]
+    pub op_id: u64,
+}
+
+impl fmt::Debug for ExecSignalArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecSignalArgs")
+            .field("session", &"<redacted>")
+            .field("signo", &self.signo)
+            .field("op_id", &self.op_id)
+            .finish()
+    }
+}
+
+/// `Resize` op args (SIGWINCH → guest PTY window resize). `opId` is the same
+/// stable client-assigned idempotency token as `ExecSignalArgs`: a retried
+/// Resize carries the same `opId` so the worker replays the original ack
+/// instead of re-delivering the resize. `opId == 0` means "no dedup".
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecResizeArgs {
+    pub session: String,
+    pub rows: u32,
+    pub cols: u32,
+    #[serde(default)]
+    pub op_id: u64,
+}
+
+impl fmt::Debug for ExecResizeArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecResizeArgs")
+            .field("session", &"<redacted>")
+            .field("rows", &self.rows)
+            .field("cols", &self.cols)
+            .field("op_id", &self.op_id)
+            .finish()
+    }
+}
+
+/// `Wait` op args. A bounded poll for the terminal status; if the command is
+/// still running after `timeoutMs` the response reports `running` so the CLI
+/// keeps draining output and polling.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWaitArgs {
+    pub session: String,
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+impl fmt::Debug for ExecWaitArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecWaitArgs")
+            .field("session", &"<redacted>")
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+/// `Close` op args. Half-closes the session's stdin (the daemon issues a
+/// guest stdin close, NOT a session teardown): the command keeps running and
+/// its output keeps flowing until it exits or the owner disconnects. The
+/// result reports `stdinClosed`. Idempotent: closing stdin on a session whose
+/// stdin is already closed/torn-down returns success.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecCloseArgs {
+    pub session: String,
+}
+
+impl fmt::Debug for ExecCloseArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecCloseArgs")
+            .field("session", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Multiplexed exec operation. Closed adjacently-tagged enum (`op` + `args`);
+/// each variant's args struct is `deny_unknown_fields`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "args", rename_all = "camelCase")]
+pub enum ExecOp {
+    Start(ExecStartArgs),
+    WriteStdin(ExecWriteStdinArgs),
+    ReadOutput(ExecReadOutputArgs),
+    Signal(ExecSignalArgs),
+    Resize(ExecResizeArgs),
+    Wait(ExecWaitArgs),
+    Close(ExecCloseArgs),
+}
+
+/// `Start` op result: the daemon-issued opaque session handle plus the initial
+/// per-stream read cursors the CLI begins reading from. `tty` echoes the
+/// negotiated interactive mode.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecStartResult {
+    pub session: String,
+    pub tty: bool,
+    pub stdout_offset: u64,
+    pub stderr_offset: u64,
+}
+
+impl fmt::Debug for ExecStartResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction: the issued session handle never appears.
+        f.debug_struct("ExecStartResult")
+            .field("session", &"<redacted>")
+            .field("tty", &self.tty)
+            .field("stdout_offset", &self.stdout_offset)
+            .field("stderr_offset", &self.stderr_offset)
+            .finish()
+    }
+}
+
+/// `WriteStdin` op result. `acceptedLen` is the number of bytes that actually
+/// landed (partial-write aware); the CLI retries any remainder from
+/// `nextOffset`. `backpressured` signals the guest stdin budget is full.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWriteStdinResult {
+    pub accepted_len: u64,
+    pub next_offset: u64,
+    #[serde(default)]
+    pub backpressured: bool,
+    #[serde(default)]
+    pub stdin_closed: bool,
+}
+
+/// `ReadOutput` op result. `dataBase64` is the base64 of a bounded output
+/// chunk; `nextOffset` advances the CLI read cursor; `eof` marks the stream
+/// drained after the command went terminal; `timedOut` marks an empty
+/// long-poll.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecReadOutputResult {
+    pub data_base64: String,
+    pub next_offset: u64,
+    #[serde(default)]
+    pub eof: bool,
+    #[serde(default)]
+    pub dropped_bytes: u64,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub timed_out: bool,
+}
+
+impl fmt::Debug for ExecReadOutputResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Redaction: the raw guest stdout/stderr bytes never appear; show
+        // only the encoded length + cursor/flags.
+        f.debug_struct("ExecReadOutputResult")
+            .field("data_base64_len", &self.data_base64.len())
+            .field("next_offset", &self.next_offset)
+            .field("eof", &self.eof)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("timed_out", &self.timed_out)
+            .finish()
+    }
+}
+
+/// `Signal` / `Resize` op result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecControlResult {
+    #[serde(default)]
+    pub delivered: bool,
+}
+
+/// Terminal disposition of the guest command. `Exited` carries the WIFEXITED
+/// code (0–255); `Signaled` carries the terminating signal number; `Error`
+/// carries a closed-enum guest error slug for an abnormal terminal state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum ExecTerminalStatus {
+    Exited { code: i32 },
+    Signaled { signal: u32 },
+    Error { slug: String },
+}
+
+/// `Wait` op result. Exactly one of `terminalStatus` (terminal) or
+/// `running == true` is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecWaitResult {
+    #[serde(default)]
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_status: Option<ExecTerminalStatus>,
+}
+
+/// `Close` op result. `stdinClosed` confirms the session's stdin is now
+/// half-closed; the command continues running until it exits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecCloseResult {
+    #[serde(default)]
+    pub stdin_closed: bool,
+}
+
+/// Multiplexed exec operation result. Closed adjacently-tagged enum mirroring
+/// [`ExecOp`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "result", rename_all = "camelCase")]
+pub enum ExecOpResponse {
+    Start(ExecStartResult),
+    WriteStdin(ExecWriteStdinResult),
+    ReadOutput(ExecReadOutputResult),
+    Signal(ExecControlResult),
+    Resize(ExecControlResult),
+    Wait(ExecWaitResult),
+    Close(ExecCloseResult),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -589,5 +996,127 @@ mod tests {
         let error = decode_frame::<PublicRequest>("PublicRequest", &frame)
             .expect_err("unknown field fails");
         assert!(error.message().contains("extra"));
+    }
+
+    // A stray `{:?}` on any exec DTO must never leak argv, env keys or
+    // values, cwd, raw stdio bytes, or the opaque session handle. Each sentinel
+    // below is a unique marker that, if it appeared in the formatted output,
+    // would prove a redaction regression.
+    #[test]
+    fn exec_dto_debug_redacts_secrets() {
+        use super::{
+            ExecCloseArgs, ExecEnvVar, ExecReadOutputArgs, ExecReadOutputResult, ExecResizeArgs,
+            ExecSignalArgs, ExecStartArgs, ExecStartResult, ExecStream, ExecWaitArgs,
+            ExecWriteStdinArgs,
+        };
+
+        const SECRET_ENV_KEY: &str = "SENTINEL_ENV_KEY_b6f1";
+        const SECRET_ENV_VAL: &str = "SENTINEL_ENV_VALUE_a90c";
+        const SECRET_ARGV: &str = "SENTINEL_ARGV_3d2e";
+        const SECRET_CWD: &str = "SENTINEL_CWD_77ab";
+        const SECRET_HANDLE: &str = "SENTINEL_HANDLE_c41f";
+        const SECRET_CHUNK: &str = "U0VOVElORUxfQ0hVTktfZGVhZA==";
+        const SECRET_DATA: &str = "U0VOVElORUxfREFUQV9iZWVm";
+
+        let secrets = [
+            SECRET_ENV_KEY,
+            SECRET_ENV_VAL,
+            SECRET_ARGV,
+            SECRET_CWD,
+            SECRET_HANDLE,
+            SECRET_CHUNK,
+            SECRET_DATA,
+        ];
+
+        let assert_clean = |rendered: &str, label: &str| {
+            for secret in secrets {
+                assert!(
+                    !rendered.contains(secret),
+                    "{label} Debug leaked sentinel {secret}: {rendered}"
+                );
+            }
+        };
+
+        let env_var = ExecEnvVar {
+            key: SECRET_ENV_KEY.to_owned(),
+            value: SECRET_ENV_VAL.to_owned(),
+        };
+        assert_clean(&format!("{env_var:?}"), "ExecEnvVar");
+
+        let start = ExecStartArgs {
+            vm: "corp-vm".to_owned(),
+            argv: vec!["sh".to_owned(), SECRET_ARGV.to_owned()],
+            tty: true,
+            detached: false,
+            env: Some(vec![env_var.clone()]),
+            cwd: Some(SECRET_CWD.to_owned()),
+            term_size: None,
+        };
+        let rendered = format!("{start:?}");
+        assert_clean(&rendered, "ExecStartArgs");
+        assert!(rendered.contains("corp-vm"), "vm name is observable");
+        assert!(rendered.contains("argv_len"), "argv length is observable");
+
+        let write = ExecWriteStdinArgs {
+            session: SECRET_HANDLE.to_owned(),
+            offset: 17,
+            chunk_base64: SECRET_CHUNK.to_owned(),
+            eof: false,
+        };
+        assert_clean(&format!("{write:?}"), "ExecWriteStdinArgs");
+
+        let read = ExecReadOutputArgs {
+            session: SECRET_HANDLE.to_owned(),
+            stream: ExecStream::Stdout,
+            offset: 0,
+            max_len: 4096,
+            wait: true,
+            timeout_ms: 250,
+        };
+        assert_clean(&format!("{read:?}"), "ExecReadOutputArgs");
+
+        let signal = ExecSignalArgs {
+            session: SECRET_HANDLE.to_owned(),
+            signo: 15,
+            op_id: 3,
+        };
+        assert_clean(&format!("{signal:?}"), "ExecSignalArgs");
+
+        let resize = ExecResizeArgs {
+            session: SECRET_HANDLE.to_owned(),
+            rows: 24,
+            cols: 80,
+            op_id: 4,
+        };
+        assert_clean(&format!("{resize:?}"), "ExecResizeArgs");
+
+        let wait = ExecWaitArgs {
+            session: SECRET_HANDLE.to_owned(),
+            timeout_ms: 1000,
+        };
+        assert_clean(&format!("{wait:?}"), "ExecWaitArgs");
+
+        let close = ExecCloseArgs {
+            session: SECRET_HANDLE.to_owned(),
+        };
+        assert_clean(&format!("{close:?}"), "ExecCloseArgs");
+
+        let start_result = ExecStartResult {
+            session: SECRET_HANDLE.to_owned(),
+            tty: true,
+            stdout_offset: 0,
+            stderr_offset: 0,
+        };
+        assert_clean(&format!("{start_result:?}"), "ExecStartResult");
+
+        let read_result = ExecReadOutputResult {
+            data_base64: SECRET_DATA.to_owned(),
+            next_offset: 64,
+            eof: false,
+            dropped_bytes: 0,
+            truncated: false,
+            timed_out: false,
+        };
+        assert_clean(&format!("{read_result:?}"), "ExecReadOutputResult");
     }
 }

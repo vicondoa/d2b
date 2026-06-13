@@ -338,6 +338,18 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "exec",
+    "subject": "VM/process",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixling-admin"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "no",
+    "auditMode": "yes"
+  },
+  {
     "operation": "switch",
     "subject": "VM",
     "scope": "per-VM",
@@ -1021,6 +1033,18 @@ let
     ],
     "destructive": false,
     "secretAccess": "read-write",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "GuestControlSign",
+    "subject": "guest-control token",
+    "scope": "per-VM",
+    "allowedGroups": [
+      "nixlingd"
+    ],
+    "destructive": false,
+    "secretAccess": "redacted-only",
     "brokerRequired": "yes",
     "auditMode": "yes"
   },

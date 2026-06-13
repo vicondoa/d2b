@@ -42,7 +42,7 @@ log "==> tests/per-vm-state-ownership-eval.sh"
 
 expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   nixos = nixosSystem {
     system = "x86_64-linux";
@@ -116,7 +116,7 @@ in {
 EOF
 )
 
-json=$(nix-instantiate --eval --strict --json --expr "$expr" 2>&1) \
+json=$(nix-instantiate --quiet --eval --strict --json --no-warn-dirty --expr "$expr" 2>&1) \
   || fail "eval failed: $json"
 
 count=$(printf '%s' "$json" | jq -r '.count')

@@ -13,6 +13,18 @@
     }
   ],
   "definitions": {
+    "ApiReadyErrorV1": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ApiReadySimple": {
       "type": "string",
       "enum": [
@@ -27,15 +39,7 @@
           "$ref": "#/definitions/ApiReadySimple"
         },
         {
-          "type": "object",
-          "required": [
-            "error"
-          ],
-          "properties": {
-            "error": {
-              "type": "string"
-            }
-          }
+          "$ref": "#/definitions/ApiReadyErrorV1"
         }
       ]
     },

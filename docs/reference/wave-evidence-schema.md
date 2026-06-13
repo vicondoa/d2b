@@ -1,8 +1,11 @@
 # Wave validation evidence schema
 
 Canonical reference for the host-local proof files that gate
-`nixling.defaultSwitchReadiness.<wave>.validated = true` and, by
-extension, the W18 auto-flip of `nixling.daemonExperimental.enable`.
+`nixling.defaultSwitchReadiness.<wave>.validated = true`. (These files
+no longer drive `nixling.daemonExperimental.enable`, which now defaults
+`true` and is no longer evidence-auto-flipped but still functionally
+gates the daemon control plane; they remain live for the per-wave
+`validated` assertion and for `nixling host validate`.)
 
 The schema is implicitly defined by the cargo-checked validator in
 [`nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)
@@ -93,7 +96,7 @@ eval.
 | `p0`     | P0 daemon-only foundation: broker socket-activation, bundle digest verify, canonical `/run/nixling`, `nixlingd.service restartIfChanged=false`.                       | `tests/nixlingd-startup-smoke.sh` green on this host, recorded into the evidence file.                         |
 | `p0Fu`   | P0fu: cgroup delegation sequence, bundle-tampered envelope, per-artifact hash verification, `ListenSequentialPacket` socket fix.                                      | `tests/broker-cgroup-delegation-smoke.sh` green on this host.                                                  |
 | `p1`     | Per-role minijail profiles + byte-parity argv generators (CH, virtiofsd, swtpm, gpu, audio, video, vsockRelay, usbip, otelHostBridge).                                | Per-role `tests/minijail-validator-<role>.sh` green + hardware smoke on the target SKUs.                       |
-| `p2`     | Daemon-side host-prep + ownership matrix + `manifestVersion=3` + daemon autostart.                                                                                    | `tests/daemon-autostart-smoke.sh` + `tests/vms-json-parity.sh` + ownership-eval green.                         |
+| `p2`     | Daemon-side host-prep + ownership matrix + `manifestVersion=4` + daemon autostart.                                                                                    | `tests/daemon-autostart-smoke.sh` + `tests/vms-json-parity.sh` + ownership-eval green.                         |
 | `p3`     | Host singletons retired (net-route-preflight, audit-check, ch-exporter, otel-host-bridge, per-env usbipd) + daemon health endpoint.                                   | `tests/observability-eval.sh` + USBIP smoke + degraded-mode escape-hatch smoke green.                          |
 | `p4`     | `vm start/stop/restart/list` daemon-native end-to-end; `.desktop` wrapper updated.                                                                                    | Per-VM `vm start` smoke + Wayland desktop launcher smoke green.                                                |
 | `p5`     | First-run validation UX shipped (`nixling host validate --apply` + daemon auto-write on first op).                                                                    | Fresh-host bootstrap smoke green on this host.                                                                 |
@@ -117,7 +120,8 @@ Cross-dependencies enforced by additional assertions in
 
 ## Operator workflow
 
-The intended path from a fresh host to `daemonExperimental.enable = true`:
+The intended path from a fresh host to a wave's
+`defaultSwitchReadiness.<wave>.validated = true`:
 
 1. **Land the code.** `nixos-rebuild switch` to a nixling version
    that ships the wave's implementation (`implemented = true`
@@ -161,15 +165,19 @@ The intended path from a fresh host to `daemonExperimental.enable = true`:
 
 5. **Rebuild.** `nixos-rebuild switch` now sees
    `defaultSwitchReadiness.<wave>.validated = true` for each
-   wave whose evidence file is present. Once every wave's
-   `{implemented, validated}` pair is `true`,
-   `nixling.daemonExperimental.enable` defaults to `true` and the
-   daemon-backed control plane is the default.
+   wave whose evidence file is present, and the fail-closed eval
+   assertion passes. The wave evidence no longer computes or flips
+   the `nixling.daemonExperimental.enable` default: that option
+   defaults `true` and still functionally gates the daemon control
+   plane, independent of these `validated` bits.
 
-Explicit operator override always wins:
-`nixling.daemonExperimental.enable = false` keeps the legacy path
-even after every readiness bit is green;
-`nixling.daemonExperimental.enable = true` opts in early.
+`nixling.daemonExperimental.enable` still functionally gates the
+daemon control plane: it defaults `true`, and consumers should leave
+it at its default (setting it `false` reverts the host to the
+unsupported pre-daemon legacy state). What changed is that the wave
+evidence no longer computes or flips that default. The `validated`
+bits remain meaningful as host-local validation evidence, surfaced by
+`nixling host validate`.
 
 ### Manual evidence writing (escape hatch)
 
@@ -198,7 +206,7 @@ that the three fields are present and well-typed.
   `nixling host validate` verb (P5 sibling deliverable) that
   writes these files.
 - [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)
-  — the W18 auto-flip surface this evidence feeds.
+  — the per-wave evidence gate this evidence feeds.
 - [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
   — the per-wave readiness matrix and the design rationale.
 - [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md)

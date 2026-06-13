@@ -39,10 +39,11 @@ architectural decision. The short version:
 - The polkit allowlist for per-VM units is retired; `nixling`
   group membership + `SO_PEERCRED` on `public.sock` is the only
   lifecycle authorisation surface.
-- The manifest contract bumps from `manifestVersion: 2` to
-  `manifestVersion: 3`. There is no auto-rewriter — `ManifestV04::from_slice`
-  rejects v2 bundles outright with the typed `manifest-parse-error`
-  / `manifest-version-mismatch` envelope.
+- The manifest contract bumps from `manifestVersion: 2` to the current
+  value documented in `docs/reference/manifest-schema.md`. There is no
+  auto-rewriter — `ManifestV04::from_slice` rejects stale bundles
+  outright with the typed `manifest-parse-error` /
+  `manifest-version-mismatch` envelope.
 
 There is **no deprecation window**. v0.5 was skipped; the v0.4.x →
 v1.0.0 boundary deletes every legacy surface in one cut. Operators
@@ -68,7 +69,7 @@ guide cross-links them and gives operators the migration recipe.
   daemon-only broker op catalogue + retired-unit obituary tables.
 - [`docs/reference/manifest-schema.md`](../reference/manifest-schema.md)
   + [`docs/reference/manifest-schema.json`](../reference/manifest-schema.json)
-  — manifest v3 contract.
+  — current manifest contract.
 - [`docs/reference/desktop-wrapper.md`](../reference/desktop-wrapper.md)
   — daemon-native `.desktop` wrapper contract.
 - [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
@@ -100,7 +101,7 @@ v1.0-intended hard removal + eval-time rejection assertion is
 option for backward-compat with consumer flakes
 pinning pre-v1.0 manifests.
 
-## 1. Manifest v2 → v3
+## 1. Manifest v2 → current manifest
 
 ### Before
 
@@ -110,26 +111,27 @@ fields (e.g. `unitName`, `instanceName`) were still emitted.
 
 ### After
 
-`_manifest.manifestVersion: 3`. The per-VM systemd-unit reference
+`_manifest.manifestVersion` is the current value documented in
+`docs/reference/manifest-schema.md`. The per-VM systemd-unit reference
 fields are gone (they became meaningless once supervisor mode
 shipped). `nixling_core::manifest_v04::MANIFEST_VERSION_CURRENT` is
-pinned to `3`; v2 bundles are rejected with the typed
+the authoritative parser constant; stale bundles are rejected with the typed
 `manifest-parse-error` / `manifest-version-mismatch` envelope.
 
 ### Migration steps
 
-The producer (`nixos-modules/manifest.nix`) already pins
-`_manifestVersion = 3` on v1.0. You **must** rebuild every host
+The producer (`nixos-modules/manifest.nix`) pins the current
+`_manifestVersion`. You **must** rebuild every host
 manifest from source before the daemon will accept the bundle:
 
 ```bash
 sudo nixos-rebuild build --flake .#myhost
 sudo cat /run/current-system/sw/share/nixling/vms.json \
-  | jq '._manifest.manifestVersion'   # expect: 3
+  | jq '._manifest.manifestVersion'   # expect: the current documented value
 ```
 
 If you vendor the bundle to a sibling host, regenerate it on the
-producer host first; never hand-edit `manifestVersion` to `3`
+producer host first; never hand-edit `manifestVersion`
 without a fresh derivation, because the rest of the schema also
 changed.
 

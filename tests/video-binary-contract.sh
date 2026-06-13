@@ -13,7 +13,7 @@ log "==> tests/video-binary-contract.sh"
 
 expr=$(cat <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   nixos = flake.inputs.nixpkgs.lib.nixosSystem {
     system = "x86_64-linux";
     modules = [

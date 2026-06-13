@@ -121,6 +121,12 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
         labels: &[],
         buckets_seconds: &[],
     },
+    MetricDescriptor {
+        name: "nixling_daemon_guest_control_exec_total",
+        kind: MetricKind::Counter,
+        labels: &["subsystem", "outcome", "error_kind"],
+        buckets_seconds: &[],
+    },
 ];
 
 /// Lookup a descriptor by name. `None` for any unknown name —
@@ -353,6 +359,9 @@ fn help_text(name: &str) -> &'static str {
         "nixling_daemon_ssh_host_key_drift_total" => "Per-VM SSH host-key drift detections.",
         "nixling_daemon_pidfd_table_size" => "Live pidfd entries held by the supervisor.",
         "nixling_daemon_uptime_seconds" => "Seconds since the daemon process started.",
+        "nixling_daemon_guest_control_exec_total" => {
+            "Cumulative count of guest-control exec session/op outcomes by error_kind."
+        }
         _ => "",
     }
 }
@@ -504,6 +513,7 @@ mod tests {
                 "nixling_daemon_ssh_host_key_drift_total",
                 "nixling_daemon_pidfd_table_size",
                 "nixling_daemon_uptime_seconds",
+                "nixling_daemon_guest_control_exec_total",
             ]
         );
     }
@@ -574,6 +584,91 @@ mod tests {
         let body = r.render();
         assert!(body.contains("nixling_daemon_pidfd_table_size 5"));
         assert!(!body.contains("nixling_daemon_pidfd_table_size 3"));
+    }
+
+    #[test]
+    fn rendered_metric_labels_are_within_approved_allowlist() {
+        // Every label key the daemon's core registry renders must be in
+        // an APPROVED, low-cardinality allowlist. This is an allowlist
+        // (not a forbidden-list on an empty registry), so a NEW metric
+        // that introduces an unapproved label key — or a guest-control
+        // closed-enum field (health_state, ...) promoted to a
+        // metric label — fails this test. The allowlist is hardcoded and
+        // independent of METRIC_INVENTORY so widening the inventory cannot
+        // silently widen the allowlist.
+        //
+        // `subsystem` and `error_kind` are approved ONLY as bounded
+        // closed-enum labels: `subsystem` is a per-metric constant and
+        // `error_kind` ranges over a hard-coded enum of exec failure
+        // classes. High-cardinality readiness fields (health_state,
+        // health_reason, guest_boot_id, capabilities_hash) stay forbidden
+        // below.
+        const APPROVED_METRIC_LABEL_KEYS: &[&str] = &[
+            "vm",
+            "state",
+            "outcome",
+            "step",
+            "op",
+            "le",
+            "subsystem",
+            "error_kind",
+        ];
+
+        // Populate one sample of EVERY inventory metric so render() emits
+        // a series (and therefore a label block) for each.
+        let r = Registry::new();
+        for d in METRIC_INVENTORY {
+            let labels: Vec<(&str, &str)> = d.labels.iter().map(|k| (*k, "sample")).collect();
+            match d.kind {
+                MetricKind::Counter => r.counter_inc(d.name, &labels),
+                MetricKind::Gauge => r.gauge_set(d.name, &labels, 1.0),
+                MetricKind::Histogram => r.histogram_observe(d.name, &labels, 0.5),
+            }
+        }
+        let body = r.render();
+
+        // Guard against a vacuous pass: at least one labelled series must
+        // have rendered.
+        assert!(
+            body.contains('{'),
+            "expected at least one labelled series in rendered metrics"
+        );
+
+        // Extract every label KEY from every `{...}` block and assert each
+        // is in the approved allowlist.
+        for line in body.lines() {
+            let (Some(open), Some(close)) = (line.find('{'), line.find('}')) else {
+                continue;
+            };
+            let inner = &line[open + 1..close];
+            if inner.is_empty() {
+                continue;
+            }
+            for pair in inner.split(',') {
+                let key = pair.split('=').next().unwrap_or("").trim();
+                assert!(
+                    APPROVED_METRIC_LABEL_KEYS.contains(&key),
+                    "unapproved metric label key {key:?} in rendered series: {line}"
+                );
+            }
+        }
+
+        // Belt-and-suspenders: the high-cardinality / sensitive
+        // guest-control readiness closed-enum fields must NEVER appear as
+        // a metric label key. (`subsystem` and `error_kind` are allowed
+        // above as bounded exec labels and are intentionally NOT in this
+        // forbidden set.)
+        for forbidden in [
+            "health_state",
+            "health_reason",
+            "guest_boot_id",
+            "capabilities_hash",
+        ] {
+            assert!(
+                !body.contains(&format!("{forbidden}=\"")),
+                "guest-control field {forbidden:?} leaked as a metric label"
+            );
+        }
     }
 
     #[test]

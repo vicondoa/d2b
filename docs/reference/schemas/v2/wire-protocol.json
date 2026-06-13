@@ -730,6 +730,24 @@
             "kind": {
               "type": "string",
               "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignRequest"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "InjectSecretById"
               ]
             },
@@ -1732,6 +1750,24 @@
           }
         },
         {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GuestControlSign"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/GuestControlSignResponse"
+            }
+          }
+        },
+        {
           "description": "OpenPidfd response. The pidfd itself is returned via SCM_RIGHTS on the same frame; the JSON body confirms which `(pid, start_time_ticks)` the broker verified.",
           "type": "object",
           "required": [
@@ -2201,6 +2237,745 @@
         }
       }
     },
+    "ExecCloseArgs": {
+      "description": "`Close` op args. Half-closes the session's stdin (the daemon issues a guest stdin close, NOT a session teardown): the command keeps running and its output keeps flowing until it exits or the owner disconnects. The result reports `stdinClosed`. Idempotent: closing stdin on a session whose stdin is already closed/torn-down returns success.",
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecCloseResult": {
+      "description": "`Close` op result. `stdinClosed` confirms the session's stdin is now half-closed; the command continues running until it exits.",
+      "type": "object",
+      "properties": {
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecControlResult": {
+      "description": "`Signal` / `Resize` op result.",
+      "type": "object",
+      "properties": {
+        "delivered": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecEnvVar": {
+      "description": "A single environment variable for `ExecOp::Start`. Values are forwarded verbatim into the guest exec request and are NEVER logged, traced, or audited (only the count is observable). `Debug` is redacted so a stray `{:?}` can never leak a key or secret value.",
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecOp": {
+      "description": "Multiplexed exec operation. Closed adjacently-tagged enum (`op` + `args`); each variant's args struct is `deny_unknown_fields`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecStartArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "start"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecWriteStdinArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecReadOutputArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecSignalArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "signal"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecResizeArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecWaitArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "args",
+            "op"
+          ],
+          "properties": {
+            "args": {
+              "$ref": "#/definitions/ExecCloseArgs"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ExecOpResponse": {
+      "description": "Multiplexed exec operation result. Closed adjacently-tagged enum mirroring [`ExecOp`].",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "start"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecStartResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "writeStdin"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecWriteStdinResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "readOutput"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecReadOutputResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "signal"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecControlResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "resize"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecControlResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "wait"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecWaitResult"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "op",
+            "result"
+          ],
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "close"
+              ]
+            },
+            "result": {
+              "$ref": "#/definitions/ExecCloseResult"
+            }
+          }
+        }
+      ]
+    },
+    "ExecReadOutputArgs": {
+      "description": "`ReadOutput` op args. A bounded long-poll: `wait` + `timeoutMs` let the guest hold the request until data arrives or the (server-side bounded) timeout elapses, so the CLI interleaves short output polls with stdin / signal forwarding without busy-looping.",
+      "type": "object",
+      "required": [
+        "maxLen",
+        "offset",
+        "session",
+        "stream"
+      ],
+      "properties": {
+        "maxLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        },
+        "stream": {
+          "$ref": "#/definitions/ExecStream"
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "wait": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecReadOutputResult": {
+      "description": "`ReadOutput` op result. `dataBase64` is the base64 of a bounded output chunk; `nextOffset` advances the CLI read cursor; `eof` marks the stream drained after the command went terminal; `timedOut` marks an empty long-poll.",
+      "type": "object",
+      "required": [
+        "dataBase64",
+        "nextOffset"
+      ],
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "droppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "timedOut": {
+          "default": false,
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecResizeArgs": {
+      "description": "`Resize` op args (SIGWINCH → guest PTY window resize). `opId` is the same stable client-assigned idempotency token as `ExecSignalArgs`: a retried Resize carries the same `opId` so the worker replays the original ack instead of re-delivering the resize. `opId == 0` means \"no dedup\".",
+      "type": "object",
+      "required": [
+        "cols",
+        "rows",
+        "session"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "opId": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecSignalArgs": {
+      "description": "`Signal` op args. The signal is delivered to the foreground process group of the exec; the CLI maps host SIGINT/SIGTSTP/SIGTERM to the corresponding guest signal numbers. `opId` is a stable client-assigned idempotency token: a retried Signal carries the same `opId` so the worker replays the original ack instead of delivering the signal twice. `opId == 0` means \"no dedup\" (legacy / unset).",
+      "type": "object",
+      "required": [
+        "session",
+        "signo"
+      ],
+      "properties": {
+        "opId": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        },
+        "signo": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecStartArgs": {
+      "description": "`Start` op args. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name, the command, and the session shape. `detached` is reserved: the daemon rejects a `detached = true` request in this release (a detached/reconnect lifecycle is not implemented), and the CLI never sets it — it ships non-detached interactive (`-it`) and non-interactive sessions only.",
+      "type": "object",
+      "required": [
+        "argv",
+        "vm"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detached": {
+          "default": false,
+          "type": "boolean"
+        },
+        "env": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/ExecEnvVar"
+          }
+        },
+        "termSize": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecTermSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tty": {
+          "default": false,
+          "type": "boolean"
+        },
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecStartResult": {
+      "description": "`Start` op result: the daemon-issued opaque session handle plus the initial per-stream read cursors the CLI begins reading from. `tty` echoes the negotiated interactive mode.",
+      "type": "object",
+      "required": [
+        "session",
+        "stderrOffset",
+        "stdoutOffset",
+        "tty"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "stderrOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "tty": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecStream": {
+      "description": "Output stream selector for `ReadOutput`. A closed enum — the daemon never forwards an unspecified stream to the guest.",
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "ExecTermSize": {
+      "description": "Terminal window dimensions for an interactive (`tty`) exec.",
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecTerminalStatus": {
+      "description": "Terminal disposition of the guest command. `Exited` carries the WIFEXITED code (0–255); `Signaled` carries the terminating signal number; `Error` carries a closed-enum guest error slug for an abnormal terminal state.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "exited"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "code"
+              ],
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "signaled"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "signal"
+              ],
+              "properties": {
+                "signal": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            },
+            "value": {
+              "type": "object",
+              "required": [
+                "slug"
+              ],
+              "properties": {
+                "slug": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExecWaitArgs": {
+      "description": "`Wait` op args. A bounded poll for the terminal status; if the command is still running after `timeoutMs` the response reports `running` so the CLI keeps draining output and polling.",
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecWaitResult": {
+      "description": "`Wait` op result. Exactly one of `terminalStatus` (terminal) or `running == true` is set.",
+      "type": "object",
+      "properties": {
+        "running": {
+          "default": false,
+          "type": "boolean"
+        },
+        "terminalStatus": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecTerminalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecWriteStdinArgs": {
+      "description": "`WriteStdin` op args. `chunkBase64` is the standard padded base64 of a raw stdin chunk (≤ `EXEC_MAX_CHUNK_BYTES` decoded). `offset` is the client's authoritative stdin byte cursor so a lost reply is idempotently retryable.",
+      "type": "object",
+      "required": [
+        "chunkBase64",
+        "offset",
+        "session"
+      ],
+      "properties": {
+        "chunkBase64": {
+          "type": "string"
+        },
+        "eof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecWriteStdinResult": {
+      "description": "`WriteStdin` op result. `acceptedLen` is the number of bytes that actually landed (partial-write aware); the CLI retries any remainder from `nextOffset`. `backpressured` signals the guest stdin budget is full.",
+      "type": "object",
+      "required": [
+        "acceptedLen",
+        "nextOffset"
+      ],
+      "properties": {
+        "acceptedLen": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "backpressured": {
+          "default": false,
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdinClosed": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "ExportBrokerAuditRequest": {
       "type": "object",
       "properties": {
@@ -2297,6 +3072,133 @@
           ],
           "format": "uint32",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestBootIdWire": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1
+    },
+    "GuestControlAuthPurpose": {
+      "type": "string",
+      "enum": [
+        "guest-control-auth-v1"
+      ]
+    },
+    "GuestControlDirection": {
+      "type": "string",
+      "enum": [
+        "host-to-guest"
+      ]
+    },
+    "GuestControlProofRole": {
+      "type": "string",
+      "enum": [
+        "host-proof",
+        "guest-proof"
+      ]
+    },
+    "GuestControlSignRequest": {
+      "type": "object",
+      "required": [
+        "direction",
+        "guestBootId",
+        "guestControlPort",
+        "guestNonce",
+        "hostNonce",
+        "protocolVersion",
+        "purpose",
+        "role",
+        "vmId"
+      ],
+      "properties": {
+        "capabilitiesHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "$ref": "#/definitions/GuestControlDirection"
+        },
+        "guestBootId": {
+          "$ref": "#/definitions/GuestBootIdWire"
+        },
+        "guestControlPort": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "guestNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "hostNonce": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
+        },
+        "peerCid": {
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "purpose": {
+          "$ref": "#/definitions/GuestControlAuthPurpose"
+        },
+        "role": {
+          "$ref": "#/definitions/GuestControlProofRole"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GuestControlSignResponse": {
+      "type": "object",
+      "required": [
+        "tag"
+      ],
+      "properties": {
+        "tag": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0.0
+          },
+          "maxItems": 32,
+          "minItems": 32
         }
       },
       "additionalProperties": false
@@ -2713,7 +3615,7 @@
           ]
         },
         {
-          "description": "Bundle's emitted manifestVersion is not the version the running daemon supports (after the v2→v3 clean break, v2 bundles MUST be rejected with this distinct kind so operators can correlate the failure to a re-render of the bundle, not to a parse-side regression).",
+          "description": "Bundle's emitted manifestVersion is not the version the running daemon supports. Stale bundles MUST be rejected with this distinct kind so operators can correlate the failure to a re-render of the bundle, not to a parse-side regression.",
           "type": "string",
           "enum": [
             "manifest-version-mismatch"
@@ -3675,6 +4577,44 @@
               "$ref": "#/definitions/HostReconcileRequest"
             }
           }
+        },
+        {
+          "description": "Read the editable guest config working copy of `vm` over the authenticated guest-control bridge and return it as a base64 string. ADMIN-ONLY (it crosses into the guest over the authenticated transport): the daemon enforces `PeerRole::Admin` BEFORE any probe / sign / read. The CLI's `config sync` uses this on guest-control VMs instead of an SSH transfer.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "read guest config"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ReadGuestConfigRequest"
+            }
+          }
+        },
+        {
+          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` (and the `vm konsole` wrapper) drive this verb; it never crosses SSH.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "exec"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExecOp"
+            }
+          }
         }
       ]
     },
@@ -3888,6 +4828,42 @@
             "kind": {
               "type": "string",
               "enum": [
+                "read guest config"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ReadGuestConfigResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "exec"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ExecOpResponse"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
                 "error"
               ]
             },
@@ -3897,6 +4873,32 @@
           }
         }
       ]
+    },
+    "ReadGuestConfigRequest": {
+      "description": "`read guest config` request payload. The daemon resolves the per-VM vsock socket + peer credentials from the trusted bundle; the client supplies only the VM name.",
+      "type": "object",
+      "required": [
+        "vm"
+      ],
+      "properties": {
+        "vm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReadGuestConfigResponse": {
+      "description": "`read guest config` response payload. `contentBase64` is the standard padded base64 of the RAW guest config bytes. The encoded payload is bounded by `READ_GUEST_CONFIG_ENCODED_MAX_BYTES` (derived from `READ_GUEST_FILE_MAX_BYTES`) so it always fits within the public.sock and ttRPC frames. The CLI decodes it and computes size + sha256 from the DECODED bytes — never from any guest-reported value.",
+      "type": "object",
+      "required": [
+        "contentBase64"
+      ],
+      "properties": {
+        "contentBase64": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "RotateKnownHostRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",
@@ -4325,7 +5327,7 @@
           ]
         },
         {
-          "description": "virtiofsd sidecar; one per `microvm.shares` row. Broker invokes `nixling_host::virtiofsd_argv::generate_virtiofsd_argv`.",
+          "description": "virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle provides argv from `nixos-modules/processes-json.nix`.",
           "type": "string",
           "enum": [
             "virtiofsd"

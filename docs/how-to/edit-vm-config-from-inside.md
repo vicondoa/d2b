@@ -47,23 +47,35 @@ Rebuild the host once (`nixling switch work`). The guest now carries:
 - `/etc/nixling/guest-config.nix` — a **read-only** copy of the current
   approved guest config (always reflects what's live).
 - `/var/lib/nixling-guest/guest-config.nix` — a **writable** working
-  copy, seeded once from the baseline, owned by the VM's SSH user.
+  copy, seeded once from the baseline. It is owned by the VM's
+  `ssh.user` when one is declared, and by `root` otherwise (the
+  guest-control exec path can edit it either way).
 
-### Prerequisite: the per-VM SSH channel
+### Prerequisite: the guest-control channel
 
-`config sync` pulls the edited file over the **existing**
-framework-managed per-VM SSH key — it does not open a new channel. That
-key is provisioned only when the VM declares an SSH user, so the VM
-**must** set:
+`config sync` reads the edited file over the authenticated
+**guest-control** vsock — the daemon's `ReadGuestConfig` →
+guestd `ReadGuestFile` path — not over SSH. It is wired exactly when
+the VM both enables guest-control and declares a `guestConfigFile`:
 
 ```nix
-nixling.vms.work.ssh.user = "alice";   # the in-VM account that owns the writable copy
+nixling.vms.work.guest.control.enable = true;   # the guest-control credential + guestd service
+nixling.vms.work.guestConfigFile = ./vms/work.guest.nix;
 ```
 
-Without `ssh.user`, there is no key to copy over and `nixling config
-sync` has nothing to connect to. The writable working copy
-(`/var/lib/nixling-guest/guest-config.nix`) is owned by this same user,
-so it is also the account you edit as inside the VM.
+With those set, guestd advertises the `ReadGuestFile` capability and
+serves a bounded read of exactly the working-copy path. Without them
+the capability stays absent and `config sync` **fails closed** with a
+typed error — it never falls back to SSH. `ssh.user` is **not**
+required for sync; it only chooses a non-root owner for the writable
+working copy (and remains the in-VM account you edit as when you reach
+the VM over SSH/console):
+
+```nix
+nixling.vms.work.ssh.user = "alice";   # optional: the in-VM account that owns the writable copy
+```
+
+When `ssh.user` is unset the working copy is owned by `root`.
 
 ## The edit → sync → review → approve loop
 
@@ -80,8 +92,8 @@ so it is also the account you edit as inside the VM.
    nixling config sync work
    ```
 
-   This pulls the edited file over the framework-managed per-VM SSH key
-   into a host-side staging copy
+   This pulls the edited file over the authenticated guest-control
+   channel into a host-side staging copy
    (`~/.local/state/nixling/config-staging/work.guest.nix`). The host
    treats it as untrusted data — nothing is evaluated yet.
 
@@ -131,9 +143,9 @@ edit isn't silently forgotten before you approve it.
 
 - The CLI never auto-writes your config tree: `approve` only writes the
   `--to` path you name. It never touches anything you don't point it at.
-- `config sync` is host-initiated (the host reaches into the guest over
-  the existing per-VM SSH key). The guest never initiates a connection
-  to the host control plane, and there is no new socket or virtiofs
-  share.
+- `config sync` is host-initiated (the host reads the guest's working
+  copy over the authenticated guest-control vsock). The guest never
+  initiates a connection to the host control plane, and there is no new
+  socket or virtiofs share.
 - If `/var` is not persistent in your VM, the writable working copy is
   re-seeded from the read-only baseline on each boot.

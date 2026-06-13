@@ -41,6 +41,31 @@ pub enum DaemonEvent {
         /// Split-readiness mode: `"strict"` or `"no-wait-api"`.
         mode: String,
     },
+    /// Emitted when an authenticated `vm exec` owner session is established
+    /// (after admin authz + capability negotiation, before any op proxy).
+    ///
+    /// Leak-safe by construction: carries ONLY the VM name, the admin peer
+    /// uid, and the negotiated tty shape. The opaque session handle, argv,
+    /// env, cwd, and any stdio bytes are NEVER recorded.
+    GuestControlExecEstablished {
+        /// VM name the exec session targets.
+        vm: String,
+        /// Admin peer uid (from `SO_PEERCRED`) that opened the session.
+        peer_uid: u32,
+        /// Whether a PTY was negotiated for the session.
+        tty: bool,
+    },
+    /// Emitted when a previously-established `vm exec` owner session ends
+    /// (owner disconnect, command terminal, or teardown).
+    ///
+    /// Leak-safe: carries ONLY the VM name and the admin peer uid. No
+    /// session handle, exit status bytes, argv, env, cwd, or stdio.
+    GuestControlExecTerminated {
+        /// VM name the exec session targeted.
+        vm: String,
+        /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
+        peer_uid: u32,
+    },
 }
 
 /// JSONL audit-log writer for daemon-side events.
@@ -277,6 +302,73 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("api_ready_timeout"),
         );
+    }
+
+    #[test]
+    fn exec_lifecycle_events_are_leak_safe() {
+        // The exec establish + terminate audit events carry ONLY
+        // leak-safe fields (vm, peer_uid, tty). A planted sentinel standing in
+        // for a session handle / argv / env / cwd must never appear, and the
+        // serialized event must expose no unexpected key.
+        const SENTINEL: &str = "SENTINEL-handle-argv-env-cwd-9b2f";
+        let log = DaemonAuditLog::no_op();
+
+        log.write_event(&DaemonEvent::GuestControlExecEstablished {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+            tty: true,
+        })
+        .expect("write established event");
+        log.write_event(&DaemonEvent::GuestControlExecTerminated {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+        })
+        .expect("write terminated event");
+
+        let records = log.captured.lock().expect("lock captured");
+        assert_eq!(records.len(), 2, "expected two captured lifecycle records");
+
+        for line in records.iter() {
+            assert!(
+                !line.contains(SENTINEL),
+                "exec lifecycle audit leaked a sentinel: {line}"
+            );
+            let record: serde_json::Value =
+                serde_json::from_str(line).expect("parse captured lifecycle record");
+            assert_eq!(
+                record.get("source").and_then(|v| v.as_str()),
+                Some("nixlingd")
+            );
+            let event = record.get("event").expect("event object");
+            let obj = event.as_object().expect("event is an object");
+            // Closed key set: kind + the leak-safe fields only. No `session`,
+            // `handle`, `argv`, `env`, `cwd`, or stdio keys may appear.
+            for key in obj.keys() {
+                assert!(
+                    matches!(key.as_str(), "kind" | "vm" | "peer_uid" | "tty"),
+                    "exec lifecycle audit exposed an unexpected key {key:?}: {line}"
+                );
+            }
+            assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("corp-vm"));
+            assert_eq!(event.get("peer_uid").and_then(|v| v.as_u64()), Some(1000));
+        }
+
+        let established = serde_json::from_str::<serde_json::Value>(&records[0])
+            .expect("parse established record");
+        assert_eq!(
+            established["event"]["kind"].as_str(),
+            Some("guest_control_exec_established")
+        );
+        assert_eq!(established["event"]["tty"].as_bool(), Some(true));
+
+        let terminated = serde_json::from_str::<serde_json::Value>(&records[1])
+            .expect("parse terminated record");
+        assert_eq!(
+            terminated["event"]["kind"].as_str(),
+            Some("guest_control_exec_terminated")
+        );
+        // The terminate event has no tty field (only vm + peer_uid).
+        assert!(terminated["event"].get("tty").is_none());
     }
 
     #[test]

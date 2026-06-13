@@ -23,7 +23,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$SCRATCH/keys/corp-vm_ed25519" >/dev/null
 
 cat > "$SCRATCH/cli-json-test.nix" <<EOF
 let
-  flake = builtins.getFlake (toString $ROOT);
+  flake = builtins.getFlake "git+file://$ROOT";
   lib = flake.inputs.nixpkgs.lib;
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   keysDir = builtins.path {
@@ -160,7 +160,7 @@ fi
 
 env "${cli_env_stopped[@]}" "$CLI" status corp-vm --json > "$SCRATCH/status.json"
 if jq -e '
-    (keys | sort) == ["booted","current","declaredRoles","env","name","pendingRestart","readiness","runnerParity","runtime","services"]
+    (keys | sort) == ["booted","current","declaredRoles","env","livePoolIntegrity","name","pendingRestart","readiness","runnerParity","runtime","services"]
     and .name == "corp-vm"
     and .env == "work"
     and .current == "/nix/store/nixling-current"
@@ -180,6 +180,9 @@ if jq -e '
     and (.pendingRestart == false)
     and ((.runnerParity | keys | sort) == ["declaredRunner","runnerParityOk","runnerParityPath"])
     and (.runnerParity.runnerParityOk == true)
+    and ((.livePoolIntegrity | keys | sort) == ["remediation","repairAttempted","status","unknownReason"])
+    and (.livePoolIntegrity.status == "unknown")
+    and (.livePoolIntegrity.repairAttempted == false)
   ' "$SCRATCH/status.json" >/dev/null 2>&1; then
   ok "status <vm> --json returns the documented stopped per-VM object"
 else

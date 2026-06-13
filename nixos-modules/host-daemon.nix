@@ -278,9 +278,10 @@ in
         AmbientCapabilities = [ "" ];
         PrivateTmp = true;
         ProtectHome = true;
-        # AF_UNIX: public.sock + broker IPC. AF_INET/AF_INET6
-        # daemon-side guest-ssh-readiness probes use TCP connect(2)
-        # to the VM's declared static IP.
+        # AF_UNIX: public.sock + broker IPC + the per-VM guest-control
+        # vsock proxy socket the daemon-side authenticated Health probe
+        # connects to. AF_INET/AF_INET6 remain for the daemon's other TCP
+        # readiness probes (e.g. per-env usbipd backend ports).
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         UMask = "0027";
         # Supplementary group so the daemon can create
