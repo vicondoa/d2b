@@ -103,7 +103,17 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
 ]
 ```
 
-**Disposition:** `rust-native` — Pure read-only inventory query; the daemon can answer it without mutating host or guest state.
+**Status**
+
+`list` is a daemon-native, read-only inventory query; the daemon answers it without mutating host or guest state.
+
+**Native**
+
+- Pure read-only manifest/inventory query; no broker op and no guest contact.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 Rows are ordered by VM name because the historical bash implementation iterated `jq keys[]`; the current daemon-native path keeps that ordering contract.
 ### `vm start`
@@ -414,10 +424,20 @@ br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 }
 ```
 
-**Disposition:** `rust-native` — Status is a read-only daemon RPC,
-including the frozen per-VM JSON shape. Guest-control rollout will add a
-negotiated guest-control state field in the release that implements
-guest-control; it must not appear as an ad hoc unversioned key.
+**Status**
+
+`status` is a read-only daemon RPC, including the frozen per-VM JSON
+shape. A negotiated guest-control state field is reserved for a future
+release and is not present in the current frozen shape; it must never
+appear as an ad hoc unversioned key.
+
+**Native**
+
+- Read-only daemon query; renders the human view or the frozen `--json` document.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `status --check-bridges`
 
@@ -453,7 +473,17 @@ br-work-lan          DOWN       up      NO-CARRIER   no-carrier (no workloads up
 br-work-up           DOWN       up      NO-CARRIER   no-carrier (net VM stopped)
 ```
 
-**Disposition:** `rust-native` — The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
+**Status**
+
+The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred.
+
+**Native**
+
+- Read-only bridge-health probe; rejects `--json` and a VM selector.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb attach`
 
@@ -491,7 +521,17 @@ $ nixling usb attach corp-vm 1-2 --dry-run
 nixling usb attach --dry-run: would bind and lock, apply the USBIP firewall carve-out, ensure the per-env backend/proxy for busid '1-2' for vm 'corp-vm', reconcile the USBIP proxy, and SSH into the guest to run sudo -n usbip attach
 ```
 
-**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly, then performs the guest-side `usbip attach` over the framework-managed SSH key.
+**Status**
+
+The native CLI drives the daemon → broker `UsbipBind`, `UsbipBindFirewallRule`, per-env backend/proxy ensurement, and `UsbipProxyReconcile` path directly.
+
+**Native**
+
+- `--apply` routes through `nixlingd` → broker. The guest-side `usbip attach` is still performed over the framework-managed per-VM SSH key: USBIP attach is the one VM-lifecycle surface that intentionally retains SSH.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb detach`
 
@@ -529,7 +569,17 @@ $ nixling usb detach corp-vm 1-2 --dry-run
 nixling usb detach --dry-run: would unbind busid '1-2' for vm 'corp-vm', and reconcile the USBIP proxy
 ```
 
-**Disposition:** `rust-native` — The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+**Status**
+
+The native CLI drives the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path directly.
+
+**Native**
+
+- `--apply` routes through `nixlingd` → broker `UsbipUnbind` then `UsbipProxyReconcile`.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `usb probe`
 
@@ -565,7 +615,17 @@ VM                       ENV          BUSID        STATUS   OWNER
 corp-vm                  work         1-2          bound    corp-vm
 ```
 
-**Disposition:** `rust-native` — Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+**Status**
+
+Probe is a read-only daemon RPC backed by the broker's `UsbipProxyReconcile` validation pass.
+
+**Native**
+
+- Read-only daemon query enumerating every declared USBIP busid claim.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `console`
 
@@ -601,7 +661,17 @@ Connected to corp-vm serial console.
 Use ~. to detach.
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native console surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native foreground console handoff is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio status`
 
@@ -639,7 +709,17 @@ sidecar:  inactive
 device:   detached
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-status surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio mic`
 
@@ -680,7 +760,17 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio hotplug surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-hotplug surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio speaker`
 
@@ -721,7 +811,17 @@ sidecar:  active
 device:   will-attach-on-next-up
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio speaker surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-speaker surface is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `audio off`
 
@@ -761,7 +861,17 @@ sidecar:  inactive
 device:   detached
 ```
 
-**Disposition:** `rust-native shim` — The Rust CLI owns help and argument validation, but returns a typed exit-78 envelope in v1.0 (daemon-native audio off surface queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017); see ADR 0015).
+**Status**
+
+The Rust CLI owns help and argument validation, but returns a typed exit-78 `not-yet-implemented` envelope (the daemon-native audio-off shorthand is queued for a future release; see ADR 0015 and ADR 0017).
+
+**Native**
+
+- Parses and validates arguments natively, then surfaces the typed `not-yet-implemented` envelope (exit `78`).
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `build`
 
@@ -796,7 +906,17 @@ nixling: corp-vm closure → /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-nixos-s
   GC root: /var/lib/nixling/vms/corp-vm/result
 ```
 
-**Disposition:** `rust-native` — Build is a native non-destructive planner that renders the eval/build preview without falling back to bash.
+**Status**
+
+Build is a native non-destructive planner that renders the eval/build preview without falling back to bash.
+
+**Native**
+
+- Native eval/build planner; renders the closure preview and GC-root path.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `switch`
 
 **Synopsis:** `nixling switch <vm> [--dry-run | --apply] [--human | --json]`
@@ -1033,7 +1153,17 @@ $ nixling generations corp-vm
   (corp-vm is not running — start it and try again)
 ```
 
-**Disposition:** `rust-native` — Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash.
+**Status**
+
+Generations is a native introspection surface that reports current/booted symlink targets without falling back to bash.
+
+**Native**
+
+- Native introspection of host-side and in-VM nix-profile generations.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `gc`
 
 **Synopsis:** `nixling gc [--dry-run | --apply] [--human | --json]`
@@ -1304,7 +1434,17 @@ corp-vm                  work         SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 }
 ```
 
-**Disposition:** `rust-native` — Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash.
+**Status**
+
+Keys list is a native inventory preview that reports the managed-key resolution placeholders without falling back to bash.
+
+**Native**
+
+- Native managed-key inventory query over the daemon public socket.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `keys show`
 
@@ -1338,7 +1478,17 @@ $ nixling keys show corp-vm
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockedExampleKeyForDocsOnly corp-vm_ed25519.pub
 ```
 
-**Disposition:** `rust-native` — Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash.
+**Status**
+
+Keys show is a native preview that reports daemon-resolved key metadata placeholders without falling back to bash.
+
+**Native**
+
+- Native per-VM managed-key lookup over the daemon public socket.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 ### `keys rotate`
 
 **Synopsis:** `nixling keys rotate <vm> [--dry-run | --apply] [--human | --json]`
@@ -1464,7 +1614,17 @@ $ nixling audit --human
 }
 ```
 
-**Disposition:** `rust-native` — Audit is part of the read-only daemon surface and keeps both human and JSON output contracts.
+**Status**
+
+Audit is part of the read-only daemon surface and keeps both human and JSON output contracts. `--strict` surfaces a typed `not-yet-implemented` envelope (exit `78`) pending its daemon-native implementation.
+
+**Native**
+
+- Read-only daemon query; `--json` emits the stable audit document.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `host check`
 
@@ -1542,7 +1702,17 @@ WARN
 }
 ```
 
-**Disposition:** `rust-native` — Host check is a read-only daemon RPC by design; mutation is explicitly handled by host prepare.
+**Status**
+
+Host check is a read-only daemon RPC by design; mutation is explicitly handled by host prepare.
+
+**Native**
+
+- Read-only host-posture inventory; never mutates nftables, cgroups, users, or runtime directories.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 The command never mutates nftables, cgroups, users, or runtime directories. `--read-only` is therefore part of the compatibility surface, not a capability toggle.
 ### `host prepare`
@@ -1935,7 +2105,17 @@ denied commands:
 }
 ```
 
-**Disposition:** `rust-native` — Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
+**Status**
+
+Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints.
+
+**Native**
+
+- Read-only daemon query resolving the caller's `SO_PEERCRED` role and the allowed/denied verb set.
+
+**Bash**
+
+- There is no live bash fallback for this verb; the bash disposition is retained only as coverage taxonomy / the retired path.
 
 ### `config sync`
 
@@ -2159,7 +2339,9 @@ message pointing at `vm exec -it`.
 | `vm list` | `rust-native` placeholder | Reserves the daemon-side runtime-view contract, but today returns an explicit empty inventory until live runner enumeration is wired through this surface. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
-| `usb` | `rust-native` | USBIP attach/detach/probe now parse and dispatch through the native daemon path. |
+| `usb attach` | `rust-native` | USBIP attach parses and dispatches through the native daemon → broker path; the guest-side `usbip attach` still runs over the framework-managed per-VM SSH key. |
+| `usb detach` | `rust-native` | USBIP detach parses and dispatches the daemon → broker `UsbipUnbind` / `UsbipProxyReconcile` path natively. |
+| `usb probe` | `rust-native` | USBIP probe is a read-only daemon query backed by the broker's `UsbipProxyReconcile` validation pass. |
 | `console` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native foreground console handoff is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio status` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native audio-status surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
 | `audio mic` | `rust-native shim` | The Rust CLI owns help / argument validation; the daemon-native microphone grant surface is queued for v1.2+ (unscheduled; v1.1 only delivers the typed-envelope rendering + remediation per ADR 0017). Today the verb surfaces the typed `not-yet-implemented` envelope (exit `78` per ADR 0015). |
