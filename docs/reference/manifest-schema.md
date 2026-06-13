@@ -67,6 +67,39 @@ Every top-level key is either a reserved key starting with `_` or a VM
 name matching the VM-name assertion (`^[a-z][a-z0-9-]*$`). The leading
 underscore prevents reserved keys from colliding with valid VM names.
 
+## Per-VM entry
+
+Every non-reserved top-level key is a VM name mapping to the per-VM entry
+described below. The JSON Schema (`manifest-schema.json`, `$defs.vmEntry`)
+is the canonical type spec; this table is its human-readable companion.
+Fields are listed in `nixos-modules/manifest.nix` declaration order.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | VM name; matches the enclosing top-level key. Pattern `^[a-z][a-z0-9-]*$` (enforced by `nixos-modules/assertions.nix`). |
+| `graphics` | boolean | yes | Mirror of `nixling.vms.<name>.graphics.enable`. The CLI uses it to pick the launch path. |
+| `tpm` | boolean | yes | Mirror of `nixling.vms.<name>.tpm.enable`. |
+| `usbipYubikey` | boolean | yes | Mirror of `nixling.vms.<name>.usbip.yubikey`. `nixling usb attach\|detach\|probe` refuses to run when false. |
+| `audio` | boolean | yes | Mirror of `nixling.vms.<name>.audio.enable` (the capability bit). Live grant state lives in `audioStateFile`. |
+| `tap` | string | yes | Host-side tap-device name. Derived: `<env>-l<index>` (workload), `<env>-u2` (net VM), or `vm-<name>` (legacy). |
+| `bridge` | string \| null | yes | Linux bridge the tap attaches to. Workload: `br-<env>-lan`. Net VM: `br-<env>-up`. Legacy hand-rolled VM: `null`. |
+| `env` | string \| null | yes | Env this VM belongs to (workload) or serves (net VM). Null for legacy hand-rolled VMs. |
+| `mtu` | integer | no | Effective MTU for env-backed VMs when emitted. Omitted for legacy/env-less VMs. |
+| `mssClamp` | integer | no | Effective TCP MSS clamp for env-backed VMs when emitted. Omitted when no clamp is configured. |
+| `lan` | object | no | LAN east-west policy metadata for env-backed VMs when emitted. Shape: `{ allowEastWest, effectiveEastWest }`. |
+| `isNetVm` | boolean | yes | True iff this VM is the auto-generated `sys-<env>-net`. Used for bring-up ordering. |
+| `netVm` | string \| null | yes | For workload VMs: name of the net VM serving this VM's env. Null for net VMs and legacy VMs. |
+| `usbipdHostIp` | string \| null | yes | Host IP of the per-env usbipd proxy, passed to `usbip attach -r` via the broker. Null for net VMs and legacy. |
+| `stateDir` | string | yes | Per-VM state dir. Currently `/var/lib/nixling/vms/<name>`. |
+| `apiSocket` | string | yes | Runner API socket path (`<stateDir>/<name>.sock`). |
+| `gpuSocket` | string | yes | GPU sidecar control socket (`<stateDir>/<name>-gpu.sock`). Only meaningful when `graphics = true`. |
+| `tpmSocket` | string | yes | swtpm vTPM socket (`/run/nixling/vms/<name>/tpm.sock`). Only meaningful when `tpm = true`. |
+| `audioStateFile` | string | yes | Live audio-grant state file (`<stateDir>/state/audio-state.json`): `{ "mic": "on"\|"off", "speaker": "on"\|"off" }`. |
+| `audioService` | string | yes | Host-side audio sidecar identifier (`nixling-<name>-snd.service`). Retained for manifest backward-compat. |
+| `observability` | object | yes | Per-VM observability transport metadata (`enabled`, base `vsockCid`/`vsockHostSocket`, guest `agentSocket`). See [Per-VM observability block](#per-vm-observability-block). |
+| `staticIp` | string \| null | yes | The VM's static LAN IP. Derived for env-attached VMs; null when no IP source applies. |
+| `sshUser` | string \| null | yes | Username for `nixling`-driven SSH. Mirrors `nixling.vms.<name>.ssh.user`. Null for headless net VMs. |
+
 ## Reserved keys
 
 ### `_manifest`
