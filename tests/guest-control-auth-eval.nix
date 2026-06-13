@@ -86,7 +86,7 @@ let
     assert builtins.elem "guest_control_token:/run/nixling-guest-control-host/token"
       service.serviceConfig.LoadCredential;
     assert builtins.elem "/run/nixling-guest-control-host" service.unitConfig.RequiresMountsFor;
-    assert service.wantedBy == [ ];
+    assert service.wantedBy == [ "multi-user.target" ];
     assert lib.hasInfix "/bin/nixling-guestd --serve --vm-id corp-vm"
       service.serviceConfig.ExecStart;
     assert !(builtins.hasAttr "nixling-guestd" nixos.config.systemd.services);
