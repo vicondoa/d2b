@@ -2842,6 +2842,15 @@ enum ExecWriterItem {
 /// promptly (the reader never blocks acquiring a permit).
 const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
 
+/// Bounded grace for the owner writer to flush its last resolved replies (e.g. a
+/// final exit-status `Wait`) during teardown before the owner socket is
+/// force–shut-down. A healthy writer exits in microseconds; this only bounds the
+/// wait for a writer wedged on a blocking `send` to an owner that stopped
+/// reading, after which the socket is shut down so the send fails and the writer
+/// can exit (otherwise `join()` would hang and strand the owner thread + slot).
+const EXEC_OWNER_WRITER_DRAIN_GRACE: Duration = Duration::from_millis(250);
+const EXEC_OWNER_WRITER_DRAIN_POLL: Duration = Duration::from_millis(5);
+
 /// A non-blocking counting semaphore bounding the owner connection's actual
 /// concurrent in-flight ops. The earlier design only bounded the
 /// reader→writer channel, but the worker immediately spawns each long-poll and
@@ -3066,6 +3075,23 @@ fn run_exec_owner_io(
     // socket writes after this returns.
     drop(control_tx);
     drop(item_tx);
+    // Give the writer a brief, bounded grace to flush its last resolved replies
+    // and exit on its own, then force teardown: a misbehaving owner that stopped
+    // reading and filled its socket receive buffer would wedge the writer's
+    // blocking `send`, so `join()` would hang forever and strand the owner
+    // thread + session slot. Shutting the owner socket down makes the wedged
+    // send fail promptly so the writer can exit. A healthy writer finishes well
+    // within the grace and never reaches the shutdown.
+    let drain_deadline = Instant::now() + EXEC_OWNER_WRITER_DRAIN_GRACE;
+    while !writer.is_finished() && Instant::now() < drain_deadline {
+        std::thread::sleep(EXEC_OWNER_WRITER_DRAIN_POLL);
+    }
+    if !writer.is_finished() {
+        let _ = nix::sys::socket::shutdown(
+            stream.as_ref().as_raw_fd(),
+            nix::sys::socket::Shutdown::Both,
+        );
+    }
     let _ = writer.join();
 }
 
@@ -3333,11 +3359,11 @@ mod exec_owner_io_tests {
 
     use super::{
         exec_session, metrics, read_frame, run_exec_owner_io, spawn_exec_owner_writer,
-        write_frame, Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP,
+        write_frame, Socket, EXEC_METRIC, EXEC_OWNER_INFLIGHT_CAP, EXEC_OWNER_WRITER_DRAIN_GRACE,
     };
     use nixling_ipc::public_wire::{
-        ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse, ExecSignalArgs,
-        ExecWaitArgs,
+        ExecCloseArgs, ExecCloseResult, ExecControlResult, ExecOp, ExecOpResponse,
+        ExecReadOutputResult, ExecSignalArgs, ExecWaitArgs,
     };
     use serde_json::{json, Value};
     use std::sync::Arc;
@@ -3727,6 +3753,108 @@ mod exec_owner_io_tests {
             "saturated owner disconnect did not tear down promptly (reader blocked?)",
         );
         let _ = &metrics;
+        worker.join().expect("fake worker joins");
+    }
+
+    #[test]
+    fn over_cap_teardown_completes_when_owner_stops_reading() {
+        // A misbehaving owner that pipelines past the cap while NEVER reading
+        // replies fills the daemon's owner-socket send buffer, wedging the
+        // writer's blocking `send`. Teardown must still complete: the bounded
+        // drain grace elapses, the owner socket is shut down to unblock the
+        // wedged send, and the io thread joins — instead of hanging forever and
+        // stranding the owner thread + session slot.
+        let cap = EXEC_OWNER_INFLIGHT_CAP;
+        let (daemon, client) = seqpacket_pair();
+        // Squeeze both buffers so a couple of unread ~1 KiB replies fill the pipe
+        // and wedge the writer well before the cap is reached.
+        let _ = daemon.set_send_buffer_size(1024);
+        let _ = client.set_recv_buffer_size(1024);
+        let daemon = Arc::new(daemon);
+        let metrics = Arc::new(metrics::Registry::new());
+        let (control_tx, mut control_rx) = tokio::sync::mpsc::channel(16);
+
+        // Resolve EVERY long-poll immediately with a ~1 KiB reply so the writer
+        // actively sends; with the owner never reading, the send buffer backs up
+        // and the writer's blocking `send` wedges.
+        let worker = std::thread::spawn(move || {
+            let payload = "x".repeat(1024);
+            while let Some(exec_session::WorkerCommand { op, reply }) = control_rx.blocking_recv() {
+                match op {
+                    ExecOp::Wait(_) | ExecOp::ReadOutput(_) => {
+                        let _ = reply.send(Ok(ExecOpResponse::ReadOutput(ExecReadOutputResult {
+                            data_base64: payload.clone(),
+                            next_offset: 0,
+                            eof: false,
+                            dropped_bytes: 0,
+                            truncated: false,
+                            timed_out: false,
+                        })));
+                    }
+                    _ => {
+                        let _ = reply.send(Err(exec_session::ExecOpError::Protocol));
+                    }
+                }
+            }
+        });
+
+        let io_daemon = Arc::clone(&daemon);
+        let io_metrics = Arc::clone(&metrics);
+        let started = Instant::now();
+        let io = std::thread::spawn(move || {
+            let (writer, item_tx, inflight) =
+                spawn_exec_owner_writer(&io_daemon, &io_metrics).expect("writer spawns");
+            run_exec_owner_io(
+                &io_daemon,
+                control_tx,
+                item_tx,
+                inflight,
+                writer,
+                &io_metrics,
+                HANDLE,
+            );
+        });
+
+        // Pipeline far past the cap WITHOUT ever reading a reply, from a thread so
+        // a backed-up client send (once the reader over-caps and stops reading)
+        // cannot wedge the test itself. Hold the client socket OPEN so teardown is
+        // an over-cap close, NOT an EOF (which would unblock the writer for free).
+        let sender = std::thread::spawn(move || {
+            for op_id in 0..(cap * 2) {
+                if write_frame(&client, &exec_frame(op_id as u64, &wait_op())).is_err() {
+                    break;
+                }
+            }
+            client
+        });
+
+        // The io thread must JOIN — proving teardown did not hang on the wedged
+        // send. Poll up to 10s (the bounded grace is sub-second).
+        let mut joined = false;
+        for _ in 0..400 {
+            if io.is_finished() {
+                joined = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            joined,
+            "owner teardown hung: the wedged writer's send was never unblocked",
+        );
+        io.join().expect("io thread joins");
+
+        // The teardown waited the full bounded grace, proving the writer was
+        // genuinely wedged (a healthy writer exits in microseconds, far under the
+        // grace) and the shutdown path — not a free EOF — released it.
+        assert!(
+            started.elapsed() >= EXEC_OWNER_WRITER_DRAIN_GRACE,
+            "expected the bounded drain grace to elapse on a wedged writer; got {:?}",
+            started.elapsed(),
+        );
+
+        let client = sender.join().expect("sender thread joins");
+        drop(client);
         worker.join().expect("fake worker joins");
     }
 }
