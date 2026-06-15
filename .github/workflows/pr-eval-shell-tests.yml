@@ -104,7 +104,6 @@ jobs:
             tests/broker-export-audit.sh \
             tests/bundle-drift.sh \
             tests/cli-rust-native-audit.sh \
-            tests/cli-vm-verbs-eval.sh \
             tests/ssh-host-key-preflight-eval.sh \
             tests/stub-no-socket.sh \
             tests/usbip-state-machine-eval.sh \

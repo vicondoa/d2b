@@ -117,12 +117,9 @@ reap_known_static_orphans() {
     '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
     '.cli-rust-native-audit.*'
-    '.cli-rust-native-auth-status.*'
     '.cli-rust-native-cache'
     '.cli-rust-native-host-check.*'
     '.cli-rust-native.log'
-    '.cli-rust-native-status.*'
-    '.cli-rust-native-usb.*'
     '.daemon-*'
     '.host-check.*'
     '.nixlingd-startup-smoke.*'
@@ -684,11 +681,6 @@ fi
 if [ -x "$ROOT/tests/video-binary-contract.sh" ]; then
   nl_static_parallel_script_gate "tests/video-binary-contract.sh" "$ROOT/tests/video-binary-contract.sh"
 fi
-if [ -x "$ROOT/tests/cli-vm-verbs-eval.sh" ]; then
-  # P4fu1 software-r1 / test-r1 closure: wire the cli-vm-verbs Layer-1
-  # gate so the bash-fallback removal stays regression-gated.
-  nl_static_parallel_script_gate "tests/cli-vm-verbs-eval.sh" "$ROOT/tests/cli-vm-verbs-eval.sh"
-fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   # Regression gate that asserts no
   # consumer of nixos-modules/cli.nix's outputs survives outside the
@@ -805,7 +797,6 @@ fi
 for _d13_gate in \
   broker-socket-activation-eval \
   broker-systemd-unit-eval \
-  cli-rust-native-host-doctor \
   daemon-autostart-eval \
   daemon-experimental-warning-eval \
   host-prep-dag-eval \
@@ -1311,9 +1302,6 @@ if [ -x "$HERE/broker-validate-bundle.sh" ]; then nl_static_parallel_script "tes
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
-if [ -x "$HERE/cli-rust-native-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-status.sh" "$HERE/cli-rust-native-status.sh"; fi
-if [ -x "$HERE/cli-rust-native-usb.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-usb.sh" "$HERE/cli-rust-native-usb.sh"; fi
-if [ -x "$HERE/cli-rust-native-auth-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-auth-status.sh" "$HERE/cli-rust-native-auth-status.sh"; fi
 if [ -x "$HERE/cli-json-drift.sh" ]; then nl_static_parallel_script "tests/cli-json-drift.sh" "$HERE/cli-json-drift.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/error-codes-drift.sh" "$HERE/error-codes-drift.sh"; fi

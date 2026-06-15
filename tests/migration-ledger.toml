@@ -215,15 +215,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/cli-rust-native-auth-status.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/cli-rust-native-host-check.sh"
 group = "A"
 make_target = "test-rust"
@@ -231,42 +222,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/cli-rust-native-host-doctor.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/cli-rust-native-status.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/cli-rust-native-usb.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/cli-vm-verbs-eval.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
 
 [[script]]
 name = "tests/daemon-api-drift.sh"
@@ -1230,6 +1185,51 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/cli-rust-native-auth-status.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/auth_status_contract.rs::auth_status_roles_match_schema_and_authz (spawns the real nixling binary and drives `auth status` across the launcher/none/admin roles via the env-file fixture contract (NIXLING_AUTH_STATUS_FIXTURE + NIXLING_TEST_{LAUNCHER,ADMIN}_UIDS + --test-uid); `auth status --json` deserialized strictly into nixling::AuthStatusOutputV2 (deny_unknown_fields == the docs/reference/cli-output/auth-status.schema.json check) + asserts per-role authz: launcher allows `up`/denies `audit`, none stays read-only [auth status,host check,list,status], admin gains `audit`/denies nothing; --human summarizes role + denied audit)", "tests/rust-workspace-checks.sh (CLI-contract step: cargo test -p nixling --tests — gated in static.sh)", "tests/golden/pinned/cli-auth-status.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/cli-rust-native-host-doctor.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/host_doctor_contract.rs::host_doctor_without_read_only_exits_78_usage_envelope (usage gate: `host doctor --json` without --read-only exits 78 with a JSON envelope .code == \"--read-only-required\")", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_baseline_no_state_reports_broker_fail_exit_2 (no daemon-state: broker unreachable -> exit 2, envelope command/mode/broker_ready=false, exact 11-check-name set with signoz-ui-endpoint suppressed by the observability-disabled manifest, summary fail>=1 warn>=4)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_pidfd_table_reports_otel_and_usbipd_runners (pidfd-table.json -> otel-host-bridge-runner pass count==1, usbipd-runners pass count==2)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_clean_kernel_module_report_passes (clean kernel-module-report.json -> kernel-module-matrix pass)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_missing_required_kernel_module_fails_exit_2 (missing_required kernel module -> kernel-module-matrix fail, exit 2, envelope exitCode==2)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_autostart_failed_outcome_fails_exit_2 (autostart-report Failed outcome -> autostart-status fail, exit 2, data.failed==1, data.degradedTotal==1)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_autostart_degraded_outcome_warns (autostart-report Degraded outcome -> autostart-status warn, data.degraded==1)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_metrics_endpoint_unreachable_warns (closed loopback NIXLING_METRICS_URL -> metrics-endpoint warn, detail contains \"unreachable\")", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_human_renderer_emits_summary_and_markers (`host doctor --read-only --human` prints the summary line + [PASS] per-check markers)", "packages/nixling/tests/host_doctor_contract.rs::host_doctor_live_sockets_report_broker_and_daemon_ready (live AF_UNIX SOCK_SEQPACKET broker+public listeners -> broker-ready pass, daemon-ready pass, top-level broker_ready==true)", "tests/rust-workspace-checks.sh (CLI-contract step: cargo test -p nixling --tests — gated in static.sh)", "tests/golden/pinned/cli-host-doctor.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/cli-rust-native-status.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/status_contract.rs::status_vm_json_matches_schema_and_static_state (spawns the real nixling binary against NL_FIXTURES; copies the fixture-smoke bundle into a hermetic temp bundle with the absolute /etc/nixling processesPath/hostPath rewritten to relative basenames so the host's deployed manifest cannot shadow the fixture; `status --vm corp-vm --json` classified as StatusOutputV2::Vm and deserialized strictly into nixling::StatusVmOutputV2 (deny_unknown_fields == the docs/reference/cli-output/status.schema.json check); asserts env=work, runtime=unknown, services.nixling=inactive, services.microvm=stopped, services.virtiofsd=stopped, declaredRoles contains cloud-hypervisor-runner, runnerParity.runnerParityOk=true, pendingRestart=false)", "packages/nixling/tests/status_contract.rs::status_vm_flag_and_positional_json_are_equivalent (`status --vm corp-vm --json` and positional `status corp-vm --json` produce byte-identical stdout)", "packages/nixling/tests/status_contract.rs::status_check_bridges_returns_frozen_not_yet_implemented_envelope (`status --check-bridges --json` classified as StatusOutputV2::CheckBridges + strictly deserialized into nixling::StatusBridgeCheckOutputV2; asserts mode=check-bridges, status=not-yet-implemented)", "packages/nixling/tests/status_contract.rs::status_human_renders_runner_parity_and_bridge_sections (`status --vm corp-vm --human` stdout contains 'runner parity: ok' and 'Bridge health')", "tests/rust-workspace-checks.sh (CLI-contract step: cargo test -p nixling --tests with NL_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-status.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/cli-rust-native-usb.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/usb_contract.rs::usb_help_matches_golden (spawns the real nixling binary; `usb --help` stdout matches tests/golden/cli-output/usb-help.txt byte-for-byte)", "packages/nixling/tests/usb_contract.rs::usb_attach_dry_run_matches_golden (`usb attach corp-vm 1-2 --dry-run` against the NL_FIXTURES manifest/bundle matches tests/golden/cli-output/usb-attach-dry-run.txt)", "packages/nixling/tests/usb_contract.rs::usb_detach_dry_run_matches_golden (`usb detach corp-vm 1-2 --dry-run` against the NL_FIXTURES manifest/bundle matches tests/golden/cli-output/usb-detach-dry-run.txt)", "tests/rust-workspace-checks.sh (CLI-contract step: cargo test -p nixling --tests with NL_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-usb.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/cli-vm-verbs-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/vm_verbs_contract.rs::mutating_verbs_emit_daemon_down_without_bash_fallback (up/down/restart + vm start/stop/restart against a missing public socket all surface the typed daemon-down envelope (.code==daemon-down, .exitCode==1) and exit 1; the exit-99 poison-pill legacy CLI is never exec'd even with NIXLING_LEGACY_BASH_OPT_IN=1 set)", "packages/nixling/tests/vm_verbs_contract.rs::legacy_bash_opt_in_is_a_no_op (spot-check: NIXLING_LEGACY_BASH_OPT_IN=1 + poison-pill legacy path never reaches the poison-pill; escape hatch removed)", "packages/nixling/tests/vm_verbs_contract.rs::vm_list_is_daemon_native_json (vm list --json returns the rust-native command==\"vm list\" envelope, exit 0, no bash fallback)", "packages/nixling/tests/vm_verbs_contract.rs::top_level_list_is_daemon_native_json (nixling list --json returns the native manifest array including the synthetic test-vm, exit 0, no bash fallback)", "packages/nixling/tests/vm_verbs_contract.rs::vm_konsole_dry_run_emits_guest_control_shape (vm konsole --dry-run --json emits command/mode/vm/terminal=konsole/transport=guest-control + argv hosting `vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l`; retired SSH host/user/key fields absent)", "packages/nixling/tests/vm_verbs_contract.rs::vm_konsole_terminal_override_reflected (--terminal xterm reflected in .terminal and argv[0])", "packages/nixling/tests/vm_verbs_contract.rs::vm_konsole_rejects_retired_ssh_flags (retired --host/--user/--key each exit non-zero)", "packages/nixling/tests/vm_verbs_contract.rs::vm_konsole_rejects_unknown_vm (unknown vm name exits non-zero)", "packages/nixling/tests/vm_verbs_contract.rs::vm_exec_missing_command_emits_cli_usage_envelope (vm exec with no command exits 2 with the cli/usage envelope via clap+dispatch)", "packages/nixling/tests/vm_verbs_contract.rs::vm_exec_no_daemon_emits_transport_unavailable_envelope (vm exec -- /bin/true with no daemon exits non-zero with source=transport reason=guest-control-transport-unavailable; never SSH/bash)", "packages/nixling/tests/vm_verbs_contract.rs::vm_exec_rejects_interactive_without_tty (vm exec -i without -t exits 2 and cites the -t/--tty requirement)", "tests/rust-workspace-checks.sh (CLI-contract step: cargo test -p nixling --tests — gated in static.sh)", "tests/golden/pinned/cli-vm-verbs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/cli-rust-native-list.sh"
