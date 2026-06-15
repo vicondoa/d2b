@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/principal-uid-collision.nix — 6 stablePrincipalId UID-collision/range/no-system-user-collision cases + non-vacuity count guards, via mkEval over examples/multi-env)"]

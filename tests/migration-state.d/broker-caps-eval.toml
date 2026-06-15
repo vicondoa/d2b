@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-caps.nix — 4 cases: broker CapabilityBoundingSet exact-set match + AmbientCapabilities empty-string sentinel via mkEval introspection)"]
