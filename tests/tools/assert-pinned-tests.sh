@@ -70,10 +70,25 @@ collect_present < <(
 # ops::device / ops::modprobe #[test]s that live there, so the fail-closed
 # pinned gate must enumerate it too — otherwise those retirements would be
 # silently unguarded against deletion.
+#
+# `cargo metadata --all-features` (run by `nextest list`) can add a
+# transitive lock entry the committed lock omits (e.g. `itoa` under rustix's
+# full feature set), which would dirty the working tree. Snapshot + restore
+# the broker lock so listing is non-mutating by construction.
+broker_lock="$ROOT/packages/nixling-priv-broker/Cargo.lock"
+broker_lock_backup=""
+if [ -f "$broker_lock" ]; then
+  broker_lock_backup=$(mktemp)
+  cp "$broker_lock" "$broker_lock_backup"
+fi
 collect_present < <(
   cd "$ROOT/packages/nixling-priv-broker"
   cargo nextest list --workspace --message-format oneline
 )
+if [ -n "$broker_lock_backup" ]; then
+  cp "$broker_lock_backup" "$broker_lock"
+  rm -f "$broker_lock_backup"
+fi
 
 declare -A seen
 total=0
