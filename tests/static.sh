@@ -113,11 +113,9 @@ reap_known_static_orphans() {
     '.broker-*'
     '.bundle-drift.*'
     '.cli-contract-coverage.*'
-    '.cli-json.*'
     '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
     '.cli-rust-native-cache'
-    '.cli-rust-native-host-check.*'
     '.cli-rust-native.log'
     '.daemon-*'
     '.host-check.*'
@@ -658,9 +656,6 @@ if [ -x "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh" ]; then
   # Asserts every declared bridge has a boot.kernel.sysctl entry that
   # suppresses IPv6 at NixOS activation, closing the boot-time window.
   nl_static_parallel_script_gate "tests/bridge-ipv6-boot-sysctl-eval.sh" "$ROOT/tests/bridge-ipv6-boot-sysctl-eval.sh"
-fi
-if [ -x "$ROOT/tests/cli-json.sh" ]; then
-  nl_static_parallel_script_gate "tests/cli-json.sh" "$ROOT/tests/cli-json.sh"
 fi
 if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/autostart-wiring-eval.sh" "$ROOT/tests/autostart-wiring-eval.sh"
@@ -1322,7 +1317,6 @@ if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_scr
 if [ -x "$HERE/daemon-socket-acl.sh" ]; then nl_static_parallel_script "tests/daemon-socket-acl.sh" "$HERE/daemon-socket-acl.sh"; fi
 if [ -x "$HERE/daemon-state-lock.sh" ]; then nl_static_parallel_script "tests/daemon-state-lock.sh" "$HERE/daemon-state-lock.sh"; fi
 if [ -x "$HERE/daemon-version-negotiation.sh" ]; then nl_static_parallel_script "tests/daemon-version-negotiation.sh" "$HERE/daemon-version-negotiation.sh"; fi
-if [ -x "$HERE/cli-rust-native-host-check.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-host-check.sh" "$HERE/cli-rust-native-host-check.sh"; fi
 nl_static_parallel_wait_all
 if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bounded.sh" || fail "manifest-fuzz-bounded"; fi
 nl_static_gate_end "W2 control-plane skeleton gates"

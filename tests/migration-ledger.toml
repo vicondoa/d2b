@@ -188,27 +188,9 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/cli-json.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/cli-nix-consumers-eval.sh"
 group = "F"
 make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/cli-rust-native-host-check.sh"
-group = "A"
-make_target = "test-rust"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -1175,6 +1157,24 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/cli-json.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/cli_json_contract.rs::list_reports_pending_restart_when_booted_differs_and_active (spawns the real nixling binary against NL_FIXTURES; copies the fixture-smoke bundle into a hermetic temp bundle with the absolute /etc/nixling processesPath/hostPath rewritten to relative basenames; per-VM state-root with corp-vm current!=booted symlinks + daemon-state pidfd-table marking ch-runner running + system-state fixture pinning nixlingd.service active; asserts `list --json` deserialized strictly into nixling::ListOutputV2 (deny_unknown_fields == the bash jq key-set check) reports corp-vm status==pending-restart)", "packages/nixling/tests/cli_json_contract.rs::status_reports_pending_restart_with_consistent_current_booted (same pending-restart env; `status corp-vm --json` deserialized strictly into nixling::StatusVmOutputV2 (deny_unknown_fields == the bash jq key-set check for status/services/runnerParity/livePoolIntegrity); asserts pendingRestart=true, current=/nix/store/nixling-current, booted=/nix/store/nixling-booted, services.nixling=active, services.microvm=running, runtime=unknown, runnerParity.runnerParityOk=true)", "packages/nixling/tests/cli_json_contract.rs::keys_list_daemon_down_returns_structured_envelope (`keys list --json` with NIXLING_PUBLIC_SOCKET pointed at a missing socket: exit 1, empty stderr, structured daemon-down envelope on stdout with the exact key set [code,docsAnchor,exitCode,kind,observedState,remediation,whatWasChecked], kind==\"nixling keys list requires nixlingd\", code=daemon-down, exitCode=1, docsAnchor=docs/reference/error-codes.md#daemon-down)", "packages/nixling/tests/cli_json_contract.rs::audit_json_stays_json_on_tty_with_daemon_down_envelope (reproduces the bash `script`-PTY case via rustix::pty: spawns `audit --json` with stdin/stdout/stderr on a real PTY slave and a missing public socket; asserts the CLI stays JSON on a TTY — not the human-on-stderr form — exit 1, daemon-down envelope with kind==\"nixling audit requires nixlingd\" and the exact key set)", "tests/rust-workspace-checks.sh (CLI-contract step: builds fixture-smoke, runs `cargo test -p nixling --tests` with NL_FIXTURES — gated in static.sh)", "tests/golden/pinned/cli-json.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/cli-rust-native-host-check.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/host_check_contract.rs::host_check_pass_fixture_exits_zero_and_matches_schema (pass fixture -> exit 0, stdout strictly deserializes into nixling::HostCheckOutputV2 (deny_unknown_fields == host-check schema check), summary.fail==0 warn==0)", "packages/nixling/tests/host_check_contract.rs::host_check_built_in_kernel_modules_pass (kvm module in builtInModules not loadedModules -> exit 0, kernel-module severity=pass message 'built into the running kernel')", "packages/nixling/tests/host_check_contract.rs::host_check_ufw_active_warns (NIXLING_TEST_UFW_ACTIVE=1 -> exit 1, firewall-coexistence warn ufw_active=true)", "packages/nixling/tests/host_check_contract.rs::host_check_systemctl_unavailable_warns (NIXLING_TEST_SYSTEMCTL_UNAVAILABLE=1 -> exit 1, firewall-coexistence warn 'could not be fully determined' + systemctl-unavailable detail)", "packages/nixling/tests/host_check_contract.rs::host_check_runner_parity_drift_warns_without_strict (runner-drift bundle no --strict -> exit 1, summary.warn>0 fail==0, runner-parity warn)", "packages/nixling/tests/host_check_contract.rs::host_check_runner_parity_drift_fails_under_strict (runner-drift bundle + --strict -> exit 2, summary.fail>0, runner-parity fail)", "packages/nixling/tests/host_check_contract.rs::host_check_hard_failure_exits_two (kernelRelease=6.5.0-nixling old-kernel hard failure -> exit 2, summary.fail>0)", "packages/nixling/tests/host_check_contract.rs::host_check_modules_probe_error_envelope (loadedModulesError -> exit 1, stderr internal-io envelope owningCommand 'host check' code 50 'forced /proc/modules read failure')", "packages/nixling/tests/host_check_contract.rs::host_check_nft_probe_error_envelope (nftError -> exit 1, stderr internal-io envelope 'forced nft probe failure')", "packages/nixling/tests/host_check_contract.rs::host_check_ufw_probe_error_envelope (ufwError -> exit 1, stderr internal-io envelope 'forced ufw probe failure')", "packages/nixling/tests/host_check_contract.rs::host_check_usage_error_exits_three (host check --bogus clap usage error -> exit 3)", "packages/nixling/tests/host_check_contract.rs::host_check_human_groups_findings_by_severity (pass fixture --human -> exit 0, stdout 'summary: pass=' + PASS severity grouping)", "packages/nixling/tests/host_check_contract.rs::daemon_host_check_pass_runs_full_probe_battery (real nixlingd serve --once + test-client hostCheck -> summary.failures==0 warnings==0, checks[] has kernel-module:kvm + nftables-table + firewall-coexistence + runner-parity; via tests/common spawn_nixlingd_host_check)", "packages/nixling/tests/host_check_contract.rs::daemon_host_check_fails_closed_on_old_kernel_and_missing_cgroup_v2 (kernelRelease=6.5.0-nixling + cgroupV2Present=false -> summary.failures>=2, kernel-version=fail + cgroup-v2=fail)", "packages/nixling/tests/host_check_contract.rs::daemon_host_check_strict_runner_parity_fails (runner-drift bundle + strict=true -> summary.failures>0, runner-parity=fail)", "tests/rust-workspace-checks.sh (CLI-contract step builds fixture-smoke + nixlingd, exports NL_FIXTURES + NIXLING_TEST_NIXLINGD_BIN, runs cargo test -p nixling --tests — gated in static.sh)", "tests/golden/pinned/cli-host-check.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
 exercised_today = "yes"
 
 [[script]]
