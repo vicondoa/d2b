@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["cargo nextest run --workspace --exclude nixling-contract-tests (argv #[test]s: audio_argv, ch_argv, gpu_argv, hardlink_farm, otel_host_bridge_argv, ssh_keygen, supervisor::state::reconcile_and_adopt, swtpm_argv, usbip_argv, video_argv, virtiofsd_argv, vsock_relay_argv)", "tests/tools/assert-pinned-tests.sh"]

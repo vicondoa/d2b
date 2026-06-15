@@ -98,10 +98,19 @@ run_gate() {
   fi
 }
 
+run_script_gate_if_present() {
+  local label="$1" path="$2"
+  if [ -x "$path" ]; then
+    run_gate "$label" "bash '$path'"
+  else
+    log "  SKIP: $label (not present)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
-run_gate "tests/preflight-disk-space.sh" "bash '$ROOT/tests/preflight-disk-space.sh'"
+run_script_gate_if_present "tests/preflight-disk-space.sh" "$ROOT/tests/preflight-disk-space.sh"
 
 # ---------------------------------------------------------------------------
 # Parse + lint
@@ -138,22 +147,22 @@ run_gate "shellcheck --severity=warning on all nixling shell scripts" "
   shellcheck --severity=warning -x \$files
 "
 
-run_gate "tests/legacy-group-name-denylist-self-test.sh" "bash '$ROOT/tests/legacy-group-name-denylist-self-test.sh'"
-run_gate "tests/legacy-group-name-denylist.sh" "bash '$ROOT/tests/legacy-group-name-denylist.sh'"
-run_gate "tests/group-rename-semantic-eval.sh" "bash '$ROOT/tests/group-rename-semantic-eval.sh'"
-run_gate "tests/group-migration-fresh-install-eval.sh" "bash '$ROOT/tests/group-migration-fresh-install-eval.sh'"
-run_gate "tests/guest-control-proto.sh" "bash '$ROOT/tests/guest-control-proto.sh'"
-run_gate "tests/guest-proto-bindings.sh" "bash '$ROOT/tests/guest-proto-bindings.sh'"
-run_gate "tests/guest-ttrpc-bindings.sh" "bash '$ROOT/tests/guest-ttrpc-bindings.sh'"
-run_gate "tests/guest-control-auth-eval.sh" "bash '$ROOT/tests/guest-control-auth-eval.sh'"
-run_gate "tests/guest-control-auth-nongoals.sh" "bash '$ROOT/tests/guest-control-auth-nongoals.sh'"
-run_gate "tests/guest-control-token-materializer.sh" "bash '$ROOT/tests/guest-control-token-materializer.sh'"
-run_gate "tests/guest-control-vsock-eval.sh" "bash '$ROOT/tests/guest-control-vsock-eval.sh'"
-run_gate "tests/guest-control-vsock-helper-static.sh" "bash '$ROOT/tests/guest-control-vsock-helper-static.sh'"
-run_gate "tests/guest-exec-runtime-static.sh" "bash '$ROOT/tests/guest-exec-runtime-static.sh'"
-run_gate "tests/guest-exec-policy-eval.sh" "bash '$ROOT/tests/guest-exec-policy-eval.sh'"
-run_gate "tests/guest-static-elf.sh" "bash '$ROOT/tests/guest-static-elf.sh'"
-run_gate "tests/guest-static-consumption-eval.sh" "bash '$ROOT/tests/guest-static-consumption-eval.sh'"
+run_script_gate_if_present "tests/legacy-group-name-denylist-self-test.sh" "$ROOT/tests/legacy-group-name-denylist-self-test.sh"
+run_script_gate_if_present "tests/legacy-group-name-denylist.sh" "$ROOT/tests/legacy-group-name-denylist.sh"
+run_script_gate_if_present "tests/group-rename-semantic-eval.sh" "$ROOT/tests/group-rename-semantic-eval.sh"
+run_script_gate_if_present "tests/group-migration-fresh-install-eval.sh" "$ROOT/tests/group-migration-fresh-install-eval.sh"
+run_script_gate_if_present "tests/guest-control-proto.sh" "$ROOT/tests/guest-control-proto.sh"
+run_script_gate_if_present "tests/guest-proto-bindings.sh" "$ROOT/tests/guest-proto-bindings.sh"
+run_script_gate_if_present "tests/guest-ttrpc-bindings.sh" "$ROOT/tests/guest-ttrpc-bindings.sh"
+run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest-control-auth-eval.sh"
+run_script_gate_if_present "tests/guest-control-auth-nongoals.sh" "$ROOT/tests/guest-control-auth-nongoals.sh"
+run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
+run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
+run_script_gate_if_present "tests/guest-control-vsock-helper-static.sh" "$ROOT/tests/guest-control-vsock-helper-static.sh"
+run_script_gate_if_present "tests/guest-exec-runtime-static.sh" "$ROOT/tests/guest-exec-runtime-static.sh"
+run_script_gate_if_present "tests/guest-exec-policy-eval.sh" "$ROOT/tests/guest-exec-policy-eval.sh"
+run_script_gate_if_present "tests/guest-static-elf.sh" "$ROOT/tests/guest-static-elf.sh"
+run_script_gate_if_present "tests/guest-static-consumption-eval.sh" "$ROOT/tests/guest-static-consumption-eval.sh"
 
 run_gate "nix flake check --no-build --all-systems" '
   nix flake check "'$ROOT'" --no-build --all-systems
@@ -162,7 +171,7 @@ run_gate "nix flake check --no-build --all-systems" '
 # ---------------------------------------------------------------------------
 # Rust workspace
 # ---------------------------------------------------------------------------
-run_gate "tests/rust-workspace-checks.sh" "bash '$ROOT/tests/rust-workspace-checks.sh'"
+run_script_gate_if_present "tests/rust-workspace-checks.sh" "$ROOT/tests/rust-workspace-checks.sh"
 
 # ---------------------------------------------------------------------------
 #  bundle/schema static gates (pure shell + small Nix evals)

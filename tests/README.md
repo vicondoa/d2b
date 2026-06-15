@@ -137,6 +137,25 @@ guest-control regressions:
 | `tests/broker-enum-disposition.sh` | `docs/reference/broker-w2-dispositions.md` lacks rows for store-view ops (`StoreSync`, `StoreVerify`, `BindMountFromHardlinkFarm`, `DiskInit`, …) that are in the schema enum, and the gate has no handler for the doc's existing `promoted-live` disposition. Needs the W2-snapshot→live migration intent. (Only `GuestControlSign` is guest-control's; the other 9 are not.) |
 | `tests/broker-validate-bundle.sh` | Forbids **all** `serde_json::from_str`/`from_value` under the broker `src/` to prevent duplicate bundle parsing, but the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output) in `ops/{store_view_farm,route,tap,store_sync_*}.rs`. The over-broad assertion needs narrowing. |
 
+## Parallel W1 unit protocol
+
+When a parallel unit retires `tests/X.sh`, it must keep its edits
+partition-local:
+
+1. Ensure every assertion in `X.sh` has a Rust/nextest, nix-unit, or
+   other declared successor.
+2. Write `tests/migration-state.d/X.toml` with `status = "retired"`
+   and non-empty `successor_ids = [...]`.
+3. Put any pinned successor names in
+   `tests/golden/pinned/<batch>.txt` and/or add the unit-owned
+   successor test under `packages/nixling-contract-tests/tests/`.
+4. Delete `tests/X.sh`.
+
+Unit branches must not edit `tests/tools/gen-migration-ledger.sh`,
+`tests/static.sh`, `tests/static-fast.sh`, `AGENTS.md`, the Makefile,
+or other units' state/pinned files. AGENTS.md critical-subsystem
+doc-reference updates are applied by the integrator at merge.
+
 ## Layer 2 — `nixling-store.sh`
 
 Integration tests that exercise the per-VM nix store and the

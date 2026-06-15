@@ -20,6 +20,7 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 DEFAULT_OUT="$ROOT/tests/migration-ledger.toml"
 MODE="write"
 OUT="$DEFAULT_OUT"
+STATE_DIR="$ROOT/tests/migration-state.d"
 
 usage() {
   cat <<USAGE
@@ -57,6 +58,7 @@ A=(
   activation-helper-eval broker-default-features-build
   broker-enum-disposition broker-export-audit broker-scm-rights-fd-lifecycle
   broker-socket-acl broker-validate-bundle cgroup-delegation-oracle
+  audio-argv-shape ch-argv-shape gpu-argv-shape otel-host-bridge-argv-shape
   ch-net-handoff-canary cli-json cli-rust-native-audit cli-rust-native-auth-status
   cli-rust-native-host-check cli-rust-native-host-doctor cli-rust-native-list
   cli-rust-native-status cli-rust-native-usb cli-vm-verbs-eval daemon-metrics-eval
@@ -70,17 +72,11 @@ A=(
   nft-coexistence nft-foreign-rule-preservation nixlingd-startup-smoke
   path-safety-violation-fs pidfd-handoff
   bridge-isolation-runtime runner-shape-preflight runner-shape-snapshot
-  rust-workspace-checks ssh-host-key-preflight-eval
+  rust-workspace-checks sidecar-argv-shape ssh-host-key-preflight-eval
   stub-no-socket usbip-firewall-skeleton
-  usbip-state-machine-eval video-binary-contract
+  usbip-argv-shape usbip-state-machine-eval video-argv-shape video-binary-contract
+  virtiofsd-argv-shape w6-argv-shape
 )
-
-A_ARGV_RETIRED=(
-  audio-argv-shape ch-argv-shape gpu-argv-shape otel-host-bridge-argv-shape
-  sidecar-argv-shape usbip-argv-shape video-argv-shape virtiofsd-argv-shape
-  w6-argv-shape
-)
-A_ARGV_SUCCESSORS='["cargo nextest run --workspace --exclude nixling-contract-tests (argv #[test]s: audio_argv, ch_argv, gpu_argv, hardlink_farm, otel_host_bridge_argv, ssh_keygen, supervisor::state::reconcile_and_adopt, swtpm_argv, usbip_argv, video_argv, virtiofsd_argv, vsock_relay_argv)", "tests/tools/assert-pinned-tests.sh"]'
 
 # B: drift vs shipped committed artifact (xtask gen + git diff).
 B=(
@@ -159,27 +155,16 @@ ORCH=(static static-fast static-fast-tier0 static-timing runner preflight-disk-s
 
 GROUP_NAMES=(A B C D E F H GCI GHW PERF ORCH)
 
-declare -A existing_group existing_make_target existing_tier
-declare -A existing_status existing_successors existing_exercised
+declare -A existing_group existing_make_target existing_tier existing_exercised
+declare -A migration_status migration_successors
 existing_order=()
+migration_order=()
 PRESERVE_EXERCISED=0
 
 contains_script() {
   local needle="$1" group_name="$2" item
   local -n group_ref="$group_name"
   for item in "${group_ref[@]}"; do
-    if [ "$item" = "$needle" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
-is_retired_argv_script() {
-  local needle="$1" item
-  needle=${needle#tests/}
-  needle=${needle%.sh}
-  for item in "${A_ARGV_RETIRED[@]}"; do
     if [ "$item" = "$needle" ]; then
       return 0
     fi
@@ -223,21 +208,19 @@ tier_of() {
 }
 
 load_existing_state() {
-  local ledger="$1" name group make_target tier status successors exercised
+  local ledger="$1" name group make_target tier _status _successors exercised
   [ -f "$ledger" ] || return 0
 
   if grep -qF 'exercised_today is a W0 script-level heuristic' "$ledger"; then
     PRESERVE_EXERCISED=1
   fi
 
-  while IFS=$'\t' read -r name group make_target tier status successors exercised; do
+  while IFS=$'\t' read -r name group make_target tier _status _successors exercised; do
     [ -n "$name" ] || continue
     existing_order+=("$name")
     existing_group["$name"]=${group:-}
     existing_make_target["$name"]=${make_target:-}
     existing_tier["$name"]=${tier:-}
-    existing_status["$name"]=${status:-legacy}
-    existing_successors["$name"]=${successors:-[]}
     existing_exercised["$name"]=${exercised:-yes}
   done < <(awk '
     function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
@@ -264,6 +247,45 @@ load_existing_state() {
   ' "$ledger")
 }
 
+load_migration_state() {
+  local file base rel status successors fail=0
+  [ -d "$STATE_DIR" ] || return 0
+
+  shopt -s nullglob
+  for file in "$STATE_DIR"/*.toml; do
+    base=$(basename "$file" .toml)
+    rel="tests/$base.sh"
+    status=$(sed -n 's/^[[:space:]]*status[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | tail -1)
+    successors=$(sed -n 's/^[[:space:]]*successor_ids[[:space:]]*=[[:space:]]*\(.*\)$/\1/p' "$file" | tail -1)
+
+    if [ -z "$status" ]; then
+      echo "MIGRATION STATE INVALID: $file missing status = \"...\"" >&2
+      fail=1
+      continue
+    fi
+    case "$status" in
+      legacy|porting|ported|retired) ;;
+      *)
+        echo "MIGRATION STATE INVALID: $file has unsupported status '$status'" >&2
+        fail=1
+        continue
+        ;;
+    esac
+    if [ -z "$successors" ]; then
+      echo "MIGRATION STATE INVALID: $file missing successor_ids = [...]" >&2
+      fail=1
+      continue
+    fi
+
+    migration_status["$rel"]=$status
+    migration_successors["$rel"]=$successors
+    migration_order+=("$rel")
+  done
+  shopt -u nullglob
+
+  [ "$fail" -eq 0 ] || exit 1
+}
+
 successors_empty() {
   local value="$1" compact
   compact=${value//[[:space:]]/}
@@ -284,20 +306,12 @@ detect_exercised_today() {
 
 status_for() {
   local rel="$1"
-  if is_retired_argv_script "$rel"; then
-    printf '%s' "retired"
-    return
-  fi
-  printf '%s' "${existing_status[$rel]:-legacy}"
+  printf '%s' "${migration_status[$rel]:-legacy}"
 }
 
 successors_for() {
   local rel="$1"
-  if is_retired_argv_script "$rel"; then
-    printf '%s' "$A_ARGV_SUCCESSORS"
-    return
-  fi
-  printf '%s' "${existing_successors[$rel]:-[]}"
+  printf '%s' "${migration_successors[$rel]:-[]}"
 }
 
 exercised_for() {
@@ -311,7 +325,7 @@ exercised_for() {
 }
 
 self_check() {
-  local fail=0 file name hits group item rel successors retired_count=0
+  local fail=0 file name hits group item rel successors retired_count=0 status
 
   for file in "$ROOT"/tests/*.sh; do
     name=$(basename "$file" .sh)
@@ -337,7 +351,7 @@ self_check() {
     for name in "${group_ref[@]}"; do
       rel="tests/$name.sh"
       if [ ! -f "$ROOT/$rel" ]; then
-        successors="${existing_successors[$rel]:-[]}"
+        successors=$(successors_for "$rel")
         if ! successors_empty "$successors"; then
           continue
         fi
@@ -362,10 +376,27 @@ self_check() {
     fi
   done
 
-  for item in "${A_ARGV_RETIRED[@]}"; do
-    rel="tests/$item.sh"
-    if [ -f "$ROOT/$rel" ]; then
-      echo "RETIRED SCRIPT STILL EXISTS: $rel" >&2
+  for rel in "${migration_order[@]}"; do
+    name=${rel#tests/}
+    name=${name%.sh}
+    group=$(group_of "$name")
+    if [ "$group" = "?" ]; then
+      echo "MIGRATION STATE UNCLASSIFIED: $rel (classify it before adding state)" >&2
+      fail=1
+    fi
+    status=$(status_for "$rel")
+    successors=$(successors_for "$rel")
+    if [ "$status" = "retired" ]; then
+      if [ -f "$ROOT/$rel" ]; then
+        echo "RETIRED SCRIPT STILL EXISTS: $rel" >&2
+        fail=1
+      fi
+      if successors_empty "$successors"; then
+        echo "RETIRED WITHOUT SUCCESSOR: $rel (state file must set successor_ids before deleting the legacy script)" >&2
+        fail=1
+      fi
+    elif [ ! -f "$ROOT/$rel" ]; then
+      echo "MISSING SCRIPT STATE MUST BE RETIRED: $rel has status=$status" >&2
       fail=1
     fi
   done
@@ -398,6 +429,7 @@ emit_script_row() {
 
 emit_ledger() {
   local destination="$1" file name group rel status successors exercised make_target tier
+  declare -A emitted_missing=()
   {
     echo "# tests/migration-ledger.toml — AUTO-GENERATED by tests/tools/gen-migration-ledger.sh."
     echo "# W0 seed: one row per script. W1+ refines to one row per assertion."
@@ -432,11 +464,30 @@ emit_ledger() {
       tier="${existing_tier[$rel]}"
       exercised="${existing_exercised[$rel]:-manual}"
       emit_script_row "$rel" "$group" "$make_target" "$tier" "retired" "$successors" "$exercised"
+      emitted_missing["$rel"]=1
+    done
+    for rel in "${migration_order[@]}"; do
+      case "$rel" in
+        tests/*.sh) ;;
+        *) continue ;;
+      esac
+      [ -f "$ROOT/$rel" ] && continue
+      [ "${emitted_missing[$rel]+set}" = set ] && continue
+      successors=$(successors_for "$rel")
+      successors_empty "$successors" && continue
+      name=${rel#tests/}
+      name=${name%.sh}
+      group=$(group_of "$name")
+      make_target=$(target_of "$group")
+      tier=$(tier_of "$group")
+      exercised="${existing_exercised[$rel]:-manual}"
+      emit_script_row "$rel" "$group" "$make_target" "$tier" "retired" "$successors" "$exercised"
     done
   } > "$destination"
 }
 
 load_existing_state "$OUT"
+load_migration_state
 self_check
 
 if [ "$MODE" = check ]; then

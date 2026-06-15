@@ -1,4 +1,4 @@
-# tests/golden/argv-pinned-tests.txt — coverage successors for retired argv-shape bash wrappers.
+# tests/golden/pinned/argv.txt — coverage successors for retired argv-shape bash wrappers.
 # One libtest path per line; checked by tests/tools/assert-pinned-tests.sh.
 audio_argv::tests::argv_is_round_trip_serializable
 audio_argv::tests::audit_minimal_snapshot_line

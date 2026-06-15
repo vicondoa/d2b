@@ -348,8 +348,12 @@ reap_known_static_orphans
 # AFTER the orphan reapers above so a recoverable-by-reap situation
 # isn't flagged spuriously, but BEFORE any nix-store realisation work.
 nl_static_gate_begin "tests/preflight-disk-space.sh" "tests/preflight-disk-space.sh"
-bash "$ROOT/tests/preflight-disk-space.sh"
-ok "preflight-disk-space"
+if [ -x "$ROOT/tests/preflight-disk-space.sh" ]; then
+  bash "$ROOT/tests/preflight-disk-space.sh"
+  ok "preflight-disk-space"
+else
+  log "  SKIP: tests/preflight-disk-space.sh (not present)"
+fi
 nl_static_gate_end "tests/preflight-disk-space.sh"
 
 if [ -d "$ROOT/packages" ] && [ -f "$ROOT/packages/rust-toolchain.toml" ]; then
@@ -1194,13 +1198,15 @@ nl_static_gate_end "tests/layer1-self-inventory.sh"
 # rust-workspace-checks.sh after the cargo gates.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
-if [ -d "$ROOT/packages" ]; then
+if [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
   if bash "$HERE/rust-workspace-checks.sh" >/dev/null 2>&1; then
     ok "rust-workspace-checks"
   else
     bash "$HERE/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
     fail "rust-workspace-checks"
   fi
+elif [ -d "$ROOT/packages" ]; then
+  log "  SKIP: rust-workspace-checks.sh (not present)"
 else
   log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
 fi
