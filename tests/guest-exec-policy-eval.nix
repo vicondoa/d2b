@@ -172,9 +172,11 @@ let
     assert lib.hasInfix "--detached-max-runtime-sec 0" guestdExecStart;
     # No root-exec flag is ever emitted.
     assert !(lib.hasInfix "--exec-allow-root" guestdExecStart);
-    # Detached's guest-internal surface is not emitted in this build.
-    assert !guestHasExecSlice;
-    assert !guestHasRunDir;
+    # The detached runtime substrate (slice + boot-scoped parent dir) is
+    # declared as part of the both-or-neither exec runtime bundle whenever
+    # exec is enabled; guestd decides at runtime whether to serve detached.
+    assert guestHasExecSlice;
+    assert guestHasRunDir;
     builtins.toJSON {
       scenario = "enabled";
       execUser = corpGuest.nixling.guestControl.exec.execUser;

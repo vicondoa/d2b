@@ -11,6 +11,11 @@ let
     in
     builtins.hasAttr user config.users.users
     && ((userCfg.isNormalUser or false) || (userCfg.isSystemUser or false));
+  # Exec runtime is wired whenever exec is enabled for a workload user.
+  # The detached runtime paths + substrate (parent dir + slice) are part
+  # of a both-or-neither bundle with the attached exec runtime; guestd
+  # decides at runtime whether to actually serve detached.
+  execRuntimeEnabled = cfg.exec.enable && cfg.exec.execUser != null;
 in
 {
   options.nixling.guestControl = {
@@ -173,6 +178,24 @@ in
           ];
         };
       };
+    };
+
+    # Detached exec runtime substrate (parent dir + slice), declared as
+    # part of the both-or-neither exec runtime bundle whenever exec is
+    # enabled for a workload user. The parent dir is root-owned, 0700,
+    # boot-scoped (D = clear at boot, NOT on every guestd restart) so
+    # detached slot state survives a guestd restart for re-adoption. Do
+    # NOT make this guestd's RuntimeDirectory without
+    # RuntimeDirectoryPreserve, else a restart wipes adoptable state.
+    systemd.tmpfiles.rules = lib.mkIf execRuntimeEnabled [
+      "D /run/nixling-exec 0700 root root -"
+    ];
+
+    # Guest-internal slice that scopes every per-exec transient slot unit
+    # (nixling-exec-NN.service). Slot-keyed unit names bound metadata
+    # cardinality to <=32 stable values that carry no exec id.
+    systemd.slices."nixling-exec" = lib.mkIf execRuntimeEnabled {
+      description = "nixling detached guest exec slice";
     };
   };
 }
