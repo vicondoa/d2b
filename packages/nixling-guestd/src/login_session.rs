@@ -105,7 +105,9 @@ mod tests {
     }
 
     fn as_strs(argv: &[OsString]) -> Vec<String> {
-        argv.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+        argv.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
     }
 
     #[test]
@@ -153,7 +155,12 @@ mod tests {
             Path::new("/bin/bash"),
             "john",
             SessionMode::Pipe,
-            &cmd("/bin/true", &[], "/tmp", &[("TERM", "xterm"), ("FOO", "bar baz")]),
+            &cmd(
+                "/bin/true",
+                &[],
+                "/tmp",
+                &[("TERM", "xterm"), ("FOO", "bar baz")],
+            ),
         );
         let s = as_strs(&argv);
         // Each value is a single argv element (no shell splitting of "bar baz").

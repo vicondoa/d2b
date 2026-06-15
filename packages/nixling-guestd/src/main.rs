@@ -159,9 +159,9 @@ fn is_valid_workload_user(value: &str) -> bool {
     !value.is_empty()
         && value != "root"
         && value.len() <= 32
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
         && value
             .bytes()
             .next()
