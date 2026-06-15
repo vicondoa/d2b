@@ -152,7 +152,7 @@ export directory only. It is not added to the `nixlingd` group and gets
 no access to the unified broker audit log, privileged daemon socket, or
 other broker state. Static gates:
 
-- [`tests/store-sync-export-eval.sh`](../../tests/store-sync-export-eval.sh)
+- [`packages/nixling-contract-tests/tests/policy_state.rs`](../../packages/nixling-contract-tests/tests/policy_state.rs) (`store_sync_export`)
 - [`tests/loki-label-cardinality-eval.sh`](../../tests/loki-label-cardinality-eval.sh)
 
 ## Socket and port contract

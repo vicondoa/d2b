@@ -787,10 +787,8 @@ fi
 # wired here so ci-coverage.sh structural guard passes.
 for _d13_gate in \
   broker-socket-activation-eval \
-  broker-systemd-unit-eval \
   daemon-autostart-eval \
   host-prep-dag-eval \
-  kernel-modules-parity-eval \
   loki-label-cardinality-eval \
   minijail-validator-audio \
   minijail-validator-cloud-hypervisor \
@@ -807,12 +805,8 @@ for _d13_gate in \
   no-bash-exec-eval \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
-  processes-json-eval \
   readiness-waves-eval \
   ssh-host-key-preflight-eval \
-  state-dir-acl-eval \
-  store-sync-export-eval \
-  stop-dag-reconcile-eval \
   supervisor-option-absent-eval \
   tap-dag-contract-doc-eval \
   usbip-state-machine-eval \

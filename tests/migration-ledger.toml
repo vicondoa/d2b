@@ -89,15 +89,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/broker-systemd-unit-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/broker-validate-bundle.sh"
 group = "A"
 make_target = "test-rust"
@@ -260,24 +251,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/group-migration-fresh-install-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/group-rename-semantic-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/guest-control-proto.sh"
 group = "A"
 make_target = "test-rust"
@@ -414,15 +387,6 @@ exercised_today = "yes"
 
 [[script]]
 name = "tests/kernel-module-matrix-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/kernel-modules-parity-eval.sh"
 group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
@@ -782,15 +746,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/processes-json-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/runner-shape-preflight.sh"
 group = "A"
 make_target = "test-rust"
@@ -827,15 +782,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/state-dir-acl-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/state-dir-acl-runtime.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -861,24 +807,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/stop-dag-reconcile-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/store-sync-export-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/stub-no-socket.sh"
@@ -995,6 +923,78 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/broker-systemd-unit-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::broker_systemd_unit_declarations (nixos-modules/host-broker.nix: nixling-priv-broker socket/service shape — config NOT gated behind cfg.daemonExperimental.enable, ListenSequentialPacket=/run/nixling/priv.sock, SocketGroup=nixlingd, SocketMode=0660, serviceConfig.Type=notify, socket unit wantedBy sockets.target); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/group-migration-fresh-install-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_state.rs::group_migration_fresh_install (fresh-install legacy-gid migration activation block in nixos-modules/host-activation.nix: nixlingGroupMigration stringAfter ordering, root-existence guard, chgrp-by-numeric-gid helper routing, --skip-while-lock-held, the fd-safe O_DIRECTORY|O_NOFOLLOW / F_OFD_SETLK / AT_SYMLINK_NOFOLLOW helper invariants, and the no-raw-chgrp-in-migration-block awk port); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/group-rename-semantic-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_state.rs::group_rename_semantic (nixling lifecycle-group rename semantics in nixos-modules: users.groups.nixling declaration, launcherUsers extraGroups join, daemon publicSocketGroup=nixling, state-dir ACL LAUNCHER_GROUP=nixling, the g:$LAUNCHER_GROUP traversal render in state-dir-acl.sh, the empty legacy-group tombstones, and the no-legacy-group-in-extraGroups scan over nixos-modules); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/kernel-modules-parity-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::kernel_modules_parity_evaluator_shape (nixos-modules/vm-evaluator.nix calls the standard NixOS eval-config.nix entrypoint that computes requiredKernelModules, and nixos-modules/lib.nix routes nl.vmRunner through config.nixling._computed so per-VM microvm.* incl. microvm.kernel resolves); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/processes-json-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::processes_json_consumers_route_through_helpers (nixos-modules/{processes-json,closures-json,minijail-profiles,store}.nix do NOT read config.microvm.vms.<name>.config.config.* directly, and nixos-modules/lib.nix defines the nl.vmRunner/vmToplevel/vmDeclaredRunner helpers); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/state-dir-acl-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_state.rs::state_dir_acl (/var/lib/nixling state-dir declaration + ACL invariants in nixos-modules: 0750 root nixlingd tmpfiles decl (not 0755), nixlingStateDirAcl activation script, per-user/per-group --x traversal grants incl. g:kvm:--x and the g:nixling:--x grant (direct or via the sourced state-dir-acl.sh helper), and the no-`setfacl -d -m`-default-ACL-on-state-dir-root negative with the comment-line filter); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/stop-dag-reconcile-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::stop_dag_reconcile_surface (packages/nixlingd/src/supervisor/stop_dag.rs StopDagOwner/ObservedHostState/ReconcileReport/Nftables+Usbip reconcile actions+drift reasons/reconcile_on_restart/reconcile surface, supervisor/mod.rs `pub mod stop_dag;`, broker_wire.rs reuses ApplyNftables/UsbipBind/UsbipUnbind variants with no new *Request type in stop_dag.rs, and docs/reference/stop-dag-reconcile.md marker coverage); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/store-sync-export-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_state.rs::store_sync_export (StoreSync-only observability export static invariants in nixos-modules/components/observability/host.nix: storeSyncExportDir/Glob shape, the filelog/store_sync_audit receiver + json_parser + logs/store_sync_audit pipeline forwarded over otlp, the host-singleton resource attrs plus source=store-sync-audit with target_vm/target_env never promoted, the nixling-host-otel-collector export-dir-only ACL grants, and the deny scans for broker audit-log/glob, priv.sock, and any collector ACL on an audit path; over a comment-stripped view); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]

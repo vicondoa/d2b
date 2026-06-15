@@ -147,8 +147,6 @@ run_gate "shellcheck --severity=warning on all nixling shell scripts" "
   shellcheck --severity=warning -x \$files
 "
 
-run_script_gate_if_present "tests/group-rename-semantic-eval.sh" "$ROOT/tests/group-rename-semantic-eval.sh"
-run_script_gate_if_present "tests/group-migration-fresh-install-eval.sh" "$ROOT/tests/group-migration-fresh-install-eval.sh"
 run_script_gate_if_present "tests/guest-control-proto.sh" "$ROOT/tests/guest-control-proto.sh"
 run_script_gate_if_present "tests/guest-proto-bindings.sh" "$ROOT/tests/guest-proto-bindings.sh"
 run_script_gate_if_present "tests/guest-ttrpc-bindings.sh" "$ROOT/tests/guest-ttrpc-bindings.sh"

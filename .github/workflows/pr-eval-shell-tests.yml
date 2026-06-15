@@ -30,7 +30,6 @@ jobs:
           for t in \
             tests/preflight-disk-space.sh \
             tests/agents-md-rewrite-eval.sh \
-            tests/broker-systemd-unit-eval.sh \
             tests/cli-nix-consumers-eval.sh \
             tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
@@ -45,9 +44,6 @@ jobs:
             tests/deliverable-gate-inventory.sh \
             tests/polkit-allowlist-eval.sh \
             tests/privileges-doc-completeness-eval.sh \
-            tests/processes-json-eval.sh \
-            tests/state-dir-acl-eval.sh \
-            tests/stop-dag-reconcile-eval.sh \
             tests/supervisor-option-absent-eval.sh \
             tests/tap-dag-contract-doc-eval.sh \
             tests/tempo-budget-eval.sh \
@@ -73,7 +69,6 @@ jobs:
         run: |
           set -euo pipefail
           for t in \
-            tests/kernel-modules-parity-eval.sh \
             tests/net-vm-network-eval.sh \
             tests/observability-eval.sh \
             tests/per-vm-state-ownership-eval.sh \
