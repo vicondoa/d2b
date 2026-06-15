@@ -80,24 +80,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/broker-bundle-path-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/broker-caps-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/broker-default-features-build.sh"
 group = "A"
 make_target = "test-rust"
@@ -137,15 +119,6 @@ exercised_today = "yes"
 name = "tests/broker-socket-acl.sh"
 group = "A"
 make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/broker-socket-activation-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -341,15 +314,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/daemon-default-compat-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/daemon-experimental-warning-eval.sh"
 group = "D"
 make_target = "test-nix-unit"
@@ -449,24 +413,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/guest-config-containment-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/guest-control-auth-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/guest-control-auth-nongoals.sh"
 group = "H"
 make_target = "test-policy"
@@ -494,27 +440,9 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/guest-control-vsock-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/guest-control-vsock-helper-static.sh"
 group = "H"
 make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/guest-exec-policy-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -876,8 +804,8 @@ name = "tests/multi-env-daemon-backed.sh"
 group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
+status = "porting"      # legacy | porting | ported
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/multi-env-daemon-backed.nix — 16 host.json env-propagation (mtu/mssClamp/east-west/bridgePortFlags + personal negative control), manifest no-microvm@/nixling@ unit reference, and ADR-0015 daemon-only processes.json zero-unit-field cases via mkEval over both reconstructed example variants)", "UNMIGRATED: step 1 `nix flake check --no-build --all-systems` of examples/multi-env (realized flake check; needs a derivation-backed successor, not nix-unit)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1025,15 +953,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/principal-uid-collision-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/privileges-doc-completeness-eval.sh"
 group = "H"
 make_target = "test-policy"
@@ -1068,15 +987,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/readiness-waves-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
 
 [[script]]
 name = "tests/release-tag-eval.sh"
@@ -1331,15 +1241,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/video-contract-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/video-sidecar-hardening-eval.sh"
 group = "C"
 make_target = "test-contract"
@@ -1383,6 +1284,105 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/broker-bundle-path-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-bundle-path.nix — 12 cases: host-broker/host-daemon bundle-path source-grep via readFile + bundle.json artifact ACL contract via mkEval introspection)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/broker-caps-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-caps.nix — 4 cases: broker CapabilityBoundingSet exact-set match + AmbientCapabilities empty-string sentinel via mkEval introspection)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/broker-socket-activation-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/broker-socket-activation.nix — 5 cases: host-broker ExecStart no --socket-path source-grep via readFile + socket-unit FileDescriptorName/ListenSequentialPacket via mkEval introspection)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-default-compat-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/daemon-default-compat.nix — 5 daemonExperimental.enable default-flip + operator-override (mkForce true/false) cases via mkEval; the historical evidence-dir writes are inert because the default is no longer evidence-gated)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/guest-config-containment-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-config-containment.nix — 13 guestConfigFile containment cases: contained clean/reads-standard fixtures produce no failing assertion; sets-microvm / sets-nixling / imports / builtins.toFile / _file-spoof bypass fixtures fire the containment assertion naming the host-owned option, via mkEval config.assertions introspection)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/guest-control-auth-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-auth.nix — 5 auth-token-delivery cases: default parameterization asserts the exact nl-gctl token share + LoadCredential JSON; /nix/store, /nix/store/<child>, and relative auth.tokenFile each reject at eval time, as does a tokenFile set without guest.control.enable; imports tests/guest-control-auth-eval.nix via a mkEval flake shim)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-control-vsock-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-vsock.nix — 6 base-vsock allocation cases: positive base scenario asserts exact CID/socket parity + ladder + readiness JSON; user-vsock-cid/socket, --vsock split/equals extraArgs, and long-AF_UNIX-socket override guards each reject at eval time; imports tests/guest-control-vsock-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-control-vsock (existing derivation independently builds the positive base scenario)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-exec-policy-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-exec-policy.nix — 13 exec-policy cases: enabled/default/allow-root-only/allow-root-ceiling/allow-root-interactive-ceiling positive scenarios assert exact userd + ceiling JSON; exec-no-control, allowRoot/users-without-enable, empty-target, duplicate/root/wildcard/unknown user, and guest-internal exec.users override each reject at eval time; imports tests/guest-exec-policy-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-exec-policy (existing derivation independently builds the positive enabled scenario)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/principal-uid-collision-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/principal-uid-collision.nix — 6 stablePrincipalId UID-collision/range/no-system-user-collision cases + non-vacuity count guards, via mkEval over examples/multi-env)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/readiness-waves-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/readiness-waves.nix — 11 defaultSwitchReadiness p0..p7 wave-presence, p0 implemented/validated default, and daemonExperimental.enable default cases via mkEval)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/video-contract-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/video-contract.nix — 28 video-sidecar DAG/socket/principal/device-bind/virgl-opt-in/guard-assertion cases plus the graphics.nix use_video source-wiring checks, via mkEval; x86_64-only guarded)"]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/autostart-wiring-eval.sh"
