@@ -449,15 +449,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/device-node-matrix.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/error-codes-drift.sh"
 group = "B"
 make_target = "test-drift"
@@ -674,15 +665,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/ifname-collision.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
@@ -690,15 +672,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/ioctl-negative.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
 
 [[script]]
 name = "tests/ipv6-off-readback.sh"
@@ -717,15 +690,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/kernel-module-matrix.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
 
 [[script]]
 name = "tests/kernel-modules-parity-eval.sh"
@@ -1527,6 +1491,42 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/device-node-matrix.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/ifname-collision.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (net canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/ioctl-negative.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/kernel-module-matrix.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+exercised_today = "skip"
 
 [[script]]
 name = "tests/audio-argv-shape.sh"
