@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::kernel_modules_parity_evaluator_shape (nixos-modules/vm-evaluator.nix calls the standard NixOS eval-config.nix entrypoint that computes requiredKernelModules, and nixos-modules/lib.nix routes nl.vmRunner through config.nixling._computed so per-VM microvm.* incl. microvm.kernel resolves); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
