@@ -116,7 +116,6 @@ reap_known_static_orphans() {
     '.cli-json.*'
     '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
-    '.cli-rust-native-audit.*'
     '.cli-rust-native-cache'
     '.cli-rust-native-host-check.*'
     '.cli-rust-native.log'
@@ -1323,7 +1322,6 @@ if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_scr
 if [ -x "$HERE/daemon-socket-acl.sh" ]; then nl_static_parallel_script "tests/daemon-socket-acl.sh" "$HERE/daemon-socket-acl.sh"; fi
 if [ -x "$HERE/daemon-state-lock.sh" ]; then nl_static_parallel_script "tests/daemon-state-lock.sh" "$HERE/daemon-state-lock.sh"; fi
 if [ -x "$HERE/daemon-version-negotiation.sh" ]; then nl_static_parallel_script "tests/daemon-version-negotiation.sh" "$HERE/daemon-version-negotiation.sh"; fi
-if [ -x "$HERE/cli-rust-native-audit.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-audit.sh" "$HERE/cli-rust-native-audit.sh"; fi
 if [ -x "$HERE/cli-rust-native-host-check.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-host-check.sh" "$HERE/cli-rust-native-host-check.sh"; fi
 nl_static_parallel_wait_all
 if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bounded.sh" || fail "manifest-fuzz-bounded"; fi

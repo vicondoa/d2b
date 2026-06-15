@@ -202,8 +202,22 @@ if command -v nix >/dev/null 2>&1; then
   # fixture bundle (NL_FIXTURES) + a synthetic system-state and validate the
   # JSON envelopes strictly against the committed ListOutputV2/StatusOutputV2
   # DTOs (deny_unknown_fields). Successor of the cli-rust-native-* bash gates.
-  log "--> cargo test -p nixling --test '*' (CLI-contract, NL_FIXTURES = fixture-smoke)"
-  NL_FIXTURES="$contract_fixtures" CARGO_TARGET_DIR="$workspace_target_dir" \
+  #
+  # A few CLI-contract cases (audit/host-check daemon-backed paths) spawn a
+  # real, KVM-free `nixlingd serve --once --test-listen-on` and talk to it over
+  # AF_UNIX + SO_PEERCRED. Build nixlingd and hand its path to the test via
+  # NIXLING_TEST_NIXLINGD_BIN so those cases run instead of skipping. nixling
+  # does NOT depend on nixlingd (the static-rust-dependency-direction gate
+  # forbids it), so the path is delivered out-of-band rather than via a dep edge.
+  log "--> cargo build -p nixlingd (CLI-contract daemon-spawn harness binary)"
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo build --manifest-path "$manifest" -p nixlingd
+  nixlingd_bin="$workspace_target_dir/debug/nixlingd"
+  [ -x "$nixlingd_bin" ] || fail "nixlingd binary not found at $nixlingd_bin"
+  log "--> cargo test -p nixling --tests (CLI-contract, NL_FIXTURES = fixture-smoke)"
+  NL_FIXTURES="$contract_fixtures" \
+  NIXLING_TEST_NIXLINGD_BIN="$nixlingd_bin" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo test --manifest-path "$manifest" -p nixling --tests
   ok "cargo test -p nixling --tests (CLI-contract layer)"
 else
