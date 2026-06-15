@@ -75,8 +75,28 @@ from `nixos-modules/default.nix`. Don't fatten existing files.
 
 ## Build & validate
 
-Four tiers cover the static gate. Pick the one that matches your
-intent.
+> **Test interface = `make` targets** (test-rearchitecture, in progress). Run
+> tests via `make`, not ad-hoc scripts. **`make check` is the done-gate: an
+> agent has not finished a test-affecting change until `make check` passes.**
+>
+> | target | what | runs in CI? | needs |
+> | --- | --- | --- | --- |
+> | `make check` | Layer-1 PR gate (today wraps `static.sh`) | yes (any runner) | Ubuntu+Nix |
+> | `make check-ci` | `check` + `test-integration` (what CI runs) | yes (KVM Ubuntu job) | `/dev/kvm` |
+> | `make test-integration` | device-free runNixOSTest VM tier (G-ci) | yes (KVM job) | NixOS VM (KVM) |
+> | `make test-hardware` | real GPU/YubiKey/hardware-TPM passthrough, full microVM boot (G-hw) | **no** | NixOS host **with the devices** |
+> | `make check-all` | `check-ci` + `test-hardware` + `perf` | — | NixOS host w/ devices |
+> | `make test-{rust,drift,contract,nix-unit,flake,policy}` | focused per-layer run (ledger-driven) | — | — |
+> | `make check-inventory` | assert `tests/` is classified 1:1 in `tests/migration-ledger.toml` | yes | — |
+>
+> CI runs the `make` targets (not bespoke script lists). Hosted GitHub runners
+> have **KVM but no physical devices**, so only `test-hardware` is off-CI and
+> is the PR author's manual responsibility (see the PR template checklist).
+> Test→group classification lives in `tests/migration-ledger.toml` (regenerate
+> with `make check-inventory`).
+
+The four legacy static tiers below are being repointed behind the `make`
+targets wave by wave; pick the one that matches your intent.
 
 ```bash
 # 1. Flake-level eval, both systems we support.
