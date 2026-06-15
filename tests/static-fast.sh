@@ -153,7 +153,6 @@ run_script_gate_if_present "tests/guest-ttrpc-bindings.sh" "$ROOT/tests/guest-tt
 run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest-control-auth-eval.sh"
 run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
 run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
-run_script_gate_if_present "tests/guest-exec-runtime-static.sh" "$ROOT/tests/guest-exec-runtime-static.sh"
 run_script_gate_if_present "tests/guest-exec-policy-eval.sh" "$ROOT/tests/guest-exec-policy-eval.sh"
 run_script_gate_if_present "tests/guest-static-elf.sh" "$ROOT/tests/guest-static-elf.sh"
 run_script_gate_if_present "tests/guest-static-consumption-eval.sh" "$ROOT/tests/guest-static-consumption-eval.sh"
@@ -222,7 +221,6 @@ for gate in \
   path-safety-violation-fs \
   ioctl-negative \
   kernel-module-matrix \
-  kernel-module-matrix-eval \
   minijail-version-check \
   runner-shape-preflight \
   dag-topo \
@@ -239,7 +237,6 @@ done
 for gate in \
   error-codes-drift \
   manpage-completion-drift \
-  manpage-completeness-eval \
   daemon-api-drift; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"

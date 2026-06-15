@@ -761,11 +761,6 @@ fi
 if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
   nl_static_parallel_script_gate "tests/no-new-deferral.sh" "$ROOT/tests/no-new-deferral.sh"
 fi
-# Wire the remaining doc/drift gates so
-# the clean-break invariants are Layer-1 always-on.
-if [ -x "$ROOT/tests/agents-md-rewrite-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/agents-md-rewrite-eval.sh" "$ROOT/tests/agents-md-rewrite-eval.sh"
-fi
 if [ -x "$ROOT/tests/privileges-doc-completeness-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-doc-completeness-eval.sh" "$ROOT/tests/privileges-doc-completeness-eval.sh"
 fi
@@ -774,10 +769,6 @@ if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
 fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
-fi
-# tracing-contract + daemon-metrics need static.sh wiring.
-if [ -x "$ROOT/tests/tracing-contract-lint.sh" ]; then
-  nl_static_parallel_script_gate "tests/tracing-contract-lint.sh" "$ROOT/tests/tracing-contract-lint.sh"
 fi
 if [ -x "$ROOT/tests/daemon-metrics-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/daemon-metrics-eval.sh" "$ROOT/tests/daemon-metrics-eval.sh"
@@ -808,7 +799,6 @@ for _d13_gate in \
   readiness-waves-eval \
   ssh-host-key-preflight-eval \
   supervisor-option-absent-eval \
-  tap-dag-contract-doc-eval \
   usbip-state-machine-eval \
   vm-submodule-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
@@ -1228,7 +1218,6 @@ if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tes
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
-if [ -x "$HERE/guest-exec-runtime-static.sh" ]; then nl_static_parallel_script "tests/guest-exec-runtime-static.sh" "$HERE/guest-exec-runtime-static.sh"; fi
 if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
 if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_script "tests/guest-control-token-materializer.sh" "$HERE/guest-control-token-materializer.sh"; fi
@@ -1277,7 +1266,6 @@ if [ -x "$HERE/cli-json-drift.sh" ]; then nl_static_parallel_script "tests/cli-j
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/error-codes-drift.sh" "$HERE/error-codes-drift.sh"; fi
 if [ -x "$HERE/manpage-completion-drift.sh" ]; then nl_static_parallel_script "tests/manpage-completion-drift.sh" "$HERE/manpage-completion-drift.sh"; fi
-if [ -x "$HERE/manpage-completeness-eval.sh" ]; then nl_static_parallel_script "tests/manpage-completeness-eval.sh" "$HERE/manpage-completeness-eval.sh"; fi
 # Closure: wire the remaining gates.
 if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
 if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
@@ -1333,7 +1321,6 @@ if [ -x "$HERE/ch-net-handoff-canary.sh" ]; then nl_static_parallel_script "test
 if [ -x "$HERE/nft-foreign-rule-preservation.sh" ]; then nl_static_parallel_script "tests/nft-foreign-rule-preservation.sh" "$HERE/nft-foreign-rule-preservation.sh"; fi
 if [ -x "$HERE/usbip-firewall-skeleton.sh" ]; then nl_static_parallel_script "tests/usbip-firewall-skeleton.sh" "$HERE/usbip-firewall-skeleton.sh"; fi
 if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
-if [ -x "$HERE/kernel-module-matrix-eval.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix-eval.sh" "$HERE/kernel-module-matrix-eval.sh"; fi
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
 if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tests/runner-shape-preflight.sh" "$HERE/runner-shape-preflight.sh"; fi

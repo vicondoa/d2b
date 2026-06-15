@@ -100,8 +100,9 @@ skip the broker dispatch on a clean restart.
 - Unit tests (`packages/nixlingd/src/supervisor/stop_dag.rs::tests`)
   exercise every drift variant against a fixture-derived
   `BundleResolver`.
-- `packages/nixling-contract-tests/tests/policy_daemon.rs`
-  (`stop_dag_reconcile_surface`) is a static gate that asserts
+- The stop-dag-reconcile static gate
+  `packages/nixling-contract-tests/tests/policy_daemon.rs`
+  (`stop_dag_reconcile_surface`) asserts
   the module surface, the supervisor module wires it in, the planner
   composes only existing broker ops (no new `*Request` types), and
   this doc is up to date.

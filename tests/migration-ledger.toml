@@ -26,15 +26,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/agents-md-rewrite-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/audio.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -269,15 +260,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/guest-exec-runtime-static.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/guest-proto-bindings.sh"
 group = "A"
 make_target = "test-rust"
@@ -386,15 +368,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/kernel-module-matrix-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/l1c-privilege-oracle.sh"
 group = "A"
 make_target = "test-rust"
@@ -461,15 +434,6 @@ exercised_today = "skip"
 name = "tests/manifest-v04-roundtrip.sh"
 group = "A"
 make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/manpage-completeness-eval.sh"
-group = "H"
-make_target = "test-policy"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -836,27 +800,9 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/tap-dag-contract-doc-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/tempo-budget-eval.sh"
 group = "C"
 make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/tracing-contract-lint.sh"
-group = "H"
-make_target = "test-policy"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -923,6 +869,60 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/agents-md-rewrite-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_docs.rs::agents_md_reflects_daemon_only_end_state (AGENTS.md daemon-only end-state invariant: positive — '## Daemon-only end-state (P6 onward)' section + ADR 0015 cross-ref + nixlingd / nixling-priv-broker.socket / SpawnRunner mentions; negative — per-line forbidden legacy-as-live scan exempting lines that carry an explicit historical/retired marker, forbidden_re + allowed_marker_re ported verbatim); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-exec-runtime-static.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_contracts.rs::guest_exec_runtime_static (guest exec runtime static guard over packages/nixling-guestd/src + packages/nixling-exec-runner/src + nixos-modules/guest-control.nix: ATTACHED exec.rs/exec_linux.rs scope held — no userd path, no low-level TTY/PTY syscalls, no retained-log file writes, stdin Stdio::null never piped, no vsock listener, no CH CONNECT/relay/host-network/observability surface; DETACHED path present-and-bounded — slot-keyed nixling-exec-<NN> units with no opaque exec_id in production unit name/argv, nixling-exec.slice scoping, filering.rs truncation-bounded logs, conditionally-advertised EXEC_DETACHED/EXEC_LOGS, guest-module-declared /run/nixling-exec parent dir + slice; INTERACTIVE TTY path present-and-confined — exec_pty.rs owns openpt master alloc, tty_helper.rs owns the setsid+ioctl_tiocsctty handshake, exec_pty.rs non-comment code performs no handshake, service.rs wires TtyStderrUnavailable); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/kernel-module-matrix-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_docs.rs::kernel_module_matrix_source_doc_parity, kernel_module_missing_typed_error_contract (REQUIRED/OPTIONAL module-matrix parity between the constants in packages/nixlingd/src/kernel_module_check.rs — quoted module string literals + canonical `pub const` idents — and the backticked module names in docs/reference/kernel-module-check.md, plus the fatal-typed-error contract: packages/nixlingd/src/typed_error.rs carries HostKernelModulesMissing at exit code 64 with kind host-kernel-modules-missing); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/manpage-completeness-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_docs.rs::manpage_documents_every_top_level_subcommand (every top-level clap subcommand declared in packages/nixling/src/lib.rs `enum NativeCommand` — including #[command(name = ...)] overrides and the PascalCase→kebab-case default conversion — is documented as a `nixling-<name>(1)` entry under the SUBCOMMANDS block of docs/manpages/nixling.1; fails closed on manpage drift without a cargo toolchain); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/tap-dag-contract-doc-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_contracts.rs::tap_dag_contract_doc_matches_implementation (docs/reference/tap-dag-contract.md doc/code drift gate: every `../../` doc-referenced path resolves; ifname.rs DEFAULT_PREFIX=\"nl-\"/BRIDGE_TAG='b'/TAP_TAG='t'/HASH_SUFFIX_LEN=8/derive_from_env_vm/looks_nixling_owned cross-refs; tap.rs broker ops CreateTapFd/CreatePersistentTap/SetBridgePortFlags + nm-unmanaged-pre-create-required + TUNSETPERSIST/TUNSETOWNER/TUNSETGROUP; host_prep_dag.rs BringUpTapInterface variant/bring-up-tap-interface slug/broker_op_name==CreateTapFd/HostPrepStepFailed + apply-nftables-rules->pre-open-vhost-net-fd ordering; host.rs ChNetHandoffMode enum TapFd/PersistentTap; host-daemon.nix nixling group); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/tracing-contract-lint.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_contracts.rs::tracing_contract_lint (bounded-cardinality tracing-attribute allowlist enforcement over packages/**/*.rs excluding target/vendor/generated, including tests: fails closed on forbidden high-cardinality/leakable attr classes — bundle/keys_dir .display() path attrs, bundle_path alias, argv/cmdline/command_line, secret/password/token/private_key, stdout/stderr — plus a faithful awk-state-machine port flagging store-path string literals inside tracing-macro arg lists; see docs/reference/tracing-contract.md); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
