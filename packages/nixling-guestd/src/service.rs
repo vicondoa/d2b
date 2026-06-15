@@ -881,6 +881,7 @@ fn wire_error_kind(error: ExecError) -> pb::GuestControlErrorKind {
         ExecError::UserDenied => Pb::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_USER_DENIED,
         ExecError::UnsupportedMode => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
         ExecError::InvalidArgv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+        ExecError::InvalidProgram => Pb::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
         ExecError::CwdInvalid => Pb::GUEST_CONTROL_ERROR_KIND_CWD_INVALID,
         ExecError::InvalidEnv => Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
         ExecError::MaxChunkExceeded => Pb::GUEST_CONTROL_ERROR_KIND_MAX_CHUNK_EXCEEDED,
@@ -2460,6 +2461,10 @@ mod tests {
             (
                 ExecError::InvalidArgv,
                 Pb::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR,
+            ),
+            (
+                ExecError::InvalidProgram,
+                Pb::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
             ),
             (
                 ExecError::CwdInvalid,
