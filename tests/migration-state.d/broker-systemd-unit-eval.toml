@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::broker_systemd_unit_declarations (nixos-modules/host-broker.nix: nixling-priv-broker socket/service shape — config NOT gated behind cfg.daemonExperimental.enable, ListenSequentialPacket=/run/nixling/priv.sock, SocketGroup=nixlingd, SocketMode=0660, serviceConfig.Type=notify, socket unit wantedBy sockets.target); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]

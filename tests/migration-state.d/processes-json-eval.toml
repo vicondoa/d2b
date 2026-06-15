@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_daemon.rs::processes_json_consumers_route_through_helpers (nixos-modules/{processes-json,closures-json,minijail-profiles,store}.nix do NOT read config.microvm.vms.<name>.config.config.* directly, and nixos-modules/lib.nix defines the nl.vmRunner/vmToplevel/vmDeclaredRunner helpers); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
