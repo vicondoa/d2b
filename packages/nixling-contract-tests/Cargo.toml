@@ -1,0 +1,13 @@
+[package]
+name = "nixling-contract-tests"
+version = "0.0.0-bootstrap"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nixling-core = { path = "../nixling-core", version = "0.0.0-bootstrap" }
+serde_json.workspace = true

@@ -12,6 +12,7 @@ members = [
     "nixling",
     "nixlingd",
     "nixling-wayland-filter",
+    "nixling-contract-tests",
     "xtask",
 ]
 

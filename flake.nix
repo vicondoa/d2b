@@ -205,6 +205,59 @@
         mkCheck = name: cfg: pkgs.runCommand "nixling-check-${name}" { } ''
           echo ${builtins.unsafeDiscardStringContext cfg.config.system.build.toplevel.drvPath} > $out
         '';
+        smokeConfigModule = { lib, ... }: {
+          boot.loader.grub.enable = false;
+          boot.loader.systemd-boot.enable = false;
+          boot.initrd.includeDefaultModules = false;
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+          environment.etc."machine-id".text =
+            "00000000000000000000000000000000";
+          system.stateVersion = "25.11";
+
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
+
+          nixling.site = {
+            waylandUser = "alice";
+            launcherUsers = [ "alice" ];
+            yubikey.enable = false;
+          };
+
+          nixling.envs.work = {
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+
+          nixling.vms.corp-vm = {
+            enable = true;
+            env = "work";
+            index = 10;
+            ssh.user = "alice";
+            config = {
+              networking.hostName = lib.mkDefault "corp-vm";
+              users.users.alice = {
+                isNormalUser = true;
+                uid = 1000;
+              };
+            };
+          };
+        };
+        smokeEval = mkEval [ smokeConfigModule ];
+        smokeFixture = let
+          bundle = smokeEval.config.nixling._bundle;
+          manifestPkg = smokeEval.config.nixling._manifestPkg;
+        in pkgs.runCommand "nixling-fixture-smoke" { } ''
+          mkdir -p $out
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+        '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
@@ -347,6 +400,8 @@
             commit -q -m 'advisory-db snapshot'
         '';
       in {
+        fixture-smoke = smokeFixture;
+
         eval-minimal = mkCheck "eval-minimal"
           (mkEval [ (import ./examples/minimal/configuration.nix) ]);
 

@@ -65,11 +65,26 @@ ci-uses-make:
 ## the ledger. W1+ repoints each to its successor (nextest/nix-unit/VM).
 test-rust:        ; bash tests/tools/run-layer.sh test-rust
 test-drift:       ; bash tests/tools/run-layer.sh test-drift
-test-contract:    ; bash tests/tools/run-layer.sh test-contract
+test-contract:
+	@set -eu; \
+	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
+	fixtures="$$(nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke")"; \
+	printf 'NL_FIXTURES=%s\n' "$$fixtures"; \
+	cd packages; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+	  NL_FIXTURES="$$fixtures" cargo nextest run -p nixling-contract-tests; \
+	elif command -v nix >/dev/null 2>&1; then \
+	  NL_FIXTURES="$$fixtures" nix shell --inputs-from .. nixpkgs#cargo-nextest -c cargo nextest run -p nixling-contract-tests; \
+	else \
+	  NL_FIXTURES="$$fixtures" cargo test -p nixling-contract-tests; \
+	fi
 test-nix-unit:    ; bash tests/tools/run-layer.sh test-nix-unit
 test-flake:       ; bash tests/tools/run-layer.sh test-flake
 test-policy:      ; bash tests/tools/run-layer.sh test-policy
-test-fixtures:    ; @echo "test-fixtures: artifact-fixture derivations land in W1/W3 (plan §2.1)"
+test-fixtures:
+	@set -eu; \
+	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
+	nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke"
 test-mutation:    ; @echo "test-mutation: standing mutation gate lands W1+ (plan §3.7)"
 ## test-integration — W0 placeholder: run legacy G-ci only on a local NixOS host
 ## with KVM. The runNixOSTest CI job lands in W4; do not run live-host scripts

@@ -975,6 +975,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nixling-contract-tests"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "nixling-core",
+ "serde_json",
+]
+
+[[package]]
 name = "nixling-core"
 version = "0.0.0-bootstrap"
 dependencies = [
