@@ -120,7 +120,6 @@ reap_known_static_orphans() {
     '.cli-rust-native-auth-status.*'
     '.cli-rust-native-cache'
     '.cli-rust-native-host-check.*'
-    '.cli-rust-native-list.*'
     '.cli-rust-native.log'
     '.cli-rust-native-status.*'
     '.cli-rust-native-usb.*'
@@ -1312,7 +1311,6 @@ if [ -x "$HERE/broker-validate-bundle.sh" ]; then nl_static_parallel_script "tes
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
-if [ -x "$HERE/cli-rust-native-list.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-list.sh" "$HERE/cli-rust-native-list.sh"; fi
 if [ -x "$HERE/cli-rust-native-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-status.sh" "$HERE/cli-rust-native-status.sh"; fi
 if [ -x "$HERE/cli-rust-native-usb.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-usb.sh" "$HERE/cli-rust-native-usb.sh"; fi
 if [ -x "$HERE/cli-rust-native-auth-status.sh" ]; then nl_static_parallel_script "tests/cli-rust-native-auth-status.sh" "$HERE/cli-rust-native-auth-status.sh"; fi

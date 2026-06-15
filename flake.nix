@@ -252,12 +252,15 @@
           bundle = smokeEval.config.nixling._bundle;
           manifestPkg = smokeEval.config.nixling._manifestPkg;
         in pkgs.runCommand "nixling-fixture-smoke" { } ''
-          mkdir -p $out
+          mkdir -p $out $out/closures
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
           cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
+            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
+            bundle.closures)}
         '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time

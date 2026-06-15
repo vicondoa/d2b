@@ -197,6 +197,15 @@ if command -v nix >/dev/null 2>&1; then
   NL_FIXTURES="$contract_fixtures" CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo test --manifest-path "$manifest" -p nixling-contract-tests
   ok "cargo test -p nixling-contract-tests (W3 fixture-contract layer)"
+
+  # CLI-contract layer: spawn the real `nixling` binary against the rendered
+  # fixture bundle (NL_FIXTURES) + a synthetic system-state and validate the
+  # JSON envelopes strictly against the committed ListOutputV2/StatusOutputV2
+  # DTOs (deny_unknown_fields). Successor of the cli-rust-native-* bash gates.
+  log "--> cargo test -p nixling --test '*' (CLI-contract, NL_FIXTURES = fixture-smoke)"
+  NL_FIXTURES="$contract_fixtures" CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo test --manifest-path "$manifest" -p nixling --tests
+  ok "cargo test -p nixling --tests (CLI-contract layer)"
 else
   log "  SKIP: nixling-contract-tests (nix unavailable to build fixture-smoke)"
 fi

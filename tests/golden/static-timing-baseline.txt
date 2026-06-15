@@ -41,7 +41,6 @@ wall           cumulative     label
 00:00.041      18:25.458      tests/broker-validate-bundle.sh
 00:00.307      18:25.664      tests/manifest-v04-roundtrip.sh
 00:00.310      18:25.697      tests/broker-enum-disposition.sh
-00:00.558      18:26.006      tests/cli-rust-native-list.sh
 00:00.574      18:26.086      tests/cli-rust-native-status.sh
 00:00.598      18:26.292      tests/cli-rust-native-auth-status.sh
 00:02.187      18:28.532      tests/manpage-completion-drift.sh
