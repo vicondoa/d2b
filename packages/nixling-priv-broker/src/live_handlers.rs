@@ -3824,11 +3824,13 @@ mod tests {
             Ok(false),
             "absent socket must report not-ready",
         );
-        // Traversal over the world-traversable TestDir ancestors is a
-        // no-op (no non-world-x component needs an explicit grant).
-        grant_guest_control_traversal_acls(&dir.path)
-            .expect("traversal over world-x ancestors is a no-op");
-        // Revoke against an absent socket is a no-op.
+        // Revoke against an absent socket is a no-op (short-circuits on
+        // the absent inode before any setfacl). The traversal-skip
+        // behaviour (no setfacl on world-traversable ancestors) is
+        // covered hermetically by `dir_traverse_classification_world_x_vs_private`
+        // without invoking the host setfacl binary on real ancestors —
+        // which a TestDir rooted under a non-world-x CI path (e.g.
+        // `/home/runner`, mode 0750) would otherwise trigger.
         revoke_guest_control_vsock_acl(&socket).expect("revoke of absent socket is a no-op");
     }
 
