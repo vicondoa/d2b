@@ -99,10 +99,12 @@ pub struct WaitOutcome {
 pub enum ExecOpError {
     Transport,
     Auth,
+    StaleSession,
     Protocol,
     Timeout,
     OldGeneration,
     Capability,
+    DetachedUnavailable,
     /// Guest-reported deterministic op error (a closed slug).
     Guest(GuestOpError),
 }
@@ -116,9 +118,11 @@ pub enum GuestOpError {
     StdinBackpressure,
     ExecNotFound,
     ExecAlreadyExited,
+    ExecExpired,
     ControlSeqMismatch,
     RateLimited,
     MaxChunkExceeded,
+    InvalidProgram,
     Protocol,
     Other,
 }
@@ -132,9 +136,11 @@ impl GuestOpError {
             Self::StdinBackpressure => "stdin-backpressure",
             Self::ExecNotFound => "exec-not-found",
             Self::ExecAlreadyExited => "exec-already-exited",
+            Self::ExecExpired => "exec-expired",
             Self::ControlSeqMismatch => "control-seq-mismatch",
             Self::RateLimited => "rate-limited",
             Self::MaxChunkExceeded => "max-chunk-exceeded",
+            Self::InvalidProgram => "invalid-program",
             Self::Protocol => "guest-protocol-error",
             Self::Other => "guest-error",
         }
@@ -147,10 +153,12 @@ impl ExecOpError {
         match self {
             Self::Transport => "guest-control-transport-unavailable",
             Self::Auth => "guest-control-auth-failed",
+            Self::StaleSession => "stale-session",
             Self::Protocol => "guest-control-protocol-error",
             Self::Timeout => "guest-control-timeout",
             Self::OldGeneration => "guest-control-unavailable-old-generation",
             Self::Capability => "guest-control-capability-unavailable",
+            Self::DetachedUnavailable => "guest-control-exec-detached-unavailable",
             Self::Guest(inner) => inner.slug(),
         }
     }
@@ -160,10 +168,12 @@ impl ExecOpError {
         match self {
             Self::Transport => "transport",
             Self::Auth => "auth",
+            Self::StaleSession => "auth",
             Self::Protocol => "protocol",
             Self::Timeout => "timeout",
             Self::OldGeneration => "old-generation",
             Self::Capability => "capability",
+            Self::DetachedUnavailable => "capability",
             Self::Guest(_) => "guest",
         }
     }
