@@ -74,7 +74,8 @@ of the store.
    longer depends on SSH for terminal access.
 5. **Exec Konsole.** Replaces the wrapper with a chromed Konsole
    running `nixling vm exec -it <vm> -- <login-shell>`, which attaches an
-   interactive guest-control session (admin-only, guest-root, no SSH).
+   interactive guest-control session (admin-only, runs as the VM's
+   workload user, no SSH).
    `StartupWMClass=org.kde.konsole` matches Konsole's fixed Wayland
    app_id.
 

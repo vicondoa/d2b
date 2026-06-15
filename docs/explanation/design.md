@@ -312,8 +312,10 @@ Pretending otherwise would be dishonest.
   names launchers could start was retired in v1.0 (per ADR 0015).
   Every mutating verb — lifecycle (`vm start`/`vm stop`/`vm restart`/
   `switch`), host-prepare, key rotation, USBIP bind, store verify,
-  config sync (`readGuestConfig`), and the destructive guest-root
-  verb (`vm exec`) — is gated to the admin role
+  config sync (`readGuestConfig`), and the destructive
+  guest-control exec verb (`vm exec`, which runs commands as the VM's
+  workload user in a PAM login session — never as root) — is gated to
+  the admin role
   (`nixling.site.adminUsers`, checked via `SO_PEERCRED` at accept
   time), so a launcher-only member cannot reach them. The daemon does
   not narrow *which* admin user can drive *which* VM. By design.
@@ -829,7 +831,9 @@ audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
 guest-control verbs are the exception: `readGuestConfig`
 (config sync) reads the guest's config over the typed guest-control
 channel rather than mutating the host, and `vm exec`
-proxies a guest-root session whose establishment and termination are
+proxies a guest-control exec session — running as the VM's workload
+user (`ssh.user`, never root) in a PAM login session — whose
+establishment and termination are
 recorded as *leak-safe daemon-side* lifecycle events in
 `daemon-events-<utc-date>.jsonl` (VM name, admin peer uid, and tty
 shape only — never argv, env, cwd, or stdio bytes), not as broker
