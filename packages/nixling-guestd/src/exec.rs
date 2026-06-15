@@ -5,10 +5,12 @@
 //! execution inside the VM. There is no host broker op, no CLI surface, no
 //! readiness wiring, and no user-session-daemon participation.
 //!
-//! Security posture: attached exec is trusted-control-plane guest-root
-//! execution. It is gated behind an explicit `user = "root"` request plus the
-//! host-owned per-VM `exec.enable` + `allowRoot` policy. It is not a sandbox
-//! and makes no CPU/memory/fd kernel-isolation claim; it bounds the
+//! Security posture: attached exec is trusted-control-plane execution that
+//! runs as the VM's **host-fixed workload user** (`ssh.user`), never root.
+//! It is gated behind the host-owned per-VM `exec.enable` policy plus a
+//! resolved workload user; the wire `user` field is never consulted, so a
+//! guest-control client cannot target root or any other user. It is not a
+//! sandbox and makes no CPU/memory/fd kernel-isolation claim; it bounds the
 //! protocol/session resources it owns and applies a wall-clock runtime ceiling.
 //!
 //! Process spawning is abstracted behind [`ProcessSpawner`] so the lifecycle

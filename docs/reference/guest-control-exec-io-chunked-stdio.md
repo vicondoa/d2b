@@ -570,9 +570,10 @@ different leaves only if they preserve the same security properties:
    workload user.
 2. Detached exec is served entirely by the root guestd; there is no
    `nixling-userd` involvement and no per-user retained-log path to resolve.
-   Attached non-root exec still maps every exec to the authenticated target
-   user and hands any append/read capability to the matching
-   `nixling-userd` over already-open file descriptors.
+   Reachable attached exec runs as the host-fixed workload user (`ssh.user`)
+   inside a PAM login session, never root; the wire `user` field is ignored
+   and there is no separate user-session daemon (`nixling-userd` was removed;
+   see [ADR 0030](../adr/0030-guest-exec-as-workload-user.md)).
 3. Every open is rooted at the pre-opened runtime/state directory and uses
    symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
    surprises, non-regular log segments, world/group-writable parents, and
