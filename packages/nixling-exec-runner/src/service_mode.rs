@@ -441,6 +441,7 @@ mod production {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use rustix::process::{kill_process_group, Pid, Signal};
@@ -467,6 +468,9 @@ mod production {
     pub struct StdSpawner {
         runner_unit_name: String,
         systemctl_path: PathBuf,
+        passwd_path: PathBuf,
+        slice_verifier: Arc<dyn SliceVerifier>,
+        unit_killer: Arc<dyn WorkloadUnitKiller>,
     }
 
     impl StdSpawner {
@@ -474,13 +478,33 @@ mod production {
             Self {
                 runner_unit_name: format!("nixling-exec-{slot:02}.service"),
                 systemctl_path,
+                passwd_path: PathBuf::from("/etc/passwd"),
+                slice_verifier: Arc::new(SystemSliceVerifier),
+                unit_killer: Arc::new(SystemWorkloadUnitKiller),
+            }
+        }
+
+        #[cfg(test)]
+        pub(super) fn new_for_test(
+            slot: u32,
+            systemctl_path: PathBuf,
+            passwd_path: PathBuf,
+            slice_verifier: Arc<dyn SliceVerifier>,
+            unit_killer: Arc<dyn WorkloadUnitKiller>,
+        ) -> Self {
+            Self {
+                runner_unit_name: format!("nixling-exec-{slot:02}.service"),
+                systemctl_path,
+                passwd_path,
+                slice_verifier,
+                unit_killer,
             }
         }
     }
 
     impl Spawner for StdSpawner {
         fn spawn(&self, spec: &ExecSpec) -> Result<Box<dyn ChildHandle>, SpawnFailure> {
-            if !verify_never_root_against_passwd(spec, "/etc/passwd") {
+            if !verify_never_root_against_passwd(spec, &self.passwd_path) {
                 return Err(SpawnFailure::InfraFailed);
             }
             if !workload_argv_is_expected(spec, &self.runner_unit_name) {
@@ -501,16 +525,16 @@ mod production {
             let mut child = cmd.spawn().map_err(|_| SpawnFailure::InfraFailed)?;
             let pgid = child.id() as i32;
 
-            match verify_expected_slice_with_retry(
+            match self.slice_verifier.verify_expected_slice(
                 &self.systemctl_path,
                 &self.runner_unit_name,
                 &spec.workload_unit_name,
             ) {
                 SliceCheck::Verified => {}
-                SliceCheck::NotObserved if matches!(child.try_wait(), Ok(Some(_))) => {}
                 SliceCheck::NotObserved | SliceCheck::Unsafe => {
                     signal_process_group(pgid, StopSignal::Kill);
-                    systemctl_kill_unit(&self.systemctl_path, &spec.workload_unit_name);
+                    self.unit_killer
+                        .kill_workload_unit(&self.systemctl_path, &spec.workload_unit_name);
                     let _ = child.wait();
                     return Err(SpawnFailure::InfraFailed);
                 }
@@ -651,7 +675,7 @@ mod production {
         )
     }
 
-    fn verify_never_root_against_passwd(spec: &ExecSpec, passwd_path: &str) -> bool {
+    fn verify_never_root_against_passwd(spec: &ExecSpec, passwd_path: &Path) -> bool {
         std::fs::read_to_string(passwd_path)
             .map(|content| verify_never_root_with_passwd(spec, &content))
             .unwrap_or(false)
@@ -711,10 +735,44 @@ mod production {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum SliceCheck {
+    pub(super) enum SliceCheck {
         Verified,
         NotObserved,
         Unsafe,
+    }
+
+    pub(super) trait SliceVerifier: Send + Sync {
+        fn verify_expected_slice(
+            &self,
+            systemctl_path: &Path,
+            runner_unit_name: &str,
+            workload_unit_name: &str,
+        ) -> SliceCheck;
+    }
+
+    struct SystemSliceVerifier;
+
+    impl SliceVerifier for SystemSliceVerifier {
+        fn verify_expected_slice(
+            &self,
+            systemctl_path: &Path,
+            runner_unit_name: &str,
+            workload_unit_name: &str,
+        ) -> SliceCheck {
+            verify_expected_slice_with_retry(systemctl_path, runner_unit_name, workload_unit_name)
+        }
+    }
+
+    pub(super) trait WorkloadUnitKiller: Send + Sync {
+        fn kill_workload_unit(&self, systemctl_path: &Path, unit_name: &str);
+    }
+
+    struct SystemWorkloadUnitKiller;
+
+    impl WorkloadUnitKiller for SystemWorkloadUnitKiller {
+        fn kill_workload_unit(&self, systemctl_path: &Path, unit_name: &str) {
+            systemctl_kill_unit(systemctl_path, unit_name);
+        }
     }
 
     fn verify_expected_slice_with_retry(
@@ -1090,6 +1148,73 @@ ControlGroup=/nixling-exec.slice/nixling-exec-03.service
             "nixling-exec-03.service",
             "nixling-exec-03-w.service"
         ));
+    }
+
+    struct FixedSliceVerifier(production::SliceCheck);
+
+    impl production::SliceVerifier for FixedSliceVerifier {
+        fn verify_expected_slice(
+            &self,
+            _systemctl_path: &std::path::Path,
+            _runner_unit_name: &str,
+            _workload_unit_name: &str,
+        ) -> production::SliceCheck {
+            self.0
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingUnitKiller {
+        killed: StdMutex<Vec<String>>,
+    }
+
+    impl production::WorkloadUnitKiller for RecordingUnitKiller {
+        fn kill_workload_unit(&self, _systemctl_path: &std::path::Path, unit_name: &str) {
+            self.killed.lock().unwrap().push(unit_name.to_owned());
+        }
+    }
+
+    #[test]
+    fn std_spawner_fails_closed_when_slice_not_verified_even_if_wrapper_exited() {
+        for check in [
+            production::SliceCheck::NotObserved,
+            production::SliceCheck::Unsafe,
+        ] {
+            let (dir, _paths) = scratch_slot();
+            let passwd = dir.join("passwd");
+            std::fs::write(
+                &passwd,
+                "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:100::/home/alice:/bin/sh\n",
+            )
+            .unwrap();
+            let killer = Arc::new(RecordingUnitKiller::default());
+            let spawner = production::StdSpawner::new_for_test(
+                3,
+                PathBuf::from("/bin/false"),
+                passwd,
+                Arc::new(FixedSliceVerifier(check)),
+                killer.clone(),
+            );
+            let mut spec = spec("/bin/true", 0);
+            spec.systemd_run_path = std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+
+            let result = spawner.spawn(&spec);
+
+            match result {
+                Err(error) => assert_eq!(error, SpawnFailure::InfraFailed),
+                Ok(_) => panic!("StdSpawner accepted unverified slice state {check:?}"),
+            }
+            let killed = killer.killed.lock().unwrap().clone();
+            assert_eq!(
+                killed,
+                vec!["nixling-exec-03-w.service".to_owned()],
+                "workload unit must be killed on {check:?}"
+            );
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
     // ---- Fakes -----------------------------------------------------------

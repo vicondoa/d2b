@@ -7,6 +7,7 @@
 //! registry can be unit-tested against an in-memory fake.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -31,7 +32,7 @@ pub enum UnitError {
 }
 
 /// A transient unit the manager currently knows about (re-adoption input).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ManagedUnit {
     pub slot: u32,
     pub kind: ManagedUnitKind,
@@ -67,13 +68,16 @@ impl ManagedUnit {
 /// *unqueried* identity means the `show` step never produced a usable value
 /// (spawn failed, non-zero exit, unparsable, or no block for this unit). Only
 /// the queried case can drive a `Foreign` classification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum UnitIdentity {
     /// `systemctl show` was read for this unit. `slice`/`exec_start` carry
     /// exactly what systemd reported (either may be `None` for an empty value).
     Queried {
         slice: Option<String>,
         exec_start: Option<String>,
+        binds_to: Option<String>,
+        part_of: Option<String>,
+        after: Option<String>,
     },
     /// The identity query failed or produced no block for this unit; its
     /// identity is unknown.
@@ -85,10 +89,52 @@ pub enum UnitIdentity {
 /// path and the argv token sequence. Used for the structural identity check
 /// so an impostor cannot pass by merely embedding the expected substrings in
 /// an unrelated argument.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ParsedExecStart {
     pub exe: String,
     pub argv: Vec<String>,
+}
+
+impl fmt::Debug for ManagedUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ManagedUnit")
+            .field("slot", &self.slot)
+            .field("kind", &self.kind)
+            .field("active", &self.active)
+            .field("identity", &self.identity)
+            .finish()
+    }
+}
+
+impl fmt::Debug for UnitIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Queried {
+                slice,
+                exec_start,
+                binds_to,
+                part_of,
+                after,
+            } => f
+                .debug_struct("Queried")
+                .field("slice", &slice.as_deref())
+                .field("has_exec_start", &exec_start.is_some())
+                .field("has_binds_to", &binds_to.is_some())
+                .field("has_part_of", &part_of.is_some())
+                .field("has_after", &after.is_some())
+                .finish(),
+            Self::Unqueried => f.write_str("Unqueried"),
+        }
+    }
+}
+
+impl fmt::Debug for ParsedExecStart {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ParsedExecStart")
+            .field("exe", &self.exe)
+            .field("argv_len", &self.argv.len())
+            .finish()
+    }
 }
 
 /// Parse a systemd-rendered `ExecStart` value of the form
@@ -110,9 +156,63 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
             }
         } else if let Some(v) = field.strip_prefix("argv[]=") {
             if argv.is_none() {
-                argv = Some(v.split_whitespace().map(|t| t.to_owned()).collect());
+                argv = Some(parse_exec_argv(v.trim())?);
             }
         }
+    }
+
+    fn parse_exec_argv(value: &str) -> Option<Vec<String>> {
+        let mut argv = Vec::new();
+        let mut current = String::new();
+        let mut quote: Option<char> = None;
+        let mut escaped = false;
+        let mut in_token = false;
+
+        for ch in value.chars() {
+            if escaped {
+                current.push(ch);
+                in_token = true;
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                in_token = true;
+                continue;
+            }
+            if let Some(q) = quote {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+                in_token = true;
+                continue;
+            }
+            match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    in_token = true;
+                }
+                c if c.is_whitespace() => {
+                    if in_token {
+                        argv.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                }
+                _ => {
+                    current.push(ch);
+                    in_token = true;
+                }
+            }
+        }
+        if escaped || quote.is_some() {
+            return None;
+        }
+        if in_token {
+            argv.push(current);
+        }
+        Some(argv)
     }
     let exe = exe?;
     if exe.is_empty() {
@@ -224,8 +324,6 @@ impl TransientUnitManager for SystemdRunUnitManager {
     }
 
     async fn stop_unit(&self, slot: u32) -> Result<(), UnitError> {
-        // Best-effort + idempotent: a non-zero exit (e.g. "unit not loaded")
-        // is treated as success; only a spawn failure is surfaced.
         let mut cmd = tokio::process::Command::new(&self.systemctl_path);
         cmd.arg("stop")
             .arg(unit_name(slot))
@@ -233,7 +331,7 @@ impl TransientUnitManager for SystemdRunUnitManager {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let _ = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        let stop_status = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
         let mut kill = tokio::process::Command::new(&self.systemctl_path);
         kill.arg("--system")
             .arg("--no-ask-password")
@@ -245,8 +343,12 @@ impl TransientUnitManager for SystemdRunUnitManager {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let _ = kill.status().await.map_err(|_| UnitError::SpawnFailed)?;
-        Ok(())
+        let kill_status = kill.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        if stop_status.success() && kill_status.success() {
+            Ok(())
+        } else {
+            Err(UnitError::NonZeroExit)
+        }
     }
 
     async fn reset_failed(&self, slot: u32) -> Result<(), UnitError> {
@@ -280,7 +382,8 @@ impl TransientUnitManager for SystemdRunUnitManager {
         if units.is_empty() {
             return Ok(units);
         }
-        // Enrich with Slice + ExecStart for identity verification. The `show`
+        // Enrich with Slice + ExecStart + unit dependencies for identity
+        // verification. The `show`
         // step is best-effort for LIVENESS but load-bearing for IDENTITY: a
         // failure (spawn error, non-zero exit, or a unit with no returned
         // block) leaves that unit's identity `Unqueried`, so an ACTIVE unit
@@ -289,7 +392,7 @@ impl TransientUnitManager for SystemdRunUnitManager {
         let mut show = tokio::process::Command::new(&self.systemctl_path);
         show.arg("show")
             .arg("--no-pager")
-            .arg("--property=Id,Slice,ExecStart")
+            .arg("--property=Id,Slice,ExecStart,BindsTo,PartOf,After")
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         for unit in &units {
@@ -305,6 +408,9 @@ impl TransientUnitManager for SystemdRunUnitManager {
                         unit.identity = UnitIdentity::Queried {
                             slice: block.slice.clone(),
                             exec_start: block.exec_start.clone(),
+                            binds_to: block.binds_to.clone(),
+                            part_of: block.part_of.clone(),
+                            after: block.after.clone(),
                         };
                     }
                 }
@@ -315,14 +421,31 @@ impl TransientUnitManager for SystemdRunUnitManager {
 }
 
 /// One `systemctl show` property block (identity-verification input).
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 struct ShowEntry {
     id: String,
     slice: Option<String>,
     exec_start: Option<String>,
+    binds_to: Option<String>,
+    part_of: Option<String>,
+    after: Option<String>,
 }
 
-/// Parse `systemctl show --property=Id,Slice,ExecStart UNIT...` output. Blocks
+impl fmt::Debug for ShowEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShowEntry")
+            .field("id", &self.id)
+            .field("slice", &self.slice.as_deref())
+            .field("has_exec_start", &self.exec_start.is_some())
+            .field("has_binds_to", &self.binds_to.is_some())
+            .field("has_part_of", &self.part_of.is_some())
+            .field("has_after", &self.after.is_some())
+            .finish()
+    }
+}
+
+/// Parse `systemctl show --property=Id,Slice,ExecStart,BindsTo,PartOf,After
+/// UNIT...` output. Blocks
 /// for distinct units are separated by a blank line. `ExecStart` renders as
 /// `{ path=... ; argv[]=<abs> --serve-exec --slot NN ; ... }`; the raw value is
 /// kept verbatim and decomposed structurally upstream (see
@@ -343,6 +466,21 @@ fn parse_show_blocks(text: &str) -> Vec<ShowEntry> {
                 let v = v.trim();
                 if !v.is_empty() && entry.exec_start.is_none() {
                     entry.exec_start = Some(v.to_owned());
+                }
+            } else if let Some(v) = line.strip_prefix("BindsTo=") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    entry.binds_to = Some(v.to_owned());
+                }
+            } else if let Some(v) = line.strip_prefix("PartOf=") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    entry.part_of = Some(v.to_owned());
+                }
+            } else if let Some(v) = line.strip_prefix("After=") {
+                let v = v.trim();
+                if !v.is_empty() {
+                    entry.after = Some(v.to_owned());
                 }
             }
         }
@@ -629,6 +767,9 @@ other.service           loaded active   running Unrelated
 Id=nixling-exec-07.service
 Slice=nixling-exec.slice
 ExecStart={ path=/nix/store/abc/bin/nixling-exec-runner ; argv[]=/nix/store/abc/bin/nixling-exec-runner --serve-exec --slot 07 ; ignore_errors=no }
+BindsTo=nixling-exec-07.service
+PartOf=nixling-exec-07.service
+After=nixling-exec-07.service
 
 Id=nixling-exec-08.service
 Slice=other.slice
@@ -643,6 +784,15 @@ ExecStart={ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }
             .as_deref()
             .unwrap()
             .contains("--slot 07"));
+        assert_eq!(
+            blocks[0].binds_to.as_deref(),
+            Some("nixling-exec-07.service")
+        );
+        assert_eq!(
+            blocks[0].part_of.as_deref(),
+            Some("nixling-exec-07.service")
+        );
+        assert_eq!(blocks[0].after.as_deref(), Some("nixling-exec-07.service"));
         assert_eq!(blocks[1].slice.as_deref(), Some("other.slice"));
     }
 
@@ -681,6 +831,26 @@ ExecStart=
     }
 
     #[test]
+    fn parse_exec_start_preserves_quoted_argv_token_boundaries() {
+        let parsed = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c "exec \"$@\"" nl-exec "/bin/echo" "hello world" ; ignore_errors=no }"#,
+        )
+        .expect("quoted argv parses");
+        assert_eq!(
+            parsed.argv,
+            vec![
+                "/run/current-system/sw/bin/bash".to_owned(),
+                "-l".to_owned(),
+                "-c".to_owned(),
+                r#"exec "$@""#.to_owned(),
+                "nl-exec".to_owned(),
+                "/bin/echo".to_owned(),
+                "hello world".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn parse_exec_start_rejects_unstructured_or_empty() {
         // No `path=` field at all.
         assert_eq!(
@@ -692,5 +862,49 @@ ExecStart=
             parse_exec_start("{ path= ; argv[]=x ; ignore_errors=no }"),
             None
         );
+    }
+
+    #[test]
+    fn debug_impls_redact_exec_start_argv() {
+        let secret = "--token=super-secret";
+        let identity = UnitIdentity::Queried {
+            slice: Some("nixling-exec.slice".to_owned()),
+            exec_start: Some(format!(
+                "{{ path=/bin/bash ; argv[]=/bin/bash -lc {secret} ; ignore_errors=no }}"
+            )),
+            binds_to: Some("nixling-exec-03.service".to_owned()),
+            part_of: Some("nixling-exec-03.service".to_owned()),
+            after: Some("nixling-exec-03.service".to_owned()),
+        };
+        let unit = ManagedUnit {
+            slot: 3,
+            kind: ManagedUnitKind::Workload,
+            active: true,
+            identity: identity.clone(),
+        };
+        let show = ShowEntry {
+            id: "nixling-exec-03-w.service".to_owned(),
+            slice: Some("nixling-exec.slice".to_owned()),
+            exec_start: Some(format!(
+                "{{ path=/bin/bash ; argv[]=/bin/bash -lc {secret} ; ignore_errors=no }}"
+            )),
+            binds_to: Some("nixling-exec-03.service".to_owned()),
+            part_of: Some("nixling-exec-03.service".to_owned()),
+            after: Some("nixling-exec-03.service".to_owned()),
+        };
+        for rendered in [
+            format!("{identity:?}"),
+            format!("{unit:?}"),
+            format!("{show:?}"),
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "Debug output leaked ExecStart argv: {rendered}"
+            );
+            assert!(
+                rendered.contains("has_exec_start: true"),
+                "Debug output should expose only metadata: {rendered}"
+            );
+        }
     }
 }

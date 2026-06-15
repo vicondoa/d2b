@@ -333,7 +333,47 @@ pub fn build_runtime_auth_core(
     ))
 }
 
-pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
+struct ServiceRuntime {
+    auth: SharedAuthCore,
+    exec: SharedExec,
+    detached: SharedDetached,
+    guest_config_path: Option<PathBuf>,
+}
+
+trait StartupProbe {
+    fn classify_workload_user(&self, user: &str) -> crate::login_session::WorkloadUserUid;
+    fn guest_boot_id(&self) -> Result<String, GuestAuthError>;
+    fn path_is_file(&self, path: &Path) -> bool;
+    fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool;
+    fn login_shell_path(&self) -> PathBuf {
+        PathBuf::from(GUEST_LOGIN_SHELL_PATH)
+    }
+}
+
+struct ProductionStartupProbe;
+
+impl StartupProbe for ProductionStartupProbe {
+    fn classify_workload_user(&self, user: &str) -> crate::login_session::WorkloadUserUid {
+        crate::login_session::classify_workload_user(user)
+    }
+
+    fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
+        ProcBootIdSource.guest_boot_id()
+    }
+
+    fn path_is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn detached_runtime_usable(&self, detached: &DetachedRuntimeConfig) -> bool {
+        detached_runtime_usable(detached)
+    }
+}
+
+async fn prepare_service_runtime_with_probe<P: StartupProbe>(
+    mut config: GuestdServeConfig,
+    probe: &P,
+) -> Result<ServiceRuntime, GuestdServiceError> {
     // Enforce the never-root contract by EFFECTIVE UID before wiring any
     // spawner. Arg parsing rejects only the literal name "root"; a non-root
     // name aliased to UID 0 would otherwise reach `systemd-run --uid=<name>`
@@ -343,7 +383,7 @@ pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServ
     // path (non-TTY pipe and interactive PTY) — never root.
     let mut exec_uid: Option<u32> = None;
     if let Some(user) = config.exec_policy.exec_user.clone() {
-        match crate::login_session::classify_workload_user(&user) {
+        match probe.classify_workload_user(&user) {
             crate::login_session::WorkloadUserUid::NonRoot(uid) => {
                 exec_uid = Some(uid);
             }
@@ -376,22 +416,22 @@ pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServ
     // inside a real PAM login session via `systemd-run --property=PAMName=login
     // --uid=<user>`. Both require these paths present and valid.
     let exec_paths: Option<&DetachedRuntimeConfig> = config.detached.as_ref().filter(|cfg| {
-        exec_enabled_user && cfg.systemd_run_path.is_file() && cfg.exec_runner_path.is_file()
+        exec_enabled_user
+            && probe.path_is_file(&cfg.systemd_run_path)
+            && probe.path_is_file(&cfg.exec_runner_path)
     });
-    let login_shell = PathBuf::from(GUEST_LOGIN_SHELL_PATH);
+    let login_shell = probe.login_shell_path();
 
     let detached: SharedDetached = match (config.detached.as_ref(), exec_user.clone(), exec_uid) {
         (Some(detached_cfg), Some(user), Some(uid))
             if detached_registry_allowed(
                 exec_enabled_user,
                 Some(uid),
-                detached_runtime_usable(detached_cfg),
-                login_shell.is_file(),
+                probe.detached_runtime_usable(detached_cfg),
+                probe.path_is_file(&login_shell),
             ) =>
         {
-            let guest_boot_id = ProcBootIdSource
-                .guest_boot_id()
-                .map_err(|_| GuestdServiceError::Io)?;
+            let guest_boot_id = probe.guest_boot_id().map_err(|_| GuestdServiceError::Io)?;
             let registry =
                 build_detached_registry(detached_cfg, guest_boot_id, user, uid, &login_shell);
             registry.reconcile_on_startup().await;
@@ -452,6 +492,22 @@ pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServ
         capabilities,
     )?));
     let guest_config_path = config.guest_config_path.clone();
+    Ok(ServiceRuntime {
+        auth,
+        exec,
+        detached,
+        guest_config_path,
+    })
+}
+
+pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
+    let vm_id = config.vm_id.clone();
+    let ServiceRuntime {
+        auth,
+        exec,
+        detached,
+        guest_config_path,
+    } = prepare_service_runtime_with_probe(config, &ProductionStartupProbe).await?;
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, GUEST_CONTROL_AUTH_PORT))
         .map_err(|_| GuestdServiceError::Ttrpc)?;
 
@@ -463,7 +519,7 @@ pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServ
         let auth = Arc::clone(&auth);
         let exec = Arc::clone(&exec);
         let detached = detached.clone();
-        let vm_id = config.vm_id.clone();
+        let vm_id = vm_id.clone();
         let guest_config_path = guest_config_path.clone();
         tokio::spawn(async move {
             if let Ok(context) = connection_context(vm_id, peer_addr.cid()) {
@@ -1757,12 +1813,15 @@ fn validate_detached_command(
         return Err(ExecError::InvalidArgv);
     }
     for arg in &input.argv {
-        if arg.is_empty() || arg.len() > MAX_ARG_BYTES || arg.as_bytes().contains(&0) {
+        if arg.len() > MAX_ARG_BYTES || arg.as_bytes().contains(&0) {
             return Err(ExecError::InvalidArgv);
         }
     }
     let program = &input.argv[0];
-    if program.starts_with('-') {
+    if program.is_empty() || program.starts_with('-') {
+        return Err(ExecError::InvalidProgram);
+    }
+    if input.argv.iter().skip(1).any(|arg| arg.is_empty()) {
         return Err(ExecError::InvalidArgv);
     }
 
@@ -2104,6 +2163,49 @@ mod tests {
         }
     }
 
+    struct TestStartupProbe {
+        uid: crate::login_session::WorkloadUserUid,
+    }
+
+    impl StartupProbe for TestStartupProbe {
+        fn classify_workload_user(&self, _user: &str) -> crate::login_session::WorkloadUserUid {
+            self.uid
+        }
+
+        fn guest_boot_id(&self) -> Result<String, GuestAuthError> {
+            Ok("boot-1".to_owned())
+        }
+
+        fn path_is_file(&self, _path: &Path) -> bool {
+            true
+        }
+
+        fn detached_runtime_usable(&self, _detached: &DetachedRuntimeConfig) -> bool {
+            true
+        }
+
+        fn login_shell_path(&self) -> PathBuf {
+            PathBuf::from("/run/current-system/sw/bin/bash")
+        }
+    }
+
+    fn startup_config(user: &str) -> GuestdServeConfig {
+        GuestdServeConfig::with_exec_policy(
+            "corp-vm",
+            TEST_TOKEN.to_vec(),
+            ExecPolicy {
+                enabled: true,
+                exec_user: Some(user.to_owned()),
+            },
+        )
+        .unwrap()
+        .with_detached(DetachedRuntimeConfig {
+            systemd_run_path: PathBuf::from("/run/current-system/sw/bin/systemd-run"),
+            exec_runner_path: PathBuf::from("/run/current-system/sw/bin/nixling-exec-runner"),
+            max_runtime_sec: 0,
+        })
+    }
+
     #[test]
     fn detached_command_validation_allows_bare_absolute_and_relative_argv0() {
         for argv0 in ["id", "/bin/true", "./script", "../script"] {
@@ -2118,7 +2220,13 @@ mod tests {
     #[test]
     fn detached_command_validation_rejects_leading_dash_argv0() {
         let err = validate_detached_command(&detached_input("-sh"), &exec_policy()).unwrap_err();
-        assert_eq!(err, ExecError::InvalidArgv);
+        assert_eq!(err, ExecError::InvalidProgram);
+    }
+
+    #[test]
+    fn detached_command_validation_rejects_empty_argv0_as_invalid_program() {
+        let err = validate_detached_command(&detached_input(""), &exec_policy()).unwrap_err();
+        assert_eq!(err, ExecError::InvalidProgram);
     }
 
     #[test]
@@ -2159,6 +2267,68 @@ mod tests {
         assert!(!detached_registry_allowed(false, Some(1000), true, true));
         assert!(!detached_registry_allowed(true, Some(1000), false, true));
         assert!(!detached_registry_allowed(true, Some(1000), true, false));
+    }
+
+    #[tokio::test]
+    async fn service_startup_disables_detached_for_root_alias_and_unresolved_workload_user() {
+        for (uid, label, instance) in [
+            (
+                crate::login_session::WorkloadUserUid::Root,
+                "uid-0 alias",
+                31,
+            ),
+            (
+                crate::login_session::WorkloadUserUid::Unresolved,
+                "unresolved user",
+                32,
+            ),
+        ] {
+            let runtime = prepare_service_runtime_with_probe(
+                startup_config("alice"),
+                &TestStartupProbe { uid },
+            )
+            .await
+            .unwrap();
+            assert!(runtime.detached.is_none(), "{label}: no detached registry");
+            let service = GuestControlService::new(
+                runtime.auth,
+                runtime.exec,
+                runtime.detached,
+                test_context(instance),
+            );
+            authenticate(&service).await;
+
+            let ctx = ttrpc_context();
+            let caps = service
+                .capabilities(&ctx, capabilities_request())
+                .await
+                .unwrap();
+            let cap_values = caps
+                .capabilities
+                .iter()
+                .map(|cap| cap.enum_value().unwrap())
+                .collect::<Vec<_>>();
+            assert!(
+                !cap_values.contains(&pb::GuestCapability::GUEST_CAPABILITY_EXEC_DETACHED),
+                "{label}: EXEC_DETACHED must not be advertised"
+            );
+
+            let mut request = pb::ExecCreateRequest::new();
+            request.metadata = metadata();
+            request.argv = vec!["/bin/true".to_owned()];
+            request.detached = true;
+            let mut output_policy = pb::OutputPolicy::new();
+            output_policy.max_chunk_bytes = 64 * 1024;
+            request.output_policy = MessageField::some(output_policy);
+            let response = service.exec_create(&ctx, request).await.unwrap();
+            assert_disabled(
+                response
+                    .error
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{label}: detached create disabled error")),
+            );
+            assert!(response.exec_id.is_none(), "{label}: no exec id allocated");
+        }
     }
 
     fn test_exec() -> SharedExec {
@@ -2839,6 +3009,9 @@ mod tests {
         }
         fn write_spec(&self, _slot: u32, _spec: &ExecSpec) -> Result<(), ExecError> {
             Ok(())
+        }
+        fn read_spec(&self, _slot: u32) -> Result<ExecSpec, ExecError> {
+            Err(ExecError::Internal)
         }
         fn write_cancel(&self, _slot: u32) -> Result<(), ExecError> {
             Ok(())
