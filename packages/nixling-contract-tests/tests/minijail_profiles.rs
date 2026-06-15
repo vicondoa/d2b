@@ -8,10 +8,21 @@ use nixling_contract_tests::load_bundle_resolver_from_env;
 // This is the POSITIVE half of retiring the minijail-validator /
 // static-invariant-uid0 bash gates — it proves the real rendered output is
 // policy-compliant end-to-end. The NEGATIVE half (synthetic rejection cases)
-// belongs in nixling-core unit tests over validate_minijail_profiles, which
-// are blocked until the build_personal_dev_bundle test helper's stale
-// manifest fixture (manifest_version 4 vs MANIFEST_VERSION_CURRENT 5) is
-// fixed; see plan.md.
+// lives in nixling-core unit tests over validate_minijail_profiles.
+//
+// RETIREMENT PREREQUISITES (W3 security panel findings) before retiring
+// static-invariant-uid0 / minijail-validator-*:
+//   - validate_minijail_profiles treats `adr_carve_out: Some(_)` as
+//     sufficient and accepts Some(""); the bash gate required an ADR-like
+//     reference. Either reject empty/malformed carve-outs in the validator
+//     or document Some(_) as intentionally sufficient.
+//   - RoleProfile has no requires_start_root; the bash gate coupled uid0 +
+//     long-lived with requiresStartRoot=true. Decide whether to model that
+//     in Rust or document the simplification.
+//   - Replace the bash gate's schema-shape check (uid/requiresStartRoot
+//     shapes must carry an ADR carve-out field) with a Rust/xtask assertion
+//     over the current v2 schemas/DTOs (bundle-drift proves schema==DTO but
+//     would not catch a future DTO dropping the field).
 #[test]
 fn rendered_bundle_passes_all_minijail_profile_invariants() {
     let resolver = load_bundle_resolver_from_env();

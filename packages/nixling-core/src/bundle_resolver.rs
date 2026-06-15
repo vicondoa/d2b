@@ -3194,6 +3194,27 @@ mod tests {
     }
 
     #[test]
+    fn validate_minijail_profiles_rejects_root_gid_without_carve_out() {
+        let root = test_root("minijail-root-gid-no-carveout");
+        let mut resolver = build_personal_dev_bundle(&root);
+        {
+            let p = &mut resolver.processes.vms[0].nodes[0].profile;
+            // uid stays non-root (1100); gid 0 alone must also be rejected
+            // (the validator gates on uid == 0 || gid == 0).
+            p.gid = 0;
+            p.adr_carve_out = None;
+        }
+        assert!(
+            matches!(
+                resolver.validate_minijail_profiles(),
+                Err(MinijailProfileViolation::RootWithoutCarveOut { gid: 0, .. })
+            ),
+            "gid 0 without an ADR carve-out must be rejected"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn usbip_firewall_intent_targets_uplink_not_lan_bridge() {
         let root = test_root("usbip-firewall-uplink");
         let resolver = build_personal_dev_bundle(&root);

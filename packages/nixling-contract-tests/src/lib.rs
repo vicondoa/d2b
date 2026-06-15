@@ -41,6 +41,13 @@ pub fn load_bundle_resolver_from_env() -> BundleResolver {
     let bundle: Bundle = parse_fixture("bundle.json");
     let host: HostJson = parse_fixture("host.json");
     let processes: ProcessesJson = parse_fixture("processes.json");
-    let manifest: ManifestV04 = parse_fixture("manifest.json");
+    // Parse the manifest via the production `ManifestV04::from_slice`, which
+    // enforces MANIFEST_VERSION_CURRENT — generic serde (parse_fixture) would
+    // accept a stale rendered manifest that `BundleResolver::load` rejects,
+    // letting the contract test pass on a version the daemon/broker refuse.
+    let manifest_bytes = read_fixture("manifest.json");
+    let manifest = ManifestV04::from_slice(manifest_bytes.as_bytes()).unwrap_or_else(|err| {
+        panic!("manifest.json fixture failed ManifestV04::from_slice (version gate): {err:?}")
+    });
     BundleResolver::from_artifacts(bundle, host, processes, manifest)
 }
