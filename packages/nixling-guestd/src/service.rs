@@ -49,8 +49,8 @@ use crate::{
 /// Absolute path to the guest login shell (NixOS system profile). Interactive
 /// and non-interactive execs run the requested command through this shell with
 /// `-l` so the profile (`/etc/set-environment`, `WAYLAND_DISPLAY`, …) is
-/// sourced inside the PAM login session, reproducing the old SSH `vm konsole`
-/// environment so graphical clients work.
+/// sourced inside the PAM login session, reproducing an interactive login
+/// environment (the surface `vm exec -it` drives) so graphical clients work.
 const GUEST_LOGIN_SHELL_PATH: &str = "/run/current-system/sw/bin/bash";
 
 /// Server-generated opaque exec id source backed by `/dev/urandom`.

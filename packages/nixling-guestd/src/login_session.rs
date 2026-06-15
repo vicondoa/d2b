@@ -1,8 +1,8 @@
 //! Build the argv that runs a validated guest command as the VM's workload
 //! user inside a real PAM login session, via `systemd-run`.
 //!
-//! This reproduces the environment an SSH login (the retired `vm konsole`
-//! transport) produced: `systemd-run -p PAMName=login` opens a PAM session so
+//! This reproduces the environment an interactive login (driven by
+//! `vm exec -it`) produces: `systemd-run -p PAMName=login` opens a PAM session so
 //! `pam_systemd` provisions `XDG_RUNTIME_DIR`, and the command is run through
 //! the workload user's login shell so the profile (`/etc/set-environment`,
 //! `WAYLAND_DISPLAY`, …) is sourced. Graphical clients (e.g. a browser) then

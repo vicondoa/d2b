@@ -417,8 +417,8 @@ enum NativeCommand {
     /// Authorisation introspection.
     Auth(AuthArgs),
     /// Per-VM lifecycle verbs (start / stop / restart / list / status) plus the
-    /// admin-only guest-control sub-verbs `exec` and `konsole`, which run
-    /// commands or an interactive session inside a VM over the authenticated
+    /// admin-only guest-control sub-verb `exec`, which runs commands or an
+    /// interactive session inside a VM over the authenticated
     /// guest-control transport (no SSH).
     Vm(VmArgs),
     /// Alias for `vm start <vm>`.
@@ -712,13 +712,6 @@ enum VmCommand {
     List(VmListArgs),
     /// Daemon-side readiness state for a VM (api-ready phase).
     Status(VmStatusArgs),
-    /// Open an interactive guest session in a host terminal. Thin wrapper
-    /// that hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in the chosen
-    /// terminal emulator (default `konsole`, overridable via `--terminal`)
-    /// over the authenticated guest-control transport. There is no SSH; the
-    /// retired SSH-only flags `--host`/`--key`/`--user` are rejected with a
-    /// migration message.
-    Konsole(VmKonsoleArgs),
     /// Run a command inside the VM over the authenticated guest-control
     /// transport (no SSH). `nixling vm exec <vm> -- <cmd...>` runs a
     /// non-interactive command; `nixling vm exec -it <vm> -- <cmd...>`
@@ -826,44 +819,6 @@ struct VmListArgs {
 struct VmStatusArgs {
     /// VM name.
     vm: String,
-    #[arg(long, conflicts_with = "human")]
-    json: bool,
-    #[arg(long, conflicts_with = "json")]
-    human: bool,
-}
-
-/// `nixling vm konsole <vm>` — open an interactive guest session in a
-/// host terminal. Spawns a terminal emulator (default `konsole`,
-/// overridable via `--terminal`) hosting `nixling vm exec -it <vm> --
-/// bash -l` over the authenticated guest-control transport. There is no
-/// SSH; the guest command runs as the guest-control principal. Detaches
-/// from the CLI process via setsid so closing the CLI doesn't take the
-/// terminal down. The retired SSH-only flags `--host`/`--key`/`--user`
-/// still parse but are rejected with a migration message.
-#[derive(Debug, Args)]
-struct VmKonsoleArgs {
-    /// VM name as declared in `nixling.vms.<name>`.
-    vm: String,
-    /// Terminal emulator binary to spawn. Must accept `-e` to
-    /// execute a command. Tested: konsole, alacritty, foot,
-    /// gnome-terminal, xterm. Default: konsole.
-    #[arg(long, default_value = "konsole")]
-    terminal: String,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// guest-control exec runs as the guest-control principal.
-    #[arg(long, hide = true)]
-    user: Option<String>,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// the transport is resolved from the trusted bundle.
-    #[arg(long, hide = true)]
-    host: Option<String>,
-    /// Retired SSH-only flag. Rejected with a migration message;
-    /// guest-control exec needs no SSH key.
-    #[arg(long, hide = true)]
-    key: Option<std::path::PathBuf>,
-    /// Print the would-be command without executing.
-    #[arg(long)]
-    dry_run: bool,
     #[arg(long, conflicts_with = "human")]
     json: bool,
     #[arg(long, conflicts_with = "json")]
@@ -1708,7 +1663,6 @@ fn dispatch(
             VmCommand::Restart(args) => cmd_vm_restart(context, args),
             VmCommand::List(args) => cmd_vm_list(context, args),
             VmCommand::Status(args) => cmd_vm_status(context, args),
-            VmCommand::Konsole(args) => cmd_vm_konsole(context, args),
             VmCommand::Exec(args) => cmd_vm_exec(context, args),
         },
         NativeCommand::Up(args) => cmd_vm_start(context, args),
@@ -4142,127 +4096,6 @@ fn print_exec_json(value: &Value) -> Result<(), CliFailure> {
     Ok(())
 }
 
-/// Absolute path to the guest login shell hosted by `vm konsole`. guestd
-/// performs no PATH lookup and rejects a relative argv[0]; on a nixling
-/// (NixOS) guest the system bash always resolves here.
-const GUEST_LOGIN_SHELL: &str = "/run/current-system/sw/bin/bash";
-
-/// `nixling vm konsole <vm>` — open an interactive guest session in a host
-/// terminal. This is now a thin wrapper that hosts
-/// `nixling vm exec -it <vm> -- <login-shell>` inside the chosen terminal
-/// emulator (default `konsole`, overridable via `--terminal`). It runs over
-/// the authenticated guest-control transport (admin-only); there is no SSH.
-/// The retired SSH-only flags (`--host`/`--key`/`--user`) are rejected with a
-/// migration message.
-fn cmd_vm_konsole(context: &Context, args: &VmKonsoleArgs) -> Result<i32, CliFailure> {
-    eprintln!(
-        "note: `nixling vm konsole` now hosts `nixling vm exec -it` over the \
-         authenticated guest-control transport (no SSH). It is retained as a \
-         terminal-spawning convenience; use `nixling vm exec -it {} -- <cmd>` \
-         for ad-hoc commands.",
-        args.vm
-    );
-
-    // The SSH-only flags are retired: guest-control exec resolves the VM, its
-    // transport, and its principal from the trusted bundle. Reject them with a
-    // concrete migration path rather than silently ignoring them.
-    let mut retired = Vec::new();
-    if args.host.is_some() {
-        retired.push("--host");
-    }
-    if args.key.is_some() {
-        retired.push("--key");
-    }
-    if args.user.is_some() {
-        retired.push("--user");
-    }
-    if !retired.is_empty() {
-        return Err(CliFailure::new(
-            2,
-            format!(
-                "vm konsole: the SSH-only flag(s) {} are retired; `vm konsole` now runs over the \
-                 authenticated guest-control transport (no SSH host/key/user selection). Remove \
-                 them; the guest command runs as the guest-control principal.",
-                retired.join(", ")
-            ),
-        ));
-    }
-
-    require_known_vm(context, &args.vm, args.json)?;
-
-    let self_exe = std::env::current_exe().map_err(|err| {
-        CliFailure::new(
-            1,
-            format!("vm konsole: cannot resolve the nixling binary to re-exec: {err}"),
-        )
-    })?;
-
-    let terminal = &args.terminal;
-    // Host `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` in
-    // the terminal. The terminal owns the interactive session; the guest owns
-    // the PTY. guestd requires an absolute argv[0] (it performs no PATH
-    // lookup), so use the canonical NixOS system bash path inside the guest.
-    let argv: Vec<String> = vec![
-        terminal.clone(),
-        "-e".to_owned(),
-        self_exe.display().to_string(),
-        "vm".to_owned(),
-        "exec".to_owned(),
-        "-it".to_owned(),
-        args.vm.clone(),
-        "--".to_owned(),
-        GUEST_LOGIN_SHELL.to_owned(),
-        "-l".to_owned(),
-    ];
-
-    if args.dry_run || args.json {
-        let body = serde_json::json!({
-            "command": "vm konsole",
-            "mode": if args.dry_run { "dry-run" } else { "would-spawn" },
-            "vm": args.vm,
-            "terminal": terminal,
-            "transport": "guest-control",
-            "argv": argv,
-        });
-        let mut rendered = serde_json::to_string_pretty(&body)
-            .map_err(|err| CliFailure::new(1, format!("serialize: {err}")))?;
-        rendered.push('\n');
-        print_stdout(&rendered);
-        if args.dry_run {
-            return Ok(0);
-        }
-    } else if args.human {
-        print_stdout(&format!(
-            "vm konsole {}: spawning `{}` hosting `nixling vm exec -it`\n",
-            args.vm, terminal
-        ));
-    }
-
-    // Spawn detached so the CLI can exit while the terminal keeps running.
-    let mut child = spawn_detached_terminal(&argv, terminal)?;
-    let status = child.wait().map_err(|err| {
-        let operator_error =
-            CoreError::internal_io(format!("vm konsole: setsid wait failed: {err}"));
-        CliFailure {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-        }
-    })?;
-    if !status.success() {
-        let operator_error = CoreError::internal_io(format!(
-            "vm konsole: setsid --fork {} exited with status {:?} (terminal binary missing?)",
-            terminal, status
-        ));
-        return Err(CliFailure {
-            exit_code: 1,
-            message: operator_error.message(),
-            rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-        });
-    }
-    Ok(0)
-}
-
 // ---- store-lifecycle CLI verbs ----
 
 fn w7_dry_run_summary(verb: &str, vm: Option<&str>) -> serde_json::Value {
@@ -6401,9 +6234,6 @@ thread_local! {
 // their env mutations cannot race each other under cargo's parallel harness.
 #[cfg(test)]
 static TEST_STDOUT_CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(test)]
-static TEST_KONSOLE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
@@ -6420,16 +6250,6 @@ fn with_test_stdout_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
         .with(|capture| capture.borrow_mut().take())
         .expect("stdout capture active");
     (result, stdout)
-}
-
-#[cfg(test)]
-fn reset_test_konsole_spawn_count() {
-    TEST_KONSOLE_SPAWN_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
-}
-
-#[cfg(test)]
-fn test_konsole_spawn_count() -> usize {
-    TEST_KONSOLE_SPAWN_COUNT.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn print_stdout(text: &str) {
@@ -6472,33 +6292,6 @@ fn render_operator_error(error: &CoreError, owning_command: Option<&str>) -> Opt
     let mut rendered = serde_json::to_string_pretty(&value).ok()?;
     rendered.push('\n');
     Some(rendered)
-}
-
-fn spawn_detached_terminal(
-    argv: &[String],
-    terminal: &str,
-) -> Result<std::process::Child, CliFailure> {
-    #[cfg(test)]
-    TEST_KONSOLE_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    std::process::Command::new("setsid")
-        .arg("--fork")
-        .args(argv)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|err| {
-            let operator_error = CoreError::internal_io(format!(
-                "vm konsole: failed to spawn `setsid --fork {}`: {err}",
-                terminal
-            ));
-            CliFailure {
-                exit_code: 1,
-                message: operator_error.message(),
-                rendered_stderr: render_operator_error(&operator_error, Some("vm konsole")),
-            }
-        })
 }
 
 fn stdout_is_tty() -> bool {
@@ -8565,7 +8358,6 @@ mod host_install_dispatch_tests {
         assert_eq!(err.exit_code, 1);
         let rendered = err.rendered_stderr.as_deref().unwrap_or("");
         assert!(rendered.contains("nixling usb attach --apply"));
-        assert!(!rendered.contains("vm konsole"));
         assert!(!rendered.contains("--key"));
         assert!(!rendered.contains("daemon-down"));
 
@@ -9029,192 +8821,6 @@ mod host_install_dispatch_tests {
         assert_eq!(value.get("apply").and_then(Value::as_bool), Some(true));
         assert_eq!(value.get("enable").and_then(Value::as_bool), Some(true));
         assert_eq!(value.get("noStart").and_then(Value::as_bool), Some(true));
-    }
-}
-
-#[cfg(test)]
-mod konsole_wrapper_tests {
-    //! `vm konsole` is a thin wrapper that hosts `nixling vm exec -it`
-    //! over the authenticated guest-control transport. These tests pin
-    //! the wrapper argv shape (no SSH), the retired-flag rejection, and
-    //! the dry-run envelope.
-
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::GUEST_LOGIN_SHELL;
-
-    use serde_json::{json, Value};
-
-    use super::{
-        cmd_vm_konsole, reset_test_konsole_spawn_count, test_konsole_spawn_count, Context,
-        VmKonsoleArgs,
-    };
-
-    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn test_dir(test_name: &str) -> PathBuf {
-        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::current_dir()
-            .expect("current dir")
-            .join("target")
-            .join(format!(
-                "konsole-wrapper-{test_name}-{}-{counter}",
-                std::process::id()
-            ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("create test dir");
-        dir
-    }
-
-    fn write_konsole_manifest(path: &std::path::Path, vm: &str) {
-        let manifest = json!({
-            (vm): {
-                "name": vm,
-                "env": "dev",
-                "graphics": false,
-                "tpm": false,
-                "audio": false,
-                "audioService": format!("nixling-{vm}-audio.service"),
-                "usbipYubikey": false,
-                "staticIp": "10.20.0.42",
-                "isNetVm": false,
-                "stateDir": format!("/var/lib/nixling/vms/{vm}"),
-                "bridge": "nl-dev",
-                "sshUser": "alice"
-            }
-        });
-        fs::write(
-            path,
-            serde_json::to_vec(&manifest).expect("serialize manifest"),
-        )
-        .expect("write manifest");
-    }
-
-    fn konsole_context(dir: &std::path::Path, vm: &str) -> Context {
-        let manifest_path = dir.join("vms.json");
-        write_konsole_manifest(&manifest_path, vm);
-        Context {
-            manifest_path,
-            bundle_path: dir.join("bundle.json"),
-            public_socket: PathBuf::from("/dev/null"),
-            broker_socket: PathBuf::from("/dev/null"),
-            state_root: None,
-            host_runtime_path: PathBuf::from("/dev/null"),
-            system_state_fixture: None,
-            auth_status_fixture: None,
-            daemon_state_dir: PathBuf::from("/dev/null"),
-            metrics_url: "http://127.0.0.1:1/metrics".to_owned(),
-        }
-    }
-
-    fn base_args(vm: &str) -> VmKonsoleArgs {
-        VmKonsoleArgs {
-            vm: vm.to_owned(),
-            terminal: "konsole".to_owned(),
-            user: None,
-            host: None,
-            key: None,
-            dry_run: true,
-            json: false,
-            human: false,
-        }
-    }
-
-    #[test]
-    fn dry_run_argv_hosts_vm_exec_it_with_no_ssh() {
-        let dir = test_dir("dry-run-argv");
-        let context = konsole_context(&dir, "work");
-        let args = base_args("work");
-
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-
-        // The wrapper must re-exec this binary into `vm exec -it` and must
-        // not contain any SSH token. We can only assert the static suffix
-        // (the self-exe path is the test harness binary at runtime).
-        let argv_suffix = ["vm", "exec", "-it", "work", "--", GUEST_LOGIN_SHELL, "-l"];
-        // Reconstruct the argv the wrapper would build, mirroring the
-        // production logic, and assert no "ssh" token appears.
-        let self_exe = std::env::current_exe().expect("self exe");
-        let argv: Vec<String> = vec![
-            "konsole".to_owned(),
-            "-e".to_owned(),
-            self_exe.display().to_string(),
-            "vm".to_owned(),
-            "exec".to_owned(),
-            "-it".to_owned(),
-            "work".to_owned(),
-            "--".to_owned(),
-            GUEST_LOGIN_SHELL.to_owned(),
-            "-l".to_owned(),
-        ];
-        assert!(argv.iter().all(|a| !a.contains("ssh")));
-        assert_eq!(&argv[3..], &argv_suffix);
-    }
-
-    #[test]
-    fn dry_run_json_envelope_advertises_guest_control_transport() {
-        let dir = test_dir("dry-run-json");
-        let context = konsole_context(&dir, "work");
-        let mut args = base_args("work");
-        args.dry_run = true;
-
-        // Capture stdout by running the command; the JSON doc is printed.
-        // We re-derive the expected shape: transport == guest-control,
-        // argv contains `exec`/`-it`, and no `host`/`user`/`key` fields.
-        let body = json!({
-            "command": "vm konsole",
-            "mode": "dry-run",
-            "vm": "work",
-            "terminal": "konsole",
-            "transport": "guest-control",
-        });
-        assert_eq!(
-            body.get("transport").and_then(Value::as_str),
-            Some("guest-control")
-        );
-        assert!(body.get("host").is_none());
-        assert!(body.get("key").is_none());
-        assert!(body.get("user").is_none());
-
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-    }
-
-    #[test]
-    fn retired_ssh_flags_are_rejected_with_migration_exit_2() {
-        let dir = test_dir("retired-flags");
-        let context = konsole_context(&dir, "work");
-
-        for mutate in [
-            |a: &mut VmKonsoleArgs| a.host = Some("10.0.0.1".to_owned()),
-            |a: &mut VmKonsoleArgs| a.user = Some("bob".to_owned()),
-            |a: &mut VmKonsoleArgs| a.key = Some(PathBuf::from("/tmp/k")),
-        ] {
-            reset_test_konsole_spawn_count();
-            let mut args = base_args("work");
-            mutate(&mut args);
-            let err = cmd_vm_konsole(&context, &args).expect_err("retired flag rejected");
-            assert_eq!(err.exit_code, 2);
-            assert!(err.message.contains("retired"));
-            assert!(!err.message.contains("ssh key"));
-            // A rejected migration error must never spawn a terminal.
-            assert_eq!(test_konsole_spawn_count(), 0);
-        }
-    }
-
-    #[test]
-    fn dry_run_does_not_spawn_a_terminal() {
-        let dir = test_dir("dry-run-no-spawn");
-        let context = konsole_context(&dir, "work");
-        let args = base_args("work");
-
-        reset_test_konsole_spawn_count();
-        let code = cmd_vm_konsole(&context, &args).expect("dry-run ok");
-        assert_eq!(code, 0);
-        assert_eq!(test_konsole_spawn_count(), 0);
     }
 }
 

@@ -187,18 +187,19 @@ if [ "$top_list_rc" = "99" ]; then
 fi
 ok "nixling list is native (exit $top_list_rc, no bash fallback)"
 
-# --- (5) vm konsole --dry-run --json shape (guest-control transport) ---
+# --- (5) vm exec black-box: clap parse + top-level dispatch ---
 #
-# `vm konsole` now hosts `nixling vm exec -it <vm> -- /run/current-system/sw/bin/bash -l` over the
-# authenticated guest-control transport (no SSH). Asserts the --dry-run
-# JSON shape without spawning a terminal or contacting a socket. Layer 1
-# (no socket, no fork).
+# Exercises `nixling vm exec` through real clap parsing and dispatch (not the
+# Rust unit tests that build VmExecArgs directly). Hermetic: no daemon, no
+# guest. Asserts (a) the cli/usage envelope for a missing command and (b) the
+# guest-control-transport-unavailable envelope when the daemon socket is
+# absent — proving the primary operator command reaches cmd_vm_exec.
 
-konsole_manifest="$scratch/konsole-manifest.json"
-cat > "$konsole_manifest" <<'JSON'
+exec_manifest="$scratch/exec-manifest.json"
+cat > "$exec_manifest" <<'JSON'
 {
-  "konsole-vm": {
-    "name": "konsole-vm",
+  "exec-vm": {
+    "name": "exec-vm",
     "env": "work",
     "graphics": false,
     "tpm": false,
@@ -207,116 +208,18 @@ cat > "$konsole_manifest" <<'JSON'
     "usbipYubikey": false,
     "staticIp": "10.30.0.99",
     "isNetVm": false,
-    "stateDir": "/var/lib/nixling/vms/konsole-vm",
+    "stateDir": "/var/lib/nixling/vms/exec-vm",
     "bridge": "nl-work",
     "sshUser": "alice"
   }
 }
 JSON
 
-konsole_out="$scratch/konsole-dry.json"
-konsole_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole konsole-vm --dry-run --json > "$konsole_out" 2>/dev/null || konsole_rc=$?
-if [ "$konsole_rc" != "0" ]; then
-  fail "vm konsole --dry-run --json should exit 0, got $konsole_rc"
-  cat "$konsole_out" >&2
-  exit 1
-fi
-
-if command -v jq >/dev/null 2>&1; then
-  cmd=$(jq -r '.command' "$konsole_out")
-  mode=$(jq -r '.mode' "$konsole_out")
-  vm=$(jq -r '.vm' "$konsole_out")
-  terminal=$(jq -r '.terminal' "$konsole_out")
-  transport=$(jq -r '.transport' "$konsole_out")
-  argv0=$(jq -r '.argv[0]' "$konsole_out")
-  argv_joined=$(jq -r '.argv | join(" ")' "$konsole_out")
-  has_host=$(jq -r 'has("host")' "$konsole_out")
-  has_user=$(jq -r 'has("user")' "$konsole_out")
-  has_key=$(jq -r 'has("key")' "$konsole_out")
-  [ "$cmd" = "vm konsole" ] || { fail "vm konsole .command='$cmd' (want 'vm konsole')"; exit 1; }
-  [ "$mode" = "dry-run" ] || { fail "vm konsole .mode='$mode' (want 'dry-run')"; exit 1; }
-  [ "$vm" = "konsole-vm" ] || { fail "vm konsole .vm='$vm' (want 'konsole-vm')"; exit 1; }
-  [ "$terminal" = "konsole" ] || { fail "vm konsole .terminal='$terminal' (want 'konsole' default)"; exit 1; }
-  [ "$transport" = "guest-control" ] || { fail "vm konsole .transport='$transport' (want 'guest-control')"; exit 1; }
-  [ "$argv0" = "konsole" ] || { fail "vm konsole .argv[0]='$argv0' (want 'konsole' terminal)"; exit 1; }
-  # konsole hosts `nixling vm exec -it <vm> -- bash -l` over guest-control.
-  case "$argv_joined" in
-    *"vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l") : ;;
-    *) fail "vm konsole .argv must host 'vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l' (got '$argv_joined')"; exit 1 ;;
-  esac
-  # The retired SSH fields must be absent from the JSON entirely.
-  [ "$has_host" = "false" ] || { fail "vm konsole must not emit SSH .host"; exit 1; }
-  [ "$has_user" = "false" ] || { fail "vm konsole must not emit SSH .user"; exit 1; }
-  [ "$has_key" = "false" ] || { fail "vm konsole must not emit SSH .key"; exit 1; }
-fi
-ok "vm konsole --dry-run --json emits the guest-control transport shape"
-
-# --- (5b) vm konsole --terminal override reflected; retired SSH flags rejected ---
-
-konsole_override_out="$scratch/konsole-override.json"
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole konsole-vm \
-    --dry-run --json \
-    --terminal xterm \
-  > "$konsole_override_out" 2>/dev/null
-if command -v jq >/dev/null 2>&1; then
-  terminal=$(jq -r '.terminal' "$konsole_override_out")
-  argv0=$(jq -r '.argv[0]' "$konsole_override_out")
-  [ "$terminal" = "xterm" ] || { fail "vm konsole --terminal override not reflected (got '$terminal')"; exit 1; }
-  [ "$argv0" = "xterm" ] || { fail "vm konsole --terminal not reflected in argv[0] (got '$argv0')"; exit 1; }
-fi
-ok "vm konsole --terminal override reflected in dry-run JSON"
-
-# Retired SSH-only flags (--host/--user/--key) must be rejected with a clear
-# non-zero exit and a migration message, not silently honored.
-retired_host_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole konsole-vm --dry-run --json --host 192.0.2.44 > /dev/null 2>&1 || retired_host_rc=$?
-[ "$retired_host_rc" != "0" ] || { fail "vm konsole must reject retired --host (exited 0)"; exit 1; }
-
-retired_user_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole konsole-vm --dry-run --json --user bob > /dev/null 2>&1 || retired_user_rc=$?
-[ "$retired_user_rc" != "0" ] || { fail "vm konsole must reject retired --user (exited 0)"; exit 1; }
-
-retired_key_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole konsole-vm --dry-run --json --key /custom/key > /dev/null 2>&1 || retired_key_rc=$?
-[ "$retired_key_rc" != "0" ] || { fail "vm konsole must reject retired --key (exited 0)"; exit 1; }
-ok "vm konsole rejects retired SSH-only flags (--host/--user/--key)"
-
-# --- (5c) vm konsole unknown VM exits 1 with clear error ---
-
-konsole_unknown_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
-NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm konsole missing-vm --dry-run --json > /dev/null 2>&1 || konsole_unknown_rc=$?
-if [ "$konsole_unknown_rc" = "0" ]; then
-  fail "vm konsole on unknown vm should exit 1, got 0"
-  exit 1
-fi
-ok "vm konsole rejects unknown vm name with non-zero exit"
-
-# --- (6) vm exec black-box: clap parse + top-level dispatch ---
-#
-# Exercises `nixling vm exec` through real clap parsing and dispatch (not the
-# Rust unit tests that build VmExecArgs directly). Hermetic: no daemon, no
-# guest. Asserts (a) the cli/usage envelope for a missing command and (b) the
-# guest-control-transport-unavailable envelope when the daemon socket is
-# absent — proving the primary operator command reaches cmd_vm_exec.
-
 exec_usage_out="$scratch/exec-usage.json"
 exec_usage_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_MANIFEST_PATH="$exec_manifest" \
 NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm exec konsole-vm --json > "$exec_usage_out" 2>/dev/null || exec_usage_rc=$?
+  "$cli" vm exec exec-vm --json > "$exec_usage_out" 2>/dev/null || exec_usage_rc=$?
 [ "$exec_usage_rc" = "2" ] || { fail "vm exec (no command) should exit 2, got $exec_usage_rc"; cat "$exec_usage_out" >&2; exit 1; }
 if command -v jq >/dev/null 2>&1; then
   [ "$(jq -r '.command' "$exec_usage_out")" = "vm exec" ] || { fail "vm exec usage .command (want 'vm exec')"; exit 1; }
@@ -327,9 +230,9 @@ ok "vm exec (missing command) emits the cli/usage envelope via clap+dispatch"
 
 exec_transport_out="$scratch/exec-transport.json"
 exec_transport_rc=0
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_MANIFEST_PATH="$exec_manifest" \
 NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm exec konsole-vm --json -- /bin/true > "$exec_transport_out" 2>/dev/null || exec_transport_rc=$?
+  "$cli" vm exec exec-vm --json -- /bin/true > "$exec_transport_out" 2>/dev/null || exec_transport_rc=$?
 [ "$exec_transport_rc" != "0" ] || { fail "vm exec with no daemon should exit non-zero"; exit 1; }
 if command -v jq >/dev/null 2>&1; then
   [ "$(jq -r '.command' "$exec_transport_out")" = "vm exec" ] || { fail "vm exec transport .command (want 'vm exec')"; exit 1; }
@@ -343,9 +246,9 @@ ok "vm exec (no daemon) emits guest-control-transport-unavailable via clap+dispa
 # stdin-closed exec it then writes to.
 exec_i_rc=0
 exec_i_err="$scratch/exec-i.err"
-NIXLING_MANIFEST_PATH="$konsole_manifest" \
+NIXLING_MANIFEST_PATH="$exec_manifest" \
 NIXLING_PUBLIC_SOCKET="$socket_missing" \
-  "$cli" vm exec konsole-vm -i -- /bin/true >/dev/null 2>"$exec_i_err" || exec_i_rc=$?
+  "$cli" vm exec exec-vm -i -- /bin/true >/dev/null 2>"$exec_i_err" || exec_i_rc=$?
 [ "$exec_i_rc" = "2" ] || { fail "vm exec -i without -t should exit 2, got $exec_i_rc"; cat "$exec_i_err" >&2; exit 1; }
 grep -qiE 'requires .*-t/--tty|requires -t' "$exec_i_err" || { fail "vm exec -i without -t error must cite the -t/--tty requirement"; cat "$exec_i_err" >&2; exit 1; }
 ok "vm exec rejects -i without -t (stdin forwarding requires a PTY)"

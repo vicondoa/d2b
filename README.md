@@ -374,8 +374,7 @@ The Rust `nixling` CLI is the only operator surface. Run
 - **Guest control** (admin-only): `vm exec` runs a command inside a
   VM over the authenticated guest-control vsock — no SSH —
   (`nixling vm exec <vm> -- <cmd…>`, or `nixling vm exec -it <vm> --
-  bash -l` for an interactive PTY); `vm konsole` opens that
-  interactive session in a host terminal emulator. Both are restricted
+  bash -l` for an interactive PTY). It is restricted
   to callers in `nixling.site.adminUsers`, the role gate enforced via
   `SO_PEERCRED` at the daemon socket.
 

@@ -91,8 +91,8 @@ pub enum PublicRequest {
     /// `Start` op then drives the session with the remaining ops
     /// (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The
     /// daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock
-    /// connect, auth, or `ExecCreate`. `nixling vm exec` (and the
-    /// `vm konsole` wrapper) drive this verb; it never crosses SSH.
+    /// connect, auth, or `ExecCreate`. `nixling vm exec` drives this verb;
+    /// it never crosses SSH.
     #[serde(rename = "exec")]
     Exec(ExecOp),
 }

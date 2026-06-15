@@ -578,7 +578,7 @@ Notes:
 
 ## Public `exec` operation (daemon-handled, no broker dispatch)
 
-The `nixling vm exec` verb (and its `vm konsole` wrapper) is a
+The `nixling vm exec` verb is a
 **public** operation handled entirely by the unprivileged daemon and
 CLI. It dispatches **no** broker request (`brokerRequired: false`): the
 daemon holds an in-process exec **session table** and proxies typed exec

@@ -815,7 +815,8 @@ pub mod linux {
     /// so the interactive session is a real PAM login for the workload user
     /// (never root): `pam_systemd` provisions `XDG_RUNTIME_DIR`, the login
     /// shell sources the profile (`WAYLAND_DISPLAY`, …), and the requested
-    /// command runs inside that session — reproducing the old SSH `vm konsole`.
+    /// command runs inside that session — reproducing an interactive login
+    /// (the surface `vm exec -it` drives).
     pub struct LinuxPtyProcessSpawner {
         helper_path: PathBuf,
         systemd_run_path: PathBuf,

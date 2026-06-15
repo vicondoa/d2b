@@ -2321,21 +2321,6 @@ socket → authenticated guest-control session → `guestd` exec RPCs; no
 SSH, no host PTY, no new privileged broker op (the session table lives
 in-process in `nixlingd`).
 
-### `vm konsole`
-
-**Synopsis:** `nixling vm konsole [--terminal <emulator>] <vm>`
-
-Opens an interactive guest session in a host terminal emulator. As of
-v1.2 this is a thin wrapper that hosts `nixling vm exec -it <vm> -- <login-shell>`
-inside the chosen emulator (default `konsole`, overridable with
-`--terminal`); it runs entirely over the authenticated guest-control
-transport. **There is no SSH.** The retired SSH-only flags
-(`--host`/`--key`/`--user`) are rejected with exit `2` and a migration
-message pointing at `vm exec -it`.
-
-**Disposition:** `rust-native` — terminal-emulator wrapper around
-`vm exec -it`; the historical SSH allowlist site was removed.
-
 ## Dispatch capability table
 
 | Command | Current disposition | Rationale |
@@ -2377,4 +2362,3 @@ message pointing at `vm exec -it`.
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `vm exec` | `rust-native` | Owner connection over the daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op (the exec session table is in-process in `nixlingd`). |
-| `vm konsole` | `rust-native` | Thin terminal-emulator wrapper around `vm exec -it`; the SSH allowlist site was removed and the SSH-only flags are rejected with a migration message. |

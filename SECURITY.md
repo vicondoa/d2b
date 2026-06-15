@@ -75,7 +75,7 @@ will introduce are:
   `0660` group `nixling`. Membership in the `nixling` group (populated
   from `nixling.site.launcherUsers`) is the only *connection* gate —
   there is no second `nixling-admin` socket or group. Destructive /
-  admin verbs (`vm exec`, `vm konsole`, `audit`, and `config sync`'s
+  admin verbs (`vm exec`, `audit`, and `config sync`'s
   guest read) are gated a second time *inside the daemon*: the
   `SO_PEERCRED` peer identity must also appear in
   `nixling.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
@@ -174,7 +174,7 @@ The new trust-boundary statements are:
 
 ### Guest-control exec trust boundary
 
-`nixling vm exec` / `nixling vm konsole` run a command inside a VM over
+`nixling vm exec` runs a command inside a VM over
 the authenticated guest-control vsock channel — there is no SSH. The
 trust-boundary statements are:
 

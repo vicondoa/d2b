@@ -408,6 +408,14 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Removed
+
+- `nixling vm konsole` is removed. The subcommand was a thin wrapper that
+  re-exec'd `nixling vm exec -it <vm> -- <login-shell> -l` inside a host
+  terminal emulator; operators now invoke `nixling vm exec -it` directly.
+  All references (CLI surface, shell completions, manpage, and reference
+  docs) are dropped accordingly.
+
 ### Changed
 
 - Framework readiness for a guest-control-capable VM is now the
@@ -435,13 +443,6 @@ deprecations ship one minor release before removal.
 - The framework readiness label is now the canonical `guest-control-health`
   (no per-VM suffix) across `status`, `vm list`, and the start preview;
   the start-preview DAG no longer hard-codes an `ssh-ready` node.
-- `nixling vm konsole` is now a thin wrapper around `nixling vm exec -it`:
-  it opens the interactive guest session in a terminal emulator
-  (default `konsole`, overridable with `--terminal`) over the
-  authenticated guest-control transport. The historical operator-SSH
-  path and its allowlist site were removed; the SSH-only flags
-  (`--host` / `--key` / `--user`) are now rejected with a migration
-  message pointing at `vm exec -it`. No SSH process is spawned.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.

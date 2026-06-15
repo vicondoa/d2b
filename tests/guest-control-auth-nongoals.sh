@@ -4,8 +4,8 @@
 # The guest-control-health readiness non-goal was retired in W15, which migrates
 # framework readiness onto the authenticated guest-control Health probe
 # (ReadinessPredicate::GuestControlHealth). The `nixling exec` CLI non-goal was
-# retired in W16, which intentionally landed the admin-only `vm exec` / `vm
-# konsole` guest-control surface. This guard now just smoke-checks that the
+# retired in W16, which intentionally landed the admin-only `vm exec`
+# guest-control surface. This guard now just smoke-checks that the
 # auth-core token-share / LoadCredential eval still evaluates.
 
 set -euo pipefail
