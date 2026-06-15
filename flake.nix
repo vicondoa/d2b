@@ -419,16 +419,26 @@
           in
           if case ? expectedError then
             # Bucket-B: the case must throw. `tryEval` cannot capture the
-            # message, so message-substring matching stays in the E-bucket
-            # tool path; here we assert that the throw occurred.
-            {
-              inherit name;
-              ok = !r.success;
-              detail =
-                if r.success
-                then "expected an error, but eval succeeded"
-                else "threw as expected";
-            }
+            # message, so message-substring matching is NOT supported here:
+            # if an author sets `expectedError.msg` (expecting it enforced),
+            # fail loudly rather than give false confidence. Message-sensitive
+            # negative gates should assert over `config.assertions` data (see
+            # guest-config-containment.nix) instead.
+            if (builtins.isAttrs case.expectedError) && (case.expectedError != { }) then
+              {
+                inherit name;
+                ok = false;
+                detail = "expectedError must be `{ }` — this runner asserts only THAT the expr throws; tryEval cannot match a throw message. Move message-substring checks to config.assertions data.";
+              }
+            else
+              {
+                inherit name;
+                ok = !r.success;
+                detail =
+                  if r.success
+                  then "expected an error, but eval succeeded"
+                  else "threw as expected";
+              }
           else
             {
               inherit name;
@@ -442,6 +452,24 @@
         nixUnitReport = pkgs.lib.concatMapStringsSep "\n"
           (x: "FAIL ${x.name}: ${x.detail}") nixUnitFailures;
         nixUnitTotal = pkgs.lib.length nixUnitResults;
+
+        # Fail-closed case-PRESENCE gate (mirrors tests/tools/assert-pinned-tests.sh
+        # for the Rust layer): every pinned case name MUST still exist in the
+        # corpus, so a retired bash gate's nix-unit successor can't silently
+        # vanish. Pins are system-aware — `common.txt` holds the all-systems
+        # cases; `<system>.txt` holds extra (e.g. x86-only graphics) cases.
+        # Regenerate with `make nix-unit-pin` after adding/removing cases.
+        nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
+        readPins = path:
+          if builtins.pathExists path then
+            pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
+              (pkgs.lib.splitString "\n" (builtins.readFile path))
+          else [ ];
+        nixUnitPinned =
+          (readPins ./tests/nix-unit/pinned/common.txt)
+          ++ (readPins (./tests/nix-unit/pinned + "/${system}.txt"));
+        nixUnitMissingPins =
+          pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
       in {
         fixture-smoke = smokeFixture;
 
@@ -449,18 +477,26 @@
         # eval-gate bash scripts. Runs inside `nix flake check` and via
         # `make test-nix-unit`.
         nix-unit =
-          if nixUnitFailures == [ ] then
+          if nixUnitFailures == [ ] && nixUnitMissingPins == [ ] then
             pkgs.runCommand "nixling-nix-unit" { } ''
-              echo "nix-unit: ${toString nixUnitTotal} cases passed"
+              echo "nix-unit: ${toString nixUnitTotal} cases passed (${toString (pkgs.lib.length nixUnitPinned)} pinned present)"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
             ''
           else
             pkgs.runCommand "nixling-nix-unit" {
               NIXLING_NIX_UNIT_REPORT = nixUnitReport;
+              NIXLING_NIX_UNIT_MISSING = pkgs.lib.concatMapStringsSep "\n"
+                (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted — restore it or run `make nix-unit-pin`)")
+                nixUnitMissingPins;
             } ''
-              echo "nix-unit: ${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases FAILED" >&2
-              printf '%s\n' "$NIXLING_NIX_UNIT_REPORT" >&2
+              if [ -n "$NIXLING_NIX_UNIT_REPORT" ]; then
+                echo "nix-unit: ${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases FAILED" >&2
+                printf '%s\n' "$NIXLING_NIX_UNIT_REPORT" >&2
+              fi
+              if [ -n "$NIXLING_NIX_UNIT_MISSING" ]; then
+                printf '%s\n' "$NIXLING_NIX_UNIT_MISSING" >&2
+              fi
               exit 1
             '';
 

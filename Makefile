@@ -7,7 +7,7 @@
 	        check check-ci check-all check-fast check-tier0 \
 	        test-rust test-drift test-fixtures test-contract test-nix-unit \
 	        test-flake test-policy test-mutation test-integration test-hardware perf \
-	        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make
+	        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make nix-unit-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -102,6 +102,11 @@ test-contract:
 test-nix-unit:
 	bash tests/tools/run-layer.sh test-nix-unit
 	$(NIX_FLAKE) build --no-link --print-out-paths '.#checks.$(SYSTEM).nix-unit'
+
+## nix-unit-pin — regenerate the fail-closed nix-unit case-presence pins
+## (tests/nix-unit/pinned/*.txt) after adding or removing cases.
+nix-unit-pin:
+	bash tests/tools/gen-nix-unit-pins.sh
 test-flake:       ; bash tests/tools/run-layer.sh test-flake
 test-policy:      ; bash tests/tools/run-layer.sh test-policy
 test-fixtures:
