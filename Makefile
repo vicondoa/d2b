@@ -9,6 +9,12 @@
 	        test-flake test-policy test-mutation test-integration test-hardware perf \
 	        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make
 
+# Current Nix system double, used to address per-system flake.checks attrs.
+# Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
+SYSTEM ?= $(shell nix eval --extra-experimental-features 'nix-command flakes' \
+	        --impure --raw --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
+NIX_FLAKE := nix --extra-experimental-features 'nix-command flakes'
+
 # ===========================================================================
 # Test-rearchitecture interface (plan §2.9). The targets are the stable
 # contract; the tools behind them change per wave. W0: `check` wraps today's
@@ -91,7 +97,11 @@ test-contract:
 	else \
 	  NL_FIXTURES="$$fixtures" cargo test -p nixling-contract-tests; \
 	fi
-test-nix-unit:    ; bash tests/tools/run-layer.sh test-nix-unit
+## test-nix-unit — W2: legacy D/E eval-gates still on bash, then the
+## migrated nix-unit value/throw corpus (flake.checks.<sys>.nix-unit).
+test-nix-unit:
+	bash tests/tools/run-layer.sh test-nix-unit
+	$(NIX_FLAKE) build --no-link --print-out-paths '.#checks.$(SYSTEM).nix-unit'
 test-flake:       ; bash tests/tools/run-layer.sh test-flake
 test-policy:      ; bash tests/tools/run-layer.sh test-policy
 test-fixtures:

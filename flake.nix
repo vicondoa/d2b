@@ -399,8 +399,86 @@
           git -c user.email=nixbld@localhost -c user.name=nixbld \
             commit -q -m 'advisory-db snapshot'
         '';
+
+        # --- W2 nix-unit layer -------------------------------------------
+        # Hermetic pure-eval comparison runner over the tests/nix-unit
+        # corpus ({ expr; expected; } / { expr; expectedError; } cases).
+        # NO recursive-nix / IFD: each case is compared at flake-eval time
+        # and the verdict baked into a tiny runCommand. The same corpus is
+        # CLI-compatible with upstream `nix-unit` for local iteration.
+        nixUnitCases = import ./tests/nix-unit {
+          lib = pkgs.lib;
+          inherit pkgs system;
+          flakeRoot = ./.;
+          nl = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
+          inherit mkEval;
+        };
+        nixUnitEval = name: case:
+          let
+            r = builtins.tryEval (let v = case.expr; in builtins.deepSeq v v);
+          in
+          if case ? expectedError then
+            # Bucket-B: the case must throw. `tryEval` cannot capture the
+            # message, so message-substring matching stays in the E-bucket
+            # tool path; here we assert that the throw occurred.
+            {
+              inherit name;
+              ok = !r.success;
+              detail =
+                if r.success
+                then "expected an error, but eval succeeded"
+                else "threw as expected";
+            }
+          else
+            {
+              inherit name;
+              ok = r.success && r.value == case.expected;
+              detail =
+                if !r.success then "eval threw; expected a value"
+                else "got=${builtins.toJSON r.value} expected=${builtins.toJSON case.expected}";
+            };
+        nixUnitResults = pkgs.lib.mapAttrsToList nixUnitEval nixUnitCases;
+        nixUnitFailures = pkgs.lib.filter (x: !x.ok) nixUnitResults;
+        nixUnitReport = pkgs.lib.concatMapStringsSep "\n"
+          (x: "FAIL ${x.name}: ${x.detail}") nixUnitFailures;
+        nixUnitTotal = pkgs.lib.length nixUnitResults;
       in {
         fixture-smoke = smokeFixture;
+
+        # W2: nix-unit value/throw assertions migrated from the group-D/E
+        # eval-gate bash scripts. Runs inside `nix flake check` and via
+        # `make test-nix-unit`.
+        nix-unit =
+          if nixUnitFailures == [ ] then
+            pkgs.runCommand "nixling-nix-unit" { } ''
+              echo "nix-unit: ${toString nixUnitTotal} cases passed"
+              mkdir -p "$out"
+              echo ok > "$out/nix-unit"
+            ''
+          else
+            pkgs.runCommand "nixling-nix-unit" {
+              NIXLING_NIX_UNIT_REPORT = nixUnitReport;
+            } ''
+              echo "nix-unit: ${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases FAILED" >&2
+              printf '%s\n' "$NIXLING_NIX_UNIT_REPORT" >&2
+              exit 1
+            '';
+
+        # W2: the "module callsites use the shared volume helpers" grep
+        # checks from volume-mounts-eval.sh — a hermetic source-wiring
+        # invariant (the nix-unit value cases assert the helpers; this
+        # asserts the production modules actually call them).
+        module-helper-wiring = pkgs.runCommand "nixling-module-helper-wiring" { } ''
+          set -e
+          grep -Fq 'serial = nl.volumeSerial volume;' ${./nixos-modules/processes-json.nix} \
+            || { echo "processes-json.nix must use shared volumeSerial helper" >&2; exit 1; }
+          grep -Fq 'nl.volumeFileSystem volume' ${./nixos-modules/vm-guest-base.nix} \
+            || { echo "vm-guest-base.nix must use shared volumeFileSystem helper" >&2; exit 1; }
+          grep -Fq 'builtins.filter nl.volumeDiskInitEligible microvm.volumes' ${./nixos-modules/processes-json.nix} \
+            || { echo "processes-json.nix must gate DiskInit with shared eligibility helper" >&2; exit 1; }
+          mkdir -p "$out"
+          echo ok > "$out/module-helper-wiring"
+        '';
 
         eval-minimal = mkCheck "eval-minimal"
           (mkEval [ (import ./examples/minimal/configuration.nix) ]);
