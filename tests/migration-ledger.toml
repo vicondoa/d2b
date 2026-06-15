@@ -431,15 +431,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/dag-topo.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/deliverable-gate-inventory.sh"
 group = "H"
 make_target = "test-policy"
@@ -578,15 +569,6 @@ exercised_today = "yes"
 name = "tests/guest-static-consumption-eval.sh"
 group = "F"
 make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/guest-static-elf.sh"
-group = "A"
-make_target = "test-rust"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -920,15 +902,6 @@ exercised_today = "yes"
 name = "tests/multi-env-daemon-backed.sh"
 group = "D"
 make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/net-vm-bundle-gate-eval.sh"
-group = "A"
-make_target = "test-rust"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -1490,6 +1463,33 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/dag-topo.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (nixlingd supervisor::dag/supervisor::state/daemon_version #[test]s)", "tests/tools/assert-pinned-tests.sh (fail-closed pin)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/guest-static-elf.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.guest-static-elf (nix flake check / make test-flake builds the static-ELF derivation gate)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/net-vm-bundle-gate-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo nextest run --workspace (nixlingd net_vm_bundle_gate + typed_error envelope #[test]s)", "tests/tools/assert-pinned-tests.sh (fail-closed pin)"]
 exercised_today = "yes"
 
 [[script]]

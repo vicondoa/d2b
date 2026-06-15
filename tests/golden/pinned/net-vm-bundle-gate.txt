@@ -1,0 +1,11 @@
+# net-vm-bundle-gate (nixlingd net_vm_bundle_gate + typed_error envelope)
+net_vm_bundle_gate::tests::divergent_bytes_surface_hash_mismatch
+net_vm_bundle_gate::tests::drift_path_accessor_returns_offending_path
+net_vm_bundle_gate::tests::drift_reason_redacts_paths
+net_vm_bundle_gate::tests::expected_hash_is_deterministic
+net_vm_bundle_gate::tests::matching_hash_is_ok
+net_vm_bundle_gate::tests::missing_dnsmasq_conf_is_drift
+net_vm_bundle_gate::tests::unknown_vm_short_circuits_to_not_a_net_vm
+net_vm_bundle_gate::tests::workload_vm_short_circuits_to_not_a_net_vm
+typed_error::tests::bundle_dnsmasq_drift_envelope_shape
+typed_error::tests::envelope_kind_matches_expected_discriminant

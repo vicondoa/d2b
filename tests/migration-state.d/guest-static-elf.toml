@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.guest-static-elf (nix flake check / make test-flake builds the static-ELF derivation gate)"]
