@@ -1677,6 +1677,24 @@ impl SetfaclFailure {
             self.errno_kind,
         )
     }
+
+    /// Path-free detail for the guest-control fs-share (`nl-gctl`) consumer
+    /// ACL path. The consumer is the per-VM cloud-hypervisor runner (not the
+    /// daemon), so this reports the CH-runner principal class rather than
+    /// `nixlingd`. Carries only closed-set op/target/stage/errno labels —
+    /// never the raw socket/state-dir path, the acl-spec, or a uid-by-value.
+    fn guest_control_fs_detail(&self, op_label: &str, target_class: &str) -> String {
+        let errno = self
+            .raw_os_error
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "none".to_owned());
+        format!(
+            "guest-control fs-share consumer ACL {op_label} on {target_class} failed: \
+             principal={GUEST_CONTROL_FS_CONSUMER_PRINCIPAL} stage={} kind={:?} errno={errno}",
+            self.stage_label(),
+            self.errno_kind,
+        )
+    }
 }
 
 /// Open `path` as an `O_PATH|NOFOLLOW|RESOLVE_NO_SYMLINKS` fd and fstat
@@ -2120,6 +2138,7 @@ fn refresh_spawn_runner_acls(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerEr
     }
     refresh_obs_vsock_acl(plan)?;
     refresh_guest_control_vsock_acl(plan)?;
+    refresh_guest_control_fs_acl(plan)?;
 
     Ok(())
 }
@@ -2162,6 +2181,29 @@ fn grant_daemon_api_socket_acl(api_socket: PathBuf) {
 /// and is the only host process that connects to the guest-control
 /// vsock socket for the readiness probe / config-sync over the bridge.
 const GUEST_CONTROL_DAEMON_PRINCIPAL: &str = "nixlingd";
+
+/// The runner principal-class the framework grants guest-control fs-share
+/// (`nl-gctl`) connect access to: the per-VM cloud-hypervisor runner. The
+/// `nl-gctl` token virtiofs share is the only CROSS-PRINCIPAL fs share —
+/// it is served by the narrower `gctlfs` principal (ADR 0021), so its 0700
+/// socket is owned by `gctlfs`, not the CH runner. CH connects to that
+/// vhost-user fs backend socket during device-init (the `--fs
+/// socket=...,tag=nl-gctl` element emitted by `processes-json.nix`), but
+/// the inherited `default:u:$ch_uid` grant is masked out by the 0700
+/// socket's `mask::---`. This label names the consumer for the hash-only
+/// audit without leaking a uid-by-value.
+const GUEST_CONTROL_FS_CONSUMER_PRINCIPAL: &str = "cloud-hypervisor-runner";
+
+/// The setfacl `-m` spec that lifts the `nl-gctl` socket's masked-out
+/// CH-runner named entry: grant the runner uid `rw` AND pin the ACL mask
+/// to `rw`. The explicit `m::rw` is load-bearing — without it the 0700
+/// socket's `mask::---` keeps the named entry's effective perms at `---`
+/// and CH's connect still EACCESes. The mask grants no execute and does
+/// not touch owner/owning-group/other, so it raises effective perms for
+/// the CH-runner named entry only.
+fn guest_control_fs_socket_acl_spec(uid: u32) -> String {
+    format!("u:{uid}:rw,m::rw")
+}
 
 /// Extract the cloud-hypervisor `--vsock socket=<path>` argument for a
 /// CH runner plan. Gated on the CH runner's seccomp policy ref so the
@@ -2235,6 +2277,40 @@ fn setfacl_guest_control(
 ) -> Result<Option<(u64, u64)>, String> {
     setfacl_fd_safe_op_classed(path, op, acl_spec, kind)
         .map_err(|failure| failure.guest_control_detail(op_label, target_class))
+}
+
+/// Path-free wrapper over [`setfacl_fd_safe_op_classed`] for the
+/// guest-control fs-share (`nl-gctl`) CONSUMER ACL path: identical to
+/// [`setfacl_guest_control`] but reports the cloud-hypervisor-runner
+/// consumer principal class on failure instead of the daemon principal.
+fn setfacl_guest_control_fs(
+    path: &Path,
+    op: &str,
+    acl_spec: &str,
+    kind: AclPathKind,
+    op_label: &str,
+    target_class: &str,
+) -> Result<Option<(u64, u64)>, String> {
+    setfacl_fd_safe_op_classed(path, op, acl_spec, kind)
+        .map_err(|failure| failure.guest_control_fs_detail(op_label, target_class))
+}
+
+/// Emit a hash-only audit event for a guest-control fs-share consumer ACL
+/// mutation (the cloud-hypervisor runner's connect grant on the `nl-gctl`
+/// virtiofs socket / its parent dir). Closed-enum labels only; no raw
+/// paths, uids-by-value, or content — same contract as
+/// [`audit_guest_control_vsock_acl`].
+fn audit_guest_control_fs_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
+    tracing::info!(
+        kind = "critical",
+        subsystem = "guest-control-health",
+        op = op,
+        consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
+        target_class = target_class,
+        acl_diff_hash = %guest_control_acl_diff_hash(op, target_class, dev, ino),
+        result = "ok",
+        "guest-control fs-share consumer ACL mutation",
+    );
 }
 
 /// Whether the daemon needs an explicit `--x` grant to traverse `path`.
@@ -2423,6 +2499,159 @@ fn refresh_guest_control_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHan
         }
         Err(detail) => Err(LiveHandlerError::SpawnFailed {
             detail: format!("refresh guest-control vsock daemon ACL: {detail}"),
+        }),
+    }
+}
+
+/// Extract the cloud-hypervisor `--fs socket=<path>,tag=nl-gctl` argument
+/// for a CH runner plan, or `None` for any non-CH runner / a CH plan
+/// without the guest-control token share.
+///
+/// Cloud Hypervisor's `--fs` takes a variadic list of value elements
+/// (`socket=...,tag=...`) — one per share — so this scans EVERY argv
+/// element (never just the first after `--fs`) for the element whose
+/// comma-separated fields include exactly `tag=nl-gctl`, and returns its
+/// absolute `socket=` value. Gated on the CH runner's seccomp policy ref
+/// so the grant is only ever attached to a real cloud-hypervisor runner.
+fn cloud_hypervisor_guest_control_fs_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> {
+    if plan.seccomp_policy_ref.as_deref() != Some("w1-cloud-hypervisor-runner") {
+        return None;
+    }
+    plan.argv.iter().find_map(|arg| {
+        let arg = arg.trim_matches('"');
+        let fields: Vec<&str> = arg.split(',').collect();
+        if !fields.contains(&"tag=nl-gctl") {
+            return None;
+        }
+        fields
+            .iter()
+            .find_map(|field| field.strip_prefix("socket="))
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    })
+}
+
+/// Grant the CH runner uid execute (search) on the `nl-gctl` socket's
+/// parent (the per-VM `guest-control` dir) so CH can traverse to the
+/// socket. Idempotent with the host-activation `u:$ch_uid:--x` grant;
+/// re-asserting it here makes the spawn path self-healing if the dir was
+/// recreated. Path-free + hash-only audited.
+fn grant_guest_control_fs_traversal_acl(parent: &Path, uid: u32) -> Result<(), String> {
+    if let Some((dev, ino)) = setfacl_guest_control_fs(
+        parent,
+        "-m",
+        &format!("u:{uid}:--x"),
+        AclPathKind::Directory,
+        "grant",
+        "gctlfs-dir",
+    )? {
+        audit_guest_control_fs_acl("grant", "gctlfs-dir", dev, ino);
+    }
+    Ok(())
+}
+
+/// Grant `u:<ch_uid>:rw` on the `nl-gctl` virtiofs socket inode, with an
+/// explicit `m::rw` mask so the 0700 socket's `mask::---` is deterministically
+/// lifted to cover the CH-runner named entry (without enabling execute in the
+/// mask). Then re-stat to confirm the same `(dev, ino)` (inode pinning): if
+/// the socket was replaced/vanished between the setfacl and the re-stat, the
+/// grant landed on a stale inode — do not audit success and report not-ready
+/// (`Ok(false)`) so the caller retries the live inode. `Ok(false)` while the
+/// socket has not yet been created by the gctlfs virtiofsd.
+fn grant_guest_control_fs_socket_acl_once(socket: &Path, uid: u32) -> Result<bool, String> {
+    let Some((dev, ino)) = setfacl_guest_control_fs(
+        socket,
+        "-m",
+        &guest_control_fs_socket_acl_spec(uid),
+        AclPathKind::Socket,
+        "grant",
+        "gctlfs-socket",
+    )?
+    else {
+        return Ok(false);
+    };
+    match current_path_dev_ino(socket)
+        .map_err(|failure| failure.guest_control_fs_detail("grant", "gctlfs-socket"))?
+    {
+        Some(current) if current == (dev, ino) => {
+            audit_guest_control_fs_acl("grant", "gctlfs-socket", dev, ino);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Retry the CH-runner `nl-gctl` socket ACL grant in a background thread
+/// until the gctlfs virtiofsd has created the socket. Bounded to ~60s
+/// (240 × 250ms) so it covers cloud-hypervisor's own ~1-minute vhost-user
+/// backend connect-retry window. The traversal grant is applied
+/// synchronously before this thread starts; this only re-attempts the
+/// socket grant. Logs are path-free.
+fn spawn_guest_control_fs_acl_retry(socket: PathBuf, uid: u32) {
+    std::thread::spawn(move || {
+        for _ in 0..240 {
+            match grant_guest_control_fs_socket_acl_once(&socket, uid) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(_) => {
+                    tracing::debug!(
+                        subsystem = "guest-control-health",
+                        consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
+                        "guest-control fs-share consumer ACL refresh not ready yet",
+                    );
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        tracing::warn!(
+            subsystem = "guest-control-health",
+            consumer_principal = GUEST_CONTROL_FS_CONSUMER_PRINCIPAL,
+            "guest-control fs-share consumer ACL refresh timed out",
+        );
+    });
+}
+
+/// Grant the cloud-hypervisor runner connect access to the `nl-gctl`
+/// virtiofs socket. No-op for any non-CH runner or a CH plan without the
+/// guest-control token share.
+///
+/// The `nl-gctl` share is the only CROSS-PRINCIPAL fs share (served by the
+/// narrower `gctlfs` principal, so CH does not own its socket as it does
+/// the runner-owned shares). The gctlfs virtiofsd runs in the broker's
+/// user namespace (ADR 0021) where `--socket-group` does not take effect
+/// on the host-visible socket, leaving it `0700 gctlfs:gctlfs` with
+/// `mask::---` — which masks out the `default:u:$ch_uid` grant the
+/// host-activation default ACL inherits onto the socket. Grant the CH
+/// runner uid search on the parent and `rw` on the socket (lifting the
+/// mask) so CH's vhost-user backend connect succeeds. The socket is a DAG
+/// predecessor of cloud-hypervisor, so the synchronous grant normally
+/// lands before CH spawns; a bounded retry covers the rare absent-socket
+/// race.
+fn refresh_guest_control_fs_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+    let Some(socket) = cloud_hypervisor_guest_control_fs_socket_arg(plan) else {
+        return Ok(());
+    };
+    let Some(parent) = socket.parent().map(Path::to_path_buf) else {
+        return Err(LiveHandlerError::SpawnFailed {
+            detail: "guest-control fs-share socket path has no parent".to_owned(),
+        });
+    };
+    let uid = plan.uid;
+
+    grant_guest_control_fs_traversal_acl(&parent, uid).map_err(|detail| {
+        LiveHandlerError::SpawnFailed {
+            detail: format!("refresh guest-control fs-share traversal ACL: {detail}"),
+        }
+    })?;
+
+    match grant_guest_control_fs_socket_acl_once(&socket, uid) {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            spawn_guest_control_fs_acl_retry(socket, uid);
+            Ok(())
+        }
+        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+            detail: format!("refresh guest-control fs-share consumer ACL: {detail}"),
         }),
     }
 }
@@ -3400,6 +3629,172 @@ mod tests {
         );
 
         assert_eq!(cloud_hypervisor_vsock_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn parses_guest_control_fs_socket_for_ch_runner_heavy_vm() {
+        // CH `--fs` is variadic: many `socket=...,tag=...` value elements,
+        // with `nl-gctl` LAST after ro-store / nl-meta / nl-hkeys. The
+        // parser must scan every element, not just the first after `--fs`.
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--fs".to_owned(),
+                "socket=/run/nixling/vms/work-aad/ro-store.sock,tag=ro-store".to_owned(),
+                "socket=/run/nixling/vms/work-aad/nl-meta.sock,tag=nl-meta".to_owned(),
+                "socket=/run/nixling/vms/work-aad/nl-hkeys.sock,tag=nl-hkeys".to_owned(),
+                "socket=/run/nixling/vms/work-aad/guest-control/nl-gctl.sock,tag=nl-gctl"
+                    .to_owned(),
+                "--api-socket".to_owned(),
+                "/var/lib/nixling/vms/work-aad/work-aad.sock".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(
+            cloud_hypervisor_guest_control_fs_socket_arg(&plan),
+            Some(PathBuf::from(
+                "/run/nixling/vms/work-aad/guest-control/nl-gctl.sock"
+            ))
+        );
+    }
+
+    #[test]
+    fn guest_control_fs_socket_gated_on_ch_runner_policy() {
+        // Same nl-gctl share element but a non-CH seccomp policy: the
+        // consumer ACL must never attach to a non-cloud-hypervisor runner.
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "virtiofsd".to_owned(),
+                "socket=/run/nixling/vms/work-aad/guest-control/nl-gctl.sock,tag=nl-gctl"
+                    .to_owned(),
+            ],
+            "w1-virtiofsd",
+        );
+
+        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn guest_control_fs_socket_absent_without_nl_gctl_share() {
+        // A guest-control-disabled VM: CH runner with fs shares but no
+        // nl-gctl tag. The grant must be a no-op.
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--fs".to_owned(),
+                "socket=/run/nixling/vms/work-aad/ro-store.sock,tag=ro-store".to_owned(),
+                "socket=/run/nixling/vms/work-aad/nl-meta.sock,tag=nl-meta".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn guest_control_fs_socket_rejects_relative_socket_path() {
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--fs".to_owned(),
+                "socket=relative/nl-gctl.sock,tag=nl-gctl".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn guest_control_fs_socket_parser_rejects_near_miss_tag() {
+        // A share whose tag merely CONTAINS `nl-gctl` as a prefix
+        // (`tag=nl-gctl-foo`) must not be mistaken for the token share:
+        // the parser does an exact comma-field match, never a substring
+        // match, so a future regression to substring matching would
+        // mis-grant the consumer ACL onto the wrong share.
+        let plan = test_spawn_plan_with_argv(
+            vec![
+                "cloud-hypervisor".to_owned(),
+                "--fs".to_owned(),
+                "socket=/run/nixling/vms/work-aad/nl-gctl-foo.sock,tag=nl-gctl-foo".to_owned(),
+            ],
+            "w1-cloud-hypervisor-runner",
+        );
+
+        assert_eq!(cloud_hypervisor_guest_control_fs_socket_arg(&plan), None);
+    }
+
+    #[test]
+    fn guest_control_fs_socket_grant_not_ready_for_absent_socket() {
+        // Hermetic: before the gctlfs virtiofsd creates the nl-gctl
+        // socket, the consumer socket grant must report not-ready
+        // (Ok(false)) so the caller retries — never erroring (which would
+        // fail the cloud-hypervisor spawn outright) and never touching a
+        // foreign inode. This is the exact race the bounded retry thread
+        // exists to tolerate.
+        let dir = TestDir::new("gc-fs-acl");
+        let socket = dir.join("nl-gctl.sock");
+        assert!(!socket.exists());
+        assert_eq!(
+            grant_guest_control_fs_socket_acl_once(&socket, 4242),
+            Ok(false),
+            "absent socket must report not-ready",
+        );
+    }
+
+    #[test]
+    fn guest_control_fs_socket_acl_spec_pins_mask() {
+        // Regression guard: the `m::rw` mask token is load-bearing. The
+        // 0700 nl-gctl socket's `mask::---` masks out the inherited
+        // CH-runner named entry, so the grant MUST pin the mask to `rw`
+        // (not the bare `u:<uid>:rw` the vsock precedent uses). Dropping
+        // `,m::rw` would silently reintroduce the original EACCES/boot
+        // hang with every other unit test still green. The mask must not
+        // grant execute.
+        let spec = guest_control_fs_socket_acl_spec(1628571);
+        assert_eq!(spec, "u:1628571:rw,m::rw");
+        assert!(spec.contains("m::rw"), "mask token missing: {spec}");
+        assert!(!spec.contains('x'), "mask/entry must not grant execute: {spec}");
+    }
+
+    #[test]
+    fn guest_control_fs_detail_is_path_free() {
+        // The fs-share consumer error formatter must never leak a
+        // path-bearing legacy detail: it carries only closed-set class
+        // tokens (op/target-class/stage), the CH-runner consumer
+        // principal, the io::ErrorKind, and the numeric errno — same
+        // path-free contract as the daemon `guest_control_detail` twin.
+        let failure = SetfaclFailure {
+            stage: SetfaclStage::Apply,
+            errno_kind: std::io::ErrorKind::PermissionDenied,
+            raw_os_error: Some(13),
+            legacy_detail:
+                "setfacl -m u:1628571:rw,m::rw on \
+                 /run/nixling/vms/corp-vm/guest-control/nl-gctl.sock: denied"
+                    .to_owned(),
+        };
+        let detail = failure.guest_control_fs_detail("grant", "gctlfs-socket");
+        assert!(!detail.contains('/'), "detail must not embed any path: {detail}");
+        assert!(
+            !detail.contains("nl-gctl.sock"),
+            "detail leaked socket name: {detail}"
+        );
+        assert!(!detail.contains(":rw"), "detail leaked acl spec: {detail}");
+        assert!(
+            !detail.contains("1628571"),
+            "detail leaked uid-by-value: {detail}"
+        );
+        assert!(
+            detail.contains("gctlfs-socket"),
+            "missing target class: {detail}"
+        );
+        assert!(detail.contains("stage=apply"), "missing stage: {detail}");
+        assert!(detail.contains("errno=13"), "missing errno: {detail}");
+        assert!(
+            detail.contains(GUEST_CONTROL_FS_CONSUMER_PRINCIPAL),
+            "missing consumer principal: {detail}"
+        );
     }
 
     #[test]
