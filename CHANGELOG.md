@@ -430,7 +430,8 @@ deprecations ship one minor release before removal.
   options are removed — enabling `guest.exec.enable = true` on a VM with
   a workload user is sufficient, and a VM whose `ssh.user` is unset,
   `root`, or otherwise invalid disables exec at eval time with a typed
-  message.
+  message. See
+  [ADR 0030](docs/adr/0030-guest-exec-as-workload-user.md).
 - Framework readiness for a guest-control-capable VM is now the
   authenticated guest-control Health probe rather than a raw TCP-22 SSH
   connect. The per-VM DAG node `guest-ssh-readiness` is replaced by
