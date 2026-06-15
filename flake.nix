@@ -412,6 +412,12 @@
           flakeRoot = ./.;
           nl = import ./nixos-modules/lib.nix { lib = pkgs.lib; };
           inherit mkEval;
+          # Direct-injection handles for tests/eval-cases/shared.nix (the
+          # minimal lib.evalModules fast evaluator) — passing the nixpkgs
+          # flake input + the nixling module set avoids a `getFlake ./.`
+          # (which would resolve to a non-git store path inside the flake).
+          nixpkgsFlake = nixpkgs;
+          inherit nixlingModule;
         };
         nixUnitEval = name: case:
           let

@@ -24,13 +24,31 @@
 # Replaces the old per-case `nix-instantiate --eval` invocation (31 cases
 # in assertions-eval, 23 in observability-eval) with one batched eval.
 {
-  flakeRoot,
+  # Two ways to supply nixpkgs + the nixling module set:
+  #   * flakeRoot — re-`getFlake`s the repo (the bash gates' path; flakeRoot
+  #     is a real working-tree path).
+  #   * nixpkgs + nixlingModule — direct injection, used by the in-flake
+  #     nix-unit check where `flakeRoot = ./.` would resolve to a non-git
+  #     store path. Provide exactly one of the two.
+  flakeRoot ? null,
+  nixpkgs ? null,
+  nixlingModule ? null,
 }:
 
 let
-  flake = builtins.getFlake "git+file://${toString flakeRoot}";
-  nixpkgs = flake.inputs.nixpkgs;
-  lib = nixpkgs.lib;
+  flake =
+    if flakeRoot != null
+    then builtins.getFlake "git+file://${toString flakeRoot}"
+    else null;
+  resolvedNixpkgs =
+    if nixpkgs != null then nixpkgs
+    else if flake != null then flake.inputs.nixpkgs
+    else throw "shared.nix: provide either flakeRoot or nixpkgs";
+  resolvedNixlingModule =
+    if nixlingModule != null then nixlingModule
+    else if flake != null then flake.nixosModules.default
+    else throw "shared.nix: provide either flakeRoot or nixlingModule";
+  lib = resolvedNixpkgs.lib;
   defaultSystem = "x86_64-linux";
 
   # ---------------------------------------------------------------------
@@ -52,7 +70,7 @@ let
   # Marginal per-case cost drops from ~28s to ~0.6s. This mirrors how
   # nixpkgs tests its own module system (lib/tests/modules.sh): minimal
   # `evalModules` over fixtures, never `nixosSystem`.
-  assertionsModule = nixpkgs + "/nixos/modules/misc/assertions.nix";
+  assertionsModule = resolvedNixpkgs + "/nixos/modules/misc/assertions.nix";
 
   # Top-level NixOS namespaces nixling's modules assign to. If nixling
   # grows a write to a new top-level NixOS namespace, add it here (a
@@ -146,7 +164,7 @@ let
   # case with the same system instead of being re-imported per case.
   importPkgs =
     system:
-    import nixpkgs {
+    import resolvedNixpkgs {
       inherit system;
       config = {
         allowUnsupportedSystem = true;
@@ -209,7 +227,7 @@ let
     lib.evalModules {
       modules = [
         assertionsModule
-        flake.nixosModules.default
+        resolvedNixlingModule
         baseModule
         override
       ]
@@ -217,7 +235,7 @@ let
       specialArgs = {
         inherit lib;
         pkgs = pkgsFor system;
-        modulesPath = nixpkgs + "/nixos/modules";
+        modulesPath = resolvedNixpkgs + "/nixos/modules";
       };
     };
 

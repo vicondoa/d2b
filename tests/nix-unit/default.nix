@@ -20,10 +20,10 @@
 # `ctx` carries everything any case might need; cases destructure only what
 # they use:
 #   { lib, pkgs, system, flakeRoot, nl, mkEval }
-{ lib, pkgs, system, flakeRoot, nl, mkEval ? null }:
+{ lib, pkgs, system, flakeRoot, nl, mkEval ? null, nixpkgsFlake ? null, nixlingModule ? null }:
 
 let
-  ctx = { inherit lib pkgs system flakeRoot nl mkEval; };
+  ctx = { inherit lib pkgs system flakeRoot nl mkEval nixpkgsFlake nixlingModule; };
 
   # Auto-discover every case module under ./cases so parallel W2 migration
   # units can each DROP a new `cases/<gate>.nix` file without editing this

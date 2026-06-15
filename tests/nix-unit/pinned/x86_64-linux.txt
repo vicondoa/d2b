@@ -1,4 +1,5 @@
 # nix-unit case-presence pins (x86_64-linux-only, e.g. graphics cases).
+# Header-only is valid: this system has no system-specific cases.
 # Regenerate with: make nix-unit-pin
 niri-vm-borders/color-override-verbatim
 niri-vm-borders/custom-output-path-default-absent

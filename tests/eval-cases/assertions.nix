@@ -9,10 +9,10 @@
 # Replaces 31 separate per-case `nix-instantiate --eval --strict`
 # invocations in the legacy bash gate. See `shared.nix` for the
 # evaluator contract.
-{ flakeRoot }:
+{ flakeRoot ? null, nixpkgs ? null, nixlingModule ? null }:
 
 let
-  shared = import ./shared.nix { inherit flakeRoot; };
+  shared = import ./shared.nix { inherit flakeRoot nixpkgs nixlingModule; };
 in
 shared.mkBatch {
   cases = {

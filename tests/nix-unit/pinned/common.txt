@@ -1,5 +1,31 @@
 # nix-unit case-presence pins (common — present on every system).
 # Regenerate with: make nix-unit-pin
+assertions/allow-east-west-requires-site-ack
+assertions/audit-without-observability
+assertions/env-name-invalid
+assertions/env-name-too-long
+assertions/env-vs-host-overlap
+assertions/graphics-with-autostart
+assertions/graphics-without-wayland-user
+assertions/graphics-xwayland-unsupported
+assertions/lansubnet-nonzero-host
+assertions/lansubnet-wrong-mask
+assertions/overlap-containment
+assertions/platform-gate-audio-aarch64
+assertions/platform-gate-graphics-aarch64
+assertions/principal-uid-collision
+assertions/private-key-in-authorized-keys
+assertions/state-dir-override-rejected
+assertions/static-ip-and-env-mutually-exclusive
+assertions/store-state-dir-override-rejected
+assertions/uplinksubnet-wrong-mask
+assertions/vm-env-disabled
+assertions/vm-env-missing
+assertions/vm-index-duplicate
+assertions/vm-name-invalid
+assertions/vm-name-reserved-launcher
+assertions/vm-name-reserved-sys-prefix
+assertions/wayland-user-missing
 autostart-wiring/microvms-target-empty
 autostart-wiring/nixlingd-present
 autostart-wiring/nixlingd-wired-multi-user

@@ -44,15 +44,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/assertions-eval.sh"
-group = "E"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/audio.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -1284,6 +1275,15 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/assertions-eval.sh"
+group = "E"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/assertions.nix — 26 eval-rejection cases via the minimal lib.evalModules fast evaluator; 23 Bucket-A preserve the message-substring check, 3 Bucket-B platform/throw cases assert rejection)"]
+exercised_today = "skip"
 
 [[script]]
 name = "tests/broker-bundle-path-eval.sh"
