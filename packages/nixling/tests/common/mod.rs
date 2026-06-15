@@ -104,6 +104,34 @@ fn primary_group_name() -> String {
 /// the caller should run a single `nixling` invocation against
 /// `socket_path` and then call [`DaemonOnce::wait`].
 pub fn spawn_nixlingd_once(peer: &TestPeer) -> Option<DaemonOnce> {
+    spawn_nixlingd_inner(peer, None, None)
+}
+
+/// Spawn `nixlingd serve --once` wired to read its bundle/host/closure
+/// artifacts from `artifacts_dir` and to drive every `host check` probe from
+/// the JSON `fixture_path` (`NIXLING_HOST_CHECK_FIXTURE`). Used by the
+/// daemon-backed `hostCheck` cases migrated from
+/// tests/cli-rust-native-host-check.sh.
+///
+/// `artifacts_dir` must contain a `bundle.json` whose `hostPath` /
+/// `processesPath` resolve (relative to the dir) to fixture artifacts that
+/// live there too, plus a `closures/` subdir — see
+/// `host_check_contract::build_hermetic_bundle_tree`, which rewrites the
+/// committed fixture-smoke bundle so the absolute `/etc/nixling/*` paths can
+/// never leak the real host's artifacts into the test.
+pub fn spawn_nixlingd_host_check(
+    artifacts_dir: &Path,
+    fixture_path: &Path,
+    peer: &TestPeer,
+) -> Option<DaemonOnce> {
+    spawn_nixlingd_inner(peer, Some(artifacts_dir), Some(fixture_path))
+}
+
+fn spawn_nixlingd_inner(
+    peer: &TestPeer,
+    artifacts_dir: Option<&Path>,
+    fixture_path: Option<&Path>,
+) -> Option<DaemonOnce> {
     let bin = nixlingd_bin()?;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -112,13 +140,18 @@ pub fn spawn_nixlingd_once(peer: &TestPeer) -> Option<DaemonOnce> {
     let locks_dir = run.join("locks");
     std::fs::create_dir_all(&daemon_state_dir).expect("mk daemon-state");
     std::fs::create_dir_all(&locks_dir).expect("mk locks");
+    // The state-lock parent (`run`) must be uid/gid-owned by the invoking user
+    // and mode 0755/0750 for `--allow-unprivileged-runtime-dir` lock-parent
+    // validation; pin it explicitly rather than relying on the process umask.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o755)).expect("chmod run dir");
 
     let socket_path = run.join("public.sock");
     let state_lock = run.join("daemon.lock");
     let config_json = run.join("config.json");
 
     let group = primary_group_name();
-    let config = serde_json::json!({
+    let mut config = serde_json::json!({
         "publicSocketPath": socket_path,
         "brokerSocketPath": run.join("priv.sock"),
         "stateLockPath": state_lock,
@@ -131,13 +164,26 @@ pub fn spawn_nixlingd_once(peer: &TestPeer) -> Option<DaemonOnce> {
         "serverVersion": "0.4.0",
         "acceptedClientVersionRange": ">=0.4.0, <0.5.0"
     });
+    if let Some(dir) = artifacts_dir {
+        config.as_object_mut().unwrap().insert(
+            "artifacts".to_owned(),
+            serde_json::json!({
+                "publicManifestPath": dir.join("manifest.json"),
+                "bundlePath": dir.join("bundle.json"),
+                "hostPath": dir.join("host.json"),
+                "processesPath": dir.join("processes.json"),
+                "closuresDir": dir.join("closures"),
+            }),
+        );
+    }
     {
         let mut f = std::fs::File::create(&config_json).expect("write config.json");
         f.write_all(serde_json::to_string_pretty(&config).unwrap().as_bytes())
             .expect("write config bytes");
     }
 
-    let child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(["serve", "--config"])
         .arg(&config_json)
         .arg("--test-listen-on")
@@ -157,14 +203,20 @@ pub fn spawn_nixlingd_once(peer: &TestPeer) -> Option<DaemonOnce> {
         .env("NIXLINGD_TEST_PEER_GID", peer.gid.to_string())
         .env("NIXLINGD_TEST_PEER_USERNAME", peer.username)
         .env("NIXLINGD_TEST_PEER_GROUPS", peer.groups)
+        // The daemon's startup kernel-module gate reads the real /proc/modules
+        // (NOT the host-check fixture); bypass it so the daemon starts on any
+        // host. The host-check dispatch itself still runs entirely from
+        // NIXLING_HOST_CHECK_FIXTURE.
         .env("NIXLING_SKIP_KERNEL_MODULE_CHECK", "1")
         // Quiet the daemon's startup/autostart tracing so it does not pollute
         // test output; assertions over the CLI response give the signal.
         .env("RUST_LOG", "off")
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn nixlingd serve --once");
+        .stderr(std::process::Stdio::null());
+    if let Some(fixture) = fixture_path {
+        command.env("NIXLING_HOST_CHECK_FIXTURE", fixture);
+    }
+    let child = command.spawn().expect("spawn nixlingd serve --once");
 
     wait_for_socket(&socket_path, Duration::from_secs(15));
 
@@ -174,6 +226,43 @@ pub fn spawn_nixlingd_once(peer: &TestPeer) -> Option<DaemonOnce> {
         daemon_state_dir,
         _tmp: tmp,
     })
+}
+
+/// Drive one daemon `hostCheck` round-trip through the bundled `nixlingd
+/// test-client` (the daemon binary's own subcommand) and return the parsed
+/// `hostCheckResponse`.
+///
+/// The client opens a single `AF_UNIX`/`SOCK_SEQPACKET` connection, sends a
+/// `hello` frame followed by `{"type":"hostCheck","strict":<strict>}`, and
+/// prints one JSON line per response frame. The LAST line is the
+/// `hostCheckResponse`. Panics if the harness binary is unavailable — callers
+/// that obtained a [`DaemonOnce`] from [`spawn_nixlingd_host_check`] already
+/// know `nixlingd_bin()` is `Some`.
+pub fn daemon_host_check_response(socket_path: &Path, strict: bool) -> serde_json::Value {
+    let bin = nixlingd_bin().expect("nixlingd test-client binary");
+    let host_check_frame = format!("{{\"type\":\"hostCheck\",\"strict\":{strict}}}");
+    let out = Command::new(&bin)
+        .arg("test-client")
+        .arg("--socket")
+        .arg(socket_path)
+        .arg("--frame-json")
+        .arg(r#"{"type":"hello","clientVersion":">=0.4.0, <0.5.0","supportedFeatures":[]}"#)
+        .arg("--frame-json")
+        .arg(&host_check_frame)
+        .output()
+        .expect("spawn nixlingd test-client");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let last = stdout
+        .lines()
+        .rfind(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "nixlingd test-client produced no response line; stderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+    serde_json::from_str(last)
+        .unwrap_or_else(|err| panic!("hostCheckResponse was not valid JSON: {err}\nline: {last}"))
 }
 
 /// Poll until `path` is a socket or the timeout elapses.
