@@ -935,15 +935,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/static-invariant-broad-caps.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/static-invariant-deny-unknown-fields.sh"
 group = "F"
 make_target = "test-flake"
@@ -956,33 +947,6 @@ exercised_today = "skip"
 name = "tests/static-invariant-deny-unknown-fields-w3.sh"
 group = "F"
 make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/static-invariant-opaque-key-ids.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/static-invariant-world-readable-leak.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/static-invariant-writable-paths.sh"
-group = "C"
-make_target = "test-contract"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -1158,6 +1122,42 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/static-invariant-broad-caps.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["nixling_core::static_invariants validators (production logic): is_broad_cap_violation", "packages/nixling-contract-tests/tests/static_invariants.rs (synthetic positive/negative logic cases + REAL rendered fixture-smoke contract cases; gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — broad_caps_* (synthetic) + rendered_profiles_with_broad_caps_carry_an_adr_carve_out (real RoleProfile.caps vs adr_carve_out)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/static-invariant-opaque-key-ids.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["nixling_core::static_invariants validators (production logic): path_bearing_key_violations", "packages/nixling-contract-tests/tests/static_invariants.rs (synthetic positive/negative logic cases + REAL rendered fixture-smoke contract cases; gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — opaque_key_ids_* (synthetic) + rendered_manifest_has_no_path_bearing_key_or_secret_fields (real vms.json key/secret path scan)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/static-invariant-world-readable-leak.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["nixling_core::static_invariants validators (production logic): world_readable_field_leaks", "packages/nixling-contract-tests/tests/static_invariants.rs (synthetic positive/negative logic cases + REAL rendered fixture-smoke contract cases; gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — world_readable_* (synthetic) + rendered_manifest_exposes_only_public_safe_fields (real vms.json field allowlist)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/static-invariant-writable-paths.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["nixling_core::static_invariants validators (production logic): undeclared_writable_paths", "packages/nixling-contract-tests/tests/static_invariants.rs (synthetic positive/negative logic cases + REAL rendered fixture-smoke contract cases; gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — writable_paths_* (synthetic logic). Spec correction: the bash schema-vocabulary grep is subsumed by the typed MountPolicy.writable_paths DTO + the bundle-drift gate (schema generated from the DTO); no separate bundle-level declared-writable-paths list exists in the real DTO to contract-test"]
+exercised_today = "skip"
 
 [[script]]
 name = "tests/cli-json.sh"

@@ -22,12 +22,22 @@ fn read_fixture(name: &str) -> String {
 fn parse_fixture<T: serde::de::DeserializeOwned>(name: &str) -> T {
     let json = read_fixture(name);
     serde_json::from_str(&json).unwrap_or_else(|err| {
-        panic!("failed to parse fixture {name} as {}: {err}", std::any::type_name::<T>())
+        panic!(
+            "failed to parse fixture {name} as {}: {err}",
+            std::any::type_name::<T>()
+        )
     })
 }
 
 pub fn load_privileges_fixture_from_env() -> PrivilegesJson {
     parse_fixture("privileges.json")
+}
+
+/// Load the rendered public manifest (`manifest.json` == `vms.json`) as an
+/// untyped `serde_json::Value` for the world-readable / opaque-key-id static
+/// invariants (which traverse arbitrary scalar fields).
+pub fn load_manifest_value_from_env() -> serde_json::Value {
+    parse_fixture("manifest.json")
 }
 
 /// Reconstruct a `BundleResolver` from the rendered fixture-smoke artifacts

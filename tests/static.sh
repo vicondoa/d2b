@@ -1253,13 +1253,9 @@ if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_s
 if [ -x "$HERE/guest-static-elf.sh" ]; then nl_static_parallel_script "tests/guest-static-elf.sh" "$HERE/guest-static-elf.sh"; fi
 if [ -x "$HERE/guest-static-consumption-eval.sh" ]; then nl_static_parallel_script "tests/guest-static-consumption-eval.sh" "$HERE/guest-static-consumption-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
-if [ -x "$HERE/static-invariant-broad-caps.sh" ]; then nl_static_parallel_script "tests/static-invariant-broad-caps.sh" "$HERE/static-invariant-broad-caps.sh"; fi
-if [ -x "$HERE/static-invariant-writable-paths.sh" ]; then nl_static_parallel_script "tests/static-invariant-writable-paths.sh" "$HERE/static-invariant-writable-paths.sh"; fi
-if [ -x "$HERE/static-invariant-world-readable-leak.sh" ]; then nl_static_parallel_script "tests/static-invariant-world-readable-leak.sh" "$HERE/static-invariant-world-readable-leak.sh"; fi
 if [ -x "$HERE/static-invariant-deny-unknown-fields.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields.sh" "$HERE/static-invariant-deny-unknown-fields.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
 if [ -x "$HERE/static-invariant-deny-unknown-fields-w3.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields-w3.sh" "$HERE/static-invariant-deny-unknown-fields-w3.sh"; fi
-if [ -x "$HERE/static-invariant-opaque-key-ids.sh" ]; then nl_static_parallel_script "tests/static-invariant-opaque-key-ids.sh" "$HERE/static-invariant-opaque-key-ids.sh"; fi
 if [ -x "$HERE/privileges-matrix-completeness.sh" ]; then nl_static_parallel_script "tests/privileges-matrix-completeness.sh" "$HERE/privileges-matrix-completeness.sh"; fi
 nl_static_parallel_wait_all
 nl_static_gate_end "W1 bundle/schema static gates"

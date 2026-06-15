@@ -3205,9 +3205,8 @@ mod tests {
         {
             let p = &mut resolver.processes.vms[0].nodes[0].profile;
             p.uid = 0;
-            p.adr_carve_out = Some(
-                "ADR 0004 swtpm-flush requires uid 0 for /dev/tpm access".to_owned(),
-            );
+            p.adr_carve_out =
+                Some("ADR 0004 swtpm-flush requires uid 0 for /dev/tpm access".to_owned());
         }
         assert!(
             resolver.validate_minijail_profiles().is_ok(),

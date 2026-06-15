@@ -26,9 +26,11 @@ use nixling_contract_tests::load_bundle_resolver_from_env;
 #[test]
 fn rendered_bundle_passes_all_minijail_profile_invariants() {
     let resolver = load_bundle_resolver_from_env();
-    let validated = resolver.validate_minijail_profiles().unwrap_or_else(|violation| {
-        panic!("rendered fixture bundle violates a minijail profile invariant: {violation:?}")
-    });
+    let validated = resolver
+        .validate_minijail_profiles()
+        .unwrap_or_else(|violation| {
+            panic!("rendered fixture bundle violates a minijail profile invariant: {violation:?}")
+        });
     assert!(
         validated > 0,
         "expected the fixture bundle to contain at least one minijail profile to validate; \

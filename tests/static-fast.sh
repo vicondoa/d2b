@@ -182,11 +182,7 @@ for gate in \
   vms-json-parity \
   static-invariant-uid0 \
   host-json-drift-gate \
-  static-invariant-broad-caps \
-  static-invariant-writable-paths \
-  static-invariant-world-readable-leak \
   static-invariant-deny-unknown-fields-w3 \
-  static-invariant-opaque-key-ids \
   privileges-matrix-completeness \
   ifname-nix-rust-parity \
   static-invariant-deny-unknown-fields; do
