@@ -1,0 +1,13 @@
+# cli-json — CLI-contract integration tests for the unique behaviours of the
+# retired tests/cli-json.sh bash gate (packages/nixling/tests/cli_json_contract.rs).
+# Spawns the real `nixling` binary against the NL_FIXTURES rendered bundle
+# (copied into a hermetic temp bundle so the host's deployed /etc/nixling
+# artifacts cannot shadow the fixture) plus synthetic state-root / daemon-state /
+# system-state fixtures, and validates the pending-restart, keys-list daemon-down,
+# and audit-on-a-TTY daemon-down JSON contracts strictly against the committed
+# DTOs (deny_unknown_fields). One libtest path per line; checked by
+# tests/tools/assert-pinned-tests.sh.
+list_reports_pending_restart_when_booted_differs_and_active
+status_reports_pending_restart_with_consistent_current_booted
+keys_list_daemon_down_returns_structured_envelope
+audit_json_stays_json_on_tty_with_daemon_down_envelope
