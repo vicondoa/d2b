@@ -26,7 +26,10 @@ use crate::exec::{
     ExecError, ExitOutcome, ProcessKiller, ProcessSpawner, ProcessWaiter, SpawnedProcess,
     ValidatedCommand,
 };
-use crate::login_session::{login_session_systemd_run_args, SessionMode};
+use crate::login_session::{
+    login_session_systemd_run_args, sibling_systemctl_path, systemctl_kill_unit,
+    unique_exec_unit_name, SessionMode,
+};
 
 /// Host-fixed workload-user spawn configuration for the non-TTY path.
 #[derive(Clone)]
@@ -67,9 +70,13 @@ impl ProcessSpawner for LinuxProcessSpawner {
             return Err(ExecError::ExecDisabled);
         };
 
+        let unit_name = unique_exec_unit_name();
+        let systemctl_path = sibling_systemctl_path(&workload.systemd_run_path);
+
         let session_args = login_session_systemd_run_args(
             &workload.login_shell_path,
             &workload.exec_user,
+            &unit_name,
             SessionMode::Pipe,
             &command,
         );
@@ -97,26 +104,41 @@ impl ProcessSpawner for LinuxProcessSpawner {
         Ok(SpawnedProcess {
             stdout: Box::new(stdout),
             stderr: Box::new(stderr),
-            killer: Arc::new(LinuxProcessKiller { pgid: pid }),
+            killer: Arc::new(LinuxProcessKiller {
+                pgid: pid,
+                systemctl_path,
+                unit_name,
+            }),
             waiter: Box::new(LinuxProcessWaiter { child: Some(child) }),
         })
     }
 }
 
-/// Lock-free, idempotent process-group terminator.
+/// Lock-free, idempotent process-group + transient-unit terminator.
 struct LinuxProcessKiller {
     pgid: i32,
+    /// Path to `systemctl`, used to SIGKILL the named transient unit's cgroup.
+    systemctl_path: PathBuf,
+    /// The `--unit=` name of the workload's transient unit.
+    unit_name: String,
 }
 
 impl ProcessKiller for LinuxProcessKiller {
     fn kill_group(&self) {
-        // Idempotent best-effort group termination. A process group persists
-        // while any member is alive, so the PGID cannot be reused underneath
-        // this signal as long as descendants remain; once the group is empty
-        // the signal is a harmless ESRCH no-op.
+        // 1. LOCAL first: SIGKILL the `systemd-run` wrapper's process group. This
+        //    fires regardless of systemd health (teardown is never stranded by a
+        //    wedged PID 1) and ensures the wrapper cannot issue a further
+        //    StartTransientUnit once teardown has begun. A process group persists
+        //    while any member is alive, so the PGID cannot be reused underneath
+        //    this signal; once empty the signal is a harmless ESRCH no-op.
         if let Some(pid) = Pid::from_raw(self.pgid) {
             let _ = kill_process_group(pid, Signal::Kill);
         }
+        // 2. SYSTEMD: the workload runs in a PID 1-owned transient unit, NOT in
+        //    the wrapper's process group, so step 1 alone would leave a quiet
+        //    non-TTY command (e.g. `sleep 3600`) running. SIGKILL the whole unit
+        //    cgroup by name. Bounded + idempotent (see `systemctl_kill_unit`).
+        systemctl_kill_unit(&self.systemctl_path, &self.unit_name);
     }
 }
 

@@ -798,6 +798,7 @@ pub mod linux {
         PtyControl, PtyProcessSpawner, SessionReaper, SpawnedPtyProcess, TerminalSize, TtySignal,
     };
     use crate::exec::{ExecError, ExitOutcome, ProcessWaiter, ValidatedCommand};
+    use crate::login_session::systemctl_kill_unit;
 
     /// Bounded SIGKILL sweep rounds for the session reaper.
     const REAP_MAX_ROUNDS: u32 = 50;
@@ -889,9 +890,17 @@ pub mod linux {
                 .find(|(k, _)| k == "TERM")
                 .map(|(_, v)| v.clone())
                 .unwrap_or_else(|| "xterm".to_owned());
+            // Name the transient unit so teardown can SIGKILL the workload's
+            // cgroup directly: the workload runs in a PID 1-owned `systemd-run
+            // --pty` unit, NOT in the helper's TTY session, so the `/proc`
+            // session sweep alone would not reach it.
+            let unit_name = crate::login_session::unique_exec_unit_name();
+            let systemctl_path =
+                crate::login_session::sibling_systemctl_path(&self.systemd_run_path);
             let session_args = crate::login_session::login_session_systemd_run_args(
                 &self.login_shell_path,
                 &self.exec_user,
+                &unit_name,
                 crate::login_session::SessionMode::Pty,
                 &command,
             );
@@ -938,6 +947,8 @@ pub mod linux {
             let guard = SpawnGuard {
                 child: Some(child),
                 sid: pid,
+                systemctl_path: systemctl_path.clone(),
+                unit_name: unit_name.clone(),
             };
 
             // Await the helper handshake: EOF == exec succeeded; one byte == a
@@ -973,7 +984,11 @@ pub mod linux {
                 waiter: Box::new(PtyChildWaiter { child: Some(child) }),
                 // The helper called setsid() before exec, so its pid is the
                 // session id of the whole interactive session.
-                reaper: Arc::new(ProcSessionReaper { sid: pid }),
+                reaper: Arc::new(ProcSessionReaper {
+                    sid: pid,
+                    systemctl_path,
+                    unit_name,
+                }),
             })
         }
     }
@@ -986,6 +1001,8 @@ pub mod linux {
     struct SpawnGuard {
         child: Option<Child>,
         sid: i32,
+        systemctl_path: PathBuf,
+        unit_name: String,
     }
 
     impl SpawnGuard {
@@ -1005,14 +1022,22 @@ pub mod linux {
             // group kill could hit guestd itself).
             let _ = child.start_kill();
             let sid = self.sid;
+            let systemctl_path = self.systemctl_path.clone();
+            let unit_name = self.unit_name.clone();
             // Reap the direct child and sweep any process remaining in the
             // helper-created TTY session (a no-op if setsid never ran, since no
-            // process then has session id == pid). Spawned only when a runtime
-            // is available; the synchronous SIGKILL above already fired.
+            // process then has session id == pid), then SIGKILL the workload's
+            // named transient unit cgroup. Spawned only when a runtime is
+            // available; the synchronous SIGKILL above already fired.
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
                     let _ = child.wait().await;
-                    ProcSessionReaper { sid }.kill_session();
+                    ProcSessionReaper {
+                        sid,
+                        systemctl_path,
+                        unit_name,
+                    }
+                    .kill_session();
                 });
             }
         }
@@ -1160,14 +1185,40 @@ pub mod linux {
     }
 
     /// `/proc`-scanning session reaper: SIGKILLs every process whose session id
-    /// equals the helper-created session leader, repeating until the session is
-    /// empty (bounded).
+    /// equals the helper-created session leader, then SIGKILLs the workload's
+    /// named transient unit cgroup (the workload runs in a PID 1-owned
+    /// `systemd-run --pty` unit, NOT in the helper's session, so the `/proc`
+    /// sweep alone never reaches it), repeating the session sweep until empty
+    /// (bounded).
     struct ProcSessionReaper {
         sid: i32,
+        /// Path to `systemctl`, used to SIGKILL the named transient unit's cgroup.
+        systemctl_path: PathBuf,
+        /// The `--unit=` name of the workload's transient unit.
+        unit_name: String,
     }
 
     impl SessionReaper for ProcSessionReaper {
         fn kill_session(&self) {
+            // 1. LOCAL first: one SIGKILL pass over the helper's TTY session (the
+            //    helper + the `systemd-run --pty` wrapper share it) so no further
+            //    StartTransientUnit can be issued and teardown never depends
+            //    solely on systemd.
+            for pid in pids_in_session(self.sid) {
+                if let Some(pid) = Pid::from_raw(pid) {
+                    let _ = kill_process(pid, Signal::Kill);
+                }
+            }
+            // 2. SYSTEMD: SIGKILL the whole transient-unit cgroup by name. This is
+            //    the only step that reaches the actual workload (a quiet non-TTY
+            //    child such as `sleep 3600` survives owner-disconnect otherwise).
+            //    Always runs, even if the helper session is already empty — never
+            //    gate it behind the empty-session early-out below. Bounded +
+            //    idempotent (see `systemctl_kill_unit`).
+            systemctl_kill_unit(&self.systemctl_path, &self.unit_name);
+            // 3. Finish: bounded sweep until the helper session is empty, reaping
+            //    any late-joining session members. The unit-cgroup kill above
+            //    already handled the workload.
             for _ in 0..REAP_MAX_ROUNDS {
                 let pids = pids_in_session(self.sid);
                 if pids.is_empty() {
