@@ -677,6 +677,36 @@
             '';
           };
 
+          # Tombstones (removed options): guest-control exec now always
+          # runs as the VM's workload user (`ssh.user`) in a PAM login
+          # session — never root — and there is no per-VM exec user
+          # allowlist. These hidden stubs keep legacy assignments landing
+          # on the friendly migration assertions in assertions.nix instead
+          # of a cryptic "option does not exist" module-system error.
+          allowRoot = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            internal = true;
+            visible = false;
+            description = ''
+              REMOVED. Guest-control exec always runs as the VM's workload
+              user (`ssh.user`), never root. Elevate with `sudo` inside the
+              session. See the migration assertion in assertions.nix.
+            '';
+          };
+
+          users = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            internal = true;
+            visible = false;
+            description = ''
+              REMOVED. Guest-control exec always targets the VM's single
+              workload user (`ssh.user`); there is no per-VM exec user
+              allowlist. See the migration assertion in assertions.nix.
+            '';
+          };
+
           detachedMaxRuntimeSec = lib.mkOption {
             type = lib.types.ints.unsigned;
             default = 0;
