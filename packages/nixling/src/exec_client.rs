@@ -365,12 +365,17 @@ fn expect_wait(resp: ExecOpResponse) -> Result<ExecWaitResult, ExecClientError> 
 fn response_label(resp: &ExecOpResponse) -> &'static str {
     match resp {
         ExecOpResponse::Start(_) => "start",
+        ExecOpResponse::DetachedCreate(_) => "detachedCreate",
         ExecOpResponse::WriteStdin(_) => "writeStdin",
         ExecOpResponse::ReadOutput(_) => "readOutput",
         ExecOpResponse::Signal(_) => "signal",
         ExecOpResponse::Resize(_) => "resize",
         ExecOpResponse::Wait(_) => "wait",
         ExecOpResponse::Close(_) => "close",
+        ExecOpResponse::List(_) => "list",
+        ExecOpResponse::Logs(_) => "logs",
+        ExecOpResponse::Status(_) => "status",
+        ExecOpResponse::Kill(_) => "kill",
     }
 }
 
@@ -1093,6 +1098,10 @@ mod tests {
             ExecOp::Resize(_) => "resize",
             ExecOp::Wait(_) => "wait",
             ExecOp::Close(_) => "close",
+            ExecOp::List(_) => "list",
+            ExecOp::Logs(_) => "logs",
+            ExecOp::Status(_) => "status",
+            ExecOp::Kill(_) => "kill",
         }
     }
 
@@ -1102,6 +1111,9 @@ mod tests {
             match op {
                 // A real exec session never re-sends Start through the FSM.
                 ExecOp::Start(_) => Err(ExecClientError::protocol("unexpected Start in FSM")),
+                ExecOp::List(_) | ExecOp::Logs(_) | ExecOp::Status(_) | ExecOp::Kill(_) => Err(
+                    ExecClientError::protocol("unexpected detached-management op in FSM"),
+                ),
                 ExecOp::Close(_) => {
                     self.close_seen = true;
                     Ok(ExecOpResponse::Close(
@@ -1271,6 +1283,9 @@ mod tests {
                 ExecOp::Wait(a) => &a.session,
                 ExecOp::Close(a) => &a.session,
                 ExecOp::Start(_) => panic!("FSM must never emit Start"),
+                ExecOp::List(_) | ExecOp::Logs(_) | ExecOp::Status(_) | ExecOp::Kill(_) => {
+                    panic!("FSM must never emit detached-management ops")
+                }
             };
             assert_eq!(
                 handle,

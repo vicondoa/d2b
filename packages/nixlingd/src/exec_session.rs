@@ -751,6 +751,9 @@ impl WorkerState {
                 }))
             }
             ExecOp::Start(_) => Err(ExecOpError::Protocol),
+            ExecOp::List(_) | ExecOp::Logs(_) | ExecOp::Status(_) | ExecOp::Kill(_) => {
+                Err(ExecOpError::Protocol)
+            }
             ExecOp::ReadOutput(_) | ExecOp::Wait(_) => unreachable!("long-polls are spawned"),
         }
     }

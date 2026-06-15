@@ -2450,6 +2450,10 @@ fn exec_op_session(op: &public_wire::ExecOp) -> Option<&str> {
         public_wire::ExecOp::Resize(args) => Some(&args.session),
         public_wire::ExecOp::Wait(args) => Some(&args.session),
         public_wire::ExecOp::Close(args) => Some(&args.session),
+        public_wire::ExecOp::List(_)
+        | public_wire::ExecOp::Logs(_)
+        | public_wire::ExecOp::Status(_)
+        | public_wire::ExecOp::Kill(_) => None,
     }
 }
 

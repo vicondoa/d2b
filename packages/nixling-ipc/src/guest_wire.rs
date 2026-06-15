@@ -1055,6 +1055,7 @@ pub enum GuestControlErrorKind {
     FileTooLarge,
     PathUnsafe,
     ReadDenied,
+    InvalidProgram,
 }
 
 #[cfg(test)]
