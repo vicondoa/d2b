@@ -366,9 +366,12 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
         // Non-TTY attached exec is served iff the workload-user runtime paths
         // are present.
         exec_attached: exec_paths.is_some(),
-        // Detached exec + its retained logs are disabled in this build.
+        // Detached exec is disabled in this build (no `-d` CLI surface yet).
         exec_detached: false,
-        exec_logs: false,
+        // The output capability (`ReadOutput`) is required by the host for
+        // every non-TTY attached exec to stream stdout/stderr, independent of
+        // detached. Advertise it whenever the attached runtime is present.
+        exec_logs: exec_paths.is_some(),
         exec_tty: exec.tty_usable(),
         read_guest_file: config.guest_config_path.is_some(),
     };
@@ -3184,5 +3187,36 @@ mod tests {
             .unwrap();
         assert!(!advertised(&without.capabilities.capabilities));
         assert!(!advertised(&without.health.capabilities));
+    }
+
+    #[test]
+    fn attached_exec_advertises_output_capability_for_read_output() {
+        // The host requires the output capability (`EXEC_LOGS`) before it will
+        // issue `ReadOutput` for a non-TTY attached exec to stream stdout/
+        // stderr. A build that advertises attached exec but withholds the
+        // output cap establishes a session and then fails fetching output, so
+        // the two MUST be advertised together for the attached runtime.
+        let advertised = |caps: &[EnumOrUnknown<pb::GuestCapability>], cap: pb::GuestCapability| {
+            caps.iter().any(|c| c.enum_value().unwrap() == cap)
+        };
+        let snap = RuntimeCapabilitiesProvider::new(CapabilitiesConfig {
+            exec_attached: true,
+            exec_logs: true,
+            ..CapabilitiesConfig::default()
+        })
+        .snapshot()
+        .unwrap();
+        assert!(advertised(
+            &snap.capabilities.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED
+        ));
+        assert!(advertised(
+            &snap.capabilities.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS
+        ));
+        assert!(advertised(
+            &snap.health.capabilities,
+            pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS
+        ));
     }
 }
