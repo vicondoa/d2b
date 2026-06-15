@@ -1,0 +1,25 @@
+# cli-host-check — `nixling host check` CLI-contract integration tests
+# (host_check_contract.rs). Successor of the retired
+# cli-rust-native-host-check.sh gate: drive the real `nixling host check
+# --read-only` binary with every probe pinned through
+# NIXLING_HOST_CHECK_FIXTURE (exit-code lattice 0/1/2/3, strict
+# HostCheckOutputV2 deserialize == the host-check.schema.json check, the
+# internal-io operator error envelope, --human severity grouping) plus three
+# daemon-backed cases against a real KVM-free `nixlingd serve --once`
+# (hostCheckResponse summary/checks shape). One bare libtest fn per line;
+# checked by tests/tools/assert-pinned-tests.sh.
+host_check_pass_fixture_exits_zero_and_matches_schema
+host_check_built_in_kernel_modules_pass
+host_check_ufw_active_warns
+host_check_systemctl_unavailable_warns
+host_check_runner_parity_drift_warns_without_strict
+host_check_runner_parity_drift_fails_under_strict
+host_check_hard_failure_exits_two
+host_check_modules_probe_error_envelope
+host_check_nft_probe_error_envelope
+host_check_ufw_probe_error_envelope
+host_check_usage_error_exits_three
+host_check_human_groups_findings_by_severity
+daemon_host_check_pass_runs_full_probe_battery
+daemon_host_check_fails_closed_on_old_kernel_and_missing_cgroup_v2
+daemon_host_check_strict_runner_parity_fails
