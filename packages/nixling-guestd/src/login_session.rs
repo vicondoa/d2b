@@ -413,13 +413,18 @@ mod tests {
         dir
     }
 
-    /// Write an executable fake `systemctl` that appends its argv (one line,
-    /// NUL-free, space-joined) to `<dir>/calls.log` and exits with `exit_code`.
+    /// Write an executable fake `systemctl` that appends one record per
+    /// invocation to `<dir>/calls.log` and exits with `exit_code`. Argv
+    /// boundaries are preserved: each argument is written followed by a NUL
+    /// byte, and each invocation record is terminated by a newline. This
+    /// lets `read_calls` reconstruct the EXACT argv vector (order + count),
+    /// so a regression that adds/reorders/duplicates flags is caught — a
+    /// space-joined `$*` could not distinguish those shapes.
     fn write_fake_systemctl(dir: &Path, exit_code: i32) -> PathBuf {
         let log = dir.join("calls.log");
         let script = dir.join("systemctl");
         let body = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit {}\n",
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\"; done >> '{0}'\nprintf '\\n' >> '{0}'\nexit {1}\n",
             log.display(),
             exit_code
         );
@@ -430,9 +435,21 @@ mod tests {
         script
     }
 
-    fn read_calls(dir: &Path) -> Vec<String> {
+    /// One inner `Vec<String>` per fake-`systemctl` invocation, each holding
+    /// that invocation's exact argv (excluding the program name), with
+    /// boundaries preserved via the NUL-separated record format written by
+    /// `write_fake_systemctl`.
+    fn read_calls(dir: &Path) -> Vec<Vec<String>> {
         match std::fs::read_to_string(dir.join("calls.log")) {
-            Ok(s) => s.lines().map(|l| l.to_owned()).collect(),
+            Ok(s) => s
+                .lines()
+                .map(|line| {
+                    line.split('\0')
+                        .filter(|tok| !tok.is_empty())
+                        .map(|tok| tok.to_owned())
+                        .collect()
+                })
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
@@ -447,21 +464,23 @@ mod tests {
 
         let calls = read_calls(&dir);
         assert_eq!(calls.len(), 1, "exit-0 means exactly one invocation");
-        let argv = &calls[0];
-        for expected in [
-            "--system",
-            "--no-ask-password",
-            "--quiet",
-            "--kill-whom=all",
-            "--signal=SIGKILL",
-            "kill",
-            unit,
-        ] {
-            assert!(
-                argv.split(' ').any(|tok| tok == expected),
-                "kill argv missing {expected:?}; got {argv:?}"
-            );
-        }
+        // Exact argv equality (order + count), not mere token presence: a
+        // regression that adds an extra flag, duplicates a conflicting one,
+        // or reorders `kill`/<unit> would change teardown semantics yet slip
+        // past a subset check.
+        assert_eq!(
+            calls[0],
+            vec![
+                "--system".to_owned(),
+                "--no-ask-password".to_owned(),
+                "--quiet".to_owned(),
+                "--kill-whom=all".to_owned(),
+                "--signal=SIGKILL".to_owned(),
+                "kill".to_owned(),
+                unit.to_owned(),
+            ],
+            "kill argv must be exactly the spelled-out vector"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
