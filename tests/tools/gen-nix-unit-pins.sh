@@ -16,9 +16,22 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 
-# Systems the corpus is pinned for. The first is treated as the "base"
-# whose case set defines common.txt; others contribute a per-system delta.
-SYSTEMS=(aarch64-linux x86_64-linux)
+# Supported systems, derived from the flake's own `checks` (forAllSystems) —
+# the same source of truth the gate uses — rather than hardcoded, so adding
+# a system to flake.nix's `systems` automatically pins it. Sorted, so the
+# first (the lexically-smallest, e.g. aarch64-linux) is the "base" whose case
+# set defines common.txt; the others contribute a per-system delta. (This
+# assumes the base's case set is a subset of every other system's — true
+# while extra cases are x86-only graphics guards.)
+mapfile -t SYSTEMS < <(
+  nix eval --no-warn-dirty --raw "$ROOT#checks" \
+    --apply 'cs: builtins.concatStringsSep "\n" (builtins.sort builtins.lessThan (builtins.attrNames cs))' \
+    2>/dev/null
+)
+if [ "${#SYSTEMS[@]}" -eq 0 ]; then
+  echo "gen-nix-unit-pins: could not derive systems from .#checks; falling back to defaults" >&2
+  SYSTEMS=(aarch64-linux x86_64-linux)
+fi
 PIN_DIR="$ROOT/tests/nix-unit/pinned"
 mkdir -p "$PIN_DIR"
 
