@@ -63,7 +63,19 @@ ci-uses-make:
 
 ## Per-layer targets — W0: run the group's not-yet-ported legacy scripts via
 ## the ledger. W1+ repoints each to its successor (nextest/nix-unit/VM).
-test-rust:        ; bash tests/tools/run-layer.sh test-rust
+test-rust:
+	bash tests/tools/run-layer.sh test-rust
+	bash tests/tools/assert-pinned-tests.sh
+	set -eu; \
+	if ! command -v cargo >/dev/null 2>&1; then \
+	  for candidate in "$$HOME"/.rustup/toolchains/1.94.1-*/bin; do \
+	    if [ -x "$$candidate/cargo" ]; then PATH="$$candidate:$$PATH"; export PATH; break; fi; \
+	  done; \
+	fi; \
+	CARGO_BUILD_RUSTC_WRAPPER='' RUSTC_WRAPPER='' nix shell --quiet --inputs-from . nixpkgs#cargo-nextest nixpkgs#gcc --command bash -c 'cd packages && cargo nextest run --workspace --exclude nixling-contract-tests'; \
+	cd packages; \
+	CARGO_BUILD_RUSTC_WRAPPER='' RUSTC_WRAPPER='' cargo test --doc --workspace --exclude nixling-contract-tests
+	bash tests/tools/assert-pinned-tests.sh
 test-drift:       ; bash tests/tools/run-layer.sh test-drift
 test-contract:
 	bash tests/tools/run-layer.sh test-contract

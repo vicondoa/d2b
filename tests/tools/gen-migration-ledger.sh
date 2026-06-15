@@ -54,27 +54,33 @@ done
 # --- group → scripts (basenames, no .sh) -----------------------------------
 # A: cargo-nextest (logic/argv/DTO, fake-backed canaries, KVM-free runtime).
 A=(
-  activation-helper-eval audio-argv-shape broker-default-features-build
+  activation-helper-eval broker-default-features-build
   broker-enum-disposition broker-export-audit broker-scm-rights-fd-lifecycle
-  broker-socket-acl broker-validate-bundle cgroup-delegation-oracle ch-argv-shape
+  broker-socket-acl broker-validate-bundle cgroup-delegation-oracle
   ch-net-handoff-canary cli-json cli-rust-native-audit cli-rust-native-auth-status
   cli-rust-native-host-check cli-rust-native-host-doctor cli-rust-native-list
   cli-rust-native-status cli-rust-native-usb cli-vm-verbs-eval daemon-metrics-eval
   daemon-socket-acl daemon-state-lock daemon-state-persistence
-  daemon-version-negotiation dag-topo device-node-matrix gpu-argv-shape
+  daemon-version-negotiation dag-topo device-node-matrix
   guest-control-proto guest-control-token-materializer guest-proto-bindings
   guest-static-elf guest-ttrpc-bindings host-prepare-idempotency
   host-prepare-network host-validate-verb-eval ifname-collision ioctl-negative
   kernel-module-matrix l1c-privilege-oracle manifest-fuzz-bounded
   manifest-v04-roundtrip minijail-version-check net-vm-bundle-gate-eval
   nft-coexistence nft-foreign-rule-preservation nixlingd-startup-smoke
-  otel-host-bridge-argv-shape path-safety-violation-fs pidfd-handoff
+  path-safety-violation-fs pidfd-handoff
   bridge-isolation-runtime runner-shape-preflight runner-shape-snapshot
-  rust-workspace-checks sidecar-argv-shape ssh-host-key-preflight-eval
-  stub-no-socket usbip-argv-shape usbip-firewall-skeleton
-  usbip-state-machine-eval video-argv-shape video-binary-contract
-  virtiofsd-argv-shape w6-argv-shape
+  rust-workspace-checks ssh-host-key-preflight-eval
+  stub-no-socket usbip-firewall-skeleton
+  usbip-state-machine-eval video-binary-contract
 )
+
+A_ARGV_RETIRED=(
+  audio-argv-shape ch-argv-shape gpu-argv-shape otel-host-bridge-argv-shape
+  sidecar-argv-shape usbip-argv-shape video-argv-shape virtiofsd-argv-shape
+  w6-argv-shape
+)
+A_ARGV_SUCCESSORS='["cargo nextest run --workspace --exclude nixling-contract-tests (argv #[test]s: audio_argv, ch_argv, gpu_argv, hardlink_farm, otel_host_bridge_argv, ssh_keygen, supervisor::state::reconcile_and_adopt, swtpm_argv, usbip_argv, video_argv, virtiofsd_argv, vsock_relay_argv)", "tests/tools/assert-pinned-tests.sh"]'
 
 # B: drift vs shipped committed artifact (xtask gen + git diff).
 B=(
@@ -162,6 +168,18 @@ contains_script() {
   local needle="$1" group_name="$2" item
   local -n group_ref="$group_name"
   for item in "${group_ref[@]}"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_retired_argv_script() {
+  local needle="$1" item
+  needle=${needle#tests/}
+  needle=${needle%.sh}
+  for item in "${A_ARGV_RETIRED[@]}"; do
     if [ "$item" = "$needle" ]; then
       return 0
     fi
@@ -266,11 +284,19 @@ detect_exercised_today() {
 
 status_for() {
   local rel="$1"
+  if is_retired_argv_script "$rel"; then
+    printf '%s' "retired"
+    return
+  fi
   printf '%s' "${existing_status[$rel]:-legacy}"
 }
 
 successors_for() {
   local rel="$1"
+  if is_retired_argv_script "$rel"; then
+    printf '%s' "$A_ARGV_SUCCESSORS"
+    return
+  fi
   printf '%s' "${existing_successors[$rel]:-[]}"
 }
 
@@ -327,12 +353,20 @@ self_check() {
       *) continue ;;
     esac
     [ -f "$ROOT/$rel" ] && continue
-    successors="${existing_successors[$rel]:-[]}"
+    successors=$(successors_for "$rel")
     if successors_empty "$successors"; then
       echo "RETIRED WITHOUT SUCCESSOR: $rel (set successor_ids before deleting the legacy script)" >&2
       fail=1
     else
       retired_count=$((retired_count + 1))
+    fi
+  done
+
+  for item in "${A_ARGV_RETIRED[@]}"; do
+    rel="tests/$item.sh"
+    if [ -f "$ROOT/$rel" ]; then
+      echo "RETIRED SCRIPT STILL EXISTS: $rel" >&2
+      fail=1
     fi
   done
 

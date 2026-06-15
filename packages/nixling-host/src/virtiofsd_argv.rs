@@ -278,10 +278,27 @@ mod tests {
         assert!(joined.contains("--readonly"));
     }
 
+    const VIRTIOFSD_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/virtiofsd-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        VIRTIOFSD_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn audit_ro_store_snapshot_line() {
         let argv = generate_virtiofsd_argv(&audit_ro_store_input()).unwrap();
-        println!("SNAPSHOT: {}", argv.join(" "));
+        let observed = argv.join(" ");
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "virtiofsd argv drifted from tests/golden/runner-shape/virtiofsd-argv-minimal.txt"
+        );
+        println!("SNAPSHOT: {observed}");
     }
 
     #[test]

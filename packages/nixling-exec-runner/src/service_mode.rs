@@ -606,7 +606,7 @@ mod tests {
     fn fast_cfg() -> SuperviseConfig {
         SuperviseConfig {
             poll_interval: Duration::from_millis(1),
-            grace: Duration::from_millis(8),
+            grace: Duration::from_millis(100),
         }
     }
 
@@ -724,6 +724,32 @@ mod tests {
     impl Clock for FixedClock {
         fn now_ms(&self) -> u64 {
             self.now.load(Ordering::SeqCst)
+        }
+    }
+
+    struct StepClock {
+        calls: AtomicU64,
+        first: u64,
+        rest: u64,
+    }
+
+    impl StepClock {
+        fn new(first: u64, rest: u64) -> Arc<Self> {
+            Arc::new(Self {
+                calls: AtomicU64::new(0),
+                first,
+                rest,
+            })
+        }
+    }
+
+    impl Clock for StepClock {
+        fn now_ms(&self) -> u64 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.first
+            } else {
+                self.rest
+            }
         }
     }
 
@@ -945,13 +971,6 @@ mod tests {
             stderr: Vec::new(),
             fail: false,
         };
-        let now = Arc::new(AtomicU64::new(0));
-        // Advance the clock past the 1s ceiling after a brief delay.
-        let now_writer = Arc::clone(&now);
-        let bump = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(5));
-            now_writer.store(2_000, Ordering::SeqCst);
-        });
         supervise(
             &spec("/bin/true", 1),
             &paths,
@@ -959,15 +978,12 @@ mod tests {
             Arc::new(FakeSignaller {
                 proc: Arc::clone(&proc),
             }),
-            Arc::new(FixedClock {
-                now: Arc::clone(&now),
-            }),
+            StepClock::new(0, 2_000),
             Arc::new(FlagCancel {
                 flag: Arc::new(AtomicBool::new(false)),
             }),
             &fast_cfg(),
         );
-        bump.join().unwrap();
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
         assert!(proc.signals().contains(&StopSignal::Term));
         std::fs::remove_dir_all(&dir).ok();

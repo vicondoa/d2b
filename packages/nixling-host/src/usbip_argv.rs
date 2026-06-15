@@ -337,16 +337,29 @@ mod tests {
         assert_eq!(argv[1], "unbind");
     }
 
-    /// USBIP byte-parity snapshot. Emits two SNAPSHOT lines in a stable
-    /// order (bind first, then unbind) consumed by
-    /// `tests/usbip-argv-shape.sh` against
-    /// `tests/golden/runner-shape/usbip-argv-minimal.txt`.
+    const USBIP_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/usbip-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        USBIP_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn argv_snapshot_lines() {
         let input = audit_input();
         let bind = generate_usbip_argv(&input, UsbipSubcommand::Bind).unwrap();
-        println!("SNAPSHOT: {}", bind.join(" "));
         let unbind = generate_usbip_argv(&input, UsbipSubcommand::Unbind).unwrap();
+        let observed = format!("{}\n{}", bind.join(" "), unbind.join(" "));
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "usbip argv drifted from tests/golden/runner-shape/usbip-argv-minimal.txt"
+        );
+        println!("SNAPSHOT: {}", bind.join(" "));
         println!("SNAPSHOT: {}", unbind.join(" "));
     }
 

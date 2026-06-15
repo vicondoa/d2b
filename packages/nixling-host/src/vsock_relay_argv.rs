@@ -578,8 +578,8 @@ mod tests {
         );
     }
 
-    /// SNAPSHOT printers consumed by a future shell harness mirroring
-    /// tests/virtiofsd-argv-shape.sh (one snapshot line per shape).
+    /// SNAPSHOT printers kept for ad-hoc diffs; golden parity is asserted
+    /// by the unit tests above.
     #[test]
     fn stack_vsock_in_snapshot_line() {
         let argv = generate_vsock_relay_argv(&audit_stack_vsock_in()).unwrap();

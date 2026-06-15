@@ -186,9 +186,6 @@ for gate in \
       static-invariant-deny-unknown-fields-w3)
         label="tests/host-schema-deny-unknown-fields.sh"
         ;;
-      w6-argv-shape)
-        label="tests/vsock-usbip-argv-shape.sh"
-        ;;
       *)
         label="tests/$gate.sh"
         ;;
@@ -229,11 +226,8 @@ for gate in \
   kernel-module-matrix-eval \
   minijail-version-check \
   runner-shape-preflight \
-  ch-argv-shape \
   dag-topo \
   video-contract-eval \
-  sidecar-argv-shape \
-  w6-argv-shape \
   device-node-matrix; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"

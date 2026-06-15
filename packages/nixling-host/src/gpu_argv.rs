@@ -122,9 +122,9 @@ pub enum GpuArgvError {
 ///   time by `context_type_string_is_json_safe`; `bool` fields
 ///   render as lowercase `true`/`false` via Rust `Display`.
 ///
-/// The full byte-level parity gate runs in
-/// `tests/sidecar-argv-shape.sh` via per-test substring asserts;
-/// it is intentionally NOT a byte-compare against the W0b audit
+/// The full byte-level parity gate runs in the pinned
+/// `gpu_argv` unit tests; it is intentionally NOT a byte-compare
+/// against the W0b audit
 /// fixture (the audit fixture is a snapshot of microvm.nix's
 /// runner shape and includes a `${runtime_args:-}` template
 /// expansion the daemon never emits).
@@ -251,16 +251,27 @@ mod tests {
         }
     }
 
-    /// Daemon-only snapshot for the byte-parity gate
-    /// (`tests/gpu-argv-shape.sh`). The single `SNAPSHOT:` line is
-    /// extracted by the gate and diffed against
-    /// `tests/golden/runner-shape/gpu-argv-minimal.txt`. Drift in
-    /// argv order, flag spelling, or `--params` JSON layout fails
-    /// the wave.
+    const GPU_ARGV_GOLDEN: &str =
+        include_str!("../../../tests/golden/runner-shape/gpu-argv-minimal.txt");
+
+    fn golden_payload() -> String {
+        GPU_ARGV_GOLDEN
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn daemon_input_snapshot_line() {
         let argv = generate_gpu_argv(&daemon_input()).unwrap();
-        println!("SNAPSHOT: {}", argv.join(" "));
+        let observed = argv.join(" ");
+        let expected = golden_payload();
+        assert_eq!(
+            observed, expected,
+            "gpu argv drifted from tests/golden/runner-shape/gpu-argv-minimal.txt"
+        );
+        println!("SNAPSHOT: {observed}");
     }
 
     #[test]

@@ -800,13 +800,11 @@ fi
 # in any CI workflow or aggregator;
 # wired here so ci-coverage.sh structural guard passes.
 for _d13_gate in \
-  audio-argv-shape \
   broker-socket-activation-eval \
   broker-systemd-unit-eval \
   cli-rust-native-host-doctor \
   daemon-autostart-eval \
   daemon-experimental-warning-eval \
-  gpu-argv-shape \
   host-prep-dag-eval \
   kernel-modules-parity-eval \
   loki-label-cardinality-eval \
@@ -825,7 +823,6 @@ for _d13_gate in \
   niri-vm-borders-eval \
   no-bash-exec-eval \
   otel-acl-migration-eval \
-  otel-host-bridge-argv-shape \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   processes-json-eval \
@@ -837,11 +834,9 @@ for _d13_gate in \
   stop-dag-reconcile-eval \
   supervisor-option-absent-eval \
   tap-dag-contract-doc-eval \
-  usbip-argv-shape \
   usbip-state-machine-eval \
   v1.1-kernel-floor-eval \
   vfsd-watchdog-retired-eval \
-  video-argv-shape \
   vm-submodule-cutover-eval \
   vm-submodule-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
@@ -1382,18 +1377,11 @@ if [ -x "$HERE/kernel-module-matrix-eval.sh" ]; then nl_static_parallel_script "
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
 if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tests/runner-shape-preflight.sh" "$HERE/runner-shape-preflight.sh"; fi
-# Gates: CH / virtiofsd / swtpm argv generators + DAG executor
-# + daemon state-persistence + [pending restart] machinery.
-if [ -x "$HERE/ch-argv-shape.sh" ]; then nl_static_parallel_script "tests/ch-argv-shape.sh" "$HERE/ch-argv-shape.sh"; fi
-if [ -x "$HERE/virtiofsd-argv-shape.sh" ]; then nl_static_parallel_script "tests/virtiofsd-argv-shape.sh" "$HERE/virtiofsd-argv-shape.sh"; fi
+# Gates: DAG executor + daemon state-persistence + [pending restart] machinery.
 # Layer-1 smoke for the nixling-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).
 if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-# GPU / audio / video sidecar argv generators.
-if [ -x "$HERE/sidecar-argv-shape.sh" ]; then nl_static_parallel_script "tests/sidecar-argv-shape.sh" "$HERE/sidecar-argv-shape.sh"; fi
-# Vsock-relay + USBIP argv generators.
-if [ -x "$HERE/w6-argv-shape.sh" ]; then nl_static_parallel_script "tests/w6-argv-shape.sh" "$HERE/w6-argv-shape.sh"; fi
 if [ -x "$HERE/minijail-version-check.sh" ]; then nl_static_parallel_script "tests/minijail-version-check.sh" "$HERE/minijail-version-check.sh"; fi
 if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
