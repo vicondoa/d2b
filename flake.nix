@@ -256,6 +256,7 @@
           cp ${bundle.privilegesJson.path} $out/privileges.json
           cp ${bundle.hostJson.path} $out/host.json
           cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.bundle.path} $out/bundle.json
           cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
         '';
         # Rust tests reach repo-level fixtures under tests/golden/
