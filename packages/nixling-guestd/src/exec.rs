@@ -1781,6 +1781,89 @@ mod tests {
     }
 
     #[test]
+    fn detached_and_tty_validators_ignore_wire_user_and_require_configured_user() {
+        // The detached and interactive-TTY validators MUST share the non-TTY
+        // validator's authorization contract: the wire `user` field is never
+        // consulted (no escalation to root or another user), a configured
+        // workload user authorizes, and a missing workload user / disabled
+        // policy fails closed.
+        let enabled_user = ExecPolicy {
+            enabled: true,
+            exec_user: Some("john".to_owned()),
+        };
+        let enabled_no_user = ExecPolicy {
+            enabled: true,
+            exec_user: None,
+        };
+        let disabled = ExecPolicy::disabled();
+
+        // Detached create input (detached=true, no interactive flags).
+        let detached_input = || {
+            let mut i = good_input();
+            i.detached = true;
+            i
+        };
+        // Interactive-TTY create input (tty=true, stdin open, terminal size).
+        let tty_input = || {
+            let mut i = good_input();
+            i.tty = true;
+            i.stdin_open = true;
+            i.has_terminal_size = true;
+            i
+        };
+
+        for (label, mk) in [
+            ("detached", &detached_input as &dyn Fn() -> ExecCreateInput),
+            ("tty", &tty_input as &dyn Fn() -> ExecCreateInput),
+        ] {
+            let validate = |input: &ExecCreateInput, policy: &ExecPolicy| {
+                if label == "detached" {
+                    validate_and_authorize_detached(input, policy)
+                } else {
+                    validate_and_authorize_tty(input, policy)
+                }
+            };
+
+            // Wire user = root is ignored: the configured workload user wins.
+            let mut root_req = mk();
+            root_req.user = Some("root".to_owned());
+            assert!(
+                validate(&root_req, &enabled_user).is_ok(),
+                "{label}: wire root user must be ignored, configured user authorizes"
+            );
+
+            // Wire user = some other name is ignored too.
+            let mut other_req = mk();
+            other_req.user = Some("alice".to_owned());
+            assert!(
+                validate(&other_req, &enabled_user).is_ok(),
+                "{label}: wire alice user must be ignored"
+            );
+
+            // Omitted wire user is fine — it is not consulted.
+            let mut omitted = mk();
+            omitted.user = None;
+            assert!(
+                validate(&omitted, &enabled_user).is_ok(),
+                "{label}: omitted wire user is fine"
+            );
+
+            // No configured workload user => fail closed.
+            assert_eq!(
+                validate(&mk(), &enabled_no_user),
+                Err(ExecError::ExecDisabled),
+                "{label}: missing workload user must fail closed"
+            );
+            // Disabled policy => fail closed.
+            assert_eq!(
+                validate(&mk(), &disabled),
+                Err(ExecError::ExecDisabled),
+                "{label}: disabled policy must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn validate_rejects_bad_command_shapes() {
         let policy = ExecPolicy {
             enabled: true,

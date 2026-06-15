@@ -292,6 +292,29 @@ pub struct CapabilitiesConfig {
     pub read_guest_file: bool,
 }
 
+/// Derive the advertised capability set from runtime presence.
+///
+/// Extracted as a pure function so the **`exec_attached` ⟺ `exec_logs`**
+/// invariant is locked by a unit test: every attached exec session streams
+/// stdout/stderr back via `ReadOutput`, so the host must never negotiate an
+/// attached session it cannot stream. Both flags are therefore gated on the
+/// SAME `exec_paths_present` input here, by construction — they can never
+/// diverge. Detached exec has no `-d` CLI surface in this build, so
+/// `exec_detached` is always `false`.
+fn derive_capabilities_config(
+    exec_paths_present: bool,
+    exec_tty: bool,
+    read_guest_file: bool,
+) -> CapabilitiesConfig {
+    CapabilitiesConfig {
+        exec_attached: exec_paths_present,
+        exec_detached: false,
+        exec_logs: exec_paths_present,
+        exec_tty,
+        read_guest_file,
+    }
+}
+
 pub fn build_runtime_auth_core(
     token: Vec<u8>,
     capabilities: CapabilitiesConfig,
@@ -362,19 +385,13 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
     }
     let exec: SharedExec = Arc::new(exec_runtime);
 
-    let capabilities = CapabilitiesConfig {
-        // Non-TTY attached exec is served iff the workload-user runtime paths
-        // are present.
-        exec_attached: exec_paths.is_some(),
-        // Detached exec is disabled in this build (no `-d` CLI surface yet).
-        exec_detached: false,
-        // The output capability (`ReadOutput`) is required by the host for
-        // every non-TTY attached exec to stream stdout/stderr, independent of
-        // detached. Advertise it whenever the attached runtime is present.
-        exec_logs: exec_paths.is_some(),
-        exec_tty: exec.tty_usable(),
-        read_guest_file: config.guest_config_path.is_some(),
-    };
+    let capabilities = derive_capabilities_config(
+        // Non-TTY attached exec (and its required ReadOutput streaming) is served
+        // iff the workload-user runtime paths are present.
+        exec_paths.is_some(),
+        exec.tty_usable(),
+        config.guest_config_path.is_some(),
+    );
 
     let auth = Arc::new(Mutex::new(build_runtime_auth_core(
         config.token,
@@ -1918,6 +1935,31 @@ mod tests {
         Arc::new(Mutex::new(
             build_runtime_auth_core(TEST_TOKEN.to_vec(), CapabilitiesConfig::default()).unwrap(),
         ))
+    }
+
+    #[test]
+    fn derive_capabilities_locks_attached_implies_output() {
+        // The host requires `ReadOutput` (EXEC_LOGS) for every attached exec, so
+        // `exec_attached` and `exec_logs` MUST be gated on the same runtime
+        // presence. Lock that they never diverge however the inputs vary.
+        for exec_paths_present in [false, true] {
+            for exec_tty in [false, true] {
+                for read_guest_file in [false, true] {
+                    let cfg =
+                        derive_capabilities_config(exec_paths_present, exec_tty, read_guest_file);
+                    assert_eq!(
+                        cfg.exec_attached, cfg.exec_logs,
+                        "exec_attached must imply exec_logs (and vice-versa)"
+                    );
+                    assert_eq!(cfg.exec_attached, exec_paths_present);
+                    assert_eq!(cfg.exec_logs, exec_paths_present);
+                    // Detached has no CLI surface in this build.
+                    assert!(!cfg.exec_detached);
+                    assert_eq!(cfg.exec_tty, exec_tty);
+                    assert_eq!(cfg.read_guest_file, read_guest_file);
+                }
+            }
+        }
     }
 
     fn test_exec() -> SharedExec {
