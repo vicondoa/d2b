@@ -11,7 +11,14 @@
 # real host-level `environment.etc`, then asserts with lib.hasInfix
 # (substring; robust across the multi-line KDL, unlike `builtins.match`
 # whose `.` does not span newlines).
-{ mkEval, lib, ... }:
+{ mkEval, lib, system, ... }:
+
+# niri window-rule generation requires a graphics VM, which the framework's
+# checkVmPlatform gate refuses on aarch64. The bash gate hardcoded
+# system = "x86_64-linux"; mirror that — contribute these cases only to the
+# x86_64-linux nix-unit check (the aarch64 check has no graphics coverage,
+# which is correct: graphics cannot run there).
+lib.optionalAttrs (system == "x86_64-linux") (
 
 let
   base = { lib, ... }: {
@@ -120,3 +127,4 @@ in
     expected = false;
   };
 }
+)
