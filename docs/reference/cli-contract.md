@@ -2269,13 +2269,17 @@ Modes:
 - **non-interactive** (default): stdin is closed up front; stdout and
   stderr are streamed back as separate streams and written to the host's
   stdout/stderr.
-- **`-i`/`--interactive`**: host stdin is forwarded to the guest command
+- **`-t`/`--tty`**: allocates a PTY **in the guest**, puts the host
+  terminal in raw mode for the session, and forwards host stdin to the
+  guest command (`-t` implies `-i`). stderr is merged into stdout by the
+  guest PTY. Requires stdin **and** stdout to be a terminal. Interactive
+  modes are human-only: `-t` (and `-i`) are rejected together with
+  `--json`.
+- **`-i`/`--interactive`**: forwards host stdin to the guest command
   (non-blocking, partial-write aware) until EOF, which closes the guest
-  stdin.
-- **`-t`/`--tty`**: allocates a PTY **in the guest** and puts the host
-  terminal in raw mode for the session (implies `-i`). stderr is merged
-  into stdout by the guest PTY. Requires stdin **and** stdout to be a
-  terminal. `-t` is human-only and is rejected together with `--json`.
+  stdin. The guest-control transport forwards stdin **only** in PTY
+  mode, so `-i` **must** be paired with `-t` (use `-it`); `-i` without
+  `-t` is a usage error.
 
 FSM (one session, one exec, no per-op reconnect): the CLI drains
 enqueued host signals, forwards ready stdin, then bounded-long-polls
@@ -2297,7 +2301,7 @@ guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`; `SIGTERM` → `15`;
 | --- | --- | --- |
 | `0`–`255` | guest | The guest command's `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | The guest command was killed by signal `N` (`WIFSIGNALED`). |
-| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, or `--json` combined with `-t`. |
+| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, `-i` without `-t`, or `--json` combined with `-i`/`-t`. |
 | `69` | transport | The guest-control transport was unreachable, or a per-op/establishment deadline elapsed (`guest-control-transport-unavailable`, `guest-control-timeout`). |
 | `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`). No SSH fallback. |
 | `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
