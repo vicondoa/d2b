@@ -157,6 +157,10 @@ deprecations ship one minor release before removal.
   in-process signal handler. Terminal records are retained for 30 minutes
   then garbage-collected; a running detached job is never reaped. guestd
   re-adopts live detached execs across a guestd restart within one boot.
+  This is the guest-side detached substrate only; the operator
+  `nixling vm exec` CLI does not expose detached mode in this release (the
+  daemon owner handler rejects `detached=true`), so detached exec is not
+  reachable from the CLI yet.
 
 - `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
   discovery call that enumerates the caller's detached execs for the same
@@ -232,11 +236,9 @@ deprecations ship one minor release before removal.
   produces daemon-local health evidence only; it does not replace SSH readiness
   or enable exec.
 
-- Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
-  now validate exec allowlist defaults: generic exec is off by default, root
-  exec is separately denied by default, and non-root users must be explicitly
-  listed. This is dormant policy wiring only; no exec runtime/CLI behavior is
-  enabled by these options yet.
+- Guest exec policy option `nixling.vms.<vm>.guest.exec.enable` gates guest
+  exec (off by default). This is dormant policy wiring only; no exec
+  runtime/CLI behavior is enabled by this option yet.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and

@@ -60,11 +60,14 @@ argv as root.
    `exec`-ing the workload, giving `WAYLAND_DISPLAY`; the PAM login session
    gives `XDG_RUNTIME_DIR`.
 
-3. **Interactive `-it` runs the workload login shell on guestd's PTY.** The
-   PTY is allocated by guestd (as before) and the login session runs on it.
-   `vm exec -it <vm>` opens the workload login shell (the `vm konsole`
-   replacement); an explicit command combined with `-it` is rejected with a
-   clear message.
+3. **Interactive `-it` runs the requested command on guestd's PTY under the
+   workload login session.** Like every exec, `-it` requires an explicit
+   command after `--` (the CLI rejects an empty command); it runs that
+   command on a guestd-allocated PTY inside the workload login session. The
+   `vm konsole` replacement is therefore `nixling vm exec -it <vm> -- <shell>`
+   (e.g. `-- bash`), which gives an interactive login shell with
+   `XDG_RUNTIME_DIR`/`WAYLAND_DISPLAY`/the login profile. (`-i` without `-t`
+   is rejected, since guestd forwards stdin only in PTY mode.)
 
 4. **Guestd stays the supervisor; teardown SIGKILLs the named unit's
    cgroup.** The workload runs in a PID 1-owned transient unit, **not** in the
@@ -99,5 +102,5 @@ argv as root.
   the per-VM manifest contract.
 - The named-unit `systemctl kill` teardown is the load-bearing guarantee that
   a disconnect or cancel cannot strand a workload; it is covered by hermetic
-  unit tests (argv exactness + retry-once) and by the W19 live-host validation
+  unit tests (argv exactness + retry-once) and by the live-host validation
   (disconnect a `sleep 3600` and confirm it is gone).
