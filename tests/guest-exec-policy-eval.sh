@@ -32,6 +32,7 @@ eval_fail() {
 
 eval_ok enabled
 eval_ok default
+eval_ok control-no-exec
 eval_ok detached-ceiling
 eval_ok interactive-ceiling
 

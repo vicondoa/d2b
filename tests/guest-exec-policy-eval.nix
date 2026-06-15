@@ -23,6 +23,13 @@ let
       sshUser = "alice";
       exec = { };
     };
+    # Guest-control enabled, but the `guest.exec` block omitted entirely: exec
+    # must default OFF and no exec wiring may leak into the guestd ExecStart.
+    control-no-exec = {
+      controlEnable = true;
+      sshUser = "alice";
+      exec = { };
+    };
     detached-ceiling = {
       controlEnable = true;
       sshUser = "alice";
@@ -192,6 +199,27 @@ let
       execUser = corpGuest.nixling.guestControl.exec.execUser;
     };
 
+  positiveControlNoExec =
+    # Control enabled but the `guest.exec` block omitted: exec defaults OFF.
+    assert corpGuest.nixling.guestControl.enable == true;
+    assert corpGuest.nixling.guestControl.exec.enable == false;
+    # guestd IS emitted (the control plane is up), but with NO exec wiring.
+    assert builtins.hasAttr "nixling-guestd" corpGuest.systemd.services;
+    assert !(lib.hasInfix "--exec-enable" guestdExecStart);
+    assert !(lib.hasInfix "--exec-user" guestdExecStart);
+    assert !(lib.hasInfix "--systemd-run-path" guestdExecStart);
+    assert !(lib.hasInfix "--exec-runner-path" guestdExecStart);
+    # No root-exec flag is ever emitted.
+    assert !(lib.hasInfix "--exec-allow-root" guestdExecStart);
+    # The detached runtime substrate is not declared when exec is disabled.
+    assert !guestHasExecSlice;
+    assert !guestHasRunDir;
+    builtins.toJSON {
+      scenario = "control-no-exec";
+      controlEnable = corpGuest.nixling.guestControl.enable;
+      execEnable = corpGuest.nixling.guestControl.exec.enable;
+    };
+
   positiveDetachedCeiling =
     assert corpGuest.nixling.guestControl.exec.enable == true;
     assert corpGuest.nixling.guestControl.exec.detachedMaxRuntimeSec == 3600;
@@ -215,6 +243,8 @@ if scenario == "enabled" then
   positiveEnabled
 else if scenario == "default" then
   positiveDefault
+else if scenario == "control-no-exec" then
+  positiveControlNoExec
 else if scenario == "detached-ceiling" then
   positiveDetachedCeiling
 else if scenario == "interactive-ceiling" then
