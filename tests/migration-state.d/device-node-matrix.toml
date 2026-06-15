@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
