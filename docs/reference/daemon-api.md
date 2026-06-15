@@ -137,11 +137,11 @@ names are rejected during deserialization.
 | `UsbipUnbindCliRequest` | struct | [`UsbipUnbindCliRequest`](../../packages/nixling-ipc/src/public_wire.rs#L253) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
 | `StoreVerifyRequest` | struct | [`StoreVerifyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L262) | struct { `vm`: `String`; `repair`: `bool` } |
 | `ReadGuestConfigRequest` | struct | [`ReadGuestConfigRequest`](../../packages/nixling-ipc/src/public_wire.rs#L275) | struct { `vm`: `String` } |
-| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L934) | struct { `flags`: `MutationFlags` } |
-| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/nixling-ipc/src/public_wire.rs#L941) | struct { `flags`: `MutationFlags` } |
-| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L948) | struct { `flags`: `MutationFlags` } |
-| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/nixling-ipc/src/public_wire.rs#L955) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
-| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/nixling-ipc/src/public_wire.rs#L973) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
+| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/nixling-ipc/src/public_wire.rs#L944) | struct { `flags`: `MutationFlags` } |
+| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/nixling-ipc/src/public_wire.rs#L951) | struct { `flags`: `MutationFlags` } |
+| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/nixling-ipc/src/public_wire.rs#L958) | struct { `flags`: `MutationFlags` } |
+| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/nixling-ipc/src/public_wire.rs#L965) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
+| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/nixling-ipc/src/public_wire.rs#L983) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
 
 ### Broker socket request types
 
@@ -205,17 +205,17 @@ names are rejected during deserialization.
 | --- | --- | --- | --- |
 | `PublicResponse` | enum | [`PublicResponse`](../../packages/nixling-ipc/src/public_wire.rs#L102) | `Capabilities` — (CapabilitiesResponse); `AuthStatus` — (AuthStatusResponse); `List` — (ListResponse); `Status` — (StatusResponse); `Audit` — (AuditResponse); `HostCheck` — (HostCheckResponse); `KeysList` — (KeysListResponse); `KeysShow` — (KeysShowResponse); `UsbipProbe` — (UsbipProbeResponse); `StoreVerify` — (StoreVerifyResponse); `MutatingVerb` — (MutatingVerbResponse); `ReadGuestConfig` — (ReadGuestConfigResponse); `Exec` — (ExecOpResponse); `Error` — (Error) |
 | `ReadGuestConfigResponse` | struct | [`ReadGuestConfigResponse`](../../packages/nixling-ipc/src/public_wire.rs#L287) | struct { `content_base64`: `String` } |
-| `ExecOpResponse` | enum | [`ExecOpResponse`](../../packages/nixling-ipc/src/public_wire.rs#L917) | `Start` — (ExecStartResult); `DetachedCreate` — (ExecDetachedCreateResult); `WriteStdin` — (ExecWriteStdinResult); `ReadOutput` — (ExecReadOutputResult); `Signal` — (ExecControlResult); `Resize` — (ExecControlResult); `Wait` — (ExecWaitResult); `Close` — (ExecCloseResult); `List` — (ExecDetachedListResult); `Logs` — (ExecDetachedLogsResult); `Status` — (ExecDetachedStatusResult); `Kill` — (ExecDetachedKillResult) |
-| `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1007) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
-| `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1033) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
-| `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1043) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
-| `ListResponse` | struct | [`ListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1052) | struct { `vms`: `Vec<ListEntry>` } |
-| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1058) | struct { `vm`: `VmStatus` } |
-| `AuditResponse` | struct | [`AuditResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1064) | struct { `entries`: `Vec<AuditEntry>` } |
-| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1070) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
-| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1088) | struct { `entries`: `Vec<KeyEntry>` } |
-| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1094) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
-| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1125) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
+| `ExecOpResponse` | enum | [`ExecOpResponse`](../../packages/nixling-ipc/src/public_wire.rs#L927) | `Start` — (ExecStartResult); `DetachedCreate` — (ExecDetachedCreateResult); `WriteStdin` — (ExecWriteStdinResult); `ReadOutput` — (ExecReadOutputResult); `Signal` — (ExecControlResult); `Resize` — (ExecControlResult); `Wait` — (ExecWaitResult); `Close` — (ExecCloseResult); `List` — (ExecDetachedListResult); `Logs` — (ExecDetachedLogsResult); `Status` — (ExecDetachedStatusResult); `Kill` — (ExecDetachedKillResult) |
+| `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1017) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
+| `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1043) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
+| `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1053) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
+| `ListResponse` | struct | [`ListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1062) | struct { `vms`: `Vec<ListEntry>` } |
+| `StatusResponse` | struct | [`StatusResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1068) | struct { `vm`: `VmStatus` } |
+| `AuditResponse` | struct | [`AuditResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1074) | struct { `entries`: `Vec<AuditEntry>` } |
+| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1080) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
+| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1098) | struct { `entries`: `Vec<KeyEntry>` } |
+| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1104) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
+| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/nixling-ipc/src/public_wire.rs#L1135) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
 
 ### Broker socket response types
 
@@ -270,7 +270,7 @@ state-machine node.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-ipc/src/public_wire.rs#L1205) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/nixling-ipc/src/public_wire.rs#L1215) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -311,14 +311,14 @@ state-machine node.
 | `ExecCancelReason` | enum | [`ExecCancelReason`](../../packages/nixling-ipc/src/guest_wire.rs#L999) | `ClientDisconnect`; `UserRequested`; `SlowConsumer`; `ProtocolError` |
 | `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/nixling-ipc/src/lib.rs#L146) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit` |
 | `ExecStream` | enum | [`ExecStream`](../../packages/nixling-ipc/src/public_wire.rs#L301) | `Stdout`; `Stderr` |
-| `ExecOp` | enum | [`ExecOp`](../../packages/nixling-ipc/src/public_wire.rs#L582) | `Start` — (ExecStartArgs); `WriteStdin` — (ExecWriteStdinArgs); `ReadOutput` — (ExecReadOutputArgs); `Signal` — (ExecSignalArgs); `Resize` — (ExecResizeArgs); `Wait` — (ExecWaitArgs); `Close` — (ExecCloseArgs); `List` — (ExecDetachedListArgs); `Logs` — (ExecDetachedLogsArgs); `Status` — (ExecDetachedStatusArgs); `Kill` — (ExecDetachedKillArgs) |
-| `ExecTerminalStatus` | enum | [`ExecTerminalStatus`](../../packages/nixling-ipc/src/public_wire.rs#L698) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
-| `ExecDetachedKillOutcome` | enum | [`ExecDetachedKillOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L889) | `Cancelling`; `AlreadyTerminal` |
-| `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L1022) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
-| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-ipc/src/public_wire.rs#L1106) | `Bound`; `Unbound` |
-| `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-ipc/src/public_wire.rs#L1139) | `Human`; `Json` |
-| `AuthRole` | enum | [`AuthRole`](../../packages/nixling-ipc/src/public_wire.rs#L1147) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1241) | `Pass`; `Warn`; `Fail` |
+| `ExecOp` | enum | [`ExecOp`](../../packages/nixling-ipc/src/public_wire.rs#L592) | `Start` — (ExecStartArgs); `WriteStdin` — (ExecWriteStdinArgs); `ReadOutput` — (ExecReadOutputArgs); `Signal` — (ExecSignalArgs); `Resize` — (ExecResizeArgs); `Wait` — (ExecWaitArgs); `Close` — (ExecCloseArgs); `List` — (ExecDetachedListArgs); `Logs` — (ExecDetachedLogsArgs); `Status` — (ExecDetachedStatusArgs); `Kill` — (ExecDetachedKillArgs) |
+| `ExecTerminalStatus` | enum | [`ExecTerminalStatus`](../../packages/nixling-ipc/src/public_wire.rs#L708) | `Exited` — struct { `code`: `i32` }; `Signaled` — struct { `signal`: `u32` }; `Error` — struct { `slug`: `String` } |
+| `ExecDetachedKillOutcome` | enum | [`ExecDetachedKillOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L899) | `Cancelling`; `AlreadyTerminal` |
+| `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/nixling-ipc/src/public_wire.rs#L1032) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
+| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/nixling-ipc/src/public_wire.rs#L1116) | `Bound`; `Unbound` |
+| `AuditFormat` | enum | [`AuditFormat`](../../packages/nixling-ipc/src/public_wire.rs#L1149) | `Human`; `Json` |
+| `AuthRole` | enum | [`AuthRole`](../../packages/nixling-ipc/src/public_wire.rs#L1157) | `None`; `Launcher`; `Admin` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/nixling-ipc/src/public_wire.rs#L1251) | `Pass`; `Warn`; `Fail` |
 | `PathClass` | enum | [`PathClass`](../../packages/nixling-ipc/src/types.rs#L115) | `Vm`; `Runtime` |
 <!-- END AUTO-GENERATED: enum-variants -->
 

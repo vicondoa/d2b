@@ -9241,8 +9241,17 @@ mod detached_exec_routing_tests {
                     },
                 ))
             }
-            exec_detached::DetachedTestRequest::Logs { vm, exec_id } => {
+            exec_detached::DetachedTestRequest::Logs {
+                vm,
+                exec_id,
+                stdout_offset,
+                stderr_offset,
+                max_len,
+            } => {
                 assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                assert_eq!(stdout_offset, None);
+                assert_eq!(stderr_offset, None);
+                assert_eq!(max_len, None);
                 Ok(exec_detached::DetachedTestResponse::Logs(
                     ExecDetachedLogsResult {
                         exec_id,
@@ -9336,6 +9345,9 @@ mod detached_exec_routing_tests {
             wire::Request::Exec(ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
                 vm: "work".to_owned(),
                 exec_id: "exec-1".to_owned(),
+                stdout_offset: None,
+                stderr_offset: None,
+                max_len: None,
             })),
         )
         .expect("logs dispatch succeeds");
@@ -9490,6 +9502,9 @@ mod detached_exec_routing_tests {
             ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
                 vm: "work".to_owned(),
                 exec_id: "exec-1".to_owned(),
+                stdout_offset: None,
+                stderr_offset: None,
+                max_len: None,
             }),
             ExecOp::Status(public_wire::ExecDetachedStatusArgs {
                 vm: "work".to_owned(),

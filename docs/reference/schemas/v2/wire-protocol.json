@@ -2467,7 +2467,7 @@
       "additionalProperties": false
     },
     "ExecDetachedLogsArgs": {
-      "description": "`Logs` op args for one detached exec. The daemon fetches retained stdout and stderr bytes and returns them in one redacted-debug response.",
+      "description": "`Logs` op args for one detached exec. The daemon fetches retained stdout and stderr bytes, optionally resuming each stream from a caller-provided byte cursor, and returns them in one redacted-debug response.",
       "type": "object",
       "required": [
         "execId",
@@ -2476,6 +2476,30 @@
       "properties": {
         "execId": {
           "type": "string"
+        },
+        "maxLen": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
         },
         "vm": {
           "type": "string"

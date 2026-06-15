@@ -541,12 +541,19 @@ impl fmt::Debug for ExecDetachedStatusArgs {
 }
 
 /// `Logs` op args for one detached exec. The daemon fetches retained stdout
-/// and stderr bytes and returns them in one redacted-debug response.
+/// and stderr bytes, optionally resuming each stream from a caller-provided
+/// byte cursor, and returns them in one redacted-debug response.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecDetachedLogsArgs {
     pub vm: String,
     pub exec_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_len: Option<u64>,
 }
 
 impl fmt::Debug for ExecDetachedLogsArgs {
@@ -554,6 +561,9 @@ impl fmt::Debug for ExecDetachedLogsArgs {
         f.debug_struct("ExecDetachedLogsArgs")
             .field("vm", &self.vm)
             .field("exec_id", &self.exec_id)
+            .field("has_stdout_offset", &self.stdout_offset.is_some())
+            .field("has_stderr_offset", &self.stderr_offset.is_some())
+            .field("has_max_len", &self.max_len.is_some())
             .finish()
     }
 }
@@ -1447,6 +1457,9 @@ mod tests {
         let detached_logs = ExecDetachedLogsArgs {
             vm: "corp-vm".to_owned(),
             exec_id: "exec-0001".to_owned(),
+            stdout_offset: Some(64),
+            stderr_offset: Some(96),
+            max_len: Some(4096),
         };
         assert_clean(&format!("{detached_logs:?}"), "ExecDetachedLogsArgs");
         assert_clean(

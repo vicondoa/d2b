@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use nixling_core::base64_codec;
 use nixling_ipc::guest_proto as pb;
 use nixling_ipc::guest_wire::ExecState as PublicExecState;
@@ -25,7 +26,7 @@ use crate::guest_control_bridge::{
     VMADDR_CID_HOST,
 };
 use crate::guest_control_health::{
-    probe_guest_control_health, AttemptBudget, TtrpcGuestControlClient,
+    probe_guest_control_health, AttemptBudget, GuestControlHealthError, TtrpcGuestControlClient,
 };
 use crate::typed_error::TypedError;
 use crate::{
@@ -47,9 +48,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 enum DetachedRealRequest {
     Create(ExecStartSpec),
     List,
-    Status { exec_id: String },
-    Logs { exec_id: String },
-    Kill { exec_id: String },
+    Status {
+        exec_id: String,
+    },
+    Logs {
+        exec_id: String,
+        stdout_offset: Option<u64>,
+        stderr_offset: Option<u64>,
+        max_len: Option<u64>,
+    },
+    Kill {
+        exec_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -80,6 +90,9 @@ pub(crate) enum DetachedTestRequest {
     Logs {
         vm: String,
         exec_id: String,
+        stdout_offset: Option<u64>,
+        stderr_offset: Option<u64>,
+        max_len: Option<u64>,
     },
     Kill {
         vm: String,
@@ -231,6 +244,9 @@ pub(crate) fn logs(
     if let Some(result) = test_hook(DetachedTestRequest::Logs {
         vm: args.vm.clone(),
         exec_id: args.exec_id.clone(),
+        stdout_offset: args.stdout_offset,
+        stderr_offset: args.stderr_offset,
+        max_len: args.max_len,
     }) {
         return match result? {
             DetachedTestResponse::Logs(response) => Ok(response),
@@ -245,6 +261,9 @@ pub(crate) fn logs(
         &args.vm,
         DetachedRealRequest::Logs {
             exec_id: args.exec_id.clone(),
+            stdout_offset: args.stdout_offset,
+            stderr_offset: args.stderr_offset,
+            max_len: args.max_len,
         },
     )? {
         DetachedRealResponse::Logs(response) => Ok(response),
@@ -314,8 +333,13 @@ fn run_real(
                     .exec_status(&exec_id)
                     .await
                     .map(DetachedRealResponse::Status),
-                DetachedRealRequest::Logs { exec_id } => client
-                    .exec_logs(&exec_id)
+                DetachedRealRequest::Logs {
+                    exec_id,
+                    stdout_offset,
+                    stderr_offset,
+                    max_len,
+                } => client
+                    .exec_logs(&exec_id, stdout_offset, stderr_offset, max_len)
                     .await
                     .map(DetachedRealResponse::Logs),
                 DetachedRealRequest::Kill { exec_id } => client
@@ -337,14 +361,93 @@ fn internal_error(detail: impl Into<String>) -> TypedError {
     }
 }
 
-struct DetachedClient {
-    client: TtrpcGuestControlClient,
+#[async_trait]
+trait DetachedGuestControlRpc: Send + Sync {
+    async fn exec_create(
+        &self,
+        request: pb::ExecCreateRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecCreateResponse, GuestControlHealthError>;
+
+    async fn exec_list(
+        &self,
+        request: pb::ExecListRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecListResponse, GuestControlHealthError>;
+
+    async fn exec_inspect(
+        &self,
+        request: pb::ExecInspectRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecInspectResponse, GuestControlHealthError>;
+
+    async fn exec_logs(
+        &self,
+        request: pb::ExecLogsRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecLogsResponse, GuestControlHealthError>;
+
+    async fn exec_cancel(
+        &self,
+        request: pb::ExecCancelRequest,
+        timeout: Duration,
+    ) -> Result<pb::ControlAck, GuestControlHealthError>;
+}
+
+#[async_trait]
+impl DetachedGuestControlRpc for TtrpcGuestControlClient {
+    async fn exec_create(
+        &self,
+        request: pb::ExecCreateRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecCreateResponse, GuestControlHealthError> {
+        self.unary_with_timeout("ExecCreate", request, timeout)
+            .await
+    }
+
+    async fn exec_list(
+        &self,
+        request: pb::ExecListRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecListResponse, GuestControlHealthError> {
+        self.unary_with_timeout("ExecList", request, timeout).await
+    }
+
+    async fn exec_inspect(
+        &self,
+        request: pb::ExecInspectRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecInspectResponse, GuestControlHealthError> {
+        self.unary_with_timeout("ExecInspect", request, timeout)
+            .await
+    }
+
+    async fn exec_logs(
+        &self,
+        request: pb::ExecLogsRequest,
+        timeout: Duration,
+    ) -> Result<pb::ExecLogsResponse, GuestControlHealthError> {
+        self.unary_with_timeout("ExecLogs", request, timeout).await
+    }
+
+    async fn exec_cancel(
+        &self,
+        request: pb::ExecCancelRequest,
+        timeout: Duration,
+    ) -> Result<pb::ControlAck, GuestControlHealthError> {
+        self.unary_with_timeout("ExecCancel", request, timeout)
+            .await
+    }
+}
+
+struct DetachedClient<C = TtrpcGuestControlClient> {
+    client: C,
     vm_id: String,
     guest_boot_id: String,
     deadlines: ExecOpDeadlines,
 }
 
-impl DetachedClient {
+impl DetachedClient<TtrpcGuestControlClient> {
     async fn connect(params: ProbeParams, broker_socket: PathBuf) -> Result<Self, ExecOpError> {
         let budget = AttemptBudget::from_now(
             exec_session_real::ESTABLISH_TIMEOUT,
@@ -369,7 +472,12 @@ impl DetachedClient {
             deadlines: ExecOpDeadlines::default(),
         })
     }
+}
 
+impl<C> DetachedClient<C>
+where
+    C: DetachedGuestControlRpc,
+{
     async fn exec_create(
         &self,
         spec: &ExecStartSpec,
@@ -377,7 +485,7 @@ impl DetachedClient {
         let request = exec_session_real::build_exec_create_request(&self.vm_id, spec);
         let response: pb::ExecCreateResponse = self
             .client
-            .unary_with_timeout("ExecCreate", request, DETACHED_CREATE_DEADLINE)
+            .exec_create(request, DETACHED_CREATE_DEADLINE)
             .await
             .map_err(exec_session_real::map_op_health_error)?;
         check_response_error(response.error.as_ref())?;
@@ -393,7 +501,7 @@ impl DetachedClient {
         request.guest_boot_id = self.guest_boot_id.clone();
         let response: pb::ExecListResponse = self
             .client
-            .unary_with_timeout("ExecList", request, self.deadlines.control)
+            .exec_list(request, self.deadlines.control)
             .await
             .map_err(exec_session_real::map_op_health_error)?;
         check_response_error(response.error.as_ref())?;
@@ -410,17 +518,26 @@ impl DetachedClient {
         map_status_response(exec_id, &response)
     }
 
-    async fn exec_logs(&self, exec_id: &str) -> Result<ExecDetachedLogsResult, ExecOpError> {
+    async fn exec_logs(
+        &self,
+        exec_id: &str,
+        stdout_offset: Option<u64>,
+        stderr_offset: Option<u64>,
+        max_len: Option<u64>,
+    ) -> Result<ExecDetachedLogsResult, ExecOpError> {
         let inspect = self.inspect(exec_id).await?;
         let stdout_window =
             stream_window_from_inspect(&inspect, pb::OutputStream::OUTPUT_STREAM_STDOUT);
         let stderr_window =
             stream_window_from_inspect(&inspect, pb::OutputStream::OUTPUT_STREAM_STDERR);
+        let max_len = requested_log_max_len(max_len);
         let stdout = self
             .read_retained_log_stream(
                 exec_id,
                 pb::OutputStream::OUTPUT_STREAM_STDOUT,
                 stdout_window,
+                stdout_offset,
+                max_len,
             )
             .await?;
         let stderr = self
@@ -428,6 +545,8 @@ impl DetachedClient {
                 exec_id,
                 pb::OutputStream::OUTPUT_STREAM_STDERR,
                 stderr_window,
+                stderr_offset,
+                max_len,
             )
             .await?;
         Ok(map_logs_result(exec_id, &stdout, &stderr))
@@ -452,7 +571,7 @@ impl DetachedClient {
             EnumOrUnknown::new(pb::ExecCancelReason::EXEC_CANCEL_REASON_USER_REQUESTED);
         let response: pb::ControlAck = self
             .client
-            .unary_with_timeout("ExecCancel", request, DETACHED_CANCEL_DEADLINE)
+            .exec_cancel(request, DETACHED_CANCEL_DEADLINE)
             .await
             .map_err(exec_session_real::map_op_health_error)?;
         if let Some(error) = response.error.as_ref() {
@@ -498,7 +617,7 @@ impl DetachedClient {
             MessageField::some(self.exec_metadata(exec_id, "guest-control-exec-status"));
         let response: pb::ExecInspectResponse = self
             .client
-            .unary_with_timeout("ExecInspect", request, self.deadlines.control)
+            .exec_inspect(request, self.deadlines.control)
             .await
             .map_err(exec_session_real::map_op_health_error)?;
         check_response_error(response.error.as_ref())?;
@@ -510,16 +629,17 @@ impl DetachedClient {
         exec_id: &str,
         stream: pb::OutputStream,
         offset: u64,
+        max_len: u64,
     ) -> Result<pb::ExecLogsResponse, LogReadError> {
         let mut request = pb::ExecLogsRequest::new();
         request.metadata =
             MessageField::some(self.exec_metadata(exec_id, "guest-control-exec-logs"));
         request.stream = EnumOrUnknown::new(stream);
         request.offset = offset;
-        request.max_len = public_wire::EXEC_MAX_CHUNK_BYTES;
+        request.max_len = max_len;
         let response: pb::ExecLogsResponse = self
             .client
-            .unary_with_timeout("ExecLogs", request, self.deadlines.control)
+            .exec_logs(request, self.deadlines.control)
             .await
             .map_err(exec_session_real::map_op_health_error)
             .map_err(LogReadError::Op)?;
@@ -540,13 +660,24 @@ impl DetachedClient {
         exec_id: &str,
         stream: pb::OutputStream,
         mut window: RetainedStreamWindow,
+        requested_offset: Option<u64>,
+        max_len: u64,
     ) -> Result<pb::ExecLogsResponse, ExecOpError> {
         for _ in 0..2 {
+            let effective_offset = requested_log_offset(requested_offset, window);
             match self
-                .read_log_stream(exec_id, stream, window.start_offset)
+                .read_log_stream(exec_id, stream, effective_offset, max_len)
                 .await
             {
-                Ok(response) => return Ok(response),
+                Ok(mut response) => {
+                    apply_retention_window(
+                        &mut response,
+                        window,
+                        requested_offset,
+                        effective_offset,
+                    );
+                    return Ok(response);
+                }
                 Err(LogReadError::OffsetExpired) => {
                     let inspect = self.inspect(exec_id).await?;
                     window = stream_window_from_inspect(&inspect, stream);
@@ -554,7 +685,9 @@ impl DetachedClient {
                 Err(LogReadError::Op(error)) => return Err(error),
             }
         }
-        Ok(empty_retained_log_stream(stream, window))
+        let mut response = empty_retained_log_stream(stream, window);
+        apply_retention_window(&mut response, window, requested_offset, window.start_offset);
+        Ok(response)
     }
 
     fn exec_metadata(&self, exec_id: &str, request_id: &str) -> pb::ExecRequestMetadata {
@@ -609,6 +742,45 @@ fn is_guest_error_kind(error: &pb::GuestControlError, expected: pb::GuestControl
 enum LogReadError {
     OffsetExpired,
     Op(ExecOpError),
+}
+
+fn requested_log_max_len(max_len: Option<u64>) -> u64 {
+    max_len
+        .unwrap_or(public_wire::EXEC_MAX_CHUNK_BYTES)
+        .clamp(1, public_wire::EXEC_MAX_CHUNK_BYTES)
+}
+
+fn requested_log_offset(requested_offset: Option<u64>, window: RetainedStreamWindow) -> u64 {
+    requested_offset
+        .unwrap_or(window.start_offset)
+        .max(window.start_offset)
+}
+
+fn apply_retention_window(
+    response: &mut pb::ExecLogsResponse,
+    window: RetainedStreamWindow,
+    requested_offset: Option<u64>,
+    effective_offset: u64,
+) {
+    response.offset = effective_offset;
+    response.start_offset = response.start_offset.max(window.start_offset);
+    response.end_offset = response.end_offset.max(window.end_offset);
+    response.next_offset = response.next_offset.max(effective_offset);
+
+    if window.truncated {
+        response.truncated = true;
+        response.dropped_bytes = response.dropped_bytes.max(window.dropped_bytes);
+    }
+
+    if let Some(requested_offset) = requested_offset {
+        if requested_offset < window.start_offset {
+            response.truncated = true;
+            response.dropped_bytes = response
+                .dropped_bytes
+                .max(window.dropped_bytes)
+                .max(window.start_offset - requested_offset);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -842,7 +1014,242 @@ fn map_list_entry(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::sync::Arc;
+
     use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedCall {
+        method: &'static str,
+        timeout: Duration,
+        stream: Option<pb::OutputStream>,
+        offset: Option<u64>,
+        max_len: Option<u64>,
+    }
+
+    #[derive(Debug)]
+    enum FakeResponse {
+        Create(pb::ExecCreateResponse),
+        List(pb::ExecListResponse),
+        Inspect(pb::ExecInspectResponse),
+        Logs(pb::ExecLogsResponse),
+        Cancel(pb::ControlAck),
+    }
+
+    struct FakeDetachedRpc {
+        responses: Mutex<VecDeque<FakeResponse>>,
+        calls: Arc<Mutex<Vec<RecordedCall>>>,
+    }
+
+    impl FakeDetachedRpc {
+        fn new(responses: Vec<FakeResponse>, calls: Arc<Mutex<Vec<RecordedCall>>>) -> Self {
+            Self {
+                responses: Mutex::new(VecDeque::from(responses)),
+                calls,
+            }
+        }
+
+        fn record(
+            &self,
+            method: &'static str,
+            timeout: Duration,
+            stream: Option<pb::OutputStream>,
+            offset: Option<u64>,
+            max_len: Option<u64>,
+        ) {
+            self.calls
+                .lock()
+                .expect("recorded call lock")
+                .push(RecordedCall {
+                    method,
+                    timeout,
+                    stream,
+                    offset,
+                    max_len,
+                });
+        }
+
+        fn pop(&self, method: &str) -> FakeResponse {
+            self.responses
+                .lock()
+                .expect("fake response lock")
+                .pop_front()
+                .unwrap_or_else(|| panic!("missing fake response for {method}"))
+        }
+    }
+
+    #[async_trait]
+    impl DetachedGuestControlRpc for FakeDetachedRpc {
+        async fn exec_create(
+            &self,
+            _request: pb::ExecCreateRequest,
+            timeout: Duration,
+        ) -> Result<pb::ExecCreateResponse, GuestControlHealthError> {
+            self.record("ExecCreate", timeout, None, None, None);
+            match self.pop("ExecCreate") {
+                FakeResponse::Create(response) => Ok(response),
+                other => panic!("unexpected fake response for ExecCreate: {other:?}"),
+            }
+        }
+
+        async fn exec_list(
+            &self,
+            _request: pb::ExecListRequest,
+            timeout: Duration,
+        ) -> Result<pb::ExecListResponse, GuestControlHealthError> {
+            self.record("ExecList", timeout, None, None, None);
+            match self.pop("ExecList") {
+                FakeResponse::List(response) => Ok(response),
+                other => panic!("unexpected fake response for ExecList: {other:?}"),
+            }
+        }
+
+        async fn exec_inspect(
+            &self,
+            _request: pb::ExecInspectRequest,
+            timeout: Duration,
+        ) -> Result<pb::ExecInspectResponse, GuestControlHealthError> {
+            self.record("ExecInspect", timeout, None, None, None);
+            match self.pop("ExecInspect") {
+                FakeResponse::Inspect(response) => Ok(response),
+                other => panic!("unexpected fake response for ExecInspect: {other:?}"),
+            }
+        }
+
+        async fn exec_logs(
+            &self,
+            request: pb::ExecLogsRequest,
+            timeout: Duration,
+        ) -> Result<pb::ExecLogsResponse, GuestControlHealthError> {
+            self.record(
+                "ExecLogs",
+                timeout,
+                request.stream.enum_value().ok(),
+                Some(request.offset),
+                Some(request.max_len),
+            );
+            match self.pop("ExecLogs") {
+                FakeResponse::Logs(response) => Ok(response),
+                other => panic!("unexpected fake response for ExecLogs: {other:?}"),
+            }
+        }
+
+        async fn exec_cancel(
+            &self,
+            _request: pb::ExecCancelRequest,
+            timeout: Duration,
+        ) -> Result<pb::ControlAck, GuestControlHealthError> {
+            self.record("ExecCancel", timeout, None, None, None);
+            match self.pop("ExecCancel") {
+                FakeResponse::Cancel(response) => Ok(response),
+                other => panic!("unexpected fake response for ExecCancel: {other:?}"),
+            }
+        }
+    }
+
+    fn block_on<T>(future: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime")
+            .block_on(future)
+    }
+
+    fn fake_client(
+        responses: Vec<FakeResponse>,
+    ) -> (
+        DetachedClient<FakeDetachedRpc>,
+        Arc<Mutex<Vec<RecordedCall>>>,
+    ) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rpc = FakeDetachedRpc::new(responses, Arc::clone(&calls));
+        (
+            DetachedClient {
+                client: rpc,
+                vm_id: "work".to_owned(),
+                guest_boot_id: "boot-1".to_owned(),
+                deadlines: ExecOpDeadlines::default(),
+            },
+            calls,
+        )
+    }
+
+    fn start_spec() -> ExecStartSpec {
+        ExecStartSpec {
+            vm: "work".to_owned(),
+            argv: vec!["true".to_owned()],
+            tty: false,
+            detached: true,
+            env: Vec::new(),
+            cwd: None,
+            term_size: None,
+        }
+    }
+
+    fn create_response() -> pb::ExecCreateResponse {
+        let mut response = pb::ExecCreateResponse::new();
+        response.exec_id = Some("exec-1".to_owned());
+        response.state = EnumOrUnknown::new(pb::ExecState::EXEC_STATE_RUNNING);
+        response
+    }
+
+    fn list_response() -> pb::ExecListResponse {
+        pb::ExecListResponse::new()
+    }
+
+    fn inspect_response(
+        state: pb::ExecState,
+        stdout_start_offset: u64,
+        stdout_end_offset: u64,
+        stderr_start_offset: u64,
+        stderr_end_offset: u64,
+        last_control_seq: u64,
+    ) -> pb::ExecInspectResponse {
+        let mut response = pb::ExecInspectResponse::new();
+        response.state = EnumOrUnknown::new(state);
+        response.stdout_start_offset = stdout_start_offset;
+        response.stdout_end_offset = stdout_end_offset;
+        response.stderr_start_offset = stderr_start_offset;
+        response.stderr_end_offset = stderr_end_offset;
+        response.last_control_seq = last_control_seq;
+        response
+    }
+
+    fn guest_error(kind: pb::GuestControlErrorKind) -> pb::GuestControlError {
+        let mut error = pb::GuestControlError::new();
+        error.kind = EnumOrUnknown::new(kind);
+        error
+    }
+
+    fn offset_expired_logs_response(stream: pb::OutputStream) -> pb::ExecLogsResponse {
+        let mut response = pb::ExecLogsResponse::new();
+        response.stream = EnumOrUnknown::new(stream);
+        response.error = MessageField::some(guest_error(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_OFFSET_EXPIRED,
+        ));
+        response
+    }
+
+    fn logs_response(
+        stream: pb::OutputStream,
+        offset: u64,
+        start_offset: u64,
+        end_offset: u64,
+        data: &[u8],
+        eof: bool,
+    ) -> pb::ExecLogsResponse {
+        let mut response = pb::ExecLogsResponse::new();
+        response.stream = EnumOrUnknown::new(stream);
+        response.offset = offset;
+        response.start_offset = start_offset;
+        response.end_offset = end_offset;
+        response.data = data.to_vec();
+        response.next_offset = offset + data.len() as u64;
+        response.eof = eof;
+        response
+    }
 
     fn cap(value: pb::GuestCapability) -> EnumOrUnknown<pb::GuestCapability> {
         EnumOrUnknown::new(value)
@@ -883,6 +1290,282 @@ mod tests {
             DETACHED_CANCEL_DEADLINE > DETACHED_CANCEL_GUEST_WINDOW,
             "cancel deadline must cover guestd's 15s cancel window plus margin"
         );
+    }
+
+    #[test]
+    fn detached_call_paths_use_expanded_deadlines() {
+        let (client, calls) = fake_client(vec![
+            FakeResponse::Create(create_response()),
+            FakeResponse::List(list_response()),
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_RUNNING,
+                0,
+                0,
+                0,
+                0,
+                41,
+            )),
+            FakeResponse::Cancel(pb::ControlAck::new()),
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_CANCELLED,
+                0,
+                0,
+                0,
+                0,
+                42,
+            )),
+        ]);
+
+        block_on(async {
+            client
+                .exec_create(&start_spec())
+                .await
+                .expect("create succeeds");
+            client.exec_list().await.expect("list succeeds");
+            client.exec_kill("exec-1").await.expect("kill succeeds");
+        });
+
+        let calls = calls.lock().expect("recorded calls");
+        assert_eq!(
+            calls
+                .iter()
+                .find(|call| call.method == "ExecCreate")
+                .expect("create call")
+                .timeout,
+            DETACHED_CREATE_DEADLINE
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .find(|call| call.method == "ExecCancel")
+                .expect("cancel call")
+                .timeout,
+            DETACHED_CANCEL_DEADLINE
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .find(|call| call.method == "ExecList")
+                .expect("generic management call")
+                .timeout,
+            ExecOpDeadlines::default().control
+        );
+        assert!(
+            calls
+                .iter()
+                .filter(|call| call.method == "ExecInspect")
+                .all(|call| call.timeout == ExecOpDeadlines::default().control),
+            "inspect calls must use the generic detached control deadline: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn kill_duplicate_ack_maps_to_already_terminal_on_real_path() {
+        let mut duplicate = pb::ControlAck::new();
+        duplicate.duplicate = true;
+        let (client, _calls) = fake_client(vec![
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_RUNNING,
+                0,
+                0,
+                0,
+                0,
+                7,
+            )),
+            FakeResponse::Cancel(duplicate),
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_CANCELLED,
+                0,
+                0,
+                0,
+                0,
+                8,
+            )),
+        ]);
+
+        let result = block_on(client.exec_kill("exec-1")).expect("kill succeeds");
+
+        assert_eq!(result.exec_id, "exec-1");
+        assert_eq!(result.result, ExecDetachedKillOutcome::AlreadyTerminal);
+        assert_eq!(result.state, PublicExecState::Cancelled);
+    }
+
+    #[test]
+    fn kill_already_exited_error_maps_to_already_terminal_on_real_path() {
+        let mut already_exited = pb::ControlAck::new();
+        already_exited.error = MessageField::some(guest_error(
+            pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED,
+        ));
+        let (client, _calls) = fake_client(vec![
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_RUNNING,
+                0,
+                0,
+                0,
+                0,
+                7,
+            )),
+            FakeResponse::Cancel(already_exited),
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_EXITED,
+                0,
+                0,
+                0,
+                0,
+                8,
+            )),
+        ]);
+
+        let result = block_on(client.exec_kill("exec-1")).expect("kill succeeds");
+
+        assert_eq!(result.exec_id, "exec-1");
+        assert_eq!(result.result, ExecDetachedKillOutcome::AlreadyTerminal);
+        assert_eq!(result.state, PublicExecState::Exited);
+    }
+
+    #[test]
+    fn logs_resume_offsets_are_clamped_and_threaded_to_guest() {
+        let (client, calls) = fake_client(vec![
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_RUNNING,
+                10,
+                12,
+                20,
+                25,
+                0,
+            )),
+            FakeResponse::Logs(logs_response(
+                pb::OutputStream::OUTPUT_STREAM_STDOUT,
+                10,
+                10,
+                12,
+                b"ab",
+                true,
+            )),
+            FakeResponse::Logs(logs_response(
+                pb::OutputStream::OUTPUT_STREAM_STDERR,
+                22,
+                20,
+                25,
+                b"cd",
+                false,
+            )),
+        ]);
+
+        let result = block_on(client.exec_logs("exec-1", Some(7), Some(22), Some(512)))
+            .expect("logs succeed");
+
+        assert_eq!(result.stdout_base64, "YWI=");
+        assert_eq!(result.stderr_base64, "Y2Q=");
+        assert_eq!(result.stdout_start_offset, 10);
+        assert_eq!(result.stdout_next_offset, 12);
+        assert_eq!(result.stdout_dropped_bytes, 3);
+        assert!(result.stdout_truncated);
+        assert_eq!(result.stderr_start_offset, 20);
+        assert_eq!(result.stderr_next_offset, 24);
+        assert_eq!(result.stderr_dropped_bytes, 0);
+        assert!(!result.stderr_truncated);
+
+        let calls = calls.lock().expect("recorded calls");
+        let log_calls: Vec<_> = calls
+            .iter()
+            .filter(|call| call.method == "ExecLogs")
+            .collect();
+        assert_eq!(log_calls.len(), 2);
+        assert_eq!(
+            (
+                log_calls[0].stream,
+                log_calls[0].offset,
+                log_calls[0].max_len
+            ),
+            (
+                Some(pb::OutputStream::OUTPUT_STREAM_STDOUT),
+                Some(10),
+                Some(512)
+            )
+        );
+        assert_eq!(
+            (
+                log_calls[1].stream,
+                log_calls[1].offset,
+                log_calls[1].max_len
+            ),
+            (
+                Some(pb::OutputStream::OUTPUT_STREAM_STDERR),
+                Some(22),
+                Some(512)
+            )
+        );
+    }
+
+    #[test]
+    fn logs_offset_expired_reinspects_and_reads_new_retained_start() {
+        let mut advanced = inspect_response(pb::ExecState::EXEC_STATE_RUNNING, 5, 14, 0, 0, 0);
+        advanced.stdout_dropped_bytes = 5;
+        advanced.stdout_truncated_for_retention = true;
+        let (client, calls) = fake_client(vec![
+            FakeResponse::Inspect(inspect_response(
+                pb::ExecState::EXEC_STATE_RUNNING,
+                0,
+                10,
+                0,
+                0,
+                0,
+            )),
+            FakeResponse::Logs(offset_expired_logs_response(
+                pb::OutputStream::OUTPUT_STREAM_STDOUT,
+            )),
+            FakeResponse::Inspect(advanced),
+            FakeResponse::Logs(logs_response(
+                pb::OutputStream::OUTPUT_STREAM_STDOUT,
+                5,
+                5,
+                14,
+                b"retained!",
+                true,
+            )),
+            FakeResponse::Logs(logs_response(
+                pb::OutputStream::OUTPUT_STREAM_STDERR,
+                0,
+                0,
+                0,
+                b"",
+                true,
+            )),
+        ]);
+
+        let result = block_on(client.exec_logs("exec-1", None, None, None)).expect("logs succeed");
+
+        assert_eq!(result.stdout_base64, "cmV0YWluZWQh");
+        assert_eq!(result.stdout_start_offset, 5);
+        assert_eq!(result.stdout_end_offset, 14);
+        assert_eq!(result.stdout_next_offset, 14);
+        assert_eq!(result.stdout_dropped_bytes, 5);
+        assert!(result.stdout_truncated);
+        assert!(result.stdout_eof);
+        assert_eq!(result.stderr_base64, "");
+        assert_eq!(result.stderr_start_offset, 0);
+        assert_eq!(result.stderr_next_offset, 0);
+        assert!(result.stderr_eof);
+
+        let calls = calls.lock().expect("recorded calls");
+        assert_eq!(
+            calls.iter().map(|call| call.method).collect::<Vec<_>>(),
+            vec![
+                "ExecInspect",
+                "ExecLogs",
+                "ExecInspect",
+                "ExecLogs",
+                "ExecLogs"
+            ]
+        );
+        let log_calls: Vec<_> = calls
+            .iter()
+            .filter(|call| call.method == "ExecLogs")
+            .collect();
+        assert_eq!(log_calls[0].offset, Some(0));
+        assert_eq!(log_calls[1].offset, Some(5));
+        assert_eq!(log_calls[2].offset, Some(0));
     }
 
     #[test]
