@@ -255,7 +255,18 @@ fn run_client(client_id: u64, fd: OwnedFd, upstream: &str, policy: FilterPolicy)
         match state.dispatch(Some(Duration::from_millis(10))) {
             Ok(_) => {}
             Err(e) => {
-                log::warn!("[nixling-wlproxy] vm={vm} client={client_id} dispatch error: {e}");
+                // Log the full source chain, not just the top-level
+                // `StateError` message. A server-event dispatch failure renders
+                // as the generic "could not dispatch server events"; the
+                // `#[source]` `EndpointError`/`MessageError` underneath names the
+                // actual failing object/interface/event (e.g. `NoReceiver`, the
+                // destroy-vs-event race), which is what's needed to diagnose a
+                // window that vanishes from the host compositor while the guest
+                // keeps rendering.
+                log::warn!(
+                    "[nixling-wlproxy] vm={vm} client={client_id} dispatch error: {}",
+                    error_source_chain(&e)
+                );
                 break;
             }
         }
@@ -275,6 +286,21 @@ fn is_recoverable_accept_error(error: &io::Error) -> bool {
     }
 
     matches!(error.raw_os_error(), Some(libc::ECONNABORTED | libc::EINTR))
+}
+
+/// Renders an error together with its full `source()` chain on one line, e.g.
+/// `could not dispatch server events: receiver object 4278190081 does not exist`.
+/// `thiserror`'s `Display` only prints the top-level message, so without walking
+/// the chain the `#[source]` detail that pinpoints the failing message is lost.
+fn error_source_chain(error: &dyn std::error::Error) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -297,5 +323,38 @@ mod tests {
     fn permission_denied_accept_is_fatal() {
         let err = io::Error::from_raw_os_error(libc::EACCES);
         assert!(!is_recoverable_accept_error(&err));
+    }
+
+    #[test]
+    fn error_source_chain_includes_nested_causes() {
+        use std::error::Error;
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Inner;
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "receiver object 42 does not exist")
+            }
+        }
+        impl Error for Inner {}
+
+        #[derive(Debug)]
+        struct Outer(Inner);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "could not dispatch server events")
+            }
+        }
+        impl Error for Outer {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            error_source_chain(&Outer(Inner)),
+            "could not dispatch server events: receiver object 42 does not exist"
+        );
     }
 }
