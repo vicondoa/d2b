@@ -41,5 +41,6 @@ eval_fail exec-no-user "no workload user"
 eval_fail root-user "must not be root"
 eval_fail invalid-user "must match"
 eval_fail missing-user "declared as a normal"
+eval_fail uid-zero-alias "with uid = 0"
 
 ok "guest-exec-policy-eval: workload-user exec policy defaults and assertions hold"

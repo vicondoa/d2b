@@ -73,6 +73,19 @@ let
       sshUser = "bob";
       exec.enable = true;
     };
+
+    # A non-root NAME aliased to UID 0: passes the name pattern + `!= "root"`
+    # check, but must be rejected by the effective-UID assertion.
+    uid-zero-alias = {
+      controlEnable = true;
+      sshUser = "toor";
+      exec.enable = true;
+      extraUsers.toor = {
+        isSystemUser = true;
+        group = "root";
+        uid = 0;
+      };
+    };
   };
 
   selected =
@@ -87,10 +100,12 @@ let
     guest.exec = selected.exec;
     config = {
       networking.hostName = lib.mkDefault "corp-vm";
-      users.users.alice = {
-        isNormalUser = true;
-        uid = 1000;
-      };
+      users.users = {
+        alice = {
+          isNormalUser = true;
+          uid = 1000;
+        };
+      } // (selected.extraUsers or { });
     };
   };
 

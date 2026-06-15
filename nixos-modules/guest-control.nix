@@ -130,6 +130,24 @@ in
           enable the desktop/home-manager user) before enabling guest exec.
         '';
       }
+      {
+        # The workload user must not resolve to UID 0 (root) even under a
+        # non-root name. The name check above rejects only the literal "root",
+        # but the never-root contract is about the effective UID, so an explicit
+        # `uid = 0` alias must also be rejected. The guestd daemon additionally
+        # resolves the effective UID from the guest passwd DB at runtime and
+        # refuses 0; this is the eval-time half of that defense.
+        assertion =
+          !cfg.exec.enable
+          || cfg.exec.execUser == null
+          || !(builtins.hasAttr cfg.exec.execUser config.users.users)
+          || (config.users.users.${cfg.exec.execUser}.uid or null) != 0;
+        message = ''
+          nixling.vms.<vm>.ssh.user (the guest exec workload user) is configured
+          with uid = 0. Guest exec never runs as root; assign the workload user
+          a non-zero uid.
+        '';
+      }
     ];
 
     environment.systemPackages = [

@@ -107,6 +107,68 @@ pub fn login_session_systemd_run_args(
     argv
 }
 
+/// Guest passwd database. nss resolves locally-declared NixOS users against
+/// this file, the same source `systemd-run --uid=<name>` consults, so reading
+/// it here matches the UID systemd will actually run the command as.
+const GUEST_PASSWD_PATH: &str = "/etc/passwd";
+
+/// Classification of a workload user's effective UID. The never-root contract
+/// is about the effective UID, not the name: a non-`root` account aliased to
+/// UID 0 must be refused exactly like `root`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadUserUid {
+    /// Resolves to a non-zero UID — safe to run guest exec as this user.
+    NonRoot(u32),
+    /// Resolves to UID 0 under some name (e.g. a `root` alias). Refused.
+    Root,
+    /// Absent from the passwd database (or the database is unreadable).
+    /// Refused (fail closed): a user we cannot prove is non-root is never run.
+    Unresolved,
+}
+
+/// The numeric UID `getpwnam` would resolve for `user` from `/etc/passwd`-format
+/// `content`: the FIRST matching entry's UID field (the one nss returns).
+/// Returns `None` when the user is absent or its UID field is missing/malformed.
+/// Blank lines, comment lines, and entries with too few fields are skipped.
+pub fn passwd_uid_for(content: &str, user: &str) -> Option<u32> {
+    for line in content.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // passwd format: name:passwd:uid:gid:gecos:dir:shell
+        let mut fields = line.split(':');
+        let name = fields.next();
+        if name != Some(user) {
+            continue;
+        }
+        // Skip the password field, then take the UID field.
+        return fields.nth(1).and_then(|uid| uid.parse::<u32>().ok());
+    }
+    None
+}
+
+/// Classify `user` against `/etc/passwd`-format `content` (pure; testable).
+pub fn classify_workload_user_in(content: &str, user: &str) -> WorkloadUserUid {
+    match passwd_uid_for(content, user) {
+        Some(0) => WorkloadUserUid::Root,
+        Some(uid) => WorkloadUserUid::NonRoot(uid),
+        None => WorkloadUserUid::Unresolved,
+    }
+}
+
+/// Resolve `user`'s effective UID from the guest passwd database and classify
+/// it. This is the runtime half of the never-root contract: the host-side name
+/// check rejects only the literal `root`, but the contract is about the
+/// effective UID, so UID 0 under any alias — and any user we cannot prove is
+/// non-root (absent/unreadable passwd) — fails closed.
+pub fn classify_workload_user(user: &str) -> WorkloadUserUid {
+    match std::fs::read_to_string(GUEST_PASSWD_PATH) {
+        Ok(content) => classify_workload_user_in(&content, user),
+        Err(_) => WorkloadUserUid::Unresolved,
+    }
+}
+
 /// Process-unique counter component for transient unit names.
 static EXEC_UNIT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -238,6 +300,61 @@ mod tests {
         argv.iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    // A representative NixOS-style /etc/passwd with a normal workload user, the
+    // real root entry, a system user, and a non-root account ALIASED to UID 0.
+    const SAMPLE_PASSWD: &str = "\
+root:x:0:0:System administrator:/root:/run/current-system/sw/bin/bash
+# a comment line
+toor:x:0:0:Root alias:/root:/run/current-system/sw/bin/bash
+
+messagebus:x:4:4:System user:/var/empty:/run/current-system/sw/bin/nologin
+john:x:1000:100:John:/home/john:/run/current-system/sw/bin/bash
+";
+
+    #[test]
+    fn passwd_uid_for_resolves_first_matching_entry() {
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "john"), Some(1000));
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "root"), Some(0));
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "messagebus"), Some(4));
+        // A non-root NAME aliased to UID 0 still resolves to 0.
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "toor"), Some(0));
+        // Absent user, and a near-miss substring, both resolve to nothing.
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "alice"), None);
+        assert_eq!(passwd_uid_for(SAMPLE_PASSWD, "joh"), None);
+    }
+
+    #[test]
+    fn passwd_uid_for_skips_malformed_and_blank_lines() {
+        // No UID field, trailing junk, and an empty DB all fail closed (None).
+        assert_eq!(passwd_uid_for("john:x\nbob::not-a-number:\n", "john"), None);
+        assert_eq!(passwd_uid_for("bob::xyz:1000\n", "bob"), None);
+        assert_eq!(passwd_uid_for("", "john"), None);
+    }
+
+    #[test]
+    fn classify_workload_user_enforces_never_root_by_uid() {
+        // The never-root contract is about the EFFECTIVE UID: both `root` and a
+        // non-root NAME aliased to UID 0 classify as Root and are refused.
+        assert_eq!(
+            classify_workload_user_in(SAMPLE_PASSWD, "root"),
+            WorkloadUserUid::Root
+        );
+        assert_eq!(
+            classify_workload_user_in(SAMPLE_PASSWD, "toor"),
+            WorkloadUserUid::Root
+        );
+        // A normal workload user classifies as NonRoot with its real UID.
+        assert_eq!(
+            classify_workload_user_in(SAMPLE_PASSWD, "john"),
+            WorkloadUserUid::NonRoot(1000)
+        );
+        // An unresolvable user fails closed (never silently treated as valid).
+        assert_eq!(
+            classify_workload_user_in(SAMPLE_PASSWD, "ghost"),
+            WorkloadUserUid::Unresolved
+        );
     }
 
     #[test]

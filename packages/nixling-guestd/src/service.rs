@@ -330,7 +330,34 @@ pub fn build_runtime_auth_core(
     ))
 }
 
-pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
+pub async fn serve_vsock(mut config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
+    // Enforce the never-root contract by EFFECTIVE UID before wiring any
+    // spawner. Arg parsing rejects only the literal name "root"; a non-root
+    // name aliased to UID 0 would otherwise reach `systemd-run --uid=<name>`
+    // and run the guest command as root. Resolve the workload user's UID from
+    // the guest passwd DB and refuse UID 0 (any alias) or an unresolvable user
+    // (fail closed). Refusal clears the workload user, disabling every exec
+    // path (non-TTY pipe and interactive PTY) — never root.
+    if let Some(user) = config.exec_policy.exec_user.clone() {
+        match crate::login_session::classify_workload_user(&user) {
+            crate::login_session::WorkloadUserUid::NonRoot(_) => {}
+            crate::login_session::WorkloadUserUid::Root => {
+                eprintln!(
+                    "nixling-guestd: refusing guest exec: workload user '{user}' resolves to \
+                     UID 0; guest exec never runs as root"
+                );
+                config.exec_policy.exec_user = None;
+            }
+            crate::login_session::WorkloadUserUid::Unresolved => {
+                eprintln!(
+                    "nixling-guestd: refusing guest exec: workload user '{user}' is not \
+                     resolvable in /etc/passwd; cannot prove non-root, failing closed"
+                );
+                config.exec_policy.exec_user = None;
+            }
+        }
+    }
+
     // The host-fixed workload user every exec runs as (never root). When set,
     // exec is usable; the wire `user` field is never consulted for authz.
     let exec_user = config.exec_policy.exec_user.clone();
