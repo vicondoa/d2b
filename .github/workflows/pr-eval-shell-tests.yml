@@ -32,15 +32,12 @@ jobs:
             tests/cli-nix-consumers-eval.sh \
             tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
-            tests/host-prep-dag-eval.sh \
             tests/host-validate-verb-eval.sh \
             tests/legacy-unit-denylist-eval.sh \
             tests/loki-label-cardinality-eval.sh \
             tests/minijail-version-check.sh \
-            tests/no-bash-exec-eval.sh \
             tests/deliverable-gate-inventory.sh \
             tests/polkit-allowlist-eval.sh \
-            tests/privileges-doc-completeness-eval.sh \
             tests/supervisor-option-absent-eval.sh \
             tests/tempo-budget-eval.sh \
             tests/video-sidecar-hardening-eval.sh \
@@ -49,11 +46,7 @@ jobs:
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"
-              if [ "$t" = "tests/no-bash-exec-eval.sh" ]; then
-                bash "$t" all
-              else
-                bash "$t"
-              fi
+              bash "$t"
             fi
           done
 

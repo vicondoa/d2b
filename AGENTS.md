@@ -974,8 +974,11 @@ contract:
   `nixling` group membership + `SO_PEERCRED` at
   `public.sock` accept time is the **only** lifecycle authorisation
   surface.
-- The Rust CLI does not invoke bash. `tests/no-bash-exec-eval.sh`
-  is the fail-closed gate ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
+- The Rust CLI does not invoke bash.
+  `packages/nixling-contract-tests/tests/policy_source.rs`
+  (`no_bash_exec_check`) plus the AST-level `tests/tools/no-bash-ast-walker`
+  step in `tests/rust-workspace-checks.sh` are the fail-closed gates
+  ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
 
 ### Verification gates
 

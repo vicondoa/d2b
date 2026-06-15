@@ -332,15 +332,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/host-prep-dag-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/host-validate-verb-eval.sh"
 group = "A"
 make_target = "test-rust"
@@ -611,15 +602,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/no-bash-exec-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/no-new-deferral.sh"
 group = "H"
 make_target = "test-policy"
@@ -684,15 +666,6 @@ exercised_today = "yes"
 
 [[script]]
 name = "tests/pr-checklist-gate.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/privileges-doc-completeness-eval.sh"
 group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
@@ -869,6 +842,33 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/host-prep-dag-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_source.rs::host_prep_dag_module_surface (packages/nixling-host/src/host_prep_dag.rs: all 10 HostPrepStepKind enum variants declared, builder ordering-edge presence, the 9-symbol public API surface, and the depends_on dep-edges ApplySysctl<-BringUpTapInterface / SetBridgePortFlags<-ApplySysctl / PreOpenVhostNetFd<-SetBridgePortFlags via the ported `grep -B 3` window), host_prep_dag_nixling_host_reexport (nixling-host/src/lib.rs `pub mod host_prep_dag;`), host_prep_dag_broker_wire_scaffolds (broker_wire.rs BrokerRequest variant/struct/op_name arms + runtime.rs dispatch arms for SeedDnsmasqLease/BindMountFromHardlinkFarm/OwnershipMatrixCheck/SshHostKeyPreflight, the two live OperationFields audit rows, and the two still-deferred typed Unimplemented labels), host_prep_dag_nixlingd_wiring (nixlingd/src/lib.rs build_/log_/execute_host_prep_dag + NIXLING_HOST_PREP_DAG_EXECUTE markers), host_prep_dag_documentation (docs/reference/host-prep-dag.md: all 10 step kinds, ordering phrases incl. `AFTER \\`ApplySysctl\\``, and the Canonical step set section completeness for all 10 slugs; the bash gate's `grep -qF host-prep-dag` self-reference check is asserted via the doc's canonical slug path rather than its body to avoid the retired-.sh self-referential doc trap); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/no-bash-exec-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_source.rs::no_bash_exec_check (ADR 0017 — the Rust CLI must never invoke bash; per-line scan of git-listed files under packages/ excluding any target/, tests/, .git/ directory component for the verbatim-ported BASH_EXEC_PATTERN, each hit filtered against tests/fixtures/no-bash-exec-exempt-paths.json exempt_paths) + no_bash_exec_fixture_coverage (no stale allow-list entries); gated via the NL_FIXTURES contract step in tests/rust-workspace-checks.sh", "tests/tools/no-bash-ast-walker (ADR 0017 syn-AST-level Command::new bash-literal scan, catching cross-line/obfuscated sites the per-line regex cannot) — now run as a dedicated gated step in tests/rust-workspace-checks.sh, preserving the retired gate's default all-mode syn-ast-walk coverage"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/privileges-doc-completeness-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_privileges_doc.rs::legacy_systemd_surface_obituary_completeness (docs/reference/privileges.md legacy-systemd obituary completeness scan vs nixos-modules/: per the 20 LEGACY_UNITS patterns, each must have a live broker-op row OR an obituary row — never a self-contradictory both; obituary region = '## Legacy systemd surface obituary' heading through the next top-level '## ' heading; reproduces all three hard-fail modes [emitted-but-undocumented, deleted-but-no-obituary, contradictory live+obituary] plus the transitional emitted+obituary warning, with the emitted grep / doc_pat / LIVE_OBIT_MARKERS regexes and the ±3-line marker window ported verbatim); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]

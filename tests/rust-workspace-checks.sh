@@ -224,6 +224,20 @@ else
   log "  SKIP: nixling-contract-tests (nix unavailable to build fixture-smoke)"
 fi
 
+# no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
+# is covered by nixling-contract-tests/tests/policy_source.rs, but the
+# AST-level walk (which catches cross-line / obfuscated bash-exec sites the
+# per-line regex cannot) lives in the standalone tests/tools/no-bash-ast-walker
+# cargo tool. The retired tests/no-bash-exec-eval.sh ran it via `... all`; run
+# it here so the AST coverage stays gated. Fails closed on any bash-literal
+# Command::new site under packages/.
+log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
+CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo run --release --quiet \
+    --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml" \
+    -- "$ROOT/packages"
+ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
+
 # The privileged broker lives in its own sibling workspace, so the main
 # workspace checks above do not see it. Validate its manifest/lock graph
 # explicitly, then run its tests in both feature modes.

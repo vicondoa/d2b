@@ -761,9 +761,6 @@ fi
 if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
   nl_static_parallel_script_gate "tests/no-new-deferral.sh" "$ROOT/tests/no-new-deferral.sh"
 fi
-if [ -x "$ROOT/tests/privileges-doc-completeness-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/privileges-doc-completeness-eval.sh" "$ROOT/tests/privileges-doc-completeness-eval.sh"
-fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
 fi
@@ -779,7 +776,6 @@ fi
 for _d13_gate in \
   broker-socket-activation-eval \
   daemon-autostart-eval \
-  host-prep-dag-eval \
   loki-label-cardinality-eval \
   minijail-validator-audio \
   minijail-validator-cloud-hypervisor \
@@ -793,7 +789,6 @@ for _d13_gate in \
   minijail-validator-wayland-proxy \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
-  no-bash-exec-eval \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   readiness-waves-eval \
