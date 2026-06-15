@@ -15,7 +15,12 @@
 # minimal config that instantiates all four roles at once. Like the niri
 # graphics case, this is x86_64-only by nature (the framework's
 # checkVmPlatform gate refuses graphics/audio on non-x86_64 hosts).
-{ mkEval, ... }:
+{ mkEval, lib, system, ... }:
+
+# Like niri, this evaluates a graphics/audio VM that checkVmPlatform refuses
+# on aarch64 (the bash gate hardcoded x86_64-linux); contribute these cases
+# only to the x86_64-linux nix-unit check.
+lib.optionalAttrs (system == "x86_64-linux") (
 
 let
   base = { lib, ... }: {
@@ -77,3 +82,4 @@ in
     expected = 7;
   };
 }
+)

@@ -71,24 +71,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/autostart-wiring-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/bridge-ipv6-boot-sysctl-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/bridge-isolation-runtime.sh"
 group = "A"
 make_target = "test-rust"
@@ -357,15 +339,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/daemon-autostart-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
 
 [[script]]
 name = "tests/daemon-default-compat-eval.sh"
@@ -1115,15 +1088,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/restart-policy-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/runner-shape-preflight.sh"
 group = "A"
 make_target = "test-rust"
@@ -1259,15 +1223,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/store-overlay-emit-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/store-sync-export-eval.sh"
 group = "D"
 make_target = "test-nix-unit"
@@ -1331,15 +1286,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/umask-roundtrip-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/usbip-firewall-skeleton.sh"
 group = "A"
 make_target = "test-rust"
@@ -1347,15 +1293,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/usbip-gating-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
 
 [[script]]
 name = "tests/usbip-state-machine-eval.sh"
@@ -1446,6 +1383,69 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/autostart-wiring-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/autostart-wiring.nix — 7 daemon autostart-wiring value cases via mkEval introspection)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/bridge-ipv6-boot-sysctl-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/bridge-ipv6-boot-sysctl.nix — 12 cases)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/daemon-autostart-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/daemon-autostart.nix — 24 cases: Rust/doc source-grep via readFile + parallelism option via mkEval)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/restart-policy-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/restart-policy.nix — 14 restartIfChanged value cases via mkEval introspection)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/store-overlay-emit-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/store-overlay-emit.nix — 9 cases)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/umask-roundtrip-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/umask-roundtrip.nix — 4 cases)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/usbip-gating-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/usbip-gating.nix — 40 usbip gating cases)"]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/niri-vm-borders-eval.sh"
