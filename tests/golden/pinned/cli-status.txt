@@ -1,0 +1,12 @@
+# cli-status — CLI-contract integration tests for `nixling status`
+# (packages/nixling/tests/status_contract.rs). Successor for the retired
+# cli-rust-native-status.sh bash gate: spawns the real `nixling` binary against
+# the NL_FIXTURES rendered bundle (copied into a hermetic temp bundle so the
+# host's deployed /etc/nixling artifacts cannot shadow the fixture) plus a
+# synthetic system-state/daemon-state fixture, and validates the status JSON
+# envelope strictly against the committed DTOs (deny_unknown_fields). One
+# libtest path per line; checked by tests/tools/assert-pinned-tests.sh.
+status_vm_json_matches_schema_and_static_state
+status_vm_flag_and_positional_json_are_equivalent
+status_check_bridges_returns_frozen_not_yet_implemented_envelope
+status_human_renders_runner_parity_and_bridge_sections
