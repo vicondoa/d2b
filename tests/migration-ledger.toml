@@ -1070,15 +1070,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/static-invariant-uid0.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/static-invariant-world-readable-leak.sh"
 group = "C"
 make_target = "test-contract"
@@ -1266,6 +1257,15 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/static-invariant-uid0.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-core/src/bundle_resolver.rs validate_minijail_profiles unit tests (rejects uid0/gid0 without a real carve-out, rejects empty/whitespace carve-out, accepts uid0 WITH carve-out)", "packages/nixling-contract-tests/tests/minijail_profiles.rs::rendered_bundle_passes_all_minijail_profile_invariants (the real rendered bundle passes the uid0/root-carve-out invariant — gated via NL_FIXTURES in rust-workspace-checks.sh)", "validate_minijail_profiles doc + RoleProfile.adr_carve_out structural coupling + bundle-drift (schema-shape: root-capable shapes carry the ADR field); requiresStartRoot coupling superseded by ADR 0021"]
+exercised_today = "skip"
 
 [[script]]
 name = "tests/privileges-json-rust-vs-nix-eval.sh"

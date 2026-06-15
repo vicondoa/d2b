@@ -52,7 +52,6 @@ jobs:
             tests/privileges-doc-completeness-eval.sh \
             tests/processes-json-eval.sh \
             tests/state-dir-acl-eval.sh \
-            tests/static-invariant-uid0.sh \
             tests/stop-dag-reconcile-eval.sh \
             tests/supervisor-option-absent-eval.sh \
             tests/tap-dag-contract-doc-eval.sh \
