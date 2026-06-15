@@ -157,6 +157,10 @@ deprecations ship one minor release before removal.
   in-process signal handler. Terminal records are retained for 30 minutes
   then garbage-collected; a running detached job is never reaped. guestd
   re-adopts live detached execs across a guestd restart within one boot.
+  This is the guest-side detached substrate only; the operator
+  `nixling vm exec` CLI does not expose detached mode in this release (the
+  daemon owner handler rejects `detached=true`), so detached exec is not
+  reachable from the CLI yet.
 
 - `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
   discovery call that enumerates the caller's detached execs for the same
@@ -232,11 +236,9 @@ deprecations ship one minor release before removal.
   produces daemon-local health evidence only; it does not replace SSH readiness
   or enable exec.
 
-- Guest exec policy options `nixling.vms.<vm>.guest.exec.{enable,allowRoot,users}`
-  now validate exec allowlist defaults: generic exec is off by default, root
-  exec is separately denied by default, and non-root users must be explicitly
-  listed. This is dormant policy wiring only; no exec runtime/CLI behavior is
-  enabled by these options yet.
+- Guest exec policy option `nixling.vms.<vm>.guest.exec.enable` gates guest
+  exec (off by default). This is dormant policy wiring only; no exec
+  runtime/CLI behavior is enabled by this option yet.
 
 - Guest-control retained-log security requirements and canary-based
   redaction test coverage for stdout/stderr logs, telemetry, health, and
@@ -408,8 +410,30 @@ deprecations ship one minor release before removal.
   inside the VM. See
   [`docs/how-to/edit-vm-config-from-inside.md`](docs/how-to/edit-vm-config-from-inside.md).
 
+### Removed
+
+- `nixling vm konsole` is removed. The subcommand was a thin wrapper that
+  re-exec'd `nixling vm exec -it <vm> -- <login-shell> -l` inside a host
+  terminal emulator; operators now invoke `nixling vm exec -it` directly.
+  All references (CLI surface, shell completions, manpage, and reference
+  docs) are dropped accordingly.
+
 ### Changed
 
+- `nixling vm exec` now runs the requested command as the VM's
+  configured workload user (`ssh.user`) — **never root** — inside a real
+  PAM login session (`systemd-run --property=PAMName=login
+  --uid=<user>`). The command sees the same environment an interactive
+  SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
+  profile), so graphical and login-shell workflows (e.g. launching a
+  browser) work unchanged; operators elevate with `sudo` inside the
+  session. `guestd` host-fixes the exec identity and ignores the wire
+  `user` field. The per-VM `guest.exec.allowRoot` and `guest.exec.users`
+  options are removed — enabling `guest.exec.enable = true` on a VM with
+  a workload user is sufficient, and a VM whose `ssh.user` is unset,
+  `root`, or otherwise invalid disables exec at eval time with a typed
+  message. See
+  [ADR 0030](docs/adr/0030-guest-exec-as-workload-user.md).
 - Framework readiness for a guest-control-capable VM is now the
   authenticated guest-control Health probe rather than a raw TCP-22 SSH
   connect. The per-VM DAG node `guest-ssh-readiness` is replaced by
@@ -435,13 +459,6 @@ deprecations ship one minor release before removal.
 - The framework readiness label is now the canonical `guest-control-health`
   (no per-VM suffix) across `status`, `vm list`, and the start preview;
   the start-preview DAG no longer hard-codes an `ssh-ready` node.
-- `nixling vm konsole` is now a thin wrapper around `nixling vm exec -it`:
-  it opens the interactive guest session in a terminal emulator
-  (default `konsole`, overridable with `--terminal`) over the
-  authenticated guest-control transport. The historical operator-SSH
-  path and its allowlist site were removed; the SSH-only flags
-  (`--host` / `--key` / `--user`) are now rejected with a migration
-  message pointing at `vm exec -it`. No SSH process is spawned.
 - The default observability VM name is now `sys-obs`. The old
   `sys-obs-stack` state is not deleted automatically; keep it for
   rollback until the new stack is validated.

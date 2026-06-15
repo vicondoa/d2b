@@ -2255,18 +2255,31 @@ verbs); a launcher-role caller is rejected with the typed
 `authz-not-admin` error (exit `77`, AUTH) before any session is
 established.
 
+**Execution identity.** Every exec runs the requested command as the
+VM's configured workload user (`ssh.user`) — **never root** — inside a
+real PAM login session (`systemd-run --property=PAMName=login
+--uid=<user>`). The command therefore sees the same environment an
+interactive SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the
+login-shell profile), so graphical and login-shell workflows work
+unchanged. The wire `user` field is host-fixed by `guestd` and ignored;
+operators elevate with `sudo` inside the session.
+
 Modes:
 
 - **non-interactive** (default): stdin is closed up front; stdout and
   stderr are streamed back as separate streams and written to the host's
   stdout/stderr.
-- **`-i`/`--interactive`**: host stdin is forwarded to the guest command
+- **`-t`/`--tty`**: allocates a PTY **in the guest**, puts the host
+  terminal in raw mode for the session, and forwards host stdin to the
+  guest command (`-t` implies `-i`). stderr is merged into stdout by the
+  guest PTY. Requires stdin **and** stdout to be a terminal. Interactive
+  modes are human-only: `-t` (and `-i`) are rejected together with
+  `--json`.
+- **`-i`/`--interactive`**: forwards host stdin to the guest command
   (non-blocking, partial-write aware) until EOF, which closes the guest
-  stdin.
-- **`-t`/`--tty`**: allocates a PTY **in the guest** and puts the host
-  terminal in raw mode for the session (implies `-i`). stderr is merged
-  into stdout by the guest PTY. Requires stdin **and** stdout to be a
-  terminal. `-t` is human-only and is rejected together with `--json`.
+  stdin. The guest-control transport forwards stdin **only** in PTY
+  mode, so `-i` **must** be paired with `-t` (use `-it`); `-i` without
+  `-t` is a usage error.
 
 FSM (one session, one exec, no per-op reconnect): the CLI drains
 enqueued host signals, forwards ready stdin, then bounded-long-polls
@@ -2288,7 +2301,7 @@ guest signal `2`; `SIGQUIT` → `3`; `SIGHUP` → `1`; `SIGTERM` → `15`;
 | --- | --- | --- |
 | `0`–`255` | guest | The guest command's `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | The guest command was killed by signal `N` (`WIFSIGNALED`). |
-| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, or `--json` combined with `-t`. |
+| `2` | cli | Usage error: missing command after `--`, malformed `--env`, `-t` without a terminal, `-i` without `-t`, or `--json` combined with `-i`/`-t`. |
 | `69` | transport | The guest-control transport was unreachable, or a per-op/establishment deadline elapsed (`guest-control-transport-unavailable`, `guest-control-timeout`). |
 | `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`). No SSH fallback. |
 | `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
@@ -2320,21 +2333,6 @@ written to a span, log, audit record, or metric label.
 socket → authenticated guest-control session → `guestd` exec RPCs; no
 SSH, no host PTY, no new privileged broker op (the session table lives
 in-process in `nixlingd`).
-
-### `vm konsole`
-
-**Synopsis:** `nixling vm konsole [--terminal <emulator>] <vm>`
-
-Opens an interactive guest session in a host terminal emulator. As of
-v1.2 this is a thin wrapper that hosts `nixling vm exec -it <vm> -- <login-shell>`
-inside the chosen emulator (default `konsole`, overridable with
-`--terminal`); it runs entirely over the authenticated guest-control
-transport. **There is no SSH.** The retired SSH-only flags
-(`--host`/`--key`/`--user`) are rejected with exit `2` and a migration
-message pointing at `vm exec -it`.
-
-**Disposition:** `rust-native` — terminal-emulator wrapper around
-`vm exec -it`; the historical SSH allowlist site was removed.
 
 ## Dispatch capability table
 
@@ -2377,4 +2375,3 @@ message pointing at `vm exec -it`.
 | `migrate` | `rust-native` | Dry-run analysis is native; `--apply` routes through `nixlingd` → broker `RunMigrate`. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `auth status` | `rust-native` | Auth status is a read-only daemon query that reports caller mapping, socket reachability, and authorization hints. |
 | `vm exec` | `rust-native` | Owner connection over the daemon public socket → authenticated guest-control session → `guestd` exec RPCs. Admin-only; no SSH, no host PTY, no new privileged broker op (the exec session table is in-process in `nixlingd`). |
-| `vm konsole` | `rust-native` | Thin terminal-emulator wrapper around `vm exec -it`; the SSH allowlist site was removed and the SSH-only flags are rejected with a migration message. |

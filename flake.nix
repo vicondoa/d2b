@@ -49,7 +49,6 @@
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
-          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
@@ -86,7 +85,6 @@
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
-            "nixling-userd",
             "nixling-exec-runner",
           ]
 
@@ -158,7 +156,6 @@
           install -Dm644 ${./docs/completions/nixling.fish} "$out/share/fish/vendor_completions.d/nixling.fish"
         '';
         nixling-guestd-static = guestStaticPackage "nixling-guestd" "nixling-guestd";
-        nixling-userd-static = guestStaticPackage "nixling-userd" "nixling-userd";
         nixling-exec-runner-static =
           guestStaticPackage "nixling-exec-runner" "nixling-exec-runner";
 
@@ -226,7 +223,6 @@
           cp -r ${./packages/nixling-core} $out/packages/nixling-core
           cp -r ${./packages/nixling-ipc} $out/packages/nixling-ipc
           cp -r ${./packages/nixling-guestd} $out/packages/nixling-guestd
-          cp -r ${./packages/nixling-userd} $out/packages/nixling-userd
           cp -r ${./packages/nixling-exec-runner} $out/packages/nixling-exec-runner
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
           chmod -R u+w $out/packages/nixling-core
@@ -263,7 +259,6 @@
             "nixling-core",
             "nixling-ipc",
             "nixling-guestd",
-            "nixling-userd",
             "nixling-exec-runner",
           ]
 
@@ -397,7 +392,6 @@
         } ''
           for bin in \
             ${self.packages.${system}.nixling-guestd-static}/bin/nixling-guestd \
-            ${self.packages.${system}.nixling-userd-static}/bin/nixling-userd \
             ${self.packages.${system}.nixling-exec-runner-static}/bin/nixling-exec-runner
           do
             test -x "$bin"

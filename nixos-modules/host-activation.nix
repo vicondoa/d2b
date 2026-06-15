@@ -182,7 +182,7 @@ in
     # SSH keys from `${cfg.site.keysDir}` (each key file is mode
     # 0640 root:nixling with a named-group ACL granting
     # read). Pre-v1.2fu58 the state-dir had no traversal grant
-    # for `nixling`, so `nixling vm konsole` failed
+    # for `nixling`, so `nixling vm exec` failed
     # `stat(2)` on the key path before reaching the file — even
     # though the key existed and the operator was in the group.
     #

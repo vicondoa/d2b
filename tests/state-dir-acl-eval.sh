@@ -53,7 +53,7 @@ fi
 # (c) `nixling` traversal grant on the state-dir parent. Without it,
 # members of `nixling` could not stat
 # `${cfg.site.keysDir}/<vm>_ed25519` because /var/lib/nixling had no
-# launcher-group traversal ACL — `nixling vm konsole` reported
+# launcher-group traversal ACL — `nixling vm exec` reported
 # "ssh key not found" instead of EACCES. The grant is `--x` only
 # (chdir, no list / no read); per-VM subdirs keep their own scoped ACLs.
 #

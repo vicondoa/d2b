@@ -372,6 +372,31 @@ shared.mkBatch {
       );
     };
 
+    # W19 — `guest.exec.allowRoot` was removed (exec always runs as the
+    # workload user). A legacy assignment must land on the friendly
+    # migration assertion, not a cryptic "option does not exist".
+    "guest-exec-allowroot-removed" = {
+      expectedSubstring = "guest.exec.allowRoot was removed";
+      override = (
+        { ... }:
+        {
+          nixling.vms.corp-vm.guest.exec.allowRoot = true;
+        }
+      );
+    };
+
+    # W19 — `guest.exec.users` was removed (no per-VM exec user
+    # allowlist; exec targets the single workload user `ssh.user`).
+    "guest-exec-users-removed" = {
+      expectedSubstring = "guest.exec.users was removed";
+      override = (
+        { ... }:
+        {
+          nixling.vms.corp-vm.guest.exec.users = [ "alice" ];
+        }
+      );
+    };
+
     # v1.1.2fu19 panel-test R2 must-fix: stablePrincipalId UID
     # collision assertion (per the new check in
     # nixos-modules/minijail-profiles.nix:538-575). vm9163 and

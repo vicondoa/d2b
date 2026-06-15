@@ -570,9 +570,10 @@ different leaves only if they preserve the same security properties:
    workload user.
 2. Detached exec is served entirely by the root guestd; there is no
    `nixling-userd` involvement and no per-user retained-log path to resolve.
-   Attached non-root exec still maps every exec to the authenticated target
-   user and hands any append/read capability to the matching
-   `nixling-userd` over already-open file descriptors.
+   Reachable attached exec runs as the host-fixed workload user (`ssh.user`)
+   inside a PAM login session, never root; the wire `user` field is ignored
+   and there is no separate user-session daemon (`nixling-userd` was removed;
+   see [ADR 0030](../adr/0030-guest-exec-as-workload-user.md)).
 3. Every open is rooted at the pre-opened runtime/state directory and uses
    symlink-safe, beneath-root traversal. Symlinks, `..`, hard-link count
    surprises, non-regular log segments, world/group-writable parents, and
@@ -882,9 +883,12 @@ payload bytes, or guest free-form error text.
 > contract. The `nixling vm exec` **CLI** described below — including the
 > `--interactive` / `-i`, `--tty` / `-t`, and the interactive `exec -it`
 > flow — is shipped and drives that RPC surface (admin-only). The
-> `--detach` *CLI flag* is not yet exposed; detached exec is currently
-> reachable only through the service surface. The behaviors below
-> specify the CLI mapping onto the RPC surface.
+> `--detach` *CLI flag* is not exposed, and detached exec is **disabled in
+> this release**: production `guestd` forces `detached` off and the daemon
+> rejects a `detached = true` request, so a detached `ExecCreate` fails
+> closed (`GuestExecDisabled` / `UnsupportedMode`) — including through the
+> service surface — pending its workload-user migration. The behaviors
+> below specify the CLI mapping onto the RPC surface.
 
 ### Attached exec
 
@@ -910,15 +914,19 @@ resizes as sequenced `TtyWinResize` calls with rows/cols in `1..65535`,
 merges output through stdout, and restores local terminal raw mode on every
 return path.
 
-### Detached exec (service surface only)
+### Detached exec (reserved; disabled in this release)
 
 Detached exec is **not exposed through the `nixling` CLI** today (there is
 no `--detach` flag and no `vm exec inspect/logs/attach/kill/run`
-subcommands; see the scope note above). It is reachable only through the
-guest-control RPC/service surface, where a detached create returns the
-`exec_id`, initial state, and effective retention limits and the process
-continues after host transport disconnect. The corresponding service
-operations are:
+subcommands; see the scope note above), and it is **disabled in this
+release**: the daemon rejects `detached = true` and production `guestd`
+forces `detached` off, so a detached create fails closed
+(`GuestExecDisabled` / `UnsupportedMode`) rather than returning an
+`exec_id`. The contract below is the **reserved** design that a future
+workload-user-migration release re-enables; when served, a detached create
+returns the `exec_id`, initial state, and effective retention limits and
+the process continues after host transport disconnect. The corresponding
+service operations are:
 
 - `ExecInspect` for state and offset windows;
 - `ExecLogs` for retained logs;

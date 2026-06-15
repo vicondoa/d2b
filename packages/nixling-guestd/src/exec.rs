@@ -5,10 +5,12 @@
 //! execution inside the VM. There is no host broker op, no CLI surface, no
 //! readiness wiring, and no user-session-daemon participation.
 //!
-//! Security posture: attached exec is trusted-control-plane guest-root
-//! execution. It is gated behind an explicit `user = "root"` request plus the
-//! host-owned per-VM `exec.enable` + `allowRoot` policy. It is not a sandbox
-//! and makes no CPU/memory/fd kernel-isolation claim; it bounds the
+//! Security posture: attached exec is trusted-control-plane execution that
+//! runs as the VM's **host-fixed workload user** (`ssh.user`), never root.
+//! It is gated behind the host-owned per-VM `exec.enable` policy plus a
+//! resolved workload user; the wire `user` field is never consulted, so a
+//! guest-control client cannot target root or any other user. It is not a
+//! sandbox and makes no CPU/memory/fd kernel-isolation claim; it bounds the
 //! protocol/session resources it owns and applies a wall-clock runtime ceiling.
 //!
 //! Process spawning is abstracted behind [`ProcessSpawner`] so the lifecycle
@@ -76,11 +78,17 @@ const POST_EXIT_DRAIN_GRACE_MS: u64 = 2_000;
 const PIPE_READ_CHUNK: usize = 64 * 1024;
 
 /// Host-owned guest exec policy, delivered out of band (CLI flags from the
-/// dormant guest unit). Defaults are fail-closed: exec disabled, root denied.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// dormant guest unit). Defaults are fail-closed: exec disabled, no target
+/// user. The target user is **host-fixed** (the VM's workload user); the
+/// wire `user` field is never consulted for authorization, so a guest-control
+/// client can never target root or any other user.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecPolicy {
     pub enabled: bool,
-    pub allow_root: bool,
+    /// The single host-configured workload user every exec runs as. `None`
+    /// means no target is configured (exec is effectively disabled even if
+    /// `enabled` is set). Never `root`.
+    pub exec_user: Option<String>,
 }
 
 impl ExecPolicy {
@@ -535,7 +543,7 @@ pub struct ExecCreateInput {
 /// Validate the supported-subset flags and command shape, then apply policy.
 pub fn validate_and_authorize(
     input: &ExecCreateInput,
-    policy: ExecPolicy,
+    policy: &ExecPolicy,
 ) -> Result<ValidatedCommand, ExecError> {
     if !policy.enabled {
         return Err(ExecError::ExecDisabled);
@@ -547,15 +555,12 @@ pub fn validate_and_authorize(
         return Err(ExecError::MaxChunkExceeded);
     }
 
-    // Root-only gate. Omitted users fail closed; non-root is unsupported.
-    match input.user.as_deref() {
-        Some("root") => {
-            if !policy.allow_root {
-                return Err(ExecError::RootDenied);
-            }
-        }
-        Some(_) => return Err(ExecError::UserDenied),
-        None => return Err(ExecError::RootDenied),
+    // The target user is host-fixed (`policy.exec_user`, the VM workload
+    // user). The wire `user` field is never consulted for authorization, so a
+    // guest-control client cannot target root or any other user. A missing
+    // host-configured user fails closed.
+    if policy.exec_user.is_none() {
+        return Err(ExecError::ExecDisabled);
     }
 
     let command = validate_command(input)?;
@@ -569,7 +574,7 @@ pub fn validate_and_authorize(
 /// caps), so that bound is not enforced here.
 pub fn validate_and_authorize_detached(
     input: &ExecCreateInput,
-    policy: ExecPolicy,
+    policy: &ExecPolicy,
 ) -> Result<ValidatedCommand, ExecError> {
     if !policy.enabled {
         return Err(ExecError::ExecDisabled);
@@ -578,15 +583,10 @@ pub fn validate_and_authorize_detached(
         return Err(ExecError::UnsupportedMode);
     }
 
-    // Root-only gate. Omitted users fail closed; non-root is unsupported.
-    match input.user.as_deref() {
-        Some("root") => {
-            if !policy.allow_root {
-                return Err(ExecError::RootDenied);
-            }
-        }
-        Some(_) => return Err(ExecError::UserDenied),
-        None => return Err(ExecError::RootDenied),
+    // Host-fixed target user; the wire `user` field is ignored. Fail closed
+    // when no workload user is configured.
+    if policy.exec_user.is_none() {
+        return Err(ExecError::ExecDisabled);
     }
 
     let command = validate_command(input)?;
@@ -601,7 +601,7 @@ pub fn validate_and_authorize_detached(
 /// so the `max_chunk_bytes` bound is enforced here too.
 pub fn validate_and_authorize_tty(
     input: &ExecCreateInput,
-    policy: ExecPolicy,
+    policy: &ExecPolicy,
 ) -> Result<ValidatedCommand, ExecError> {
     if !policy.enabled {
         return Err(ExecError::ExecDisabled);
@@ -614,15 +614,10 @@ pub fn validate_and_authorize_tty(
         return Err(ExecError::MaxChunkExceeded);
     }
 
-    // Root-only gate. Omitted users fail closed; non-root is unsupported.
-    match input.user.as_deref() {
-        Some("root") => {
-            if !policy.allow_root {
-                return Err(ExecError::RootDenied);
-            }
-        }
-        Some(_) => return Err(ExecError::UserDenied),
-        None => return Err(ExecError::RootDenied),
+    // Host-fixed target user; the wire `user` field is ignored. Fail closed
+    // when no workload user is configured.
+    if policy.exec_user.is_none() {
+        return Err(ExecError::ExecDisabled);
     }
 
     let command = validate_command(input)?;
@@ -769,8 +764,8 @@ where
 
     /// The effective exec policy (read-only; used by the detached path to
     /// authorize a create routed to the detached registry).
-    pub fn policy(&self) -> ExecPolicy {
-        self.policy
+    pub fn policy(&self) -> &ExecPolicy {
+        &self.policy
     }
 
     fn lock_execs(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Arc<ExecEntry>>> {
@@ -809,7 +804,7 @@ where
         guest_boot_id: String,
         input: ExecCreateInput,
     ) -> Result<(String, ExecSnapshot), ExecError> {
-        let command = validate_and_authorize(&input, self.policy)?;
+        let command = validate_and_authorize(&input, &self.policy)?;
 
         // Reserve a capacity slot under the execs lock so concurrent creates
         // cannot collectively exceed the caps. The guard releases the slot on
@@ -906,7 +901,7 @@ where
         input: ExecCreateInput,
         initial_size: Option<(u32, u32)>,
     ) -> Result<(String, ExecSnapshot, u64), ExecError> {
-        let command = validate_and_authorize_tty(&input, self.policy)?;
+        let command = validate_and_authorize_tty(&input, &self.policy)?;
         // The capability is advertised only when usable; a create that reaches
         // here without a real PTY spawner fails closed.
         if !self.tty_usable {
@@ -1726,7 +1721,7 @@ mod tests {
     fn validate_rejects_unsupported_modes() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         for mutate in [
             |i: &mut ExecCreateInput| i.tty = true,
@@ -1737,74 +1732,164 @@ mod tests {
             let mut input = good_input();
             mutate(&mut input);
             assert_eq!(
-                validate_and_authorize(&input, policy),
+                validate_and_authorize(&input, &policy),
                 Err(ExecError::UnsupportedMode)
             );
         }
     }
 
     #[test]
-    fn validate_enforces_root_only_policy() {
-        let enabled_root = ExecPolicy {
+    fn validate_ignores_wire_user_and_requires_configured_user() {
+        // The target user is host-fixed (`policy.exec_user`); the wire `user`
+        // field is never consulted, so a client cannot escalate to root or
+        // pick another user. A configured workload user authorizes regardless
+        // of the wire `user`; a missing workload user fails closed; disabled
+        // policy fails closed.
+        let enabled_user = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
-        let enabled_no_root = ExecPolicy {
+        let enabled_no_user = ExecPolicy {
             enabled: true,
-            allow_root: false,
+            exec_user: None,
         };
         let disabled = ExecPolicy::disabled();
 
+        // Wire user = root is ignored: the configured workload user still wins.
+        let mut root_req = good_input();
+        root_req.user = Some("root".to_owned());
+        assert!(validate_and_authorize(&root_req, &enabled_user).is_ok());
+
+        // Wire user = some other name is ignored too.
+        let mut other_req = good_input();
+        other_req.user = Some("alice".to_owned());
+        assert!(validate_and_authorize(&other_req, &enabled_user).is_ok());
+
+        // Omitted wire user is fine — it is not consulted.
         let mut omitted = good_input();
         omitted.user = None;
-        assert_eq!(
-            validate_and_authorize(&omitted, enabled_root),
-            Err(ExecError::RootDenied)
-        );
+        assert!(validate_and_authorize(&omitted, &enabled_user).is_ok());
 
-        let mut non_root = good_input();
-        non_root.user = Some("alice".to_owned());
+        // No configured workload user => fail closed.
         assert_eq!(
-            validate_and_authorize(&non_root, enabled_root),
-            Err(ExecError::UserDenied)
-        );
-
-        assert_eq!(
-            validate_and_authorize(&good_input(), enabled_no_root),
-            Err(ExecError::RootDenied)
-        );
-        assert_eq!(
-            validate_and_authorize(&good_input(), disabled),
+            validate_and_authorize(&good_input(), &enabled_no_user),
             Err(ExecError::ExecDisabled)
         );
-        assert!(validate_and_authorize(&good_input(), enabled_root).is_ok());
+        // Disabled policy => fail closed.
+        assert_eq!(
+            validate_and_authorize(&good_input(), &disabled),
+            Err(ExecError::ExecDisabled)
+        );
+    }
+
+    #[test]
+    fn detached_and_tty_validators_ignore_wire_user_and_require_configured_user() {
+        // The detached and interactive-TTY validators MUST share the non-TTY
+        // validator's authorization contract: the wire `user` field is never
+        // consulted (no escalation to root or another user), a configured
+        // workload user authorizes, and a missing workload user / disabled
+        // policy fails closed.
+        let enabled_user = ExecPolicy {
+            enabled: true,
+            exec_user: Some("john".to_owned()),
+        };
+        let enabled_no_user = ExecPolicy {
+            enabled: true,
+            exec_user: None,
+        };
+        let disabled = ExecPolicy::disabled();
+
+        // Detached create input (detached=true, no interactive flags).
+        let detached_input = || {
+            let mut i = good_input();
+            i.detached = true;
+            i
+        };
+        // Interactive-TTY create input (tty=true, stdin open, terminal size).
+        let tty_input = || {
+            let mut i = good_input();
+            i.tty = true;
+            i.stdin_open = true;
+            i.has_terminal_size = true;
+            i
+        };
+
+        for (label, mk) in [
+            ("detached", &detached_input as &dyn Fn() -> ExecCreateInput),
+            ("tty", &tty_input as &dyn Fn() -> ExecCreateInput),
+        ] {
+            let validate = |input: &ExecCreateInput, policy: &ExecPolicy| {
+                if label == "detached" {
+                    validate_and_authorize_detached(input, policy)
+                } else {
+                    validate_and_authorize_tty(input, policy)
+                }
+            };
+
+            // Wire user = root is ignored: the configured workload user wins.
+            let mut root_req = mk();
+            root_req.user = Some("root".to_owned());
+            assert!(
+                validate(&root_req, &enabled_user).is_ok(),
+                "{label}: wire root user must be ignored, configured user authorizes"
+            );
+
+            // Wire user = some other name is ignored too.
+            let mut other_req = mk();
+            other_req.user = Some("alice".to_owned());
+            assert!(
+                validate(&other_req, &enabled_user).is_ok(),
+                "{label}: wire alice user must be ignored"
+            );
+
+            // Omitted wire user is fine — it is not consulted.
+            let mut omitted = mk();
+            omitted.user = None;
+            assert!(
+                validate(&omitted, &enabled_user).is_ok(),
+                "{label}: omitted wire user is fine"
+            );
+
+            // No configured workload user => fail closed.
+            assert_eq!(
+                validate(&mk(), &enabled_no_user),
+                Err(ExecError::ExecDisabled),
+                "{label}: missing workload user must fail closed"
+            );
+            // Disabled policy => fail closed.
+            assert_eq!(
+                validate(&mk(), &disabled),
+                Err(ExecError::ExecDisabled),
+                "{label}: disabled policy must fail closed"
+            );
+        }
     }
 
     #[test]
     fn validate_rejects_bad_command_shapes() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
 
         let mut empty = good_input();
         empty.argv = vec![];
         assert_eq!(
-            validate_and_authorize(&empty, policy),
+            validate_and_authorize(&empty, &policy),
             Err(ExecError::InvalidArgv)
         );
 
         let mut relative = good_input();
         relative.argv = vec!["echo".to_owned()];
         assert_eq!(
-            validate_and_authorize(&relative, policy),
+            validate_and_authorize(&relative, &policy),
             Err(ExecError::InvalidArgv)
         );
 
         let mut nul = good_input();
         nul.argv = vec!["/bin/echo".to_owned(), "a\0b".to_owned()];
         assert_eq!(
-            validate_and_authorize(&nul, policy),
+            validate_and_authorize(&nul, &policy),
             Err(ExecError::InvalidArgv)
         );
 
@@ -1813,28 +1898,28 @@ mod tests {
             .chain((0..MAX_ARGV).map(|_| "x".to_owned()))
             .collect();
         assert_eq!(
-            validate_and_authorize(&too_many, policy),
+            validate_and_authorize(&too_many, &policy),
             Err(ExecError::InvalidArgv)
         );
 
         let mut rel_cwd = good_input();
         rel_cwd.cwd = Some("rel".to_owned());
         assert_eq!(
-            validate_and_authorize(&rel_cwd, policy),
+            validate_and_authorize(&rel_cwd, &policy),
             Err(ExecError::CwdInvalid)
         );
 
         let mut empty_cwd = good_input();
         empty_cwd.cwd = Some(String::new());
         assert_eq!(
-            validate_and_authorize(&empty_cwd, policy),
+            validate_and_authorize(&empty_cwd, &policy),
             Err(ExecError::CwdInvalid)
         );
 
         let mut bad_env = good_input();
         bad_env.env = vec![("1BAD".to_owned(), "v".to_owned())];
         assert_eq!(
-            validate_and_authorize(&bad_env, policy),
+            validate_and_authorize(&bad_env, &policy),
             Err(ExecError::InvalidEnv)
         );
 
@@ -1844,14 +1929,14 @@ mod tests {
             ("A".to_owned(), "2".to_owned()),
         ];
         assert_eq!(
-            validate_and_authorize(&dup_env, policy),
+            validate_and_authorize(&dup_env, &policy),
             Err(ExecError::InvalidEnv)
         );
 
         let mut big_chunk = good_input();
         big_chunk.max_chunk_bytes = HARD_MAX_CHUNK_BYTES + 1;
         assert_eq!(
-            validate_and_authorize(&big_chunk, policy),
+            validate_and_authorize(&big_chunk, &policy),
             Err(ExecError::MaxChunkExceeded)
         );
     }
@@ -1969,7 +2054,7 @@ mod tests {
     async fn create_streams_output_and_reports_exit() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (rt, mut hooks) = runtime(policy);
         let owner = b"conn-1".to_vec();
@@ -2058,7 +2143,7 @@ mod tests {
     async fn cross_connection_access_is_denied() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (rt, _hooks) = runtime(policy);
         let owner = b"conn-A".to_vec();
@@ -2081,7 +2166,7 @@ mod tests {
     async fn spawn_failure_leaves_no_state() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let rt = ExecRuntime::new(FakeSpawner::failing(), SeqIds::new(), policy);
         let owner = b"conn-1".to_vec();
@@ -2097,7 +2182,7 @@ mod tests {
     async fn close_connection_cancels_and_forgets() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (rt, _hooks) = runtime(policy);
         let owner = b"conn-1".to_vec();
@@ -2155,7 +2240,7 @@ mod tests {
             SeqIds::new(),
             ExecPolicy {
                 enabled: true,
-                allow_root: true,
+                exec_user: Some("john".to_owned()),
             },
         );
         (rt, killed)
@@ -2355,7 +2440,7 @@ mod tests {
             SeqIds::new(),
             ExecPolicy {
                 enabled: true,
-                allow_root: true,
+                exec_user: Some("john".to_owned()),
             },
         ));
         let owner = b"conn-1".to_vec();
@@ -2604,7 +2689,7 @@ mod tests {
     fn tty_runtime(ceiling: Option<Duration>) -> (ExecRuntime<FakeSpawner, SeqIds>, PtyHooks) {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (pty, hooks) = FakePtySpawner::new();
         let (base, _non_tty_hooks) = FakeSpawner::new();
@@ -2835,7 +2920,7 @@ mod tests {
     async fn tty_create_without_spawner_is_unsupported() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (base, _hooks) = FakeSpawner::new();
         let rt = ExecRuntime::new(base, SeqIds::new(), policy);
@@ -2925,7 +3010,7 @@ mod tests {
     async fn tty_create_shares_attached_capacity() {
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (base, _hooks) = FakeSpawner::new();
         let spawner = MultiPtySpawner::new();
@@ -2970,7 +3055,7 @@ mod tests {
         // PTY (it fails before the spawner is reached).
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let (base, _hooks) = FakeSpawner::new();
         let spawner = MultiPtySpawner::new();
@@ -3023,7 +3108,7 @@ mod tests {
         assert_eq!(ATTACHED_SESSIONS_PER_VM, 8, "test interleave assumes cap 8");
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let killed = Arc::new(AtomicU64::new(0));
         let base = PendingSpawner {
@@ -3281,7 +3366,7 @@ mod tests {
 
         let policy = ExecPolicy {
             enabled: true,
-            allow_root: true,
+            exec_user: Some("john".to_owned()),
         };
         let spawner = CeilingSpawner {
             probe: Arc::new(CeilingProbe {

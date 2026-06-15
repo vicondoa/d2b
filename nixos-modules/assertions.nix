@@ -361,6 +361,35 @@ let
         '';
       }
       {
+        # `nixling.vms.<name>.guest.exec.allowRoot` was removed:
+        # guest-control exec now ALWAYS runs as the VM's workload
+        # user (`ssh.user`) inside a PAM login session, never root.
+        # The option is a kept-but-internal stub (options-vms.nix) so
+        # legacy assignments land on this friendly message instead of
+        # a cryptic "option does not exist" module-system error.
+        assertion = !(vm.enable && vm.guest.exec.allowRoot);
+        message = ''
+          nixling.vms.${name}.guest.exec.allowRoot was removed.
+          Guest-control exec now always runs as the VM's workload
+          user (`ssh.user`) inside a PAM login session — never as
+          root. There is no root-exec mode. Remove
+          `guest.exec.allowRoot = ...;`; to run a command as root,
+          elevate with `sudo` inside the exec session.
+        '';
+      }
+      {
+        # `nixling.vms.<name>.guest.exec.users` was removed: there is
+        # no per-VM exec user allowlist; exec always targets the
+        # single workload user (`ssh.user`). Kept-but-internal stub.
+        assertion = !(vm.enable && vm.guest.exec.users != [ ]);
+        message = ''
+          nixling.vms.${name}.guest.exec.users was removed.
+          Guest-control exec now always targets the VM's single
+          workload user (`ssh.user`); there is no per-VM exec user
+          allowlist. Remove `guest.exec.users = [ ... ];`.
+        '';
+      }
+      {
         # Graphics VMs CANNOT be autostart. The
         # `nixling@<vm>` wrapper template starts `microvm@<vm>`,
         # which is the upstream microvm.nix runner — but graphics

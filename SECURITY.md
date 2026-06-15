@@ -75,7 +75,7 @@ will introduce are:
   `0660` group `nixling`. Membership in the `nixling` group (populated
   from `nixling.site.launcherUsers`) is the only *connection* gate —
   there is no second `nixling-admin` socket or group. Destructive /
-  admin verbs (`vm exec`, `vm konsole`, `audit`, and `config sync`'s
+  admin verbs (`vm exec`, `audit`, and `config sync`'s
   guest read) are gated a second time *inside the daemon*: the
   `SO_PEERCRED` peer identity must also appear in
   `nixling.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
@@ -174,7 +174,7 @@ The new trust-boundary statements are:
 
 ### Guest-control exec trust boundary
 
-`nixling vm exec` / `nixling vm konsole` run a command inside a VM over
+`nixling vm exec` runs a command inside a VM over
 the authenticated guest-control vsock channel — there is no SSH. The
 trust-boundary statements are:
 
@@ -182,10 +182,12 @@ trust-boundary statements are:
   `SO_PEERCRED` caller must be in `nixling.site.adminUsers` (the
   daemon-side role gate above), on top of the `nixling`-group
   connection gate. Per-VM exec must also be enabled in the bundle
-  (`guest.control.enable` + the guest exec policy); today guestd serves
-  **guest-root** exec (`guest.exec.allowRoot = true`), with the
-  non-root `guest.exec.users` allowlist validated but reserved for a
-  future wave.
+  (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
+  requested command as the VM's workload user (`ssh.user`) — **never
+  root** — inside a real PAM login session (`systemd-run
+  --property=PAMName=login --uid=<user>`); the wire `user` field is
+  host-fixed by guestd and ignored, and operators elevate with `sudo`
+  inside the session.
 - **Leak-safe daemon-side audit.** The daemon records exec *lifecycle*
   events (`GuestControlExecEstablished` / `GuestControlExecTerminated`)
   to its own `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM

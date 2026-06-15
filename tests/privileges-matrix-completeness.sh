@@ -78,9 +78,9 @@ def record_cli(parts):
             if len(parts) > 2 and parts[2] in {'--apply', '--dry-run', '--read-only'}:
                 op.append(parts[2])
         elif parts[0] == 'vm' and not parts[1].startswith('--'):
-            # konsole is the `vm exec -it` wrapper; both route to the daemon
-            # `exec` operation and share its admin-only authz row.
-            vm_alias = {'start': 'up', 'stop': 'down', 'restart': 'restart', 'list': 'list', 'exec': 'exec', 'konsole': 'exec'}.get(parts[1])
+            # `vm exec` routes to the daemon `exec` operation and uses its
+            # admin-only authz row.
+            vm_alias = {'start': 'up', 'stop': 'down', 'restart': 'restart', 'list': 'list', 'exec': 'exec'}.get(parts[1])
             if vm_alias is not None:
                 op = [vm_alias]
             else:

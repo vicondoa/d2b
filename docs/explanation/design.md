@@ -312,8 +312,10 @@ Pretending otherwise would be dishonest.
   names launchers could start was retired in v1.0 (per ADR 0015).
   Every mutating verb — lifecycle (`vm start`/`vm stop`/`vm restart`/
   `switch`), host-prepare, key rotation, USBIP bind, store verify,
-  config sync (`readGuestConfig`), and the destructive guest-root
-  verbs (`vm exec` / `vm konsole`) — is gated to the admin role
+  config sync (`readGuestConfig`), and the destructive
+  guest-control exec verb (`vm exec`, which runs commands as the VM's
+  workload user in a PAM login session — never as root) — is gated to
+  the admin role
   (`nixling.site.adminUsers`, checked via `SO_PEERCRED` at accept
   time), so a launcher-only member cannot reach them. The daemon does
   not narrow *which* admin user can drive *which* VM. By design.
@@ -609,7 +611,7 @@ behavioural contract at
 [`../reference/cli-contract.md`](../reference/cli-contract.md))
 is the daily-driver interface. Verbs include `list`, `status`,
 `vm start` / `vm stop` / `vm restart` / `vm switch`, `console`,
-`vm exec` / `vm konsole`, `build`, `generations`, `config`
+`vm exec`, `build`, `generations`, `config`
 (`sync` / `diff` / `approve` / `reject` / `status`), `audio`, `usb`,
 `keys`, `host`, and `audit`. The CLI is the Rust binary, full stop:
 the pre-v1.0 bash CLI (and the generated `nixos-modules/cli.nix`
@@ -828,8 +830,10 @@ mutating verbs to the admin role (`nixling.site.adminUsers`, the
 audited `OpAuditRecord` in `broker-<utc-date>.jsonl`. The
 guest-control verbs are the exception: `readGuestConfig`
 (config sync) reads the guest's config over the typed guest-control
-channel rather than mutating the host, and `vm exec` / `vm konsole`
-proxy a guest-root session whose establishment and termination are
+channel rather than mutating the host, and `vm exec`
+proxies a guest-control exec session — running as the VM's workload
+user (`ssh.user`, never root) in a PAM login session — whose
+establishment and termination are
 recorded as *leak-safe daemon-side* lifecycle events in
 `daemon-events-<utc-date>.jsonl` (VM name, admin peer uid, and tty
 shape only — never argv, env, cwd, or stdio bytes), not as broker

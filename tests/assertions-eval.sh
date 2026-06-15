@@ -315,6 +315,8 @@ BATCHED_CASES=(
   graphics-with-autostart
   graphics-xwayland-unsupported
   audit-without-observability
+  guest-exec-allowroot-removed
+  guest-exec-users-removed
   principal-uid-collision
 )
 
