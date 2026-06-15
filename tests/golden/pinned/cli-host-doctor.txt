@@ -1,0 +1,17 @@
+# cli-host-doctor — host-doctor CLI-contract integration tests (nixling
+# crate, tests/host_doctor_contract.rs). Successors for the retired
+# tests/cli-rust-native-host-doctor.sh gate: spawn the real `nixling` binary
+# and exercise `host doctor --read-only --json` against sandboxed daemon-state
+# report fixtures, asserting the JSON envelope + per-check outcomes + process
+# exit codes. One libtest path per line; checked by
+# tests/tools/assert-pinned-tests.sh.
+host_doctor_without_read_only_exits_78_usage_envelope
+host_doctor_baseline_no_state_reports_broker_fail_exit_2
+host_doctor_pidfd_table_reports_otel_and_usbipd_runners
+host_doctor_clean_kernel_module_report_passes
+host_doctor_missing_required_kernel_module_fails_exit_2
+host_doctor_autostart_failed_outcome_fails_exit_2
+host_doctor_autostart_degraded_outcome_warns
+host_doctor_metrics_endpoint_unreachable_warns
+host_doctor_human_renderer_emits_summary_and_markers
+host_doctor_live_sockets_report_broker_and_daemon_ready

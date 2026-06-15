@@ -1,0 +1,424 @@
+//! W3 CLI-contract integration test, migrated from
+//! tests/cli-rust-native-host-doctor.sh.
+//!
+//! Spawns the real `nixling` binary and exercises `host doctor
+//! --read-only --json` against on-disk daemon-state report fixtures
+//! written into a sandboxed scratch directory. Every probe is
+//! redirected via env knobs (`NIXLING_BROKER_SOCKET`,
+//! `NIXLING_PUBLIC_SOCKET`, `NIXLING_DAEMON_STATE_DIR`,
+//! `NIXLING_METRICS_URL`, `NIXLING_MANIFEST_PATH`) so the test never
+//! touches real `/run` or `/var/lib` state and is fully hermetic.
+//!
+//! Unlike the `list` contract test, this gate needs no NL_FIXTURES
+//! bundle/manifest: `host doctor --read-only` reads its probe inputs
+//! from the env-pointed scratch paths, so the test always runs.
+//!
+//! The doctor JSON envelope is built by `doctor::render_summary` as a
+//! free-form `serde_json::Value` (there is no single public strict
+//! `*OutputV2` DTO for it), so the assertions below validate the
+//! exact fields the bash gate checked: `command` / `mode` /
+//! `broker_ready` / per-check `status` + `data` / `summary` /
+//! `exitCode`, plus the process exit code captured from
+//! `out.status.code()`.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+use nix::sys::socket::{
+    bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
+};
+use serde_json::Value;
+use std::os::fd::{AsRawFd, OwnedFd};
+
+// Pinned manifest with observability disabled so the `signoz-ui-endpoint`
+// probe returns early on every host (without this, the probe reads the
+// host's real manifest and the baseline check-name set drifts). Copied
+// verbatim from the bash gate's `manifest_path` heredoc.
+const MANIFEST_JSON: &str = r#"{"_manifest":{"manifestVersion":5},"_observability":{"enabled":false,"vmName":"sys-obs","obsVsockCid":1000,"obsVsockHostSocket":"/var/lib/nixling/vms/sys-obs/vsock.sock","signozUrl":"http://10.40.0.10:8080","signozOtlpGrpcPort":4317,"signozOtlpHttpPort":4318}}"#;
+
+const PIDFD_TABLE_JSON: &str = r#"{
+  "entries": [
+    { "vm": "obs-net",  "role": "otel-host-bridge",   "pid": 1001, "startTimeTicks": 5 },
+    { "vm": "corp-net", "role": "usbip",              "pid": 1002, "startTimeTicks": 5 },
+    { "vm": "work-net", "role": "usbip",              "pid": 1003, "startTimeTicks": 5 },
+    { "vm": "corp-vm",  "role": "cloud-hypervisor",   "pid": 1004, "startTimeTicks": 5 }
+  ]
+}"#;
+
+const KERNEL_MODULE_CLEAN_JSON: &str = r#"{
+  "required": ["kvm_intel"],
+  "present": ["kvm_intel"],
+  "missing_required": [],
+  "optional_missing": []
+}"#;
+
+const KERNEL_MODULE_MISSING_JSON: &str = r#"{
+  "required": ["kvm_intel"],
+  "present": [],
+  "missing_required": ["kvm_intel"],
+  "optional_missing": []
+}"#;
+
+const AUTOSTART_FAILED_JSON: &str = r#"{
+  "outcomes": [
+    { "vm": "obs-net",  "env": "obs",  "is_net_vm": true,  "outcome": { "kind": "started" } },
+    { "vm": "corp-vm",  "env": "corp", "is_net_vm": false, "outcome": { "kind": "failed", "reason": "broker refused" } }
+  ]
+}"#;
+
+const AUTOSTART_DEGRADED_JSON: &str = r#"{
+  "outcomes": [
+    { "vm": "obs-net",  "env": "obs",  "is_net_vm": true,  "outcome": { "kind": "started" } },
+    { "vm": "work-vm",  "env": "work", "is_net_vm": false, "outcome": { "kind": "degraded", "reason": "net-vm down" } }
+  ]
+}"#;
+
+/// Hermetic sandbox: a scratch tempdir holding the daemon-state report
+/// JSONs + a pinned manifest, with closed loopback/socket paths so the
+/// broker, daemon, and metrics probes surface predictable failures.
+struct Sandbox {
+    _tmp: tempfile::TempDir,
+    state_dir: PathBuf,
+    broker_socket: PathBuf,
+    public_socket: PathBuf,
+    manifest_path: PathBuf,
+}
+
+impl Sandbox {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state_dir = tmp.path().join("daemon-state");
+        std::fs::create_dir_all(&state_dir).expect("mk daemon-state dir");
+        let manifest_path = tmp.path().join("vms.json");
+        std::fs::write(&manifest_path, MANIFEST_JSON).expect("write manifest fixture");
+        let broker_socket = tmp.path().join("broker.sock");
+        let public_socket = tmp.path().join("public.sock");
+        Self {
+            _tmp: tmp,
+            state_dir,
+            broker_socket,
+            public_socket,
+            manifest_path,
+        }
+    }
+
+    fn write_state(&self, name: &str, contents: &str) {
+        std::fs::write(self.state_dir.join(name), contents)
+            .unwrap_or_else(|err| panic!("write {name}: {err}"));
+    }
+
+    fn doctor_command(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_nixling"));
+        cmd.env("NIXLING_BROKER_SOCKET", &self.broker_socket)
+            .env("NIXLING_PUBLIC_SOCKET", &self.public_socket)
+            .env("NIXLING_DAEMON_STATE_DIR", &self.state_dir)
+            // Closed loopback port -> predictable "unreachable" metrics probe.
+            .env("NIXLING_METRICS_URL", "http://127.0.0.1:1/metrics")
+            .env("NIXLING_MANIFEST_PATH", &self.manifest_path);
+        cmd
+    }
+
+    /// Run `host doctor --read-only --json`, returning the captured
+    /// process exit code and the parsed JSON envelope.
+    fn run_doctor_json(&self) -> (i32, Value) {
+        let out = self
+            .doctor_command()
+            .args(["host", "doctor", "--read-only", "--json"])
+            .output()
+            .expect("spawn host doctor --read-only --json");
+        let code = out
+            .status
+            .code()
+            .expect("host doctor terminated by signal, no exit code");
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+            panic!(
+                "host doctor --json did not emit valid JSON: {err}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (code, value)
+    }
+}
+
+/// Find the `checks[]` row with the given `name`, panicking with the
+/// full envelope if it is absent.
+fn check<'a>(envelope: &'a Value, name: &str) -> &'a Value {
+    envelope["checks"]
+        .as_array()
+        .expect("checks[] is an array")
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("check {name:?} missing; envelope:\n{envelope:#}"))
+}
+
+/// Bind + listen a `SOCK_SEQPACKET` `AF_UNIX` socket at `path`. The
+/// doctor only `connect()`s (no handshake), so a queued connection in
+/// the listen backlog is enough to report the probe as reachable. The
+/// returned fd must stay alive for the duration of the probe.
+fn listen_seqpacket(path: &std::path::Path) -> OwnedFd {
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .expect("create seqpacket socket");
+    let addr = UnixAddr::new(path).expect("seqpacket socket address");
+    bind(fd.as_raw_fd(), &addr).expect("bind seqpacket listener");
+    listen(&fd, Backlog::new(8).expect("listener backlog")).expect("listen seqpacket");
+    fd
+}
+
+// --- 1. usage gate: missing --read-only must exit 78 ----------------
+
+#[test]
+fn host_doctor_without_read_only_exits_78_usage_envelope() {
+    let sandbox = Sandbox::new();
+    let out = sandbox
+        .doctor_command()
+        .args(["host", "doctor", "--json"])
+        .output()
+        .expect("spawn host doctor --json (no --read-only)");
+    let code = out.status.code().expect("host doctor terminated by signal");
+    assert_eq!(
+        code,
+        78,
+        "host doctor without --read-only must exit 78; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value =
+        serde_json::from_slice(&out.stdout).expect("usage refusal must emit a JSON error envelope");
+    assert_eq!(
+        envelope["code"], "--read-only-required",
+        "usage envelope must carry the --read-only-required code; got:\n{envelope:#}"
+    );
+}
+
+// --- 2. baseline (no state present) → broker fail, exit 2 -----------
+
+#[test]
+fn host_doctor_baseline_no_state_reports_broker_fail_exit_2() {
+    let sandbox = Sandbox::new();
+    let (code, env) = sandbox.run_doctor_json();
+
+    assert_eq!(
+        code, 2,
+        "baseline doctor (no broker, no state) should exit 2 (broker fail); envelope:\n{env:#}"
+    );
+    assert_eq!(env["command"], "host doctor", "envelope command drift");
+    assert_eq!(env["mode"], "read-only", "envelope mode drift");
+    assert_eq!(
+        env["broker_ready"],
+        Value::Bool(false),
+        "baseline must preserve top-level broker_ready=false"
+    );
+
+    let mut names: Vec<&str> = env["checks"]
+        .as_array()
+        .expect("checks[] array")
+        .iter()
+        .map(|c| c["name"].as_str().expect("check name"))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "autostart-status",
+            "bridge-ipv6-sysctl",
+            "broker-ready",
+            "broker-reap-health",
+            "daemon-ready",
+            "kernel-module-matrix",
+            "metrics-endpoint",
+            "otel-host-bridge-runner",
+            "pre-ns-posture",
+            "seccomp-bpf-loaded",
+            "usbipd-runners",
+        ],
+        "baseline doctor checks[] name set drift (signoz-ui-endpoint must be \
+         suppressed by the observability-disabled manifest)"
+    );
+
+    let summary = &env["summary"];
+    assert!(
+        summary["fail"].as_u64().expect("summary.fail") >= 1,
+        "baseline must have >=1 fail (broker unreachable); summary:\n{summary:#}"
+    );
+    assert!(
+        summary["warn"].as_u64().expect("summary.warn") >= 4,
+        "baseline must warn on >=4 missing-state probes; summary:\n{summary:#}"
+    );
+}
+
+// --- 3. pidfd-table.json with bridge + usbipd → both runners pass ---
+
+#[test]
+fn host_doctor_pidfd_table_reports_otel_and_usbipd_runners() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("pidfd-table.json", PIDFD_TABLE_JSON);
+    let (_code, env) = sandbox.run_doctor_json();
+
+    let otel = check(&env, "otel-host-bridge-runner");
+    assert_eq!(otel["status"], "pass", "OtelHostBridge runner not pass");
+    assert_eq!(
+        otel["data"]["count"].as_u64(),
+        Some(1),
+        "exactly one OtelHostBridge runner expected"
+    );
+
+    let usbipd = check(&env, "usbipd-runners");
+    assert_eq!(usbipd["status"], "pass", "usbipd runners not pass");
+    assert_eq!(
+        usbipd["data"]["count"].as_u64(),
+        Some(2),
+        "two per-env usbipd runners expected"
+    );
+}
+
+// --- 4a. kernel-module-report.json clean → pass --------------------
+
+#[test]
+fn host_doctor_clean_kernel_module_report_passes() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("kernel-module-report.json", KERNEL_MODULE_CLEAN_JSON);
+    let (_code, env) = sandbox.run_doctor_json();
+    assert_eq!(
+        check(&env, "kernel-module-matrix")["status"],
+        "pass",
+        "clean kernel-module-report must yield kernel-module-matrix=pass"
+    );
+}
+
+// --- 4b. kernel-module-report.json required-missing → fail, exit 2 --
+
+#[test]
+fn host_doctor_missing_required_kernel_module_fails_exit_2() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("kernel-module-report.json", KERNEL_MODULE_MISSING_JSON);
+    let (code, env) = sandbox.run_doctor_json();
+    assert_eq!(code, 2, "missing required kernel module should exit 2");
+    assert_eq!(
+        check(&env, "kernel-module-matrix")["status"],
+        "fail",
+        "missing required module must yield kernel-module-matrix=fail"
+    );
+    assert_eq!(
+        env["exitCode"].as_i64(),
+        Some(2),
+        "envelope exitCode must agree with the process exit code"
+    );
+}
+
+// --- 5. autostart-report.json with Failed outcome → fail, exit 2 ----
+
+#[test]
+fn host_doctor_autostart_failed_outcome_fails_exit_2() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("autostart-report.json", AUTOSTART_FAILED_JSON);
+    let (code, env) = sandbox.run_doctor_json();
+    assert_eq!(code, 2, "autostart Failed outcome should exit 2");
+
+    let autostart = check(&env, "autostart-status");
+    assert_eq!(autostart["status"], "fail", "autostart-status must be fail");
+    assert_eq!(
+        autostart["data"]["failed"].as_u64(),
+        Some(1),
+        "exactly one failed autostart outcome expected"
+    );
+    assert_eq!(
+        autostart["data"]["degradedTotal"].as_u64(),
+        Some(1),
+        "degradedTotal counts failed+degraded"
+    );
+}
+
+// --- 6. autostart Degraded only → warn -----------------------------
+
+#[test]
+fn host_doctor_autostart_degraded_outcome_warns() {
+    let sandbox = Sandbox::new();
+    sandbox.write_state("autostart-report.json", AUTOSTART_DEGRADED_JSON);
+    let (_code, env) = sandbox.run_doctor_json();
+
+    let autostart = check(&env, "autostart-status");
+    assert_eq!(autostart["status"], "warn", "degraded-only must be warn");
+    assert_eq!(
+        autostart["data"]["degraded"].as_u64(),
+        Some(1),
+        "exactly one degraded autostart outcome expected"
+    );
+}
+
+// --- 7. metrics endpoint reported unreachable consistently ---------
+
+#[test]
+fn host_doctor_metrics_endpoint_unreachable_warns() {
+    let sandbox = Sandbox::new();
+    let (_code, env) = sandbox.run_doctor_json();
+    let metrics = check(&env, "metrics-endpoint");
+    assert_eq!(
+        metrics["status"], "warn",
+        "closed-port metrics probe must warn"
+    );
+    assert!(
+        metrics["detail"]
+            .as_str()
+            .expect("metrics detail")
+            .contains("unreachable"),
+        "metrics-endpoint detail must mention 'unreachable'; got {:?}",
+        metrics["detail"]
+    );
+}
+
+// --- 8. human renderer surfaces summary line + per-check markers ----
+
+#[test]
+fn host_doctor_human_renderer_emits_summary_and_markers() {
+    let sandbox = Sandbox::new();
+    // Guarantee at least one [PASS] marker by seeding passing probes.
+    sandbox.write_state("pidfd-table.json", PIDFD_TABLE_JSON);
+    sandbox.write_state("kernel-module-report.json", KERNEL_MODULE_CLEAN_JSON);
+
+    let out = sandbox
+        .doctor_command()
+        .args(["host", "doctor", "--read-only", "--human"])
+        .output()
+        .expect("spawn host doctor --read-only --human");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("host doctor --read-only: summary pass="),
+        "human renderer missing summary line; output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("[PASS]"),
+        "human renderer missing [PASS] markers; output:\n{stdout}"
+    );
+}
+
+// --- 9. live sockets → broker-ready + daemon-ready pass -------------
+
+#[test]
+fn host_doctor_live_sockets_report_broker_and_daemon_ready() {
+    let sandbox = Sandbox::new();
+    // Keep both listener fds alive across the probe.
+    let _broker = listen_seqpacket(&sandbox.broker_socket);
+    let _public = listen_seqpacket(&sandbox.public_socket);
+
+    let (_code, env) = sandbox.run_doctor_json();
+    assert_eq!(
+        check(&env, "broker-ready")["status"],
+        "pass",
+        "reachable broker socket must report broker-ready=pass"
+    );
+    assert_eq!(
+        check(&env, "daemon-ready")["status"],
+        "pass",
+        "reachable daemon socket must report daemon-ready=pass"
+    );
+    assert_eq!(
+        env["broker_ready"],
+        Value::Bool(true),
+        "top-level broker_ready must be true when the broker socket is reachable"
+    );
+}
