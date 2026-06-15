@@ -11,14 +11,22 @@ use nixling_core::privileges::{OperationAuthz, PrivilegesJson};
 // don't need to re-parse the source: `PrivilegesJson::w1` IS the canonical
 // matrix built from the same const rows, so the contract test compares the
 // rendered fixture directly against it.
-fn operation_groups(ops: &[OperationAuthz]) -> BTreeMap<String, Vec<String>> {
-    ops.iter()
-        .map(|op| {
-            let mut groups = op.allowed_groups.clone();
-            groups.sort();
-            (op.operation.clone(), groups)
-        })
-        .collect()
+fn operation_groups(label: &str, ops: &[OperationAuthz]) -> BTreeMap<String, Vec<String>> {
+    let mut map = BTreeMap::new();
+    for op in ops {
+        let mut groups = op.allowed_groups.clone();
+        groups.sort();
+        // Reject duplicate operation keys: a BTreeMap would otherwise
+        // last-wins-collapse two rows for the same operation, masking a
+        // duplicate with conflicting allowedGroups that the retired bash
+        // gate's row-wise join would have surfaced.
+        assert!(
+            map.insert(op.operation.clone(), groups).is_none(),
+            "{label}: duplicate operation '{}' in the privileges matrix",
+            op.operation
+        );
+    }
+    map
 }
 
 #[test]
@@ -29,16 +37,16 @@ fn rendered_privileges_matches_rust_matrix() {
     // Operation set + allowedGroups parity, public and broker, in one
     // BTreeMap equality each (the map diff localizes any drift to the
     // offending operation, mirroring the bash gate's rust-only/nix-only +
-    // per-op mismatch reporting).
+    // per-op mismatch reporting). Duplicate operations are rejected up front.
     assert_eq!(
-        operation_groups(&rendered.public_operations),
-        operation_groups(&rust.public_operations),
+        operation_groups("rendered.publicOperations", &rendered.public_operations),
+        operation_groups("rust.public_operations", &rust.public_operations),
         "rendered privileges.json publicOperations drifted from the Rust matrix \
          (PUBLIC_OPERATION_AUTHZ in nixling-core::privileges)"
     );
     assert_eq!(
-        operation_groups(&rendered.broker_operations),
-        operation_groups(&rust.broker_operations),
+        operation_groups("rendered.brokerOperations", &rendered.broker_operations),
+        operation_groups("rust.broker_operations", &rust.broker_operations),
         "rendered privileges.json brokerOperations drifted from the Rust matrix \
          (BROKER_OPERATION_AUTHZ in nixling-core::privileges)"
     );

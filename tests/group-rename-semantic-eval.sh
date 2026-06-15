@@ -23,5 +23,10 @@ if grep -R -nE 'extraGroups = \[[^]]*"nixling-launcher(s)?"' "$ROOT/nixos-module
   printf 'group-rename-semantic-eval: FAIL — legacy group still appears in extraGroups\n' >&2
   exit 1
 fi
-bash "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
+# The privileges Nix<->Rust matrix parity (which this gate previously
+# piggybacked via tests/privileges-json-rust-vs-nix-eval.sh) is now covered
+# independently by the gated contract test
+# packages/nixling-contract-tests/tests/privileges_parity.rs (run from
+# tests/rust-workspace-checks.sh with NL_FIXTURES). This gate retains only
+# its own group-rename source invariants.
 printf 'group-rename-semantic-eval: PASS\n'

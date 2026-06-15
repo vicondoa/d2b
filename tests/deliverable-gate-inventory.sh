@@ -35,10 +35,10 @@ MAPPINGS=(
   "vfsd-watchdog:cargo:nixlingd::supervisor::pidfd"
   "known-hosts-refresh:cargo:nixlingd::known_hosts_refresh"
   "ssh-host-key-preflight:tests/ssh-host-key-preflight-eval.sh;cargo:nixlingd::ssh_host_key_preflight"
-  "daemon-autostart:tests/daemon-autostart-eval.sh;cargo:nixlingd::autostart"
+  "daemon-autostart:cargo:nixlingd::autostart"
   "stop-dag-owner:tests/stop-dag-reconcile-eval.sh;cargo:nixlingd::supervisor::stop_dag"
   "net-fixture-observability-env:tests/net-vm-network-eval.sh"
-  "net-vm-bundle-gate:tests/net-vm-bundle-gate-eval.sh;cargo:nixlingd::net_vm_bundle_gate"
+  "net-vm-bundle-gate:cargo:nixlingd::net_vm_bundle_gate"
   "tap-dag-contract:tests/tap-dag-contract-doc-eval.sh;docs/reference/tap-dag-contract.md"
 )
 
