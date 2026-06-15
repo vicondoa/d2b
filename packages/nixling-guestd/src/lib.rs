@@ -7,6 +7,7 @@ pub mod exec;
 pub mod exec_linux;
 pub mod exec_pty;
 pub mod generated;
+pub mod login_session;
 pub mod service;
 
 use nixling_ipc::guest_wire::{
@@ -97,22 +98,6 @@ pub trait TokenSource {
 pub enum AuthError {
     TokenUnavailable,
     MacRejected,
-}
-
-pub trait UserDirectory {
-    fn resolve_user(&self, user: &str) -> Result<GuestUserIdentity, UserDirectoryError>;
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct GuestUserIdentity {
-    pub uid: u32,
-    pub gid: u32,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum UserDirectoryError {
-    NotFound,
-    Denied,
 }
 
 pub trait ExecRuntime {

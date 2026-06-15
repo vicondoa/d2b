@@ -663,46 +663,17 @@
               Enable the guest-control exec runtime for this VM.
 
               This wires the guestd exec service so admin operators (callers in
-              `nixling.site.adminUsers`) can run `nixling vm exec` and `nixling
-              vm konsole` against this VM over the authenticated guest-control
-              vsock — no SSH. Exec is off by default, and enabling it requires
-              `guest.control.enable = true` plus either `allowRoot = true` or a
-              non-root user allowlist. Today guestd serves guest-root exec only
-              (`allowRoot = true`); the non-root `users` allowlist is validated
-              and reserved but not yet honoured at runtime.
-            '';
-          };
+              `nixling.site.adminUsers`) can run `nixling vm exec` against this
+              VM over the authenticated guest-control vsock — no SSH. Exec is
+              off by default; enabling it requires `guest.control.enable = true`
+              and a workload user (`ssh.user`).
 
-          allowRoot = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = ''
-              Permit the guest-control exec runtime to target root in this VM.
-
-              This is the currently-served exec target: with
-              `guest.exec.enable = true` and `allowRoot = true`, guestd runs
-              admin-requested `nixling vm exec` / `vm konsole` commands as guest
-              root. It defaults to false and is separate from the non-root user
-              allowlist.
-            '';
-          };
-
-          users = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ ];
-            example = [ "alice" ];
-            description = ''
-              Non-root guest users that the guest-control exec runtime may
-              target.
-
-              No users are allowed by default, and the SSH user is not
-              implicitly added. Usernames are intentionally restricted to a
-              raw-safe lowercase subset so guest-side unit names and runtime
-              directories are unambiguous. `root` is never listed here; use
-              `allowRoot` for the separate root-exec policy gate. Note: non-root
-              exec is not yet served by guestd — these entries are validated and
-              emit per-user `nixling-userd` units, but every non-root exec
-              request is currently rejected (reserved for a future wave).
+              Every exec runs the requested command as the VM's workload user
+              (`ssh.user`) — never as root — inside a real PAM login session
+              (`systemd-run --property=PAMName=login --uid=<user>`), so the
+              command sees the same environment an SSH login would
+              (`XDG_RUNTIME_DIR`, the login-shell profile, …). Users elevate
+              with `sudo` inside the session.
             '';
           };
 

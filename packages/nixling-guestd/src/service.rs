@@ -46,12 +46,12 @@ use crate::{
     generated::guest_control_ttrpc::{create_guest_control, GuestControl},
 };
 
-/// Absolute path to the guest login program (NixOS system profile). The
-/// interactive PTY spawner execs `login -f <workload-user>` here to start a
-/// real PAM login session: `pam_systemd` provisions `XDG_RUNTIME_DIR` and the
-/// login shell sources the profile (`WAYLAND_DISPLAY`, …), reproducing the old
-/// SSH `vm konsole` environment so graphical clients work.
-const GUEST_LOGIN_PATH: &str = "/run/current-system/sw/bin/login";
+/// Absolute path to the guest login shell (NixOS system profile). Interactive
+/// and non-interactive execs run the requested command through this shell with
+/// `-l` so the profile (`/etc/set-environment`, `WAYLAND_DISPLAY`, …) is
+/// sourced inside the PAM login session, reproducing the old SSH `vm konsole`
+/// environment so graphical clients work.
+const GUEST_LOGIN_SHELL_PATH: &str = "/run/current-system/sw/bin/bash";
 
 /// Server-generated opaque exec id source backed by `/dev/urandom`.
 pub struct OsExecIds;
@@ -313,63 +313,62 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
     let exec_user = config.exec_policy.exec_user.clone();
     let exec_enabled_user = config.exec_policy.enabled && exec_user.is_some();
 
-    // Build the cross-connection detached registry (shared by all connections)
-    // when the host wired detached runtime constants AND exec is usable.
-    let detached: SharedDetached = match (&config.detached, exec_enabled_user) {
-        (Some(detached_cfg), true) if detached_runtime_usable(detached_cfg) => {
-            let boot_id = ProcBootIdSource
-                .guest_boot_id()
-                .map_err(|_| GuestdServiceError::Io)?;
-            let registry = build_detached_registry(detached_cfg, boot_id);
-            // Re-adopt durable records before serving so a guestd restart never
-            // kills a still-running adopted unit and lost ids remain listable.
-            registry.reconcile_on_startup().await;
-            // Periodic reaper: live reconciliation of vanished units + TTL/GC.
-            let reaper = Arc::clone(&registry);
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(DETACHED_REAPER_INTERVAL_MS)).await;
-                    reaper.reap_once().await;
-                }
-            });
-            Some(registry)
+    // Exec runtime paths (the `systemd-run` binary + the `nixling-exec-runner`
+    // PTY helper) are wired by the host whenever exec is enabled. Both reachable
+    // exec paths — the interactive PTY session and the non-interactive pipe —
+    // run the requested command as the host-fixed workload user (never root)
+    // inside a real PAM login session via `systemd-run --property=PAMName=login
+    // --uid=<user>`. Both require these paths present and valid.
+    let exec_paths: Option<&DetachedRuntimeConfig> = config.detached.as_ref().filter(|cfg| {
+        exec_enabled_user && cfg.systemd_run_path.is_file() && cfg.exec_runner_path.is_file()
+    });
+    let login_shell = PathBuf::from(GUEST_LOGIN_SHELL_PATH);
+
+    // Detached exec is not served in this build. Its durable, re-adoptable slot
+    // model is root-owned, so enabling it here would run the command as root —
+    // which the host-fixed workload-user policy forbids. It is disabled pending
+    // its own workload-user migration, and is not reachable from the CLI (there
+    // is no detach flag). Detached creates fail closed with `GuestExecDisabled`.
+    let detached: SharedDetached = None;
+
+    // Non-interactive (attached, non-TTY) spawner: runs as the workload user via
+    // `systemd-run --pipe`, or disabled (fail closed, never root) when exec
+    // paths are unavailable.
+    let nontty_spawner = match (exec_paths, exec_user.clone()) {
+        (Some(paths), Some(user)) => {
+            crate::exec_linux::LinuxProcessSpawner::new(crate::exec_linux::WorkloadUserSpawn {
+                systemd_run_path: paths.systemd_run_path.clone(),
+                login_shell_path: login_shell.clone(),
+                exec_user: user,
+            })
         }
-        _ => None,
+        _ => crate::exec_linux::LinuxProcessSpawner::disabled(),
     };
 
-    // Interactive TTY exec usability: exec must be enabled+root and the
-    // first-party PTY helper (the `nixling-exec-runner` binary, shared with the
-    // detached path) must be present. The interactive path needs only the
-    // runner binary — not systemd-run or the detached slot dir — so it is gated
-    // on the runner path alone.
-    let interactive_helper: Option<PathBuf> = match (&config.detached, exec_enabled_user) {
-        (Some(detached_cfg), true) if detached_cfg.exec_runner_path.is_file() => {
-            Some(detached_cfg.exec_runner_path.clone())
-        }
-        _ => None,
-    };
-
-    let mut exec_runtime = ExecRuntime::new(LinuxProcessSpawner, OsExecIds, config.exec_policy);
-    if let (Some(helper), Some(user)) = (interactive_helper.clone(), exec_user.clone()) {
+    let mut exec_runtime = ExecRuntime::new(nontty_spawner, OsExecIds, config.exec_policy);
+    if let (Some(paths), Some(user)) = (exec_paths, exec_user.clone()) {
         // 0 means unlimited (the interactive default); a non-zero value caps the
         // per-session runtime. Non-TTY attached execs keep MAX_EXEC_RUNTIME_MS.
         let ceiling = (config.interactive_max_runtime_sec != 0)
             .then(|| Duration::from_secs(config.interactive_max_runtime_sec));
         exec_runtime = exec_runtime
             .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(
-                helper,
+                paths.exec_runner_path.clone(),
+                paths.systemd_run_path.clone(),
+                login_shell.clone(),
                 user,
-                PathBuf::from(GUEST_LOGIN_PATH),
             )))
             .with_interactive_ceiling(ceiling);
     }
     let exec: SharedExec = Arc::new(exec_runtime);
 
     let capabilities = CapabilitiesConfig {
-        exec_attached: exec_enabled_user,
-        exec_detached: detached.is_some(),
-        // Retained logs share the detached store + quota.
-        exec_logs: detached.is_some(),
+        // Non-TTY attached exec is served iff the workload-user runtime paths
+        // are present.
+        exec_attached: exec_paths.is_some(),
+        // Detached exec + its retained logs are disabled in this build.
+        exec_detached: false,
+        exec_logs: false,
         exec_tty: exec.tty_usable(),
         read_guest_file: config.guest_config_path.is_some(),
     };
@@ -405,6 +404,11 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
 /// Build the production detached registry: `systemd-run`/`systemctl` unit
 /// manager, `/run/nixling-exec` slot store, system wall clock, tokio sleeper,
 /// and `/dev/urandom` exec ids.
+///
+/// Currently unused: detached exec is disabled in this build pending its
+/// workload-user migration (it runs root-owned today). Retained — with its
+/// tested registry infrastructure — for the migration that re-enables it.
+#[allow(dead_code)]
 fn build_detached_registry(
     detached: &DetachedRuntimeConfig,
     boot_id: String,
@@ -433,6 +437,10 @@ fn build_detached_registry(
 
 /// Runtime-usability probe for detached exec: the `systemd-run` + runner
 /// binaries must exist and `/run/nixling-exec` must be a root-owned directory.
+///
+/// Currently unused: detached exec is disabled in this build pending its
+/// workload-user migration.
+#[allow(dead_code)]
 fn detached_runtime_usable(detached: &DetachedRuntimeConfig) -> bool {
     if !detached.systemd_run_path.is_file() || !detached.exec_runner_path.is_file() {
         return false;
@@ -1911,7 +1919,7 @@ mod tests {
 
     fn test_exec() -> SharedExec {
         Arc::new(ExecRuntime::new(
-            LinuxProcessSpawner,
+            crate::exec_linux::LinuxProcessSpawner::disabled(),
             OsExecIds,
             ExecPolicy::disabled(),
         ))
@@ -1919,7 +1927,7 @@ mod tests {
 
     fn test_exec_root_enabled() -> SharedExec {
         Arc::new(ExecRuntime::new(
-            LinuxProcessSpawner,
+            crate::exec_linux::LinuxProcessSpawner::disabled(),
             OsExecIds,
             ExecPolicy {
                 enabled: true,

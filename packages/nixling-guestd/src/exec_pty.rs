@@ -809,23 +809,32 @@ pub mod linux {
 
     /// Production PTY spawner. Constructed with the absolute path to the
     /// `nixling-exec-runner` binary (invoked in `--tty-exec` mode), the
-    /// host-fixed workload user, and the absolute `login` path. The helper
-    /// execs `login -f <user>` so the interactive session is a real PAM login
-    /// for the workload user (never root): `pam_systemd` provisions
-    /// `XDG_RUNTIME_DIR` and the login shell sources the profile
-    /// (`WAYLAND_DISPLAY`, …), reproducing the old SSH `vm konsole`.
+    /// `systemd-run` binary, the workload user's login shell, and the
+    /// host-fixed workload user. The helper sets up the controlling TTY and
+    /// then execs `systemd-run --pty --property=PAMName=login --uid=<user>`,
+    /// so the interactive session is a real PAM login for the workload user
+    /// (never root): `pam_systemd` provisions `XDG_RUNTIME_DIR`, the login
+    /// shell sources the profile (`WAYLAND_DISPLAY`, …), and the requested
+    /// command runs inside that session — reproducing the old SSH `vm konsole`.
     pub struct LinuxPtyProcessSpawner {
         helper_path: PathBuf,
+        systemd_run_path: PathBuf,
+        login_shell_path: PathBuf,
         exec_user: String,
-        login_path: PathBuf,
     }
 
     impl LinuxPtyProcessSpawner {
-        pub fn new(helper_path: PathBuf, exec_user: String, login_path: PathBuf) -> Self {
+        pub fn new(
+            helper_path: PathBuf,
+            systemd_run_path: PathBuf,
+            login_shell_path: PathBuf,
+            exec_user: String,
+        ) -> Self {
             Self {
                 helper_path,
+                systemd_run_path,
+                login_shell_path,
                 exec_user,
-                login_path,
             }
         }
     }
@@ -863,29 +872,36 @@ pub mod linux {
                 .map_err(|_| ExecError::SpawnFailed)?;
 
             let mut cmd = Command::new(&self.helper_path);
-            // Interactive sessions run as a real PAM login for the host-fixed
-            // workload user: the helper execs `login -f <user>` (never root, and
-            // the requested argv is intentionally not run here — `login` opens
-            // the user's login shell, exactly as the old SSH `vm konsole` did).
-            // `pam_systemd` provisions `XDG_RUNTIME_DIR` and the login shell
-            // sources the profile (`WAYLAND_DISPLAY`, …), so graphical clients
-            // work. Only `TERM` is forwarded; `login`/PAM/profile establish the
-            // rest of the environment. cwd is `/` (login cds to the user home).
+            // Interactive sessions run the requested command as the host-fixed
+            // workload user (never root) inside a real PAM login session: the
+            // helper sets up the controlling TTY, then execs
+            // `systemd-run --pty --property=PAMName=login --uid=<user> -- <login
+            // shell> -l -c 'exec "$@"' <argv...>`. pam_systemd provisions
+            // XDG_RUNTIME_DIR and the login shell sources the profile
+            // (WAYLAND_DISPLAY, …), so graphical clients work; the client argv
+            // is passed as shell positional params (no injection). TERM is
+            // forwarded as a session override; the rest of the environment is
+            // established by login/PAM/profile.
             let term = command
                 .env
                 .iter()
                 .find(|(k, _)| k == "TERM")
                 .map(|(_, v)| v.clone())
                 .unwrap_or_else(|| "xterm".to_owned());
+            let session_args = crate::login_session::login_session_systemd_run_args(
+                &self.login_shell_path,
+                &self.exec_user,
+                crate::login_session::SessionMode::Pty,
+                &command,
+            );
             cmd.arg("--tty-exec")
                 .arg("--rows")
                 .arg(initial_size.rows.to_string())
                 .arg("--cols")
                 .arg(initial_size.cols.to_string())
                 .arg("--")
-                .arg(&self.login_path)
-                .arg("-f")
-                .arg(&self.exec_user)
+                .arg(&self.systemd_run_path)
+                .args(&session_args)
                 .current_dir("/")
                 .env_clear()
                 .env("TERM", term)

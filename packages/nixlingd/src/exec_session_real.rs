@@ -196,13 +196,10 @@ fn build_exec_create_request(vm_id: &str, spec: &ExecStartSpec) -> pb::ExecCreat
 
     let mut request = pb::ExecCreateRequest::new();
     request.metadata = MessageField::some(metadata);
-    // Guest-control exec is root-only by design: guestd's validate/authorize
-    // gates require `user == "root"` (then honour the per-VM `allow_root`
-    // policy) and fail closed on an omitted/non-root user. The daemon therefore
-    // always requests root; the guest's `guest.exec.allowRoot` policy decides
-    // whether it is permitted. Omitting this field made every exec fail
-    // `RootDenied` end-to-end.
-    request.user = Some("root".to_owned());
+    // The exec target user is host-fixed by guestd (the VM's workload user,
+    // `--exec-user`), and guestd ignores the wire `user` field entirely, so a
+    // client cannot select or escalate the target user. The daemon therefore
+    // leaves `user` unset.
     request.argv = spec.argv.clone();
     request.cwd = spec.cwd.clone();
     request.env = spec
@@ -763,12 +760,10 @@ mod tests {
     }
 
     #[test]
-    fn exec_create_request_always_requests_guest_root() {
-        // Guest-control exec is root-only: the daemon MUST set `user = "root"`
-        // so guestd's root gate (which fails closed on an omitted/non-root user)
-        // can honour the per-VM `allow_root` policy. A regression that omits the
-        // user makes every exec fail `RootDenied` end-to-end (the seam the
-        // hermetic fakes + deferred live test had missed).
+    fn exec_create_request_leaves_user_unset() {
+        // The exec target user is host-fixed by guestd (the workload user); the
+        // daemon must NOT set the wire `user` field (guestd ignores it, and a
+        // client must never be able to select/escalate the target user).
         let spec = ExecStartSpec {
             vm: "work".to_owned(),
             argv: vec!["true".to_owned()],
@@ -781,9 +776,9 @@ mod tests {
         let request = build_exec_create_request("work", &spec);
         assert_eq!(
             request.user.as_deref(),
-            Some("root"),
-            "the daemon must request guest root for exec; omitting it fails \
-             closed as RootDenied",
+            None,
+            "the daemon must leave the wire user unset; guestd fixes the \
+             target user host-side",
         );
         // Non-TTY exec must close stdin: guestd's non-TTY validators
         // (`validate_and_authorize` / `_detached`) reject `stdin_open`, so a
