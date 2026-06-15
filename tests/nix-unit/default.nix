@@ -25,9 +25,15 @@
 let
   ctx = { inherit lib pkgs system flakeRoot nl mkEval; };
 
-  caseFiles = [
-    ./cases/volume-mounts.nix
-  ];
+  # Auto-discover every case module under ./cases so parallel W2 migration
+  # units can each DROP a new `cases/<gate>.nix` file without editing this
+  # shared aggregator (mirrors the W1 parallel-unit protocol). A unit adds
+  # its case file + its migration-state.d row + deletes its legacy `.sh`;
+  # it never touches default.nix.
+  casesDir = ./cases;
+  caseFiles = map (n: casesDir + "/${n}")
+    (lib.filter (n: lib.hasSuffix ".nix" n)
+      (lib.attrNames (builtins.readDir casesDir)));
 
   merge = acc: f:
     let cases = import f ctx;
