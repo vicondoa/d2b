@@ -34,6 +34,7 @@ pub enum UnitError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedUnit {
     pub slot: u32,
+    pub kind: ManagedUnitKind,
     /// True when the unit is loaded and active/activating.
     pub active: bool,
     /// The unit's identity (`Slice` + `ExecStart`) as resolved by
@@ -43,6 +44,21 @@ pub struct ManagedUnit {
     /// never `Foreign` (destructive) — only a queried identity that actually
     /// mismatches is `Foreign`.
     pub identity: UnitIdentity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedUnitKind {
+    Runner,
+    Workload,
+}
+
+impl ManagedUnit {
+    fn name(&self) -> String {
+        match self.kind {
+            ManagedUnitKind::Runner => unit_name(self.slot),
+            ManagedUnitKind::Workload => workload_unit_name(self.slot),
+        }
+    }
 }
 
 /// The result of querying a unit's identity (`Slice` + `ExecStart`) via
@@ -213,10 +229,23 @@ impl TransientUnitManager for SystemdRunUnitManager {
         let mut cmd = tokio::process::Command::new(&self.systemctl_path);
         cmd.arg("stop")
             .arg(unit_name(slot))
+            .arg(workload_unit_name(slot))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         let _ = cmd.status().await.map_err(|_| UnitError::SpawnFailed)?;
+        let mut kill = tokio::process::Command::new(&self.systemctl_path);
+        kill.arg("--system")
+            .arg("--no-ask-password")
+            .arg("--quiet")
+            .arg("--kill-whom=all")
+            .arg("--signal=SIGKILL")
+            .arg("kill")
+            .arg(workload_unit_name(slot))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = kill.status().await.map_err(|_| UnitError::SpawnFailed)?;
         Ok(())
     }
 
@@ -224,6 +253,7 @@ impl TransientUnitManager for SystemdRunUnitManager {
         let mut cmd = tokio::process::Command::new(&self.systemctl_path);
         cmd.arg("reset-failed")
             .arg(unit_name(slot))
+            .arg(workload_unit_name(slot))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -263,14 +293,14 @@ impl TransientUnitManager for SystemdRunUnitManager {
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         for unit in &units {
-            show.arg(unit_name(unit.slot));
+            show.arg(unit.name());
         }
         if let Ok(show_out) = show.output().await {
             if show_out.status.success() {
                 let show_text = String::from_utf8_lossy(&show_out.stdout);
                 let blocks = parse_show_blocks(&show_text);
                 for unit in &mut units {
-                    let name = unit_name(unit.slot);
+                    let name = unit.name();
                     if let Some(block) = blocks.iter().find(|b| b.id == name) {
                         unit.identity = UnitIdentity::Queried {
                             slice: block.slice.clone(),
@@ -346,7 +376,7 @@ fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
         } else {
             continue;
         };
-        let Some(slot) = parse_slot_from_unit(unit) else {
+        let Some((slot, kind)) = parse_slot_from_unit(unit) else {
             continue;
         };
         // ACTIVE column (3rd after the unit name): LOAD ACTIVE SUB ...
@@ -355,6 +385,7 @@ fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
         let active = matches!(active_state, "active" | "activating");
         out.push(ManagedUnit {
             slot,
+            kind,
             active,
             identity: UnitIdentity::Unqueried,
         });
@@ -362,18 +393,33 @@ fn parse_managed_units(text: &str) -> Vec<ManagedUnit> {
     out
 }
 
-/// Extract the slot from `nixling-exec-<NN>.service`; `None` if it does not
-/// match the bounded slot-keyed name.
-fn parse_slot_from_unit(unit: &str) -> Option<u32> {
+/// Extract the slot/kind from `nixling-exec-<NN>.service` or
+/// `nixling-exec-<NN>-w.service`; `None` if it does not match the bounded
+/// slot-keyed names.
+fn parse_slot_from_unit(unit: &str) -> Option<(u32, ManagedUnitKind)> {
     let rest = unit.strip_prefix("nixling-exec-")?;
+    if let Some(digits) = rest.strip_suffix("-w.service") {
+        return digits
+            .parse::<u32>()
+            .ok()
+            .map(|slot| (slot, ManagedUnitKind::Workload));
+    }
     let digits = rest.strip_suffix(".service")?;
-    digits.parse::<u32>().ok()
+    digits
+        .parse::<u32>()
+        .ok()
+        .map(|slot| (slot, ManagedUnitKind::Runner))
 }
 
 /// Stable unit name for a slot: `nixling-exec-<NN>.service` (zero-padded). The
 /// opaque exec id never appears in the unit name (journald cardinality bound).
 pub fn unit_name(slot: u32) -> String {
     format!("nixling-exec-{slot:02}.service")
+}
+
+/// Stable workload unit name for a slot: `nixling-exec-<NN>-w.service`.
+pub fn workload_unit_name(slot: u32) -> String {
+    format!("nixling-exec-{slot:02}-w.service")
 }
 
 /// Build the full `systemd-run` argv (excluding the `systemd-run` binary
@@ -499,9 +545,22 @@ mod tests {
 
     #[test]
     fn parse_slot_from_unit_matches_only_bounded_names() {
-        assert_eq!(parse_slot_from_unit("nixling-exec-00.service"), Some(0));
-        assert_eq!(parse_slot_from_unit("nixling-exec-31.service"), Some(31));
-        assert_eq!(parse_slot_from_unit("nixling-exec-07.service"), Some(7));
+        assert_eq!(
+            parse_slot_from_unit("nixling-exec-00.service"),
+            Some((0, ManagedUnitKind::Runner))
+        );
+        assert_eq!(
+            parse_slot_from_unit("nixling-exec-31.service"),
+            Some((31, ManagedUnitKind::Runner))
+        );
+        assert_eq!(
+            parse_slot_from_unit("nixling-exec-07.service"),
+            Some((7, ManagedUnitKind::Runner))
+        );
+        assert_eq!(
+            parse_slot_from_unit("nixling-exec-07-w.service"),
+            Some((7, ManagedUnitKind::Workload))
+        );
         assert_eq!(parse_slot_from_unit("other.service"), None);
         assert_eq!(parse_slot_from_unit("nixling-exec-.service"), None);
         assert_eq!(parse_slot_from_unit("nixling-exec-xx.service"), None);
@@ -511,27 +570,37 @@ mod tests {
     fn parse_managed_units_reads_active_column() {
         let text = "\
 nixling-exec-00.service loaded active   running Detached exec 00
+nixling-exec-00-w.service loaded active running Detached exec 00 workload
 nixling-exec-01.service loaded inactive dead    Detached exec 01
 nixling-exec-02.service loaded activating start Detached exec 02
 other.service           loaded active   running Unrelated
 ";
         let mut units = parse_managed_units(text);
-        units.sort_by_key(|u| u.slot);
+        units.sort_by_key(|u| (u.slot, u.kind == ManagedUnitKind::Workload));
         assert_eq!(
             units,
             vec![
                 ManagedUnit {
                     slot: 0,
+                    kind: ManagedUnitKind::Runner,
+                    active: true,
+                    identity: UnitIdentity::Unqueried
+                },
+                ManagedUnit {
+                    slot: 0,
+                    kind: ManagedUnitKind::Workload,
                     active: true,
                     identity: UnitIdentity::Unqueried
                 },
                 ManagedUnit {
                     slot: 1,
+                    kind: ManagedUnitKind::Runner,
                     active: false,
                     identity: UnitIdentity::Unqueried
                 },
                 ManagedUnit {
                     slot: 2,
+                    kind: ManagedUnitKind::Runner,
                     active: true,
                     identity: UnitIdentity::Unqueried
                 },
@@ -547,6 +616,7 @@ other.service           loaded active   running Unrelated
             units,
             vec![ManagedUnit {
                 slot: 5,
+                kind: ManagedUnitKind::Runner,
                 active: false,
                 identity: UnitIdentity::Unqueried
             }]
