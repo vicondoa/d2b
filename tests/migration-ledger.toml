@@ -71,15 +71,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/broker-default-features-build.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/broker-enum-disposition.sh"
 group = "A"
 make_target = "test-rust"
@@ -1248,6 +1239,15 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
+
+[[script]]
+name = "tests/broker-default-features-build.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["tests/rust-workspace-checks.sh (gated `cargo check --workspace --manifest-path nixling-priv-broker default features = real wire dispatch` — the broker default-features build is already a gate step)"]
+exercised_today = "skip"
 
 [[script]]
 name = "tests/broker-scm-rights-fd-lifecycle.sh"
