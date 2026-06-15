@@ -792,7 +792,6 @@ for _d13_gate in \
   host-prep-dag-eval \
   kernel-modules-parity-eval \
   loki-label-cardinality-eval \
-  microvm-nix-absent-eval \
   minijail-validator-audio \
   minijail-validator-cloud-hypervisor \
   minijail-validator-gpu \
@@ -806,12 +805,10 @@ for _d13_gate in \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
   no-bash-exec-eval \
-  otel-acl-migration-eval \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   processes-json-eval \
   readiness-waves-eval \
-  release-tag-eval \
   ssh-host-key-preflight-eval \
   state-dir-acl-eval \
   store-sync-export-eval \
@@ -819,8 +816,6 @@ for _d13_gate in \
   supervisor-option-absent-eval \
   tap-dag-contract-doc-eval \
   usbip-state-machine-eval \
-  vfsd-watchdog-retired-eval \
-  vm-submodule-cutover-eval \
   vm-submodule-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
     nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
@@ -1238,9 +1233,7 @@ if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-proto.sh" ]; then nl_static_parallel_script "tests/guest-control-proto.sh" "$HERE/guest-control-proto.sh"; fi
-if [ -x "$HERE/guest-control-auth-nongoals.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-nongoals.sh" "$HERE/guest-control-auth-nongoals.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
-if [ -x "$HERE/guest-control-vsock-helper-static.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-helper-static.sh" "$HERE/guest-control-vsock-helper-static.sh"; fi
 if [ -x "$HERE/guest-exec-runtime-static.sh" ]; then nl_static_parallel_script "tests/guest-exec-runtime-static.sh" "$HERE/guest-exec-runtime-static.sh"; fi
 if [ -x "$HERE/guest-exec-policy-eval.sh" ]; then nl_static_parallel_script "tests/guest-exec-policy-eval.sh" "$HERE/guest-exec-policy-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
@@ -1263,7 +1256,6 @@ nl_static_gate_end "W1 bundle/schema static gates"
 # error-codes, and bounded fuzz of the manifest_v04 / bundle parsers.
 # -----------------------------------------------------------------------------
 nl_static_gate_begin "W2 control-plane skeleton gates" "W2 control-plane skeleton gates"
-if [ -x "$HERE/static-rust-dependency-direction.sh" ]; then bash "$HERE/static-rust-dependency-direction.sh" || fail "static-rust-dependency-direction"; fi
 nl_time_begin "W2 cargo prebuild"
 if [ -d "$ROOT/packages" ]; then
   nl_activate_rust_toolchain_path || true
@@ -1293,7 +1285,6 @@ if [ -x "$HERE/error-codes-drift.sh" ]; then nl_static_parallel_script "tests/er
 if [ -x "$HERE/manpage-completion-drift.sh" ]; then nl_static_parallel_script "tests/manpage-completion-drift.sh" "$HERE/manpage-completion-drift.sh"; fi
 if [ -x "$HERE/manpage-completeness-eval.sh" ]; then nl_static_parallel_script "tests/manpage-completeness-eval.sh" "$HERE/manpage-completeness-eval.sh"; fi
 # Closure: wire the remaining gates.
-if [ -x "$HERE/changelog-v1-cut-eval.sh" ]; then nl_static_parallel_script "tests/changelog-v1-cut-eval.sh" "$HERE/changelog-v1-cut-eval.sh"; fi
 if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
 if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
 if [ -x "$HERE/daemon-api-drift.sh" ]; then nl_static_parallel_script "tests/daemon-api-drift.sh" "$HERE/daemon-api-drift.sh"; fi

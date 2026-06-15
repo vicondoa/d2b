@@ -72,33 +72,8 @@ fn git_listed_files(roots: &[&str]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 #[test]
 fn legacy_group_name_denylist() {
-    let search = Regex::new(r"nixling-launcher(s)?").expect("valid search regex");
-
-    // Verbatim port of the bash gate's `allowlist=(...)` array. Each entry is a
-    // full-line (`^...$`-anchored) regex matched against `path:lineno:content`.
-    let allowlist_patterns = [
-        r"nixos-modules/host-activation\.nix:[0-9]+:[[:space:]]*(legacyLauncherGid|legacyLaunchersGid|getent group|for legacy_name in nixling-launcher nixling-launchers; do).*",
-        r"nixos-modules/host-activation-helper/.*",
-        r"packages/nixling-host-activation-helper/.*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# nixling-launcher\{,s\} → nixling rename\. No module references the[[:space:]]*",
-        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*nixling-launcher = \{ \};[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# nixling-launcher\{,s\} → nixling rename\. No module references the[[:space:]]*",
-        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.nixling-launchers = \{ \};[[:space:]]*",
-        r"packages/nixling-core/src/privileges\.rs:[0-9]+:.*nixling-launcher.*",
-        r"packages/nixling-ipc/src/broker_wire\.rs:[0-9]+:.*nixling-launcher.*",
-        r"packages/nixling-priv-broker/src/bootstrap\.rs:[0-9]+:.*nixling-launcher.*",
-        r"nixos-modules/privileges-json\.nix:[0-9]+:.*nixling-launcher.*",
-        r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
-        r"tests/group-rename-semantic-eval\.sh:[0-9]+:.*",
-        // This Rust port carries the denylist patterns (which literally contain
-        // the legacy group names) and replaces the bash gate; self-allowlist it
-        // exactly as the bash gate self-allowlisted `legacy-group-name-denylist.sh`.
-        r"packages/nixling-contract-tests/tests/policy_modules\.rs:[0-9]+:.*",
-    ];
-    let allowlist = Regex::new(&format!("^({})$", allowlist_patterns.join("|")))
-        .expect("valid allowlist regex");
+    let search = legacy_group_search();
+    let allowlist = legacy_group_allowlist();
 
     let mut violations: Vec<String> = Vec::new();
     for rel in git_listed_files(&["nixos-modules", "packages", "tests"]) {
@@ -121,6 +96,71 @@ fn legacy_group_name_denylist() {
         "legacy nixling-launcher{{,s}} references found:\n{}",
         violations.join("\n")
     );
+}
+
+/// Negative coverage migrated from the retired
+/// `tests/legacy-group-name-denylist-self-test.sh`: a forbidden
+/// `nixling-launcher` reference in a non-allowlisted source path must be
+/// flagged, while an allowlisted (migration-tombstone) reference must not.
+#[test]
+fn legacy_group_name_denylist_rejects_forbidden_line() {
+    let search = legacy_group_search();
+    let allowlist = legacy_group_allowlist();
+
+    let forbidden = "packages/forbidden.rs:1:const BAD: &str = \"nixling-launcher\";";
+    assert!(
+        search.is_match(forbidden),
+        "search must match the forbidden line"
+    );
+    assert!(
+        !allowlist.is_match(forbidden),
+        "a forbidden nixling-launcher reference in a non-allowlisted path must be flagged"
+    );
+
+    let allowed = "nixos-modules/host-users.nix:42:    nixling-launcher = { };";
+    assert!(
+        allowlist.is_match(allowed),
+        "the host-users.nix migration-tombstone line must stay allowlisted"
+    );
+}
+
+/// The line-matching search for legacy group names (`nixling-launcher{,s}`).
+fn legacy_group_search() -> Regex {
+    Regex::new(r"nixling-launcher(s)?").expect("valid search regex")
+}
+
+/// Full-line (`^...$`-anchored, matched against `path:lineno:content`) allowlist
+/// of permitted legacy-group-name references — a verbatim port of the bash
+/// gate's `allowlist=(...)` array.
+fn legacy_group_allowlist() -> Regex {
+    let allowlist_patterns = [
+        r"nixos-modules/host-activation\.nix:[0-9]+:[[:space:]]*(legacyLauncherGid|legacyLaunchersGid|getent group|for legacy_name in nixling-launcher nixling-launchers; do).*",
+        r"nixos-modules/host-activation-helper/.*",
+        r"packages/nixling-host-activation-helper/.*",
+        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
+        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*# nixling-launcher\{,s\} → nixling rename\. No module references the[[:space:]]*",
+        r"nixos-modules/host-users\.nix:[0-9]+:[[:space:]]*nixling-launcher = \{ \};[[:space:]]*",
+        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# DEPRECATED v1\.2: kept as migration tombstone for the[[:space:]]*",
+        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*# nixling-launcher\{,s\} → nixling rename\. No module references the[[:space:]]*",
+        r"nixos-modules/host-daemon\.nix:[0-9]+:[[:space:]]*users\.groups\.nixling-launchers = \{ \};[[:space:]]*",
+        r"packages/nixling-core/src/privileges\.rs:[0-9]+:.*nixling-launcher.*",
+        r"packages/nixling-ipc/src/broker_wire\.rs:[0-9]+:.*nixling-launcher.*",
+        r"packages/nixling-priv-broker/src/bootstrap\.rs:[0-9]+:.*nixling-launcher.*",
+        r"nixos-modules/privileges-json\.nix:[0-9]+:.*nixling-launcher.*",
+        r"tests/legacy-group-name-denylist(-self-test)?\.sh:[0-9]+:.*",
+        r"tests/group-rename-semantic-eval\.sh:[0-9]+:.*",
+        // Migration bookkeeping (the ledger + per-script retirement records)
+        // legitimately *describes* the retired legacy-group-name gates and their
+        // successors; it is not live config usage, so exempt it (this is also
+        // future-proof against other legacy-name gate retirements).
+        r"tests/migration-ledger\.toml:[0-9]+:.*",
+        r"tests/migration-state\.d/.*:[0-9]+:.*",
+        // This Rust port carries the denylist patterns (which literally contain
+        // the legacy group names) and replaces the bash gate; self-allowlist it
+        // exactly as the bash gate self-allowlisted `legacy-group-name-denylist.sh`.
+        r"packages/nixling-contract-tests/tests/policy_modules\.rs:[0-9]+:.*",
+    ];
+    Regex::new(&format!("^({})$", allowlist_patterns.join("|"))).expect("valid allowlist regex")
 }
 
 // ---------------------------------------------------------------------------

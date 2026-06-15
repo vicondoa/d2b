@@ -125,15 +125,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/changelog-v1-cut-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/ch-net-handoff-canary.sh"
 group = "A"
 make_target = "test-rust"
@@ -287,15 +278,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/guest-control-auth-nongoals.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/guest-control-proto.sh"
 group = "A"
 make_target = "test-rust"
@@ -308,15 +290,6 @@ exercised_today = "skip"
 name = "tests/guest-control-token-materializer.sh"
 group = "A"
 make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/guest-control-vsock-helper-static.sh"
-group = "H"
-make_target = "test-policy"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -485,24 +458,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/legacy-group-name-denylist-self-test.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/legacy-group-name-denylist.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/legacy-unit-denylist-eval.sh"
 group = "F"
 make_target = "test-flake"
@@ -564,15 +519,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "yes"
-
-[[script]]
-name = "tests/microvm-nix-absent-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
 
 [[script]]
 name = "tests/minijail-validator-audio.sh"
@@ -764,15 +710,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/otel-acl-migration-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/path-safety-violation-fs.sh"
 group = "A"
 make_target = "test-rust"
@@ -854,15 +791,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/release-tag-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/runner-shape-preflight.sh"
 group = "A"
 make_target = "test-rust"
@@ -929,15 +857,6 @@ exercised_today = "skip"
 name = "tests/static-invariant-deny-unknown-fields-w3.sh"
 group = "F"
 make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/static-rust-dependency-direction.sh"
-group = "H"
-make_target = "test-policy"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -1034,15 +953,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/vfsd-watchdog-retired-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/video-binary-contract.sh"
 group = "A"
 make_target = "test-rust"
@@ -1070,15 +980,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/vm-submodule-cutover-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/vm-submodule-eval.sh"
 group = "H"
 make_target = "test-policy"
@@ -1094,6 +995,105 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/changelog-v1-cut-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::changelog_keeps_unreleased_above_latest_dated_release, changelog_v1_0_0_section_enumerates_breaking_changes_with_adr_and_migration_xref (CHANGELOG.md Unreleased/latest-cut-date hygiene + [1.0.0] breaking-changes enumeration with ADR 0015 & v0->v1 migration-guide cross-refs); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-control-auth-nongoals.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_guest.rs::retired_guest_control_nongoals_are_now_shipped_goals (the W15 guest-control-health readiness non-goal and the W16 `nixling exec` CLI non-goal are now shipped goals: ProcessRole::GuestControlHealth + the readiness predicate in nixling-core/src/processes.rs, and the admin-only `vm exec` / `vm konsole` verbs in nixling/src/lib.rs); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh", "packages/nixling-contract-tests/tests/policy_guest.rs::guest_control_auth_core_token_share_contract_present (the auth-core token-share / LoadCredential contract the retired nix-eval smoke exercised — nl-gctl share + /run/nixling-guest-control-host mount + guest_control_token LoadCredential + auth.tokenFile absolute/outside-/nix/store validation — is present in the module source; the nix eval itself remains covered by tests/nix-unit/cases/guest-control-auth.nix); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-control-vsock-helper-static.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_guest.rs::guest_control_vsock_helper_stays_transport_confined (recursively scans packages/nixlingd/src/**/*.rs and asserts the raw connect_guest_control_vsock* helper appears only in its transport module guest_control_vsock.rs and its sanctioned consumers guest_control_bridge.rs + exec_session_real.rs); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/legacy-group-name-denylist-self-test.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist_rejects_forbidden_line (negative coverage: a forbidden legacy launcher group-name reference in a non-allowlisted source path is flagged, while allowlisted migration-tombstone lines are not); gated via the NL_FIXTURES contract step in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/legacy-group-name-denylist.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::legacy_group_name_denylist (full-line allowlisted denylist scan over nixos-modules/packages/tests rejecting retired legacy launcher group-name references); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/microvm-nix-absent-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::microvm_nix_input_absent_from_flake (flake.nix declares no microvm input / inputs.microvm reference per ADR 0018); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/otel-acl-migration-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_guest.rs::otel_relay_acl_module_not_publicly_imported_and_broker_handler_present (asserts nixos-modules/default.nix carries no uncommented ./host-otel-relay-acl.nix import and that packages/nixling-priv-broker/src/runtime.rs still carries the RunnerRole::OtelHostBridge spawn handler); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/release-tag-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::release_v1_1_tag_is_annotated_and_names_the_release (refs/tags/v1.1 is annotated, resolves to a commit, and its tag message first line names the release version); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/static-rust-dependency-direction.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::static_rust_dependency_direction (static Cargo.toml parse of the workspace dep graph WANT map + asserts nixling/nixlingd import nixling_ipc from their src trees); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/vfsd-watchdog-retired-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_release.rs::vfsd_watchdog_units_retired_from_store_module (nixos-modules/store.nix declares no nixling-vfsd-watchdog@ service/timer template or per-VM enable unit per ADR 0018); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/vm-submodule-cutover-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_modules.rs::vm_submodule_cutover (asserts no non-exempt nixos-modules/ consumer reads config.microvm.vms.${name}.config.config directly; lib.nix/host.nix/vm-submodule.nix exempt); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]

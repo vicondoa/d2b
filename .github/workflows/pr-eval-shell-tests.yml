@@ -31,7 +31,6 @@ jobs:
             tests/preflight-disk-space.sh \
             tests/agents-md-rewrite-eval.sh \
             tests/broker-systemd-unit-eval.sh \
-            tests/changelog-v1-cut-eval.sh \
             tests/cli-nix-consumers-eval.sh \
             tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
@@ -41,10 +40,8 @@ jobs:
             tests/legacy-unit-denylist-eval.sh \
             tests/loki-label-cardinality-eval.sh \
             tests/manpage-completeness-eval.sh \
-            tests/microvm-nix-absent-eval.sh \
             tests/minijail-version-check.sh \
             tests/no-bash-exec-eval.sh \
-            tests/otel-acl-migration-eval.sh \
             tests/deliverable-gate-inventory.sh \
             tests/polkit-allowlist-eval.sh \
             tests/privileges-doc-completeness-eval.sh \
@@ -55,9 +52,7 @@ jobs:
             tests/tap-dag-contract-doc-eval.sh \
             tests/tempo-budget-eval.sh \
             tests/tracing-contract-lint.sh \
-            tests/vfsd-watchdog-retired-eval.sh \
             tests/video-sidecar-hardening-eval.sh \
-            tests/vm-submodule-cutover-eval.sh \
             tests/vm-submodule-eval.sh \
             tests/wave-evidence-schema-eval.sh \
           ; do
