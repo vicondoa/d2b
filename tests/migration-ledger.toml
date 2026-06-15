@@ -386,15 +386,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/legacy-unit-denylist-eval.sh"
-group = "F"
-make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/live-vm-smoke.sh"
 group = "GHW"
 make_target = "test-hardware"
@@ -728,15 +719,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/supervisor-option-absent-eval.sh"
-group = "E"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/swtpm-persistence-smoke.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -747,15 +729,6 @@ exercised_today = "manual"
 
 [[script]]
 name = "tests/usbip-firewall-skeleton.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/usbip-state-machine-eval.sh"
 group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
@@ -789,6 +762,33 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/legacy-unit-denylist-eval.sh"
+group = "F"
+make_target = "test-flake"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_units.rs::legacy_unit_denylist (ADR 0015 fail-closed denylist scan over every *.nix/*.md under nixos-modules/: no retired per-VM systemd template or host-singleton framework unit name reappears as live wiring, honoring the pure-comment / inline+preceding `# obituary:`/`# retired:` marker / per-file allowlist / `*Service = \"nixling-...\"` content carve-outs); legacy_unit_denylist_classify_semantics (negative coverage of the classify() skip/live escape hatches); legacy_unit_denylist_patterns_match_representative_refs (denylist needle integrity); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/supervisor-option-absent-eval.sh"
+group = "E"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_supervisor.rs::supervisor_option_absent (asserts the productive `supervisor = lib.mkOption` declaration is absent from nixos-modules/options-vms.nix, and the top-level defense-in-depth assertion in nixos-modules/assertions.nix fires on any per-VM `vm ? supervisor` / `nixling.vms.${name}.supervisor` definition with the friendly ADR-0015 daemon-only-clean-break message); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/usbip-state-machine-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_supervisor.rs::usbip_state_machine_surface (asserts packages/nixlingd/src/{usbip_state_machine.rs,lib.rs,typed_error.rs} + docs/reference/usbip-state-machine.md are present, lib.rs declares `pub mod usbip_state_machine;`, the CANONICAL_STEPS const pins the bring-up order Modprobe Lock Withhold Firewall Backend Bind Proxy, typed_error.rs wires TypedError::UsbipStepFailed with the 'usbip-step-failed' kind and exit code 67, and the doc names the canonical order verbatim); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/loki-label-cardinality-eval.sh"

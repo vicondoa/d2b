@@ -33,9 +33,7 @@ jobs:
             tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
             tests/host-validate-verb-eval.sh \
-            tests/legacy-unit-denylist-eval.sh \
             tests/deliverable-gate-inventory.sh \
-            tests/supervisor-option-absent-eval.sh \
             tests/video-sidecar-hardening-eval.sh \
           ; do
             if [ -f "$t" ]; then
@@ -74,7 +72,6 @@ jobs:
             tests/bundle-drift.sh \
             tests/ssh-host-key-preflight-eval.sh \
             tests/stub-no-socket.sh \
-            tests/usbip-state-machine-eval.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"

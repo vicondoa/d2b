@@ -722,14 +722,6 @@ if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
   # evidence files.
   nl_static_parallel_script_gate "tests/host-validate-verb-eval.sh" "$ROOT/tests/host-validate-verb-eval.sh"
 fi
-if [ -x "$ROOT/tests/legacy-unit-denylist-eval.sh" ]; then
-  # Drift gate enforcing that no
-  # systemd unit name retired in reappears in nixos-modules/.
-  # EXPECTED-RED until lands; the gate
-  # is wired here so the deletion sweep has a machine-checkable
-  # target to drive to green.
-  nl_static_parallel_script_gate "tests/legacy-unit-denylist-eval.sh" "$ROOT/tests/legacy-unit-denylist-eval.sh"
-fi
 # ADR index coverage guard (/ -class doc-drift).
 if [ -x "$ROOT/tests/adr-index-coverage.sh" ]; then
   nl_static_parallel_script_gate "tests/adr-index-coverage.sh" "$ROOT/tests/adr-index-coverage.sh"
@@ -770,9 +762,7 @@ for _d13_gate in \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
   readiness-waves-eval \
-  ssh-host-key-preflight-eval \
-  supervisor-option-absent-eval \
-  usbip-state-machine-eval; do
+  ssh-host-key-preflight-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
     nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
   fi
