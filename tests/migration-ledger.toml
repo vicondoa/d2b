@@ -2,6 +2,7 @@
 # W0 seed: one row per script. W1+ refines to one row per assertion.
 # exercised_today is a W0 script-level heuristic (yes|skip|manual); W1 refines it per-assertion.
 # Migration state (status, successor_ids, exercised_today) is preserved across regenerations.
+# Retired rows are append-only coverage history and must keep non-empty successor_ids.
 # Do not edit classification fields by hand; run make ledger-regen. Seed of the check-inventory gate.
 schema_version = 0
 generated_for = "test-rearchitecture W0"

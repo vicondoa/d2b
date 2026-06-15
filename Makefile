@@ -1,7 +1,7 @@
 # Makefile — nixling repository top-level convenience targets.
 #
-# Maintainer-facing targets only; CI uses .github/workflows/*.yml directly today
-# while W0 adds the stable make-target interface they converge on in later waves.
+# Maintainer-facing targets only; CI converges on this stable make-target
+# interface incrementally during the test rearchitecture.
 
 .PHONY: pre-tag smoke-lite i3-check \
 	        check check-ci check-all check-fast check-tier0 \
@@ -66,6 +66,7 @@ ci-uses-make:
 test-rust:        ; bash tests/tools/run-layer.sh test-rust
 test-drift:       ; bash tests/tools/run-layer.sh test-drift
 test-contract:
+	bash tests/tools/run-layer.sh test-contract
 	@set -eu; \
 	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
 	fixtures="$$(nix build --no-link --print-out-paths ".#checks.$$system.fixture-smoke")"; \

@@ -419,7 +419,14 @@
           pname = "nixling-rust-tests";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
-          cargoTestFlags = [ "--workspace" ];
+          # Keep fixture-dependent contract crates out of generic
+          # sandbox workspace tests. Full NL_FIXTURES delivery to the
+          # sandbox/CI is a tracked W1 deliverable.
+          cargoTestFlags = [
+            "--workspace"
+            "--exclude"
+            "nixling-contract-tests"
+          ];
           installPhase = ''
             runHook preInstall
             mkdir -p $out

@@ -8628,7 +8628,7 @@ mod runtime_acl_tests {
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "nixlingd-runtime-acl-{}-{}-{}",
+            "nlacl-{}-{}-{}",
             tag,
             std::process::id(),
             std::time::SystemTime::now()

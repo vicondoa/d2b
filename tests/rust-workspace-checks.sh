@@ -39,6 +39,10 @@ broker_target_dir=$(nl_cargo_target_dir broker)
 broker_layer1_target_dir=$(nl_mktemp .nixling-broker-layer1-target.XXXXXX)
 add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
 
+# Keep fixture-dependent contract crates out of generic workspace tests.
+# Full NL_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
+workspace_test_excludes=(--exclude nixling-contract-tests)
+
 nl_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
 
@@ -174,8 +178,8 @@ log "--> cargo clippy --workspace --all-targets -- -D warnings"
 CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
 ok "cargo clippy"
 
-log "--> cargo test --workspace"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace
+log "--> cargo test --workspace ${workspace_test_excludes[*]}"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 ok "cargo test"
 
 # The privileged broker lives in its own sibling workspace, so the main

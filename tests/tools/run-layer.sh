@@ -37,14 +37,14 @@ fi
 
 [ -f "$LEDGER" ] || { echo "run-layer: missing ledger $LEDGER (run gen-migration-ledger.sh)" >&2; exit 1; }
 
-# Extract `name`s whose make_target matches and status != ported.
+# Extract `name`s whose make_target matches and status is still runnable legacy.
 mapfile -t scripts < <(awk -v t="$target" '
   /^\[\[script\]\]/ { name=""; mt=""; st="" }
   /^name = / { gsub(/^name = "|"$/ , ""); name=$0 }
   /^make_target = / { gsub(/^make_target = "|"$/ , ""); mt=$0 }
   /^status = / { sub(/#.*/, ""); gsub(/^status = "| *"? *$|"/, ""); st=$0 }
-  /^$/ { if (name != "" && mt == t && st != "ported") print name; name="" }
-  END { if (name != "" && mt == t && st != "ported") print name }
+  /^$/ { if (name != "" && mt == t && st != "ported" && st != "retired") print name; name="" }
+  END { if (name != "" && mt == t && st != "ported" && st != "retired") print name }
 ' "$LEDGER")
 
 if [ "${#scripts[@]}" -eq 0 ]; then

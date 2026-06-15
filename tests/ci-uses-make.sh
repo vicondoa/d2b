@@ -17,7 +17,6 @@ allowlisted_workflows=(
   .github/workflows/pr-cargo-workspace.yml
   .github/workflows/pr-eval-shell-tests.yml
   .github/workflows/pr-l1c-privilege-oracle.yml
-  .github/workflows/pr-l1-static-fast.yml
 )
 
 is_allowlisted() {
