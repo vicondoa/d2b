@@ -32,17 +32,13 @@ eval_fail() {
 
 eval_ok enabled
 eval_ok default
-eval_ok allow-root-only
-eval_ok allow-root-ceiling
-eval_ok allow-root-interactive-ceiling
+eval_ok detached-ceiling
+eval_ok interactive-ceiling
 
 eval_fail exec-no-control "guest.exec.enable requires"
-eval_fail exec-disabled-users "guest.exec.allowRoot/users are set"
-eval_fail exec-empty "no exec target is"
-eval_fail duplicate-user "must not contain duplicate"
-eval_fail root-user "must not include root"
-eval_fail wildcard-user "must match"
-eval_fail missing-user "declared as a normal or system user"
-eval_fail internal-override "read-only"
+eval_fail exec-no-user "no workload user"
+eval_fail root-user "must not be root"
+eval_fail invalid-user "must match"
+eval_fail missing-user "declared as a normal"
 
-ok "guest-exec-policy-eval: exec policy defaults, assertions, and dormant userd invariants hold"
+ok "guest-exec-policy-eval: workload-user exec policy defaults and assertions hold"
