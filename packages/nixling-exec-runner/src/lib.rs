@@ -46,6 +46,7 @@ pub enum ValidationError {
     EmptyArgv,
     TooManyArgs,
     ArgEmpty,
+    ArgLeadingDash,
     ArgTooLong,
     ArgContainsNul,
     CwdEmpty,
@@ -86,6 +87,9 @@ pub fn validate_argv(argv: &[String]) -> Result<(), ValidationError> {
         if contains_nul(arg) {
             return Err(ValidationError::ArgContainsNul);
         }
+    }
+    if argv[0].starts_with('-') {
+        return Err(ValidationError::ArgLeadingDash);
     }
     Ok(())
 }
@@ -202,6 +206,10 @@ mod tests {
         assert_eq!(
             validate_argv(&["".to_owned()]),
             Err(ValidationError::ArgEmpty)
+        );
+        assert_eq!(
+            validate_argv(&["-bad".to_owned()]),
+            Err(ValidationError::ArgLeadingDash)
         );
         assert_eq!(
             validate_argv(&["bad\0arg".to_owned()]),

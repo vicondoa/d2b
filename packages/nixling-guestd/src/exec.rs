@@ -106,6 +106,7 @@ pub enum ExecError {
     UserDenied,
     UnsupportedMode,
     InvalidArgv,
+    InvalidProgram,
     CwdInvalid,
     InvalidEnv,
     MaxChunkExceeded,
@@ -147,6 +148,7 @@ impl ExecError {
             // no new wire enum variants are added for them.
             Self::UnsupportedMode => WireErrorKind::ProtocolError,
             Self::InvalidArgv => WireErrorKind::ProtocolError,
+            Self::InvalidProgram => WireErrorKind::InvalidProgram,
             Self::CwdInvalid => WireErrorKind::CwdInvalid,
             Self::InvalidEnv => WireErrorKind::ProtocolError,
             Self::MaxChunkExceeded => WireErrorKind::MaxChunkExceeded,
@@ -634,9 +636,10 @@ fn validate_command(input: &ExecCreateInput) -> Result<ValidatedCommand, ExecErr
         }
     }
     let program = &input.argv[0];
-    // argv[0] must be an absolute path; no PATH-based lookup is performed.
-    if !program.starts_with('/') {
-        return Err(ExecError::InvalidArgv);
+    // The login-shell wrapper invokes `exec "$@"`; reject leading '-' so argv[0]
+    // cannot be parsed as an exec option before PATH/relative/absolute lookup.
+    if program.is_empty() || program.starts_with('-') {
+        return Err(ExecError::InvalidProgram);
     }
     let program = PathBuf::from(program);
 
@@ -1717,6 +1720,13 @@ mod tests {
         }
     }
 
+    fn enabled_policy() -> ExecPolicy {
+        ExecPolicy {
+            enabled: true,
+            exec_user: Some("john".to_owned()),
+        }
+    }
+
     #[test]
     fn validate_rejects_unsupported_modes() {
         let policy = ExecPolicy {
@@ -1867,10 +1877,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_bad_command_shapes() {
-        let policy = ExecPolicy {
-            enabled: true,
-            exec_user: Some("john".to_owned()),
-        };
+        let policy = enabled_policy();
 
         let mut empty = good_input();
         empty.argv = vec![];
@@ -1879,10 +1886,24 @@ mod tests {
             Err(ExecError::InvalidArgv)
         );
 
-        let mut relative = good_input();
-        relative.argv = vec!["echo".to_owned()];
+        let mut empty_program = good_input();
+        empty_program.argv = vec![String::new()];
         assert_eq!(
-            validate_and_authorize(&relative, &policy),
+            validate_and_authorize(&empty_program, &policy),
+            Err(ExecError::InvalidProgram)
+        );
+
+        let mut leading_dash_program = good_input();
+        leading_dash_program.argv = vec!["-echo".to_owned()];
+        assert_eq!(
+            validate_and_authorize(&leading_dash_program, &policy),
+            Err(ExecError::InvalidProgram)
+        );
+
+        let mut nul_program = good_input();
+        nul_program.argv = vec!["echo\0bad".to_owned()];
+        assert_eq!(
+            validate_and_authorize(&nul_program, &policy),
             Err(ExecError::InvalidArgv)
         );
 
@@ -1890,6 +1911,13 @@ mod tests {
         nul.argv = vec!["/bin/echo".to_owned(), "a\0b".to_owned()];
         assert_eq!(
             validate_and_authorize(&nul, &policy),
+            Err(ExecError::InvalidArgv)
+        );
+
+        let mut over_length_program = good_input();
+        over_length_program.argv = vec!["x".repeat(MAX_ARG_BYTES + 1)];
+        assert_eq!(
+            validate_and_authorize(&over_length_program, &policy),
             Err(ExecError::InvalidArgv)
         );
 
@@ -1938,6 +1966,41 @@ mod tests {
         assert_eq!(
             validate_and_authorize(&big_chunk, &policy),
             Err(ExecError::MaxChunkExceeded)
+        );
+    }
+
+    #[test]
+    fn validate_accepts_absolute_bare_and_relative_program_names() {
+        let policy = enabled_policy();
+
+        for program in ["/bin/echo", "id", "./scripts/hello"] {
+            let mut input = good_input();
+            input.argv = vec![program.to_owned(), "arg".to_owned()];
+            let command =
+                validate_and_authorize(&input, &policy).expect("program name should validate");
+            assert_eq!(command.program, std::path::PathBuf::from(program));
+            assert_eq!(command.args, vec!["arg".to_owned()]);
+        }
+    }
+
+    #[test]
+    fn validate_detached_inherits_bare_program_relaxation() {
+        let policy = enabled_policy();
+        let mut input = good_input();
+        input.detached = true;
+        input.argv = vec!["id".to_owned()];
+
+        let command = validate_and_authorize_detached(&input, &policy)
+            .expect("detached validation should accept bare argv[0]");
+        assert_eq!(command.program, std::path::PathBuf::from("id"));
+        assert!(command.args.is_empty());
+    }
+
+    #[test]
+    fn invalid_program_maps_to_distinct_wire_kind() {
+        assert_eq!(
+            ExecError::InvalidProgram.wire_kind(),
+            WireErrorKind::InvalidProgram
         );
     }
 

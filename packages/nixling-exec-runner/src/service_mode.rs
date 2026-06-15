@@ -50,10 +50,15 @@ pub enum ChildOutcome {
     Signaled(i32),
 }
 
-/// Opaque spawn failure (ENOENT/EACCES/exec-format/relative argv0/...). Carries
-/// no payload.
+/// Opaque spawn failure. Carries no payload.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpawnFailure;
+pub enum SpawnFailure {
+    /// Workload exec failure (retained terminal 127-style result).
+    SpawnFailed,
+    /// Runner infrastructure failure (unsafe slot/spec/unit placement).
+    InfraFailed,
+}
 
 /// A spawned, supervised child. The supervisor takes the stdout/stderr readers
 /// for draining and calls `wait` exactly once to reap the direct child.
@@ -72,6 +77,7 @@ pub trait Spawner: Send + Sync {
 /// Signals a child process group (best-effort, idempotent).
 pub trait Signaller: Send + Sync {
     fn signal_group(&self, pgid: i32, signal: StopSignal);
+    fn kill_workload_unit(&self, unit_name: &str);
 }
 
 /// Monotonic millisecond clock (fakeable).
@@ -207,13 +213,14 @@ pub fn supervise(
 
     let mut child = match spawner.spawn(spec) {
         Ok(child) => child,
-        Err(SpawnFailure) => {
+        Err(SpawnFailure::SpawnFailed) => {
             // Legitimate terminal exec: retained, exit 0.
             return match write_status(paths, StatusPhase::SpawnFailed) {
                 Ok(()) => RunnerResult::Done,
                 Err(()) => RunnerResult::StatusUnwritable,
             };
         }
+        Err(SpawnFailure::InfraFailed) => return finish_infra_failed(paths),
     };
 
     let pgid = child.pgid();
@@ -224,6 +231,7 @@ pub fn supervise(
         // The child is live but we cannot publish `started`; tear it down and
         // fail the unit so reconciliation cleans up.
         signaller.signal_group(pgid, StopSignal::Kill);
+        signaller.kill_workload_unit(&spec.workload_unit_name);
         let _ = child.wait();
         return RunnerResult::StatusUnwritable;
     }
@@ -266,6 +274,7 @@ pub fn supervise(
         Arc::clone(&signaller),
         Arc::clone(&clock),
         Arc::clone(&cancel),
+        &spec.workload_unit_name,
     );
 
     // The supervisor is the single reaper.
@@ -275,6 +284,9 @@ pub fn supervise(
     // The watcher exits as soon as it observes `reaped`; join it so
     // `cancel_requested` is final before we decide the terminal phase.
     let _ = watcher.join();
+    if cancel_requested.load(Ordering::SeqCst) {
+        signaller.kill_workload_unit(&spec.workload_unit_name);
+    }
 
     // Decide the terminal phase NOW, before any (possibly unbounded) wait on the
     // drains. Exactly-once terminal status: cancellation (sentinel or ceiling)
@@ -323,7 +335,9 @@ fn spawn_watcher(
     signaller: Arc<dyn Signaller>,
     clock: Arc<dyn Clock>,
     cancel: Arc<dyn CancelSource>,
+    workload_unit_name: &str,
 ) -> JoinHandle<()> {
+    let workload_unit_name = workload_unit_name.to_owned();
     let poll = cfg.poll_interval.max(Duration::from_millis(1));
     let grace_steps = {
         let grace = cfg.grace.as_millis().max(1);
@@ -346,6 +360,7 @@ fn spawn_watcher(
             }
             if !reaped.load(Ordering::SeqCst) {
                 signaller.signal_group(pgid, StopSignal::Kill);
+                signaller.kill_workload_unit(&workload_unit_name);
             }
             return;
         }
@@ -377,7 +392,9 @@ pub fn main_service(slot: u32) -> i32 {
         }
     };
 
-    let signaller: Arc<dyn Signaller> = Arc::new(production::RustixSignaller);
+    let systemctl_path = production::sibling_systemctl_path(&spec.systemd_run_path);
+    let signaller: Arc<dyn Signaller> =
+        Arc::new(production::RustixSignaller::new(systemctl_path.clone()));
     let clock: Arc<dyn Clock> = Arc::new(production::MonotonicClock::new());
     let cancel: Arc<dyn CancelSource> = Arc::new(production::FileCancelSource::new(paths.cancel()));
     let cfg = SuperviseConfig::default();
@@ -385,7 +402,7 @@ pub fn main_service(slot: u32) -> i32 {
     match supervise(
         &spec,
         &paths,
-        &production::StdSpawner,
+        &production::StdSpawner::new(slot, systemctl_path),
         signaller,
         clock,
         cancel,
@@ -424,7 +441,7 @@ mod production {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use rustix::process::{kill_process_group, Pid, Signal};
 
@@ -436,27 +453,69 @@ mod production {
 
     use nixling_exec_runner::spec::ExecSpec;
 
-    pub struct StdSpawner;
+    const SYSTEMCTL_KILL_TIMEOUT: Duration = Duration::from_secs(2);
+    const SLICE_VERIFY_TIMEOUT: Duration = Duration::from_secs(2);
+    const SLICE_VERIFY_POLL: Duration = Duration::from_millis(50);
+
+    pub(super) fn sibling_systemctl_path(systemd_run_path: &str) -> PathBuf {
+        Path::new(systemd_run_path)
+            .parent()
+            .map(|dir| dir.join("systemctl"))
+            .unwrap_or_else(|| PathBuf::from("systemctl"))
+    }
+
+    pub struct StdSpawner {
+        runner_unit_name: String,
+        systemctl_path: PathBuf,
+    }
+
+    impl StdSpawner {
+        pub fn new(slot: u32, systemctl_path: PathBuf) -> Self {
+            Self {
+                runner_unit_name: format!("nixling-exec-{slot:02}.service"),
+                systemctl_path,
+            }
+        }
+    }
 
     impl Spawner for StdSpawner {
         fn spawn(&self, spec: &ExecSpec) -> Result<Box<dyn ChildHandle>, SpawnFailure> {
-            // No PATH lookup: argv[0] must be absolute.
-            let program = spec.argv.first().ok_or(SpawnFailure)?;
-            if !Path::new(program).is_absolute() {
-                return Err(SpawnFailure);
+            if !verify_never_root_against_passwd(spec, "/etc/passwd") {
+                return Err(SpawnFailure::InfraFailed);
             }
-            let mut cmd = Command::new(program);
-            cmd.args(&spec.argv[1..])
+            if !workload_argv_is_expected(spec, &self.runner_unit_name) {
+                return Err(SpawnFailure::InfraFailed);
+            }
+
+            let mut cmd = Command::new(&spec.systemd_run_path);
+            cmd.args(&spec.systemd_run_args)
                 .env_clear()
-                .envs(spec.env.iter().map(|entry| (&entry.key, &entry.value)))
-                .current_dir(spec.cwd.as_deref().unwrap_or("/"))
+                .current_dir("/")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                // New process group with the child as leader (pgid == pid).
+                // New process group for the systemd-run wrapper. The actual
+                // workload is killed by its deterministic systemd unit; the PG
+                // remains the local backstop for the wrapper.
                 .process_group(0);
-            let mut child = cmd.spawn().map_err(|_| SpawnFailure)?;
+            let mut child = cmd.spawn().map_err(|_| SpawnFailure::InfraFailed)?;
             let pgid = child.id() as i32;
+
+            match verify_expected_slice_with_retry(
+                &self.systemctl_path,
+                &self.runner_unit_name,
+                &spec.workload_unit_name,
+            ) {
+                SliceCheck::Verified => {}
+                SliceCheck::NotObserved if matches!(child.try_wait(), Ok(Some(_))) => {}
+                SliceCheck::NotObserved | SliceCheck::Unsafe => {
+                    signal_process_group(pgid, StopSignal::Kill);
+                    systemctl_kill_unit(&self.systemctl_path, &spec.workload_unit_name);
+                    let _ = child.wait();
+                    return Err(SpawnFailure::InfraFailed);
+                }
+            }
+
             let stdout = child
                 .stdout
                 .take()
@@ -470,6 +529,8 @@ mod production {
                 pgid,
                 stdout,
                 stderr,
+                systemctl_path: self.systemctl_path.clone(),
+                workload_unit_name: spec.workload_unit_name.clone(),
             }))
         }
     }
@@ -479,6 +540,8 @@ mod production {
         pgid: i32,
         stdout: Option<Box<dyn Read + Send>>,
         stderr: Option<Box<dyn Read + Send>>,
+        systemctl_path: PathBuf,
+        workload_unit_name: String,
     }
 
     impl ChildHandle for StdChild {
@@ -510,19 +573,282 @@ mod production {
         }
     }
 
-    pub struct RustixSignaller;
+    impl Drop for StdChild {
+        fn drop(&mut self) {
+            systemctl_kill_unit(&self.systemctl_path, &self.workload_unit_name);
+        }
+    }
+
+    impl RustixSignaller {
+        pub fn new(systemctl_path: PathBuf) -> Self {
+            Self { systemctl_path }
+        }
+    }
+
+    pub struct RustixSignaller {
+        systemctl_path: PathBuf,
+    }
 
     impl Signaller for RustixSignaller {
         fn signal_group(&self, pgid: i32, signal: StopSignal) {
-            // The group persists while the (possibly zombie) leader is
-            // unreaped, so the PGID cannot be reused under this signal; the
-            // supervisor stops signalling once it reaps the leader.
-            if let Some(pid) = Pid::from_raw(pgid) {
-                let sig = match signal {
-                    StopSignal::Term => Signal::Term,
-                    StopSignal::Kill => Signal::Kill,
+            signal_process_group(pgid, signal);
+        }
+
+        fn kill_workload_unit(&self, unit_name: &str) {
+            systemctl_kill_unit(&self.systemctl_path, unit_name);
+        }
+    }
+
+    fn signal_process_group(pgid: i32, signal: StopSignal) {
+        // The group persists while the (possibly zombie) leader is unreaped, so
+        // the PGID cannot be reused under this signal; the supervisor stops
+        // signalling once it reaps the leader.
+        if let Some(pid) = Pid::from_raw(pgid) {
+            let sig = match signal {
+                StopSignal::Term => Signal::Term,
+                StopSignal::Kill => Signal::Kill,
+            };
+            let _ = kill_process_group(pid, sig);
+        }
+    }
+
+    pub(super) fn passwd_uid_for(content: &str, user: &str) -> Option<u32> {
+        for line in content.lines() {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split(':');
+            if fields.next() != Some(user) {
+                continue;
+            }
+            return fields.nth(1).and_then(|uid| uid.parse::<u32>().ok());
+        }
+        None
+    }
+
+    pub(super) fn verify_never_root_with_passwd(spec: &ExecSpec, content: &str) -> bool {
+        let Some((pre, _post)) = split_systemd_run_args(spec) else {
+            return false;
+        };
+        let uid_arg = format!("--uid={}", spec.exec_user);
+        if pre.iter().filter(|arg| *arg == &uid_arg).count() != 1 {
+            return false;
+        }
+        if pre.iter().any(|arg| {
+            arg == "-p"
+                || arg == "--property"
+                || arg.starts_with("--uid=") && arg != &uid_arg
+                || arg.starts_with("User=")
+                || arg.starts_with("--property=User=")
+                || arg.starts_with("-p User=")
+        }) {
+            return false;
+        }
+        matches!(
+            passwd_uid_for(content, &spec.exec_user),
+            Some(uid) if uid != 0 && uid == spec.exec_uid
+        )
+    }
+
+    fn verify_never_root_against_passwd(spec: &ExecSpec, passwd_path: &str) -> bool {
+        std::fs::read_to_string(passwd_path)
+            .map(|content| verify_never_root_with_passwd(spec, &content))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn workload_argv_is_expected(spec: &ExecSpec, runner_unit_name: &str) -> bool {
+        let Some((pre, post)) = split_systemd_run_args(spec) else {
+            return false;
+        };
+        let expected_pre = expected_systemd_run_pre_args(spec, runner_unit_name);
+        let expected_post_prefix = [
+            spec.login_shell_path.as_str(),
+            "-l",
+            "-c",
+            r#"exec "$@""#,
+            "nl-exec",
+        ];
+        pre == expected_pre.as_slice()
+            && post.len() == expected_post_prefix.len() + spec.argv.len()
+            && post
+                .iter()
+                .take(expected_post_prefix.len())
+                .map(String::as_str)
+                .eq(expected_post_prefix)
+            && &post[expected_post_prefix.len()..] == spec.argv.as_slice()
+    }
+
+    fn expected_systemd_run_pre_args(spec: &ExecSpec, runner_unit_name: &str) -> Vec<String> {
+        let mut expected = vec![
+            format!("--uid={}", spec.exec_user),
+            format!("--unit={}", spec.workload_unit_name),
+            "--quiet".to_owned(),
+            "--collect".to_owned(),
+            "--expand-environment=no".to_owned(),
+            "--slice=nixling-exec.slice".to_owned(),
+            "--pipe".to_owned(),
+            "--wait".to_owned(),
+            "--property=PAMName=login".to_owned(),
+            format!("--property=BindsTo={runner_unit_name}"),
+            format!("--property=PartOf={runner_unit_name}"),
+            format!("--property=After={runner_unit_name}"),
+            format!("--working-directory={}", spec.cwd.as_deref().unwrap_or("/")),
+        ];
+        for env in &spec.env {
+            expected.push("--setenv".to_owned());
+            expected.push(format!("{}={}", env.key, env.value));
+        }
+        expected
+    }
+
+    fn split_systemd_run_args(spec: &ExecSpec) -> Option<(&[String], &[String])> {
+        let sep = spec.systemd_run_args.iter().position(|arg| arg == "--")?;
+        Some((
+            &spec.systemd_run_args[..sep],
+            &spec.systemd_run_args[sep + 1..],
+        ))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SliceCheck {
+        Verified,
+        NotObserved,
+        Unsafe,
+    }
+
+    fn verify_expected_slice_with_retry(
+        systemctl_path: &Path,
+        runner_unit_name: &str,
+        workload_unit_name: &str,
+    ) -> SliceCheck {
+        let deadline = Instant::now() + SLICE_VERIFY_TIMEOUT;
+        loop {
+            match query_expected_slice(systemctl_path, runner_unit_name, workload_unit_name) {
+                SliceCheck::Verified => return SliceCheck::Verified,
+                SliceCheck::Unsafe => return SliceCheck::Unsafe,
+                SliceCheck::NotObserved => {}
+            }
+            if Instant::now() >= deadline {
+                return SliceCheck::NotObserved;
+            }
+            std::thread::sleep(SLICE_VERIFY_POLL);
+        }
+    }
+
+    fn query_expected_slice(
+        systemctl_path: &Path,
+        runner_unit_name: &str,
+        workload_unit_name: &str,
+    ) -> SliceCheck {
+        let Ok(output) = Command::new(systemctl_path)
+            .arg("show")
+            .arg("--no-pager")
+            .arg("--property=Id,Slice,ControlGroup")
+            .arg(runner_unit_name)
+            .arg(workload_unit_name)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return SliceCheck::NotObserved;
+        };
+        if !output.status.success() {
+            return SliceCheck::NotObserved;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        combined_slice_check(&text, runner_unit_name, workload_unit_name)
+    }
+
+    #[cfg(test)]
+    pub(super) fn units_in_expected_slice(
+        show_text: &str,
+        runner_unit_name: &str,
+        workload_unit_name: &str,
+    ) -> bool {
+        combined_slice_check(show_text, runner_unit_name, workload_unit_name)
+            == SliceCheck::Verified
+    }
+
+    fn combined_slice_check(
+        show_text: &str,
+        runner_unit_name: &str,
+        workload_unit_name: &str,
+    ) -> SliceCheck {
+        match (
+            show_entry_slice_check(show_text, runner_unit_name),
+            show_entry_slice_check(show_text, workload_unit_name),
+        ) {
+            (SliceCheck::Unsafe, _) | (_, SliceCheck::Unsafe) => SliceCheck::Unsafe,
+            (SliceCheck::Verified, SliceCheck::Verified) => SliceCheck::Verified,
+            _ => SliceCheck::NotObserved,
+        }
+    }
+
+    fn show_entry_slice_check(show_text: &str, unit_name: &str) -> SliceCheck {
+        for block in show_text.split("\n\n") {
+            let mut id = None;
+            let mut slice = None;
+            let mut cgroup = None;
+            for line in block.lines() {
+                if let Some(v) = line.strip_prefix("Id=") {
+                    id = Some(v.trim());
+                } else if let Some(v) = line.strip_prefix("Slice=") {
+                    slice = Some(v.trim());
+                } else if let Some(v) = line.strip_prefix("ControlGroup=") {
+                    cgroup = Some(v.trim());
+                }
+            }
+            if id == Some(unit_name) {
+                if slice != Some("nixling-exec.slice") {
+                    return SliceCheck::Unsafe;
+                }
+                return match cgroup {
+                    Some("") => SliceCheck::NotObserved,
+                    Some(value)
+                        if value.starts_with("/nixling-exec.slice/")
+                            && value.ends_with(unit_name) =>
+                    {
+                        SliceCheck::Verified
+                    }
+                    Some(_) => SliceCheck::Unsafe,
+                    None => SliceCheck::NotObserved,
                 };
-                let _ = kill_process_group(pid, sig);
+            }
+        }
+        SliceCheck::NotObserved
+    }
+
+    fn systemctl_kill_unit(systemctl_path: &Path, unit_name: &str) {
+        let mut child = match Command::new(systemctl_path)
+            .arg("--system")
+            .arg("--no-ask-password")
+            .arg("--quiet")
+            .arg("--kill-whom=all")
+            .arg("--signal=SIGKILL")
+            .arg("kill")
+            .arg(unit_name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => return,
+        };
+        let deadline = Instant::now() + SYSTEMCTL_KILL_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                Err(_) => return,
             }
         }
     }
@@ -595,18 +921,45 @@ mod tests {
     fn spec(argv0: &str, max_runtime_sec: u64) -> ExecSpec {
         ExecSpec {
             argv: vec![argv0.to_owned()],
-            cwd: None,
+            cwd: Some("/".to_owned()),
             env: Vec::<RunnerEnv>::new(),
             stdout_log_cap: 64 * 1024,
             stderr_log_cap: 64 * 1024,
             max_runtime_sec,
+            exec_user: "alice".to_owned(),
+            exec_uid: 1000,
+            systemd_run_path: "/run/current-system/sw/bin/systemd-run".to_owned(),
+            login_shell_path: "/run/current-system/sw/bin/bash".to_owned(),
+            workload_unit_name: "nixling-exec-03-w.service".to_owned(),
+            systemd_run_args: vec![
+                "--uid=alice".to_owned(),
+                "--unit=nixling-exec-03-w.service".to_owned(),
+                "--quiet".to_owned(),
+                "--collect".to_owned(),
+                "--expand-environment=no".to_owned(),
+                "--slice=nixling-exec.slice".to_owned(),
+                "--pipe".to_owned(),
+                "--wait".to_owned(),
+                "--property=PAMName=login".to_owned(),
+                "--property=BindsTo=nixling-exec-03.service".to_owned(),
+                "--property=PartOf=nixling-exec-03.service".to_owned(),
+                "--property=After=nixling-exec-03.service".to_owned(),
+                "--working-directory=/".to_owned(),
+                "--".to_owned(),
+                "/run/current-system/sw/bin/bash".to_owned(),
+                "-l".to_owned(),
+                "-c".to_owned(),
+                r#"exec "$@""#.to_owned(),
+                "nl-exec".to_owned(),
+                argv0.to_owned(),
+            ],
         }
     }
 
     fn fast_cfg() -> SuperviseConfig {
         SuperviseConfig {
             poll_interval: Duration::from_millis(1),
-            grace: Duration::from_millis(8),
+            grace: Duration::from_millis(50),
         }
     }
 
@@ -615,11 +968,136 @@ mod tests {
         StatusRecord::decode(&bytes).unwrap().phase
     }
 
+    #[test]
+    fn runner_never_root_guard_re_resolves_exact_uid_arg() {
+        let good = spec("id", 0);
+        let passwd = "root:x:0:0:root:/root:/bin/sh\nalice:x:1000:100::/home/alice:/bin/sh\n";
+        assert!(production::verify_never_root_with_passwd(&good, passwd));
+
+        let root_alias = "root:x:0:0:root:/root:/bin/sh\nalice:x:0:0::/home/alice:/bin/sh\n";
+        assert!(!production::verify_never_root_with_passwd(
+            &good, root_alias
+        ));
+
+        let unresolved = "root:x:0:0:root:/root:/bin/sh\n";
+        assert!(!production::verify_never_root_with_passwd(
+            &good, unresolved
+        ));
+
+        let mut mismatched_uid = good.clone();
+        mismatched_uid.exec_uid = 1001;
+        assert!(!production::verify_never_root_with_passwd(
+            &mismatched_uid,
+            passwd
+        ));
+
+        let mut wrong_uid_arg = good;
+        wrong_uid_arg.systemd_run_args[0] = "--uid=bob".to_owned();
+        assert!(!production::verify_never_root_with_passwd(
+            &wrong_uid_arg,
+            passwd
+        ));
+
+        let mut post_separator_uid = spec("id", 0);
+        post_separator_uid.systemd_run_args[0] = "--quiet".to_owned();
+        post_separator_uid
+            .systemd_run_args
+            .push("--uid=alice".to_owned());
+        assert!(!production::verify_never_root_with_passwd(
+            &post_separator_uid,
+            passwd
+        ));
+    }
+
+    #[test]
+    fn workload_argv_validation_rejects_pre_separator_overrides() {
+        let good = spec("id", 0);
+        assert!(production::workload_argv_is_expected(
+            &good,
+            "nixling-exec-03.service"
+        ));
+
+        let mut duplicate_uid = good.clone();
+        let sep = duplicate_uid
+            .systemd_run_args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap();
+        duplicate_uid
+            .systemd_run_args
+            .insert(sep, "--uid=root".to_owned());
+        assert!(!production::workload_argv_is_expected(
+            &duplicate_uid,
+            "nixling-exec-03.service"
+        ));
+
+        let mut root_property = good.clone();
+        let sep = root_property
+            .systemd_run_args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap();
+        root_property
+            .systemd_run_args
+            .insert(sep, "--property=User=root".to_owned());
+        assert!(!production::workload_argv_is_expected(
+            &root_property,
+            "nixling-exec-03.service"
+        ));
+
+        let mut reordered = good;
+        reordered.systemd_run_args.swap(2, 5);
+        assert!(!production::workload_argv_is_expected(
+            &reordered,
+            "nixling-exec-03.service"
+        ));
+    }
+
+    #[test]
+    fn slice_verification_requires_runner_and_workload_in_exec_slice() {
+        let ok = "\
+Id=nixling-exec-03.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling-exec.slice/nixling-exec-03.service
+
+Id=nixling-exec-03-w.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling-exec.slice/nixling-exec-03-w.service
+";
+        assert!(production::units_in_expected_slice(
+            ok,
+            "nixling-exec-03.service",
+            "nixling-exec-03-w.service"
+        ));
+
+        let bad_workload_slice = ok.replace(
+            "Slice=nixling-exec.slice\nControlGroup=/nixling-exec.slice/nixling-exec-03-w.service",
+            "Slice=user-1000.slice\nControlGroup=/user.slice/user-1000.slice/session-2.scope",
+        );
+        assert!(!production::units_in_expected_slice(
+            &bad_workload_slice,
+            "nixling-exec-03.service",
+            "nixling-exec-03-w.service"
+        ));
+
+        let missing_workload = "\
+Id=nixling-exec-03.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling-exec.slice/nixling-exec-03.service
+";
+        assert!(!production::units_in_expected_slice(
+            missing_workload,
+            "nixling-exec-03.service",
+            "nixling-exec-03-w.service"
+        ));
+    }
+
     // ---- Fakes -----------------------------------------------------------
 
     #[derive(Default)]
     struct FakeState {
         signals: Vec<StopSignal>,
+        killed_units: Vec<String>,
         exit: Option<ChildOutcome>,
         /// When set, receiving this signal causes the child to exit.
         die_on: Option<StopSignal>,
@@ -653,6 +1131,9 @@ mod tests {
 
         fn signals(&self) -> Vec<StopSignal> {
             self.state.lock().unwrap().signals.clone()
+        }
+        fn killed_units(&self) -> Vec<String> {
+            self.state.lock().unwrap().killed_units.clone()
         }
     }
 
@@ -691,13 +1172,21 @@ mod tests {
     impl Spawner for FakeSpawner {
         fn spawn(&self, _spec: &ExecSpec) -> Result<Box<dyn ChildHandle>, SpawnFailure> {
             if self.fail {
-                return Err(SpawnFailure);
+                return Err(SpawnFailure::SpawnFailed);
             }
             Ok(Box::new(FakeChild {
                 proc: Arc::clone(&self.proc),
                 stdout: Some(Box::new(Cursor::new(self.stdout.clone()))),
                 stderr: Some(Box::new(Cursor::new(self.stderr.clone()))),
             }))
+        }
+    }
+
+    struct InfraFailSpawner;
+
+    impl Spawner for InfraFailSpawner {
+        fn spawn(&self, _spec: &ExecSpec) -> Result<Box<dyn ChildHandle>, SpawnFailure> {
+            Err(SpawnFailure::InfraFailed)
         }
     }
 
@@ -714,6 +1203,14 @@ mod tests {
                 self.proc.cv.notify_all();
             }
         }
+        fn kill_workload_unit(&self, unit_name: &str) {
+            self.proc
+                .state
+                .lock()
+                .unwrap()
+                .killed_units
+                .push(unit_name.to_owned());
+        }
     }
 
     struct FixedClock {
@@ -724,6 +1221,20 @@ mod tests {
     impl Clock for FixedClock {
         fn now_ms(&self) -> u64 {
             self.now.load(Ordering::SeqCst)
+        }
+    }
+
+    struct StepClock {
+        calls: AtomicU64,
+    }
+
+    impl Clock for StepClock {
+        fn now_ms(&self) -> u64 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                0
+            } else {
+                2_000
+            }
         }
     }
 
@@ -869,6 +1380,28 @@ mod tests {
     }
 
     #[test]
+    fn infra_spawn_failure_records_infra_failed() {
+        let (dir, paths) = scratch_slot();
+        let proc = FakeProc::new(None);
+        let result = supervise(
+            &spec("/bin/true", 0),
+            &paths,
+            &InfraFailSpawner,
+            Arc::new(FakeSignaller { proc }),
+            Arc::new(FixedClock {
+                now: Arc::new(AtomicU64::new(0)),
+            }),
+            Arc::new(FlagCancel {
+                flag: Arc::new(AtomicBool::new(false)),
+            }),
+            &fast_cfg(),
+        );
+        assert_eq!(result, RunnerResult::Done);
+        assert_eq!(read_phase(&paths), StatusPhase::InfraFailed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn cancel_sentinel_terminates_and_records_cancelled() {
         let (dir, paths) = scratch_slot();
         // The child ignores TERM and only dies on KILL, proving TERM is sent
@@ -901,11 +1434,14 @@ mod tests {
             signals.contains(&StopSignal::Kill),
             "KILL backstop fires when TERM is ignored: {signals:?}"
         );
+        assert!(proc
+            .killed_units()
+            .contains(&"nixling-exec-03-w.service".to_owned()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn cancel_when_child_terms_promptly_does_not_kill() {
+    fn cancel_when_child_terms_promptly_still_kills_workload_unit() {
         let (dir, paths) = scratch_slot();
         // The child dies on TERM, so no KILL backstop is needed.
         let proc = FakeProc::new(Some(StopSignal::Term));
@@ -932,6 +1468,9 @@ mod tests {
         );
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
         assert_eq!(proc.signals(), vec![StopSignal::Term]);
+        assert!(proc
+            .killed_units()
+            .contains(&"nixling-exec-03-w.service".to_owned()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -945,13 +1484,6 @@ mod tests {
             stderr: Vec::new(),
             fail: false,
         };
-        let now = Arc::new(AtomicU64::new(0));
-        // Advance the clock past the 1s ceiling after a brief delay.
-        let now_writer = Arc::clone(&now);
-        let bump = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(5));
-            now_writer.store(2_000, Ordering::SeqCst);
-        });
         supervise(
             &spec("/bin/true", 1),
             &paths,
@@ -959,17 +1491,19 @@ mod tests {
             Arc::new(FakeSignaller {
                 proc: Arc::clone(&proc),
             }),
-            Arc::new(FixedClock {
-                now: Arc::clone(&now),
+            Arc::new(StepClock {
+                calls: AtomicU64::new(0),
             }),
             Arc::new(FlagCancel {
                 flag: Arc::new(AtomicBool::new(false)),
             }),
             &fast_cfg(),
         );
-        bump.join().unwrap();
         assert_eq!(read_phase(&paths), StatusPhase::Cancelled);
         assert!(proc.signals().contains(&StopSignal::Term));
+        assert!(proc
+            .killed_units()
+            .contains(&"nixling-exec-03-w.service".to_owned()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
