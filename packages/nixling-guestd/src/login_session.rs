@@ -367,24 +367,39 @@ john:x:1000:100:John:/home/john:/run/current-system/sw/bin/bash
             &cmd("/run/current-system/sw/bin/id", &["-u"], "/", &[]),
         );
         let s = as_strs(&argv);
-        assert_eq!(s[0], "--uid=john");
-        // The unit is named so teardown can `systemctl kill` the workload cgroup,
-        // and systemd must not expand `$VAR` in the unit ExecStart.
-        assert!(s.contains(&"--unit=nixling-exec-1-0-abcdef.service".to_owned()));
-        assert!(s.contains(&"--expand-environment=no".to_owned()));
-        assert!(s.contains(&"--pipe".to_owned()));
-        assert!(s.contains(&"--wait".to_owned()));
-        assert!(s.contains(&"--property=PAMName=login".to_owned()));
-        assert!(s.contains(&"--working-directory=/".to_owned()));
-        // The command lands as positional params after the login shell.
-        let dd = s.iter().position(|a| a == "--").unwrap();
-        assert_eq!(s[dd + 1], "/run/current-system/sw/bin/bash");
-        assert_eq!(s[dd + 2], "-l");
-        assert_eq!(s[dd + 3], "-c");
-        assert_eq!(s[dd + 4], r#"exec "$@""#);
-        assert_eq!(s[dd + 5], "nl-exec");
-        assert_eq!(s[dd + 6], "/run/current-system/sw/bin/id");
-        assert_eq!(s[dd + 7], "-u");
+        // Byte-exact ordered argv. Asserting the whole vector (rather than
+        // partial `contains` presence) locks the workload-user identity
+        // boundary: there is exactly one `--uid`, it is the workload user, and
+        // no extra systemd-run option can be injected before `--`. The unit is
+        // named so teardown can `systemctl kill` the workload cgroup, and
+        // `--expand-environment=no` keeps systemd from expanding `$VAR` in the
+        // unit ExecStart. The command lands as positional params after the
+        // login shell (`exec "$@"`).
+        assert_eq!(
+            s,
+            vec![
+                "--uid=john",
+                "--unit=nixling-exec-1-0-abcdef.service",
+                "--quiet",
+                "--collect",
+                "--expand-environment=no",
+                "--pipe",
+                "--wait",
+                "--property=PAMName=login",
+                "--working-directory=/",
+                "--",
+                "/run/current-system/sw/bin/bash",
+                "-l",
+                "-c",
+                r#"exec "$@""#,
+                "nl-exec",
+                "/run/current-system/sw/bin/id",
+                "-u",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>(),
+        );
     }
 
     #[test]
