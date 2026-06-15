@@ -711,14 +711,6 @@ if [ -x "$ROOT/tests/volume-mounts-eval.sh" ]; then
   # identity-bearing services regenerate state on every VM restart.
   nl_static_parallel_script_gate "tests/volume-mounts-eval.sh" "$ROOT/tests/volume-mounts-eval.sh"
 fi
-if [ -x "$ROOT/tests/tempo-budget-eval.sh" ]; then
-  # Static gate for the Tempo retention +
-  # sampling budget policy. Asserts Nix-side constants in
-  # nixos-modules/components/observability/stack.nix +
-  # options-observability.nix stay aligned with
-  # docs/reference/tempo-retention-sampling.md.
-  nl_static_parallel_script_gate "tests/tempo-budget-eval.sh" "$ROOT/tests/tempo-budget-eval.sh"
-fi
 if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # Assert daemonExperimental.enable default
   # flip gate honors readiness + evidence + override semantics.
@@ -729,19 +721,6 @@ if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
   # `nixling host validate --apply` verb that writes per-wave
   # evidence files.
   nl_static_parallel_script_gate "tests/host-validate-verb-eval.sh" "$ROOT/tests/host-validate-verb-eval.sh"
-fi
-if [ -x "$ROOT/tests/wave-evidence-schema-eval.sh" ]; then
-  # Assert the canonical wave
-  # evidence schema doc + JSON Schema cover every wave declared
-  # in options-daemon.nix.
-  nl_static_parallel_script_gate "tests/wave-evidence-schema-eval.sh" "$ROOT/tests/wave-evidence-schema-eval.sh"
-fi
-if [ -x "$ROOT/tests/polkit-allowlist-eval.sh" ]; then
-  # Assert host-polkit.nix names ONLY
-  # the daemon-only singleton units (nixlingd.service,
-  # nixling-priv-broker.{service,socket}) and contains no
-  # references to the retired per-VM / per-env unit shapes.
-  nl_static_parallel_script_gate "tests/polkit-allowlist-eval.sh" "$ROOT/tests/polkit-allowlist-eval.sh"
 fi
 if [ -x "$ROOT/tests/legacy-unit-denylist-eval.sh" ]; then
   # Drift gate enforcing that no
@@ -776,7 +755,6 @@ fi
 for _d13_gate in \
   broker-socket-activation-eval \
   daemon-autostart-eval \
-  loki-label-cardinality-eval \
   minijail-validator-audio \
   minijail-validator-cloud-hypervisor \
   minijail-validator-gpu \
@@ -794,8 +772,7 @@ for _d13_gate in \
   readiness-waves-eval \
   ssh-host-key-preflight-eval \
   supervisor-option-absent-eval \
-  usbip-state-machine-eval \
-  vm-submodule-eval; do
+  usbip-state-machine-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
     nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
   fi
@@ -1324,7 +1301,6 @@ if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tes
 # activation primitives per ADR 0021 + TOCTOU closures).
 if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-if [ -x "$HERE/minijail-version-check.sh" ]; then nl_static_parallel_script "tests/minijail-version-check.sh" "$HERE/minijail-version-check.sh"; fi
 if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
 if [ -x "$HERE/daemon-state-persistence.sh" ]; then bash "$HERE/daemon-state-persistence.sh" || fail "daemon-state-persistence"; fi

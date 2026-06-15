@@ -34,15 +34,9 @@ jobs:
             tests/host-json-drift-gate.sh \
             tests/host-validate-verb-eval.sh \
             tests/legacy-unit-denylist-eval.sh \
-            tests/loki-label-cardinality-eval.sh \
-            tests/minijail-version-check.sh \
             tests/deliverable-gate-inventory.sh \
-            tests/polkit-allowlist-eval.sh \
             tests/supervisor-option-absent-eval.sh \
-            tests/tempo-budget-eval.sh \
             tests/video-sidecar-hardening-eval.sh \
-            tests/vm-submodule-eval.sh \
-            tests/wave-evidence-schema-eval.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"

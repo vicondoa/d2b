@@ -221,7 +221,6 @@ for gate in \
   path-safety-violation-fs \
   ioctl-negative \
   kernel-module-matrix \
-  minijail-version-check \
   runner-shape-preflight \
   dag-topo \
   video-contract-eval \

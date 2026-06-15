@@ -404,15 +404,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/loki-label-cardinality-eval.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/manifest-fuzz-bounded.sh"
 group = "A"
 make_target = "test-rust"
@@ -528,15 +519,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-version-check.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/multi-env-daemon-backed.sh"
@@ -656,15 +638,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/polkit-allowlist-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/pr-checklist-gate.sh"
 group = "H"
 make_target = "test-policy"
@@ -773,15 +746,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/tempo-budget-eval.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/usbip-firewall-skeleton.sh"
 group = "A"
 make_target = "test-rust"
@@ -827,12 +791,48 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
+name = "tests/loki-label-cardinality-eval.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes (native SigNoz/OTel resource-attribute contract over nixos-modules/components/observability/{host,stack,guest}.nix: bounded resource-attribute key allowlist + required identity keys + no retired Loki/Alloy/Grafana/Tempo/Prometheus stack surfaces + no secret/high-cardinality/value-leaking key + upsert/identity tokens + StoreSync target_vm/target_env not promoted to resource attributes); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/minijail-version-check.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_misc.rs::minijail_version_comparison_canary (deterministic minijail version-refusal canary: observed >= required => ok else too-old, over the pinned-current/newer-accepted/older-refused/ancient-refused cases against the Tier-0 pinned minimum v17); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh", "packages/nixling-contract-tests/tests/policy_misc.rs::minijail_version_parser_canary (parser-shape canary: extracts the integer revision from a minijail0-shaped version banner); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/polkit-allowlist-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_misc.rs::polkit_allowlist_daemon_only_singletons (nixos-modules/host-polkit.nix: launcher-group allowlist names ONLY the daemon-only singletons nixlingd.service/nixling-priv-broker.service/nixling-priv-broker.socket, the executable region (awk '/^in$/,0' scope) carries no retired per-VM/per-env unit shapes, and the surviving grant keeps the manage-units action-id guard, the `nixling` group guard, the start/stop/restart verb allowlist, and exactly one polkit.addRule callback); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/tempo-budget-eval.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_observability.rs::tempo_stack_signoz_backend_and_collector (native SigNoz stack shape in nixos-modules/components/observability/stack.nix: ClickHouse + Keeper coordinator + signoz/signoz-otel-collector/signoz-schema-migrate-sync units + collector processor/exporter tokens + per-source receiver ingress tokens); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh", "packages/nixling-contract-tests/tests/policy_observability.rs::tempo_guest_collector_shape (guest collector in nixos-modules/components/observability/guest.nix: lib.mkIf/optionalAttrs conditionals resolved before YAML, self-metrics on dedicated resource/self pipeline, workload resource block preserves application service.name, journald receiver+access+severity+restart-safe cursor under scrapeJournal); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh", "packages/nixling-contract-tests/tests/policy_observability.rs::tempo_security_observability_and_retired_backends (collector self-telemetry tokens, source-specific pipelines vs shared otlp receiver, URL-encoded ClickHouse DSN passwords, ClickHouse default-user local-only auth, no OpAMP manager mode, obs secrets readable through ro virtiofs, host-activation obs vsock-relay ACL wiring, loopback-only backend binds + SigNoz UI port, no retired grafana/prometheus/loki/tempo/alloy backend, host options surface in options-observability.nix, ADR 0026 manifestVersion Spec-corrections record); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
 name = "tests/vm-submodule-eval.sh"
 group = "H"
 make_target = "test-policy"
 tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_misc.rs::vm_submodule_compose_vm_shape (nixos-modules/vm-submodule.nix exists and carries the composeVm ownership shape via the unanchored `composeVm\\s*=` grep, which matches the current `_composeVm =` binding; toplevel-hash parity covered separately); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
@@ -840,8 +840,8 @@ name = "tests/wave-evidence-schema-eval.sh"
 group = "B"
 make_target = "test-drift"
 tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_observability.rs::wave_evidence_schema_cross_check (readiness-wave doc/schema drift gate: every wave key parsed from nixos-modules/options-daemon.nix:readinessWaveSpecs has a matching per-wave inventory row in docs/reference/wave-evidence-schema.md, and docs/reference/wave-evidence-schema.json .required declares exactly [operatorSignature, timestamp, wave]); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "yes"
 
 [[script]]
