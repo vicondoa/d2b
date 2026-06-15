@@ -1498,7 +1498,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+successor_ids = ["cargo nextest run --workspace (nixling-host devices #[test]s)", "tests/rust-workspace-checks.sh (nixling-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1516,7 +1516,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+successor_ids = ["cargo nextest run --workspace (nixling-host ioctl_policy #[test]s)", "tests/rust-workspace-checks.sh (nixling-priv-broker ops::device #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "manual"
 
 [[script]]
@@ -1525,7 +1525,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo nextest run --workspace (kernel canary #[test]s)", "tests/tools/assert-pinned-tests.sh"]
+successor_ids = ["cargo nextest run --workspace (nixling-host modules #[test]s)", "tests/rust-workspace-checks.sh (nixling-priv-broker ops::modprobe #[test]s via broker-workspace cargo test --workspace)", "tests/tools/assert-pinned-tests.sh (fail-closed pin across both workspaces)"]
 exercised_today = "skip"
 
 [[script]]

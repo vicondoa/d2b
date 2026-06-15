@@ -152,9 +152,16 @@ partition-local:
 4. Delete `tests/X.sh`.
 
 Unit branches must not edit `tests/tools/gen-migration-ledger.sh`,
-`tests/static.sh`, `tests/static-fast.sh`, `AGENTS.md`, the Makefile,
-or other units' state/pinned files. AGENTS.md critical-subsystem
-doc-reference updates are applied by the integrator at merge.
+`tests/migration-ledger.toml`, `tests/static.sh`, `tests/static-fast.sh`,
+`AGENTS.md`, the Makefile, or other units' state/pinned files. In
+particular, a unit branch must never run `make ledger-regen` or commit
+`tests/migration-ledger.toml`: the ledger is a generated aggregate of
+every unit's `tests/migration-state.d/*.toml`, so committing it from a
+unit branch reintroduces a shared-file merge conflict and breaks the
+octopus integration at scale. The integrator regenerates and commits the
+ledger exactly once, after merging all units. AGENTS.md
+critical-subsystem doc-reference updates are applied by the integrator at
+merge.
 
 ## Layer 2 — `nixling-store.sh`
 

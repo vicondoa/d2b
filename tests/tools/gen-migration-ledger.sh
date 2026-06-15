@@ -502,7 +502,9 @@ if [ "$MODE" = check ]; then
   if diff -u "$OUT" "$scratch"; then
     echo "check-inventory: ledger is up to date ($(grep -c '^\[\[script\]\]' "$OUT") test rows; ORCH excluded)"
   else
-    echo "check-inventory: ledger drift detected; run make ledger-regen and commit the result" >&2
+    echo "check-inventory: ledger drift detected vs tests/migration-state.d/*.toml." >&2
+    echo "  Integrator (post-merge, on the integration branch): run 'make ledger-regen' and commit the single regenerated tests/migration-ledger.toml." >&2
+    echo "  Parallel unit branch: do NOT run ledger-regen or commit tests/migration-ledger.toml. Edit only your own tests/migration-state.d/<unit>.toml + pinned file; the integrator regenerates the ledger once post-merge (see tests/README.md 'Parallel W1 unit protocol')." >&2
     exit 1
   fi
 else

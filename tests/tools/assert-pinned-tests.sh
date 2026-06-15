@@ -54,12 +54,25 @@ if [ "${#pinned_files[@]}" -eq 0 ]; then
 fi
 
 declare -A present
-while IFS= read -r line; do
-  [ -n "$line" ] || continue
-  present["${line#* }"]=1
-done < <(
+collect_present() {
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    present["${line#* }"]=1
+  done
+}
+# Main workspace (packages/Cargo.toml).
+collect_present < <(
   cd "$ROOT/packages"
   cargo nextest list --workspace --exclude nixling-contract-tests --message-format oneline
+)
+# Broker workspace (packages/nixling-priv-broker/Cargo.toml) is a SEPARATE
+# cargo workspace, excluded from the main one. Retired canaries pinned
+# ops::device / ops::modprobe #[test]s that live there, so the fail-closed
+# pinned gate must enumerate it too — otherwise those retirements would be
+# silently unguarded against deletion.
+collect_present < <(
+  cd "$ROOT/packages/nixling-priv-broker"
+  cargo nextest list --workspace --message-format oneline
 )
 
 declare -A seen
