@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_guest.rs::otel_relay_acl_module_not_publicly_imported_and_broker_handler_present (asserts nixos-modules/default.nix carries no uncommented ./host-otel-relay-acl.nix import and that packages/nixling-priv-broker/src/runtime.rs still carries the RunnerRole::OtelHostBridge spawn handler); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
