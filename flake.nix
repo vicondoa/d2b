@@ -459,45 +459,58 @@
         # vanish. Pins are system-aware — `common.txt` holds the all-systems
         # cases; `<system>.txt` holds extra (e.g. x86-only graphics) cases.
         # Regenerate with `make nix-unit-pin` after adding/removing cases.
+        #
+        # common.txt is REQUIRED and must be non-empty: deleting the pin file
+        # itself (along with case files) must fail closed, not silently make
+        # the pin set empty (panel W2 finding). The per-system file is
+        # optional (aarch64 legitimately has no x86-only graphics cases).
         nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
-        readPins = path:
+        readPinsRequired = path:
+          if !(builtins.pathExists path) then
+            throw "nix-unit: required pin file ${toString path} is missing — run `make nix-unit-pin`"
+          else
+            let names = pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
+              (pkgs.lib.splitString "\n" (builtins.readFile path));
+            in if names == [ ]
+            then throw "nix-unit: required pin file ${toString path} has no pinned cases — the corpus would be unguarded; run `make nix-unit-pin`"
+            else names;
+        readPinsOptional = path:
           if builtins.pathExists path then
             pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
               (pkgs.lib.splitString "\n" (builtins.readFile path))
           else [ ];
         nixUnitPinned =
-          (readPins ./tests/nix-unit/pinned/common.txt)
-          ++ (readPins (./tests/nix-unit/pinned + "/${system}.txt"));
+          (readPinsRequired ./tests/nix-unit/pinned/common.txt)
+          ++ (readPinsOptional (./tests/nix-unit/pinned + "/${system}.txt"));
         nixUnitMissingPins =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
+        nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
+          (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted — restore it or run `make nix-unit-pin`)")
+          nixUnitMissingPins;
       in {
         fixture-smoke = smokeFixture;
 
         # W2: nix-unit value/throw assertions migrated from the group-D/E
-        # eval-gate bash scripts. Runs inside `nix flake check` and via
-        # `make test-nix-unit`.
+        # eval-gate bash scripts.
+        #
+        # CRITICAL: failures THROW at EVALUATION time, not just at build time.
+        # tests/static.sh + static-fast.sh run `nix flake check --no-build
+        # --all-systems`, which evaluates every check's derivation but does
+        # NOT build it. A failing runCommand would evaluate to a valid
+        # (unbuilt) derivation and slip through fail-OPEN (panel W2 finding).
+        # Throwing here forces the gate to fail during `--no-build`
+        # evaluation, on BOTH systems (aarch64 included on an x86 runner).
         nix-unit =
-          if nixUnitFailures == [ ] && nixUnitMissingPins == [ ] then
+          if nixUnitFailures != [ ] || nixUnitMissingPins != [ ] then
+            throw ''
+              nix-unit gate FAILED (${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases failed, ${toString (pkgs.lib.length nixUnitMissingPins)} pinned cases missing) for ${system}:
+              ${nixUnitReport}${pkgs.lib.optionalString (nixUnitMissingPins != [ ]) "\n${nixUnitMissingReport}"}
+            ''
+          else
             pkgs.runCommand "nixling-nix-unit" { } ''
               echo "nix-unit: ${toString nixUnitTotal} cases passed (${toString (pkgs.lib.length nixUnitPinned)} pinned present)"
               mkdir -p "$out"
               echo ok > "$out/nix-unit"
-            ''
-          else
-            pkgs.runCommand "nixling-nix-unit" {
-              NIXLING_NIX_UNIT_REPORT = nixUnitReport;
-              NIXLING_NIX_UNIT_MISSING = pkgs.lib.concatMapStringsSep "\n"
-                (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted — restore it or run `make nix-unit-pin`)")
-                nixUnitMissingPins;
-            } ''
-              if [ -n "$NIXLING_NIX_UNIT_REPORT" ]; then
-                echo "nix-unit: ${toString (pkgs.lib.length nixUnitFailures)}/${toString nixUnitTotal} cases FAILED" >&2
-                printf '%s\n' "$NIXLING_NIX_UNIT_REPORT" >&2
-              fi
-              if [ -n "$NIXLING_NIX_UNIT_MISSING" ]; then
-                printf '%s\n' "$NIXLING_NIX_UNIT_MISSING" >&2
-              fi
-              exit 1
             '';
 
         # W2: the "module callsites use the shared volume helpers" grep
