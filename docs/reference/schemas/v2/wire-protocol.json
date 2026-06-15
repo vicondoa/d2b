@@ -4598,7 +4598,7 @@
           }
         },
         {
-          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` (and the `vm konsole` wrapper) drive this verb; it never crosses SSH.",
+          "description": "Multiplexed, ADMIN-ONLY operation on a daemon-held authenticated guest-control exec session. A single owner connection issues a `Start` op then drives the session with the remaining ops (`WriteStdin`/`ReadOutput`/`Signal`/`Resize`/`Wait`/`Close`). The daemon enforces `PeerRole::Admin` BEFORE any session lookup, vsock connect, auth, or `ExecCreate`. `nixling vm exec` drives this verb; it never crosses SSH.",
           "type": "object",
           "required": [
             "kind",
