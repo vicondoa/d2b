@@ -1,12 +1,13 @@
 # Makefile — nixling repository top-level convenience targets.
 #
-# Maintainer-facing targets only; CI uses .github/workflows/*.yml directly.
+# Maintainer-facing targets only; CI uses .github/workflows/*.yml directly today
+# while W0 adds the stable make-target interface they converge on in later waves.
 
 .PHONY: pre-tag smoke-lite i3-check \
-        check check-ci check-all check-fast check-tier0 \
-        test-rust test-drift test-fixtures test-contract test-nix-unit \
-        test-flake test-policy test-mutation test-integration test-hardware perf \
-        ledger check-inventory
+	        check check-ci check-all check-fast check-tier0 \
+	        test-rust test-drift test-fixtures test-contract test-nix-unit \
+	        test-flake test-policy test-mutation test-integration test-hardware perf \
+	        ledger ledger-regen check-inventory pr-checklist-gate ci-uses-make
 
 # ===========================================================================
 # Test-rearchitecture interface (plan §2.9). The targets are the stable
@@ -14,10 +15,11 @@
 # static.sh; per-layer targets route through tests/migration-ledger.toml.
 #
 #   make check          L1 PR gate (A-F,H) — Ubuntu+Nix, any runner. Done-gate.
-#   make check-ci       check + test-integration — exactly what CI runs.
+#   make check-ci       W0: check, then the test-integration placeholder.
 #   make check-all      check-ci + test-hardware + perf — full local NixOS gate.
 #   make test-<layer>   focused per-layer run (ledger-driven).
-#   make test-integration  G-ci runNixOSTest — CI KVM job + local NixOS.
+#   make test-integration  W0 placeholder: legacy G-ci only on NixOS+KVM;
+#                          runNixOSTest CI harness lands W4.
 #   make test-hardware     G-hw real GPU/YubiKey/TPM passthrough — NixOS host only.
 # ===========================================================================
 
@@ -25,11 +27,16 @@
 check:
 	bash tests/static.sh
 
-## check-ci — what CI runs: L1 + the device-free VM tier (KVM Ubuntu job).
-check-ci: check test-integration
+## check-ci — W0: run check, then skip or run legacy G-ci on a suitable host.
+check-ci:
+	$(MAKE) check
+	$(MAKE) test-integration
 
 ## check-all — the full local gate on a NixOS host with devices.
-check-all: check-ci test-hardware perf
+check-all:
+	$(MAKE) check-ci
+	$(MAKE) test-hardware
+	$(MAKE) perf
 
 ## check-fast / check-tier0 — fast PR-loop subsets.
 check-fast:
@@ -37,10 +44,22 @@ check-fast:
 check-tier0:
 	bash tests/static-fast-tier0.sh
 
-## ledger / check-inventory — (re)generate the migration ledger and assert it
-## covers tests/ 1:1 (fails closed on any unclassified/renamed test).
-ledger check-inventory:
+## check-inventory — fail-closed ledger drift check for CI.
+check-inventory:
+	bash tests/tools/gen-migration-ledger.sh --check
+
+## ledger — compatibility alias for the fail-closed check.
+ledger: check-inventory
+
+## ledger-regen — regenerate tests/migration-ledger.toml in place for humans.
+ledger-regen:
 	bash tests/tools/gen-migration-ledger.sh
+
+## W0 policy gates. Warn-only in aggregate CI today; CI wiring lands later.
+pr-checklist-gate:
+	bash tests/pr-checklist-gate.sh .github/PULL_REQUEST_TEMPLATE.md
+ci-uses-make:
+	bash tests/ci-uses-make.sh
 
 ## Per-layer targets — W0: run the group's not-yet-ported legacy scripts via
 ## the ledger. W1+ repoints each to its successor (nextest/nix-unit/VM).
@@ -52,9 +71,15 @@ test-flake:       ; bash tests/tools/run-layer.sh test-flake
 test-policy:      ; bash tests/tools/run-layer.sh test-policy
 test-fixtures:    ; @echo "test-fixtures: artifact-fixture derivations land in W1/W3 (plan §2.1)"
 test-mutation:    ; @echo "test-mutation: standing mutation gate lands W1+ (plan §3.7)"
-## test-integration — G-ci device-free runNixOSTest. Runs in CI on a KVM job
-## (DeterminateSystems/determinate-nix-action) and on a local NixOS host.
-test-integration: ; bash tests/tools/run-layer.sh test-integration
+## test-integration — W0 placeholder: run legacy G-ci only on a local NixOS host
+## with KVM. The runNixOSTest CI job lands in W4; do not run live-host scripts
+## on generic CI runners.
+test-integration:
+	@if [ -e /dev/kvm ] && [ -f /etc/NIXOS ]; then \
+	bash tests/tools/run-layer.sh test-integration; \
+	else \
+	echo "G-ci legacy tests need a NixOS host; runNixOSTest harness lands W4"; \
+	fi
 ## test-hardware — G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 test-hardware:    ; bash tests/tools/run-layer.sh test-hardware

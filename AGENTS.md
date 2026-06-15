@@ -82,18 +82,18 @@ from `nixos-modules/default.nix`. Don't fatten existing files.
 > | target | what | runs in CI? | needs |
 > | --- | --- | --- | --- |
 > | `make check` | Layer-1 PR gate (today wraps `static.sh`) | yes (any runner) | Ubuntu+Nix |
-> | `make check-ci` | `check` + `test-integration` (what CI runs) | yes (KVM Ubuntu job) | `/dev/kvm` |
-> | `make test-integration` | device-free runNixOSTest VM tier (G-ci) | yes (KVM job) | NixOS VM (KVM) |
+> | `make check-ci` | W0: `check` + `test-integration` placeholder | no — `make check` remains the real CI gate today | Ubuntu+Nix |
+> | `make test-integration` | W0 placeholder: legacy G-ci scripts only on NixOS+KVM; runNixOSTest CI job lands W4 | no | NixOS host + KVM |
 > | `make test-hardware` | real GPU/YubiKey/hardware-TPM passthrough, full microVM boot (G-hw) | **no** | NixOS host **with the devices** |
 > | `make check-all` | `check-ci` + `test-hardware` + `perf` | — | NixOS host w/ devices |
 > | `make test-{rust,drift,contract,nix-unit,flake,policy}` | focused per-layer run (ledger-driven) | — | — |
 > | `make check-inventory` | assert `tests/` is classified 1:1 in `tests/migration-ledger.toml` | yes | — |
 >
-> CI runs the `make` targets (not bespoke script lists). Hosted GitHub runners
-> have **KVM but no physical devices**, so only `test-hardware` is off-CI and
-> is the PR author's manual responsibility (see the PR template checklist).
-> Test→group classification lives in `tests/migration-ledger.toml` (regenerate
-> with `make check-inventory`).
+> W0 does not move live-host scripts into CI: `make check` (today `static.sh`) remains
+> the real CI gate. The `test-integration` target is a safe placeholder that skips
+> unless it is run on a NixOS host with KVM; the runNixOSTest CI job lands in W4.
+> Test→group classification lives in `tests/migration-ledger.toml` (check with
+> `make check-inventory`; regenerate with `make ledger-regen`).
 
 The four legacy static tiers below are being repointed behind the `make`
 targets wave by wave; pick the one that matches your intent.
