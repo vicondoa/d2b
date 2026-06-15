@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/readiness-waves.nix — 11 defaultSwitchReadiness p0..p7 wave-presence, p0 implemented/validated default, and daemonExperimental.enable default cases via mkEval)"]
