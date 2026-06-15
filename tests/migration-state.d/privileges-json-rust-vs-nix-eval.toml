@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/privileges_parity.rs::rendered_privileges_matches_rust_matrix (compares NL_FIXTURES privileges.json vs nixling_core::privileges::PrivilegesJson::w1 — operation set + allowedGroups parity, public + broker)", "tests/rust-workspace-checks.sh (W3 fixture-contract step: builds fixture-smoke, runs the contract crate with NL_FIXTURES — gated in static.sh)"]

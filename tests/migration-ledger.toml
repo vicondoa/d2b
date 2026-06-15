@@ -953,15 +953,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/privileges-json-rust-vs-nix-eval.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/privileges-matrix-completeness.sh"
 group = "H"
 make_target = "test-policy"
@@ -1274,6 +1265,15 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/privileges-json-rust-vs-nix-eval.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/privileges_parity.rs::rendered_privileges_matches_rust_matrix (compares NL_FIXTURES privileges.json vs nixling_core::privileges::PrivilegesJson::w1 — operation set + allowedGroups parity, public + broker)", "tests/rust-workspace-checks.sh (W3 fixture-contract step: builds fixture-smoke, runs the contract crate with NL_FIXTURES — gated in static.sh)"]
 exercised_today = "yes"
 
 [[script]]

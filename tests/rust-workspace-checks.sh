@@ -182,6 +182,25 @@ log "--> cargo test --workspace ${workspace_test_excludes[*]}"
 CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 ok "cargo test"
 
+# W3 fixture-contract layer: the nixling-contract-tests crate is EXCLUDED
+# from the workspace test above because it reads the Nix-rendered bundle via
+# $NL_FIXTURES. Build the fixture-smoke artifact and run the contract crate
+# against it — this is what gates the fixture -> nixling-core DTO contract
+# layer (e.g. the privileges Rust-vs-Nix matrix parity). Without this step
+# the contract crate never runs in the gate.
+if command -v nix >/dev/null 2>&1; then
+  log "--> cargo test -p nixling-contract-tests (NL_FIXTURES = fixture-smoke)"
+  contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
+    --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
+  contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
+    --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
+  NL_FIXTURES="$contract_fixtures" CARGO_TARGET_DIR="$workspace_target_dir" \
+    cargo test --manifest-path "$manifest" -p nixling-contract-tests
+  ok "cargo test -p nixling-contract-tests (W3 fixture-contract layer)"
+else
+  log "  SKIP: nixling-contract-tests (nix unavailable to build fixture-smoke)"
+fi
+
 # The privileged broker lives in its own sibling workspace, so the main
 # workspace checks above do not see it. Validate its manifest/lock graph
 # explicitly, then run its tests in both feature modes.
