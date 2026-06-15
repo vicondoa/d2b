@@ -180,7 +180,7 @@ impl GuestControlExecErrorKind {
                 "rebuild and switch the VM to the current nixling generation so guest-control exec is available; nixling does not fall back to SSH"
             }
             Self::Capability => {
-                "rebuild the guest with the required exec capability enabled (current nixling generation)"
+                "ensure guest-control exec is enabled on the VM (`guest.exec.enable = true`) and the guest is rebuilt to the current nixling generation; an interactive session additionally requires the guest TTY capability"
             }
             Self::SessionCapacity => {
                 "wait for an in-flight exec session to finish or close an idle one, then retry"

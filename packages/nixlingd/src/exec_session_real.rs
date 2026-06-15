@@ -154,8 +154,14 @@ impl ExecGuestConnector for RealExecConnector {
 
 /// Fail closed unless the guest advertises every exec capability the session
 /// needs, returning the negotiated cap snapshot for per-op gating.
-/// Old generations that never advertised exec map to a dedicated
-/// old-generation error (exit 70, no SSH fallback).
+///
+/// This runs AFTER a successful authenticated handshake, so the guest is a
+/// guest-control generation that is up and reachable. A guest that does not
+/// advertise the exec capabilities here therefore has exec **disabled or not
+/// built in** (`guest.exec.enable = false`, or a partial generation) — it is
+/// NOT the genuine "no guestd / old generation" case, which is detected earlier
+/// at connect/probe time. Surface the capability slug (exit 70, no SSH
+/// fallback) whose remediation points at enabling guest-control exec.
 fn gate_capabilities(
     capabilities: &[EnumOrUnknown<pb::GuestCapability>],
     tty: bool,
@@ -166,10 +172,20 @@ fn gate_capabilities(
             .filter_map(|value| value.enum_value().ok())
             .any(|value| value == cap)
     };
-    // A guest that advertises no exec capability at all is an old generation
-    // (or exec-disabled build); surface the dedicated old-generation slug.
+    // The guest authenticated but advertises no attached-exec capability: exec
+    // is disabled or not built in (NOT old-generation — that is a connect-time
+    // failure). Fail closed to the capability slug, whose remediation points at
+    // `guest.exec.enable = true`.
     if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED) {
-        return Err(ExecEstablishError::OldGeneration);
+        return Err(ExecEstablishError::Capability);
+    }
+    // Every reachable exec session streams stdout/stderr back via ReadOutput, so
+    // a guest that does not advertise EXEC_LOGS cannot serve a session at all.
+    // Fail fast rather than establishing a session that can never deliver
+    // output. A real exec-enabled guestd always advertises EXEC_LOGS alongside
+    // EXEC_ATTACHED, so this never rejects a correctly-configured guest.
+    if !advertises(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS) {
+        return Err(ExecEstablishError::Capability);
     }
     if !advertises(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS) {
         return Err(ExecEstablishError::Capability);
@@ -574,6 +590,7 @@ mod tests {
     fn full_tty_caps() -> Vec<EnumOrUnknown<pb::GuestCapability>> {
         vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
             cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
@@ -581,27 +598,51 @@ mod tests {
     }
 
     #[test]
-    fn no_exec_capability_is_old_generation() {
-        // A guest advertising only health/capabilities (no exec) is an old
-        // generation: fail closed to the dedicated old-generation slug (exit
-        // 70, NO SSH fallback), never a transport error.
+    fn no_exec_capability_is_capability_unavailable_after_auth() {
+        // A guest advertising only health/capabilities (no exec) has reached
+        // this gate AFTER authenticating, so it is up and reachable — exec is
+        // disabled or not built in, NOT a genuine old generation (that is a
+        // connect-time failure). Fail closed to the capability slug (exit 70,
+        // NO SSH fallback) whose remediation points at `guest.exec.enable`.
         let caps = vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_HEALTH),
             cap(pb::GuestCapability::GUEST_CAPABILITY_CAPABILITIES),
         ];
         assert_eq!(
             gate_capabilities(&caps, false),
-            Err(ExecEstablishError::OldGeneration)
+            Err(ExecEstablishError::Capability)
         );
         assert_eq!(
             gate_capabilities(&caps, true),
-            Err(ExecEstablishError::OldGeneration)
+            Err(ExecEstablishError::Capability)
+        );
+    }
+
+    #[test]
+    fn exec_without_output_capability_is_capability_unavailable() {
+        // EXEC_ATTACHED without EXEC_LOGS: every reachable session must stream
+        // output, so the host fails closed rather than establishing a session
+        // that can never deliver stdout/stderr.
+        let caps = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
+        ];
+        assert_eq!(
+            gate_capabilities(&caps, false),
+            Err(ExecEstablishError::Capability)
+        );
+        assert_eq!(
+            gate_capabilities(&caps, true),
+            Err(ExecEstablishError::Capability)
         );
     }
 
     #[test]
     fn exec_without_signals_is_capability_unavailable() {
-        let caps = vec![cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED)];
+        let caps = vec![
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
+        ];
         assert_eq!(
             gate_capabilities(&caps, false),
             Err(ExecEstablishError::Capability)
@@ -612,6 +653,7 @@ mod tests {
     fn non_tty_session_succeeds_without_tty_caps() {
         let caps = vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
         ];
         let negotiated = gate_capabilities(&caps, false).expect("non-tty session is allowed");
@@ -621,7 +663,7 @@ mod tests {
                 tty: false,
                 signals: true,
                 tty_resize: false,
-                output: false,
+                output: true,
             }
         );
     }
@@ -654,6 +696,7 @@ mod tests {
         // Missing EXEC_TTY.
         let no_exec_tty = vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_TTY_RESIZE),
         ];
@@ -664,6 +707,7 @@ mod tests {
         // Missing TTY_RESIZE.
         let no_resize = vec![
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_SIGNALS),
             cap(pb::GuestCapability::GUEST_CAPABILITY_EXEC_TTY),
         ];
