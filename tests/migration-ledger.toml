@@ -944,15 +944,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/niri-vm-borders-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/nixlingd-startup-smoke.sh"
 group = "A"
 make_target = "test-rust"
@@ -1454,6 +1445,15 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/niri-vm-borders-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/niri-vm-borders.nix — 10 niri KDL window-rule cases via mkEval introspection)"]
 exercised_today = "yes"
 
 [[script]]
