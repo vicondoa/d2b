@@ -51,7 +51,7 @@ let
   };
   cargoLock = {
     lockFile = ../packages/Cargo.lock;
-    outputHashes."wl-proxy-0.1.2" = "sha256-5hnfZksxKQIWVEKYnqwyJGWKrBX1FOMGG+3k/FASoBg=";
+    outputHashes."wl-proxy-0.1.2" = "sha256-1yO1zgzSyzQ2DnDMpVxcnI5BsTNvXfzIUS+RNlPj4A8=";
   };
   activationHelperPackage = pkgs.rustPlatform.buildRustPackage {
     pname = "nixling-activation-helper";
