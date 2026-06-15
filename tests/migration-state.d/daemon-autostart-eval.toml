@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/daemon-autostart.nix — 24 cases: Rust/doc source-grep via readFile + parallelism option via mkEval)"]
