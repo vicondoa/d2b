@@ -46,9 +46,15 @@ use crate::{
     generated::guest_control_ttrpc::{create_guest_control, GuestControl},
 };
 
+/// Absolute path to the guest login program (NixOS system profile). The
+/// interactive PTY spawner execs `login -f <workload-user>` here to start a
+/// real PAM login session: `pam_systemd` provisions `XDG_RUNTIME_DIR` and the
+/// login shell sources the profile (`WAYLAND_DISPLAY`, …), reproducing the old
+/// SSH `vm konsole` environment so graphical clients work.
+const GUEST_LOGIN_PATH: &str = "/run/current-system/sw/bin/login";
+
 /// Server-generated opaque exec id source backed by `/dev/urandom`.
 pub struct OsExecIds;
-
 impl crate::exec::ExecIdSource for OsExecIds {
     fn next_exec_id(&self) -> Result<String, ExecError> {
         let mut bytes = [0_u8; 16];
@@ -302,11 +308,14 @@ pub fn build_runtime_auth_core(
 }
 
 pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceError> {
-    let exec_enabled_root = config.exec_policy.enabled && config.exec_policy.allow_root;
+    // The host-fixed workload user every exec runs as (never root). When set,
+    // exec is usable; the wire `user` field is never consulted for authz.
+    let exec_user = config.exec_policy.exec_user.clone();
+    let exec_enabled_user = config.exec_policy.enabled && exec_user.is_some();
 
     // Build the cross-connection detached registry (shared by all connections)
     // when the host wired detached runtime constants AND exec is usable.
-    let detached: SharedDetached = match (&config.detached, exec_enabled_root) {
+    let detached: SharedDetached = match (&config.detached, exec_enabled_user) {
         (Some(detached_cfg), true) if detached_runtime_usable(detached_cfg) => {
             let boot_id = ProcBootIdSource
                 .guest_boot_id()
@@ -333,7 +342,7 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
     // detached path) must be present. The interactive path needs only the
     // runner binary — not systemd-run or the detached slot dir — so it is gated
     // on the runner path alone.
-    let interactive_helper: Option<PathBuf> = match (&config.detached, exec_enabled_root) {
+    let interactive_helper: Option<PathBuf> = match (&config.detached, exec_enabled_user) {
         (Some(detached_cfg), true) if detached_cfg.exec_runner_path.is_file() => {
             Some(detached_cfg.exec_runner_path.clone())
         }
@@ -341,19 +350,23 @@ pub async fn serve_vsock(config: GuestdServeConfig) -> Result<(), GuestdServiceE
     };
 
     let mut exec_runtime = ExecRuntime::new(LinuxProcessSpawner, OsExecIds, config.exec_policy);
-    if let Some(helper) = interactive_helper.clone() {
+    if let (Some(helper), Some(user)) = (interactive_helper.clone(), exec_user.clone()) {
         // 0 means unlimited (the interactive default); a non-zero value caps the
         // per-session runtime. Non-TTY attached execs keep MAX_EXEC_RUNTIME_MS.
         let ceiling = (config.interactive_max_runtime_sec != 0)
             .then(|| Duration::from_secs(config.interactive_max_runtime_sec));
         exec_runtime = exec_runtime
-            .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(helper)))
+            .with_pty_spawner(Arc::new(LinuxPtyProcessSpawner::new(
+                helper,
+                user,
+                PathBuf::from(GUEST_LOGIN_PATH),
+            )))
             .with_interactive_ceiling(ceiling);
     }
     let exec: SharedExec = Arc::new(exec_runtime);
 
     let capabilities = CapabilitiesConfig {
-        exec_attached: exec_enabled_root,
+        exec_attached: exec_enabled_user,
         exec_detached: detached.is_some(),
         // Retained logs share the detached store + quota.
         exec_logs: detached.is_some(),
@@ -1910,7 +1923,7 @@ mod tests {
             OsExecIds,
             ExecPolicy {
                 enabled: true,
-                allow_root: true,
+                exec_user: Some("john".to_owned()),
             },
         ))
     }

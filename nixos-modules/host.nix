@@ -294,6 +294,10 @@ in
                 enable = lib.mkForce vm'.guest.exec.enable;
                 allowRoot = lib.mkForce vm'.guest.exec.allowRoot;
                 users = lib.mkForce vm'.guest.exec.users;
+                # The host-fixed workload user every exec runs as (never root),
+                # derived from the per-VM workload user. guestd runs interactive
+                # sessions as a real PAM login for this user.
+                execUser = lib.mkForce vm'.ssh.user;
                 detachedMaxRuntimeSec = lib.mkForce vm'.guest.exec.detachedMaxRuntimeSec;
                 interactiveMaxRuntimeSec = lib.mkForce vm'.guest.exec.interactiveMaxRuntimeSec;
               };

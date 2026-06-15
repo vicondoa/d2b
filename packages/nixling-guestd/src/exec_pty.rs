@@ -808,14 +808,25 @@ pub mod linux {
     const EIO: i32 = 5;
 
     /// Production PTY spawner. Constructed with the absolute path to the
-    /// `nixling-exec-runner` binary, which it invokes in `--tty-exec` mode.
+    /// `nixling-exec-runner` binary (invoked in `--tty-exec` mode), the
+    /// host-fixed workload user, and the absolute `login` path. The helper
+    /// execs `login -f <user>` so the interactive session is a real PAM login
+    /// for the workload user (never root): `pam_systemd` provisions
+    /// `XDG_RUNTIME_DIR` and the login shell sources the profile
+    /// (`WAYLAND_DISPLAY`, …), reproducing the old SSH `vm konsole`.
     pub struct LinuxPtyProcessSpawner {
         helper_path: PathBuf,
+        exec_user: String,
+        login_path: PathBuf,
     }
 
     impl LinuxPtyProcessSpawner {
-        pub fn new(helper_path: PathBuf) -> Self {
-            Self { helper_path }
+        pub fn new(helper_path: PathBuf, exec_user: String, login_path: PathBuf) -> Self {
+            Self {
+                helper_path,
+                exec_user,
+                login_path,
+            }
         }
     }
 
@@ -852,17 +863,32 @@ pub mod linux {
                 .map_err(|_| ExecError::SpawnFailed)?;
 
             let mut cmd = Command::new(&self.helper_path);
+            // Interactive sessions run as a real PAM login for the host-fixed
+            // workload user: the helper execs `login -f <user>` (never root, and
+            // the requested argv is intentionally not run here — `login` opens
+            // the user's login shell, exactly as the old SSH `vm konsole` did).
+            // `pam_systemd` provisions `XDG_RUNTIME_DIR` and the login shell
+            // sources the profile (`WAYLAND_DISPLAY`, …), so graphical clients
+            // work. Only `TERM` is forwarded; `login`/PAM/profile establish the
+            // rest of the environment. cwd is `/` (login cds to the user home).
+            let term = command
+                .env
+                .iter()
+                .find(|(k, _)| k == "TERM")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "xterm".to_owned());
             cmd.arg("--tty-exec")
                 .arg("--rows")
                 .arg(initial_size.rows.to_string())
                 .arg("--cols")
                 .arg(initial_size.cols.to_string())
                 .arg("--")
-                .arg(&command.program)
-                .args(&command.args)
-                .current_dir(&command.cwd)
+                .arg(&self.login_path)
+                .arg("-f")
+                .arg(&self.exec_user)
+                .current_dir("/")
                 .env_clear()
-                .envs(command.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+                .env("TERM", term)
                 // Safe fd handoff: no arbitrary pass_fds, no process_group(0),
                 // no pre_exec. The slave is stdin; the status pipe is stdout.
                 .stdin(Stdio::from(slave))

@@ -12,10 +12,10 @@ let
     in
     builtins.hasAttr user config.users.users
     && ((userCfg.isNormalUser or false) || (userCfg.isSystemUser or false));
-  # Detached exec is served only when root exec is allowed; the guest
-  # mirror gates it on exec.enable && exec.allowRoot, matching guestd's
+  # Detached exec is served only when a workload user is configured; the guest
+  # mirror gates it on exec.enable && exec.execUser != null, matching guestd's
   # own usability check (both abs flags present => detached runtime).
-  detachedEnabled = cfg.exec.enable && cfg.exec.allowRoot;
+  detachedEnabled = cfg.exec.enable && cfg.exec.execUser != null;
   userdServices =
     if cfg.exec.enable then
       lib.listToAttrs (map (user: lib.nameValuePair "nixling-userd-${user}" {
@@ -70,6 +70,18 @@ in
         internal = true;
         readOnly = true;
         description = "Host-owned root exec policy gate.";
+      };
+
+      execUser = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        internal = true;
+        readOnly = true;
+        description = ''
+          Host-fixed workload user every guest exec runs as (never root).
+          Derived from the per-VM workload user (`ssh.user`). When non-null,
+          guestd is launched with `--exec-user <name>` and every interactive
+          session is a real PAM login (`login -f <name>`) for this user.
+        '';
       };
 
       users = lib.mkOption {
@@ -185,10 +197,12 @@ in
           Type = "exec";
           ExecStart =
             let
+              execEnabledUser = cfg.exec.enable && cfg.exec.execUser != null;
               execFlags =
                 lib.optionalString cfg.exec.enable " --exec-enable"
-                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot) " --exec-allow-root"
-                + lib.optionalString (cfg.exec.enable && cfg.exec.allowRoot)
+                + lib.optionalString execEnabledUser
+                    " --exec-user ${lib.escapeShellArg cfg.exec.execUser}"
+                + lib.optionalString execEnabledUser
                     " --interactive-max-runtime-sec ${toString cfg.exec.interactiveMaxRuntimeSec}";
               detachedFlags =
                 lib.optionalString detachedEnabled (
