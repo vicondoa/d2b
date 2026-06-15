@@ -61,3 +61,35 @@ pub fn load_bundle_resolver_from_env() -> BundleResolver {
     });
     BundleResolver::from_artifacts(bundle, host, processes, manifest)
 }
+
+// ---------------------------------------------------------------------------
+// Repo-file access for the policy/source/doc-lint layer (the H-group gates).
+//
+// This crate is excluded from the hermetic Nix sandbox workspace build and
+// runs only from tests/rust-workspace-checks.sh against the real checkout, so
+// reading repo files relative to CARGO_MANIFEST_DIR is sound here (it is NOT
+// sound for crates built in the sandbox).
+// ---------------------------------------------------------------------------
+
+/// Absolute path to the repository root (two levels up from this crate).
+pub fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .canonicalize()
+        .expect("canonicalize repo root from CARGO_MANIFEST_DIR")
+}
+
+/// Read a repo-relative file to a string, panicking with a clear message when
+/// absent (a policy lint asserting a file's content must fail, not skip, if the
+/// file is missing).
+pub fn read_repo_file(rel: &str) -> String {
+    let path = repo_root().join(rel);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", path.display()))
+}
+
+/// Whether a repo-relative path exists.
+pub fn repo_path_exists(rel: &str) -> bool {
+    repo_root().join(rel).exists()
+}

@@ -29,12 +29,10 @@ jobs:
           set -euo pipefail
           for t in \
             tests/preflight-disk-space.sh \
-            tests/adr-0015-presence-eval.sh \
             tests/agents-md-rewrite-eval.sh \
             tests/broker-systemd-unit-eval.sh \
             tests/changelog-v1-cut-eval.sh \
             tests/cli-nix-consumers-eval.sh \
-            tests/daemon-experimental-warning-eval.sh \
             tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
             tests/host-prep-dag-eval.sh \
@@ -85,7 +83,6 @@ jobs:
             tests/observability-eval.sh \
             tests/per-vm-state-ownership-eval.sh \
             tests/runner-shape-snapshot.sh \
-            tests/v1.1-kernel-floor-eval.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"

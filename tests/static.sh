@@ -763,9 +763,6 @@ if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
 fi
 # Wire the remaining doc/drift gates so
 # the clean-break invariants are Layer-1 always-on.
-if [ -x "$ROOT/tests/adr-0015-presence-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/adr-0015-presence-eval.sh" "$ROOT/tests/adr-0015-presence-eval.sh"
-fi
 if [ -x "$ROOT/tests/agents-md-rewrite-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/agents-md-rewrite-eval.sh" "$ROOT/tests/agents-md-rewrite-eval.sh"
 fi
@@ -792,7 +789,6 @@ for _d13_gate in \
   broker-socket-activation-eval \
   broker-systemd-unit-eval \
   daemon-autostart-eval \
-  daemon-experimental-warning-eval \
   host-prep-dag-eval \
   kernel-modules-parity-eval \
   loki-label-cardinality-eval \
@@ -823,7 +819,6 @@ for _d13_gate in \
   supervisor-option-absent-eval \
   tap-dag-contract-doc-eval \
   usbip-state-machine-eval \
-  v1.1-kernel-floor-eval \
   vfsd-watchdog-retired-eval \
   vm-submodule-cutover-eval \
   vm-submodule-eval; do

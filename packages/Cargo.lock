@@ -980,6 +980,7 @@ name = "nixling-contract-tests"
 version = "0.0.0-bootstrap"
 dependencies = [
  "nixling-core",
+ "regex",
  "serde",
  "serde_json",
 ]

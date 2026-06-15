@@ -17,15 +17,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/adr-0015-presence-eval.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/adr-index-coverage.sh"
 group = "H"
 make_target = "test-policy"
@@ -204,15 +195,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/daemon-experimental-warning-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/daemon-metrics-eval.sh"
@@ -1052,15 +1034,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/v1.1-kernel-floor-eval.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/vfsd-watchdog-retired-eval.sh"
 group = "H"
 make_target = "test-policy"
@@ -1121,6 +1094,33 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "yes"
+
+[[script]]
+name = "tests/adr-0015-presence-eval.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — adr_0015_present_with_header_and_cross_references (ADR 0015 file/header/section invariants + AGENTS.md & docs/adr/README.md cross-refs)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-experimental-warning-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — daemon_experimental_option_documents_default_with_migration (options-daemon.nix + v1.0->v1.1 migration guide literal-string lints)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/v1.1-kernel-floor-eval.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — v1_1_kernel_floor_declared_in_adr_and_migration_guide (ADR 0008 + migration guide >=6.9 kernel-floor regex lints)"]
 exercised_today = "yes"
 
 [[script]]

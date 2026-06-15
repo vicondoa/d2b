@@ -14,7 +14,9 @@ order:
 1. **Linux kernel ≥ 6.9** (hard upgrade blocker). Operators on
    kernel 6.6–6.8 cannot run v1.1. The daemon's pidfs runtime
    self-probe in `packages/nixlingd/src/startup.rs` and the
-   static eval gate in `tests/v1.1-kernel-floor-eval.sh` both require
+   static eval gate in
+   `packages/nixling-contract-tests/tests/policy_lints.rs`
+   (`v1_1_kernel_floor_declared_in_adr_and_migration_guide`) both require
    pidfs support, which landed in mainline 6.9. See
    [ADR 0008 § "v1.1 kernel-floor uplift"](../adr/0008-supported-platforms-and-rejected-targets.md)
    and [ADR 0018 § "set-booted race-free serialization"](../adr/0018-microvm-nix-removal.md#set-booted-race-free-serialization)

@@ -544,7 +544,7 @@ In that implementation, the roster is selected per plan via
 | `tests/state-dir-acl-runtime.sh`      | **Layer-2 + root-only.** Skips unless `NL_RUN_LAYER2_WITH_SUDO=1 sudo -n bash tests/state-dir-acl-runtime.sh` is run. `.github/workflows/layer2-runtime-with-sudo.yml` is **manual-dispatch only** on a self-hosted `nixling-sudo` runner — never `pull_request` (panel R9 security: passwordless-sudo on PR-controlled checkout). Maintainers dispatch via `gh workflow run layer2-runtime-with-sudo.yml --ref <ref>` after review. See `CONTRIBUTING.md` § "Provisioning the `nixling-sudo` self-hosted runner". |
 | `tests/bridge-isolation-runtime.sh`   | Hermetic runtime bridge-isolation test: net-VM port stays reachable, workload taps stay isolated even after peer-style MAC spoofing. |
 | `tests/legacy-unit-denylist-eval.sh`  | Fail-closed gate: no example's `nixos-rebuild dry-build` output emits a retired per-VM systemd template or host-singleton framework service (ADR 0015). |
-| `tests/adr-0015-presence-eval.sh`     | Asserts the daemon-only ADR exists, carries the canonical header, and is cross-referenced from `AGENTS.md`. |
+| `packages/nixling-contract-tests/tests/policy_lints.rs::adr_0015_present_with_header_and_cross_references` | Asserts the daemon-only ADR exists, carries the canonical header, and is cross-referenced from `AGENTS.md`. |
 | `tests/agents-md-rewrite-eval.sh`     | Asserts `AGENTS.md` does not describe the legacy bash CLI or retired per-VM systemd templates as live framework surfaces. |
 | `tests/nixling-store.sh`              | Layer 2, optional. Per-VM `/nix/store` hardlink farm + `nixling vm switch` lifecycle. Requires a live host. |
 | `tests/lib.sh`                        | Shared shell helpers (logging, skip-detection, root-path derivation).                        |
@@ -981,8 +981,9 @@ contract:
 
 - `tests/legacy-unit-denylist-eval.sh` asserts that no example's
   `nixos-rebuild dry-build` output emits a retired unit name.
-- `tests/adr-0015-presence-eval.sh` asserts the ADR exists,
-  carries the canonical header, and is cross-referenced from this
+- `packages/nixling-contract-tests/tests/policy_lints.rs`
+  (`adr_0015_present_with_header_and_cross_references`) asserts the ADR
+  exists, carries the canonical header, and is cross-referenced from this
   file.
 - `tests/agents-md-rewrite-eval.sh` asserts AGENTS.md itself does
   not mention the bash CLI or per-VM systemd templates as live

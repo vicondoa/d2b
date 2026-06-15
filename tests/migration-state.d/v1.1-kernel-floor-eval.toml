@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — v1_1_kernel_floor_declared_in_adr_and_migration_guide (ADR 0008 + migration guide >=6.9 kernel-floor regex lints)"]

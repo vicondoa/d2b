@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_lints.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — adr_0015_present_with_header_and_cross_references (ADR 0015 file/header/section invariants + AGENTS.md & docs/adr/README.md cross-refs)"]
