@@ -59,10 +59,14 @@ base="${SYSTEMS[0]}"
 } > "$PIN_DIR/common.txt"
 echo "wrote $PIN_DIR/common.txt ($(grep -cv '^#' "$PIN_DIR/common.txt") cases)" >&2
 
-for sys in "${SYSTEMS[@]:1}"; do
+# Every supported system commits a per-system pin file (REQUIRED TO EXIST by
+# the gate so deleting it fails closed); it may be header-only for a system
+# with no system-specific cases (e.g. the base system's delta is empty).
+for sys in "${SYSTEMS[@]}"; do
   delta=$(comm -23 "$tmp/$sys.names" "$tmp/$base.names")
   {
     echo "# nix-unit case-presence pins ($sys-only, e.g. graphics cases)."
+    echo "# Header-only is valid: this system has no system-specific cases."
     echo "# Regenerate with: make nix-unit-pin"
     [ -n "$delta" ] && printf '%s\n' "$delta"
   } > "$PIN_DIR/$sys.txt"

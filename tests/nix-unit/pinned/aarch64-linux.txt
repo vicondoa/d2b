@@ -1,0 +1,3 @@
+# nix-unit case-presence pins (aarch64-linux-only, e.g. graphics cases).
+# Header-only is valid: this system has no system-specific cases.
+# Regenerate with: make nix-unit-pin

@@ -462,26 +462,35 @@
         #
         # common.txt is REQUIRED and must be non-empty: deleting the pin file
         # itself (along with case files) must fail closed, not silently make
-        # the pin set empty (panel W2 finding). The per-system file is
-        # optional (aarch64 legitimately has no x86-only graphics cases).
+        # the pin set empty (panel W2 finding). The PER-SYSTEM file is also
+        # REQUIRED TO EXIST for the current system, but may be empty — a
+        # system with no extra (e.g. graphics) cases still commits a
+        # header-only file, so deleting a non-empty per-system pin file
+        # (e.g. x86_64-linux.txt with its 42 graphics pins) also fails closed
+        # (panel W2 re-review finding). The set of supported systems is the
+        # flake's own `systems`, not the currently-evaluated case set (which
+        # could be deleted in the same diff).
         nixUnitCaseNames = pkgs.lib.attrNames nixUnitCases;
-        readPinsRequired = path:
+        pinNames = path: pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
+          (pkgs.lib.splitString "\n" (builtins.readFile path));
+        readPinsRequiredNonEmpty = path:
           if !(builtins.pathExists path) then
             throw "nix-unit: required pin file ${toString path} is missing — run `make nix-unit-pin`"
           else
-            let names = pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
-              (pkgs.lib.splitString "\n" (builtins.readFile path));
+            let names = pinNames path;
             in if names == [ ]
             then throw "nix-unit: required pin file ${toString path} has no pinned cases — the corpus would be unguarded; run `make nix-unit-pin`"
             else names;
-        readPinsOptional = path:
-          if builtins.pathExists path then
-            pkgs.lib.filter (n: n != "" && !(pkgs.lib.hasPrefix "#" n))
-              (pkgs.lib.splitString "\n" (builtins.readFile path))
-          else [ ];
+        readPinsRequiredExist = path:
+          # The file MUST exist (so deleting it fails closed) but MAY be empty
+          # for a system with no system-specific cases (e.g. aarch64 has no
+          # x86-only graphics cases).
+          if !(builtins.pathExists path) then
+            throw "nix-unit: required per-system pin file ${toString path} is missing — every supported system commits one (header-only is fine); run `make nix-unit-pin`"
+          else pinNames path;
         nixUnitPinned =
-          (readPinsRequired ./tests/nix-unit/pinned/common.txt)
-          ++ (readPinsOptional (./tests/nix-unit/pinned + "/${system}.txt"));
+          (readPinsRequiredNonEmpty ./tests/nix-unit/pinned/common.txt)
+          ++ (readPinsRequiredExist (./tests/nix-unit/pinned + "/${system}.txt"));
         nixUnitMissingPins =
           pkgs.lib.filter (n: !(builtins.elem n nixUnitCaseNames)) nixUnitPinned;
         nixUnitMissingReport = pkgs.lib.concatMapStringsSep "\n"
