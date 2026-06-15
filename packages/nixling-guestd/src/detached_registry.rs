@@ -1645,14 +1645,16 @@ fn property_contains_unit(value: Option<&str>, unit: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Exact argv equality for workload-unit identity. `parse_exec_start`'s
+/// `parse_exec_argv` is quote-aware (honours `'`/`"`/`\`), so a systemd-rendered
+/// `argv[]=` round-trips to the persisted argv exactly — including the
+/// space-bearing `exec "$@"` element. We therefore require BYTE-EXACT argv
+/// equality: a whitespace-flattened comparison would let a foreign unit whose
+/// argument boundaries differ (e.g. `["hello", "world"]` vs a persisted
+/// `["hello world"]`) classify as the expected workload. A genuine mismatch
+/// fails closed (the slot is not adopted) rather than adopting a foreign unit.
 fn argv_matches_expected(actual: &[String], expected: &[String]) -> bool {
     actual == expected
-        || actual
-            == expected
-                .iter()
-                .flat_map(|arg| arg.split_whitespace().map(str::to_owned))
-                .collect::<Vec<_>>()
-                .as_slice()
 }
 
 fn build_spec(
@@ -3308,6 +3310,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(snap.state, ExecState::LostGuestd);
+    }
+
+    #[test]
+    fn argv_matches_expected_requires_byte_exact_argv() {
+        let expected = vec![
+            "/run/current-system/sw/bin/bash".to_owned(),
+            "-l".to_owned(),
+            "-c".to_owned(),
+            r#"exec "$@""#.to_owned(),
+            "nl-exec".to_owned(),
+            "/bin/id".to_owned(),
+        ];
+        assert!(argv_matches_expected(&expected, &expected));
+
+        // A whitespace-flattened variant MUST NOT match: a persisted single arg
+        // with an embedded space must not be satisfied by two separate args
+        // (the foreign-unit adoption hole the flatten fallback opened).
+        let persisted = vec!["hello world".to_owned()];
+        let two_args = vec!["hello".to_owned(), "world".to_owned()];
+        assert!(!argv_matches_expected(&two_args, &persisted));
+        assert!(!argv_matches_expected(&persisted, &two_args));
+
+        // The space-bearing `exec "$@"` element round-trips exactly through the
+        // quote-aware ExecStart parser, so byte-exact comparison still matches a
+        // real systemd `argv[]=` rendering.
+        let parsed = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c "exec \"$@\"" nl-exec /bin/id ; ignore_errors=no }"#,
+        )
+        .expect("parse systemd ExecStart");
+        assert!(argv_matches_expected(&parsed.argv, &expected));
     }
 
     #[tokio::test]
