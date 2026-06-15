@@ -1890,7 +1890,7 @@ fn dispatch_exec_management(
         }
         public_wire::ExecOp::Kill(args) => {
             let result = exec_detached::kill(state, &args);
-            emit_detached_kill_audit(state, peer.uid, &args.vm, &args.exec_id, result.as_ref());
+            emit_detached_kill_audit(state, peer.uid, &args.vm, result.as_ref());
             public_wire::ExecOpResponse::Kill(result?)
         }
         public_wire::ExecOp::Start(_)
@@ -2623,19 +2623,24 @@ fn emit_detached_kill_audit(
     state: &ServerState,
     peer_uid: u32,
     vm: &str,
-    exec_id: &str,
     result: Result<&public_wire::ExecDetachedKillResult, &TypedError>,
 ) {
-    let audit_result = match result {
-        Ok(kill) => match kill.result {
-            public_wire::ExecDetachedKillOutcome::Cancelling => {
-                daemon_audit::DetachedExecAuditResult::Cancelling
-            }
-            public_wire::ExecDetachedKillOutcome::AlreadyTerminal => {
-                daemon_audit::DetachedExecAuditResult::AlreadyTerminal
-            }
-        },
-        Err(_) => daemon_audit::DetachedExecAuditResult::Error,
+    let (audit_result, exec_id) = match result {
+        Ok(kill) => (
+            match kill.result {
+                public_wire::ExecDetachedKillOutcome::Cancelling => {
+                    daemon_audit::DetachedExecAuditResult::Cancelling
+                }
+                public_wire::ExecDetachedKillOutcome::AlreadyTerminal => {
+                    daemon_audit::DetachedExecAuditResult::AlreadyTerminal
+                }
+            },
+            kill.exec_id.as_str(),
+        ),
+        Err(_) => (
+            daemon_audit::DetachedExecAuditResult::Error,
+            "<redacted-on-error>",
+        ),
     };
     if let Err(err) =
         state
@@ -9013,6 +9018,13 @@ mod detached_exec_routing_tests {
         }
     }
 
+    fn launcher_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1000,
+        }
+    }
+
     fn seqpacket_pair() -> (Socket, Socket) {
         let (a, b) = socketpair(
             AddressFamily::Unix,
@@ -9042,6 +9054,41 @@ mod detached_exec_routing_tests {
             cwd: Some("SENTINEL_CWD".to_owned()),
             term_size: None,
         })
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0",
+        }))
+        .expect("encode hello frame")
+    }
+
+    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
+        let mut value = serde_json::to_value(op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), serde_json::json!("exec"));
+        object.insert("opId".to_owned(), serde_json::json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    struct PeerOverrideEnv;
+
+    impl PeerOverrideEnv {
+        fn launcher() -> Self {
+            std::env::set_var("NIXLINGD_TEST_PEER_UID", "1000");
+            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "launcher");
+            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
+            Self
+        }
+    }
+
+    impl Drop for PeerOverrideEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
+            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
+            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+        }
     }
 
     #[test]
@@ -9112,6 +9159,47 @@ mod detached_exec_routing_tests {
     }
 
     #[test]
+    fn detached_create_denies_launcher_before_owner_backend_or_session_table() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _env = PeerOverrideEnv::launcher();
+        let mut state = test_state(exec_session::ExecSessionCaps::default());
+        state.config.launcher_users = vec!["launcher".to_owned()];
+        state.config.admin_users = vec![];
+        let touched = Arc::new(AtomicUsize::new(0));
+        let hook_touched = Arc::clone(&touched);
+        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
+            hook_touched.fetch_add(1, Ordering::SeqCst);
+            panic!("launcher denial must not touch detached create backend: {request:?}");
+        }));
+        let (daemon, client) = seqpacket_pair();
+        let run_state = state.clone();
+        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state));
+
+        write_frame(&client, &hello_frame()).expect("client sends hello");
+        let hello_ok = recv_reply(&client);
+        assert_eq!(hello_ok["type"], "helloOk");
+        write_frame(&client, &exec_frame(88, &detached_start("true")))
+            .expect("client sends detached create");
+        let reply = recv_reply(&client);
+        drop(client);
+        handle
+            .join()
+            .expect("daemon thread joins")
+            .expect("connection exits after client EOF");
+
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["kind"], "authz-not-admin");
+        assert_eq!(reply["error"]["exitCode"], 75);
+        assert_eq!(state.exec_sessions.len(), 0);
+        assert_eq!(
+            touched.load(Ordering::SeqCst),
+            0,
+            "admin gate must short-circuit before detached create backend"
+        );
+    }
+
+    #[test]
     fn exec_detached_not_advertised_surfaces_clear_error() {
         let caps = vec![
             EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
@@ -9137,8 +9225,18 @@ mod detached_exec_routing_tests {
                             exit_code: None,
                             signal: None,
                             started_at: "1700000001".to_owned(),
+                            start_offset: 1,
+                            end_offset: 9,
+                            stdout_start_offset: 1,
+                            stdout_end_offset: 5,
+                            stderr_start_offset: 2,
+                            stderr_end_offset: 9,
                             dropped_bytes: 3,
+                            stdout_dropped_bytes: 1,
+                            stderr_dropped_bytes: 2,
                             truncated: true,
+                            stdout_truncated: false,
+                            stderr_truncated: true,
                         }],
                     },
                 ))
@@ -9154,6 +9252,18 @@ mod detached_exec_routing_tests {
                         end_offset: 9,
                         dropped_bytes: 4,
                         truncated: true,
+                        stdout_start_offset: 1,
+                        stdout_end_offset: 5,
+                        stdout_next_offset: 5,
+                        stdout_eof: true,
+                        stdout_dropped_bytes: 1,
+                        stdout_truncated: false,
+                        stderr_start_offset: 2,
+                        stderr_end_offset: 9,
+                        stderr_next_offset: 7,
+                        stderr_eof: false,
+                        stderr_dropped_bytes: 3,
+                        stderr_truncated: true,
                     },
                 ))
             }
@@ -9206,8 +9316,18 @@ mod detached_exec_routing_tests {
         assert_eq!(list["type"], "execResponse");
         assert_eq!(list["op"], "list");
         assert_eq!(list["result"]["execs"][0]["execId"], "exec-1");
+        assert_eq!(list["result"]["execs"][0]["startOffset"], 1);
+        assert_eq!(list["result"]["execs"][0]["endOffset"], 9);
+        assert_eq!(list["result"]["execs"][0]["stdoutStartOffset"], 1);
+        assert_eq!(list["result"]["execs"][0]["stdoutEndOffset"], 5);
+        assert_eq!(list["result"]["execs"][0]["stderrStartOffset"], 2);
+        assert_eq!(list["result"]["execs"][0]["stderrEndOffset"], 9);
         assert_eq!(list["result"]["execs"][0]["droppedBytes"], 3);
+        assert_eq!(list["result"]["execs"][0]["stdoutDroppedBytes"], 1);
+        assert_eq!(list["result"]["execs"][0]["stderrDroppedBytes"], 2);
         assert_eq!(list["result"]["execs"][0]["truncated"], true);
+        assert_eq!(list["result"]["execs"][0]["stdoutTruncated"], false);
+        assert_eq!(list["result"]["execs"][0]["stderrTruncated"], true);
         assert!(!list.to_string().contains("argv"));
 
         let logs = dispatch_request(
@@ -9226,6 +9346,18 @@ mod detached_exec_routing_tests {
         assert_eq!(logs["result"]["endOffset"], 9);
         assert_eq!(logs["result"]["droppedBytes"], 4);
         assert_eq!(logs["result"]["truncated"], true);
+        assert_eq!(logs["result"]["stdoutStartOffset"], 1);
+        assert_eq!(logs["result"]["stdoutEndOffset"], 5);
+        assert_eq!(logs["result"]["stdoutNextOffset"], 5);
+        assert_eq!(logs["result"]["stdoutEof"], true);
+        assert_eq!(logs["result"]["stdoutDroppedBytes"], 1);
+        assert_eq!(logs["result"]["stdoutTruncated"], false);
+        assert_eq!(logs["result"]["stderrStartOffset"], 2);
+        assert_eq!(logs["result"]["stderrEndOffset"], 9);
+        assert_eq!(logs["result"]["stderrNextOffset"], 7);
+        assert_eq!(logs["result"]["stderrEof"], false);
+        assert_eq!(logs["result"]["stderrDroppedBytes"], 3);
+        assert_eq!(logs["result"]["stderrTruncated"], true);
 
         let status = dispatch_request(
             &state,
@@ -9271,6 +9403,85 @@ mod detached_exec_routing_tests {
         assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
     }
 
+    #[test]
+    fn detached_kill_duplicate_maps_already_terminal_and_audits_idempotent_result() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
+            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
+                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                Ok(exec_detached::DetachedTestResponse::Kill(
+                    ExecDetachedKillResult {
+                        exec_id,
+                        result: ExecDetachedKillOutcome::AlreadyTerminal,
+                        state: ExecState::Exited,
+                    },
+                ))
+            }
+            other => panic!("unexpected detached backend request: {other:?}"),
+        }));
+
+        let kill = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            })),
+        )
+        .expect("kill dispatch succeeds");
+        assert_eq!(kill["op"], "kill");
+        assert_eq!(kill["result"]["result"], "already-terminal");
+        assert_eq!(kill["result"]["state"], "exited");
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "kill writes one audit event");
+        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
+        assert_eq!(record["event"]["result"].as_str(), Some("already-terminal"));
+        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
+    }
+
+    #[test]
+    fn detached_kill_error_audit_redacts_unvalidated_caller_exec_id() {
+        use crate::typed_error::GuestControlExecErrorKind as K;
+
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
+            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
+                assert_eq!(vm, "work");
+                assert_eq!(exec_id, "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control");
+                Err(TypedError::GuestControlExecFailed {
+                    kind: K::ExecNotFound,
+                })
+            }
+            other => panic!("unexpected detached backend request: {other:?}"),
+        }));
+
+        let err = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control".to_owned(),
+            })),
+        )
+        .expect_err("kill should surface backend error");
+        assert_eq!(err.kind(), "guest-control-exec-not-found");
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "kill errors still write one audit event");
+        assert!(
+            !records[0].contains("SENTINEL_UNVALIDATED_EXEC_ID"),
+            "audit must not persist unvalidated caller exec_id: {}",
+            records[0]
+        );
+        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
+        assert_eq!(record["event"]["result"].as_str(), Some("error"));
+        assert_eq!(
+            record["event"]["exec_id"].as_str(),
+            Some("<redacted-on-error>")
+        );
+    }
+
     fn management_ops() -> Vec<ExecOp> {
         vec![
             ExecOp::List(public_wire::ExecDetachedListArgs {
@@ -9289,6 +9500,41 @@ mod detached_exec_routing_tests {
                 exec_id: "exec-1".to_owned(),
             }),
         ]
+    }
+
+    fn detached_create_and_management_ops() -> Vec<ExecOp> {
+        let mut ops = vec![detached_start("true")];
+        ops.extend(management_ops());
+        ops
+    }
+
+    #[test]
+    fn detached_exec_ops_deny_launcher_before_backend_or_session_table() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let touched = Arc::new(AtomicUsize::new(0));
+        let hook_touched = Arc::clone(&touched);
+        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
+            hook_touched.fetch_add(1, Ordering::SeqCst);
+            panic!("launcher denial must not touch detached backend: {request:?}");
+        }));
+
+        for op in detached_create_and_management_ops() {
+            let err = dispatch_request(&state, &launcher_peer(), wire::Request::Exec(op))
+                .expect_err("launcher must be denied before exec backend");
+            match &err {
+                TypedError::AuthzNotAdmin { verb } => assert_eq!(verb, "exec"),
+                other => panic!("expected AuthzNotAdmin for exec, got {other:?}"),
+            }
+            assert_eq!(err.exit_code(), 75);
+            assert_eq!(state.exec_sessions.len(), 0);
+        }
+        assert_eq!(
+            touched.load(Ordering::SeqCst),
+            0,
+            "admin gate must short-circuit before detached backend"
+        );
     }
 
     #[test]

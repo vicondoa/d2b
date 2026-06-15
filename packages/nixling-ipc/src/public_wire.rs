@@ -732,9 +732,29 @@ pub struct ExecDetachedListEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<u32>,
     pub started_at: String,
+    #[serde(default)]
+    pub start_offset: u64,
+    #[serde(default)]
+    pub end_offset: u64,
+    #[serde(default)]
+    pub stdout_start_offset: u64,
+    #[serde(default)]
+    pub stdout_end_offset: u64,
+    #[serde(default)]
+    pub stderr_start_offset: u64,
+    #[serde(default)]
+    pub stderr_end_offset: u64,
     pub dropped_bytes: u64,
     #[serde(default)]
+    pub stdout_dropped_bytes: u64,
+    #[serde(default)]
+    pub stderr_dropped_bytes: u64,
+    #[serde(default)]
     pub truncated: bool,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_truncated: bool,
 }
 
 impl fmt::Debug for ExecDetachedListEntry {
@@ -745,8 +765,18 @@ impl fmt::Debug for ExecDetachedListEntry {
             .field("exit_code", &self.exit_code)
             .field("signal", &self.signal)
             .field("started_at", &self.started_at)
+            .field("start_offset", &self.start_offset)
+            .field("end_offset", &self.end_offset)
+            .field("stdout_start_offset", &self.stdout_start_offset)
+            .field("stdout_end_offset", &self.stdout_end_offset)
+            .field("stderr_start_offset", &self.stderr_start_offset)
+            .field("stderr_end_offset", &self.stderr_end_offset)
             .field("dropped_bytes", &self.dropped_bytes)
+            .field("stdout_dropped_bytes", &self.stdout_dropped_bytes)
+            .field("stderr_dropped_bytes", &self.stderr_dropped_bytes)
             .field("truncated", &self.truncated)
+            .field("stdout_truncated", &self.stdout_truncated)
+            .field("stderr_truncated", &self.stderr_truncated)
             .finish()
     }
 }
@@ -814,6 +844,30 @@ pub struct ExecDetachedLogsResult {
     pub dropped_bytes: u64,
     #[serde(default)]
     pub truncated: bool,
+    #[serde(default)]
+    pub stdout_start_offset: u64,
+    #[serde(default)]
+    pub stdout_end_offset: u64,
+    #[serde(default)]
+    pub stdout_next_offset: u64,
+    #[serde(default)]
+    pub stdout_eof: bool,
+    #[serde(default)]
+    pub stdout_dropped_bytes: u64,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_start_offset: u64,
+    #[serde(default)]
+    pub stderr_end_offset: u64,
+    #[serde(default)]
+    pub stderr_next_offset: u64,
+    #[serde(default)]
+    pub stderr_eof: bool,
+    #[serde(default)]
+    pub stderr_dropped_bytes: u64,
+    #[serde(default)]
+    pub stderr_truncated: bool,
 }
 
 impl fmt::Debug for ExecDetachedLogsResult {
@@ -1416,8 +1470,18 @@ mod tests {
             exit_code: Some(0),
             signal: None,
             started_at: "2026-06-15T18:00:00Z".to_owned(),
+            start_offset: 0,
+            end_offset: 128,
+            stdout_start_offset: 0,
+            stdout_end_offset: 64,
+            stderr_start_offset: 8,
+            stderr_end_offset: 128,
             dropped_bytes: 0,
+            stdout_dropped_bytes: 0,
+            stderr_dropped_bytes: 0,
             truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
         };
         assert_clean(&format!("{detached_entry:?}"), "ExecDetachedListEntry");
 
@@ -1464,6 +1528,18 @@ mod tests {
             end_offset: 128,
             dropped_bytes: 64,
             truncated: true,
+            stdout_start_offset: 0,
+            stdout_end_offset: 64,
+            stdout_next_offset: 64,
+            stdout_eof: true,
+            stdout_dropped_bytes: 16,
+            stdout_truncated: true,
+            stderr_start_offset: 8,
+            stderr_end_offset: 128,
+            stderr_next_offset: 96,
+            stderr_eof: false,
+            stderr_dropped_bytes: 48,
+            stderr_truncated: false,
         };
         let rendered_logs = format!("{detached_logs_result:?}");
         assert_clean(&rendered_logs, "ExecDetachedLogsResult");

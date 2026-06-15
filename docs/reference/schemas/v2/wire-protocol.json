@@ -2363,6 +2363,12 @@
           "format": "uint64",
           "minimum": 0.0
         },
+        "endOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "execId": {
           "type": "string"
         },
@@ -2381,11 +2387,61 @@
           "format": "uint32",
           "minimum": 0.0
         },
+        "startOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "startedAt": {
           "type": "string"
         },
         "state": {
           "$ref": "#/definitions/ExecState"
+        },
+        "stderrDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stdoutDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncated": {
+          "default": false,
+          "type": "boolean"
         },
         "truncated": {
           "default": false,
@@ -2460,8 +2516,72 @@
         "stderrBase64": {
           "type": "string"
         },
+        "stderrDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrEof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stderrNextOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stderrTruncated": {
+          "default": false,
+          "type": "boolean"
+        },
         "stdoutBase64": {
           "type": "string"
+        },
+        "stdoutDroppedBytes": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEndOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutEof": {
+          "default": false,
+          "type": "boolean"
+        },
+        "stdoutNextOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutStartOffset": {
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stdoutTruncated": {
+          "default": false,
+          "type": "boolean"
         },
         "truncated": {
           "default": false,
