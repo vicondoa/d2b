@@ -418,6 +418,19 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- `nixling vm exec` now runs the requested command as the VM's
+  configured workload user (`ssh.user`) — **never root** — inside a real
+  PAM login session (`systemd-run --property=PAMName=login
+  --uid=<user>`). The command sees the same environment an interactive
+  SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
+  profile), so graphical and login-shell workflows (e.g. launching a
+  browser) work unchanged; operators elevate with `sudo` inside the
+  session. `guestd` host-fixes the exec identity and ignores the wire
+  `user` field. The per-VM `guest.exec.allowRoot` and `guest.exec.users`
+  options are removed — enabling `guest.exec.enable = true` on a VM with
+  a workload user is sufficient, and a VM whose `ssh.user` is unset,
+  `root`, or otherwise invalid disables exec at eval time with a typed
+  message.
 - Framework readiness for a guest-control-capable VM is now the
   authenticated guest-control Health probe rather than a raw TCP-22 SSH
   connect. The per-VM DAG node `guest-ssh-readiness` is replaced by

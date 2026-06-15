@@ -2255,6 +2255,15 @@ verbs); a launcher-role caller is rejected with the typed
 `authz-not-admin` error (exit `77`, AUTH) before any session is
 established.
 
+**Execution identity.** Every exec runs the requested command as the
+VM's configured workload user (`ssh.user`) — **never root** — inside a
+real PAM login session (`systemd-run --property=PAMName=login
+--uid=<user>`). The command therefore sees the same environment an
+interactive SSH login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the
+login-shell profile), so graphical and login-shell workflows work
+unchanged. The wire `user` field is host-fixed by `guestd` and ignored;
+operators elevate with `sudo` inside the session.
+
 Modes:
 
 - **non-interactive** (default): stdin is closed up front; stdout and

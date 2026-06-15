@@ -379,13 +379,16 @@ The Rust `nixling` CLI is the only operator surface. Run
   `SO_PEERCRED` at the daemon socket.
 
 To enable guest exec on a VM: set `nixling.vms.<vm>.guest.control.enable
-= true` plus the guest exec root policy (`guest.exec.enable = true` and
-`guest.exec.allowRoot = true` — guestd serves guest-root exec today, with
-the non-root `guest.exec.users` allowlist reserved for a future wave);
-add your operator account to `nixling.site.adminUsers`; rebuild and
-restart the daemon into the new generation (`sudo systemctl restart
-nixlingd`, since `nixlingd` carries `restartIfChanged = false`); then
-start the VM on the guest-control generation and run the verbs.
+= true` and `guest.exec.enable = true` (the VM must have a workload user
+via `ssh.user`); add your operator account to `nixling.site.adminUsers`;
+rebuild and restart the daemon into the new generation (`sudo systemctl
+restart nixlingd`, since `nixlingd` carries `restartIfChanged = false`);
+then start the VM on the guest-control generation and run the verbs.
+Every exec runs the requested command as the VM's workload user
+(`ssh.user`) — **never root** — inside a real PAM login session, so
+graphical and login-shell workflows see the same environment an SSH
+login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
+profile). Operators elevate with `sudo` inside the session.
 
 Run-state ships in `/var/lib/nixling/`; per-host config emitted by
 the NixOS module ships in `/etc/nixling/` (bundle + privileges +
