@@ -8,7 +8,7 @@ nixling \- nixling — opinionated NixOS desktop microVM CLI.
 .SH DESCRIPTION
 nixling — daemon\-native CLI for nixling microVMs.
 .PP
-All mutating verbs dispatch through nixlingd and nixling\-priv\-broker. Read\-only verbs (list, status, audit, host check) query the daemon or the static manifest. See `nixling <COMMAND> \-\-help` for per\-verb usage.
+All mutating verbs dispatch through nixlingd and nixling\-priv\-broker. Read\-only verbs (list, status, audit, host check) prefer nixlingd\*(Aqs public socket and fall back to static/local sources where documented. See `nixling <COMMAND> \-\-help` for per\-verb usage.
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -19,7 +19,7 @@ Print version
 .SH SUBCOMMANDS
 .TP
 nixling\-list(1)
-List declared VMs from the static manifest
+List declared VMs with daemon runtime state when nixlingd is reachable
 .TP
 nixling\-status(1)
 Show per\-VM runtime status plus bridge health

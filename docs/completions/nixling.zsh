@@ -1273,7 +1273,7 @@ esac
 (( $+functions[_nixling_commands] )) ||
 _nixling_commands() {
     local commands; commands=(
-'list:List declared VMs from the static manifest' \
+'list:List declared VMs with daemon runtime state when nixlingd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USBIP attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
@@ -1517,7 +1517,7 @@ _nixling__subcmd__generations_commands() {
 (( $+functions[_nixling__subcmd__help_commands] )) ||
 _nixling__subcmd__help_commands() {
     local commands; commands=(
-'list:List declared VMs from the static manifest' \
+'list:List declared VMs with daemon runtime state when nixlingd is reachable' \
 'status:Show per-VM runtime status plus bridge health' \
 'usb:USBIP attach / detach / probe' \
 'console:Foreground serial console bridge for headless VMs (not yet implemented)' \
@@ -1828,7 +1828,7 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
     )
@@ -2164,7 +2164,7 @@ _nixling__subcmd__vm_commands() {
 'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -2182,7 +2182,7 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
 'stop:Stop the per-VM DAG in reverse topo order' \
 'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
+'list:Daemon-side runtime inventory from nixlingd'\''s public socket' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
 'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
 'help:Print this message or the help of the given subcommand(s)' \
