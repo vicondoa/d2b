@@ -310,45 +310,45 @@ fn run_real(
     let params = resolve_guest_control_probe_params(state, &resolver, vm)
         .map_err(|_| exec_typed_error(ExecOpError::OldGeneration))?;
     let broker_socket = broker_socket_path(state);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| TypedError::InternalIo {
-            context: "build detached exec runtime".to_owned(),
-            detail: err.to_string(),
-        })?;
 
-    runtime
-        .block_on(async move {
-            let client = DetachedClient::connect(params, broker_socket).await?;
-            match request {
-                DetachedRealRequest::Create(spec) => client
-                    .exec_create(&spec)
-                    .await
-                    .map(DetachedRealResponse::Create),
-                DetachedRealRequest::List => {
-                    client.exec_list().await.map(DetachedRealResponse::List)
-                }
-                DetachedRealRequest::Status { exec_id } => client
-                    .exec_status(&exec_id)
-                    .await
-                    .map(DetachedRealResponse::Status),
-                DetachedRealRequest::Logs {
-                    exec_id,
-                    stdout_offset,
-                    stderr_offset,
-                    max_len,
-                } => client
-                    .exec_logs(&exec_id, stdout_offset, stderr_offset, max_len)
-                    .await
-                    .map(DetachedRealResponse::Logs),
-                DetachedRealRequest::Kill { exec_id } => client
-                    .exec_kill(&exec_id)
-                    .await
-                    .map(DetachedRealResponse::Kill),
+    // Detached ops dispatch from two distinct contexts: detached *create* runs on
+    // a dedicated `std::thread` (the exec owner, no ambient runtime), while the
+    // management verbs (list/logs/status/kill) dispatch INLINE on the
+    // multi-threaded runtime's request thread. A raw nested `Runtime::block_on`
+    // panics ("Cannot start a runtime from within a runtime") in the latter case
+    // and crashes the whole daemon, so reuse the shared `block_on_future` helper:
+    // it uses `block_in_place` + the ambient `Handle` when already inside the
+    // runtime and only builds a temporary runtime when none is present.
+    crate::block_on_future(async move {
+        let client = DetachedClient::connect(params, broker_socket).await?;
+        match request {
+            DetachedRealRequest::Create(spec) => client
+                .exec_create(&spec)
+                .await
+                .map(DetachedRealResponse::Create),
+            DetachedRealRequest::List => {
+                client.exec_list().await.map(DetachedRealResponse::List)
             }
-        })
-        .map_err(exec_typed_error)
+            DetachedRealRequest::Status { exec_id } => client
+                .exec_status(&exec_id)
+                .await
+                .map(DetachedRealResponse::Status),
+            DetachedRealRequest::Logs {
+                exec_id,
+                stdout_offset,
+                stderr_offset,
+                max_len,
+            } => client
+                .exec_logs(&exec_id, stdout_offset, stderr_offset, max_len)
+                .await
+                .map(DetachedRealResponse::Logs),
+            DetachedRealRequest::Kill { exec_id } => client
+                .exec_kill(&exec_id)
+                .await
+                .map(DetachedRealResponse::Kill),
+        }
+    })
+    .map_err(exec_typed_error)
 }
 
 fn exec_typed_error(error: ExecOpError) -> TypedError {
