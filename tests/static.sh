@@ -112,7 +112,6 @@ reap_known_static_orphans() {
     '.broad-caps-invariant.*'
     '.broker-*'
     '.cli-contract-coverage.*'
-    '.cli-json-drift.*'
     '.cli-legacy-bash-dispatch.*'
     '.cli-rust-native-cache'
     '.cli-rust-native.log'
@@ -1146,7 +1145,6 @@ if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "te
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
-if [ -x "$HERE/cli-json-drift.sh" ]; then nl_static_parallel_script "tests/cli-json-drift.sh" "$HERE/cli-json-drift.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 # Closure: wire the remaining gates.
 if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi

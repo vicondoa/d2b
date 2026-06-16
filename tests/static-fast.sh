@@ -29,8 +29,6 @@
 #   - per-example/template flake-check (~3 min wall but ~700 G disk)
 #   - cli-contract-coverage (~7 min cold; builds nixling CLI binary
 #     to validate parser/help against docs)
-#   - cli-json-drift (~6 min cold; renders + diffs every host-check
-#     golden against live CLI output)
 #   - audio component (Layer 2; requires live host)
 #
 # Measured cold-cache run (baseline at HEAD f5a44b7): ~13 min
@@ -210,8 +208,6 @@ done
 # full tests/static.sh used by panel review:
 #   - cli-contract-coverage.sh (~7 min cold; builds nixling CLI binary
 #     to validate parser/help against docs)
-#   - cli-json-drift.sh (~6 min cold; renders + diffs every host-check
-#     golden against live CLI output)
 
 log "Static-fast checks OK"
 log "(skipped: smoke-eval, assertions-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
