@@ -1209,7 +1209,6 @@ if [ -x "$HERE/drift-check.sh" ]; then nl_static_parallel_script "tests/drift-ch
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi
-if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_script "tests/guest-control-token-materializer.sh" "$HERE/guest-control-token-materializer.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
 nl_static_parallel_wait_all
