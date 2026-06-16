@@ -785,7 +785,7 @@ impl DetachedRegistry {
         expected.push(r#"exec "$@""#.to_owned());
         expected.push("nl-exec".to_owned());
         expected.extend(spec.argv.iter().cloned());
-        argv_matches_expected(&parsed.argv, &expected)
+        workload_argv_matches_rendered(&parsed.argv, &spec.login_shell_path, &expected)
     }
 
     // ---- read-side ops ---------------------------------------------------
@@ -1645,16 +1645,38 @@ fn property_contains_unit(value: Option<&str>, unit: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Exact argv equality for workload-unit identity. `parse_exec_start`'s
-/// `parse_exec_argv` is quote-aware (honours `'`/`"`/`\`), so a systemd-rendered
-/// `argv[]=` round-trips to the persisted argv exactly — including the
-/// space-bearing `exec "$@"` element. We therefore require BYTE-EXACT argv
-/// equality: a whitespace-flattened comparison would let a foreign unit whose
-/// argument boundaries differ (e.g. `["hello", "world"]` vs a persisted
-/// `["hello world"]`) classify as the expected workload. A genuine mismatch
-/// fails closed (the slot is not adopted) rather than adopting a foreign unit.
-fn argv_matches_expected(actual: &[String], expected: &[String]) -> bool {
-    actual == expected
+/// Compare a workload unit's parsed `argv[]` against the expected login-session
+/// argv, accounting for systemd's lossy `ExecStart` rendering.
+///
+/// `systemctl show -p ExecStart` joins `argv[]` with single spaces and does NOT
+/// escape embedded spaces or quotes — the `-c` value `exec "$@"` renders
+/// literally as `exec "$@"`, NOT as the escaped `"exec \"$@\""`. So the rendered
+/// `argv[]=` does not round-trip an argv whose elements contain spaces: neither
+/// the fixed `exec "$@"` login preamble nor any user argument that contains a
+/// space. (An earlier byte-exact comparison assumed systemd escapes such
+/// elements; against real systemd it instead reaps our OWN live workloads as
+/// "foreign".)
+///
+/// Re-render the EXPECTED argv through the same space-join and re-parse it with
+/// the same quote-aware tokenizer, so the comparison is symmetric with whatever
+/// systemd produced. The rendering is inherently lossy (a single arg
+/// `foo bar` is indistinguishable from two args `foo` `bar`), but the workload
+/// unit's `nixling-exec.slice` placement plus its `BindsTo`/`PartOf`/`After`
+/// pinning to THIS slot's runner unit already establish that the unit is ours;
+/// the argv comparison is a consistency check on top of that structural
+/// identity, not the trust boundary. A genuine mismatch (different exe, program,
+/// or argument count/content beyond systemd's space-flattening) still fails
+/// closed.
+fn workload_argv_matches_rendered(actual: &[String], exe: &str, expected: &[String]) -> bool {
+    let rendered = format!(
+        "{{ path={} ; argv[]={} ; ignore_errors=no }}",
+        exe,
+        expected.join(" ")
+    );
+    match parse_exec_start(&rendered) {
+        Some(reparsed) => actual == reparsed.argv.as_slice(),
+        None => false,
+    }
 }
 
 fn build_spec(
@@ -2714,27 +2736,16 @@ mod tests {
         rendered.push(r#"exec "$@""#.to_owned());
         rendered.push("nl-exec".to_owned());
         rendered.extend(spec.argv);
-        let argv = rendered
-            .iter()
-            .map(|arg| quote_exec_start_arg(arg))
-            .collect::<Vec<_>>()
-            .join(" ");
+        // Render argv[] the way real systemd does: a literal single-space join
+        // with NO escaping of embedded spaces/quotes (so the `-c` value
+        // `exec "$@"` appears verbatim as `... -c exec "$@" nl-exec ...`). This
+        // mirrors `systemctl show -p ExecStart` output so the identity tests
+        // exercise the real, lossy rendering rather than an idealized escaped one.
+        let argv = rendered.join(" ");
         format!(
             "{{ path={} ; argv[]={argv} ; ignore_errors=no }}",
             spec.login_shell_path
         )
-    }
-
-    fn quote_exec_start_arg(arg: &str) -> String {
-        if !arg.is_empty()
-            && arg
-                .chars()
-                .all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\'' && ch != '\\')
-        {
-            return arg.to_owned();
-        }
-        let escaped = arg.replace('\\', r"\\").replace('"', r#"\""#);
-        format!("\"{escaped}\"")
     }
 
     fn test_registry_config() -> RegistryConfig {
@@ -3313,33 +3324,60 @@ mod tests {
     }
 
     #[test]
-    fn argv_matches_expected_requires_byte_exact_argv() {
+    fn workload_argv_matches_real_unescaped_systemd_rendering() {
+        let exe = "/run/current-system/sw/bin/bash";
         let expected = vec![
-            "/run/current-system/sw/bin/bash".to_owned(),
+            exe.to_owned(),
             "-l".to_owned(),
             "-c".to_owned(),
             r#"exec "$@""#.to_owned(),
             "nl-exec".to_owned(),
             "/bin/id".to_owned(),
         ];
-        assert!(argv_matches_expected(&expected, &expected));
 
-        // A whitespace-flattened variant MUST NOT match: a persisted single arg
-        // with an embedded space must not be satisfied by two separate args
-        // (the foreign-unit adoption hole the flatten fallback opened).
-        let persisted = vec!["hello world".to_owned()];
-        let two_args = vec!["hello".to_owned(), "world".to_owned()];
-        assert!(!argv_matches_expected(&two_args, &persisted));
-        assert!(!argv_matches_expected(&persisted, &two_args));
-
-        // The space-bearing `exec "$@"` element round-trips exactly through the
-        // quote-aware ExecStart parser, so byte-exact comparison still matches a
-        // real systemd `argv[]=` rendering.
-        let parsed = parse_exec_start(
-            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c "exec \"$@\"" nl-exec /bin/id ; ignore_errors=no }"#,
+        // Real systemd renders argv[] with a literal space-join and NO escaping
+        // of the `-c` value's inner quotes/space: `... -c exec "$@" nl-exec ...`.
+        // The quote-aware parser splits that into [`exec`, `$@`]. The matcher
+        // must accept this (it reaped our own live workloads before the fix).
+        let real = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/id ; ignore_errors=no }"#,
         )
         .expect("parse systemd ExecStart");
-        assert!(argv_matches_expected(&parsed.argv, &expected));
+        assert!(
+            workload_argv_matches_rendered(&real.argv, exe, &expected),
+            "real unescaped systemd argv[] must match the expected login-session argv"
+        );
+
+        // A genuinely different program (same login preamble) must NOT match.
+        let wrong_prog = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/evil ; ignore_errors=no }"#,
+        )
+        .expect("parse systemd ExecStart");
+        assert!(
+            !workload_argv_matches_rendered(&wrong_prog.argv, exe, &expected),
+            "a different program must fail the workload argv match"
+        );
+
+        // A user argument that itself contains a space round-trips through the
+        // same lossy rendering on both sides, so it matches.
+        let expected_spacey = vec![
+            exe.to_owned(),
+            "-l".to_owned(),
+            "-c".to_owned(),
+            r#"exec "$@""#.to_owned(),
+            "nl-exec".to_owned(),
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo hi there".to_owned(),
+        ];
+        let real_spacey = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/sh -c echo hi there ; ignore_errors=no }"#,
+        )
+        .expect("parse systemd ExecStart");
+        assert!(
+            workload_argv_matches_rendered(&real_spacey.argv, exe, &expected_spacey),
+            "a user arg containing spaces matches via symmetric lossy rendering"
+        );
     }
 
     #[tokio::test]
