@@ -112,6 +112,13 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     // and not a foreground-PG kill — can clean it up. A `sleep` loop (rather
     // than a blocking `read`) keeps the shell responsive so a trapped SIGWINCH
     // runs promptly between commands, and a SIGHUP on hangup still terminates it.
+    //
+    // Some long-running gate launchers enter `cargo test` with SIGHUP inherited
+    // as SIG_IGN. Ignored dispositions survive exec, and `/bin/sh` cannot
+    // reliably reset an ignored-on-entry SIGHUP itself, so normalize HUP with
+    // `env --default-signal=HUP` before execing the shell. `env` execs in-place,
+    // preserving the helper's PID/SID while making the leader's SIGHUP contract
+    // explicit and deterministic.
     let script = "stty size; \
          trap 'stty size' WINCH; \
          ( trap '' HUP; exec sleep 600 ) & \
@@ -127,6 +134,8 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
             "--cols",
             "100",
             "--",
+            "/usr/bin/env",
+            "--default-signal=HUP",
             "/bin/sh",
             "-c",
             script,
