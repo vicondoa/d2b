@@ -50,6 +50,7 @@ run_xtask gen-schemas
 run_xtask gen-error-codes
 run_xtask gen-daemon-api
 run_xtask gen-cli-shell-artifacts
+run_xtask gen-cli-schemas
 run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
 
@@ -59,6 +60,7 @@ drift_paths=(
   docs/reference/daemon-api.md
   docs/manpages/
   docs/completions/
+  docs/reference/cli-output/
   packages/nixling-ipc/src/generated
   packages/nixling-guestd/src/generated
 )
