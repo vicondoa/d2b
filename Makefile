@@ -132,6 +132,35 @@ test-integration:
 	echo "==> $$s"; \
 	bash "$$s"; \
 	done
+## test-host-integration — G-host: runNixOSTest VM integration tests (the
+## `vmChecks` flake output, NOT swept by `nix flake check`). Each test boots a
+## real NixOS VM with the nixling daemon surface and asserts live broker /
+## daemon / host-posture behaviour (socket activation, bridge isolation,
+## state-dir ACLs, broker privilege posture) — the hermetic, non-destructive
+## successor to the `NL_LIVE`-against-the-real-host scripts. Needs KVM (a local
+## NixOS host; TCG software emulation is the slow fallback when /dev/kvm is
+## absent). x86_64-linux only (a same-system VM builder is required).
+test-host-integration:
+	@set -eu; \
+	system="$$(nix eval --raw --impure --expr builtins.currentSystem)"; \
+	if [ "$$system" != "x86_64-linux" ]; then \
+	echo "test-host-integration: vmChecks are x86_64-linux only (need a same-system VM builder); skipping on $$system"; \
+	exit 0; \
+	fi; \
+	if [ ! -e /dev/kvm ]; then \
+	echo "test-host-integration: /dev/kvm absent — runNixOSTest will fall back to slow TCG emulation"; \
+	fi; \
+	root="$$(pwd)"; \
+	names="$$(nix eval --raw --impure --no-warn-dirty --expr "builtins.concatStringsSep \" \" (builtins.attrNames (builtins.getFlake \"git+file://$$root\").vmChecks.$$system)")"; \
+	if [ -z "$$names" ]; then \
+	echo "test-host-integration: no vmChecks present"; \
+	exit 0; \
+	fi; \
+	echo "test-host-integration: building vmChecks: $$names"; \
+	for name in $$names; do \
+	echo "==> nix build .#vmChecks.$$system.$$name"; \
+	nix build --no-link --print-build-logs ".#vmChecks.$$system.$$name"; \
+	done
 ## test-hardware — G-hw: real GPU/YubiKey/hardware-TPM passthrough + full
 ## microVM boot. NixOS host WITH the devices only; CI cannot run this.
 test-hardware:    ; bash tests/tools/run-layer.sh test-hardware

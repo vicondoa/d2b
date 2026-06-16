@@ -206,6 +206,44 @@
           in builtins.listToAttrs (map mkImage imageFiles)
         else { });
 
+      # Type-G runNixOSTest integration tests (the additive real-kernel
+      # coverage layer). Each test boots a real NixOS VM with the nixling
+      # daemon surface and asserts live broker/daemon/host-posture behaviour
+      # (socket activation, SO_PEERCRED, bridge isolation, state-dir ACLs,
+      # broker privilege posture) that the fake-backed native Rust canaries and
+      # pure-eval gates cannot exercise. This is the hermetic, non-destructive
+      # successor to the `NL_LIVE`-against-the-real-host bash scripts.
+      #
+      # Exposed under `vmChecks`, NOT `checks`, so the Layer-1 `nix flake check
+      # --no-build --all-systems` never realizes a VM. Selected explicitly by
+      # `make test-host-integration` (`nix build .#vmChecks.<system>.<name>`),
+      # which needs KVM (a local NixOS host; TCG fallback otherwise).
+      #
+      # Auto-discovered from tests/nixos/*.nix (excluding lib.nix): each test is
+      # `{ pkgs, self }: pkgs.testers.runNixOSTest { ... }`, so adding a VM test
+      # is one new file — no edit here. x86_64-linux only: a runNixOSTest VM is
+      # built + booted for the builder's own system, and the hosted CI runners
+      # are x86_64 — aarch64 VM coverage needs an aarch64 builder.
+      vmChecks = forAllSystems (system:
+        if system == "x86_64-linux" then
+          let
+            pkgs = nixpkgsFor.${system};
+            testDir = ./tests/nixos;
+            testFiles = if builtins.pathExists testDir
+              then builtins.attrNames (nixpkgs.lib.filterAttrs
+                (name: type:
+                  type == "regular"
+                  && nixpkgs.lib.hasSuffix ".nix" name
+                  && name != "lib.nix")
+                (builtins.readDir testDir))
+              else [ ];
+            mkTest = file: {
+              name = nixpkgs.lib.removeSuffix ".nix" file;
+              value = import (testDir + "/${file}") { inherit pkgs self; };
+            };
+          in builtins.listToAttrs (map mkTest testFiles)
+        else { });
+
       templates.default = {
         path = ./templates/default;
         description = "Minimal nixling host scaffold — one env, one headless workload VM";
