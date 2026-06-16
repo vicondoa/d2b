@@ -167,8 +167,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
 
     // 2. Session leader + controlling terminal: tcgetsid(master) resolves to the
     //    child's pid (setsid made pid == sid; TIOCSCTTY bound the slave).
-    let sid = wait_for_ctty_sid(&master, WAIT)
-        .expect("controlling-terminal session id");
+    let sid = wait_for_ctty_sid(&master, WAIT).expect("controlling-terminal session id");
     assert_eq!(
         sid, child_pid,
         "session leader pid must equal the spawned helper/target pid"
@@ -359,20 +358,14 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
 
     // The helper exec'd /bin/sh and bound the slave as its controlling terminal:
     // the session id resolves to the helper/shell pid (setsid made pid == sid).
-    let sid = wait_for_ctty_sid(&master, WAIT)
-        .expect("controlling-terminal session id");
+    let sid = wait_for_ctty_sid(&master, WAIT).expect("controlling-terminal session id");
     assert_eq!(sid, helper_pid, "the shell is the session leader");
 
     // The shell prints SHELL:<pid> and the foreground child prints CHILD:<pid>
     // then CHILDREADY. The child is a DIFFERENT process from the shell.
     let mut transcript = String::new();
     assert!(
-        drain_until(
-            &master,
-            &mut transcript,
-            "CHILDREADY",
-            WAIT
-        ),
+        drain_until(&master, &mut transcript, "CHILDREADY", WAIT),
         "foreground child did not become ready, saw: {transcript:?}"
     );
     let shell_pid = parse_labelled_pid(&transcript, "SHELL:")
@@ -424,12 +417,7 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
         "SIGUSR1 was not delivered to the foreground child, saw: {transcript:?}"
     );
     assert!(
-        drain_until(
-            &master,
-            &mut transcript,
-            "SHELLRESUMED",
-            WAIT
-        ),
+        drain_until(&master, &mut transcript, "SHELLRESUMED", WAIT),
         "shell did not resume after the foreground child exited, saw: {transcript:?}"
     );
 
