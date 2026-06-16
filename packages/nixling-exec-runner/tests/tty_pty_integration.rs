@@ -251,14 +251,12 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
             Err(_) => break,
         }
     }
-    // Reap (the SIGKILL path leaves a just-killed child to collect).
+    // Reap the leader (the SIGKILL path leaves a just-killed child to collect).
     let _ = child.wait();
     assert!(
         !hup_ignored,
         "session leader did not exit after master hangup (SIGHUP ignored)"
     );
-    // Reap the now-exited helper/target so no zombie remains.
-    let _ = child.wait();
 
     // 6. In-session no-orphan: the background child shares the helper-created
     //    session (sid == child_pid) and is NOT a direct child of the helper's
