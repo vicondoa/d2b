@@ -311,6 +311,61 @@ nl_static_parallel_script_gate() {
   nl_static_parallel_spawn --timer-begun "$label" bash "$path"
 }
 
+# Dedicated "long pole" background job, distinct from the NL_STATIC_JOBS
+# semaphore pool above. The Layer-1 nix eval region (flake check + smoke
+# evals + eval gates + mid-tier + per-example checks) is single-core
+# evaluator-bound, while the Rust workspace gate is multi-core cargo-bound;
+# the two contend on different resources, so running the Rust gate
+# concurrently with the entire nix eval region hides whichever is shorter
+# (profiled: cold `nix flake check` ~120s single-core vs the Rust gate's
+# cargo compile across all cores). The job's $ROOT footprint (cargo
+# `target/`, `nl_mktemp` scratch dirs) is entirely gitignored, so the
+# concurrent git-fetcher flake evals never stat it — no source-capture race.
+# Unlike the pool, this job is NOT harvested by `nl_static_parallel_wait_all`,
+# so intermediate barriers don't block on it; it is joined explicitly.
+# Set NL_STATIC_SERIAL_RUST=1 to disable the overlap (run the gate inline).
+NL_STATIC_LONGPOLE_PID=""
+NL_STATIC_LONGPOLE_LABEL=""
+NL_STATIC_LONGPOLE_LOG=""
+NL_STATIC_LONGPOLE_STATUS=""
+
+nl_static_longpole_spawn() {
+  local label="$1"
+  shift
+  NL_STATIC_LONGPOLE_LABEL="$label"
+  NL_STATIC_LONGPOLE_LOG=$(nl_static_parallel_log_path "longpole.$label")
+  NL_STATIC_LONGPOLE_STATUS=$(nl_static_parallel_status_path "longpole.$label")
+  rm -f -- "$NL_STATIC_LONGPOLE_LOG" "$NL_STATIC_LONGPOLE_STATUS"
+  nl_static_gate_begin "$label" "$label"
+  (
+    local rc=0
+    set +e
+    "$@" >"$NL_STATIC_LONGPOLE_LOG" 2>&1
+    rc=$?
+    set -e
+    nl_time_end "$label"
+    printf '%s\n' "$rc" > "$NL_STATIC_LONGPOLE_STATUS"
+    exit 0
+  ) &
+  NL_STATIC_LONGPOLE_PID=$!
+}
+
+nl_static_longpole_join() {
+  [ -n "$NL_STATIC_LONGPOLE_PID" ] || return 0
+  local rc=1
+  wait "$NL_STATIC_LONGPOLE_PID" >/dev/null 2>&1 || true
+  if [ -f "$NL_STATIC_LONGPOLE_STATUS" ]; then
+    rc=$(cat "$NL_STATIC_LONGPOLE_STATUS")
+    rm -f -- "$NL_STATIC_LONGPOLE_STATUS"
+  fi
+  NL_STATIC_LONGPOLE_PID=""
+  if [ "$rc" -ne 0 ]; then
+    [ -f "$NL_STATIC_LONGPOLE_LOG" ] && tail -120 "$NL_STATIC_LONGPOLE_LOG" >&2 || true
+    fail "$NL_STATIC_LONGPOLE_LABEL"
+  fi
+  ok "$NL_STATIC_LONGPOLE_LABEL"
+}
+
 nl_static_run_smoke_eval() {
   local path="$1" expr="$2" ok_label="$3" tail_lines="${4:-20}"
   [ -f "$path" ] || return 0
@@ -385,6 +440,22 @@ export NL_STATIC_CACHE
 
 # shellcheck source=cli-rust-native-common.sh
 . "$HERE/cli-rust-native-common.sh"
+
+# -----------------------------------------------------------------------------
+# Launch the Rust workspace gate as a background long pole NOW, so its
+# multi-core cargo compile/clippy/test overlaps the single-core nix eval
+# region that follows (parse+eval, flake check, smoke evals, eval gates,
+# mid-tier evals, per-example flake checks). It is joined below at the point
+# where it used to run synchronously, before the W2 cargo prebuild — nothing
+# between here and the join touches the shared cargo target dir. The gate's
+# entire $ROOT footprint is gitignored, so concurrent git-fetcher flake evals
+# never stat it. Opt out with NL_STATIC_SERIAL_RUST=1.
+_STATIC_RUST_GATE_OVERLAP=0
+if [ -z "${NL_STATIC_SERIAL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
+  _STATIC_RUST_GATE_OVERLAP=1
+  log "==> launching rust-workspace-checks.sh as background long pole (overlaps nix eval region)"
+  nl_static_longpole_spawn "tests/rust-workspace-checks.sh" bash "$HERE/rust-workspace-checks.sh"
+fi
 
 log "==> Layer 1: parse + eval"
 
@@ -577,7 +648,11 @@ fi
 nl_static_gate_end "readOnly + default + config trio lint"
 
 nl_static_gate_begin "nix flake check --no-build --all-systems" "nix flake check --no-build --all-systems"
-if nix flake check "$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$NL_LOG"; then
+# Use the git+file:// ref (not a bare path) so the eval is source-captured
+# from the git tree only. This honours .gitignore, so the concurrently-running
+# background Rust gate's untracked $ROOT scratch (cargo target/, nl_mktemp
+# dirs) is invisible to the source capture and cannot race it.
+if nix flake check "git+file://$ROOT" --no-build --all-systems 2>&1 | tail -20 >> "$NL_LOG"; then
   ok "flake check"
 else
   fail "flake check"
@@ -1059,25 +1134,32 @@ fi
 nl_static_gate_end "tests/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
-# Rust workspace gate. packages/ lands on the parallel s1 branch, so
-# this is a no-op on this isolated s2 branch and becomes a hard gate after the
-# Integration merge. tests/stub-no-socket.sh is invoked by
-# rust-workspace-checks.sh after the cargo gates.
+# Rust workspace gate. When the background long pole was launched above (the
+# common case), join it here — its cargo compile/clippy/test has been running
+# concurrently with the entire nix eval region. The fall-through inline path is
+# kept for NL_STATIC_SERIAL_RUST=1 and for the no-packages/no-script cases.
+# tests/stub-no-socket.sh is invoked by rust-workspace-checks.sh after the
+# cargo gates.
 # -----------------------------------------------------------------------------
-nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
-if [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
-  if bash "$HERE/rust-workspace-checks.sh" >/dev/null 2>&1; then
-    ok "rust-workspace-checks"
-  else
-    bash "$HERE/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
-    fail "rust-workspace-checks"
-  fi
-elif [ -d "$ROOT/packages" ]; then
-  log "  SKIP: rust-workspace-checks.sh (not present)"
+if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
+  log "==> joining background rust-workspace-checks.sh long pole"
+  nl_static_longpole_join
 else
-  log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
+  nl_static_gate_begin "tests/rust-workspace-checks.sh" "tests/rust-workspace-checks.sh"
+  if [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
+    if bash "$HERE/rust-workspace-checks.sh" >/dev/null 2>&1; then
+      ok "rust-workspace-checks"
+    else
+      bash "$HERE/rust-workspace-checks.sh" 2>&1 | tail -80 >&2 || true
+      fail "rust-workspace-checks"
+    fi
+  elif [ -d "$ROOT/packages" ]; then
+    log "  SKIP: rust-workspace-checks.sh (not present)"
+  else
+    log "  no packages/ — skipping rust workspace checks (W0a unstaged)"
+  fi
+  nl_static_gate_end "tests/rust-workspace-checks.sh"
 fi
-nl_static_gate_end "tests/rust-workspace-checks.sh"
 
 # -----------------------------------------------------------------------------
 # bundle/schema drift, public vms.json parity, and static portability
