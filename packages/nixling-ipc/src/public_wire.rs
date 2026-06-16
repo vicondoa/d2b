@@ -1066,7 +1066,7 @@ pub struct ListResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatusResponse {
-    pub vm: VmStatus,
+    pub entries: Vec<VmStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -1178,9 +1178,16 @@ pub struct SocketReachability {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListEntry {
     pub env: Option<String>,
+    pub graphics: bool,
+    pub is_net_vm: bool,
     pub lifecycle: VmLifecycle,
+    pub name: String,
     pub runtime: RuntimeSummary,
+    pub services: PublicVmServices,
     pub ssh_user: Option<String>,
+    pub static_ip: Option<String>,
+    pub tpm: bool,
+    pub usbip: bool,
     pub vm: String,
 }
 
@@ -1189,11 +1196,29 @@ pub struct ListEntry {
 pub struct VmStatus {
     pub bridge_checks: Vec<BridgeCheck>,
     pub env: Option<String>,
+    pub graphics: bool,
+    pub is_net_vm: bool,
     pub lifecycle: VmLifecycle,
+    pub name: String,
     pub runtime: RuntimeSummary,
+    pub services: PublicVmServices,
     pub ssh_user: Option<String>,
     pub static_ip: Option<String>,
+    pub tpm: bool,
+    pub usbip: bool,
     pub vm: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicVmServices {
+    pub gpu: Option<String>,
+    pub microvm: String,
+    pub nixling: String,
+    pub snd: Option<String>,
+    pub swtpm: Option<String>,
+    pub video: Option<String>,
+    pub virtiofsd: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
