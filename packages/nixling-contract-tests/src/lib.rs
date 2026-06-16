@@ -40,6 +40,42 @@ pub fn load_manifest_value_from_env() -> serde_json::Value {
     parse_fixture("manifest.json")
 }
 
+/// The feature-rich `fixture-smoke-full` output dir (NL_FIXTURES_FULL), or
+/// `None` when unset — e.g. the plain `cargo test` pass, or a non-x86_64 host
+/// where the graphics platform gate makes the fixture unavailable. Per-role
+/// minijail-validator contract tests that need feature-specific profiles
+/// (gpu/swtpm/audio/video/usbip/vsock-relay/wayland-proxy/otel-host-bridge)
+/// skip cleanly when this is `None`.
+fn full_fixtures_dir() -> Option<PathBuf> {
+    env::var_os("NL_FIXTURES_FULL").map(PathBuf::from)
+}
+
+fn read_full_fixture(dir: &std::path::Path, name: &str) -> String {
+    let path = dir.join(name);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read full fixture at {}: {err}", path.display()))
+}
+
+/// Reconstruct a `BundleResolver` from the feature-rich `fixture-smoke-full`
+/// artifacts (NL_FIXTURES_FULL), or `None` when that fixture is unavailable
+/// (the caller should skip). Mirrors [`load_bundle_resolver_from_env`].
+pub fn load_full_bundle_resolver_from_env() -> Option<BundleResolver> {
+    let dir = full_fixtures_dir()?;
+    let bundle: Bundle = serde_json::from_str(&read_full_fixture(&dir, "bundle.json"))
+        .unwrap_or_else(|err| panic!("full bundle.json parse: {err}"));
+    let host: HostJson = serde_json::from_str(&read_full_fixture(&dir, "host.json"))
+        .unwrap_or_else(|err| panic!("full host.json parse: {err}"));
+    let processes: ProcessesJson = serde_json::from_str(&read_full_fixture(&dir, "processes.json"))
+        .unwrap_or_else(|err| panic!("full processes.json parse: {err}"));
+    let manifest_bytes = read_full_fixture(&dir, "manifest.json");
+    let manifest = ManifestV04::from_slice(manifest_bytes.as_bytes()).unwrap_or_else(|err| {
+        panic!("full manifest.json failed ManifestV04::from_slice (version gate): {err:?}")
+    });
+    Some(BundleResolver::from_artifacts(
+        bundle, host, processes, manifest,
+    ))
+}
+
 /// Reconstruct a `BundleResolver` from the rendered fixture-smoke artifacts
 /// (bundle/host/processes/manifest JSON), bypassing the on-disk
 /// integrity/mode/uid verification `BundleResolver::load` performs (the

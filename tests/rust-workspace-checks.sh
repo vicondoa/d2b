@@ -194,7 +194,17 @@ if command -v nix >/dev/null 2>&1; then
     --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
   contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
     --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
-  NL_FIXTURES="$contract_fixtures" CARGO_TARGET_DIR="$workspace_target_dir" \
+  # Feature-rich fixture (graphics+video+audio+tpm+usbip+observability) for the
+  # per-role minijail-validator contract tests — x86_64-linux only (graphics
+  # platform gate). On other systems NL_FIXTURES_FULL stays unset and those
+  # tests skip.
+  contract_fixtures_full=""
+  if [ "$contract_system" = "x86_64-linux" ]; then
+    contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
+      --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
+  fi
+  NL_FIXTURES="$contract_fixtures" NL_FIXTURES_FULL="$contract_fixtures_full" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo test --manifest-path "$manifest" -p nixling-contract-tests
   ok "cargo test -p nixling-contract-tests (W3 fixture-contract layer)"
 

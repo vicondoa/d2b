@@ -262,6 +262,80 @@
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
             bundle.closures)}
         '';
+        # Feature-RICH fixture: a single workload VM with graphics + video +
+        # audio + tpm + usbip + observability enabled, so every per-role
+        # minijail profile (gpu, wayland-proxy, video, audio, swtpm, usbip,
+        # vsock-relay, otel-host-bridge) renders into the bundle. Consumed by
+        # the per-role minijail-validator contract tests. x86_64-linux only:
+        # the framework's checkVmPlatform gate throws on graphics for aarch64,
+        # so this is referenced only under that guard below (lazily — never
+        # forced on aarch64).
+        fullConfigModule = { lib, ... }: {
+          boot.loader.grub.enable = false;
+          boot.loader.systemd-boot.enable = false;
+          boot.initrd.includeDefaultModules = false;
+          fileSystems."/" = {
+            device = "tmpfs";
+            fsType = "tmpfs";
+          };
+          environment.etc."machine-id".text =
+            "00000000000000000000000000000000";
+          system.stateVersion = "25.11";
+
+          users.users.alice = {
+            isNormalUser = true;
+            uid = 1000;
+          };
+
+          nixling.site = {
+            waylandUser = "alice";
+            launcherUsers = [ "alice" ];
+            yubikey.enable = true;
+          };
+
+          nixling.observability.enable = true;
+
+          nixling.envs.work = {
+            lanSubnet = "10.20.0.0/24";
+            uplinkSubnet = "192.0.2.0/30";
+          };
+
+          nixling.vms.corp-full = {
+            enable = true;
+            env = "work";
+            index = 10;
+            ssh.user = "alice";
+            graphics.enable = true;
+            graphics.crossDomainTrusted = true;
+            graphics.videoSidecar = true;
+            audio.enable = true;
+            usbip.yubikey = true;
+            tpm.enable = true;
+            observability.enable = true;
+            config = {
+              networking.hostName = lib.mkDefault "corp-full";
+              users.users.alice = {
+                isNormalUser = true;
+                uid = 1000;
+              };
+            };
+          };
+        };
+        fullEval = mkEval [ fullConfigModule ];
+        fullFixture = let
+          bundle = fullEval.config.nixling._bundle;
+          manifestPkg = fullEval.config.nixling._manifestPkg;
+        in pkgs.runCommand "nixling-fixture-smoke-full" { } ''
+          mkdir -p $out $out/closures
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.bundle.path} $out/bundle.json
+          cp ${manifestPkg}/share/nixling/vms.json $out/manifest.json
+          ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
+            (vm: c: "cp ${c.path} $out/closures/${vm}.json")
+            fullEval.config.nixling._bundle.closures)}
+        '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
         # include_str! goldens) and tests/fixtures/ (compile-time +
@@ -508,6 +582,18 @@
           nixUnitMissingPins;
       in {
         fixture-smoke = smokeFixture;
+
+        # Feature-rich fixture for the per-role minijail-validator contract
+        # tests. x86_64-linux only (graphics platform gate); on other systems
+        # the key resolves to a trivial derivation so `nix flake check
+        # --all-systems` never forces the graphics eval.
+        fixture-smoke-full =
+          if system == "x86_64-linux" then
+            fullFixture
+          else
+            pkgs.runCommand "nixling-fixture-smoke-full-unsupported" { } ''
+              echo "fixture-smoke-full is x86_64-linux only (graphics gate)" > $out
+            '';
 
         # W2: nix-unit value/throw assertions migrated from the group-D/E
         # eval-gate bash scripts.
