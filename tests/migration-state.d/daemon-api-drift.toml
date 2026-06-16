@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["tests/drift-check.sh (runs xtask gen-daemon-api and checks git diff --exit-code -- docs/reference/daemon-api.md)"]

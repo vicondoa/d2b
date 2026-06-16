@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["tests/drift-check.sh (runs xtask gen-error-codes and checks git diff --exit-code -- docs/reference/error-codes.md; preserves generated error-table marker and row assertions)"]
