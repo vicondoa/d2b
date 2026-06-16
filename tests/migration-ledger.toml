@@ -138,8 +138,8 @@ name = "tests/examples-with-observability-eval.sh"
 group = "F"
 make_target = "test-flake"
 tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
+status = "porting"      # legacy | porting | ported
+successor_ids = [
 exercised_today = "skip"
 
 [[script]]
@@ -219,8 +219,8 @@ name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
 tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
+status = "porting"      # legacy | porting | ported
+successor_ids = [
 exercised_today = "yes"
 
 [[script]]
