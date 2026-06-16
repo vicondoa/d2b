@@ -17,7 +17,7 @@
 //! readiness now rides the authenticated guest-control Health probe) and the
 //! `nixling exec` CLI non-goal was retired in W16 (the admin-only `vm exec` /
 //! `vm konsole` surface landed). The gate degenerated to a `nix eval` smoke of
-//! `tests/guest-control-auth-eval.nix`, whose evaluation is already covered by
+//! `tests/eval-cases/guest-control-auth-eval.nix`, whose evaluation is already covered by
 //! the nix-unit case `tests/nix-unit/cases/guest-control-auth.nix` (see
 //! `tests/migration-state.d/guest-control-auth-eval.toml`). Because this
 //! pure-Rust contract crate does not run `nix`, the port asserts the
@@ -154,7 +154,7 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
 
 // Migrated from tests/guest-control-auth-nongoals.sh. The auth-core
 // token-share / LoadCredential contract the smoke eval
-// (tests/guest-control-auth-eval.nix) exercises is present in the module
+// (tests/eval-cases/guest-control-auth-eval.nix) exercises is present in the module
 // source.
 #[test]
 fn guest_control_auth_core_token_share_contract_present() {

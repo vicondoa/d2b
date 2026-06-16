@@ -1,12 +1,12 @@
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
-, flake ? builtins.getFlake ("git+file://" + toString ./..)
+, flake ? builtins.getFlake ("git+file://" + toString ./../..)
 , scenario ? "base"
 }:
 
 let
   inherit (pkgs) lib;
-  nl = import ../nixos-modules/lib.nix { inherit lib; };
+  nl = import ../../nixos-modules/lib.nix { inherit lib; };
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
 
   scenarioModule =

@@ -1345,7 +1345,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-auth.nix — 5 auth-token-delivery cases: default parameterization asserts the exact nl-gctl token share + LoadCredential JSON; /nix/store, /nix/store/<child>, and relative auth.tokenFile each reject at eval time, as does a tokenFile set without guest.control.enable; imports tests/guest-control-auth-eval.nix via a mkEval flake shim)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-auth.nix — 5 auth-token-delivery cases: default parameterization asserts the exact nl-gctl token share + LoadCredential JSON; /nix/store, /nix/store/<child>, and relative auth.tokenFile each reject at eval time, as does a tokenFile set without guest.control.enable; imports tests/eval-cases/guest-control-auth-eval.nix via a mkEval flake shim)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1354,7 +1354,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-vsock.nix — 6 base-vsock allocation cases: positive base scenario asserts exact CID/socket parity + ladder + readiness JSON; user-vsock-cid/socket, --vsock split/equals extraArgs, and long-AF_UNIX-socket override guards each reject at eval time; imports tests/guest-control-vsock-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-control-vsock (existing derivation independently builds the positive base scenario)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-control-vsock.nix — 6 base-vsock allocation cases: positive base scenario asserts exact CID/socket parity + ladder + readiness JSON; user-vsock-cid/socket, --vsock split/equals extraArgs, and long-AF_UNIX-socket override guards each reject at eval time; imports tests/eval-cases/guest-control-vsock-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-control-vsock (existing derivation independently builds the positive base scenario)"]
 exercised_today = "yes"
 
 [[script]]
@@ -1363,7 +1363,7 @@ group = "D"
 make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-exec-policy.nix — 13 exec-policy cases: enabled/default/allow-root-only/allow-root-ceiling/allow-root-interactive-ceiling positive scenarios assert exact userd + ceiling JSON; exec-no-control, allowRoot/users-without-enable, empty-target, duplicate/root/wildcard/unknown user, and guest-internal exec.users override each reject at eval time; imports tests/guest-exec-policy-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-exec-policy (existing derivation independently builds the positive enabled scenario)"]
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/guest-exec-policy.nix — 13 exec-policy cases: enabled/default/allow-root-only/allow-root-ceiling/allow-root-interactive-ceiling positive scenarios assert exact userd + ceiling JSON; exec-no-control, allowRoot/users-without-enable, empty-target, duplicate/root/wildcard/unknown user, and guest-internal exec.users override each reject at eval time; imports tests/eval-cases/guest-exec-policy-eval.nix via a mkEval flake shim)", "flake.checks.<system>.guest-exec-policy (existing derivation independently builds the positive enabled scenario)"]
 exercised_today = "yes"
 
 [[script]]

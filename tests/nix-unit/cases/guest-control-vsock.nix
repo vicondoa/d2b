@@ -9,7 +9,7 @@
 # pinning `microvm.vsock.cid/socket` or smuggling `--vsock` through
 # cloud-hypervisor `extraArgs`, plus the AF_UNIX socket-path length ceiling.
 #
-# Reuses the existing evidence module tests/guest-control-vsock-eval.nix
+# Reuses the existing evidence module tests/eval-cases/guest-control-vsock-eval.nix
 # (which flake.checks.<sys>.guest-control-vsock already builds for the
 # positive "base" scenario) by importing it with a synthetic `flake` shim
 # whose `inputs.nixpkgs.lib.nixosSystem` routes through the harness `mkEval`
@@ -33,7 +33,7 @@ let
     inputs.nixpkgs.lib.nixosSystem = { modules, ... }: mkEval modules;
     nixosModules.default = { };
   };
-  vsock = scenario: import (flakeRoot + "/tests/guest-control-vsock-eval.nix") {
+  vsock = scenario: import (flakeRoot + "/tests/eval-cases/guest-control-vsock-eval.nix") {
     inherit system pkgs scenario;
     flake = flakeShim;
   };

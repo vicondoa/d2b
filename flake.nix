@@ -730,7 +730,7 @@
         '';
 
         guest-exec-policy = let
-          evidence = import ./tests/guest-exec-policy-eval.nix {
+          evidence = import ./tests/eval-cases/guest-exec-policy-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "enabled";
@@ -741,7 +741,7 @@
         '';
 
         guest-control-vsock = let
-          evidence = import ./tests/guest-control-vsock-eval.nix {
+          evidence = import ./tests/eval-cases/guest-control-vsock-eval.nix {
             inherit system pkgs;
             flake = self;
             scenario = "base";

@@ -12,7 +12,7 @@
 # the production assertions that reject a `/nix/store[/...]` or relative
 # `auth.tokenFile` and a `tokenFile` set without `guest.control.enable`.
 #
-# Reuses the existing evidence module tests/guest-control-auth-eval.nix by
+# Reuses the existing evidence module tests/eval-cases/guest-control-auth-eval.nix by
 # importing it with a synthetic `flake` shim whose
 # `inputs.nixpkgs.lib.nixosSystem` routes through the harness `mkEval`
 # (== nixosSystem with the nixling module set). This keeps the eval 100%
@@ -34,7 +34,7 @@ let
     inputs.nixpkgs.lib.nixosSystem = { modules, ... }: mkEval modules;
     nixosModules.default = { };
   };
-  auth = args: import (flakeRoot + "/tests/guest-control-auth-eval.nix") (args // {
+  auth = args: import (flakeRoot + "/tests/eval-cases/guest-control-auth-eval.nix") (args // {
     inherit system pkgs;
     flake = flakeShim;
   });

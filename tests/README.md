@@ -83,11 +83,12 @@ they stay and grow:
 - `tests/nix-unit/cases/*.nix` + `tests/nix-unit/default.nix` — the
   migrated eval tests. A former bash eval gate (a `.sh` that shelled
   out to `nix eval`) becomes a declarative case here.
-- `tests/eval-cases/*.nix`, `tests/smoke-eval*.nix`, and the top-level
-  `guest-control-*-eval.nix` — shared eval **fixtures** (consumer / VM
-  configs) imported by the nix-unit cases and by `flake.checks`
-  (e.g. `nix-unit/cases/guest-control-auth.nix` imports
-  `guest-control-auth-eval.nix`).
+- `tests/eval-cases/*.nix` and `tests/smoke-eval*.nix` — shared eval
+  **fixtures** (consumer / VM configs) imported by the nix-unit cases and
+  by `flake.checks` (e.g. `nix-unit/cases/guest-control-auth.nix` imports
+  `tests/eval-cases/guest-control-auth-eval.nix`). Fixtures shared by more
+  than one consumer live in `tests/eval-cases/`, not under any single
+  consumer's directory.
 
 The trade is deliberate: sloppy per-test `.sh` → a `.nix` corpus +
 Rust tests. Bash shrinks to the runner/harness; the test *logic* lives

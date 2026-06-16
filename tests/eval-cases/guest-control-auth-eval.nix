@@ -1,6 +1,6 @@
 { system ? builtins.currentSystem
 , pkgs ? import <nixpkgs> { inherit system; }
-, flake ? builtins.getFlake ("git+file://" + toString ./..)
+, flake ? builtins.getFlake ("git+file://" + toString ./../..)
 , guestControlEnable ? true
 , tokenFile ? "/run/secrets/nixling/corp-vm-token"
 }:

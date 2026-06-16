@@ -12,7 +12,7 @@
 # wildcard / unknown users, and a guest-internal override of the host-owned
 # `exec.users` list.
 #
-# Reuses the existing evidence module tests/guest-exec-policy-eval.nix
+# Reuses the existing evidence module tests/eval-cases/guest-exec-policy-eval.nix
 # (which flake.checks.<sys>.guest-exec-policy already builds for the
 # positive "enabled" scenario) by importing it with a synthetic `flake`
 # shim whose `inputs.nixpkgs.lib.nixosSystem` routes through the harness
@@ -36,7 +36,7 @@ let
     inputs.nixpkgs.lib.nixosSystem = { modules, ... }: mkEval modules;
     nixosModules.default = { };
   };
-  exec = scenario: import (flakeRoot + "/tests/guest-exec-policy-eval.nix") {
+  exec = scenario: import (flakeRoot + "/tests/eval-cases/guest-exec-policy-eval.nix") {
     inherit system pkgs scenario;
     flake = flakeShim;
   };
