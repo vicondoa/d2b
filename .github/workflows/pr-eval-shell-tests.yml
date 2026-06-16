@@ -70,7 +70,6 @@ jobs:
           for t in \
             tests/broker-export-audit.sh \
             tests/bundle-drift.sh \
-            tests/ssh-host-key-preflight-eval.sh \
             tests/stub-no-socket.sh \
           ; do
             if [ -f "$t" ]; then

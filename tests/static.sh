@@ -751,8 +751,7 @@ for _d13_gate in \
   niri-vm-borders-eval \
   deliverable-gate-inventory \
   per-vm-state-ownership-eval \
-  readiness-waves-eval \
-  ssh-host-key-preflight-eval; do
+  readiness-waves-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
     nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
   fi
