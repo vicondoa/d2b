@@ -462,7 +462,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // an authoritative version + binary-path snapshot. Failures are
     // logged but non-fatal — operators can still drive the daemon
     // without the pending-restart signal.
-    write_daemon_version_file();
+    write_daemon_version_file(&config);
     maybe_write_state_restore_report(&options)?;
 
     let daemon_state_dir = effective_daemon_state_dir(&options);
@@ -1508,13 +1508,15 @@ fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedError>
 }
 
 /// Write the daemon's canonicalized binary path + version + start-time
-/// to `/run/nixling/version` on startup so the CLI's
-/// `daemon_version::compute_restart_status` can compute the
+/// to the runtime `version` file on startup. The production public socket
+/// lives in `/run/nixling`, so production writes `/run/nixling/version`; test
+/// listeners write beside their redirected public socket.
+/// This lets the CLI's `daemon_version::compute_restart_status` compute the
 /// `[pending restart]` signal post-restart. Failures are logged
 /// to stderr and non-fatal — the absence of the version file
 /// surfaces in the CLI as `DaemonRestartStatus::DaemonNotRunning`,
 /// which is a reasonable degraded shape.
-fn write_daemon_version_file() {
+fn write_daemon_version_file(config: &DaemonConfig) {
     let binary_path = match std::env::current_exe().and_then(std::fs::canonicalize) {
         Ok(p) => p.to_string_lossy().into_owned(),
         Err(err) => {
@@ -1536,10 +1538,13 @@ fn write_daemon_version_file() {
             return;
         }
     };
-    let path = std::path::Path::new("/run/nixling/version");
+    let path = daemon_version_file_path(config);
     if let Some(parent) = path.parent() {
         if let Err(err) = std::fs::create_dir_all(parent) {
-            eprintln!("nixlingd: could not create /run/nixling for version file: {err}");
+            eprintln!(
+                "nixlingd: could not create {} for version file: {err}",
+                parent.display()
+            );
             return;
         }
     }
@@ -1551,6 +1556,14 @@ fn write_daemon_version_file() {
     if let Err(err) = std::fs::rename(&tmp, path) {
         eprintln!("nixlingd: could not rename version file into place: {err}");
     }
+}
+
+fn daemon_version_file_path(config: &DaemonConfig) -> std::path::PathBuf {
+    config
+        .public_socket_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("/run/nixling"))
+        .join("version")
 }
 
 /// Tiny RFC-3339 UTC formatter (`YYYY-MM-DDTHH:MM:SSZ`) so we can

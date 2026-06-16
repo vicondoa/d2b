@@ -20,6 +20,8 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+mod common;
+
 // ---------------------------------------------------------------
 // Helpers (adapted from nixling-core's bundle_resolver_tamper.rs)
 // ---------------------------------------------------------------
@@ -223,5 +225,54 @@ fn bundle_tampered_to_envelope_round_trip() {
         envelope.message.contains("hash"),
         "envelope message should contain reason; got: {:?}",
         envelope.message
+    );
+}
+
+#[test]
+fn daemon_vm_start_returns_bundle_tampered_envelope() {
+    let fixture = common::DaemonFixture::new("bundle-tampered-daemon.");
+    fixture.write_config(&["admin-user"], &["admin-user"]);
+
+    let artifacts_dir = fixture.root().join("artifacts");
+    fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
+    let bundle_path = artifacts_dir.join("bundle.json");
+    write_with_mode(&bundle_path, &minimal_bundle_json(), 0o644);
+
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.config_path).expect("read daemon config"))
+            .expect("daemon config is JSON");
+    config["artifacts"] = serde_json::json!({
+        "publicManifestPath": artifacts_dir.join("vms.json"),
+        "bundlePath": bundle_path,
+        "hostPath": artifacts_dir.join("host.json"),
+        "processesPath": artifacts_dir.join("processes.json"),
+        "closuresDir": artifacts_dir.join("closures")
+    });
+    fs::write(
+        &fixture.config_path,
+        serde_json::to_vec_pretty(&config).expect("serialize daemon config"),
+    )
+    .expect("rewrite daemon config with test artifact paths");
+
+    let server = common::spawn_nixlingd_serve(&fixture, &common::TestPeer::admin(), true, None);
+    let (rc, output) = common::test_client(
+        &fixture.socket_path,
+        &[
+            common::HELLO_FRAME,
+            r#"{"type":"vmStart","vm":"__smoke-test-nonexistent__","dryRun":false,"apply":true,"json":false}"#,
+        ],
+    );
+    let status = server.wait();
+
+    assert!(status.success(), "nixlingd serve exited with {status:?}");
+    assert_eq!(
+        rc, 60,
+        "vmStart should return BundleTampered; output:\n{output}"
+    );
+    common::assert_contains(&output, r#""type":"error""#, "typed error frame");
+    common::assert_contains(
+        &output,
+        r#""kind":"bundle-tampered""#,
+        "bundle-tampered envelope",
     );
 }

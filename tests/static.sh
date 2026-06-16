@@ -117,7 +117,6 @@ reap_known_static_orphans() {
     '.cli-rust-native.log'
     '.daemon-*'
     '.host-check.*'
-    '.nixlingd-startup-smoke.*'
     '.manifest-fuzz-bounded.*'
     '.manifest-gate.*'
     '.nl-smoke-cache.*'
@@ -754,9 +753,6 @@ if [ -x "$ROOT/tests/autostart-wiring-eval.sh" ]; then
 fi
 if [ -x "$ROOT/tests/restart-policy-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/restart-policy-eval.sh" "$ROOT/tests/restart-policy-eval.sh"
-fi
-if [ -x "$ROOT/tests/nixlingd-startup-smoke.sh" ]; then
-  nl_static_parallel_script_gate "tests/nixlingd-startup-smoke.sh" "$ROOT/tests/nixlingd-startup-smoke.sh"
 fi
 if [ -x "$ROOT/tests/video-contract-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/video-contract-eval.sh" "$ROOT/tests/video-contract-eval.sh"

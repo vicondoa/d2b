@@ -188,15 +188,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/nixlingd-startup-smoke.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/nixling-store.sh"
 group = "GCI"
 make_target = "test-integration"
@@ -294,6 +285,15 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/nixlingd-startup-smoke.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/nixlingd-startup-smoke.nix — 17 cases: daemon/broker tmpfiles + systemd socket/service surface + evidence-record shape)", "packages/nixlingd/tests/daemon_socket_acl.rs::daemon_socket_acl::configured_launcher_is_accepted (spawns CARGO_BIN_EXE_nixlingd over AF_UNIX, waits for public.sock, and asserts Hello -> helloOk)", "packages/nixlingd/tests/daemon_version_file.rs::daemon_version_file::startup_writes_version_file_next_to_public_socket (spawns CARGO_BIN_EXE_nixlingd over AF_UNIX and asserts the startup version file fields)", "packages/nixlingd/tests/bundle_tampered_envelope.rs::daemon_vm_start_returns_bundle_tampered_envelope (spawns CARGO_BIN_EXE_nixlingd over AF_UNIX and asserts vmStart returns kind=bundle-tampered for a tampered bundle.json)", "tests/golden/pinned/nixlingd-startup-smoke.txt + tests/golden/pinned/daemon-socket-acl.txt (fail-closed native-test presence pins)", "w4 runNixOSTest daemon-smoke (separate nixling-w4 worktree; covers real systemd .socket -> .service activation ordering)"]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/broker-enum-disposition.sh"
