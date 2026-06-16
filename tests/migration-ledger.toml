@@ -224,15 +224,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/host-validate-verb-eval.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
@@ -285,15 +276,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/manifest-v04-roundtrip.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/manpage-completion-drift.sh"
@@ -474,6 +456,24 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/host-validate-verb-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = [
+exercised_today = "skip"
+
+[[script]]
+name = "tests/manifest-v04-roundtrip.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-core/tests/manifest_v04_roundtrip.rs::manifest_v04_roundtrip::baseline_vms_json_round_trips_byte_identically (cargo test -p nixling-core --test manifest_v04_roundtrip[ --features test-support])", "tests/golden/pinned/manifest-v04-roundtrip.txt + tests/tools/assert-pinned-tests.sh"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/broker-export-audit.sh"

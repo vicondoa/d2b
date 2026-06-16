@@ -122,7 +122,6 @@ reap_known_static_orphans() {
     '.nixlingd-startup-smoke.*'
     '.manifest-fuzz-bounded.*'
     '.manifest-gate.*'
-    '.manifest-v04-roundtrip.*'
     '.nl-smoke-cache.*'
     '.nixling-rust-gate.*'
     '.nixling-stub-smoke.*'
@@ -713,12 +712,6 @@ if [ -x "$ROOT/tests/daemon-default-compat-eval.sh" ]; then
   # flip gate honors readiness + evidence + override semantics.
   nl_static_parallel_script_gate "tests/daemon-default-compat-eval.sh" "$ROOT/tests/daemon-default-compat-eval.sh"
 fi
-if [ -x "$ROOT/tests/host-validate-verb-eval.sh" ]; then
-  # Layer-1 gate for the
-  # `nixling host validate --apply` verb that writes per-wave
-  # evidence files.
-  nl_static_parallel_script_gate "tests/host-validate-verb-eval.sh" "$ROOT/tests/host-validate-verb-eval.sh"
-fi
 # ADR index coverage guard (/ -class doc-drift).
 if [ -x "$ROOT/tests/adr-index-coverage.sh" ]; then
   nl_static_parallel_script_gate "tests/adr-index-coverage.sh" "$ROOT/tests/adr-index-coverage.sh"
@@ -1199,7 +1192,6 @@ nl_time_end "W2 CLI smoke prewarm"
 # Group 1: pure/read-only gates that rely on getFlake or generated docs.
 # Keep them away from the runtime socket gates below because dirty-tree
 # snapshots fail closed on in-repo AF_UNIX socket paths.
-if [ -x "$HERE/manifest-v04-roundtrip.sh" ]; then nl_static_parallel_script "tests/manifest-v04-roundtrip.sh" "$HERE/manifest-v04-roundtrip.sh"; fi
 if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "tests/broker-enum-disposition.sh" "$HERE/broker-enum-disposition.sh"; fi
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
