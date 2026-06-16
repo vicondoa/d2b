@@ -15,7 +15,6 @@ allowlisted_workflows=(
   .github/workflows/eval-with-entra-id.yml
   .github/workflows/pr-cargo-workspace.yml
   .github/workflows/pr-eval-shell-tests.yml
-  .github/workflows/pr-l1c-privilege-oracle.yml
 )
 
 is_allowlisted() {

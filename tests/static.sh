@@ -1301,7 +1301,6 @@ nl_static_parallel_wait_all
 nl_static_gate_end "W3 host-prepare gates"
 
 nl_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"
-if [ -x "$HERE/l1c-privilege-oracle.sh" ]; then bash "$HERE/l1c-privilege-oracle.sh" || fail "l1c-privilege-oracle"; fi
 if [ -x "$HERE/performance-budgets.sh" ]; then bash "$HERE/performance-budgets.sh" || fail "performance-budgets"; fi
 nl_static_gate_end "L1c and performance canaries"
 

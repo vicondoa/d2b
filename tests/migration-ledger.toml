@@ -125,15 +125,6 @@ successor_ids = [
 exercised_today = "yes"
 
 [[script]]
-name = "tests/l1c-privilege-oracle.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/layer1-self-inventory.sh"
 group = "H"
 make_target = "test-policy"
@@ -257,6 +248,15 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "skip"
+
+[[script]]
+name = "tests/l1c-privilege-oracle.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["vmChecks.<system>.privilege-oracle (tests/nixos/privilege-oracle.nix — hermetic runNixOSTest asserting the live nixling-priv-broker /proc posture: bounded CapBnd, empty CapAmb, seccomp filter active, nixling.slice cgroup placement, derived from the rendered systemd unit)"]
 exercised_today = "skip"
 
 [[script]]
