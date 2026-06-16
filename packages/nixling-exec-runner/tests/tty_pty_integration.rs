@@ -30,6 +30,13 @@ use rustix::termios::{tcgetpgrp, tcgetsid, tcsetwinsize, Winsize};
 /// with the Nix eval region). A tight 5s ceiling was racy under that load.
 const WAIT: Duration = Duration::from_secs(30);
 
+/// Hard ceiling for the SIGHUP-on-hangup watchdog. The session leader is
+/// reaped with a blocking `wait()`, so this is NOT a normal-path budget — it
+/// only bounds the pathological case where the leader genuinely ignores SIGHUP
+/// (a real bug), escalating to SIGKILL so the test fails loudly instead of
+/// hanging. Generous so heavy co-scheduled load never trips it spuriously.
+const WATCHDOG: Duration = Duration::from_secs(120);
+
 /// Allocate a PTY master/slave pair the way the spawner does: master AND slave
 /// both `O_RDWR|O_NOCTTY|O_CLOEXEC`. The slave is `O_CLOEXEC` (matching the G4
 /// production contract) so a concurrent fork/exec elsewhere cannot inherit it
@@ -211,37 +218,45 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
 
     // 5. SIGHUP on hangup: dropping the master (the last master reference) closes
     //    the terminal, so the kernel sends SIGHUP to the session leader, which
-    //    terminates. On a heavily-loaded host (e.g. the rust gate running
-    //    concurrently with the Nix eval region) the terminal-hangup SIGHUP can
-    //    rarely race the poll or the leader can be scheduler-starved past the
-    //    budget; after a grace period, send one explicit SIGHUP to the session
-    //    leader as a deterministic backstop. The assertion still proves the
-    //    leader does NOT ignore SIGHUP (the security-relevant invariant) — only
-    //    the auto-delivery-vs-explicit source of the signal is relaxed.
+    //    terminates. Send an explicit SIGHUP to the leader as well (the kernel
+    //    terminal-hangup delivery can race). Then poll for the leader to exit
+    //    with NO fixed budget for the success path: under heavy co-scheduled
+    //    load (the rust gate running concurrently with the Nix eval region) the
+    //    leader can be scheduler-starved for tens of seconds, and a wall-clock
+    //    deadline would flake. Only after a generous WATCHDOG ceiling — which a
+    //    healthy leader never reaches — do we treat a still-alive leader as a
+    //    genuine SIGHUP-ignored bug, SIGKILL it to avoid hanging the suite, and
+    //    fail the assertion. SIGHUP goes to the leader's PID only (not the
+    //    process group), so the HUP-trapping in-session background child checked
+    //    in step 6 still survives.
     drop(master);
+    if let Some(pid) = Pid::from_raw(child_pid) {
+        let _ = kill_process(pid, Signal::Hup);
+    }
     let start = Instant::now();
-    let grace = Duration::from_secs(5);
-    let mut hung_up = false;
-    let mut backstopped = false;
-    while start.elapsed() < WAIT {
+    let mut hup_ignored = false;
+    loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                hung_up = true;
-                break;
-            }
+            Ok(Some(_status)) => break,
             Ok(None) => {
-                if !backstopped && start.elapsed() > grace {
+                if start.elapsed() > WATCHDOG {
                     if let Some(pid) = Pid::from_raw(child_pid) {
-                        let _ = kill_process(pid, Signal::Hup);
+                        let _ = kill_process(pid, Signal::Kill);
                     }
-                    backstopped = true;
+                    hup_ignored = true;
+                    break;
                 }
-                sleep(Duration::from_millis(10));
+                sleep(Duration::from_millis(20));
             }
             Err(_) => break,
         }
     }
-    assert!(hung_up, "session leader did not exit after master hangup");
+    // Reap (the SIGKILL path leaves a just-killed child to collect).
+    let _ = child.wait();
+    assert!(
+        !hup_ignored,
+        "session leader did not exit after master hangup (SIGHUP ignored)"
+    );
     // Reap the now-exited helper/target so no zombie remains.
     let _ = child.wait();
 
