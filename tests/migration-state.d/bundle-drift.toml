@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["tests/drift-check.sh (runs xtask gen-schemas and checks git diff --exit-code -- docs/reference/schemas/)"]
