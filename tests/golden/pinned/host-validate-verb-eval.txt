@@ -1,0 +1,14 @@
+# host-validate-verb-eval — `nixling host validate` CLI-contract integration tests
+# (packages/nixling/tests/host_validate_verb.rs). Successor of the retired
+# tests/host-validate-verb-eval.sh gate: drive the real `nixling host validate`
+# binary with validator/evidence dirs redirected to per-test scratch state,
+# assert readiness-wave catalog parity, explicit mutation-mode refusal,
+# dry-run no-write inventory, apply evidence writes, missing-validator refusal,
+# and the unknown-wave error envelope. One bare libtest path per line; checked
+# by tests/tools/assert-pinned-tests.sh.
+catalog_waves_match_options_daemon_readiness_specs
+host_validate_without_apply_or_dry_run_exits_78_usage_envelope
+host_validate_dry_run_reports_catalog_waves_and_writes_no_evidence
+host_validate_apply_wave_p1_writes_canonical_evidence_only_for_p1
+host_validate_apply_missing_validators_exits_78_and_writes_no_evidence
+host_validate_apply_unknown_wave_exits_78_envelope
