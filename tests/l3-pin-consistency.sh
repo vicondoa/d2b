@@ -17,7 +17,7 @@
 # Scratch state lives outside $ROOT per AGENTS.md disk-hygiene contract.
 #
 # TODO(integrator): wire into tests/static.sh next to the existing
-# `bash tests/path-safety-violation-fs.sh` invocation.
+# `bash tests/pidfd-handoff.sh` invocation.
 
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

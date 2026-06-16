@@ -175,20 +175,10 @@ for gate in \
   vms-json-parity \
   static-invariant-uid0 \
   host-json-drift-gate \
-  static-invariant-deny-unknown-fields-w3 \
-  privileges-matrix-completeness \
   ifname-nix-rust-parity \
   static-invariant-deny-unknown-fields; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
-    case "$gate" in
-      static-invariant-deny-unknown-fields-w3)
-        label="tests/host-schema-deny-unknown-fields.sh"
-        ;;
-      *)
-        label="tests/$gate.sh"
-        ;;
-    esac
-    run_gate "$label" "bash '$ROOT/tests/$gate.sh'"
+    run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
   fi
 done
 
@@ -207,21 +197,13 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 for gate in \
-  cgroup-delegation-oracle \
   pidfd-handoff \
-  ipv6-off-readback \
   ifname-collision \
   l3-pin-consistency \
-  host-prepare-network \
   ch-net-handoff-canary \
-  nft-foreign-rule-preservation \
-  host-prepare-idempotency \
-  nft-coexistence \
   usbip-firewall-skeleton \
-  path-safety-violation-fs \
   ioctl-negative \
   kernel-module-matrix \
-  runner-shape-preflight \
   dag-topo \
   video-contract-eval \
   device-node-matrix; do

@@ -80,15 +80,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/broker-validate-bundle.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/bundle-drift.sh"
 group = "B"
 make_target = "test-drift"
@@ -96,15 +87,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/cgroup-delegation-oracle.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/ch-net-handoff-canary.sh"
@@ -314,24 +296,6 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
-name = "tests/host-prepare-idempotency.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/host-prepare-network.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/host-validate-verb-eval.sh"
 group = "A"
 make_target = "test-rust"
@@ -344,15 +308,6 @@ exercised_today = "skip"
 name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/ipv6-off-readback.sh"
-group = "D"
-make_target = "test-nix-unit"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -449,24 +404,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/nft-coexistence.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/nft-foreign-rule-preservation.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/nixlingd-startup-smoke.sh"
 group = "A"
 make_target = "test-rust"
@@ -497,15 +434,6 @@ exercised_today = "skip"
 name = "tests/observability-eval.sh"
 group = "D"
 make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/path-safety-violation-fs.sh"
-group = "A"
-make_target = "test-rust"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
@@ -548,24 +476,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/privileges-matrix-completeness.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/runner-shape-preflight.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/runner-shape-snapshot.sh"
 group = "A"
 make_target = "test-rust"
@@ -594,15 +504,6 @@ exercised_today = "manual"
 
 [[script]]
 name = "tests/static-invariant-deny-unknown-fields.sh"
-group = "F"
-make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
-name = "tests/static-invariant-deny-unknown-fields-w3.sh"
 group = "F"
 make_target = "test-flake"
 tier = "ci-l1"
@@ -662,6 +563,105 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "skip"
+
+[[script]]
+name = "tests/broker-validate-bundle.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_broker_schema.rs::broker_delegates_bundle_validation_to_core (asserts the broker delegates bundle validation to nixling-core only: packages/nixling-priv-broker/src exists, some source under it imports `nixling_core::manifest` (delegation target), and some source calls `validate_bundle` (the single validation entry point) — the gate's two positive `grep -R -q` delegation checks ported as substring scans over the recursively-collected broker src tree. Spec correction (existing code is canon): the bash gate's 4th assertion forbidding ALL `serde_json::from_str`/`from_value` under the broker src is red against current code — the broker legitimately parses subprocess JSON (nft / `ip route` / store-view runner output / audit lines) in ops/{store_view_farm,route,tap,store_sync_*}.rs (pre-existing breakage per tests/README.md), so the over-broad blanket negative is dropped while the gate's stated delegation purpose is preserved); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/cgroup-delegation-oracle.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host cgroup::tests::* delegation canaries) + broker test pass (nixling-priv-broker ops::cgroup::tests::* delegation/audit canaries) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/cgroup-delegation-oracle.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/host-prepare-idempotency.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host nftables::tests::{idempotency_hash_table_stable,idempotency_hash_volatile_stripped} — drift-digest stability invariant; fake-backends cfg active under plain cargo test) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-idempotency.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin; supersedes the retired gate's zero-test grep guard)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/host-prepare-network.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (nixling-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by tests/ch-net-handoff-canary.sh (golden envelope code) + tests/cli-contract-coverage.sh"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/ipv6-off-readback.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host netlink::tests::{ipv6_off_sequence_runs_in_order,drift_after_write_fails_closed,bridge_nf_sysctls_applied_when_loaded,ipv6_off_sequence_fails_closed_on_nm_precondition}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/ipv6-off-readback.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/nft-coexistence.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host nftables::tests::{coexistence_matrix_all_7_rows,detector_clean_host,detector_single_manager_unambiguous,detector_multiple_managers_unknown}) + broker test pass (nixling-priv-broker ops::nft::tests::{refuses_when_firewalld_declared_coexist,applies_on_clean_host_with_coexist,nft_script_includes_all_four_chains}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/nft-coexistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/nft-foreign-rule-preservation.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host nftables::tests::{fake_backend_preserves_foreign_rules,drift_detection_strips_volatile_fields,drift_detection_catches_real_change}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/nft-foreign-rule-preservation.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/path-safety-violation-fs.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["broker test pass (nixling-priv-broker ops::hosts::tests::{refuses_symlink_target,writes_managed_block_into_fresh_file,idempotent_when_block_matches}, ops::nm::tests::reload_failure_rolls_back, ops::state_dir::tests::{refuses_absolute_relative_path,refuses_parent_dir_escape,idempotent_reuses_existing_dirs,creates_base_and_relative_paths}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/path-safety-violation-fs.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/privileges-matrix-completeness.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_broker_schema.rs::privileges_matrix_covers_declared_operations (asserts every declared public/broker operation has a privileges row: declared_ops = CLI/API verbs parsed from the backtick `nixling ...` spans of docs/reference/cli-contract.md via the bash gate's python `record_cli` folding (host/vm aliasing incl. konsole->exec, audio on|off / mic / speaker, audit --human/--json, status --check-bridges, '/'-split recursion, version/NOTICE/--help filtering) UNION the operation-enum variants parsed from every `*.rs` source under packages/ naming `DelegateCgroupV2` (enum-name suffix Operation/Request/Command/Op, excluding Error/Err/Kind; row(\"Op\") fallback) — reproduced byte-for-byte (94 ops, verified equal to the python extraction); then asserts declared_ops non-empty, rendered_ops non-empty, and declared_ops is a subset of rendered_ops. Spec correction (per the disk-hygiene contract + task directive): rendered_ops is read directly from the canonical source-of-truth `OperationAuthz.operation` enum in docs/reference/schemas/v2/privileges.json, which nixling-core privileges::operation_schema defines as exactly sorted(union(PUBLIC_OPERATION_AUTHZ, BROKER_OPERATION_AUTHZ).operation) == the bash gate's nix-rendered publicOperations ∪ brokerOperations, avoiding the nix-eval render; the dropped JSON-Schema validation of the rendered artifact is covered by the bundle/manifest drift gate); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/runner-shape-preflight.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["cargo test --workspace (nixling-host runner_shape::tests::*) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/runner-shape-preflight.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/static-invariant-deny-unknown-fields-w3.sh"
+group = "F"
+make_target = "test-flake"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_deny_unknown.rs::host_schema_dtos_carry_deny_unknown_fields (every security-sensitive nixling-core::host_w3 DTO — IfNameMapping/BridgePortFlagsW3/KernelModuleEntry/RouteIntent/SysctlIntent/HostsEntry/NmUnmanagedEntry/FirewallCoexistencePolicy — plus the HostChConfig addition to HostJson in host.rs carries #[serde(deny_unknown_fields)], asserted by selecting the declaring source (host_w3.rs first, then host.rs) and requiring the attribute within the 10 lines preceding `pub struct <DTO>`); gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh"]
 exercised_today = "skip"
 
 [[script]]

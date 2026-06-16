@@ -1177,8 +1177,6 @@ if [ -x "$HERE/guest-static-consumption-eval.sh" ]; then nl_static_parallel_scri
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
 if [ -x "$HERE/static-invariant-deny-unknown-fields.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields.sh" "$HERE/static-invariant-deny-unknown-fields.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
-if [ -x "$HERE/static-invariant-deny-unknown-fields-w3.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields-w3.sh" "$HERE/static-invariant-deny-unknown-fields-w3.sh"; fi
-if [ -x "$HERE/privileges-matrix-completeness.sh" ]; then nl_static_parallel_script "tests/privileges-matrix-completeness.sh" "$HERE/privileges-matrix-completeness.sh"; fi
 nl_static_parallel_wait_all
 nl_static_gate_end "W1 bundle/schema static gates"
 
@@ -1209,7 +1207,6 @@ nl_time_end "W2 CLI smoke prewarm"
 # snapshots fail closed on in-repo AF_UNIX socket paths.
 if [ -x "$HERE/manifest-v04-roundtrip.sh" ]; then nl_static_parallel_script "tests/manifest-v04-roundtrip.sh" "$HERE/manifest-v04-roundtrip.sh"; fi
 if [ -x "$HERE/broker-enum-disposition.sh" ]; then nl_static_parallel_script "tests/broker-enum-disposition.sh" "$HERE/broker-enum-disposition.sh"; fi
-if [ -x "$HERE/broker-validate-bundle.sh" ]; then nl_static_parallel_script "tests/broker-validate-bundle.sh" "$HERE/broker-validate-bundle.sh"; fi
 # Pin layer1-bootstrap as the default broker feature
 # until lands the production-shaped runtime.
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
@@ -1256,25 +1253,17 @@ nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 # negatives, kernel-module + device-node matrix, runner-shape preflight,
 # minijail version check, ipv6 sysctl readback). Safe to run in parallel
 # alongside the fake-backend network gates.
-if [ -x "$HERE/cgroup-delegation-oracle.sh" ]; then nl_static_parallel_script "tests/cgroup-delegation-oracle.sh" "$HERE/cgroup-delegation-oracle.sh"; fi
 if [ -x "$HERE/pidfd-handoff.sh" ]; then nl_static_parallel_script "tests/pidfd-handoff.sh" "$HERE/pidfd-handoff.sh"; fi
-if [ -x "$HERE/host-prepare-network.sh" ]; then nl_static_parallel_script "tests/host-prepare-network.sh" "$HERE/host-prepare-network.sh"; fi
-if [ -x "$HERE/ipv6-off-readback.sh" ]; then nl_static_parallel_script "tests/ipv6-off-readback.sh" "$HERE/ipv6-off-readback.sh"; fi
 if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
-if [ -x "$HERE/path-safety-violation-fs.sh" ]; then nl_static_parallel_script "tests/path-safety-violation-fs.sh" "$HERE/path-safety-violation-fs.sh"; fi
 # L3 distro-matrix pin parser/drift gate (integrator-wired).
 if [ -x "$HERE/l3-pin-consistency.sh" ]; then nl_static_parallel_script "tests/l3-pin-consistency.sh" "$HERE/l3-pin-consistency.sh"; fi
-if [ -x "$HERE/nft-coexistence.sh" ]; then nl_static_parallel_script "tests/nft-coexistence.sh" "$HERE/nft-coexistence.sh"; fi
 # Host-prepare idempotency no-op invariant (integrator-wired).
-if [ -x "$HERE/host-prepare-idempotency.sh" ]; then nl_static_parallel_script "tests/host-prepare-idempotency.sh" "$HERE/host-prepare-idempotency.sh"; fi
 # Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
 if [ -x "$HERE/ch-net-handoff-canary.sh" ]; then nl_static_parallel_script "tests/ch-net-handoff-canary.sh" "$HERE/ch-net-handoff-canary.sh"; fi
-if [ -x "$HERE/nft-foreign-rule-preservation.sh" ]; then nl_static_parallel_script "tests/nft-foreign-rule-preservation.sh" "$HERE/nft-foreign-rule-preservation.sh"; fi
 if [ -x "$HERE/usbip-firewall-skeleton.sh" ]; then nl_static_parallel_script "tests/usbip-firewall-skeleton.sh" "$HERE/usbip-firewall-skeleton.sh"; fi
 if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi
-if [ -x "$HERE/runner-shape-preflight.sh" ]; then nl_static_parallel_script "tests/runner-shape-preflight.sh" "$HERE/runner-shape-preflight.sh"; fi
 # Gates: DAG executor + daemon state-persistence + [pending restart] machinery.
 # Layer-1 smoke for the nixling-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).

@@ -12,7 +12,9 @@
 # and tests/cli-contract-coverage.sh. One bare libtest path per line.
 #
 # nixling-host (cargo test --workspace):
-netlink::tests::ipv6_off_sequence_runs_in_order
+# netlink::tests::ipv6_off_sequence_runs_in_order is pinned in
+# tests/golden/pinned/ipv6-off-readback.txt (its primary owner); this gate
+# also exercised it but the pin lives there to keep the name unique.
 bridge_port::tests::readback_matches_defaults
 netlink::tests::bridge_port_readback_matches_defaults
 routes::tests::no_default_route_fails_closed
