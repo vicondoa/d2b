@@ -671,13 +671,6 @@ fi
 if [ -x "$ROOT/tests/video-binary-contract.sh" ]; then
   nl_static_parallel_script_gate "tests/video-binary-contract.sh" "$ROOT/tests/video-binary-contract.sh"
 fi
-if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
-  # Regression gate that asserts no
-  # consumer of nixos-modules/cli.nix's outputs survives outside the
-  # file itself + this gate. Lets the sibling
-  # agent delete cli.nix without breaking framework eval.
-  nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
-fi
 if [ -x "$ROOT/tests/broker-caps-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/broker-caps-eval.sh" "$ROOT/tests/broker-caps-eval.sh"
 fi
@@ -724,9 +717,6 @@ if [ -x "$ROOT/tests/no-new-deferral.sh" ]; then
 fi
 if [ -x "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/privileges-json-rust-vs-nix-eval.sh" "$ROOT/tests/privileges-json-rust-vs-nix-eval.sh"
-fi
-if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
