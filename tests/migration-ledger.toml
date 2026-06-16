@@ -53,15 +53,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/cli-contract-coverage.sh"
-group = "H"
-make_target = "test-policy"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/deliverable-gate-inventory.sh"
 group = "H"
 make_target = "test-policy"
@@ -80,15 +71,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/guest-control-token-materializer.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/hardware-smoke-gpu-yubikey.sh"
 group = "GHW"
 make_target = "test-hardware"
@@ -96,15 +78,6 @@ tier = "manual-hw"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "manual"
-
-[[script]]
-name = "tests/ifname-nix-rust-parity.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["packages/nixling-contract-tests/tests/ifname_parity.rs::rendered_host_json_ifname_mappings_pass_looks_nixling_owned (fixture-smoke host.json ifNameMappings is non-empty and every rendered derivedIfname is accepted by nixling_host::ifname::looks_nixling_owned)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/ifname-nix-rust-parity.nix — retained pure smoke host.json shape and host-runtime source-hook coverage from the partial migration)"]
-exercised_today = "yes"
 
 [[script]]
 name = "tests/layer1-self-inventory.sh"
@@ -197,15 +170,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/video-binary-contract.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/vms-json-parity.sh"
 group = "B"
 make_target = "test-drift"
@@ -215,12 +179,48 @@ successor_ids = []
 exercised_today = "skip"
 
 [[script]]
+name = "tests/video-binary-contract.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/video_binary_contract.rs::patched_video_binaries_expose_required_command_surface (gated via the NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — loads the rendered feature-rich processes.json graphics/video VM, requires exactly one video node and cloud-hypervisor node, asserts both binaryPath values resolve to executable files, then executes the rendered crosvm binary with `device video-decoder --help` and the rendered Cloud Hypervisor binary with `--help` to require the patched `--backend` and `--vhost-user-media` command surfaces.", "tests/golden/pinned/video-binary-contract.txt"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/cli-contract-coverage.sh"
+group = "H"
+make_target = "test-policy"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling/tests/cli_contract_coverage.rs::cli_contract_sections_and_help_flags_match_documented_surface (clap-rendered help/parser acceptance plus docs/reference/cli-contract.md section, disposition, schema-link, and example coverage)", "packages/nixling/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete (closed host-* CLI error-code golden table coverage, required envelope fields, docs anchors, and orphan detection)", "tests/golden/pinned/cli-contract-coverage.txt"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/guest-control-token-materializer.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_missing_source_without_path_leak", "packages/nixling-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_relative_source_without_path_leak", "packages/nixling-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_child_source_without_path_leak", "packages/nixling-host/tests/guest_control_token_materializer.rs::guest_control_token_materializer_rejects_store_root_source_without_path_leak"]
+exercised_today = "yes"
+
+[[script]]
 name = "tests/harness-ubuntu-eval.sh"
 group = "F"
 make_target = "test-flake"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
 successor_ids = ["flake.checks.<system>.harness-ubuntu-skeleton (flake.nix:945; declared under checks = forAllSystems for x86_64-linux and aarch64-linux, so nix flake check --no-build --all-systems evaluates both systems; full nix flake check/nix build realizes the same derivation, including the stub JSON smoke)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/ifname-nix-rust-parity.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/ifname_parity.rs::rendered_host_json_ifname_mappings_pass_looks_nixling_owned (fixture-smoke host.json ifNameMappings is non-empty and every rendered derivedIfname is accepted by nixling_host::ifname::looks_nixling_owned)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/ifname-nix-rust-parity.nix — retained pure smoke host.json shape and host-runtime source-hook coverage from the partial migration)"]
 exercised_today = "yes"
 
 [[script]]
@@ -553,7 +553,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["tests/golden/pinned/runner-shape-preflight.txt (runner_shape::tests::{ch_help_with_fd_selects_tap_fd,ch_help_without_fd_or_tap_fails_closed}) + tests/tools/assert-pinned-tests.sh — existing primary pin owner; not duplicated", "tests/cli-contract-coverage.sh + tests/golden/cli-output/host-check-ch-net-handoff-not-supported.{json,txt} guard the retired golden-envelope ch-net-handoff-not-supported residual", "packages/nixling-contract-tests/tests/policy_contracts.rs::tap_dag_contract_doc_matches_implementation (gated via tests/rust-workspace-checks.sh NL_FIXTURES contract step; recorded in tests/migration-state.d/tap-dag-contract-doc-eval.toml) guards the retired CreateTapFd broker-wire/docs residual"]
+successor_ids = ["tests/golden/pinned/runner-shape-preflight.txt (runner_shape::tests::{ch_help_with_fd_selects_tap_fd,ch_help_without_fd_or_tap_fails_closed}) + tests/tools/assert-pinned-tests.sh — existing primary pin owner; not duplicated", "packages/nixling/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + tests/golden/cli-output/host-check-ch-net-handoff-not-supported.{json,txt} guard the retired golden-envelope ch-net-handoff-not-supported residual", "packages/nixling-contract-tests/tests/policy_contracts.rs::tap_dag_contract_doc_matches_implementation (gated via tests/rust-workspace-checks.sh NL_FIXTURES contract step; recorded in tests/migration-state.d/tap-dag-contract-doc-eval.toml) guards the retired CreateTapFd broker-wire/docs residual"]
 exercised_today = "yes"
 
 [[script]]
@@ -607,7 +607,7 @@ group = "A"
 make_target = "test-rust"
 tier = "ci-l1"
 status = "retired"      # legacy | porting | ported | retired
-successor_ids = ["cargo test --workspace (nixling-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (nixling-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by tests/cli-contract-coverage.sh + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
+successor_ids = ["cargo test --workspace (nixling-host netlink::tests::{ipv6_off_sequence_runs_in_order,bridge_port_readback_matches_defaults}, bridge_port::tests::readback_matches_defaults, routes::tests::{no_default_route_fails_closed,foreign_default_route_fails_closed,dnsmasq_not_bound_fails_closed,host_lan_cidr_ambiguous_for_vpn}) — already gated in tests/rust-workspace-checks.sh", "broker-workspace cargo test --workspace [+ --features layer1-bootstrap] (nixling-priv-broker ops::nm::tests::{managed_foreign_conflict_detected,reload_command_select_by_version}, ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/host-prepare-network.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across both workspaces)", "ch-net-handoff-not-supported docs-anchor (retired gate's trailing grep) independently guarded by packages/nixling/tests/cli_contract_coverage.rs::host_cli_error_golden_table_is_closed_and_complete + committed host-check goldens (ch-net-handoff-canary.sh retired W3fu10)"]
 exercised_today = "yes"
 
 [[script]]
