@@ -4,8 +4,8 @@
 //! Spawns the real `nixling` binary against a synthetic inline manifest and a
 //! deliberately-missing public socket, and asserts that the Rust CLI's
 //! mutating verbs (`up`/`down`/`restart` plus their `vm start`/`vm stop`/
-//! `vm restart` aliases), `list`/`vm list`, and the guest-control surfaces
-//! (`vm konsole`, `vm exec`) are fully daemon-native with NO bash fallback:
+//! `vm restart` aliases), `list`/`vm list`, and the guest-control surface
+//! (`vm exec`) are fully daemon-native with NO bash fallback:
 //!
 //!   1. With nixlingd's public socket missing, every mutating verb surfaces
 //!      the typed `daemon-down` envelope (`code == "daemon-down"`,
@@ -16,9 +16,7 @@
 //!      `exit 99` if ever exec'd, so any exit code of 99 fails the assertion.
 //!   3. `vm list` / `list` return the rust-native JSON envelopes without
 //!      touching bash.
-//!   4. `vm konsole --dry-run` emits the guest-control transport shape (no
-//!      retired SSH fields) and `vm exec` reaches `cmd_vm_exec` through real
-//!      clap parsing + dispatch.
+//!   4. `vm exec` reaches `cmd_vm_exec` through real clap parsing + dispatch.
 //!
 //! Layer 1: no live daemon, no microvm spawn, no NL_FIXTURES. Self-contained —
 //! always runs. Runs in seconds.
@@ -53,7 +51,7 @@ const VM_MANIFEST_JSON: &str = r#"{
   }
 }"#;
 
-// Synthetic manifest for the guest-control (konsole / exec) surfaces.
+// Synthetic manifest for the guest-control (`vm exec`) surface.
 const KONSOLE_MANIFEST_JSON: &str = r#"{
   "konsole-vm": {
     "name": "konsole-vm",
@@ -286,160 +284,6 @@ fn top_level_list_is_daemon_native_json() {
             .iter()
             .any(|i| i.get("name").and_then(Value::as_str) == Some("test-vm")),
         "list --json must include the synthetic test-vm; got {inventory}",
-    );
-}
-
-#[test]
-fn vm_konsole_dry_run_emits_guest_control_shape() {
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(
-        &paths,
-        &["vm", "konsole", "konsole-vm", "--dry-run", "--json"],
-    );
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "vm konsole --dry-run --json should exit 0\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm konsole");
-    assert_eq!(
-        envelope.get("command").and_then(Value::as_str),
-        Some("vm konsole"),
-    );
-    assert_eq!(
-        envelope.get("mode").and_then(Value::as_str),
-        Some("dry-run")
-    );
-    assert_eq!(
-        envelope.get("vm").and_then(Value::as_str),
-        Some("konsole-vm")
-    );
-    assert_eq!(
-        envelope.get("terminal").and_then(Value::as_str),
-        Some("konsole"),
-        "default terminal is konsole",
-    );
-    assert_eq!(
-        envelope.get("transport").and_then(Value::as_str),
-        Some("guest-control"),
-    );
-
-    let argv: Vec<&str> = envelope
-        .get("argv")
-        .and_then(Value::as_array)
-        .expect("argv array")
-        .iter()
-        .map(|v| v.as_str().expect("argv element is a string"))
-        .collect();
-    assert_eq!(
-        argv.first().copied(),
-        Some("konsole"),
-        "argv[0] is the terminal"
-    );
-    // konsole hosts `nixling vm exec -it <vm> -- bash -l` over guest-control.
-    let joined = argv.join(" ");
-    assert!(
-        joined.ends_with("vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l"),
-        "vm konsole .argv must host `vm exec -it konsole-vm -- /run/current-system/sw/bin/bash -l`; got {argv:?}",
-    );
-
-    // The retired SSH fields must be absent from the JSON entirely.
-    assert!(
-        envelope.get("host").is_none(),
-        "vm konsole must not emit SSH .host"
-    );
-    assert!(
-        envelope.get("user").is_none(),
-        "vm konsole must not emit SSH .user"
-    );
-    assert!(
-        envelope.get("key").is_none(),
-        "vm konsole must not emit SSH .key"
-    );
-}
-
-#[test]
-fn vm_konsole_terminal_override_reflected() {
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(
-        &paths,
-        &[
-            "vm",
-            "konsole",
-            "konsole-vm",
-            "--dry-run",
-            "--json",
-            "--terminal",
-            "xterm",
-        ],
-    );
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "vm konsole --terminal override should exit 0\nstderr:\n{}",
-        stderr_of(&out),
-    );
-    let envelope = stdout_json(&out, "vm konsole --terminal");
-    assert_eq!(
-        envelope.get("terminal").and_then(Value::as_str),
-        Some("xterm"),
-        "--terminal override not reflected",
-    );
-    let argv0 = envelope
-        .get("argv")
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(Value::as_str);
-    assert_eq!(
-        argv0,
-        Some("xterm"),
-        "--terminal override not reflected in argv[0]"
-    );
-}
-
-#[test]
-fn vm_konsole_rejects_retired_ssh_flags() {
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let retired: &[(&str, &str)] = &[
-        ("--host", "192.0.2.44"),
-        ("--user", "bob"),
-        ("--key", "/custom/key"),
-    ];
-    for (flag, value) in retired {
-        let out = run_cli(
-            &paths,
-            &[
-                "vm",
-                "konsole",
-                "konsole-vm",
-                "--dry-run",
-                "--json",
-                flag,
-                value,
-            ],
-        );
-        assert_ne!(
-            out.status.code(),
-            Some(0),
-            "vm konsole must reject retired {flag} (exited 0)\nstderr:\n{}",
-            stderr_of(&out),
-        );
-    }
-}
-
-#[test]
-fn vm_konsole_rejects_unknown_vm() {
-    let (_guard, paths) = scratch(KONSOLE_MANIFEST_JSON);
-    let out = run_cli(
-        &paths,
-        &["vm", "konsole", "missing-vm", "--dry-run", "--json"],
-    );
-    assert_ne!(
-        out.status.code(),
-        Some(0),
-        "vm konsole on an unknown vm should exit non-zero\nstderr:\n{}",
-        stderr_of(&out),
     );
 }
 
