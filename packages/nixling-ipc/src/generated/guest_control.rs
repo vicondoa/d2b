@@ -8979,6 +8979,8 @@ pub enum GuestControlErrorKind {
     GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE = 40,
     // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_READ_DENIED)
     GUEST_CONTROL_ERROR_KIND_READ_DENIED = 41,
+    // @@protoc_insertion_point(enum_value:nixling.guest.v1.GuestControlErrorKind.GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM)
+    GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM = 42,
 }
 
 impl ::protobuf::Enum for GuestControlErrorKind {
@@ -9032,6 +9034,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             39 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE),
             40 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
             41 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED),
+            42 => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM),
             _ => ::std::option::Option::None
         }
     }
@@ -9080,6 +9083,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
             "GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE),
             "GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE),
             "GUEST_CONTROL_ERROR_KIND_READ_DENIED" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED),
+            "GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM" => ::std::option::Option::Some(GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM),
             _ => ::std::option::Option::None
         }
     }
@@ -9127,6 +9131,7 @@ impl ::protobuf::Enum for GuestControlErrorKind {
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_PATH_UNSAFE,
         GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_READ_DENIED,
+        GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM,
     ];
 }
 
@@ -9436,7 +9441,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x12\"\n\x1eEXEC_CANCEL_REASON_UNSPECIFIED\x10\0\x12(\n$EXEC_CANCEL_REAS\
     ON_CLIENT_DISCONNECT\x10\x01\x12%\n!EXEC_CANCEL_REASON_USER_REQUESTED\
     \x10\x02\x12$\n\x20EXEC_CANCEL_REASON_SLOW_CONSUMER\x10\x03\x12%\n!EXEC_\
-    CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xa3\x10\n\x15GuestControlErrorKind\
+    CANCEL_REASON_PROTOCOL_ERROR\x10\x04*\xd1\x10\n\x15GuestControlErrorKind\
     \x12(\n$GUEST_CONTROL_ERROR_KIND_UNSPECIFIED\x10\0\x12+\n'GUEST_CONTROL_\
     ERROR_KIND_PROTOCOL_ERROR\x10\x01\x12/\n+GUEST_CONTROL_ERROR_KIND_MAX_CH\
     UNK_EXCEEDED\x10\x02\x12/\n+GUEST_CONTROL_ERROR_KIND_STDIN_BACKPRESSURE\
@@ -9471,7 +9476,8 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     KIND_EXEC_EXPIRED\x10%\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_NOT_FOUND\
     \x10&\x12+\n'GUEST_CONTROL_ERROR_KIND_FILE_TOO_LARGE\x10'\x12(\n$GUEST_C\
     ONTROL_ERROR_KIND_PATH_UNSAFE\x10(\x12(\n$GUEST_CONTROL_ERROR_KIND_READ_\
-    DENIED\x10)b\x06proto3\
+    DENIED\x10)\x12,\n(GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM\x10*b\x06pro\
+    to3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

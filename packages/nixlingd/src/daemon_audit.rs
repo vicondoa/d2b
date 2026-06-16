@@ -21,6 +21,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+/// Closed detached exec audit action.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DetachedExecAuditAction {
+    Create,
+    Cancel,
+}
+
+/// Closed detached exec audit result.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DetachedExecAuditResult {
+    Created,
+    Cancelling,
+    AlreadyTerminal,
+    Error,
+}
+
 /// Daemon-side audit event variants.
 ///
 /// Additive-only: new variants may be added; existing ones must not be
@@ -65,6 +83,31 @@ pub enum DaemonEvent {
         vm: String,
         /// Admin peer uid (from `SO_PEERCRED`) that owned the session.
         peer_uid: u32,
+    },
+    /// Emitted when a detached `vm exec -d` create succeeds.
+    ///
+    /// Leak-safe: carries ONLY the VM name, admin peer uid, closed
+    /// action/result enums, and the opaque guest exec id. argv, env, cwd, and
+    /// retained output bytes are never recorded.
+    GuestControlExecDetachedCreate {
+        vm: String,
+        peer_uid: u32,
+        action: DetachedExecAuditAction,
+        result: DetachedExecAuditResult,
+        exec_id: String,
+    },
+    /// Emitted when a detached `vm exec <vm> kill <id>` cancel path is
+    /// attempted.
+    ///
+    /// Leak-safe: carries ONLY the VM name, admin peer uid, closed
+    /// action/result enums, and the opaque target exec id. No argv, env, cwd,
+    /// or log bytes.
+    GuestControlExecDetachedKill {
+        vm: String,
+        peer_uid: u32,
+        action: DetachedExecAuditAction,
+        result: DetachedExecAuditResult,
+        exec_id: String,
     },
 }
 
@@ -369,6 +412,89 @@ mod tests {
         );
         // The terminate event has no tty field (only vm + peer_uid).
         assert!(terminated["event"].get("tty").is_none());
+    }
+
+    #[test]
+    fn detached_exec_audit_events_are_leak_safe() {
+        const SENTINEL: &str = "SENTINEL-argv-env-cwd-log-bytes-2d7b";
+        let log = DaemonAuditLog::no_op();
+
+        log.write_event(&DaemonEvent::GuestControlExecDetachedCreate {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+            action: DetachedExecAuditAction::Create,
+            result: DetachedExecAuditResult::Created,
+            exec_id: "exec-opaque-1".to_owned(),
+        })
+        .expect("write detached create event");
+        log.write_event(&DaemonEvent::GuestControlExecDetachedKill {
+            vm: "corp-vm".to_owned(),
+            peer_uid: 1000,
+            action: DetachedExecAuditAction::Cancel,
+            result: DetachedExecAuditResult::Cancelling,
+            exec_id: "exec-opaque-1".to_owned(),
+        })
+        .expect("write detached kill event");
+
+        let records = log.captured.lock().expect("lock captured");
+        assert_eq!(records.len(), 2, "expected two detached audit records");
+
+        for line in records.iter() {
+            assert!(
+                !line.contains(SENTINEL),
+                "detached exec audit leaked a sentinel: {line}"
+            );
+            for forbidden in [
+                "\"argv\"",
+                "\"env\"",
+                "\"cwd\"",
+                "\"stdout\"",
+                "\"stderr\"",
+                "\"log_bytes\"",
+            ] {
+                assert!(
+                    !line.contains(forbidden),
+                    "detached exec audit exposed forbidden field {forbidden:?}: {line}"
+                );
+            }
+            let record: serde_json::Value =
+                serde_json::from_str(line).expect("parse detached audit record");
+            let event = record.get("event").expect("event object");
+            let obj = event.as_object().expect("event is an object");
+            for key in obj.keys() {
+                assert!(
+                    matches!(
+                        key.as_str(),
+                        "kind" | "vm" | "peer_uid" | "action" | "result" | "exec_id"
+                    ),
+                    "detached exec audit exposed unexpected key {key:?}: {line}"
+                );
+            }
+            assert_eq!(event.get("vm").and_then(|v| v.as_str()), Some("corp-vm"));
+            assert_eq!(event.get("peer_uid").and_then(|v| v.as_u64()), Some(1000));
+            assert_eq!(
+                event.get("exec_id").and_then(|v| v.as_str()),
+                Some("exec-opaque-1")
+            );
+        }
+
+        let create = serde_json::from_str::<serde_json::Value>(&records[0])
+            .expect("parse detached create record");
+        assert_eq!(
+            create["event"]["kind"].as_str(),
+            Some("guest_control_exec_detached_create")
+        );
+        assert_eq!(create["event"]["action"].as_str(), Some("create"));
+        assert_eq!(create["event"]["result"].as_str(), Some("created"));
+
+        let kill = serde_json::from_str::<serde_json::Value>(&records[1])
+            .expect("parse detached kill record");
+        assert_eq!(
+            kill["event"]["kind"].as_str(),
+            Some("guest_control_exec_detached_kill")
+        );
+        assert_eq!(kill["event"]["action"].as_str(), Some("cancel"));
+        assert_eq!(kill["event"]["result"].as_str(), Some("cancelling"));
     }
 
     #[test]

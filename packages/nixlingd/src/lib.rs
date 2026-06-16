@@ -72,6 +72,7 @@ use supervisor::pidfd_table::{
 };
 use uzers::{get_user_by_uid, get_user_groups};
 
+pub mod exec_detached;
 pub mod exec_session;
 pub mod exec_session_real;
 pub mod guest_control_bridge;
@@ -1677,7 +1678,7 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
         // the connection + a cheap ServerState clone move to a SPAWNED owner
         // handler so the serial accept loop is never blocked for the lifetime
         // of an exec session.
-        if let wire::Request::Exec(op) = request {
+        if let wire::Request::Exec(op) = &request {
             if !matches!(peer.role, PeerRole::Admin) {
                 let error = TypedError::AuthzNotAdmin {
                     verb: "exec".to_owned(),
@@ -1685,22 +1686,28 @@ fn handle_connection(stream: Socket, state: &ServerState) -> Result<(), TypedErr
                 let _ = write_json_frame(&stream, &wire::error_frame(&error));
                 continue;
             }
-            // Recover the establishing op's envelope `opId` so the Start reply
-            // (and any establish error) echoes it for client correlation.
-            let first_op_id = wire::exec_op_id(&frame);
-            let owner_state = state.clone();
-            let owner_peer = peer.clone();
-            match std::thread::Builder::new()
-                .name("nixling-exec-owner".to_owned())
-                .spawn(move || {
-                    run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
-                }) {
-                Ok(_) => return Ok(()),
-                Err(err) => {
-                    return Err(TypedError::InternalIo {
-                        context: "spawn exec owner handler".to_owned(),
-                        detail: err.to_string(),
-                    });
+            if matches!(op, public_wire::ExecOp::Start(_)) {
+                // Recover the establishing op's envelope `opId` so the Start
+                // reply (and any establish error) echoes it for client
+                // correlation. Detached Start is also handled by the owner body,
+                // but returns after one ExecCreate instead of reserving a
+                // session slot or entering the attached FSM.
+                let first_op_id = wire::exec_op_id(&frame);
+                let owner_state = state.clone();
+                let owner_peer = peer.clone();
+                let op = op.clone();
+                match std::thread::Builder::new()
+                    .name("nixling-exec-owner".to_owned())
+                    .spawn(move || {
+                        run_exec_owner(stream, owner_state, owner_peer, first_op_id, op);
+                    }) {
+                    Ok(_) => return Ok(()),
+                    Err(err) => {
+                        return Err(TypedError::InternalIo {
+                            context: "spawn exec owner handler".to_owned(),
+                            detail: err.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -1858,14 +1865,47 @@ fn dispatch_request(
         wire::Request::HostInstall(req) => dispatch_broker_run_host_install(state, req),
         wire::Request::HostReconcile(req) => dispatch_broker_host_reconcile(state, req),
         wire::Request::ReadGuestConfig(req) => dispatch_read_guest_config(state, req),
-        // Exec is intercepted in `handle_connection` (it takes over the
-        // connection as the long-lived owner connection and is handled on a
-        // spawned worker off the serial accept loop). Reaching dispatch_request
-        // with an Exec op is a daemon-internal contract violation.
-        wire::Request::Exec(_) => Err(TypedError::GuestControlExecFailed {
-            kind: crate::typed_error::GuestControlExecErrorKind::Internal,
-        }),
+        // Attached Exec::Start is intercepted in `handle_connection` (it takes
+        // over the connection as the owner connection and is handled on a
+        // spawned worker off the serial accept loop). Detached management ops
+        // are ordinary one-shot requests.
+        wire::Request::Exec(op) => dispatch_exec_management(state, peer, op),
     }
+}
+
+fn dispatch_exec_management(
+    state: &ServerState,
+    peer: &PeerIdentity,
+    op: public_wire::ExecOp,
+) -> Result<Value, TypedError> {
+    let response = match op {
+        public_wire::ExecOp::List(args) => {
+            public_wire::ExecOpResponse::List(exec_detached::list(state, &args)?)
+        }
+        public_wire::ExecOp::Logs(args) => {
+            public_wire::ExecOpResponse::Logs(exec_detached::logs(state, &args)?)
+        }
+        public_wire::ExecOp::Status(args) => {
+            public_wire::ExecOpResponse::Status(exec_detached::status(state, &args)?)
+        }
+        public_wire::ExecOp::Kill(args) => {
+            let result = exec_detached::kill(state, &args);
+            emit_detached_kill_audit(state, peer.uid, &args.vm, result.as_ref());
+            public_wire::ExecOpResponse::Kill(result?)
+        }
+        public_wire::ExecOp::Start(_)
+        | public_wire::ExecOp::WriteStdin(_)
+        | public_wire::ExecOp::ReadOutput(_)
+        | public_wire::ExecOp::Signal(_)
+        | public_wire::ExecOp::Resize(_)
+        | public_wire::ExecOp::Wait(_)
+        | public_wire::ExecOp::Close(_) => {
+            return Err(TypedError::GuestControlExecFailed {
+                kind: crate::typed_error::GuestControlExecErrorKind::Protocol,
+            });
+        }
+    };
+    Ok(wire::exec_response(&response))
 }
 
 fn dispatch_keys_list(state: &ServerState) -> Result<Value, TypedError> {
@@ -2399,8 +2439,13 @@ const EXEC_ERROR_KIND_LABELS: &[&str] = &[
     "timeout",
     "old-generation",
     "capability",
+    "detached-unavailable",
     "session-capacity",
     "rate-limited",
+    "stale-session",
+    "exec-not-found",
+    "exec-expired",
+    "invalid-program",
     "guest",
     "internal",
     "inflight-cap-exceeded",
@@ -2450,6 +2495,10 @@ fn exec_op_session(op: &public_wire::ExecOp) -> Option<&str> {
         public_wire::ExecOp::Resize(args) => Some(&args.session),
         public_wire::ExecOp::Wait(args) => Some(&args.session),
         public_wire::ExecOp::Close(args) => Some(&args.session),
+        public_wire::ExecOp::List(_)
+        | public_wire::ExecOp::Logs(_)
+        | public_wire::ExecOp::Status(_)
+        | public_wire::ExecOp::Kill(_) => None,
     }
 }
 
@@ -2463,9 +2512,23 @@ fn map_exec_establish_error(error: exec_session::ExecEstablishError) -> TypedErr
         E::Timeout => K::Timeout,
         E::OldGeneration => K::OldGeneration,
         E::Capability => K::Capability,
-        E::Guest(_) => K::GuestError,
+        E::Guest(inner) => map_guest_exec_error_kind(inner),
     };
     TypedError::GuestControlExecFailed { kind }
+}
+
+fn map_guest_exec_error_kind(
+    error: exec_session::GuestOpError,
+) -> crate::typed_error::GuestControlExecErrorKind {
+    use crate::typed_error::GuestControlExecErrorKind as K;
+    use exec_session::GuestOpError as E;
+    match error {
+        E::ExecNotFound => K::ExecNotFound,
+        E::ExecExpired => K::ExecExpired,
+        E::InvalidProgram => K::InvalidProgram,
+        E::Protocol => K::Protocol,
+        _ => K::GuestError,
+    }
 }
 
 fn map_exec_op_error(error: exec_session::ExecOpError) -> TypedError {
@@ -2474,11 +2537,13 @@ fn map_exec_op_error(error: exec_session::ExecOpError) -> TypedError {
     let kind = match error {
         E::Transport => K::Transport,
         E::Auth => K::Auth,
+        E::StaleSession => K::StaleSession,
         E::Protocol => K::Protocol,
         E::Timeout => K::Timeout,
         E::OldGeneration => K::OldGeneration,
         E::Capability => K::Capability,
-        E::Guest(_) => K::GuestError,
+        E::DetachedUnavailable => K::DetachedUnavailable,
+        E::Guest(inner) => map_guest_exec_error_kind(inner),
     };
     TypedError::GuestControlExecFailed { kind }
 }
@@ -2504,8 +2569,13 @@ fn exec_error_kind_label(error: &TypedError) -> &'static str {
             K::Timeout => "timeout",
             K::OldGeneration => "old-generation",
             K::Capability => "capability",
+            K::DetachedUnavailable => "detached-unavailable",
             K::SessionCapacity => "session-capacity",
             K::RateLimited => "rate-limited",
+            K::StaleSession => "stale-session",
+            K::ExecNotFound => "exec-not-found",
+            K::ExecExpired => "exec-expired",
+            K::InvalidProgram => "invalid-program",
             K::GuestError => "guest",
             K::Internal => "internal",
         },
@@ -2528,6 +2598,66 @@ fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
         tty = tty,
         "guest-control exec session established"
     );
+}
+
+fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec_id: &str) {
+    if let Err(err) =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecDetachedCreate {
+                vm: vm.to_owned(),
+                peer_uid,
+                action: daemon_audit::DetachedExecAuditAction::Create,
+                result: daemon_audit::DetachedExecAuditResult::Created,
+                exec_id: exec_id.to_owned(),
+            })
+    {
+        tracing::warn!(
+            error = %err,
+            "failed to write detached exec create daemon audit event"
+        );
+    }
+}
+
+fn emit_detached_kill_audit(
+    state: &ServerState,
+    peer_uid: u32,
+    vm: &str,
+    result: Result<&public_wire::ExecDetachedKillResult, &TypedError>,
+) {
+    let (audit_result, exec_id) = match result {
+        Ok(kill) => (
+            match kill.result {
+                public_wire::ExecDetachedKillOutcome::Cancelling => {
+                    daemon_audit::DetachedExecAuditResult::Cancelling
+                }
+                public_wire::ExecDetachedKillOutcome::AlreadyTerminal => {
+                    daemon_audit::DetachedExecAuditResult::AlreadyTerminal
+                }
+            },
+            kill.exec_id.as_str(),
+        ),
+        Err(_) => (
+            daemon_audit::DetachedExecAuditResult::Error,
+            "<redacted-on-error>",
+        ),
+    };
+    if let Err(err) =
+        state
+            .daemon_audit
+            .write_event(&daemon_audit::DaemonEvent::GuestControlExecDetachedKill {
+                vm: vm.to_owned(),
+                peer_uid,
+                action: daemon_audit::DetachedExecAuditAction::Cancel,
+                result: audit_result,
+                exec_id: exec_id.to_owned(),
+            })
+    {
+        tracing::warn!(
+            error = %err,
+            "failed to write detached exec kill daemon audit event"
+        );
+    }
 }
 
 /// Owner-connection handler for an exec session. Runs on a SPAWNED thread off
@@ -2590,20 +2720,31 @@ fn run_exec_owner(
         exec_metric(&state, "error", "protocol");
         return;
     }
-    // `detached` is carried for unambiguous teardown semantics; the CLI never
-    // sets it (a detached reconnect lifecycle is not implemented). A detached
-    // request would change teardown to "survive owner disconnect", which this
-    // non-detached handler does not implement — reject it rather than silently
-    // leak a guest process.
     if start.detached {
-        let error = TypedError::GuestControlExecFailed {
-            kind: crate::typed_error::GuestControlExecErrorKind::Capability,
-        };
-        let _ = write_json_frame(
-            stream.as_ref(),
-            &wire::error_frame_with_id(first_op_id, &error),
-        );
-        exec_metric(&state, "error", "capability");
+        match exec_detached::create(&state, &start) {
+            Ok(result) => {
+                emit_detached_create_audit(&state, peer.uid, &start.vm, &result.exec_id);
+                let response = public_wire::ExecOpResponse::DetachedCreate(result);
+                if write_json_frame(
+                    stream.as_ref(),
+                    &wire::exec_response_with_id(first_op_id, &response),
+                )
+                .is_err()
+                {
+                    exec_metric(&state, "error", "transport");
+                    return;
+                }
+                exec_metric(&state, "established", "none");
+            }
+            Err(error) => {
+                let kind = exec_error_kind_label(&error);
+                let _ = write_json_frame(
+                    stream.as_ref(),
+                    &wire::error_frame_with_id(first_op_id, &error),
+                );
+                exec_metric(&state, "error", kind);
+            }
+        }
         return;
     }
 
@@ -3251,8 +3392,13 @@ mod exec_metric_tests {
         GuestControlExecErrorKind::Timeout,
         GuestControlExecErrorKind::OldGeneration,
         GuestControlExecErrorKind::Capability,
+        GuestControlExecErrorKind::DetachedUnavailable,
         GuestControlExecErrorKind::SessionCapacity,
         GuestControlExecErrorKind::RateLimited,
+        GuestControlExecErrorKind::StaleSession,
+        GuestControlExecErrorKind::ExecNotFound,
+        GuestControlExecErrorKind::ExecExpired,
+        GuestControlExecErrorKind::InvalidProgram,
         GuestControlExecErrorKind::GuestError,
         GuestControlExecErrorKind::Internal,
     ];
@@ -8829,6 +8975,636 @@ mod runtime_acl_tests {
     // visible only to non-test code.
     #[allow(dead_code)]
     fn _ensure_types_in_scope(_: Uid, _: Gid) {}
+}
+
+#[cfg(test)]
+mod detached_exec_routing_tests {
+    use super::supervisor::pidfd_table::{BrokerReapLog, PidfdTable};
+    use super::*;
+
+    use nix::sys::socket::{socketpair, AddressFamily, SockFlag, SockType};
+    use nixling_ipc::guest_proto as pb;
+    use nixling_ipc::guest_wire::ExecState;
+    use nixling_ipc::public_wire::{
+        ExecDetachedKillOutcome, ExecDetachedKillResult, ExecDetachedListEntry,
+        ExecDetachedListResult, ExecDetachedLogsResult, ExecDetachedStatusResult, ExecOp,
+        ExecStartArgs,
+    };
+    use protobuf::EnumOrUnknown;
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    fn test_state(caps: exec_session::ExecSessionCaps) -> ServerState {
+        let broker_reap_log = BrokerReapLog::new();
+        ServerState {
+            config: DaemonConfig::default(),
+            daemon_uid: 0,
+            daemon_audit: Arc::new(daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: PathBuf::from("target/nixlingd-detached-tests/state"),
+            pidfd_table: Arc::new(
+                PidfdTable::new(PathBuf::from("target/nixlingd-detached-tests/pidfd.json"))
+                    .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(metrics::Registry::new()),
+            exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
+        }
+    }
+
+    fn admin_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Admin,
+            uid: 4242,
+        }
+    }
+
+    fn launcher_peer() -> PeerIdentity {
+        PeerIdentity {
+            role: PeerRole::Launcher,
+            uid: 1000,
+        }
+    }
+
+    fn seqpacket_pair() -> (Socket, Socket) {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::empty(),
+        )
+        .expect("seqpacket socketpair");
+        (Socket::from(a), Socket::from(b))
+    }
+
+    fn recv_reply(socket: &Socket) -> Value {
+        let bytes = read_frame(socket).expect("client reads reply");
+        serde_json::from_slice(&bytes).expect("reply is JSON")
+    }
+
+    fn detached_start(argv0: &str) -> ExecOp {
+        ExecOp::Start(ExecStartArgs {
+            vm: "work".to_owned(),
+            argv: vec![argv0.to_owned()],
+            tty: false,
+            detached: true,
+            env: Some(vec![public_wire::ExecEnvVar {
+                key: "SENTINEL_ENV_KEY".to_owned(),
+                value: "SENTINEL_ENV_VALUE".to_owned(),
+            }]),
+            cwd: Some("SENTINEL_CWD".to_owned()),
+            term_size: None,
+        })
+    }
+
+    fn hello_frame() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "hello",
+            "clientVersion": ">=0.4.0, <0.5.0",
+        }))
+        .expect("encode hello frame")
+    }
+
+    fn exec_frame(op_id: u64, op: &ExecOp) -> Vec<u8> {
+        let mut value = serde_json::to_value(op).expect("encode exec op");
+        let object = value.as_object_mut().expect("exec op object");
+        object.insert("type".to_owned(), serde_json::json!("exec"));
+        object.insert("opId".to_owned(), serde_json::json!(op_id));
+        serde_json::to_vec(&value).expect("serialize exec frame")
+    }
+
+    struct PeerOverrideEnv;
+
+    impl PeerOverrideEnv {
+        fn launcher() -> Self {
+            std::env::set_var("NIXLINGD_TEST_PEER_UID", "1000");
+            std::env::set_var("NIXLINGD_TEST_PEER_USERNAME", "launcher");
+            std::env::set_var("NIXLINGD_TEST_PEER_GROUPS", "");
+            Self
+        }
+    }
+
+    impl Drop for PeerOverrideEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("NIXLINGD_TEST_PEER_UID");
+            std::env::remove_var("NIXLINGD_TEST_PEER_USERNAME");
+            std::env::remove_var("NIXLINGD_TEST_PEER_GROUPS");
+        }
+    }
+
+    #[test]
+    fn detached_create_is_one_shot_and_does_not_reserve_attached_session() {
+        let caps = exec_session::ExecSessionCaps {
+            global: 0,
+            ..exec_session::ExecSessionCaps::default()
+        };
+        let state = test_state(caps);
+        let hook = Arc::new(|request| {
+            assert_eq!(
+                request,
+                exec_detached::DetachedTestRequest::Create {
+                    vm: "work".to_owned(),
+                    argv_len: 1,
+                    env_len: 1,
+                    has_cwd: true,
+                }
+            );
+            Ok(exec_detached::DetachedTestResponse::Create(
+                public_wire::ExecDetachedCreateResult {
+                    exec_id: "exec-detached-1".to_owned(),
+                    state: ExecState::Running,
+                },
+            ))
+        });
+        let _guard = exec_detached::set_test_hook(hook);
+        let (daemon, client) = seqpacket_pair();
+        let run_state = state.clone();
+        let handle = std::thread::spawn(move || {
+            run_exec_owner(
+                daemon,
+                run_state,
+                admin_peer(),
+                77,
+                detached_start("SENTINEL_ARGV"),
+            );
+        });
+
+        let reply = recv_reply(&client);
+        handle.join().expect("detached owner returns");
+        assert_eq!(reply["type"], "execResponse");
+        assert_eq!(reply["opId"], 77);
+        assert_eq!(reply["op"], "detachedCreate");
+        assert_eq!(reply["result"]["execId"], "exec-detached-1");
+        assert_eq!(reply["result"]["state"], "running");
+        assert_eq!(
+            state.exec_sessions.len(),
+            0,
+            "detached create must not reserve an attached session slot"
+        );
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "detached create writes one audit event");
+        assert!(!records[0].contains("SENTINEL_ARGV"));
+        assert!(!records[0].contains("SENTINEL_ENV"));
+        assert!(!records[0].contains("SENTINEL_CWD"));
+        let record: Value = serde_json::from_str(&records[0]).expect("parse audit");
+        assert_eq!(
+            record["event"]["kind"].as_str(),
+            Some("guest_control_exec_detached_create")
+        );
+        assert_eq!(record["event"]["vm"].as_str(), Some("work"));
+        assert_eq!(record["event"]["peer_uid"].as_u64(), Some(4242));
+        assert_eq!(record["event"]["action"].as_str(), Some("create"));
+        assert_eq!(record["event"]["result"].as_str(), Some("created"));
+        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-detached-1"));
+    }
+
+    #[test]
+    fn detached_create_denies_launcher_before_owner_backend_or_session_table() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _env = PeerOverrideEnv::launcher();
+        let mut state = test_state(exec_session::ExecSessionCaps::default());
+        state.config.launcher_users = vec!["launcher".to_owned()];
+        state.config.admin_users = vec![];
+        let touched = Arc::new(AtomicUsize::new(0));
+        let hook_touched = Arc::clone(&touched);
+        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
+            hook_touched.fetch_add(1, Ordering::SeqCst);
+            panic!("launcher denial must not touch detached create backend: {request:?}");
+        }));
+        let (daemon, client) = seqpacket_pair();
+        let run_state = state.clone();
+        let handle = std::thread::spawn(move || handle_connection(daemon, &run_state));
+
+        write_frame(&client, &hello_frame()).expect("client sends hello");
+        let hello_ok = recv_reply(&client);
+        assert_eq!(hello_ok["type"], "helloOk");
+        write_frame(&client, &exec_frame(88, &detached_start("true")))
+            .expect("client sends detached create");
+        let reply = recv_reply(&client);
+        drop(client);
+        handle
+            .join()
+            .expect("daemon thread joins")
+            .expect("connection exits after client EOF");
+
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["kind"], "authz-not-admin");
+        assert_eq!(reply["error"]["exitCode"], 75);
+        assert_eq!(state.exec_sessions.len(), 0);
+        assert_eq!(
+            touched.load(Ordering::SeqCst),
+            0,
+            "admin gate must short-circuit before detached create backend"
+        );
+    }
+
+    #[test]
+    fn exec_detached_not_advertised_surfaces_clear_error() {
+        let caps = vec![
+            EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_EXEC_ATTACHED),
+            EnumOrUnknown::new(pb::GuestCapability::GUEST_CAPABILITY_EXEC_LOGS),
+        ];
+        let err = exec_detached::gate_detached_capabilities(&caps)
+            .expect_err("missing EXEC_DETACHED must fail");
+        let typed = map_exec_op_error(err);
+        assert_eq!(typed.kind(), "guest-control-exec-detached-unavailable");
+        assert_eq!(typed.exit_code(), 70);
+        assert!(typed.message().contains("detached exec"));
+    }
+
+    fn management_success_hook() -> exec_detached::DetachedTestHook {
+        Arc::new(|request| match request {
+            exec_detached::DetachedTestRequest::List { vm } => {
+                assert_eq!(vm, "work");
+                Ok(exec_detached::DetachedTestResponse::List(
+                    ExecDetachedListResult {
+                        execs: vec![ExecDetachedListEntry {
+                            exec_id: "exec-1".to_owned(),
+                            state: ExecState::Running,
+                            exit_code: None,
+                            signal: None,
+                            started_at: "1700000001".to_owned(),
+                            start_offset: 1,
+                            end_offset: 9,
+                            stdout_start_offset: 1,
+                            stdout_end_offset: 5,
+                            stderr_start_offset: 2,
+                            stderr_end_offset: 9,
+                            dropped_bytes: 3,
+                            stdout_dropped_bytes: 1,
+                            stderr_dropped_bytes: 2,
+                            truncated: true,
+                            stdout_truncated: false,
+                            stderr_truncated: true,
+                        }],
+                    },
+                ))
+            }
+            exec_detached::DetachedTestRequest::Logs {
+                vm,
+                exec_id,
+                stdout_offset,
+                stderr_offset,
+                max_len,
+            } => {
+                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                assert_eq!(stdout_offset, None);
+                assert_eq!(stderr_offset, None);
+                assert_eq!(max_len, None);
+                Ok(exec_detached::DetachedTestResponse::Logs(
+                    ExecDetachedLogsResult {
+                        exec_id,
+                        stdout_base64: "b3V0".to_owned(),
+                        stderr_base64: "ZXJy".to_owned(),
+                        start_offset: 1,
+                        end_offset: 9,
+                        dropped_bytes: 4,
+                        truncated: true,
+                        stdout_start_offset: 1,
+                        stdout_end_offset: 5,
+                        stdout_next_offset: 5,
+                        stdout_eof: true,
+                        stdout_dropped_bytes: 1,
+                        stdout_truncated: false,
+                        stderr_start_offset: 2,
+                        stderr_end_offset: 9,
+                        stderr_next_offset: 7,
+                        stderr_eof: false,
+                        stderr_dropped_bytes: 3,
+                        stderr_truncated: true,
+                    },
+                ))
+            }
+            exec_detached::DetachedTestRequest::Status { vm, exec_id } => {
+                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                Ok(exec_detached::DetachedTestResponse::Status(
+                    ExecDetachedStatusResult {
+                        exec_id,
+                        state: ExecState::Exited,
+                        reason: None,
+                        exit_code: Some(0),
+                        signal: None,
+                        start_offset: 1,
+                        end_offset: 9,
+                        dropped_bytes: 4,
+                        truncated: true,
+                    },
+                ))
+            }
+            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
+                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                Ok(exec_detached::DetachedTestResponse::Kill(
+                    ExecDetachedKillResult {
+                        exec_id,
+                        result: ExecDetachedKillOutcome::Cancelling,
+                        state: ExecState::Cancelled,
+                    },
+                ))
+            }
+            exec_detached::DetachedTestRequest::Create { .. } => {
+                panic!("management hook should not receive create")
+            }
+        })
+    }
+
+    #[test]
+    fn management_verbs_route_to_one_shot_detached_backend() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let _guard = exec_detached::set_test_hook(management_success_hook());
+        let peer = admin_peer();
+
+        let list = dispatch_request(
+            &state,
+            &peer,
+            wire::Request::Exec(ExecOp::List(public_wire::ExecDetachedListArgs {
+                vm: "work".to_owned(),
+            })),
+        )
+        .expect("list dispatch succeeds");
+        assert_eq!(list["type"], "execResponse");
+        assert_eq!(list["op"], "list");
+        assert_eq!(list["result"]["execs"][0]["execId"], "exec-1");
+        assert_eq!(list["result"]["execs"][0]["startOffset"], 1);
+        assert_eq!(list["result"]["execs"][0]["endOffset"], 9);
+        assert_eq!(list["result"]["execs"][0]["stdoutStartOffset"], 1);
+        assert_eq!(list["result"]["execs"][0]["stdoutEndOffset"], 5);
+        assert_eq!(list["result"]["execs"][0]["stderrStartOffset"], 2);
+        assert_eq!(list["result"]["execs"][0]["stderrEndOffset"], 9);
+        assert_eq!(list["result"]["execs"][0]["droppedBytes"], 3);
+        assert_eq!(list["result"]["execs"][0]["stdoutDroppedBytes"], 1);
+        assert_eq!(list["result"]["execs"][0]["stderrDroppedBytes"], 2);
+        assert_eq!(list["result"]["execs"][0]["truncated"], true);
+        assert_eq!(list["result"]["execs"][0]["stdoutTruncated"], false);
+        assert_eq!(list["result"]["execs"][0]["stderrTruncated"], true);
+        assert!(!list.to_string().contains("argv"));
+
+        let logs = dispatch_request(
+            &state,
+            &peer,
+            wire::Request::Exec(ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+                stdout_offset: None,
+                stderr_offset: None,
+                max_len: None,
+            })),
+        )
+        .expect("logs dispatch succeeds");
+        assert_eq!(logs["op"], "logs");
+        assert_eq!(logs["result"]["stdoutBase64"], "b3V0");
+        assert_eq!(logs["result"]["stderrBase64"], "ZXJy");
+        assert_eq!(logs["result"]["startOffset"], 1);
+        assert_eq!(logs["result"]["endOffset"], 9);
+        assert_eq!(logs["result"]["droppedBytes"], 4);
+        assert_eq!(logs["result"]["truncated"], true);
+        assert_eq!(logs["result"]["stdoutStartOffset"], 1);
+        assert_eq!(logs["result"]["stdoutEndOffset"], 5);
+        assert_eq!(logs["result"]["stdoutNextOffset"], 5);
+        assert_eq!(logs["result"]["stdoutEof"], true);
+        assert_eq!(logs["result"]["stdoutDroppedBytes"], 1);
+        assert_eq!(logs["result"]["stdoutTruncated"], false);
+        assert_eq!(logs["result"]["stderrStartOffset"], 2);
+        assert_eq!(logs["result"]["stderrEndOffset"], 9);
+        assert_eq!(logs["result"]["stderrNextOffset"], 7);
+        assert_eq!(logs["result"]["stderrEof"], false);
+        assert_eq!(logs["result"]["stderrDroppedBytes"], 3);
+        assert_eq!(logs["result"]["stderrTruncated"], true);
+
+        let status = dispatch_request(
+            &state,
+            &peer,
+            wire::Request::Exec(ExecOp::Status(public_wire::ExecDetachedStatusArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            })),
+        )
+        .expect("status dispatch succeeds");
+        assert_eq!(status["op"], "status");
+        assert_eq!(status["result"]["state"], "exited");
+        assert_eq!(status["result"]["exitCode"], 0);
+        assert_eq!(status["result"]["startOffset"], 1);
+        assert_eq!(status["result"]["endOffset"], 9);
+        assert_eq!(status["result"]["droppedBytes"], 4);
+        assert_eq!(status["result"]["truncated"], true);
+
+        let kill = dispatch_request(
+            &state,
+            &peer,
+            wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            })),
+        )
+        .expect("kill dispatch succeeds");
+        assert_eq!(kill["op"], "kill");
+        assert_eq!(kill["result"]["result"], "cancelling");
+        assert_eq!(kill["result"]["state"], "cancelled");
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "kill writes one audit event");
+        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
+        assert_eq!(
+            record["event"]["kind"].as_str(),
+            Some("guest_control_exec_detached_kill")
+        );
+        assert_eq!(record["event"]["vm"].as_str(), Some("work"));
+        assert_eq!(record["event"]["peer_uid"].as_u64(), Some(4242));
+        assert_eq!(record["event"]["action"].as_str(), Some("cancel"));
+        assert_eq!(record["event"]["result"].as_str(), Some("cancelling"));
+        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
+    }
+
+    #[test]
+    fn detached_kill_duplicate_maps_already_terminal_and_audits_idempotent_result() {
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
+            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
+                assert_eq!((vm.as_str(), exec_id.as_str()), ("work", "exec-1"));
+                Ok(exec_detached::DetachedTestResponse::Kill(
+                    ExecDetachedKillResult {
+                        exec_id,
+                        result: ExecDetachedKillOutcome::AlreadyTerminal,
+                        state: ExecState::Exited,
+                    },
+                ))
+            }
+            other => panic!("unexpected detached backend request: {other:?}"),
+        }));
+
+        let kill = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            })),
+        )
+        .expect("kill dispatch succeeds");
+        assert_eq!(kill["op"], "kill");
+        assert_eq!(kill["result"]["result"], "already-terminal");
+        assert_eq!(kill["result"]["state"], "exited");
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "kill writes one audit event");
+        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
+        assert_eq!(record["event"]["result"].as_str(), Some("already-terminal"));
+        assert_eq!(record["event"]["exec_id"].as_str(), Some("exec-1"));
+    }
+
+    #[test]
+    fn detached_kill_error_audit_redacts_unvalidated_caller_exec_id() {
+        use crate::typed_error::GuestControlExecErrorKind as K;
+
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let _guard = exec_detached::set_test_hook(Arc::new(|request| match request {
+            exec_detached::DetachedTestRequest::Kill { vm, exec_id } => {
+                assert_eq!(vm, "work");
+                assert_eq!(exec_id, "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control");
+                Err(TypedError::GuestControlExecFailed {
+                    kind: K::ExecNotFound,
+                })
+            }
+            other => panic!("unexpected detached backend request: {other:?}"),
+        }));
+
+        let err = dispatch_request(
+            &state,
+            &admin_peer(),
+            wire::Request::Exec(ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "SENTINEL_UNVALIDATED_EXEC_ID\nwith-control".to_owned(),
+            })),
+        )
+        .expect_err("kill should surface backend error");
+        assert_eq!(err.kind(), "guest-control-exec-not-found");
+
+        let records = state.daemon_audit.captured.lock().expect("audit capture");
+        assert_eq!(records.len(), 1, "kill errors still write one audit event");
+        assert!(
+            !records[0].contains("SENTINEL_UNVALIDATED_EXEC_ID"),
+            "audit must not persist unvalidated caller exec_id: {}",
+            records[0]
+        );
+        let record: Value = serde_json::from_str(&records[0]).expect("parse kill audit");
+        assert_eq!(record["event"]["result"].as_str(), Some("error"));
+        assert_eq!(
+            record["event"]["exec_id"].as_str(),
+            Some("<redacted-on-error>")
+        );
+    }
+
+    fn management_ops() -> Vec<ExecOp> {
+        vec![
+            ExecOp::List(public_wire::ExecDetachedListArgs {
+                vm: "work".to_owned(),
+            }),
+            ExecOp::Logs(public_wire::ExecDetachedLogsArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+                stdout_offset: None,
+                stderr_offset: None,
+                max_len: None,
+            }),
+            ExecOp::Status(public_wire::ExecDetachedStatusArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            }),
+            ExecOp::Kill(public_wire::ExecDetachedKillArgs {
+                vm: "work".to_owned(),
+                exec_id: "exec-1".to_owned(),
+            }),
+        ]
+    }
+
+    fn detached_create_and_management_ops() -> Vec<ExecOp> {
+        let mut ops = vec![detached_start("true")];
+        ops.extend(management_ops());
+        ops
+    }
+
+    #[test]
+    fn detached_exec_ops_deny_launcher_before_backend_or_session_table() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = test_state(exec_session::ExecSessionCaps::default());
+        let touched = Arc::new(AtomicUsize::new(0));
+        let hook_touched = Arc::clone(&touched);
+        let _guard = exec_detached::set_test_hook(Arc::new(move |request| {
+            hook_touched.fetch_add(1, Ordering::SeqCst);
+            panic!("launcher denial must not touch detached backend: {request:?}");
+        }));
+
+        for op in detached_create_and_management_ops() {
+            let err = dispatch_request(&state, &launcher_peer(), wire::Request::Exec(op))
+                .expect_err("launcher must be denied before exec backend");
+            match &err {
+                TypedError::AuthzNotAdmin { verb } => assert_eq!(verb, "exec"),
+                other => panic!("expected AuthzNotAdmin for exec, got {other:?}"),
+            }
+            assert_eq!(err.exit_code(), 75);
+            assert_eq!(state.exec_sessions.len(), 0);
+        }
+        assert_eq!(
+            touched.load(Ordering::SeqCst),
+            0,
+            "admin gate must short-circuit before detached backend"
+        );
+    }
+
+    #[test]
+    fn management_verbs_preserve_typed_guest_error_mapping() {
+        use crate::typed_error::GuestControlExecErrorKind as K;
+        for expected in [
+            K::StaleSession,
+            K::ExecNotFound,
+            K::ExecExpired,
+            K::Protocol,
+        ] {
+            for op in management_ops() {
+                let state = test_state(exec_session::ExecSessionCaps::default());
+                let _guard = exec_detached::set_test_hook(Arc::new(move |_| {
+                    Err(TypedError::GuestControlExecFailed { kind: expected })
+                }));
+                let err = dispatch_request(&state, &admin_peer(), wire::Request::Exec(op))
+                    .expect_err("management op should surface typed error");
+                assert_eq!(err.kind(), expected.wire_kind());
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_program_maps_to_actionable_exec_error() {
+        let mut guest_error = pb::GuestControlError::new();
+        guest_error.kind =
+            EnumOrUnknown::new(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM);
+        let op_error = exec_session_real::map_guest_control_error(&guest_error);
+        assert_eq!(
+            op_error,
+            exec_session::ExecOpError::Guest(exec_session::GuestOpError::InvalidProgram)
+        );
+
+        let typed = map_exec_op_error(op_error);
+        assert_eq!(typed.kind(), "guest-control-invalid-program");
+        assert_eq!(typed.exit_code(), 2);
+        assert!(
+            typed.message().contains(
+                "command must be a program name or absolute path and must not start with '-'"
+            ),
+            "unexpected message: {}",
+            typed.message()
+        );
+        assert!(
+            !typed.remediation().contains("already exited"),
+            "invalid-program remediation must not use stale exec wording"
+        );
+
+        let establish = map_exec_establish_error(exec_session::ExecEstablishError::Guest(
+            exec_session::GuestOpError::InvalidProgram,
+        ));
+        assert_eq!(establish.kind(), "guest-control-invalid-program");
+        assert_eq!(establish.message(), typed.message());
+    }
 }
 
 /// The public.sock accept loop is serial: it accepts one connection, runs

@@ -203,8 +203,20 @@ impl TtrpcGuestControlClient {
                 ..Default::default()
             })
             .await
-            .map_err(|_| GuestControlHealthError::Ttrpc)?;
+            .map_err(map_ttrpc_request_error)?;
         Resp::parse_from_bytes(&response.payload).map_err(|_| GuestControlHealthError::Protocol)
+    }
+}
+
+fn map_ttrpc_request_error(error: ttrpc::Error) -> GuestControlHealthError {
+    match &error {
+        ttrpc::Error::RpcStatus(status) if status.code() == ttrpc::Code::DEADLINE_EXCEEDED => {
+            GuestControlHealthError::Timeout
+        }
+        ttrpc::Error::Others(message) if message.to_ascii_lowercase().contains("timeout") => {
+            GuestControlHealthError::Timeout
+        }
+        _ => GuestControlHealthError::Ttrpc,
     }
 }
 
@@ -871,6 +883,26 @@ mod tests {
                 "error {error:?} must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn ttrpc_deadline_errors_map_to_timeout() {
+        let deadline =
+            ttrpc::Error::RpcStatus(ttrpc::get_status(ttrpc::Code::DEADLINE_EXCEEDED, "timeout"));
+        assert_eq!(
+            map_ttrpc_request_error(deadline),
+            GuestControlHealthError::Timeout
+        );
+        assert_eq!(
+            map_ttrpc_request_error(ttrpc::Error::Others(
+                "Receive packet timeout elapsed".to_owned()
+            )),
+            GuestControlHealthError::Timeout
+        );
+        assert_eq!(
+            map_ttrpc_request_error(ttrpc::Error::Others("stream reset".to_owned())),
+            GuestControlHealthError::Ttrpc
+        );
     }
 
     #[test]

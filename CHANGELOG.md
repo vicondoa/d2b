@@ -70,8 +70,8 @@ deprecations ship one minor release before removal.
   indefinitely by default; teardown drops the master (SIGHUP), waits a
   bounded grace, then SIGKILLs the whole TTY session (in-session
   no-orphan; a `setsid`/double-fork escapee is a documented trusted-root
-  limitation). `tty=true && detach=true` is rejected as an unsupported
-  mode. See
+  limitation). Interactive detached exec remains unsupported; use
+  non-TTY `nixling vm exec -d` for detached commands. See
   [`docs/reference/guest-control-exec-interactive-tty.md`](docs/reference/guest-control-exec-interactive-tty.md)
   and the interactive-exec section of
   [ADR 0028](docs/adr/0028-guest-control-plane-over-vsock.md). The
@@ -84,6 +84,24 @@ deprecations ship one minor release before removal.
   read-only into the guest config and forced from the host module, and
   emitted to `nixling-guestd` as `--interactive-max-runtime-sec`
   alongside the detached exec surface.
+
+- Guest exec now accepts bare command names and relative program paths in
+  both attached and detached modes. `guestd` passes `argv[0]` through the
+  workload user's login shell (`exec "$@"`), so the command is resolved
+  by that user's login `PATH`; invalid program names get the distinct
+  `INVALID_PROGRAM` / `guest-control-invalid-program` error. The
+  console replacement is `nixling vm exec -it <vm> -- bash`.
+
+- Detached workload-user exec is enabled with
+  `nixling vm exec -d <vm> -- <cmd>` and VM-first management verbs:
+  `nixling vm exec <vm> list`, `logs <exec_id>`, `status <exec_id>`,
+  and `kill <exec_id>`. Detached jobs are non-TTY, run as the workload
+  user (never root), stay inside guestd rather than adding a broker op,
+  and survive host client disconnect. Retained stdout/stderr use bounded
+  ring buffers with dropped/truncated accounting and per-stream offsets;
+  `kill` maps to idempotent two-phase `ExecCancel` (graceful terminate,
+  bounded grace, force kill). Guestd reconciles detached runner/workload
+  units at startup, cleans orphaned workloads, and reaps terminal records.
 
 ### Fixed
 
@@ -135,12 +153,13 @@ deprecations ship one minor release before removal.
   capacity, protocol, old-generation, and internal failures map to
   reserved CLI exit codes that `--json` disambiguates from a guest exit
   code via `source`/`reason`/`guestExitCode`/`transportExitCode`. `-it`
-  is human-only and is rejected together with `--json`. Detached
-  reconnect is deferred; the daemon owner handler rejects `detached=true`
-  for now. The exec session establishes one redacted kind=critical audit
-  event (vm / peer uid / tty only); the opaque session handle, argv
-  (hash-only), and stdio/env/cwd/paths never reach any log, span, audit
-  record, or metric label.
+  is human-only and is rejected together with `--json`; non-interactive
+  detached commands use `nixling vm exec -d <vm> -- <cmd>`. Attached exec
+  establishes one redacted kind=critical audit event (vm / peer uid / tty
+  only), and detached create/kill adds redacted daemon audit carrying only
+  vm / peer uid / result / exec id. Opaque session handles, argv, and
+  stdio/env/cwd/paths never reach any log, span, audit record, or metric
+  label.
 
 - Detached guest exec: `ExecCreate(detach=true)` runs a non-interactive
   command that outlives the originating connection, supervised by the root
@@ -156,17 +175,18 @@ deprecations ship one minor release before removal.
   ceiling. Cancellation is a two-phase, control-file mechanism with no
   in-process signal handler. Terminal records are retained for 30 minutes
   then garbage-collected; a running detached job is never reaped. guestd
-  re-adopts live detached execs across a guestd restart within one boot.
-  This is the guest-side detached substrate only; the operator
-  `nixling vm exec` CLI does not expose detached mode in this release (the
-  daemon owner handler rejects `detached=true`), so detached exec is not
-  reachable from the CLI yet.
+  re-adopts live detached execs across a guestd restart within one boot,
+  reconciles valid runner/workload units before advertising detached
+  capability, and cleans orphaned workloads. The operator CLI exposes the
+  substrate as `nixling vm exec -d <vm> -- <cmd>` plus
+  `nixling vm exec <vm> list|logs|status|kill` management verbs.
 
 - `ExecList` RPC (guest-control protocol version 2): a minimal, read-only
   discovery call that enumerates the caller's detached execs for the same
   VM token + boot (bounded ≤32). Each entry carries the exec id, slot,
   state, create time, an argv SHA-256 hash (never raw argv), and per-stream
-  truncation/dropped-byte counters.
+  truncation/dropped-byte counters. The CLI and public daemon DTOs do not
+  expose the argv hash.
 
 - `ExecExpired` guest-control error kind, distinguishing a retention-evicted
   detached record from `StaleSession` (boot mismatch) and `ExecNotFound`

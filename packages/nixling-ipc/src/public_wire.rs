@@ -1,4 +1,4 @@
-use crate::{FeatureFlag, Version};
+use crate::{guest_wire::ExecState, FeatureFlag, Version};
 use nixling_core::{error::Error, host::IfName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -330,10 +330,9 @@ pub struct ExecTermSize {
 
 /// `Start` op args. The daemon resolves the per-VM vsock socket + peer
 /// credentials from the trusted bundle; the client supplies only the VM name,
-/// the command, and the session shape. `detached` is reserved: the daemon
-/// rejects a `detached = true` request in this release (a detached/reconnect
-/// lifecycle is not implemented), and the CLI never sets it — it ships
-/// non-detached interactive (`-it`) and non-interactive sessions only.
+/// the command, and the session shape. `detached = false` starts the attached
+/// interactive/non-interactive exec FSM; `detached = true` starts a detached
+/// exec and returns an opaque exec id for later management verbs.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExecStartArgs {
@@ -353,16 +352,12 @@ pub struct ExecStartArgs {
 
 impl fmt::Debug for ExecStartArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Redaction: show the VM name + shape + counts, never the raw
-        // argv / env keys+values / cwd.
+        // Redaction: never show raw argv, env keys+values, cwd, or other
+        // command shape beyond stable counts.
         f.debug_struct("ExecStartArgs")
-            .field("vm", &self.vm)
-            .field("tty", &self.tty)
-            .field("detached", &self.detached)
             .field("argv_len", &self.argv.len())
             .field("env_len", &self.env.as_ref().map_or(0, Vec::len))
             .field("has_cwd", &self.cwd.is_some())
-            .field("term_size", &self.term_size)
             .finish()
     }
 }
@@ -513,6 +508,83 @@ impl fmt::Debug for ExecCloseArgs {
     }
 }
 
+/// `List` op args for detached execs in one VM.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedListArgs {
+    pub vm: String,
+}
+
+impl fmt::Debug for ExecDetachedListArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedListArgs")
+            .field("vm", &self.vm)
+            .finish()
+    }
+}
+
+/// `Status` op args for one detached exec.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedStatusArgs {
+    pub vm: String,
+    pub exec_id: String,
+}
+
+impl fmt::Debug for ExecDetachedStatusArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedStatusArgs")
+            .field("vm", &self.vm)
+            .field("exec_id", &self.exec_id)
+            .finish()
+    }
+}
+
+/// `Logs` op args for one detached exec. The daemon fetches retained stdout
+/// and stderr bytes, optionally resuming each stream from a caller-provided
+/// byte cursor, and returns them in one redacted-debug response.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedLogsArgs {
+    pub vm: String,
+    pub exec_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_len: Option<u64>,
+}
+
+impl fmt::Debug for ExecDetachedLogsArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedLogsArgs")
+            .field("vm", &self.vm)
+            .field("exec_id", &self.exec_id)
+            .field("has_stdout_offset", &self.stdout_offset.is_some())
+            .field("has_stderr_offset", &self.stderr_offset.is_some())
+            .field("has_max_len", &self.max_len.is_some())
+            .finish()
+    }
+}
+
+/// `Kill` op args for one detached exec.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedKillArgs {
+    pub vm: String,
+    pub exec_id: String,
+}
+
+impl fmt::Debug for ExecDetachedKillArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedKillArgs")
+            .field("vm", &self.vm)
+            .field("exec_id", &self.exec_id)
+            .finish()
+    }
+}
+
 /// Multiplexed exec operation. Closed adjacently-tagged enum (`op` + `args`);
 /// each variant's args struct is `deny_unknown_fields`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -525,6 +597,10 @@ pub enum ExecOp {
     Resize(ExecResizeArgs),
     Wait(ExecWaitArgs),
     Close(ExecCloseArgs),
+    List(ExecDetachedListArgs),
+    Logs(ExecDetachedLogsArgs),
+    Status(ExecDetachedStatusArgs),
+    Kill(ExecDetachedKillArgs),
 }
 
 /// `Start` op result: the daemon-issued opaque session handle plus the initial
@@ -547,6 +623,23 @@ impl fmt::Debug for ExecStartResult {
             .field("tty", &self.tty)
             .field("stdout_offset", &self.stdout_offset)
             .field("stderr_offset", &self.stderr_offset)
+            .finish()
+    }
+}
+
+/// Detached `Start` op result: an opaque exec id plus initial detached state.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedCreateResult {
+    pub exec_id: String,
+    pub state: ExecState,
+}
+
+impl fmt::Debug for ExecDetachedCreateResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedCreateResult")
+            .field("exec_id", &self.exec_id)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -638,18 +731,212 @@ pub struct ExecCloseResult {
     pub stdin_closed: bool,
 }
 
+/// One detached exec summary for `List`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedListEntry {
+    pub exec_id: String,
+    pub state: ExecState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<u32>,
+    pub started_at: String,
+    #[serde(default)]
+    pub start_offset: u64,
+    #[serde(default)]
+    pub end_offset: u64,
+    #[serde(default)]
+    pub stdout_start_offset: u64,
+    #[serde(default)]
+    pub stdout_end_offset: u64,
+    #[serde(default)]
+    pub stderr_start_offset: u64,
+    #[serde(default)]
+    pub stderr_end_offset: u64,
+    pub dropped_bytes: u64,
+    #[serde(default)]
+    pub stdout_dropped_bytes: u64,
+    #[serde(default)]
+    pub stderr_dropped_bytes: u64,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_truncated: bool,
+}
+
+impl fmt::Debug for ExecDetachedListEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedListEntry")
+            .field("exec_id", &self.exec_id)
+            .field("state", &self.state)
+            .field("exit_code", &self.exit_code)
+            .field("signal", &self.signal)
+            .field("started_at", &self.started_at)
+            .field("start_offset", &self.start_offset)
+            .field("end_offset", &self.end_offset)
+            .field("stdout_start_offset", &self.stdout_start_offset)
+            .field("stdout_end_offset", &self.stdout_end_offset)
+            .field("stderr_start_offset", &self.stderr_start_offset)
+            .field("stderr_end_offset", &self.stderr_end_offset)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("stdout_dropped_bytes", &self.stdout_dropped_bytes)
+            .field("stderr_dropped_bytes", &self.stderr_dropped_bytes)
+            .field("truncated", &self.truncated)
+            .field("stdout_truncated", &self.stdout_truncated)
+            .field("stderr_truncated", &self.stderr_truncated)
+            .finish()
+    }
+}
+
+/// Detached `List` op result.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedListResult {
+    pub execs: Vec<ExecDetachedListEntry>,
+}
+
+impl fmt::Debug for ExecDetachedListResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedListResult")
+            .field("exec_count", &self.execs.len())
+            .finish()
+    }
+}
+
+/// Detached `Status` op result.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedStatusResult {
+    pub exec_id: String,
+    pub state: ExecState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<u32>,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub dropped_bytes: u64,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+impl fmt::Debug for ExecDetachedStatusResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedStatusResult")
+            .field("exec_id", &self.exec_id)
+            .field("state", &self.state)
+            .field("has_reason", &self.reason.is_some())
+            .field("exit_code", &self.exit_code)
+            .field("signal", &self.signal)
+            .field("start_offset", &self.start_offset)
+            .field("end_offset", &self.end_offset)
+            .field("dropped_bytes", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
+/// Detached `Logs` op result. The base64 payloads carry raw guest output and
+/// are redacted from `Debug`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedLogsResult {
+    pub exec_id: String,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub dropped_bytes: u64,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub stdout_start_offset: u64,
+    #[serde(default)]
+    pub stdout_end_offset: u64,
+    #[serde(default)]
+    pub stdout_next_offset: u64,
+    #[serde(default)]
+    pub stdout_eof: bool,
+    #[serde(default)]
+    pub stdout_dropped_bytes: u64,
+    #[serde(default)]
+    pub stdout_truncated: bool,
+    #[serde(default)]
+    pub stderr_start_offset: u64,
+    #[serde(default)]
+    pub stderr_end_offset: u64,
+    #[serde(default)]
+    pub stderr_next_offset: u64,
+    #[serde(default)]
+    pub stderr_eof: bool,
+    #[serde(default)]
+    pub stderr_dropped_bytes: u64,
+    #[serde(default)]
+    pub stderr_truncated: bool,
+}
+
+impl fmt::Debug for ExecDetachedLogsResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedLogsResult")
+            .field(
+                "data_len",
+                &(self.stdout_base64.len() + self.stderr_base64.len()),
+            )
+            .field("dropped", &self.dropped_bytes)
+            .field("truncated", &self.truncated)
+            .finish()
+    }
+}
+
+/// Closed result for idempotent detached `Kill`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecDetachedKillOutcome {
+    Cancelling,
+    AlreadyTerminal,
+}
+
+/// Detached `Kill` op result.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExecDetachedKillResult {
+    pub exec_id: String,
+    pub result: ExecDetachedKillOutcome,
+    pub state: ExecState,
+}
+
+impl fmt::Debug for ExecDetachedKillResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecDetachedKillResult")
+            .field("exec_id", &self.exec_id)
+            .field("result", &self.result)
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
 /// Multiplexed exec operation result. Closed adjacently-tagged enum mirroring
 /// [`ExecOp`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", content = "result", rename_all = "camelCase")]
 pub enum ExecOpResponse {
     Start(ExecStartResult),
+    DetachedCreate(ExecDetachedCreateResult),
     WriteStdin(ExecWriteStdinResult),
     ReadOutput(ExecReadOutputResult),
     Signal(ExecControlResult),
     Resize(ExecControlResult),
     Wait(ExecWaitResult),
     Close(ExecCloseResult),
+    List(ExecDetachedListResult),
+    Logs(ExecDetachedLogsResult),
+    Status(ExecDetachedStatusResult),
+    Kill(ExecDetachedKillResult),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
@@ -1005,8 +1292,12 @@ mod tests {
     #[test]
     fn exec_dto_debug_redacts_secrets() {
         use super::{
-            ExecCloseArgs, ExecEnvVar, ExecReadOutputArgs, ExecReadOutputResult, ExecResizeArgs,
-            ExecSignalArgs, ExecStartArgs, ExecStartResult, ExecStream, ExecWaitArgs,
+            ExecCloseArgs, ExecDetachedCreateResult, ExecDetachedKillArgs, ExecDetachedKillOutcome,
+            ExecDetachedKillResult, ExecDetachedListArgs, ExecDetachedListEntry,
+            ExecDetachedListResult, ExecDetachedLogsArgs, ExecDetachedLogsResult,
+            ExecDetachedStatusArgs, ExecDetachedStatusResult, ExecEnvVar, ExecOp, ExecOpResponse,
+            ExecReadOutputArgs, ExecReadOutputResult, ExecResizeArgs, ExecSignalArgs,
+            ExecStartArgs, ExecStartResult, ExecState, ExecStream, ExecWaitArgs,
             ExecWriteStdinArgs,
         };
 
@@ -1017,6 +1308,9 @@ mod tests {
         const SECRET_HANDLE: &str = "SENTINEL_HANDLE_c41f";
         const SECRET_CHUNK: &str = "U0VOVElORUxfQ0hVTktfZGVhZA==";
         const SECRET_DATA: &str = "U0VOVElORUxfREFUQV9iZWVm";
+        const SECRET_STDOUT: &str = "U0VOVElORUxfU1RET1VUXzM2YWE=";
+        const SECRET_STDERR: &str = "U0VOVElORUxfU1RERVJSXzU0YmM=";
+        const SECRET_REASON: &str = "SENTINEL_REASON_c35d";
 
         let secrets = [
             SECRET_ENV_KEY,
@@ -1026,6 +1320,9 @@ mod tests {
             SECRET_HANDLE,
             SECRET_CHUNK,
             SECRET_DATA,
+            SECRET_STDOUT,
+            SECRET_STDERR,
+            SECRET_REASON,
         ];
 
         let assert_clean = |rendered: &str, label: &str| {
@@ -1054,8 +1351,17 @@ mod tests {
         };
         let rendered = format!("{start:?}");
         assert_clean(&rendered, "ExecStartArgs");
-        assert!(rendered.contains("corp-vm"), "vm name is observable");
         assert!(rendered.contains("argv_len"), "argv length is observable");
+        assert!(rendered.contains("env_len"), "env length is observable");
+        assert!(rendered.contains("has_cwd"), "cwd presence is observable");
+        assert!(
+            !rendered.contains("corp-vm"),
+            "create Debug omits VM name and exposes only command-shape counts"
+        );
+        assert_clean(
+            &format!("{:?}", ExecOp::Start(start.clone())),
+            "ExecOp::Start",
+        );
 
         let write = ExecWriteStdinArgs {
             session: SECRET_HANDLE.to_owned(),
@@ -1118,5 +1424,167 @@ mod tests {
             timed_out: false,
         };
         assert_clean(&format!("{read_result:?}"), "ExecReadOutputResult");
+
+        let detached_create = ExecDetachedCreateResult {
+            exec_id: "exec-0001".to_owned(),
+            state: ExecState::Running,
+        };
+        assert_clean(&format!("{detached_create:?}"), "ExecDetachedCreateResult");
+        assert_clean(
+            &format!("{:?}", ExecOpResponse::DetachedCreate(detached_create)),
+            "ExecOpResponse::DetachedCreate",
+        );
+
+        let detached_list = ExecDetachedListArgs {
+            vm: "corp-vm".to_owned(),
+        };
+        assert_clean(&format!("{detached_list:?}"), "ExecDetachedListArgs");
+        assert_clean(
+            &format!("{:?}", ExecOp::List(detached_list)),
+            "ExecOp::List",
+        );
+
+        let detached_status = ExecDetachedStatusArgs {
+            vm: "corp-vm".to_owned(),
+            exec_id: "exec-0001".to_owned(),
+        };
+        assert_clean(&format!("{detached_status:?}"), "ExecDetachedStatusArgs");
+        assert_clean(
+            &format!("{:?}", ExecOp::Status(detached_status)),
+            "ExecOp::Status",
+        );
+
+        let detached_logs = ExecDetachedLogsArgs {
+            vm: "corp-vm".to_owned(),
+            exec_id: "exec-0001".to_owned(),
+            stdout_offset: Some(64),
+            stderr_offset: Some(96),
+            max_len: Some(4096),
+        };
+        assert_clean(&format!("{detached_logs:?}"), "ExecDetachedLogsArgs");
+        assert_clean(
+            &format!("{:?}", ExecOp::Logs(detached_logs.clone())),
+            "ExecOp::Logs",
+        );
+
+        let detached_kill = ExecDetachedKillArgs {
+            vm: "corp-vm".to_owned(),
+            exec_id: "exec-0001".to_owned(),
+        };
+        assert_clean(&format!("{detached_kill:?}"), "ExecDetachedKillArgs");
+        assert_clean(
+            &format!("{:?}", ExecOp::Kill(detached_kill)),
+            "ExecOp::Kill",
+        );
+
+        let detached_entry = ExecDetachedListEntry {
+            exec_id: "exec-0001".to_owned(),
+            state: ExecState::Exited,
+            exit_code: Some(0),
+            signal: None,
+            started_at: "2026-06-15T18:00:00Z".to_owned(),
+            start_offset: 0,
+            end_offset: 128,
+            stdout_start_offset: 0,
+            stdout_end_offset: 64,
+            stderr_start_offset: 8,
+            stderr_end_offset: 128,
+            dropped_bytes: 0,
+            stdout_dropped_bytes: 0,
+            stderr_dropped_bytes: 0,
+            truncated: false,
+            stdout_truncated: false,
+            stderr_truncated: false,
+        };
+        assert_clean(&format!("{detached_entry:?}"), "ExecDetachedListEntry");
+
+        let detached_list_result = ExecDetachedListResult {
+            execs: vec![detached_entry],
+        };
+        assert_clean(
+            &format!("{detached_list_result:?}"),
+            "ExecDetachedListResult",
+        );
+        assert_clean(
+            &format!("{:?}", ExecOpResponse::List(detached_list_result)),
+            "ExecOpResponse::List",
+        );
+
+        let detached_status_result = ExecDetachedStatusResult {
+            exec_id: "exec-0001".to_owned(),
+            state: ExecState::ProtocolError,
+            reason: Some(SECRET_REASON.to_owned()),
+            exit_code: None,
+            signal: None,
+            start_offset: 0,
+            end_offset: 128,
+            dropped_bytes: 0,
+            truncated: false,
+        };
+        assert_clean(
+            &format!("{detached_status_result:?}"),
+            "ExecDetachedStatusResult",
+        );
+        assert_clean(
+            &format!(
+                "{:?}",
+                ExecOpResponse::Status(detached_status_result.clone())
+            ),
+            "ExecOpResponse::Status",
+        );
+
+        let detached_logs_result = ExecDetachedLogsResult {
+            exec_id: "exec-0001".to_owned(),
+            stdout_base64: SECRET_STDOUT.to_owned(),
+            stderr_base64: SECRET_STDERR.to_owned(),
+            start_offset: 0,
+            end_offset: 128,
+            dropped_bytes: 64,
+            truncated: true,
+            stdout_start_offset: 0,
+            stdout_end_offset: 64,
+            stdout_next_offset: 64,
+            stdout_eof: true,
+            stdout_dropped_bytes: 16,
+            stdout_truncated: true,
+            stderr_start_offset: 8,
+            stderr_end_offset: 128,
+            stderr_next_offset: 96,
+            stderr_eof: false,
+            stderr_dropped_bytes: 48,
+            stderr_truncated: false,
+        };
+        let rendered_logs = format!("{detached_logs_result:?}");
+        assert_clean(&rendered_logs, "ExecDetachedLogsResult");
+        assert!(
+            rendered_logs.contains("data_len")
+                && rendered_logs.contains("dropped")
+                && rendered_logs.contains("truncated"),
+            "logs Debug exposes only length/accounting metadata: {rendered_logs}"
+        );
+        assert!(
+            !rendered_logs.contains("exec-0001")
+                && !rendered_logs.contains("start_offset")
+                && !rendered_logs.contains("end_offset"),
+            "logs Debug must not expose IDs, offsets, or payloads: {rendered_logs}"
+        );
+        assert_clean(
+            &format!("{:?}", ExecOpResponse::Logs(detached_logs_result)),
+            "ExecOpResponse::Logs",
+        );
+
+        let detached_kill_result = ExecDetachedKillResult {
+            exec_id: "exec-0001".to_owned(),
+            result: ExecDetachedKillOutcome::Cancelling,
+            state: ExecState::Running,
+        };
+        assert_clean(
+            &format!("{detached_kill_result:?}"),
+            "ExecDetachedKillResult",
+        );
+        assert_clean(
+            &format!("{:?}", ExecOpResponse::Kill(detached_kill_result)),
+            "ExecOpResponse::Kill",
+        );
     }
 }

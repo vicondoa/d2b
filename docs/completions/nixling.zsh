@@ -492,16 +492,18 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
 '--cwd=[Working directory for the guest command]:DIR:_default' \
-'-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
-'--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`\: the guest-control transport forwards stdin only in PTY mode, so \`-i\` must be paired with \`-t\` (e.g. \`-it\`)]' \
+'-d[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`nixling vm exec <vm> {list|logs|status|kill}\`]' \
+'--detach[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`nixling vm exec <vm> {list|logs|status|kill}\`]' \
+'-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`; use \`-it\` for an interactive shell]' \
+'--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`; use \`-it\` for an interactive shell]' \
 '-t[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
 '--tty[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
 '(--human)--json[Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only]' \
-'(--json)--human[]' \
+'(--json)--human[Force human output]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':vm -- VM name as declared in `nixling.vms.<name>`:_default' \
-'*::command -- The command and its arguments, after `--`. NOT a clap `required` argument\: a missing command is validated inside `cmd_vm_exec` so a `--json` run still emits the single terminal `source\: "cli"`, `reason\: "usage"` envelope on stdout instead of a clap stderr error (matching docs/reference/{error-codes,cli-contract}.md):_default' \
+'*::management -- Optional detached exec management form\: `list`, `logs <id> \[--stdout-offset N|--stdout-offset=N\] \[--stderr-offset N|--stderr-offset=N\] \[--max-len N|--max-len=N\]`, `status <id>`, or `kill <id>`. Command execs never use this position\: pass a command after `--` instead:_default' \
 && ret=0
 ;;
 (help)
@@ -1828,7 +1830,7 @@ _nixling__subcmd__help__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
+'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
     )
     _describe -t commands 'nixling help vm commands' commands "$@"
 }
@@ -2164,7 +2166,7 @@ _nixling__subcmd__vm_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
+'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm commands' commands "$@"
@@ -2182,7 +2184,7 @@ _nixling__subcmd__vm__subcmd__help_commands() {
 'restart:Stop then start; same envelope contract as start' \
 'list:Daemon-side runtime view (different from \`nixling list\`, which is the static manifest view)' \
 'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run a command inside the VM over the authenticated guest-control transport (no SSH). \`nixling vm exec <vm> -- <cmd...>\` runs a non-interactive command; \`nixling vm exec -it <vm> -- <cmd...>\` allocates a guest PTY for an interactive session. Routed CLI → daemon \`public.sock\` (admin-only) → authenticated guest-control vsock → guestd exec RPCs' \
+'exec:Run or manage commands inside a running VM. Use \`nixling vm exec <vm> -- <cmd...>\` for a non-interactive command, \`nixling vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`nixling vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'nixling vm help commands' commands "$@"

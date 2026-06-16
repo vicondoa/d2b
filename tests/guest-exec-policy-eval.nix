@@ -167,8 +167,8 @@ let
       (lib.attrNames guestConfig.systemd.services);
 
   guestdExecStart = corpGuest.systemd.services.nixling-guestd.serviceConfig.ExecStart;
-  # The guest-internal detached slice + /run/nixling-exec dir are not emitted in
-  # this build (detached exec is disabled pending its workload-user migration).
+  # The guest-internal detached slice + /run/nixling-exec dir are emitted as
+  # part of the exec runtime substrate when guest-control exec is enabled.
   guestHasExecSlice = builtins.hasAttr "nixling-exec" (corpGuest.systemd.slices or { });
   guestTmpfilesRules = corpGuest.systemd.tmpfiles.rules or [ ];
   guestHasRunDir = lib.any (r: lib.hasInfix "/run/nixling-exec" r) guestTmpfilesRules;

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VmExecLogsOutputV1",
+  "type": "object",
+  "required": [
+    "command",
+    "droppedBytes",
+    "endOffset",
+    "execId",
+    "startOffset",
+    "stderrBase64",
+    "stderrDroppedBytes",
+    "stderrEndOffset",
+    "stderrEof",
+    "stderrNextOffset",
+    "stderrStartOffset",
+    "stderrTruncated",
+    "stdoutBase64",
+    "stdoutDroppedBytes",
+    "stdoutEndOffset",
+    "stdoutEof",
+    "stdoutNextOffset",
+    "stdoutStartOffset",
+    "stdoutTruncated",
+    "truncated",
+    "vm"
+  ],
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "droppedBytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "endOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "execId": {
+      "type": "string"
+    },
+    "startOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stderrBase64": {
+      "type": "string"
+    },
+    "stderrDroppedBytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stderrEndOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stderrEof": {
+      "type": "boolean"
+    },
+    "stderrNextOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stderrStartOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stderrTruncated": {
+      "type": "boolean"
+    },
+    "stdoutBase64": {
+      "type": "string"
+    },
+    "stdoutDroppedBytes": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stdoutEndOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stdoutEof": {
+      "type": "boolean"
+    },
+    "stdoutNextOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stdoutStartOffset": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "stdoutTruncated": {
+      "type": "boolean"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "vm": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -33,7 +33,7 @@ use nixling_ipc::guest_wire::GUEST_CONTROL_PROTOCOL_VERSION;
 
 /// Generous absolute deadline for the whole establish (connect + auth +
 /// `ExecCreate`). Per-op deadlines are separate and fresh.
-const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(12);
+pub(crate) const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// Production exec connector. Owns the resolved probe params + broker socket
 /// path so it is `Send + Sync` and can move into the worker thread.
@@ -204,7 +204,10 @@ fn gate_capabilities(
     })
 }
 
-fn build_exec_create_request(vm_id: &str, spec: &ExecStartSpec) -> pb::ExecCreateRequest {
+pub(crate) fn build_exec_create_request(
+    vm_id: &str,
+    spec: &ExecStartSpec,
+) -> pb::ExecCreateRequest {
     let mut metadata = pb::RequestMetadata::new();
     metadata.vm_id = vm_id.to_owned();
     metadata.request_id = "guest-control-exec".to_owned();
@@ -476,22 +479,23 @@ fn terminal_from_state(
     }
 }
 
-fn is_unspecified(kind: EnumOrUnknown<pb::GuestControlErrorKind>) -> bool {
+pub(crate) fn is_unspecified(kind: EnumOrUnknown<pb::GuestControlErrorKind>) -> bool {
     matches!(
         kind.enum_value(),
         Ok(pb::GuestControlErrorKind::GUEST_CONTROL_ERROR_KIND_UNSPECIFIED)
     )
 }
 
-fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
+pub(crate) fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
     use pb::GuestControlErrorKind as K;
     match error.kind.enum_value() {
         Ok(K::GUEST_CONTROL_ERROR_KIND_AUTH_FAILED) => ExecOpError::Auth,
-        Ok(K::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => ExecOpError::Auth,
+        Ok(K::GUEST_CONTROL_ERROR_KIND_STALE_SESSION) => ExecOpError::StaleSession,
         Ok(K::GUEST_CONTROL_ERROR_KIND_TRANSPORT_UNREACHABLE) => ExecOpError::Transport,
         Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_CONTROL_UNAVAILABLE_OLD_GENERATION) => {
             ExecOpError::OldGeneration
         }
+        Ok(K::GUEST_CONTROL_ERROR_KIND_GUEST_EXEC_DISABLED) => ExecOpError::Capability,
         Ok(K::GUEST_CONTROL_ERROR_KIND_PROTOCOL_ERROR) => {
             ExecOpError::Guest(GuestOpError::Protocol)
         }
@@ -517,29 +521,33 @@ fn map_guest_control_error(error: &pb::GuestControlError) -> ExecOpError {
         Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_NOT_FOUND) => {
             ExecOpError::Guest(GuestOpError::ExecNotFound)
         }
-        Ok(
-            K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED
-            | K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED,
-        ) => ExecOpError::Guest(GuestOpError::ExecAlreadyExited),
+        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_ALREADY_EXITED) => {
+            ExecOpError::Guest(GuestOpError::ExecAlreadyExited)
+        }
+        Ok(K::GUEST_CONTROL_ERROR_KIND_EXEC_EXPIRED) => {
+            ExecOpError::Guest(GuestOpError::ExecExpired)
+        }
         Ok(K::GUEST_CONTROL_ERROR_KIND_CONTROL_SEQ_MISMATCH) => {
             ExecOpError::Guest(GuestOpError::ControlSeqMismatch)
         }
         Ok(K::GUEST_CONTROL_ERROR_KIND_RATE_LIMITED) => {
             ExecOpError::Guest(GuestOpError::RateLimited)
         }
+        Ok(K::GUEST_CONTROL_ERROR_KIND_INVALID_PROGRAM) => {
+            ExecOpError::Guest(GuestOpError::InvalidProgram)
+        }
         _ => ExecOpError::Guest(GuestOpError::Other),
     }
 }
 
-fn map_op_health_error(error: GuestControlHealthError) -> ExecOpError {
+pub(crate) fn map_op_health_error(error: GuestControlHealthError) -> ExecOpError {
     match error {
         GuestControlHealthError::TransportIo
         | GuestControlHealthError::Ttrpc
         | GuestControlHealthError::Signer => ExecOpError::Transport,
         GuestControlHealthError::Timeout => ExecOpError::Timeout,
-        GuestControlHealthError::AuthFailed | GuestControlHealthError::StaleSession => {
-            ExecOpError::Auth
-        }
+        GuestControlHealthError::AuthFailed => ExecOpError::Auth,
+        GuestControlHealthError::StaleSession => ExecOpError::StaleSession,
         GuestControlHealthError::Protocol => ExecOpError::Protocol,
     }
 }
@@ -565,10 +573,12 @@ fn op_to_establish(error: ExecOpError) -> ExecEstablishError {
     match error {
         ExecOpError::Transport => ExecEstablishError::Transport,
         ExecOpError::Auth => ExecEstablishError::Auth,
+        ExecOpError::StaleSession => ExecEstablishError::Auth,
         ExecOpError::Protocol => ExecEstablishError::Protocol,
         ExecOpError::Timeout => ExecEstablishError::Timeout,
         ExecOpError::OldGeneration => ExecEstablishError::OldGeneration,
         ExecOpError::Capability => ExecEstablishError::Capability,
+        ExecOpError::DetachedUnavailable => ExecEstablishError::Capability,
         ExecOpError::Guest(inner) => ExecEstablishError::Guest(inner),
     }
 }

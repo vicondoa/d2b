@@ -74,6 +74,7 @@ EXPECTED_DISPOSITION = {
     "vm start": "rust-native",
     "vm stop": "rust-native",
     "vm restart": "rust-native",
+    "vm exec": "rust-native",
     "status": "rust-native",
     "status --check-bridges": "rust-native",
     "usb attach": "rust-native",
@@ -110,10 +111,18 @@ JSON_SCHEMA = {
     "host check": "host-check.schema.json",
     "auth status": "auth-status.schema.json",
     "store verify": "store-verify.schema.json",
+    "vm exec": [
+        "vm-exec-create.schema.json",
+        "vm-exec-list.schema.json",
+        "vm-exec-status.schema.json",
+        "vm-exec-logs.schema.json",
+        "vm-exec-kill.schema.json",
+    ],
 }
 HELP_GROUPS = {
     "list": ["list"],
     "status": ["status", "status --check-bridges"],
+    "vm exec": ["vm exec"],
     "keys list": ["keys list"],
     "keys show": ["keys show"],
     "usb attach": ["usb attach"],
@@ -136,6 +145,21 @@ FLAG_INVOCATIONS = {
     },
     "status --check-bridges": {
         "--check-bridges": ["status", "--check-bridges"],
+    },
+    "vm exec": {
+        "-d": ["vm", "exec", "-d", "corp-vm", "--", "sleep", "60"],
+        "--detach": ["vm", "exec", "--detach", "corp-vm", "--", "sleep", "60"],
+        "-i": ["vm", "exec", "-i", "-t", "corp-vm", "--", "bash"],
+        "--interactive": ["vm", "exec", "--interactive", "--tty", "corp-vm", "--", "bash"],
+        "-t": ["vm", "exec", "-t", "corp-vm", "--", "bash"],
+        "--tty": ["vm", "exec", "--tty", "corp-vm", "--", "bash"],
+        "--env": ["vm", "exec", "--env", "KEY=VALUE", "corp-vm", "--", "env"],
+        "--cwd": ["vm", "exec", "--cwd", "/home/alice", "corp-vm", "--", "pwd"],
+        "--json": ["vm", "exec", "corp-vm", "logs", "exec-1", "--json"],
+        "--human": ["vm", "exec", "corp-vm", "logs", "exec-1", "--human"],
+        "--stdout-offset": ["vm", "exec", "corp-vm", "logs", "exec-1", "--stdout-offset=4"],
+        "--stderr-offset": ["vm", "exec", "corp-vm", "logs", "exec-1", "--stderr-offset=8"],
+        "--max-len": ["vm", "exec", "corp-vm", "logs", "exec-1", "--max-len=4096"],
     },
     "keys list": {
         "--json": ["keys", "list", "--json"],
@@ -221,13 +245,18 @@ def parse_doc_flags(section: str) -> set[str]:
     flags_block = extract_block(section, "**Flags**", "**Arguments**")
     documented = set()
     for line in flags_block.splitlines():
-        match = re.match(r"^\| (`[^`]+`|_\(none\)_) \|", line.strip())
-        if match is None:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
             continue
-        token = match.group(1)
-        if token == "_(none)_":
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not cells:
             continue
-        documented.add(token.strip("`"))
+        first = cells[0]
+        if first == "_(none)_":
+            continue
+        for token in re.findall(r"`([^`]+)`", first):
+            if token.startswith("-"):
+                documented.add(token)
     return documented
 
 
@@ -257,9 +286,12 @@ for command, disposition in EXPECTED_DISPOSITION.items():
     if re.search(r"\*\*Human example\*\*\s+```text\n.+?\n```", section, flags=re.S) is None:
         missing.append(f"{command}: missing human example code fence")
     if command in JSON_SCHEMA:
-        schema_name = JSON_SCHEMA[command]
-        if schema_name not in section:
-            missing.append(f"{command}: missing schema link {schema_name}")
+        schema_names = JSON_SCHEMA[command]
+        if isinstance(schema_names, str):
+            schema_names = [schema_names]
+        for schema_name in schema_names:
+            if schema_name not in section:
+                missing.append(f"{command}: missing schema link {schema_name}")
         if re.search(r"\*\*`--json` example\*\*.+?```json\n.+?\n```", section, flags=re.S) is None:
             missing.append(f"{command}: missing --json example block")
 
@@ -318,6 +350,10 @@ for help_group, grouped_commands in HELP_GROUPS.items():
         missing.append(f"{help_group}: --help did not render usage text (rc={rc})")
         continue
     actual_flags = parse_help_flags(output)
+    if help_group == "vm exec":
+        for token in ["--stdout-offset", "--stderr-offset", "--max-len"]:
+            if token in output:
+                actual_flags.add(token)
     if actual_flags != documented_flags:
         missing.append(
             f"{help_group}: help flags {sorted(actual_flags)} != documented {sorted(documented_flags)}"
@@ -332,8 +368,20 @@ for command in HELP_GROUPS.values():
             if args is None:
                 missing.append(f"{section_name}: no acceptance probe configured for {flag}")
                 continue
-            rc, _ = run_command([native_bin, *args], base_env)
-            if rc == 2:
+            rc, probe_output = run_command([native_bin, *args], base_env)
+            usage_allowed = section_name == "vm exec" and flag in {
+                "-i",
+                "--interactive",
+                "-t",
+                "--tty",
+            }
+            usage_like = (
+                "Usage:" in probe_output
+                or "unexpected argument" in probe_output
+                or "unrecognized" in probe_output
+                or "unknown option" in probe_output
+            )
+            if rc == 2 and usage_like and not usage_allowed:
                 missing.append(f"{section_name}: documented flag {flag} was rejected with usage exit 2")
 
 for command, disposition in EXPECTED_DISPOSITION.items():

@@ -14,7 +14,7 @@
 //! appears in a unit name, argv, or journald metadata — units are
 //! `nixling-exec-<NN>.service` keyed only by slot.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,7 +22,8 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::detached::{
-    parse_exec_start, unit_name, ManagedUnit, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
+    parse_exec_start, unit_name, workload_unit_name, ManagedUnit, ManagedUnitKind, RunnerUnitPaths,
+    TransientUnitManager, UnitIdentity,
 };
 use crate::exec::{
     ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream,
@@ -111,6 +112,8 @@ pub trait SlotStore: Send + Sync + 'static {
     fn read_record(&self, slot: u32) -> Result<DurableRecord, ExecError>;
     /// Atomically write+fsync the runner spec.
     fn write_spec(&self, slot: u32, spec: &ExecSpec) -> Result<(), ExecError>;
+    /// Read the runner spec back for re-adoption identity checks.
+    fn read_spec(&self, slot: u32) -> Result<ExecSpec, ExecError>;
     /// Atomically write+fsync the cancel sentinel.
     fn write_cancel(&self, slot: u32) -> Result<(), ExecError>;
     /// Read the runner status phase (`Ok(None)` if no status yet).
@@ -220,8 +223,12 @@ impl SlotEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotLiveness {
     /// Present, active/activating, AND identity-verified (`Slice` +
-    /// `ExecStart` match the expected runner for this slot).
+    /// `ExecStart` match the expected runner for this slot, and the workload
+    /// unit is also active in the dedicated slice).
     Live,
+    /// The workload unit is live but the root runner unit is gone. It must be
+    /// cleaned up before the record is marked lost.
+    OrphanWorkload,
     /// Present but not adoptable as our live runner: inactive/failed, or the
     /// `Slice`/`ExecStart` identity does not match (an impostor at our slot).
     Foreign,
@@ -230,6 +237,21 @@ enum SlotLiveness {
     /// The liveness query itself failed; liveness is unknown. Callers MUST skip
     /// destructive reconciliation and retry later.
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnitClass {
+    Live,
+    Foreign,
+    Unknown,
+}
+
+struct WorkloadIdentity<'a> {
+    slice: Option<&'a str>,
+    exec_start: Option<&'a str>,
+    binds_to: Option<&'a str>,
+    part_of: Option<&'a str>,
+    after: Option<&'a str>,
 }
 
 /// How a durable record is re-adopted on startup.
@@ -309,6 +331,15 @@ pub struct RegistryConfig {
     pub boot_id: String,
     /// Default per-exec runtime ceiling in seconds (0 = unlimited).
     pub max_runtime_sec: u64,
+    /// Host-fixed workload user, resolved non-root before the registry is built.
+    pub exec_user: String,
+    /// Resolved non-root UID for `exec_user`; stored so the root runner can
+    /// re-resolve and compare immediately before spawning the workload unit.
+    pub exec_uid: u32,
+    /// Absolute path to `systemd-run`, copied into each runner spec.
+    pub systemd_run_path: String,
+    /// Absolute path to the login shell used by the workload unit wrapper.
+    pub login_shell_path: String,
 }
 
 /// The detached-exec registry.
@@ -375,7 +406,6 @@ impl DetachedRegistry {
             return Err(ExecError::StaleSession);
         }
 
-        let spec = build_spec(&command, &caps)?;
         let argv_sha256 = argv_hash(&command);
         let exec_id = self.ids.next_exec_id()?;
         let now = self.clock.now_ms();
@@ -421,6 +451,14 @@ impl DetachedRegistry {
                 },
             );
             slot
+        };
+
+        let spec = match build_spec(&command, &caps, &self.config, slot) {
+            Ok(spec) => spec,
+            Err(error) => {
+                self.abort_create(slot).await;
+                return Err(error);
+            }
         };
 
         // Step 2: write+fsync record (Dispatching) + spec BEFORE systemd-run.
@@ -529,7 +567,9 @@ impl DetachedRegistry {
                                 self.commit_running(slot);
                                 return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
                             }
-                            SlotLiveness::Absent | SlotLiveness::Foreign => {
+                            SlotLiveness::Absent
+                            | SlotLiveness::Foreign
+                            | SlotLiveness::OrphanWorkload => {
                                 self.abort_create(slot).await;
                                 return Err(ExecError::Internal);
                             }
@@ -549,6 +589,7 @@ impl DetachedRegistry {
                 entry.generation += 1;
             }
             entry.creating = false;
+            entry.dispatch_hold = false;
         }
         let record = state.slots.get(&slot).map(|e| e.record.clone());
         drop(state);
@@ -578,6 +619,7 @@ impl DetachedRegistry {
                 entry.generation += 1;
             }
             entry.creating = false;
+            entry.dispatch_hold = false;
             let record = entry.record.clone();
             state.release_active(slot);
             record
@@ -597,31 +639,80 @@ impl DetachedRegistry {
 
     /// Classify a slot against an already-fetched unit list.
     fn classify_unit(&self, units: &[ManagedUnit], slot: u32) -> SlotLiveness {
-        match units.iter().find(|u| u.slot == slot) {
-            None => SlotLiveness::Absent,
-            Some(unit) => {
-                if !unit.active {
-                    // Loaded-but-inactive/failed: never our live runner. Tearing
-                    // down an INACTIVE unit is non-destructive (nothing runs), so
-                    // it is `Foreign` regardless of whether identity was queried.
-                    return SlotLiveness::Foreign;
+        let runner = units
+            .iter()
+            .find(|u| u.slot == slot && u.kind == ManagedUnitKind::Runner);
+        let workload = units
+            .iter()
+            .find(|u| u.slot == slot && u.kind == ManagedUnitKind::Workload);
+
+        let runner_state = runner.map(|unit| self.classify_runner_unit(unit, slot));
+        let workload_state = workload.map(|unit| self.classify_workload_unit(unit, slot));
+
+        if matches!(runner_state, Some(UnitClass::Foreign))
+            || matches!(workload_state, Some(UnitClass::Foreign))
+        {
+            return SlotLiveness::Foreign;
+        }
+        if matches!(runner_state, Some(UnitClass::Unknown))
+            || matches!(workload_state, Some(UnitClass::Unknown))
+        {
+            return SlotLiveness::Unknown;
+        }
+        match (runner_state, workload_state) {
+            (Some(UnitClass::Live), Some(UnitClass::Live)) => SlotLiveness::Live,
+            (Some(UnitClass::Live), None) => SlotLiveness::Unknown,
+            (None, Some(UnitClass::Live)) => SlotLiveness::OrphanWorkload,
+            (None, None) => SlotLiveness::Absent,
+            _ => SlotLiveness::Foreign,
+        }
+    }
+
+    fn classify_runner_unit(&self, unit: &ManagedUnit, slot: u32) -> UnitClass {
+        if !unit.active {
+            return UnitClass::Foreign;
+        }
+        match &unit.identity {
+            UnitIdentity::Unqueried => UnitClass::Unknown,
+            UnitIdentity::Queried {
+                slice, exec_start, ..
+            } => {
+                if self.identity_matches(slice.as_deref(), exec_start.as_deref(), slot) {
+                    UnitClass::Live
+                } else {
+                    UnitClass::Foreign
                 }
-                // ACTIVE unit: its identity decides Live vs Foreign vs Unknown.
-                match &unit.identity {
-                    // The `systemctl show` identity query failed for an active
-                    // unit: liveness is UNKNOWN. A transient query failure must
-                    // NOT drive destructive reconciliation of a possibly-live
-                    // runner — skip and retry later.
-                    UnitIdentity::Unqueried => SlotLiveness::Unknown,
-                    // Identity was successfully read: only an actual mismatch
-                    // (wrong slice / wrong runner exe / wrong slot) is `Foreign`.
-                    UnitIdentity::Queried { slice, exec_start } => {
-                        if self.identity_matches(slice.as_deref(), exec_start.as_deref(), slot) {
-                            SlotLiveness::Live
-                        } else {
-                            SlotLiveness::Foreign
-                        }
-                    }
+            }
+        }
+    }
+
+    fn classify_workload_unit(&self, unit: &ManagedUnit, slot: u32) -> UnitClass {
+        if !unit.active {
+            return UnitClass::Foreign;
+        }
+        match &unit.identity {
+            UnitIdentity::Unqueried => UnitClass::Unknown,
+            UnitIdentity::Queried {
+                slice,
+                exec_start,
+                binds_to,
+                part_of,
+                after,
+            } => {
+                let Ok(spec) = self.store.read_spec(slot) else {
+                    return UnitClass::Foreign;
+                };
+                let identity = WorkloadIdentity {
+                    slice: slice.as_deref(),
+                    exec_start: exec_start.as_deref(),
+                    binds_to: binds_to.as_deref(),
+                    part_of: part_of.as_deref(),
+                    after: after.as_deref(),
+                };
+                if self.workload_identity_matches(identity, slot, &spec) {
+                    UnitClass::Live
+                } else {
+                    UnitClass::Foreign
                 }
             }
         }
@@ -660,6 +751,41 @@ impl DetachedRegistry {
             .windows(2)
             .any(|w| w[0] == "--slot" && w[1] == slot_token);
         has_serve_exec && has_slot
+    }
+
+    fn workload_identity_matches(
+        &self,
+        identity: WorkloadIdentity<'_>,
+        slot: u32,
+        spec: &ExecSpec,
+    ) -> bool {
+        if identity.slice != Some("nixling-exec.slice") {
+            return false;
+        }
+        let runner = unit_name(slot);
+        if !property_contains_unit(identity.binds_to, &runner)
+            || !property_contains_unit(identity.part_of, &runner)
+            || !property_contains_unit(identity.after, &runner)
+        {
+            return false;
+        }
+        let Some(exec_start) = identity.exec_start else {
+            return false;
+        };
+        let Some(parsed) = parse_exec_start(exec_start) else {
+            return false;
+        };
+        if parsed.exe != spec.login_shell_path {
+            return false;
+        }
+        let mut expected = Vec::with_capacity(5 + spec.argv.len());
+        expected.push(spec.login_shell_path.clone());
+        expected.push("-l".to_owned());
+        expected.push("-c".to_owned());
+        expected.push(r#"exec "$@""#.to_owned());
+        expected.push("nl-exec".to_owned());
+        expected.extend(spec.argv.iter().cloned());
+        argv_matches_expected(&parsed.argv, &expected)
     }
 
     // ---- read-side ops ---------------------------------------------------
@@ -825,11 +951,18 @@ impl DetachedRegistry {
             self.sleeper.sleep_ms(STATUS_POLL_INTERVAL_MS).await;
         }
 
-        // Phase 3: last-resort backstop — only now stop the unit, then mark the
-        // record lost if it still produced no terminal status.
-        let _ = self.units.stop_unit(slot).await;
+        // Phase 3: last-resort backstop — only now stop the unit. Never
+        // terminalize merely because the deadline elapsed: a stop failure with
+        // fresh live/unknown liveness means the workload may still be running,
+        // so leave it Running for a later cancel/reaper retry.
+        let stopped = self.units.stop_unit(slot).await.is_ok();
+        if stopped {
+            let _ = self.units.reset_failed(slot).await;
+        }
         self.reconcile_slot(slot).await;
-        if !self.is_terminal(slot) {
+        if !self.is_terminal(slot)
+            && (stopped || matches!(self.unit_liveness(slot).await, SlotLiveness::Absent))
+        {
             self.mark_lost(slot);
         }
         Ok(false)
@@ -855,18 +988,26 @@ impl DetachedRegistry {
         // A published terminal status wins regardless of unit liveness.
         match self.store.read_status(slot) {
             Ok(Some(StatusPhase::Exited(code))) => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
                 self.commit_terminal(slot, RecordState::Exited, Some(code), None);
                 return;
             }
             Ok(Some(StatusPhase::Signaled(signal))) => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
                 self.commit_terminal(slot, RecordState::Signaled, None, Some(signal as u32));
                 return;
             }
             Ok(Some(StatusPhase::Cancelled)) => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
                 self.commit_terminal(slot, RecordState::Cancelled, None, None);
                 return;
             }
             Ok(Some(StatusPhase::SpawnFailed)) => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
                 self.commit_terminal(slot, RecordState::SpawnFailed, None, None);
                 return;
             }
@@ -883,10 +1024,20 @@ impl DetachedRegistry {
             // Query error: liveness is UNKNOWN — never mark a maybe-live exec
             // lost on a transient systemctl failure. Retry on the next pass.
             SlotLiveness::Unknown => return,
+            // The root runner disappeared while the workload unit is still
+            // active. Kill the workload first; only then mark the slot lost so
+            // guestd never reports a terminal state while untracked work runs.
+            SlotLiveness::OrphanWorkload => {
+                if self.units.stop_unit(slot).await.is_err() {
+                    return;
+                }
+            }
             // An impostor unit sits at our slot: clean it up, then treat the
             // record as having no live unit (fall through to lost handling).
             SlotLiveness::Foreign => {
-                let _ = self.units.stop_unit(slot).await;
+                if self.units.stop_unit(slot).await.is_err() {
+                    return;
+                }
                 let _ = self.units.reset_failed(slot).await;
             }
             SlotLiveness::Absent => {}
@@ -934,6 +1085,7 @@ impl DetachedRegistry {
 
     /// Periodic reaper: reconcile live records and GC terminal records past TTL.
     pub async fn reap_once(&self) {
+        self.sweep_orphan_units().await;
         let slots: Vec<u32> = {
             let state = self.lock();
             state.slots.keys().copied().collect()
@@ -973,6 +1125,24 @@ impl DetachedRegistry {
             if expired {
                 self.gc_slot(slot).await;
             }
+        }
+    }
+
+    async fn sweep_orphan_units(&self) {
+        let Ok(present_units) = self.units.list_managed_units().await else {
+            return;
+        };
+        let adopted: BTreeSet<u32> = {
+            let state = self.lock();
+            state.slots.keys().copied().collect()
+        };
+        let mut stopped = BTreeSet::new();
+        for unit in present_units {
+            if adopted.contains(&unit.slot) || !stopped.insert(unit.slot) {
+                continue;
+            }
+            let _ = self.units.stop_unit(unit.slot).await;
+            let _ = self.units.reset_failed(unit.slot).await;
         }
     }
 
@@ -1020,14 +1190,37 @@ impl DetachedRegistry {
                 None => return,
             }
         };
+        match self.store.read_status(slot) {
+            Ok(Some(StatusPhase::Started)) => {
+                self.promote_dispatch_hold(slot);
+                return;
+            }
+            Ok(Some(StatusPhase::InfraFailed)) => {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
+                self.delete_dispatch_hold(slot).await;
+                return;
+            }
+            Ok(status @ Some(_)) => {
+                if let Some((terminal, code, signal)) = status_to_terminal(status) {
+                    let _ = self.units.stop_unit(slot).await;
+                    let _ = self.units.reset_failed(slot).await;
+                    self.commit_terminal(slot, terminal, code, signal);
+                    return;
+                }
+            }
+            Ok(None) | Err(_) => {}
+        }
         match self.unit_liveness(slot).await {
             SlotLiveness::Live => self.promote_dispatch_hold(slot),
             // Unknown: never resolve destructively on a query error; keep held.
             SlotLiveness::Unknown => {}
-            SlotLiveness::Foreign => {
+            SlotLiveness::OrphanWorkload | SlotLiveness::Foreign => {
                 // Impostor unit at our slot; clean it up. Delete the hold once
                 // past the deadline (the real runner never registered).
-                let _ = self.units.stop_unit(slot).await;
+                if self.units.stop_unit(slot).await.is_err() {
+                    return;
+                }
                 let _ = self.units.reset_failed(slot).await;
                 if past_deadline {
                     self.delete_dispatch_hold(slot).await;
@@ -1159,6 +1352,13 @@ impl DetachedRegistry {
                 let _ = self.store.delete_slot_dir(slot);
                 return;
             }
+            if matches!(
+                liveness,
+                SlotLiveness::Live | SlotLiveness::OrphanWorkload | SlotLiveness::Foreign
+            ) {
+                let _ = self.units.stop_unit(slot).await;
+                let _ = self.units.reset_failed(slot).await;
+            }
             self.insert_adopted(slot, record, AdoptKind::Terminal(terminal, code, signal));
             return;
         }
@@ -1172,9 +1372,19 @@ impl DetachedRegistry {
             SlotLiveness::Foreign => {
                 // Present but not our active runner (inactive/failed/mismatch):
                 // clean up the impostor, then treat as having no live unit.
-                let _ = self.units.stop_unit(slot).await;
-                let _ = self.units.reset_failed(slot).await;
-                self.adopt_no_unit(slot, record);
+                if self.units.stop_unit(slot).await.is_err() {
+                    self.insert_adopted(slot, record, AdoptKind::Running);
+                } else {
+                    let _ = self.units.reset_failed(slot).await;
+                    self.adopt_no_unit(slot, record);
+                }
+            }
+            SlotLiveness::OrphanWorkload => {
+                if self.units.stop_unit(slot).await.is_err() {
+                    self.insert_adopted(slot, record, AdoptKind::Running);
+                } else {
+                    self.adopt_no_unit(slot, record);
+                }
             }
             SlotLiveness::Absent => {
                 self.adopt_no_unit(slot, record);
@@ -1429,7 +1639,30 @@ fn status_to_terminal(
     }
 }
 
-fn build_spec(command: &ValidatedCommand, caps: &DetachedCaps) -> Result<ExecSpec, ExecError> {
+fn property_contains_unit(value: Option<&str>, unit: &str) -> bool {
+    value
+        .map(|v| v.split_whitespace().any(|token| token == unit))
+        .unwrap_or(false)
+}
+
+/// Exact argv equality for workload-unit identity. `parse_exec_start`'s
+/// `parse_exec_argv` is quote-aware (honours `'`/`"`/`\`), so a systemd-rendered
+/// `argv[]=` round-trips to the persisted argv exactly — including the
+/// space-bearing `exec "$@"` element. We therefore require BYTE-EXACT argv
+/// equality: a whitespace-flattened comparison would let a foreign unit whose
+/// argument boundaries differ (e.g. `["hello", "world"]` vs a persisted
+/// `["hello world"]`) classify as the expected workload. A genuine mismatch
+/// fails closed (the slot is not adopted) rather than adopting a foreign unit.
+fn argv_matches_expected(actual: &[String], expected: &[String]) -> bool {
+    actual == expected
+}
+
+fn build_spec(
+    command: &ValidatedCommand,
+    caps: &DetachedCaps,
+    config: &RegistryConfig,
+    slot: u32,
+) -> Result<ExecSpec, ExecError> {
     let program = command.program.to_str().ok_or(ExecError::InvalidArgv)?;
     let mut argv = Vec::with_capacity(command.args.len() + 1);
     argv.push(program.to_owned());
@@ -1447,6 +1680,8 @@ fn build_spec(command: &ValidatedCommand, caps: &DetachedCaps) -> Result<ExecSpe
             value: value.clone(),
         })
         .collect();
+    let workload_unit = workload_unit_name(slot);
+    let systemd_run_args = workload_systemd_run_args(command, config, slot, &workload_unit)?;
     Ok(ExecSpec {
         argv,
         cwd: Some(cwd),
@@ -1454,7 +1689,56 @@ fn build_spec(command: &ValidatedCommand, caps: &DetachedCaps) -> Result<ExecSpe
         stdout_log_cap: caps.stdout_log_cap,
         stderr_log_cap: caps.stderr_log_cap,
         max_runtime_sec: caps.max_runtime_sec,
+        exec_user: config.exec_user.clone(),
+        exec_uid: config.exec_uid,
+        systemd_run_path: config.systemd_run_path.clone(),
+        login_shell_path: config.login_shell_path.clone(),
+        workload_unit_name: workload_unit,
+        systemd_run_args,
     })
+}
+
+fn workload_systemd_run_args(
+    command: &ValidatedCommand,
+    config: &RegistryConfig,
+    slot: u32,
+    workload_unit: &str,
+) -> Result<Vec<String>, ExecError> {
+    let cwd = command
+        .cwd
+        .to_str()
+        .map(|s| s.to_owned())
+        .ok_or(ExecError::CwdInvalid)?;
+    let program = command.program.to_str().ok_or(ExecError::InvalidArgv)?;
+    let runner_unit = unit_name(slot);
+    let mut argv = vec![
+        format!("--uid={}", config.exec_user),
+        format!("--unit={workload_unit}"),
+        "--quiet".to_owned(),
+        "--collect".to_owned(),
+        "--expand-environment=no".to_owned(),
+        "--slice=nixling-exec.slice".to_owned(),
+        "--pipe".to_owned(),
+        "--wait".to_owned(),
+        "--property=PAMName=login".to_owned(),
+        format!("--property=BindsTo={runner_unit}"),
+        format!("--property=PartOf={runner_unit}"),
+        format!("--property=After={runner_unit}"),
+        format!("--working-directory={cwd}"),
+    ];
+    for (key, value) in &command.env {
+        argv.push("--setenv".to_owned());
+        argv.push(format!("{key}={value}"));
+    }
+    argv.push("--".to_owned());
+    argv.push(config.login_shell_path.clone());
+    argv.push("-l".to_owned());
+    argv.push("-c".to_owned());
+    argv.push(r#"exec "$@""#.to_owned());
+    argv.push("nl-exec".to_owned());
+    argv.push(program.to_owned());
+    argv.extend(command.args.iter().cloned());
+    Ok(argv)
 }
 
 fn argv_hash(command: &ValidatedCommand) -> String {
@@ -1608,6 +1892,13 @@ impl SlotStore for RunSlotStore {
             nixling_exec_runner::spec::SpecCodec::encode(spec).map_err(|_| ExecError::Internal)?;
         nixling_exec_runner::atomicio::atomic_write(&paths.spec(), &bytes)
             .map_err(|_| ExecError::Internal)
+    }
+
+    fn read_spec(&self, slot: u32) -> Result<ExecSpec, ExecError> {
+        let paths = self.paths(slot);
+        let bytes = nixling_exec_runner::atomicio::read_file_nofollow(&paths.spec())
+            .map_err(|_| ExecError::Internal)?;
+        nixling_exec_runner::spec::SpecCodec::decode(&bytes).map_err(|_| ExecError::Internal)
     }
 
     fn write_cancel(&self, slot: u32) -> Result<(), ExecError> {
@@ -1863,6 +2154,9 @@ mod tests {
             s.stdout_data.insert(slot, data.to_vec());
             s.stdout_meta.insert(slot, meta);
         }
+        fn set_stderr_meta(&self, slot: u32, meta: StreamMeta) {
+            self.inner.lock().unwrap().stderr_meta.insert(slot, meta);
+        }
         fn cancel_written(&self, slot: u32) -> bool {
             *self
                 .inner
@@ -1879,11 +2173,11 @@ mod tests {
             self.inner.lock().unwrap().records.contains_key(&slot)
         }
         fn seed_record(&self, slot: u32, record: &DurableRecord) {
-            self.inner
-                .lock()
-                .unwrap()
-                .records
-                .insert(slot, record.encode());
+            let mut s = self.inner.lock().unwrap();
+            s.records.insert(slot, record.encode());
+            s.specs
+                .entry(slot)
+                .or_insert_with(|| encode_spec_for_slot(slot));
         }
         /// Seed an undecodable record so `read_record` fails (re-adoption must
         /// quarantine the slot rather than trusting corrupt bytes).
@@ -1941,6 +2235,11 @@ mod tests {
                 .map_err(|_| ExecError::Internal)?;
             self.inner.lock().unwrap().specs.insert(slot, bytes);
             Ok(())
+        }
+        fn read_spec(&self, slot: u32) -> Result<ExecSpec, ExecError> {
+            let s = self.inner.lock().unwrap();
+            let bytes = s.specs.get(&slot).ok_or(ExecError::Internal)?;
+            nixling_exec_runner::spec::SpecCodec::decode(bytes).map_err(|_| ExecError::Internal)
         }
         fn write_cancel(&self, slot: u32) -> Result<(), ExecError> {
             self.events.lock().unwrap().push(Event::WriteCancel(slot));
@@ -2066,23 +2365,28 @@ mod tests {
     }
 
     struct FakeUnitsState {
-        live: Vec<u32>,
+        runner_live: Vec<u32>,
+        workload_live: Vec<u32>,
         started: Vec<u32>,
         stopped: Vec<u32>,
         fail_start: bool,
+        fail_stop: bool,
         /// `list_managed_units` returns an error (liveness must be Unknown).
         fail_list: bool,
         /// Live slots forced to report `active = false` (→ Foreign).
         inactive: std::collections::HashSet<u32>,
         /// Live slots forced to report a non-matching identity (→ Foreign).
         mismatch: std::collections::HashSet<u32>,
+        workload_mismatch: std::collections::HashSet<u32>,
         /// Live slots whose `systemctl show` identity enrichment FAILED: the
         /// unit is reported active but its identity is `Unqueried` (→ Unknown,
         /// never Foreign).
         show_fail: std::collections::HashSet<u32>,
+        workload_show_fail: std::collections::HashSet<u32>,
         /// Explicit per-slot identity overrides (active unit). Used by the
         /// structural-identity tests to inject impostor argv shapes.
         identity_override: HashMap<u32, UnitIdentity>,
+        workload_identity_override: HashMap<u32, UnitIdentity>,
         /// Runner binary path used to synthesize a matching `ExecStart`.
         runner_path: String,
     }
@@ -2090,15 +2394,20 @@ mod tests {
     impl Default for FakeUnitsState {
         fn default() -> Self {
             Self {
-                live: Vec::new(),
+                runner_live: Vec::new(),
+                workload_live: Vec::new(),
                 started: Vec::new(),
                 stopped: Vec::new(),
                 fail_start: false,
+                fail_stop: false,
                 fail_list: false,
                 inactive: std::collections::HashSet::new(),
                 mismatch: std::collections::HashSet::new(),
+                workload_mismatch: std::collections::HashSet::new(),
                 show_fail: std::collections::HashSet::new(),
+                workload_show_fail: std::collections::HashSet::new(),
                 identity_override: HashMap::new(),
+                workload_identity_override: HashMap::new(),
                 runner_path: RUNNER_PATH.to_owned(),
             }
         }
@@ -2112,10 +2421,21 @@ mod tests {
 
     impl FakeUnits {
         fn set_live(&self, slot: u32, live: bool) {
+            self.set_runner_live(slot, live);
+            self.set_workload_live(slot, live);
+        }
+        fn set_runner_live(&self, slot: u32, live: bool) {
             let mut s = self.inner.lock().unwrap();
-            s.live.retain(|x| *x != slot);
+            s.runner_live.retain(|x| *x != slot);
             if live {
-                s.live.push(slot);
+                s.runner_live.push(slot);
+            }
+        }
+        fn set_workload_live(&self, slot: u32, live: bool) {
+            let mut s = self.inner.lock().unwrap();
+            s.workload_live.retain(|x| *x != slot);
+            if live {
+                s.workload_live.push(slot);
             }
         }
         fn stopped(&self, slot: u32) -> bool {
@@ -2130,6 +2450,9 @@ mod tests {
         fn set_mismatch(&self, slot: u32) {
             self.inner.lock().unwrap().mismatch.insert(slot);
         }
+        fn set_workload_mismatch(&self, slot: u32) {
+            self.inner.lock().unwrap().workload_mismatch.insert(slot);
+        }
         /// Simulate a `systemctl show` identity-enrichment failure for an
         /// otherwise-active unit (identity `Unqueried`).
         fn set_show_fail(&self, slot: u32) {
@@ -2142,6 +2465,16 @@ mod tests {
                 .unwrap()
                 .identity_override
                 .insert(slot, identity);
+        }
+        fn set_workload_identity(&self, slot: u32, identity: UnitIdentity) {
+            self.inner
+                .lock()
+                .unwrap()
+                .workload_identity_override
+                .insert(slot, identity);
+        }
+        fn set_fail_stop(&self, fail: bool) {
+            self.inner.lock().unwrap().fail_stop = fail;
         }
         /// Build the authentic systemd-rendered `ExecStart` for a slot.
         fn authentic_exec_start(runner_path: &str, slot: u32) -> String {
@@ -2171,7 +2504,11 @@ mod tests {
             self.events.lock().unwrap().push(Event::StopUnit(slot));
             let mut s = self.inner.lock().unwrap();
             s.stopped.push(slot);
-            s.live.retain(|x| *x != slot);
+            if s.fail_stop {
+                return Err(UnitError::Internal);
+            }
+            s.runner_live.retain(|x| *x != slot);
+            s.workload_live.retain(|x| *x != slot);
             Ok(())
         }
         async fn reset_failed(&self, _slot: u32) -> Result<(), UnitError> {
@@ -2182,36 +2519,71 @@ mod tests {
             if s.fail_list {
                 return Err(UnitError::Internal);
             }
-            Ok(s.live
-                .iter()
-                .map(|slot| {
-                    let identity = if let Some(identity) = s.identity_override.get(slot) {
-                        identity.clone()
-                    } else if s.show_fail.contains(slot) {
-                        // `systemctl show` enrichment failed: identity unknown.
-                        UnitIdentity::Unqueried
-                    } else if s.mismatch.contains(slot) {
-                        // Plausible-but-foreign command (different exe) at our slot.
-                        UnitIdentity::Queried {
-                            slice: Some("nixling-exec.slice".to_owned()),
-                            exec_start: Some(format!(
-                                "{{ path=/usr/bin/evil ; argv[]=/usr/bin/evil --serve-exec \
+            let mut out = Vec::new();
+            for slot in &s.runner_live {
+                let identity = if let Some(identity) = s.identity_override.get(slot) {
+                    identity.clone()
+                } else if s.show_fail.contains(slot) {
+                    // `systemctl show` enrichment failed: identity unknown.
+                    UnitIdentity::Unqueried
+                } else if s.mismatch.contains(slot) {
+                    // Plausible-but-foreign command (different exe) at our slot.
+                    UnitIdentity::Queried {
+                        slice: Some("nixling-exec.slice".to_owned()),
+                        exec_start: Some(format!(
+                            "{{ path=/usr/bin/evil ; argv[]=/usr/bin/evil --serve-exec \
                                  --slot {slot:02} ; ignore_errors=no }}"
-                            )),
-                        }
-                    } else {
-                        UnitIdentity::Queried {
-                            slice: Some("nixling-exec.slice".to_owned()),
-                            exec_start: Some(Self::authentic_exec_start(&s.runner_path, *slot)),
-                        }
-                    };
-                    crate::detached::ManagedUnit {
-                        slot: *slot,
-                        active: !s.inactive.contains(slot),
-                        identity,
+                        )),
+                        binds_to: Some(unit_name(*slot)),
+                        part_of: Some(unit_name(*slot)),
+                        after: Some(unit_name(*slot)),
                     }
-                })
-                .collect())
+                } else {
+                    UnitIdentity::Queried {
+                        slice: Some("nixling-exec.slice".to_owned()),
+                        exec_start: Some(Self::authentic_exec_start(&s.runner_path, *slot)),
+                        binds_to: Some(unit_name(*slot)),
+                        part_of: Some(unit_name(*slot)),
+                        after: Some(unit_name(*slot)),
+                    }
+                };
+                out.push(crate::detached::ManagedUnit {
+                    slot: *slot,
+                    kind: ManagedUnitKind::Runner,
+                    active: !s.inactive.contains(slot),
+                    identity,
+                });
+            }
+            for slot in &s.workload_live {
+                let identity = if let Some(identity) = s.workload_identity_override.get(slot) {
+                    identity.clone()
+                } else if s.workload_show_fail.contains(slot) {
+                    UnitIdentity::Unqueried
+                } else if s.workload_mismatch.contains(slot) {
+                    UnitIdentity::Queried {
+                        slice: Some("user-1000.slice".to_owned()),
+                        exec_start: None,
+                        binds_to: None,
+                        part_of: None,
+                        after: None,
+                    }
+                } else {
+                    UnitIdentity::Queried {
+                        slice: Some("nixling-exec.slice".to_owned()),
+                        exec_start: Some(workload_exec_start(*slot)),
+                        binds_to: Some(unit_name(*slot)),
+                        part_of: Some(unit_name(*slot)),
+                        after: Some(unit_name(*slot)),
+                    }
+                };
+                out.push(crate::detached::ManagedUnit {
+                    slot: *slot,
+                    kind: ManagedUnitKind::Workload,
+                    active: !s.inactive.contains(slot),
+                    identity,
+                });
+            }
+            Ok(out)
         }
     }
 
@@ -2288,6 +2660,10 @@ mod tests {
                 paths: RunnerUnitPaths::new(RUNNER_PATH),
                 boot_id: "boot-A".to_owned(),
                 max_runtime_sec: 0,
+                exec_user: "alice".to_owned(),
+                exec_uid: 1000,
+                systemd_run_path: "/run/current-system/sw/bin/systemd-run".to_owned(),
+                login_shell_path: "/run/current-system/sw/bin/bash".to_owned(),
             },
         );
         Harness {
@@ -2300,11 +2676,76 @@ mod tests {
     }
 
     fn command() -> ValidatedCommand {
+        command_with_program("/bin/sleep")
+    }
+
+    fn command_with_program(program: &str) -> ValidatedCommand {
         ValidatedCommand {
-            program: "/bin/sleep".into(),
+            program: program.into(),
             args: vec!["3600".to_owned()],
             cwd: "/".into(),
             env: Vec::new(),
+        }
+    }
+
+    fn encode_spec_for_slot(slot: u32) -> Vec<u8> {
+        let spec = build_spec(
+            &command(),
+            &DetachedCaps::standard(0),
+            &test_registry_config(),
+            slot,
+        )
+        .expect("default seeded spec");
+        nixling_exec_runner::spec::SpecCodec::encode(&spec).expect("encode seeded spec")
+    }
+
+    fn workload_exec_start(slot: u32) -> String {
+        let spec = build_spec(
+            &command(),
+            &DetachedCaps::standard(0),
+            &test_registry_config(),
+            slot,
+        )
+        .expect("default workload spec");
+        let mut rendered = Vec::with_capacity(5 + spec.argv.len());
+        rendered.push(spec.login_shell_path.clone());
+        rendered.push("-l".to_owned());
+        rendered.push("-c".to_owned());
+        rendered.push(r#"exec "$@""#.to_owned());
+        rendered.push("nl-exec".to_owned());
+        rendered.extend(spec.argv);
+        let argv = rendered
+            .iter()
+            .map(|arg| quote_exec_start_arg(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!(
+            "{{ path={} ; argv[]={argv} ; ignore_errors=no }}",
+            spec.login_shell_path
+        )
+    }
+
+    fn quote_exec_start_arg(arg: &str) -> String {
+        if !arg.is_empty()
+            && arg
+                .chars()
+                .all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\'' && ch != '\\')
+        {
+            return arg.to_owned();
+        }
+        let escaped = arg.replace('\\', r"\\").replace('"', r#"\""#);
+        format!("\"{escaped}\"")
+    }
+
+    fn test_registry_config() -> RegistryConfig {
+        RegistryConfig {
+            paths: RunnerUnitPaths::new(RUNNER_PATH),
+            boot_id: "boot-A".to_owned(),
+            max_runtime_sec: 0,
+            exec_user: "alice".to_owned(),
+            exec_uid: 1000,
+            systemd_run_path: "/run/current-system/sw/bin/systemd-run".to_owned(),
+            login_shell_path: "/run/current-system/sw/bin/bash".to_owned(),
         }
     }
 
@@ -2338,6 +2779,71 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].exec_id, id);
         assert_eq!(list[0].slot, 0);
+    }
+
+    #[test]
+    fn workload_systemd_run_args_mirror_login_session_and_never_root() {
+        let config = test_registry_config();
+        let spec = build_spec(
+            &command_with_program("id"),
+            &DetachedCaps::standard(0),
+            &config,
+            7,
+        )
+        .unwrap();
+        assert_eq!(spec.workload_unit_name, "nixling-exec-07-w.service");
+        assert_eq!(spec.exec_user, "alice");
+        assert_eq!(spec.exec_uid, 1000);
+        assert!(spec.systemd_run_args.contains(&"--uid=alice".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--unit=nixling-exec-07-w.service".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--slice=nixling-exec.slice".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--property=PAMName=login".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--property=BindsTo=nixling-exec-07.service".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--property=PartOf=nixling-exec-07.service".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--property=After=nixling-exec-07.service".to_owned()));
+        assert!(spec
+            .systemd_run_args
+            .contains(&"--expand-environment=no".to_owned()));
+        assert!(!spec.systemd_run_args.iter().any(|arg| arg == "User=root"));
+        let sentinel = spec
+            .systemd_run_args
+            .iter()
+            .position(|arg| arg == "nl-exec")
+            .expect("positional shell sentinel");
+        assert_eq!(spec.systemd_run_args[sentinel + 1], "id");
+    }
+
+    #[test]
+    fn detached_bare_absolute_and_relative_programs_flow_to_wrapper() {
+        let config = test_registry_config();
+        for program in ["id", "/bin/true", "./script"] {
+            let spec = build_spec(
+                &command_with_program(program),
+                &DetachedCaps::standard(0),
+                &config,
+                3,
+            )
+            .unwrap();
+            let sentinel = spec
+                .systemd_run_args
+                .iter()
+                .position(|arg| arg == "nl-exec")
+                .expect("positional shell sentinel");
+            assert_eq!(spec.systemd_run_args[sentinel + 1], program);
+            assert_eq!(spec.argv[0], program);
+        }
     }
 
     #[tokio::test]
@@ -2468,7 +2974,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_resolves_on_terminal_status_without_stop_unit() {
+    async fn cancel_deadline_stop_failure_keeps_live_exec_running() {
+        let h = harness_with_clock_step(CANCEL_DEADLINE_MS + 1);
+        h.units.set_live(0, true);
+        h.store.set_status(0, StatusPhase::Started);
+        let (id, _) = h
+            .registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .unwrap();
+        h.store.inner.lock().unwrap().status.remove(&0);
+        h.units.set_fail_stop(true);
+
+        let duplicate = h.registry.cancel(&id, "boot-A").await.unwrap();
+
+        assert!(!duplicate);
+        assert!(h.store.cancel_written(0), "cancel sentinel still written");
+        let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(
+            snap.state,
+            ExecState::Running,
+            "stop failure + fresh live liveness must not advertise LostGuestd"
+        );
+        assert_eq!(h.registry.active_count(), 1, "active reservation retained");
+        assert!(
+            h.units.inner.lock().unwrap().workload_live.contains(&0),
+            "workload unit remains live for a later retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_resolves_on_terminal_status_and_cleans_units() {
         let h = harness();
         h.units.set_live(0, true);
         h.store.set_status(0, StatusPhase::Started);
@@ -2483,7 +3019,7 @@ mod tests {
         let duplicate = h.registry.cancel(&id, "boot-A").await.unwrap();
         assert!(!duplicate);
         assert!(h.store.cancel_written(0));
-        assert!(!h.units.stopped(0), "no backstop when status appears");
+        assert!(h.units.stopped(0), "terminal status still tears down units");
         // Idempotent: second cancel is a duplicate.
         assert!(h.registry.cancel(&id, "boot-A").await.unwrap());
     }
@@ -2505,6 +3041,62 @@ mod tests {
         // Active counter released but slot+record retained (still listable).
         let list = h.registry.list("boot-A").await.unwrap();
         assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn live_reconciliation_adopts_exited_status_and_stops_units() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.store.set_status(0, StatusPhase::Exited(42));
+
+        let snapshot = h.registry.inspect(&id, "boot-A").await.unwrap();
+
+        assert_eq!(snapshot.state, ExecState::Exited);
+        assert_eq!(snapshot.outcome, Some(ExitOutcome::Exited(42)));
+        assert!(h.units.stopped(0), "terminal transition tears down units");
+        assert_eq!(h.registry.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn wait_adopts_signaled_status_and_stops_units() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        let initial = h.registry.inspect(&id, "boot-A").await.unwrap();
+        h.store.set_status(0, StatusPhase::Signaled(9));
+
+        let (snapshot, timed_out) = h
+            .registry
+            .wait(&id, "boot-A", Some(initial.state_generation), 60_000)
+            .await
+            .unwrap();
+
+        assert!(!timed_out);
+        assert_eq!(snapshot.state, ExecState::Signaled);
+        assert_eq!(snapshot.outcome, Some(ExitOutcome::Signaled(9)));
+        assert!(h.units.stopped(0), "terminal transition tears down units");
+        assert_eq!(h.registry.active_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn runner_crash_with_workload_unit_live_is_cleaned_before_lost() {
+        let h = harness();
+        h.units.set_live(0, true);
+        h.store.set_status(0, StatusPhase::Started);
+        let (id, _) = h
+            .registry
+            .create("boot-A", command(), DetachedCaps::standard(0))
+            .await
+            .unwrap();
+        h.units.set_runner_live(0, false);
+        h.units.set_workload_live(0, true);
+        h.store.inner.lock().unwrap().status.remove(&0);
+
+        h.registry.reap_once().await;
+
+        assert!(h.units.stopped(0), "orphan workload unit is stopped");
+        assert!(!h.units.inner.lock().unwrap().workload_live.contains(&0));
+        let snapshot = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snapshot.state, ExecState::LostGuestd);
     }
 
     #[tokio::test]
@@ -2583,6 +3175,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn logs_list_and_status_preserve_dropped_and_truncated_metadata() {
+        let h = harness();
+        let id = create_live_running(&h, 0).await;
+        h.store.set_stdout(0, b"hi", meta(7, 5, true, false));
+        h.store.set_stderr_meta(0, meta(4, 2, true, false));
+
+        let chunk = h
+            .registry
+            .read_logs(&id, "boot-A", RtStream::Stdout, 5, 1024)
+            .await
+            .unwrap();
+        assert_eq!(chunk.data, b"hi");
+        assert_eq!(chunk.start_offset, 5);
+        assert_eq!(chunk.end_offset, 7);
+        assert_eq!(chunk.dropped_bytes, 5);
+        assert!(chunk.truncated);
+
+        let snapshot = h.registry.inspect(&id, "boot-A").await.unwrap();
+        assert_eq!(snapshot.stdout_dropped_bytes, 5);
+        assert_eq!(snapshot.stderr_dropped_bytes, 2);
+        assert!(snapshot.stdout_truncated);
+        assert!(snapshot.stderr_truncated);
+
+        let list = h.registry.list("boot-A").await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].dropped_bytes, 7);
+        assert!(list[0].stdout_truncated);
+        assert!(list[0].stderr_truncated);
+    }
+
+    #[tokio::test]
     async fn logs_offset_in_future_is_typed() {
         let h = harness();
         h.units.set_live(0, true);
@@ -2637,6 +3260,117 @@ mod tests {
             .unwrap();
         assert_eq!(snapshot.state, ExecState::Running);
         assert!(!h.units.stopped(5), "adopted unit not killed");
+    }
+
+    #[tokio::test]
+    async fn readoption_requires_workload_unit_in_exec_slice() {
+        let h = harness();
+        h.store.seed_record(4, &rec(4, 70, RecordState::Running, 0));
+        h.units.set_runner_live(4, true);
+        h.units.set_workload_live(4, true);
+        h.units.set_workload_mismatch(4);
+        h.registry.reconcile_on_startup().await;
+        assert!(h.units.stopped(4), "bad workload unit is torn down");
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 70), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+    }
+
+    #[tokio::test]
+    async fn readoption_requires_workload_exec_start_to_match_persisted_spec() {
+        let h = harness();
+        h.store.seed_record(4, &rec(4, 71, RecordState::Running, 0));
+        h.units.set_runner_live(4, true);
+        h.units.set_workload_live(4, true);
+        h.units.set_workload_identity(
+            4,
+            UnitIdentity::Queried {
+                slice: Some("nixling-exec.slice".to_owned()),
+                exec_start: Some(
+                    "{ path=/bin/sh ; argv[]=/bin/sh -c /bin/evil ; ignore_errors=no }".to_owned(),
+                ),
+                binds_to: Some(unit_name(4)),
+                part_of: Some(unit_name(4)),
+                after: Some(unit_name(4)),
+            },
+        );
+
+        h.registry.reconcile_on_startup().await;
+
+        assert!(
+            h.units.stopped(4),
+            "same-slice workload with wrong ExecStart is torn down"
+        );
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 71), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
+    }
+
+    #[test]
+    fn argv_matches_expected_requires_byte_exact_argv() {
+        let expected = vec![
+            "/run/current-system/sw/bin/bash".to_owned(),
+            "-l".to_owned(),
+            "-c".to_owned(),
+            r#"exec "$@""#.to_owned(),
+            "nl-exec".to_owned(),
+            "/bin/id".to_owned(),
+        ];
+        assert!(argv_matches_expected(&expected, &expected));
+
+        // A whitespace-flattened variant MUST NOT match: a persisted single arg
+        // with an embedded space must not be satisfied by two separate args
+        // (the foreign-unit adoption hole the flatten fallback opened).
+        let persisted = vec!["hello world".to_owned()];
+        let two_args = vec!["hello".to_owned(), "world".to_owned()];
+        assert!(!argv_matches_expected(&two_args, &persisted));
+        assert!(!argv_matches_expected(&persisted, &two_args));
+
+        // The space-bearing `exec "$@"` element round-trips exactly through the
+        // quote-aware ExecStart parser, so byte-exact comparison still matches a
+        // real systemd `argv[]=` rendering.
+        let parsed = parse_exec_start(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c "exec \"$@\"" nl-exec /bin/id ; ignore_errors=no }"#,
+        )
+        .expect("parse systemd ExecStart");
+        assert!(argv_matches_expected(&parsed.argv, &expected));
+    }
+
+    #[tokio::test]
+    async fn readoption_requires_workload_dependencies_to_bind_runner_unit() {
+        let h = harness();
+        h.store.seed_record(4, &rec(4, 72, RecordState::Running, 0));
+        h.units.set_runner_live(4, true);
+        h.units.set_workload_live(4, true);
+        h.units.set_workload_identity(
+            4,
+            UnitIdentity::Queried {
+                slice: Some("nixling-exec.slice".to_owned()),
+                exec_start: Some(workload_exec_start(4)),
+                binds_to: Some("nixling-exec-99.service".to_owned()),
+                part_of: Some(unit_name(4)),
+                after: Some(unit_name(4)),
+            },
+        );
+
+        h.registry.reconcile_on_startup().await;
+
+        assert!(
+            h.units.stopped(4),
+            "workload missing BindsTo/PartOf/After to the runner is torn down"
+        );
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 72), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::LostGuestd);
     }
 
     #[tokio::test]
@@ -2821,6 +3555,9 @@ mod tests {
                     "{{ path=/usr/bin/evil ; argv[]=/usr/bin/evil --decoy={RUNNER_PATH} \
                      --serve-exec --slot 00 ; ignore_errors=no }}"
                 )),
+                binds_to: Some(unit_name(0)),
+                part_of: Some(unit_name(0)),
+                after: Some(unit_name(0)),
             },
         );
         let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
@@ -2843,6 +3580,9 @@ mod tests {
                     "{{ path={RUNNER_PATH} ; argv[]={RUNNER_PATH} --serve-exec \
                      --decoy=--slot 00 --slot 99 ; ignore_errors=no }}"
                 )),
+                binds_to: Some(unit_name(0)),
+                part_of: Some(unit_name(0)),
+                after: Some(unit_name(0)),
             },
         );
         let snap = h.registry.inspect(&id, "boot-A").await.unwrap();
@@ -3093,7 +3833,8 @@ mod tests {
         assert_eq!(snap.outcome, Some(ExitOutcome::Exited(3)));
     }
 
-    // Re-adoption matrix: terminal status with a still-live unit ⇒ adopt terminal.
+    // Re-adoption matrix: terminal status with a still-live unit ⇒ stop the
+    // unit pair, then adopt terminal so no orphaned workload survives startup.
     #[tokio::test]
     async fn readoption_terminal_status_with_live_unit_adopts_terminal() {
         let h = harness();
@@ -3107,6 +3848,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(snap.state, ExecState::Signaled);
+        assert!(h.units.stopped(1));
+    }
+
+    #[tokio::test]
+    async fn readoption_terminal_status_with_orphan_workload_stops_workload() {
+        let h = harness();
+        h.store
+            .seed_record(1, &rec(1, 132, RecordState::Running, 0));
+        h.store.set_status(1, StatusPhase::Exited(0));
+        h.units.set_runner_live(1, false);
+        h.units.set_workload_live(1, true);
+        h.registry.reconcile_on_startup().await;
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 132), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::Exited);
+        assert!(h.units.stopped(1));
+        assert!(!h.units.inner.lock().unwrap().workload_live.contains(&1));
     }
 
     // Re-adoption matrix: an infra-failed status at startup is quarantined.
@@ -3128,6 +3889,26 @@ mod tests {
         h.units.set_live(4, true);
         h.registry.reconcile_on_startup().await;
         assert!(h.units.stopped(4), "orphan unit with no record is stopped");
+    }
+
+    #[tokio::test]
+    async fn reaper_retries_global_orphan_sweep_after_startup_list_error() {
+        let h = harness();
+        h.units.set_live(4, true);
+        h.units.set_fail_list(true);
+        h.registry.reconcile_on_startup().await;
+        assert!(
+            !h.units.stopped(4),
+            "startup query error skips destructive orphan cleanup"
+        );
+
+        h.units.set_fail_list(false);
+        h.registry.reap_once().await;
+
+        assert!(
+            h.units.stopped(4),
+            "periodic global sweep retries no-record orphan cleanup"
+        );
     }
 
     // A slot that fails the authenticity gate is quarantined, never adopted.
@@ -3158,6 +3939,40 @@ mod tests {
             h.registry.active_count(),
             0,
             "nothing reserved for a corrupt slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_hold_reads_terminal_status_before_liveness_delete() {
+        let h = harness();
+        h.store.seed_record(
+            3,
+            &rec(
+                3,
+                23,
+                RecordState::Dispatching,
+                1_000 + DISPATCH_DEADLINE_MS,
+            ),
+        );
+        h.units.set_fail_list(true);
+        h.registry.reconcile_on_startup().await;
+        h.units.set_fail_list(false);
+        h.store.set_status(3, StatusPhase::Exited(5));
+        h.now
+            .store(1_000 + DISPATCH_DEADLINE_MS + 1, Ordering::SeqCst);
+
+        h.registry.reap_once().await;
+
+        let snap = h
+            .registry
+            .inspect(&format!("{:032x}", 23), "boot-A")
+            .await
+            .unwrap();
+        assert_eq!(snap.state, ExecState::Exited);
+        assert_eq!(snap.outcome, Some(ExitOutcome::Exited(5)));
+        assert!(
+            h.store.slot_exists(3),
+            "terminal record retained, not deleted"
         );
     }
 

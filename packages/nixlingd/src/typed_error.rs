@@ -110,10 +110,20 @@ pub enum GuestControlExecErrorKind {
     /// The guest authenticated but does not advertise a required exec
     /// capability (e.g. `EXEC_TTY` for an interactive session).
     Capability,
+    /// The guest authenticated but does not advertise detached exec support.
+    DetachedUnavailable,
     /// A concurrent-session cap (global / per-uid / per-vm) was hit.
     SessionCapacity,
     /// The per-uid Start rate limit fired.
     RateLimited,
+    /// The guest rejected the op because the authenticated session is stale.
+    StaleSession,
+    /// The requested detached exec id is not present on this guest boot.
+    ExecNotFound,
+    /// The requested detached exec id has expired or been reaped.
+    ExecExpired,
+    /// The command failed guest-side argv[0] validation.
+    InvalidProgram,
     /// A deterministic guest-side op rejection (exec already exited, etc.).
     GuestError,
     /// Daemon-internal failure establishing or driving the session worker.
@@ -129,8 +139,13 @@ impl GuestControlExecErrorKind {
             Self::Timeout => "guest-control-timeout",
             Self::OldGeneration => "guest-control-unavailable-old-generation",
             Self::Capability => "guest-control-capability-unavailable",
+            Self::DetachedUnavailable => "guest-control-exec-detached-unavailable",
             Self::SessionCapacity => "exec-session-capacity",
             Self::RateLimited => "exec-session-rate-limited",
+            Self::StaleSession => "guest-control-stale-session",
+            Self::ExecNotFound => "guest-control-exec-not-found",
+            Self::ExecExpired => "guest-control-exec-expired",
+            Self::InvalidProgram => "guest-control-invalid-program",
             Self::GuestError => "guest-control-exec-error",
             Self::Internal => "guest-control-exec-internal",
         }
@@ -142,10 +157,11 @@ impl GuestControlExecErrorKind {
     fn exit_code(self) -> u8 {
         match self {
             Self::Transport | Self::Timeout => 69,
-            Self::OldGeneration | Self::Capability => 70,
+            Self::OldGeneration | Self::Capability | Self::DetachedUnavailable => 70,
             Self::SessionCapacity | Self::RateLimited => 75,
-            Self::Protocol | Self::GuestError => 76,
-            Self::Auth => 77,
+            Self::Protocol | Self::GuestError | Self::ExecNotFound | Self::ExecExpired => 76,
+            Self::InvalidProgram => 2,
+            Self::Auth | Self::StaleSession => 77,
             Self::Internal => 42,
         }
     }
@@ -158,8 +174,15 @@ impl GuestControlExecErrorKind {
             Self::Timeout => "the guest-control exec operation timed out",
             Self::OldGeneration => "the VM generation does not support guest-control exec",
             Self::Capability => "the guest does not advertise a required exec capability",
+            Self::DetachedUnavailable => "detached exec is unavailable for this VM",
             Self::SessionCapacity => "the exec session table is at capacity",
             Self::RateLimited => "exec session starts are rate limited for this caller",
+            Self::StaleSession => "the guest-control exec session is stale",
+            Self::ExecNotFound => "the requested detached exec was not found",
+            Self::ExecExpired => "the requested detached exec has expired",
+            Self::InvalidProgram => {
+                "vm exec: command must be a program name or absolute path and must not start with '-'"
+            }
             Self::GuestError => "the guest rejected the exec operation",
             Self::Internal => "the daemon failed to drive the exec session",
         }
@@ -182,11 +205,26 @@ impl GuestControlExecErrorKind {
             Self::Capability => {
                 "ensure guest-control exec is enabled on the VM (`guest.exec.enable = true`) and the guest is rebuilt to the current nixling generation; an interactive session additionally requires the guest TTY capability"
             }
+            Self::DetachedUnavailable => {
+                "rebuild and restart the VM with detached exec support enabled so the guest advertises EXEC_DETACHED"
+            }
             Self::SessionCapacity => {
                 "wait for an in-flight exec session to finish or close an idle one, then retry"
             }
             Self::RateLimited => {
                 "reduce the rate of `nixling vm exec` invocations and retry"
+            }
+            Self::StaleSession => {
+                "retry after confirming the VM is still running; if the failure persists, restart the VM to refresh guest-control session state"
+            }
+            Self::ExecNotFound => {
+                "run `nixling vm exec <vm> list` to find retained detached exec ids, then retry with a listed id"
+            }
+            Self::ExecExpired => {
+                "the detached exec record has aged out of guest retention; start a new detached exec if you still need the command"
+            }
+            Self::InvalidProgram => {
+                "pass the command after `--`; use a non-empty program name, a relative name resolved by the guest login shell, or an absolute path, and avoid leading '-'"
             }
             Self::GuestError => {
                 "inspect the guest exec state; the command may have already exited or been cancelled"
@@ -901,8 +939,13 @@ mod tests {
             GuestControlExecErrorKind::Timeout,
             GuestControlExecErrorKind::OldGeneration,
             GuestControlExecErrorKind::Capability,
+            GuestControlExecErrorKind::DetachedUnavailable,
             GuestControlExecErrorKind::SessionCapacity,
             GuestControlExecErrorKind::RateLimited,
+            GuestControlExecErrorKind::StaleSession,
+            GuestControlExecErrorKind::ExecNotFound,
+            GuestControlExecErrorKind::ExecExpired,
+            GuestControlExecErrorKind::InvalidProgram,
             GuestControlExecErrorKind::GuestError,
             GuestControlExecErrorKind::Internal,
         ];
