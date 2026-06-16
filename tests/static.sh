@@ -442,21 +442,28 @@ export NL_STATIC_CACHE
 . "$HERE/cli-rust-native-common.sh"
 
 # -----------------------------------------------------------------------------
-# Launch the Rust workspace gate as a background long pole NOW, so its
-# multi-core cargo compile/clippy/test overlaps the SINGLE-CORE, lighter nix
-# eval region that immediately follows (parse+eval, the 120s flake check, and
-# the smoke evals). It is joined right after the smoke-eval barrier — BEFORE the
-# memory-heavy mid-tier eval pool + assertions-eval, which materialize multiple
-# NixOS system closures. Overlapping the Rust gate's process-spawning tests with
-# that heavy Nix-build phase oversubscribes RAM and starves test subprocesses,
-# so the join is deliberately early. Nothing between here and the join touches
-# the shared cargo target dir. The gate's entire $ROOT footprint is gitignored,
-# so concurrent git-fetcher flake evals never stat it. Opt out with
-# NL_STATIC_SERIAL_RUST=1.
+# Optional Rust ‖ Nix overlap. When NL_STATIC_PARALLEL_RUST=1, launch the Rust
+# workspace gate as a background long pole so its multi-core cargo
+# compile/clippy overlaps the SINGLE-CORE, lighter nix eval region that
+# immediately follows (parse+eval, the 120s flake check, and the smoke evals).
+# It is joined right after the smoke-eval barrier — BEFORE the memory-heavy
+# mid-tier eval pool + assertions-eval, which materialize multiple NixOS system
+# closures.
+#
+# OFF BY DEFAULT (opt-in): profiling showed the overlap saves wall-clock on the
+# cold flake-check path, but running the Rust gate's process-spawning tests
+# concurrently with the Nix eval region intermittently starves test
+# subprocesses (the PTY hangup test fails even with a 120s watchdog) — a
+# resource-contention flake, not a test bug. cargo test --workspace is reliable
+# when the Rust gate runs serially (the default). Opt into the overlap with
+# NL_STATIC_PARALLEL_RUST=1 only where the wall-clock win outweighs the
+# timing-test flake risk. Nothing between here and the join touches the shared
+# cargo target dir; the gate's entire $ROOT footprint is gitignored, so
+# concurrent git-fetcher flake evals never stat it.
 _STATIC_RUST_GATE_OVERLAP=0
-if [ -z "${NL_STATIC_SERIAL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
+if [ -n "${NL_STATIC_PARALLEL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
-  log "==> launching rust-workspace-checks.sh as background long pole (overlaps flake check + smoke evals)"
+  log "==> launching rust-workspace-checks.sh as background long pole (NL_STATIC_PARALLEL_RUST=1; overlaps flake check + smoke evals)"
   nl_static_longpole_spawn "tests/rust-workspace-checks.sh" bash "$HERE/rust-workspace-checks.sh"
 fi
 
@@ -1160,15 +1167,14 @@ fi
 nl_static_gate_end "tests/layer1-self-inventory.sh"
 
 # -----------------------------------------------------------------------------
-# Rust workspace gate. When the background long pole was launched above (the
-# common case), join it here — its cargo compile/clippy/test has been running
-# concurrently with the entire nix eval region. The fall-through inline path is
-# kept for NL_STATIC_SERIAL_RUST=1 and for the no-packages/no-script cases.
-# tests/stub-no-socket.sh is invoked by rust-workspace-checks.sh after the
-# cargo gates.
+# Rust workspace gate. By default (serial) this runs inline here. When the
+# optional NL_STATIC_PARALLEL_RUST overlap launched the background long pole, it
+# was already joined above (after the smoke-eval region, before the heavy
+# evals), so this is a no-op in that case. tests/stub-no-socket.sh is invoked by
+# rust-workspace-checks.sh after the cargo gates.
 # -----------------------------------------------------------------------------
 if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
-  : # Already joined above (after the smoke-eval region, before heavy evals).
+  : # Overlap mode: already joined above (after smoke evals, before heavy evals).
 elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
   # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
   # skipped). Join now.
