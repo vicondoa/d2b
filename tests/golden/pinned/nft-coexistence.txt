@@ -1,0 +1,14 @@
+# nft-coexistence — nixling-host nftables detector→policy matrix + broker
+# ApplyNftables refusal cases. Successor of tests/nft-coexistence.sh, which
+# only ran these #[test]s (nixling-host with --all-features; broker
+# ops::nft::tests with --all-features). They already run in the gated
+# `cargo test --workspace` (nixling-host) and the broker layer1-bootstrap
+# pass in tests/rust-workspace-checks.sh. Pinned fail-closed via
+# tests/tools/assert-pinned-tests.sh.
+nftables::tests::coexistence_matrix_all_7_rows
+nftables::tests::detector_clean_host
+nftables::tests::detector_single_manager_unambiguous
+nftables::tests::detector_multiple_managers_unknown
+ops::nft::tests::refuses_when_firewalld_declared_coexist
+ops::nft::tests::applies_on_clean_host_with_coexist
+ops::nft::tests::nft_script_includes_all_four_chains
