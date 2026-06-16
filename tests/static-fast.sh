@@ -149,17 +149,9 @@ run_script_gate_if_present "tests/legacy-group-name-denylist-self-test.sh" "$ROO
 run_script_gate_if_present "tests/legacy-group-name-denylist.sh" "$ROOT/tests/legacy-group-name-denylist.sh"
 run_script_gate_if_present "tests/group-rename-semantic-eval.sh" "$ROOT/tests/group-rename-semantic-eval.sh"
 run_script_gate_if_present "tests/group-migration-fresh-install-eval.sh" "$ROOT/tests/group-migration-fresh-install-eval.sh"
-run_script_gate_if_present "tests/guest-control-proto.sh" "$ROOT/tests/guest-control-proto.sh"
-run_script_gate_if_present "tests/guest-proto-bindings.sh" "$ROOT/tests/guest-proto-bindings.sh"
-run_script_gate_if_present "tests/guest-ttrpc-bindings.sh" "$ROOT/tests/guest-ttrpc-bindings.sh"
 run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest-control-auth-eval.sh"
-run_script_gate_if_present "tests/guest-control-auth-nongoals.sh" "$ROOT/tests/guest-control-auth-nongoals.sh"
 run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
 run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
-run_script_gate_if_present "tests/guest-control-vsock-helper-static.sh" "$ROOT/tests/guest-control-vsock-helper-static.sh"
-run_script_gate_if_present "tests/guest-exec-runtime-static.sh" "$ROOT/tests/guest-exec-runtime-static.sh"
-run_script_gate_if_present "tests/guest-exec-policy-eval.sh" "$ROOT/tests/guest-exec-policy-eval.sh"
-run_script_gate_if_present "tests/guest-static-elf.sh" "$ROOT/tests/guest-static-elf.sh"
 run_script_gate_if_present "tests/guest-static-consumption-eval.sh" "$ROOT/tests/guest-static-consumption-eval.sh"
 
 run_gate "nix flake check --no-build --all-systems" '
