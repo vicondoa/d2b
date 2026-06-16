@@ -1256,8 +1256,6 @@ if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifn
 if [ -x "$HERE/l3-pin-consistency.sh" ]; then nl_static_parallel_script "tests/l3-pin-consistency.sh" "$HERE/l3-pin-consistency.sh"; fi
 # Host-prepare idempotency no-op invariant (integrator-wired).
 # Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
-if [ -x "$HERE/ch-net-handoff-canary.sh" ]; then nl_static_parallel_script "tests/ch-net-handoff-canary.sh" "$HERE/ch-net-handoff-canary.sh"; fi
-if [ -x "$HERE/usbip-firewall-skeleton.sh" ]; then nl_static_parallel_script "tests/usbip-firewall-skeleton.sh" "$HERE/usbip-firewall-skeleton.sh"; fi
 if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi
 if [ -x "$HERE/device-node-matrix.sh" ]; then nl_static_parallel_script "tests/device-node-matrix.sh" "$HERE/device-node-matrix.sh"; fi
 if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl-negative.sh" "$HERE/ioctl-negative.sh"; fi

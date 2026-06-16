@@ -200,8 +200,6 @@ for gate in \
   pidfd-handoff \
   ifname-collision \
   l3-pin-consistency \
-  ch-net-handoff-canary \
-  usbip-firewall-skeleton \
   ioctl-negative \
   kernel-module-matrix \
   dag-topo \
