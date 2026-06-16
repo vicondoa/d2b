@@ -2242,7 +2242,7 @@ never perturb a `--json` stdout envelope.
 
 ### `vm exec`
 
-**Run synopsis:** `nixling vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json] <vm> -- <cmd> [args…]`
+**Synopsis:** `nixling vm exec [-i] [-t] [-d|--detach] [--env KEY=VALUE]… [--cwd DIR] [--json|--human] <vm> -- <cmd> [args…]`
 
 **Detached management synopsis:**
 
@@ -2260,6 +2260,47 @@ guest owns the PTY. Exec is admin-only (the same `SO_PEERCRED` admin
 gate as other privileged verbs); a launcher-role caller is rejected with
 the typed `authz-not-admin` error (exit `77`, AUTH) before any guest
 session or detached create is attempted.
+
+**Status**
+
+`vm exec` is a rust-native, daemon-backed guest command surface. It
+supports attached, interactive, detached, and detached-management forms.
+
+**Native**
+
+- The Rust CLI owns parsing, terminal safety, detached-management
+  rendering, and the single terminal JSON envelope contract.
+
+**Bash**
+
+- There is no live bash fallback for this verb; old-generation VMs fail
+  closed with a typed guest-control error.
+
+**Flags**
+
+| Flag | Type | Default | Semantics |
+| --- | --- | --- | --- |
+| `-d`, `--detach` | boolean | `false` | Start a non-interactive detached exec and print its `exec_id`. Incompatible with `-i`/`-t`. |
+| `-i`, `--interactive` | boolean | `false` | Forward host stdin. Must be paired with `-t`; `-t` implies stdin forwarding. |
+| `-t`, `--tty` | boolean | `false` | Allocate a guest PTY and put the host terminal in raw mode. Human-only. |
+| `--env` | `KEY=VALUE` | repeatable | Add one environment variable to the guest command after policy filtering. |
+| `--cwd` | path | unset | Working directory for the guest command. |
+| `--json` | boolean | `false` | Emit a single terminal JSON envelope. Human-only interactive modes reject this flag. |
+| `--human` | boolean | `false` | Force human output. |
+| `--stdout-offset` | byte offset | `0` | `logs` only. Resume retained stdout from this byte offset; accepts `--stdout-offset N` or `--stdout-offset=N`. |
+| `--stderr-offset` | byte offset | `0` | `logs` only. Resume retained stderr from this byte offset; accepts `--stderr-offset N` or `--stderr-offset=N`. |
+| `--max-len` | byte length | daemon default | `logs` only. Request at most this many retained bytes per stream; accepts `--max-len N` or `--max-len=N`. |
+
+**Arguments**
+
+| Argument | Semantics |
+| --- | --- |
+| `vm` | Required VM name as declared in `nixling.vms.<name>`. Management words such as `status` and `logs` are valid VM names because command execution always uses `--`. |
+| `cmd [args…]` | Guest command and arguments after `--`. `argv[0]` may be a bare command name, absolute path, or relative path; it must be non-empty and must not start with `-`. |
+| `list` | Detached management verb: list retained detached exec metadata. |
+| `logs <exec-id>` | Detached management verb: emit retained stdout/stderr bytes plus bounded metadata warnings, optionally starting at per-stream offsets. |
+| `status <exec-id>` | Detached management verb: print state, terminal disposition, and aggregate retained-log metadata. |
+| `kill <exec-id>` | Detached management verb: request cancellation; repeated cancellation of a terminal exec reports `already-terminal`. |
 
 Exec command forms **always require `--`** before `<cmd>`. Tokens after
 `<vm>` without `--` are management verbs; an unknown verb is a usage
@@ -2326,7 +2367,9 @@ Detached management:
   is one copy-pasteable `exec_id` line. JSON emits
   `{ "command": "vm exec", "vm": "<vm>", "execId": "<id>", "state": "<state>" }`.
 - **list** — `nixling vm exec <vm> list`: human output is a table with
-  `execId`, state, start time, and terminal status when available. JSON
+  `execId`, state, start time, terminal status when available, aggregate
+  and per-stream retained offset windows, and aggregate/per-stream
+  dropped/truncated metadata. JSON
   emits `{ "command": "vm exec list", "vm": "<vm>", "execs": [ { "execId",
   "state", "startedAt", "exitCode"?, "signal"?, "startOffset",
   "endOffset", "droppedBytes", "truncated" } ] }`; implementations also
@@ -2340,13 +2383,15 @@ Detached management:
 - **logs** — `nixling vm exec <vm> logs <exec-id>`: human output writes
   retained stdout/stderr bytes to the corresponding host streams and
   prints only bounded metadata warnings to stderr when bytes were
-  dropped, truncated, or expired. JSON emits
+  dropped or truncated. An expired detached record is a typed failure
+  (`guest-control-exec-expired`, exit `76`), not a warning. JSON emits
   `{ "command": "vm exec logs", "vm": "<vm>", "execId": "<id>",
   "stdoutBase64", "stderrBase64", "startOffset", "endOffset",
   "droppedBytes", "truncated" }`, plus per-stream
-  `stdoutStartOffset`/`stdoutEndOffset`/`stdoutNextOffset` and
-  `stderrStartOffset`/`stderrEndOffset`/`stderrNextOffset` fields for
-  offset resume. Logs are bounded ring buffers; dropped and truncated
+  `stdoutStartOffset`/`stdoutEndOffset`/`stdoutNextOffset`/`stdoutEof`
+  and `stderrStartOffset`/`stderrEndOffset`/`stderrNextOffset`/
+  `stderrEof` fields for offset resume. Logs are bounded ring buffers;
+  dropped and truncated
   accounting is metadata, not log content.
 - **kill** — `nixling vm exec <vm> kill <exec-id>`: public name for
   `ExecCancel`. Guestd requests graceful termination, waits a bounded
@@ -2361,7 +2406,7 @@ detached runner/workload units before advertising detached capability,
 re-adopts structurally valid work, cleans orphaned workload units, and
 runs a periodic reaper for terminal records and retained-log slots.
 
-**Exit codes:**
+**Exit codes**
 
 | Exit | Source | Meaning |
 | --- | --- | --- |
@@ -2369,12 +2414,61 @@ runs a periodic reaper for terminal records and retained-log slots.
 | `0`–`255` | guest | Attached guest command `WIFEXITED` status passes through unchanged. |
 | `128+N` | guest | An attached guest command was killed by signal `N` (`WIFSIGNALED`). |
 | `2` | cli / guest-control | Usage error: missing command after `--`, unknown management verb without `--`, missing detached exec id, malformed `--env`, `-d` with `-i`/`-t`, `-t` without a terminal, `-i` without `-t`, `--json` combined with `-i`/`-t`, or guest-side `INVALID_PROGRAM` (`guest-control-invalid-program`) for an empty/leading-`-` program. |
-| `69` | transport | The guest-control transport was unreachable, or a per-op/establishment deadline elapsed (`guest-control-transport-unavailable`, `guest-control-timeout`). |
+| `69` | transport | The guest-control transport was unreachable, a per-op/establishment deadline elapsed, or `guestd` disappeared before the exec reported a terminal status (`guest-control-transport-unavailable`, `guest-control-timeout`, `guest-control-lost-guestd`). |
 | `70` | guest-control | The VM generation does not support guest-control exec, or it lacks a required exec capability (`guest-control-unavailable-old-generation`, `guest-control-capability-unavailable`, `guest-control-exec-detached-unavailable`). No SSH fallback. |
-| `75` | guest-control | The exec session table is at capacity or `Start` was rate limited (`exec-session-capacity`, `exec-session-rate-limited`). |
+| `75` | guest-control | The exec session table is at capacity, `Start` was rate limited, or an established session was cancelled/reaped before a terminal guest status arrived (`exec-session-capacity`, `exec-session-rate-limited`, `exec-session-cancelled`, `exec-session-reaped`). |
 | `76` | protocol / guest-control | The guest returned a malformed/out-of-contract response, returned an op error, or no longer retains the requested detached record (`guest-control-protocol-error`, `guest-control-exec-error`, `guest-control-exec-not-found`, `guest-control-exec-expired`). |
 | `77` | guest-control | The authenticated guest-control handshake was rejected (`guest-control-auth-failed`), the daemon's admin gate refused a non-admin caller (`authz-not-admin`), or a stale exec session was detected (`guest-control-stale-session`). |
 | `42` | internal | Daemon-internal or CLI-internal failure driving exec. |
+
+**Human example**
+
+```text
+$ nixling vm exec work -- id
+uid=1000(alice) gid=100(users)
+$ nixling vm exec work list
+EXEC ID                  STATE                  STARTED AT                EXIT/SIGNAL    OFFSETS                                    DROPPED/TRUNCATED
+exec-1                   exited                 2026-06-15T00:00:00Z      exit=0         all=4..18 stdout=4..8 stderr=9..18         all=5/truncated stdout=2/truncated stderr=3/complete
+$ nixling vm exec work logs exec-1 --stdout-offset=4 --stderr-offset=9 --max-len=4096
+OUT
+ERR
+nixling: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)
+```
+
+Detached JSON shapes are generated as
+[`vm-exec-create.schema.json`](./cli-output/vm-exec-create.schema.json),
+[`vm-exec-list.schema.json`](./cli-output/vm-exec-list.schema.json),
+[`vm-exec-status.schema.json`](./cli-output/vm-exec-status.schema.json),
+[`vm-exec-logs.schema.json`](./cli-output/vm-exec-logs.schema.json), and
+[`vm-exec-kill.schema.json`](./cli-output/vm-exec-kill.schema.json).
+
+**`--json` example**
+
+```json
+{
+  "command": "vm exec logs",
+  "vm": "work",
+  "execId": "exec-1",
+  "stdoutBase64": "T1VUCg==",
+  "stderrBase64": "RVJSCg==",
+  "startOffset": 4,
+  "endOffset": 18,
+  "droppedBytes": 5,
+  "truncated": true,
+  "stdoutStartOffset": 4,
+  "stdoutEndOffset": 8,
+  "stdoutNextOffset": 10,
+  "stdoutEof": false,
+  "stdoutDroppedBytes": 2,
+  "stdoutTruncated": true,
+  "stderrStartOffset": 9,
+  "stderrEndOffset": 18,
+  "stderrNextOffset": 21,
+  "stderrEof": true,
+  "stderrDroppedBytes": 3,
+  "stderrTruncated": false
+}
+```
 
 A guest command that itself exits `70` (or any reserved transport
 number) is **not** ambiguous in machine-readable output: attached

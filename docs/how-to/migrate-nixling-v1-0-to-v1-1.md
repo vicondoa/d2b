@@ -328,21 +328,22 @@ notes — `chown`/`chmod`/`setfacl` on
 needed**: the new activation script + daemon prune logic
 codify those workarounds.
 
-### New CLI verb: `nixling vm konsole <vm>`
+### Historical note: removed `nixling vm konsole <vm>`
 
-Spawns a terminal emulator (default `konsole`, override with
-`--terminal`) hosting an SSH session into the named VM.
-Resolves user/host/key from the manifest + bundle. Useful
-for quickly opening a guest shell after `vm start --apply`.
+v1.1 briefly added `nixling vm konsole <vm>` as an SSH-backed
+terminal-emulator helper. That verb has since been removed with the
+SSH console surface. Open an interactive workload-user shell with
+guest-control exec instead:
 
 ```
-nixling vm konsole personal-dev
-nixling vm konsole work-aad --terminal alacritty
-nixling vm konsole personal-dev --dry-run --json  # print resolved argv
+nixling vm exec -it personal-dev -- bash
 ```
 
-The `--dry-run --json` mode prints the resolved configuration
-without spawning anything; useful for tooling integration.
+Non-interactive commands use the same mandatory separator:
+
+```
+nixling vm exec personal-dev -- id
+```
 
 ### No prerequisite changes
 

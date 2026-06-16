@@ -100,7 +100,9 @@ distinct typed error kinds:
 Request fields:
 
 - `argv`: repeated string, already split by the CLI after `--`.
-- `user`: optional validated guest user selector.
+- `user`: ignored/reserved legacy field. Shipped `guestd` always runs
+  exec as the host-fixed workload user from `ssh.user`; clients cannot
+  select a different target identity through this wire field.
 - `cwd`: optional absolute path.
 - `env`: repeated key/value entries after host-side policy filtering.
 - `tty`: bool. When true, stdout and stderr are PTY-merged into stdout;
@@ -962,7 +964,8 @@ separate compatibility window.
 `ExecLogs` uses the same offset model as `ReadOutput(stream=...)` but
 packages stream records for CLI display or JSON. Human logs default to
 available retained bytes and warn when `dropped_bytes > 0`. JSON includes
-`startOffset`, `endOffset`, `nextOffset`, `droppedBytes`, `eof`, and
+`startOffset`, `endOffset`, per-stream `stdoutNextOffset` /
+`stderrNextOffset` and `stdoutEof` / `stderrEof`, `droppedBytes`, and
 `truncated`, but never embeds unbounded metadata. Payload bytes are
 emitted only as the requested command output/log stream, not in error
 objects, daemon logs, metrics, or health JSON.
