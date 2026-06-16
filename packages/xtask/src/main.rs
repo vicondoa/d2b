@@ -350,6 +350,7 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let mut bash_command = nixling::cli_command();
     let mut bash_buffer = Vec::new();
     generate(Bash, &mut bash_command, "nixling", &mut bash_buffer);
+    let bash_buffer = patch_vm_exec_logs_bash_completion(String::from_utf8(bash_buffer)?)?;
     fs::write(&bash_path, bash_buffer)?;
 
     let zsh_path = comp_dir.join("nixling.zsh");
@@ -362,9 +363,67 @@ fn gen_cli_shell_artifacts() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     let mut fish_command = nixling::cli_command();
     let mut fish_buffer = Vec::new();
     generate(Fish, &mut fish_command, "nixling", &mut fish_buffer);
+    let fish_buffer = patch_vm_exec_logs_fish_completion(String::from_utf8(fish_buffer)?)?;
     fs::write(&fish_path, fish_buffer)?;
 
     Ok(vec![man_path, bash_path, zsh_path, fish_path])
+}
+
+fn patch_vm_exec_logs_bash_completion(
+    generated: String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let generated = replace_once(
+        generated,
+        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
+"#,
+        r#"            opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
+            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+                opts="${opts} --stdout-offset --stderr-offset --max-len"
+            fi
+"#,
+        "bash vm exec opts",
+    )?;
+    replace_once(
+        generated,
+        r#"                --cwd)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+"#,
+        r#"                --cwd)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --stdout-offset|--stderr-offset|--max-len)
+                    COMPREPLY=()
+                    return 0
+                    ;;
+"#,
+        "bash vm exec logs flag values",
+    )
+}
+
+fn patch_vm_exec_logs_fish_completion(
+    generated: String,
+) -> Result<String, Box<dyn std::error::Error>> {
+    replace_once(
+        generated,
+        "complete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\n",
+        "complete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec\" -l cwd -d 'Working directory for the guest command' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stdout-offset -d 'Resume stdout from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l stderr-offset -d 'Resume stderr from this byte offset. The daemon clamps stale offsets' -r\ncomplete -c nixling -n \"__fish_nixling_using_subcommand vm; and __fish_seen_subcommand_from exec; and __fish_seen_subcommand_from logs\" -l max-len -d 'Maximum retained bytes to request per stream' -r\n",
+        "fish vm exec logs flags",
+    )
+}
+
+fn replace_once(
+    input: String,
+    needle: &str,
+    replacement: &str,
+    label: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if !input.contains(needle) {
+        return Err(format!("could not patch generated completion: missing {label}").into());
+    }
+    Ok(input.replacen(needle, replacement, 1))
 }
 
 fn write_schemas(

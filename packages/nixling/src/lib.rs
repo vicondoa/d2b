@@ -8840,14 +8840,29 @@ mod host_install_dispatch_tests {
         );
         let list_envelope: Value = serde_json::from_slice(&list_stdout).expect("list JSON");
         assert_eq!(
-            list_envelope.get("command").and_then(Value::as_str),
-            Some("vm exec list")
-        );
-        assert_eq!(
-            list_envelope
-                .pointer("/execs/0/stdoutDroppedBytes")
-                .and_then(Value::as_i64),
-            Some(1)
+            list_envelope,
+            json!({
+                "command": "vm exec list",
+                "vm": "work",
+                "execs": [{
+                    "execId": "exec-1",
+                    "state": "exited",
+                    "exitCode": 0,
+                    "startedAt": "2026-06-15T00:00:00Z",
+                    "startOffset": 1,
+                    "endOffset": 9,
+                    "stdoutStartOffset": 1,
+                    "stdoutEndOffset": 5,
+                    "stderrStartOffset": 2,
+                    "stderrEndOffset": 9,
+                    "droppedBytes": 3,
+                    "stdoutDroppedBytes": 1,
+                    "stderrDroppedBytes": 2,
+                    "truncated": true,
+                    "stdoutTruncated": false,
+                    "stderrTruncated": true
+                }]
+            })
         );
 
         let status_args = parse_vm_exec(&[
@@ -8873,12 +8888,19 @@ mod host_install_dispatch_tests {
         assert_eq!(status_result.expect("status json"), 0);
         let status_envelope: Value = serde_json::from_slice(&status_stdout).expect("status JSON");
         assert_eq!(
-            status_envelope.get("command").and_then(Value::as_str),
-            Some("vm exec status")
-        );
-        assert_eq!(
-            status_envelope.get("signal").and_then(Value::as_i64),
-            Some(15)
+            status_envelope,
+            json!({
+                "command": "vm exec status",
+                "vm": "work",
+                "execId": "exec-1",
+                "state": "signaled",
+                "reason": "operator-cancelled",
+                "signal": 15,
+                "startOffset": 4,
+                "endOffset": 44,
+                "droppedBytes": 0,
+                "truncated": false
+            })
         );
 
         let logs_args = parse_vm_exec(&[
@@ -8945,14 +8967,30 @@ mod host_install_dispatch_tests {
         );
         let logs_envelope: Value = serde_json::from_slice(&logs_stdout).expect("logs JSON");
         assert_eq!(
-            logs_envelope.get("stdoutBase64").and_then(Value::as_str),
-            Some("T1VUCg==")
-        );
-        assert_eq!(
-            logs_envelope
-                .get("stderrNextOffset")
-                .and_then(Value::as_i64),
-            Some(12)
+            logs_envelope,
+            json!({
+                "command": "vm exec logs",
+                "vm": "work",
+                "execId": "exec-1",
+                "stdoutBase64": "T1VUCg==",
+                "stderrBase64": "RVJSCg==",
+                "startOffset": 4,
+                "endOffset": 12,
+                "droppedBytes": 0,
+                "truncated": false,
+                "stdoutStartOffset": 4,
+                "stdoutEndOffset": 8,
+                "stdoutNextOffset": 8,
+                "stdoutEof": true,
+                "stdoutDroppedBytes": 0,
+                "stdoutTruncated": false,
+                "stderrStartOffset": 8,
+                "stderrEndOffset": 12,
+                "stderrNextOffset": 12,
+                "stderrEof": true,
+                "stderrDroppedBytes": 0,
+                "stderrTruncated": false
+            })
         );
 
         let kill_args =
@@ -9128,30 +9166,10 @@ mod host_install_dispatch_tests {
             "OUT\n"
         );
         let logs_stderr_rendered = String::from_utf8(logs_stderr).expect("logs stderr utf8");
-        assert!(
-            logs_stderr_rendered
-                .starts_with("ERR\nnixling: vm exec logs: retained output incomplete"),
-            "logs human output writes stderr bytes then bounded warning: {logs_stderr_rendered}"
+        assert_eq!(
+            logs_stderr_rendered,
+            "ERR\nnixling: vm exec logs: retained output incomplete (startOffset=4 endOffset=18 droppedBytes=5 truncated=true stdoutStartOffset=4 stdoutEndOffset=8 stdoutNextOffset=10 stdoutEof=false stdoutDroppedBytes=2 stdoutTruncated=true stderrStartOffset=9 stderrEndOffset=18 stderrNextOffset=21 stderrEof=true stderrDroppedBytes=3 stderrTruncated=false)\n"
         );
-        for expected in [
-            "startOffset=4",
-            "endOffset=18",
-            "stdoutStartOffset=4",
-            "stdoutEndOffset=8",
-            "stdoutNextOffset=10",
-            "stdoutEof=false",
-            "stderrStartOffset=9",
-            "stderrEndOffset=18",
-            "stderrNextOffset=21",
-            "stderrEof=true",
-            "stdoutDroppedBytes=2",
-            "stderrDroppedBytes=3",
-        ] {
-            assert!(
-                logs_stderr_rendered.contains(expected),
-                "logs warning missing {expected}: {logs_stderr_rendered}"
-            );
-        }
 
         for (wire_result, state) in [("cancelling", "running"), ("already-terminal", "exited")] {
             let kill_args = parse_vm_exec(&["nixling", "vm", "exec", "work", "kill", wire_result]);

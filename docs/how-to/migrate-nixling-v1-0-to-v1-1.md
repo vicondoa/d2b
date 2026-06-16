@@ -279,10 +279,11 @@ ls -lZ /run/nixling/priv.sock
 
 v1.1.2 adds the broker-pre-established user namespace for
 virtiofsd per [ADR 0021](../adr/0021-broker-user-namespace-for-virtiofsd.md),
-plus several host-activation hardening fixes and a new
-`nixling vm konsole` CLI verb. The bump is **drop-in for
-consumer flakes**: no flake-input changes, no manifest
-edits, no `/etc/subuid` / `/etc/subgid` provisioning.
+plus several host-activation hardening fixes. It also briefly added
+`nixling vm konsole`, which has since been removed; use
+`nixling vm exec -it <vm> -- bash` instead. The bump is
+**drop-in for consumer flakes**: no flake-input changes, no
+manifest edits, no `/etc/subuid` / `/etc/subgid` provisioning.
 
 ### What `nixos-rebuild switch` does on the v1.1.1 → v1.1.2 bump
 

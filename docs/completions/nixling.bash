@@ -2580,6 +2580,9 @@ _nixling() {
             ;;
         nixling__subcmd__vm__subcmd__exec)
             opts="-d -i -t -h --detach --interactive --tty --env --cwd --json --human --help <VM> [MANAGEMENT]... [COMMAND]..."
+            if [[ " ${COMP_WORDS[*]} " == *" logs "* ]] ; then
+                opts="${opts} --stdout-offset --stderr-offset --max-len"
+            fi
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2591,6 +2594,10 @@ _nixling() {
                     ;;
                 --cwd)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --stdout-offset|--stderr-offset|--max-len)
+                    COMPREPLY=()
                     return 0
                     ;;
                 *)
