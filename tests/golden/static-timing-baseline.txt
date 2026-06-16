@@ -44,7 +44,6 @@ wall           cumulative     label
 00:02.840      18:28.584      tests/cli-json-drift.sh
 00:00.357      18:28.989      tests/daemon-api-drift.sh
 00:03.425      18:29.555      tests/error-codes-drift.sh
-00:03.238      18:31.824      tests/cli-contract-coverage.sh
 00:38.752      19:04.809      tests/cli-legacy-bash-dispatch.sh
 00:00.135      19:05.068      tests/broker-scm-rights-fd-lifecycle.sh
 00:00.267      19:05.138      tests/broker-socket-acl.sh

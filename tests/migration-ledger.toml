@@ -102,8 +102,8 @@ name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
 tier = "ci-l1"
-status = "porting"      # legacy | porting | ported
-successor_ids = [
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/ifname_parity.rs::rendered_host_json_ifname_mappings_pass_looks_nixling_owned (fixture-smoke host.json ifNameMappings is non-empty and every rendered derivedIfname is accepted by nixling_host::ifname::looks_nixling_owned)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/ifname-nix-rust-parity.nix — retained pure smoke host.json shape and host-runtime source-hook coverage from the partial migration)"]
 exercised_today = "yes"
 
 [[script]]

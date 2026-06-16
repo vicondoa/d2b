@@ -140,10 +140,10 @@ guest-exec-policy/invalid-user-rejected
 guest-exec-policy/missing-user-rejected
 guest-exec-policy/root-user-rejected
 guest-exec-policy/uid-zero-alias-rejected
-ifname-nix-rust-parity/bridge-and-tap-role-tags
-ifname-nix-rust-parity/derived-ifnames-match-regex
-ifname-nix-rust-parity/host-runtime-override-source-hook-present
-ifname-nix-rust-parity/ifname-mappings-non-empty
+ifname-rendered-host-json/bridge-and-tap-role-tags
+ifname-rendered-host-json/derived-ifnames-match-regex
+ifname-rendered-host-json/host-runtime-override-source-hook-present
+ifname-rendered-host-json/ifname-mappings-non-empty
 multi-env-daemon/daemon-personal-app-unit-count
 multi-env-daemon/daemon-work-app-unit-count
 multi-env-daemon/demo-personal-app-unit-count

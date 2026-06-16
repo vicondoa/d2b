@@ -1,13 +1,7 @@
-# nix-unit cases migrated from tests/ifname-nix-rust-parity.sh.
-#
-# Covers the pure-eval host.json shape assertions: the smoke bundle must emit
-# at least one ifNameMappings row, every derivedIfname must keep the exact
-# legacy shell regex (`^nl-[bt][0-9A-F]{8}$`), and bridge/TAP rows must carry
-# the role tag that the Rust predicate accepts.
-#
-# The impure `NIXLING_HOST_RUNTIME_PATH` host-runtime.json readback is retained
-# in the bash gate for now; this corpus cannot set per-case evaluator
-# environment variables.
+# Host ifname pure-eval checks retained alongside the rendered-artifact Rust
+# contract test: the smoke bundle must emit at least one ifNameMappings row,
+# every derivedIfname must keep the exact `^nl-[bt][0-9A-F]{8}$` shape, and
+# bridge/TAP rows must carry the role tag that the Rust predicate accepts.
 { mkEval, lib, flakeRoot, ... }:
 
 let
@@ -59,12 +53,12 @@ let
   hostJsonSource = builtins.readFile (flakeRoot + "/nixos-modules/host-json.nix");
 in
 {
-  "ifname-nix-rust-parity/ifname-mappings-non-empty" = {
+  "ifname-rendered-host-json/ifname-mappings-non-empty" = {
     expr = mappings != [ ];
     expected = true;
   };
 
-  "ifname-nix-rust-parity/derived-ifnames-match-regex" = {
+  "ifname-rendered-host-json/derived-ifnames-match-regex" = {
     expr = map
       (row: {
         inherit (row) role userVisibleName derivedIfname;
@@ -79,7 +73,7 @@ in
       mappings;
   };
 
-  "ifname-nix-rust-parity/bridge-and-tap-role-tags" = {
+  "ifname-rendered-host-json/bridge-and-tap-role-tags" = {
     expr = map
       (wanted: wanted // { present = roleTagPresent wanted; })
       expectedRoleTags;
@@ -88,7 +82,7 @@ in
       expectedRoleTags;
   };
 
-  "ifname-nix-rust-parity/host-runtime-override-source-hook-present" = {
+  "ifname-rendered-host-json/host-runtime-override-source-hook-present" = {
     expr =
       lib.hasInfix ''builtins.getEnv "NIXLING_HOST_RUNTIME_PATH"'' hostJsonSource
       && lib.hasInfix "runtimeRow.derivedIfname" hostJsonSource;

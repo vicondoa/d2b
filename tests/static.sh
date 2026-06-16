@@ -1199,20 +1199,13 @@ nl_static_gate_begin "W1 bundle/schema static gates" "W1 bundle/schema static ga
 nl_time_begin "W1 smoke cache prewarm"
 nl_smoke_vms_json >/dev/null
 nl_smoke_bundle_privileges_json >/dev/null
-# Prewarm the host.json cache so
-# `tests/ifname-nix-rust-parity.sh` running in the parallel pool
-# hits the cache instead of triggering a fresh `getFlake` against $ROOT
-# while sibling gates (`tests/vms-json-parity.sh`,
-# `tests/bundle-drift.sh`) still hold per-test scratch files inside
-# $ROOT. Without the prewarm the parity gate fail-closes with
-# `path '//$ROOT/.vms-json-parity.XXXXXX' does not exist`.
+# Prewarm the host.json cache before the parallel bundle/schema gates so
+# each worker avoids forcing a fresh `getFlake` against $ROOT while sibling
+# gates still hold per-test scratch files inside the checkout.
 nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
 if [ -x "$HERE/drift-check.sh" ]; then nl_static_parallel_script "tests/drift-check.sh" "$HERE/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
-# Assert Nix-emitted ifNameMappings
-# pass the Rust looks_nixling_owned format gate.
-if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
 if [ -x "$HERE/vms-json-parity.sh" ]; then nl_static_parallel_script "tests/vms-json-parity.sh" "$HERE/vms-json-parity.sh"; fi
 if [ -x "$HERE/guest-control-vsock-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-vsock-eval.sh" "$HERE/guest-control-vsock-eval.sh"; fi
 if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "tests/guest-control-auth-eval.sh" "$HERE/guest-control-auth-eval.sh"; fi

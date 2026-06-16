@@ -1,11 +1,2 @@
-# PARTIAL migration. The cargo-test portion is pinned, and the pure host.json
-# ifname-shape assertions are ported to nix-unit. The impure
-# `NIXLING_HOST_RUNTIME_PATH` host-runtime.json override readback cannot be
-# expressed by the current nix-unit corpus because cases cannot set per-eval
-# environment variables, so the bash gate is retained.
-status = "porting"
-successor_ids = [
-  "cargo-pin: tests/golden/pinned/ifname-nix-rust-parity.txt pins ifname::tests::nix_emitted_ifnames_pass_looks_nixling_owned under default cargo test --workspace",
-  "flake.checks.<system>.nix-unit (tests/nix-unit/cases/ifname-nix-rust-parity.nix — smoke host.json ifNameMappings non-empty, derivedIfname values match ^nl-[bt][0-9A-F]{8}$, bridge/TAP role tags are b/t, and the host-json runtime override source hook remains present)",
-  "UNMIGRATED: impure `NIXLING_HOST_RUNTIME_PATH` host-runtime.json override readback plus the second cargo oracle against the rendered runtime host.json; retained in tests/ifname-nix-rust-parity.sh until a derivation-backed or impure successor exists"
-]
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/ifname_parity.rs::rendered_host_json_ifname_mappings_pass_looks_nixling_owned (fixture-smoke host.json ifNameMappings is non-empty and every rendered derivedIfname is accepted by nixling_host::ifname::looks_nixling_owned)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/ifname-nix-rust-parity.nix — retained pure smoke host.json shape and host-runtime source-hook coverage from the partial migration)"]

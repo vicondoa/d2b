@@ -57,6 +57,7 @@ declare -A present
 collect_present() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    present["$line"]=1
     present["${line#* }"]=1
   done
 }
@@ -64,6 +65,13 @@ collect_present() {
 collect_present < <(
   cd "$ROOT/packages"
   cargo nextest list --workspace --exclude nixling-contract-tests --message-format oneline
+)
+# Fixture contract tests are excluded from the default workspace test pass, but
+# rust-workspace-checks.sh runs them with NL_FIXTURES. Include their nextest
+# listing so retired shell gates can pin rendered-artifact contract successors.
+collect_present < <(
+  cd "$ROOT/packages"
+  cargo nextest list -p nixling-contract-tests --message-format oneline
 )
 # Broker workspace (packages/nixling-priv-broker/Cargo.toml) is a SEPARATE
 # cargo workspace, excluded from the main one. Retired canaries pinned
@@ -77,9 +85,20 @@ collect_present < <(
 # the broker lock so listing is non-mutating by construction.
 broker_lock="$ROOT/packages/nixling-priv-broker/Cargo.lock"
 broker_lock_backup=""
+restore_broker_lock() {
+  if [ -n "$broker_lock_backup" ] && [ -f "$broker_lock_backup" ]; then
+    cp "$broker_lock_backup" "$broker_lock"
+    rm -f "$broker_lock_backup"
+  fi
+}
 if [ -f "$broker_lock" ]; then
-  broker_lock_backup=$(mktemp)
+  broker_lock_backup="$ROOT/tests/.assert-pinned-broker-lock.${BASHPID:-$$}"
+  if [ -e "$broker_lock_backup" ]; then
+    echo "assert-pinned-tests: scratch path already exists: $broker_lock_backup" >&2
+    exit 1
+  fi
   cp "$broker_lock" "$broker_lock_backup"
+  trap restore_broker_lock EXIT
 fi
 collect_present < <(
   cd "$ROOT/packages/nixling-priv-broker"
@@ -93,8 +112,9 @@ collect_present < <(
   cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
 )
 if [ -n "$broker_lock_backup" ]; then
-  cp "$broker_lock_backup" "$broker_lock"
-  rm -f "$broker_lock_backup"
+  restore_broker_lock
+  broker_lock_backup=""
+  trap - EXIT
 fi
 
 declare -A seen

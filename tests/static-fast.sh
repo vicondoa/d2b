@@ -169,8 +169,7 @@ log "==> Bundle/schema static gates"
 for gate in \
   drift-check \
   vms-json-parity \
-  static-invariant-uid0 \
-  ifname-nix-rust-parity; do
+  static-invariant-uid0; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
   fi
