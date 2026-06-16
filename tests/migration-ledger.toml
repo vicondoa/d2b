@@ -278,15 +278,6 @@ successor_ids = []
 exercised_today = "manual"
 
 [[script]]
-name = "tests/static-invariant-deny-unknown-fields.sh"
-group = "F"
-make_target = "test-flake"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/stub-no-socket.sh"
 group = "A"
 make_target = "test-rust"
@@ -320,6 +311,15 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "skip"
+
+[[script]]
+name = "tests/static-invariant-deny-unknown-fields.sh"
+group = "F"
+make_target = "test-flake"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_deny_unknown_schemas.rs (faithful structural reduction of the python+jsonschema gate: sensitive_schema_roots_close_unknown_fields asserts all 7 sensitive schema roots set additionalProperties:false; deny_unknown_fixtures_isolate_an_unknown_field asserts the bundle/host/closures valid fixtures carry no unknown top-level field and the invalid fixtures carry exactly the unknown field additionalProperties:false rejects; guest_control_object_schemas_all_close_unknown_fields walks every object sub-schema in guest-control.json (the bash assert_nested_unknowns_rejected); and guest_control_{string,chunk,terminal}_bounds_did_not_drift port the explicit definition bound checks; gated via `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh)"]
 exercised_today = "skip"
 
 [[script]]

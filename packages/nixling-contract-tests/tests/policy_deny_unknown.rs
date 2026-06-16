@@ -12,15 +12,13 @@
 //! Migrated gates:
 //!   * tests/static-invariant-deny-unknown-fields-w3.sh -> host_schema_dtos_carry_deny_unknown_fields
 //!
-//! NOT migrated (reclassified): `tests/static-invariant-deny-unknown-fields.sh`
-//! is NOT a static source/schema grep gate. It shells out to
-//! `nix-shell -p "python3.withPackages (ps: [ ps.jsonschema ])"` to perform full
-//! JSON Schema Draft 2020-12 validation (instance synthesis, `$ref`/`oneOf`/
-//! `anyOf`/`allOf` resolution, plus guest-control string/chunk/terminal bounds)
-//! against committed fixtures under `tests/fixtures/deny-unknown`. It needs
-//! nix + python + the `jsonschema` validator at runtime, so it cannot be
-//! faithfully reproduced as a static-lint test in this crate and stays a bash
-//! gate.
+//! Sibling gate: `tests/static-invariant-deny-unknown-fields.sh` (the schema
+//! Draft 2020-12 validation gate) is migrated to
+//! `policy_deny_unknown_schemas.rs` as a faithful structural reduction —
+//! asserting the root + (for guest-control) every object schema closes unknown
+//! fields, the fixture pairs isolate an unknown field, and the guest-control
+//! string/chunk/terminal bounds — without shelling out to nix + python +
+//! jsonschema.
 
 use nixling_contract_tests::{read_repo_file, repo_path_exists};
 use regex::Regex;

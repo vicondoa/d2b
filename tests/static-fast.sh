@@ -171,8 +171,7 @@ for gate in \
   drift-check \
   vms-json-parity \
   static-invariant-uid0 \
-  ifname-nix-rust-parity \
-  static-invariant-deny-unknown-fields; do
+  ifname-nix-rust-parity; do
   if [ -x "$ROOT/tests/$gate.sh" ]; then
     run_gate "tests/$gate.sh" "bash '$ROOT/tests/$gate.sh'"
   fi

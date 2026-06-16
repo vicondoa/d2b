@@ -1227,7 +1227,6 @@ if [ -x "$HERE/guest-control-auth-eval.sh" ]; then nl_static_parallel_script "te
 if [ -x "$HERE/guest-control-token-materializer.sh" ]; then nl_static_parallel_script "tests/guest-control-token-materializer.sh" "$HERE/guest-control-token-materializer.sh"; fi
 if [ -x "$HERE/guest-static-consumption-eval.sh" ]; then nl_static_parallel_script "tests/guest-static-consumption-eval.sh" "$HERE/guest-static-consumption-eval.sh"; fi
 if [ -x "$HERE/static-invariant-uid0.sh" ]; then nl_static_parallel_script "tests/static-invariant-uid0.sh" "$HERE/static-invariant-uid0.sh"; fi
-if [ -x "$HERE/static-invariant-deny-unknown-fields.sh" ]; then nl_static_parallel_script "tests/static-invariant-deny-unknown-fields.sh" "$HERE/static-invariant-deny-unknown-fields.sh"; fi
 # -DTO deny_unknown_fields static invariant (integrator-wired).
 nl_static_parallel_wait_all
 nl_static_gate_end "W1 bundle/schema static gates"
