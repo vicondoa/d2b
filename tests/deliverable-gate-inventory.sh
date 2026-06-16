@@ -37,7 +37,7 @@ MAPPINGS=(
   "ssh-host-key-preflight:tests/ssh-host-key-preflight-eval.sh;cargo:nixlingd::ssh_host_key_preflight"
   "daemon-autostart:cargo:nixlingd::autostart"
   "stop-dag-owner:tests/stop-dag-reconcile-eval.sh;cargo:nixlingd::supervisor::stop_dag"
-  "net-fixture-observability-env:tests/net-vm-network-eval.sh"
+  "net-fixture-observability-env:tests/nix-unit/cases/net-vm-network.nix"
   "net-vm-bundle-gate:cargo:nixlingd::net_vm_bundle_gate"
   "tap-dag-contract:tests/tap-dag-contract-doc-eval.sh;docs/reference/tap-dag-contract.md"
 )

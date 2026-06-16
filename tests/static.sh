@@ -789,18 +789,26 @@ fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
 # wired here so ci-coverage.sh structural guard passes.
-for _d13_gate in \
+for _gate in \
   broker-socket-activation-eval \
   daemon-autostart-eval \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
-  deliverable-gate-inventory \
   readiness-waves-eval; do
-  if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
-    nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
+  if [ -x "$ROOT/tests/${_gate}.sh" ]; then
+    nl_static_parallel_script_gate "tests/${_gate}.sh" "$ROOT/tests/${_gate}.sh"
   fi
 done
-unset _d13_gate
+unset _gate
+# deliverable-gate-inventory + pr-checklist-gate are invoked literally (not via
+# the loop above) so tests/layer1-self-inventory.sh's invocation grep resolves
+# them.
+if [ -x "$ROOT/tests/deliverable-gate-inventory.sh" ]; then
+  nl_static_parallel_script_gate "tests/deliverable-gate-inventory.sh" "$ROOT/tests/deliverable-gate-inventory.sh"
+fi
+if [ -x "$ROOT/tests/pr-checklist-gate.sh" ]; then
+  nl_static_parallel_script_gate "tests/pr-checklist-gate.sh" "$ROOT/tests/pr-checklist-gate.sh"
+fi
 # ci-coverage.sh structural guard (must run after all other tests
 # are registered above so it can attest the full set is wired).
 if [ -x "$ROOT/tests/ci-coverage.sh" ]; then

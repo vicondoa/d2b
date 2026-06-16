@@ -25,6 +25,21 @@ is_known_non_layer1() {
       # Documented optional Layer-2 live-host tests in tests/README.md.
       return 0
       ;;
+    live-vm-smoke.sh|swtpm-persistence-smoke.sh|state-dir-acl-runtime.sh)
+      # Layer-2 live-host / runtime tests (real VM boot, state-dir ACLs,
+      # swtpm persistence). Not Layer-1 static gates; run on a live host.
+      return 0
+      ;;
+    hardware-smoke-gpu-yubikey.sh)
+      # Hardware tier: requires physical GPU + YubiKey passthrough.
+      # Maintainer-only, never runnable in Layer-1 / ephemeral CI.
+      return 0
+      ;;
+    ci-uses-make.sh)
+      # CI-convergence guard wired into a .github workflow
+      # (pr-l1-static-fast.yml), not invoked from static.sh.
+      return 0
+      ;;
     runner.sh|static-timing.sh)
       # Aggregating wrappers that invoke static.sh; not Layer-1 gate bodies.
       return 0
