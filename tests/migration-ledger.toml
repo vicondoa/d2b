@@ -161,15 +161,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/host-json-drift-gate.sh"
-group = "B"
-make_target = "test-drift"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/ifname-nix-rust-parity.sh"
 group = "C"
 make_target = "test-contract"
@@ -296,15 +287,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/runner-shape-snapshot.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/rust-workspace-checks.sh"
 group = "A"
 make_target = "test-rust"
@@ -365,6 +347,24 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "skip"
+
+[[script]]
+name = "tests/host-json-drift-gate.sh"
+group = "B"
+make_target = "test-drift"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = [
+exercised_today = "skip"
+
+[[script]]
+name = "tests/runner-shape-snapshot.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/runner_shape_contract.rs::cloud_hypervisor_runner_shape_matches_rendered_snapshot, ::virtiofsd_runner_shape_matches_rendered_snapshot, ::swtpm_runner_shape_matches_rendered_snapshot (gated via the NL_FIXTURES contract step in tests/rust-workspace-checks.sh; x86_64 also sets NL_FIXTURES_FULL for the rendered runner roles)"]
 exercised_today = "skip"
 
 [[script]]

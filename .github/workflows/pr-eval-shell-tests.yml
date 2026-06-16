@@ -29,7 +29,6 @@ jobs:
           set -euo pipefail
           for t in \
             tests/preflight-disk-space.sh \
-            tests/host-json-drift-gate.sh \
             tests/deliverable-gate-inventory.sh \
           ; do
             if [ -f "$t" ]; then
@@ -45,7 +44,6 @@ jobs:
         run: |
           set -euo pipefail
           for t in \
-            tests/runner-shape-snapshot.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"

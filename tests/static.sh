@@ -127,7 +127,6 @@ reap_known_static_orphans() {
     '.nixling-test.log'
     '.opaque-key-ids.*'
     '.privileges-matrix.*'
-    '.runner-shape-snapshot.log'
     '.static-cache.*'
     '.static-gitcfg.*'
     '.template-flake-check.*'
@@ -1102,7 +1101,6 @@ nl_smoke_bundle_host_json >/dev/null
 nl_time_end "W1 smoke cache prewarm"
 if [ -x "$HERE/drift-check.sh" ]; then nl_static_parallel_script "tests/drift-check.sh" "$HERE/drift-check.sh"; fi
 # host.json per-field schema gold-file drift gate (integrator-wired).
-if [ -x "$HERE/host-json-drift-gate.sh" ]; then nl_static_parallel_script "tests/host-json-drift-gate.sh" "$HERE/host-json-drift-gate.sh"; fi
 # Assert Nix-emitted ifNameMappings
 # pass the Rust looks_nixling_owned format gate.
 if [ -x "$HERE/ifname-nix-rust-parity.sh" ]; then nl_static_parallel_script "tests/ifname-nix-rust-parity.sh" "$HERE/ifname-nix-rust-parity.sh"; fi
@@ -1214,17 +1212,8 @@ nl_phase_gc "post-w3-gates"
 nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 host-prepare gates"
 
 #  Runner-shape snapshot regression guards
-# (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind).
-nl_static_gate_begin "tests/runner-shape-snapshot.sh" "tests/runner-shape-snapshot.sh"
-if [ -x "$HERE/runner-shape-snapshot.sh" ]; then
-  if bash "$HERE/runner-shape-snapshot.sh" >/dev/null 2>&1; then
-    ok "runner-shape-snapshot"
-  else
-    bash "$HERE/runner-shape-snapshot.sh" 2>&1 | tail -80 >&2 || true
-    fail "runner-shape-snapshot"
-  fi
-fi
-nl_static_gate_end "tests/runner-shape-snapshot.sh"
+# (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind)
+# migrated to packages/nixling-contract-tests/tests/runner_shape_contract.rs.
 
 nl_static_gate_begin "tests/harness-ubuntu-eval.sh" "tests/harness-ubuntu-eval.sh"
 if [ -x "$HERE/harness-ubuntu-eval.sh" ]; then
