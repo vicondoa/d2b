@@ -729,12 +729,9 @@ if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
   _STATIC_RUST_GATE_OVERLAP=2
 fi
 
-# Smaller eval/runtime script gates parallelize well, but the large
+# Smaller eval script gates parallelize well, but the large
 # assertion/observability matrices saturate the nix daemon when overlapped.
 # Keep those two serial after the lighter fan-out drains.
-if [ -x "$ROOT/tests/bridge-isolation-runtime.sh" ]; then
-  nl_static_parallel_script_gate "tests/bridge-isolation-runtime.sh" "$ROOT/tests/bridge-isolation-runtime.sh"
-fi
 if [ -x "$ROOT/tests/usbip-gating-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/usbip-gating-eval.sh" "$ROOT/tests/usbip-gating-eval.sh"
 fi

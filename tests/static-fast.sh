@@ -22,8 +22,8 @@
 # Skipped vs tests/static.sh (run those in the full panel gate):
 #   - smoke-eval-*.nix (5 toplevel evals, ~4 min, ~50 G disk)
 #   - assertions-eval (~37 min after)
-#   - mid-tier evals (autostart, restart-policy, video, usbip,
-#     bridge-isolation) — ~9 min, each materializes a system closure
+#   - mid-tier evals (autostart, restart-policy, video, usbip) — ~9 min,
+#     each materializes a system closure
 #   - manifest contract (~1 min)
 #   - control-plane gates (~12 min cargo + broker test daemons)
 #   - per-example/template flake-check (~3 min wall but ~700 G disk)

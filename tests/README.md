@@ -161,7 +161,6 @@ Layer-1 script inventory:
 | `tests/niri-vm-borders-eval.sh` | Opt-in niri KDL border generation: disabled by default, correct window-rule per graphics VM when enabled, per-VM color override, default color stability, and custom outputPath. |
 | `tests/video-sidecar-hardening-eval.sh` | Eval-time hardening gate for the broker `SpawnRunner{role=Video}` descriptor (`AF_UNIX` only, syscall filter, empty capability sets). |
 | `tests/minijail-validator-wayland-proxy.sh` | Wayland filter proxy minijail profile gate: mandatory seccomp, empty capabilities, empty device binds, dedicated runtime dir (`/run/nixling-wlproxy/<vm>`), no PipeWire/Pulse socket access; compositor access is granted to the `wlproxy` role by ACL, not by a profile bind mount. |
-| `tests/bridge-isolation-runtime.sh` | Hermetic runtime check that Linux bridge port isolation still blocks workload↔workload traffic while preserving workload↔net-VM reachability. |
 | `tests/network-isolation.sh` | Optional live-host datapath checks for same-env east-west and cross-env isolation. |
 | `tests/audit-forwarding.sh` | Optional live-host end-to-end check for auditd -> journald -> Alloy -> Loki delivery. |
 
@@ -350,27 +349,20 @@ checks above (`test_host_has_audio_*`) are the regression coverage
 for that ambient breakage — run them after any rebuild that touches
 audio, PipeWire packages, or the audio-host.nix module.
 
-> **Known Layer-2 gap.** Bridge-isolation enforcement (the DHCP
-> anti-spoofing posture for workload taps on `br-<env>-lan`) still has
-> no runtime Layer-2 test. Verifying that workload taps remain isolated
-> from each other requires a live host plus packet-level assertions
-> across the bridge, so the current Layer-2 suite documents the
-> expectation but does not yet automate it. The first planned Layer-3
-> `nixosTest` for this area is a MAC/IP spoof attempt where one
-> workload tries to impersonate a peer's DHCP reservation and send
-> east-west traffic across `br-<env>-lan`; the test should prove the
-> isolated taps still block that path.
+Bridge-isolation enforcement (the DHCP anti-spoofing posture for
+workload taps on `br-<env>-lan`) is covered by the reproducible VM check
+`vmChecks.<system>.bridge-isolation`, not by the live-host Layer-2
+scripts. It creates the bridge and network namespaces as root inside a
+throwaway VM, then proves workload taps remain isolated from each other
+while the net-VM port stays reachable.
 
 ## Layer 3 — reproducible `nixosTest`
 
-Still out of scope for now.
-
-The current runtime bridge-isolation gate is
-`tests/bridge-isolation-runtime.sh`, which runs hermetically inside a
-user+network namespace and is wired into `tests/static.sh`. It proves
-that the Linux bridge semantics nixling relies on match the documented
-threat model: the net-VM port stays reachable while workload ports stay
-isolated even after a workload spoofs a peer-style MAC.
+`tests/nixos/bridge-isolation.nix` is exposed as
+`vmChecks.<system>.bridge-isolation`. It proves that the Linux bridge
+semantics nixling relies on match the documented threat model: the
+net-VM port stays reachable while workload ports stay isolated, including
+after a workload spoofs a peer-style MAC.
 
 ## Planned runtime tests
 
