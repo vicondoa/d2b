@@ -40,24 +40,34 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_file("/run/nixling/public.sock")
     machine.succeed("test -S /run/nixling/public.sock")
 
-    # 4. Daemon-only end-state exit criterion (ADR 0015 "Verification gates"):
-    #    exactly three root-visible nixling/microvm units exist — the public
-    #    daemon, the broker socket, and the broker service. No per-VM systemd
-    #    template, no host-singleton framework service, no microvms.target.
+    # 4. Daemon-only end-state (ADR 0015 "Verification gates"): the framework's
+    #    root-visible SERVICE/SOCKET surface is exactly the public daemon, the
+    #    broker socket, and the broker service. No per-VM systemd template, no
+    #    host-singleton framework service, no microvms.target. nixling.slice is
+    #    the broker's systemd-delegated cgroup slice (systemd.slices.nixling) —
+    #    cgroup organization, not a framework service — so it is permitted to
+    #    appear; everything else under the nixling/microvm prefix is forbidden.
     units = machine.succeed(
         "systemctl list-units --no-pager --all --plain "
         "| grep -E '^(nixling|microvm)' | awk '{print $1}' | sort"
     ).strip()
     print("nixling/microvm units:\n" + units)
     unit_names = set(units.split())
-    expected = {
+    required = {
         "nixlingd.service",
         "nixling-priv-broker.socket",
         "nixling-priv-broker.service",
     }
-    assert unit_names == expected, (
-        f"daemon-only end-state violated: expected exactly {expected}, "
-        f"got {unit_names}"
+    # The delegated cgroup slice is legitimate cgroup infrastructure, not a
+    # framework service/socket unit, so allow it alongside the three required.
+    allowed = required | {"nixling.slice"}
+    missing = required - unit_names
+    assert not missing, f"daemon-only end-state: required units missing: {missing}"
+    forbidden = unit_names - allowed
+    assert not forbidden, (
+        "daemon-only end-state violated: unexpected root-visible nixling/microvm "
+        f"unit(s) {forbidden} (retired per-VM template / host-singleton service / "
+        "microvms.target?)"
     )
 
     # 5. The broker service is socket-activated (not running until a request),
