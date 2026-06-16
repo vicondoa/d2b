@@ -1,7 +1,2 @@
-# PARTIAL migration. The value/introspection assertions (steps 2-6) are
-# ported to nix-unit; the bash gate's step 1 (`nix flake check` of the
-# examples/multi-env consumer flake, both variants) is a realized flake
-# check, not a pure-eval value assertion, so it has no nix-unit successor
-# and the script is retained (status != retired).
-status = "porting"
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/multi-env-daemon-backed.nix — 16 host.json env-propagation (mtu/mssClamp/east-west/bridgePortFlags + personal negative control), manifest no-microvm@/nixling@ unit reference, and ADR-0015 daemon-only processes.json zero-unit-field cases via mkEval over both reconstructed example variants)", "UNMIGRATED: step 1 `nix flake check --no-build --all-systems` of examples/multi-env (realized flake check; needs a derivation-backed successor, not nix-unit)"]
+status = "retired"
+successor_ids = ["flake.checks.<system>.eval-multi-env (existing root flake check imports examples/multi-env/configuration.nix against the in-tree framework module for the demo variant; realized by `nix flake check`)", "flake.checks.<system>.eval-multi-env-daemon (root flake check imports examples/multi-env/configuration.nix plus the daemon-backed variant overlay; realized by `nix flake check`)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/multi-env-daemon-backed.nix — 16 host.json env-propagation (mtu/mssClamp/east-west/bridgePortFlags + personal negative control), manifest no-microvm@/nixling@ unit reference, and ADR-0015 daemon-only processes.json zero-unit-field cases via mkEval over both reconstructed example variants)"]

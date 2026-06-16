@@ -80,15 +80,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/examples-with-observability-eval.sh"
-group = "F"
-make_target = "test-flake"
-tier = "ci-l1"
-status = "porting"      # legacy | porting | ported
-successor_ids = [
-exercised_today = "skip"
-
-[[script]]
 name = "tests/guest-control-token-materializer.sh"
 group = "A"
 make_target = "test-rust"
@@ -150,15 +141,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/multi-env-daemon-backed.sh"
-group = "D"
-make_target = "test-nix-unit"
-tier = "ci-l1"
-status = "porting"      # legacy | porting | ported
-successor_ids = ["flake.checks.<system>.nix-unit (tests/nix-unit/cases/multi-env-daemon-backed.nix — 16 host.json env-propagation (mtu/mssClamp/east-west/bridgePortFlags + personal negative control), manifest no-microvm@/nixling@ unit reference, and ADR-0015 daemon-only processes.json zero-unit-field cases via mkEval over both reconstructed example variants)", "UNMIGRATED: step 1 `nix flake check --no-build --all-systems` of examples/multi-env (realized flake check; needs a derivation-backed successor, not nix-unit)"]
-exercised_today = "yes"
 
 [[script]]
 name = "tests/network-isolation.sh"
@@ -249,6 +231,24 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/examples-with-observability-eval.sh"
+group = "F"
+make_target = "test-flake"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.eval-with-observability (root flake check imports examples/with-observability/configuration.nix against the in-tree framework module; realized by `nix flake check`)", "packages/nixling-contract-tests/tests/policy_examples_observability.rs::with_observability_example_layout_files_exist (examples/with-observability/{flake.nix,configuration.nix,README.md} file-presence policy lint)", "packages/nixling-contract-tests/tests/policy_examples_observability.rs::with_observability_flake_imports_configuration (flake.nix imports ./configuration.nix policy lint)", "packages/nixling-contract-tests/tests/policy_examples_observability.rs::with_observability_configuration_sets_operator_toggles (configuration.nix sets nixling.observability, nixling.envs.work, nixling.vms.work-app, and work-app observability.enable source policy lints)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/examples-with-observability.nix — 8 resolved nixling.observability surface cases: obsEnable, obsVmName, obsEnvName, obsEnvDeclared, obsVmDeclared, workEnvDeclared, workAppDeclared, workAppObsEnable)"]
+exercised_today = "skip"
+
+[[script]]
+name = "tests/multi-env-daemon-backed.sh"
+group = "D"
+make_target = "test-nix-unit"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["flake.checks.<system>.eval-multi-env (existing root flake check imports examples/multi-env/configuration.nix against the in-tree framework module for the demo variant; realized by `nix flake check`)", "flake.checks.<system>.eval-multi-env-daemon (root flake check imports examples/multi-env/configuration.nix plus the daemon-backed variant overlay; realized by `nix flake check`)", "flake.checks.<system>.nix-unit (tests/nix-unit/cases/multi-env-daemon-backed.nix — 16 host.json env-propagation (mtu/mssClamp/east-west/bridgePortFlags + personal negative control), manifest no-microvm@/nixling@ unit reference, and ADR-0015 daemon-only processes.json zero-unit-field cases via mkEval over both reconstructed example variants)"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/l1c-privilege-oracle.sh"

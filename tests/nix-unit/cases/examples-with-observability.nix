@@ -1,10 +1,9 @@
-# nix-unit cases migrated from tests/examples-with-observability-eval.sh.
+# nix-unit cases for the with-observability example.
 #
 # PARTIAL migration. The source/file-layout assertions are now Rust policy
 # lints in packages/nixling-contract-tests/tests/policy_examples_observability.rs.
-# The bash gate's `nix flake check` of examples/with-observability is a
-# realized flake check, not a pure-eval value assertion, and is NOT covered
-# here; tests/examples-with-observability-eval.sh is retained for that step.
+# The example-level flake check is covered by the root
+# `eval-with-observability` check; this file keeps the resolved value cases.
 #
 # Covered here: the targeted `nix eval` of
 # examples/with-observability#nixosConfigurations.demo.config.nixling,

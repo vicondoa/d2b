@@ -1,13 +1,8 @@
-# nix-unit cases migrated from tests/multi-env-daemon-backed.sh.
+# nix-unit cases for the multi-env daemon-backed example variant.
 #
-# PARTIAL migration. The bash gate's step 1 (`nix flake check` of the
-# examples/multi-env consumer flake, both `demo` and
-# `multi-env-daemon-experimental` variants) is a realized flake check, not
-# a pure-eval value assertion, and is NOT covered here — so the bash gate is
-# NOT retired. The value/introspection assertions (steps 2-6) ARE migrated
-# below, reconstructed against the ROOT flake's module set via `mkEval`
-# (which side-steps the example flake's `path:../..` mutable-lock fragility
-# the bash gate hits inside a worktree).
+# The example-level flake checks are covered by the root `eval-multi-env`
+# and `eval-multi-env-daemon` checks. The value/introspection assertions
+# below are reconstructed against the ROOT flake's module set via `mkEval`.
 #
 # Reconstructed variants:
 #   * demo   = examples/multi-env/configuration.nix
@@ -85,55 +80,55 @@ let
 in
 {
   # ---- host.json env-level propagation (daemon variant) ----
-  "multi-env-daemon-backed/site-allow-unsafe-east-west" = {
+  "multi-env-daemon/site-allow-unsafe-east-west" = {
     expr = hostJson.site.allowUnsafeEastWest;
     expected = true;
   };
-  "multi-env-daemon-backed/work-mtu" = {
+  "multi-env-daemon/work-mtu" = {
     expr = work.mtu;
     expected = 1400;
   };
-  "multi-env-daemon-backed/work-mss-clamp" = {
+  "multi-env-daemon/work-mss-clamp" = {
     expr = work.mssClamp;
     expected = 1360;
   };
-  "multi-env-daemon-backed/work-lan-allow-east-west" = {
+  "multi-env-daemon/work-lan-allow-east-west" = {
     expr = work.lan.allowEastWest;
     expected = true;
   };
-  "multi-env-daemon-backed/work-lan-effective-east-west" = {
+  "multi-env-daemon/work-lan-effective-east-west" = {
     expr = work.lan.effectiveEastWest;
     expected = true;
   };
-  "multi-env-daemon-backed/work-workload-lan-flags" = {
+  "multi-env-daemon/work-workload-lan-flags" = {
     expr = flags work "workload-lan";
     expected = { isolated = false; neighSuppress = false; learning = true; unicastFlood = true; };
   };
-  "multi-env-daemon-backed/work-net-vm-lan-flags" = {
+  "multi-env-daemon/work-net-vm-lan-flags" = {
     expr = flags work "net-vm-lan";
     expected = { isolated = false; neighSuppress = false; learning = true; unicastFlood = true; };
   };
-  "multi-env-daemon-backed/work-uplink-flags" = {
+  "multi-env-daemon/work-uplink-flags" = {
     expr = flags work "uplink";
     expected = { isolated = true; neighSuppress = true; learning = false; unicastFlood = false; };
   };
 
   # ---- personal env negative control (no east-west opt-in) ----
-  "multi-env-daemon-backed/personal-lan-effective-east-west" = {
+  "multi-env-daemon/personal-lan-effective-east-west" = {
     expr = personal.lan.effectiveEastWest;
     expected = false;
   };
-  "multi-env-daemon-backed/personal-workload-lan-flags" = {
+  "multi-env-daemon/personal-workload-lan-flags" = {
     expr = flags personal "workload-lan";
     expected = { isolated = true; neighSuppress = true; learning = true; unicastFlood = false; };
   };
 
   # ---- vms.json (manifest) carries no per-VM systemd unit reference ----
-  "multi-env-daemon-backed/manifest-no-microvm-work-app" = {
+  "multi-env-daemon/manifest-no-microvm-work-app" = {
     expr = lib.hasInfix "microvm@work-app" manifestText;
     expected = false;
   };
-  "multi-env-daemon-backed/manifest-no-nixling-work-app" = {
+  "multi-env-daemon/manifest-no-nixling-work-app" = {
     expr = lib.hasInfix "nixling@work-app." manifestText;
     expected = false;
   };
@@ -141,19 +136,19 @@ in
   # ---- processes.json node-level systemd unit fields (ADR 0015) ----
   # Spec correction #1: daemon-only emits no per-VM systemd unit for any
   # node of any VM in either variant.
-  "multi-env-daemon-backed/daemon-work-app-unit-count" = {
+  "multi-env-daemon/daemon-work-app-unit-count" = {
     expr = unitCount daemonProcs "work-app";
     expected = 0;
   };
-  "multi-env-daemon-backed/daemon-personal-app-unit-count" = {
+  "multi-env-daemon/daemon-personal-app-unit-count" = {
     expr = unitCount daemonProcs "personal-app";
     expected = 0;
   };
-  "multi-env-daemon-backed/demo-work-app-unit-count" = {
+  "multi-env-daemon/demo-work-app-unit-count" = {
     expr = unitCount demoProcs "work-app";
     expected = 0;
   };
-  "multi-env-daemon-backed/demo-personal-app-unit-count" = {
+  "multi-env-daemon/demo-personal-app-unit-count" = {
     expr = unitCount demoProcs "personal-app";
     expected = 0;
   };

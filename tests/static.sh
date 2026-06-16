@@ -1253,7 +1253,6 @@ nl_time_end "W2 CLI smoke prewarm"
 if [ -x "$HERE/broker-default-features-build.sh" ]; then nl_static_parallel_script "tests/broker-default-features-build.sh" "$HERE/broker-default-features-build.sh"; fi
 if [ -x "$HERE/cli-legacy-bash-dispatch.sh" ]; then nl_static_parallel_script "tests/cli-legacy-bash-dispatch.sh" "$HERE/cli-legacy-bash-dispatch.sh"; fi
 # Closure: wire the remaining gates.
-if [ -x "$HERE/examples-with-observability-eval.sh" ]; then nl_static_parallel_script "tests/examples-with-observability-eval.sh" "$HERE/examples-with-observability-eval.sh"; fi
 if [ -x "$HERE/cli-contract-coverage.sh" ]; then nl_static_parallel_script "tests/cli-contract-coverage.sh" "$HERE/cli-contract-coverage.sh"; fi
 nl_static_parallel_wait_all
 
@@ -1296,7 +1295,6 @@ if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl
 # Layer-1 smoke for the nixling-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
-if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
 nl_static_gate_end "W3 host-prepare gates"
 

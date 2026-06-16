@@ -715,6 +715,21 @@
         eval-multi-env = mkCheck "eval-multi-env"
           (mkEval [ (import ./examples/multi-env/configuration.nix) ]);
 
+        eval-multi-env-daemon = mkCheck "eval-multi-env-daemon"
+          (mkEval [
+            (import ./examples/multi-env/configuration.nix)
+            ({ lib, ... }: {
+              nixling.site.allowUnsafeEastWest = true;
+              nixling.daemonExperimental.enable = true;
+              nixling.envs.work.mtu = lib.mkForce 1400;
+              nixling.envs.work.mssClamp = lib.mkForce true;
+              nixling.envs.work.lan.allowEastWest = lib.mkForce true;
+            })
+          ]);
+
+        eval-with-observability = mkCheck "eval-with-observability"
+          (mkEval [ (import ./examples/with-observability/configuration.nix) ]);
+
         rust-build = rustWorkspace {
           pname = "nixling-rust-build";
           preBuild = assertRustToolchain;
