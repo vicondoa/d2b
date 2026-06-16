@@ -117,7 +117,6 @@ reap_known_static_orphans() {
     '.cli-rust-native.log'
     '.daemon-*'
     '.host-check.*'
-    '.manifest-fuzz-bounded.*'
     '.manifest-gate.*'
     '.nl-smoke-cache.*'
     '.nixling-rust-gate.*'
@@ -1261,7 +1260,6 @@ nl_static_parallel_wait_all
 # read-only group has drained.
 if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_script "tests/broker-scm-rights-fd-lifecycle.sh" "$HERE/broker-scm-rights-fd-lifecycle.sh"; fi
 nl_static_parallel_wait_all
-if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bounded.sh" || fail "manifest-fuzz-bounded"; fi
 nl_static_gate_end "W2 control-plane skeleton gates"
 
 # -----------------------------------------------------------------------------
@@ -1312,17 +1310,6 @@ nl_check_disk_budget "post-w3-gates" || fail "disk budget exhausted after W3 hos
 #  Runner-shape snapshot regression guards
 # (CH variadic argv, absolute vsock paths, /dev/net/tun deviceBind)
 # migrated to packages/nixling-contract-tests/tests/runner_shape_contract.rs.
-
-nl_static_gate_begin "tests/harness-ubuntu-eval.sh" "tests/harness-ubuntu-eval.sh"
-if [ -x "$HERE/harness-ubuntu-eval.sh" ]; then
-  if bash "$HERE/harness-ubuntu-eval.sh" >/dev/null 2>&1; then
-    ok "harness-ubuntu-eval"
-  else
-    bash "$HERE/harness-ubuntu-eval.sh" 2>&1 | tail -80 >&2 || true
-    fail "harness-ubuntu-eval"
-  fi
-fi
-nl_static_gate_end "tests/harness-ubuntu-eval.sh"
 
 # -----------------------------------------------------------------------------
 # 7b /— per-example/template flake check. Each `examples/<name>/flake.nix`

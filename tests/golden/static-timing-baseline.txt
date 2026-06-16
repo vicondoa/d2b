@@ -56,7 +56,6 @@ wall           cumulative     label
 00:01.859      19:07.114      tests/cli-rust-native-audit.sh
 02:13.350      19:07.460      W2 control-plane skeleton gates
 00:31.617      19:39.095      tests/runner-shape-snapshot.sh
-00:01.386      19:40.500      tests/harness-ubuntu-eval.sh
 00:00.179      19:40.714      with-entra-id input prewarm
 00:07.319      19:48.108      example flake check: minimal
 00:09.155      19:49.908      example flake check: graphics-workstation
