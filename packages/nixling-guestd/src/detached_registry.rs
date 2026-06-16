@@ -3411,6 +3411,21 @@ mod tests {
         assert!(exec_start_raw_fields("{ argv[]=x ; ignore_errors=no }").is_none());
         assert!(exec_start_raw_fields("{ path=/x ; argv[]=/x ; }").is_none());
         assert!(exec_start_raw_fields("{ path=/x ; ignore_errors=no }").is_none());
+
+        // A truncated / line-split ExecStart (no closing `}`, e.g. a foreign
+        // unit whose argv newline split the `systemctl show` property across
+        // lines) MUST fail closed — even though it carries a `; ignore_errors=`
+        // tail that would otherwise let a recovered prefix match a shorter
+        // persisted argv.
+        assert!(exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; ignore_errors=evil"#,
+        )
+        .is_none());
+        // No leading brace (e.g. a captured continuation line) also fails closed.
+        assert!(exec_start_raw_fields(
+            "path=/x ; argv[]=/x -l -c exec \"$@\" nl-exec id ; ignore_errors=no }"
+        )
+        .is_none());
     }
 
     #[tokio::test]

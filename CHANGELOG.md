@@ -147,8 +147,8 @@ deprecations ship one minor release before removal.
   raw rendering, and a failed runner-side spawn verification logs an
   actionable guest-journal diagnostic. (Detached command arguments may not
   contain a newline or carriage return, which `systemctl show` cannot render
-  on one line; such commands are now rejected at create with a clear error
-  rather than starting and then vanishing.)
+  on one line; such commands are now rejected at create as an invalid argument
+  rather than starting and then being reaped.)
 
 ### Added
 

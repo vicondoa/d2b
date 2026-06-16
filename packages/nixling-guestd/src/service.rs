@@ -1818,8 +1818,9 @@ fn validate_detached_command(
         // recovers the running command from `systemctl show -p ExecStart`, whose
         // `argv[]` is a single line, so a `\n`/`\r` byte would split the property
         // and make the live workload unmatchable (silently reaped). Reject at
-        // create so the operator gets a clear error instead of a detached job
-        // that starts and then vanishes on the first reconcile.
+        // create — as an invalid argument — so a detached job is not started
+        // only to be reaped on the first reconcile. (The create error reuses the
+        // existing InvalidArgv kind; its operator message is generic.)
         if arg.len() > MAX_ARG_BYTES
             || arg
                 .as_bytes()

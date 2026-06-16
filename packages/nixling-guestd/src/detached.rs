@@ -250,11 +250,17 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
 ///
 /// Newline bytes in an argument are rejected at detached create
 /// (`validate_detached_command`) because `systemctl show` would split the
-/// single-line property; they cannot reach this matcher. Returns `None` if
-/// either field is absent (treated as a mismatch, never a match).
+/// single-line property; they cannot reach this matcher for our own units. The
+/// value MUST be a complete `{ ... }` block: if a foreign unit's argv contained
+/// a newline, `systemctl show` would split its `ExecStart` across lines and the
+/// captured value would be truncated (no closing `}`), so requiring both braces
+/// fails closed on such malformed/foreign input rather than matching a
+/// recovered prefix. Returns `None` if the block is malformed or either field
+/// is absent (treated as a mismatch, never a match).
 pub fn exec_start_raw_fields(value: &str) -> Option<(String, String)> {
-    let path = value.split_once("path=")?.1.split_once(" ; ")?.0.to_owned();
-    let argv = value
+    let inner = value.trim().strip_prefix('{')?.strip_suffix('}')?;
+    let path = inner.split_once("path=")?.1.split_once(" ; ")?.0.to_owned();
+    let argv = inner
         .split_once("argv[]=")?
         .1
         .rsplit_once(" ; ignore_errors=")?
