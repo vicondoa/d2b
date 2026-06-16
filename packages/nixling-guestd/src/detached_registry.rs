@@ -773,6 +773,18 @@ impl DetachedRegistry {
         slot: u32,
         spec: &ExecSpec,
     ) -> bool {
+        // The workload's TRUST identity is structural and systemd-/root-enforced:
+        // membership in `nixling-exec.slice` plus `BindsTo`/`PartOf`/`After`
+        // pinned to THIS slot's runner unit, both checked below. Only the
+        // framework (running as root in the guest) creates `nixling-exec-*` units
+        // with those properties, so a non-root caller cannot place an impostor at
+        // our slot. The `argv[]` comparison that follows is a best-effort
+        // CONSISTENCY check (does the live command match the persisted spec?)
+        // recovered from systemd's lossy single-line `systemctl show` rendering;
+        // it is hardened against the realistic argv bytes our own well-formed
+        // units carry, but it is not — and need not be — a defense against a
+        // guest-root attacker crafting a multi-line/forged ExecStart, which is a
+        // total compromise the structural boundary cannot help with either.
         if identity.slice != Some("nixling-exec.slice") {
             return false;
         }

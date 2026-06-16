@@ -450,13 +450,20 @@ impl TransientUnitManager for SystemdRunUnitManager {
                 for unit in &mut units {
                     let name = unit.name();
                     if let Some(block) = blocks.iter().find(|b| b.id == name) {
-                        unit.identity = UnitIdentity::Queried {
-                            slice: block.slice.clone(),
-                            exec_start: block.exec_start.clone(),
-                            binds_to: block.binds_to.clone(),
-                            part_of: block.part_of.clone(),
-                            after: block.after.clone(),
-                        };
+                        // A malformed block (a multi-line/continuation property
+                        // value — only possible for a foreign or crafted unit,
+                        // since our own argv is newline-free) is left Unqueried
+                        // so the active unit classifies Unknown (retry), never a
+                        // confident identity match against a truncated value.
+                        if !block.malformed {
+                            unit.identity = UnitIdentity::Queried {
+                                slice: block.slice.clone(),
+                                exec_start: block.exec_start.clone(),
+                                binds_to: block.binds_to.clone(),
+                                part_of: block.part_of.clone(),
+                                after: block.after.clone(),
+                            };
+                        }
                     }
                 }
             }
@@ -474,6 +481,11 @@ struct ShowEntry {
     binds_to: Option<String>,
     part_of: Option<String>,
     after: Option<String>,
+    /// Set when the block contained a non-empty line matching no known property
+    /// prefix — i.e. a continuation of a multi-line property value (e.g. a
+    /// newline inside a unit's argv split its `ExecStart` across `systemctl
+    /// show` lines). The block is then untrustworthy for identity verification.
+    malformed: bool,
 }
 
 impl fmt::Debug for ShowEntry {
@@ -485,6 +497,7 @@ impl fmt::Debug for ShowEntry {
             .field("has_binds_to", &self.binds_to.is_some())
             .field("has_part_of", &self.part_of.is_some())
             .field("has_after", &self.after.is_some())
+            .field("malformed", &self.malformed)
             .finish()
     }
 }
@@ -527,6 +540,17 @@ fn parse_show_blocks(text: &str) -> Vec<ShowEntry> {
                 if !v.is_empty() {
                     entry.after = Some(v.to_owned());
                 }
+            } else if !line.trim().is_empty() {
+                // A non-empty line matching no known property prefix is a
+                // continuation of a multi-line property value: systemd's
+                // `systemctl show` renders one `Key=Value` per line, and our
+                // own units' properties are all single-line (detached argv with
+                // a newline is rejected at create). A continuation therefore
+                // means a foreign/malformed block (e.g. a newline-bearing argv
+                // split across lines); mark it so the unit's identity stays
+                // Unqueried (-> Unknown/retry) rather than trusting a truncated
+                // first line.
+                entry.malformed = true;
             }
         }
         if !entry.id.is_empty() {
@@ -853,6 +877,43 @@ ExecStart=
         assert_eq!(blocks[0].id, "nixling-exec-00.service");
         assert_eq!(blocks[0].slice, None);
         assert_eq!(blocks[0].exec_start, None);
+        assert!(!blocks[0].malformed);
+    }
+
+    #[test]
+    fn parse_show_blocks_flags_multiline_continuation_as_malformed() {
+        // A foreign/crafted unit whose argv contained a newline splits its
+        // ExecStart across `systemctl show` lines. The continuation line matches
+        // no `Key=` prefix, so the block is flagged malformed even though its
+        // truncated first ExecStart line carries a fake closing brace — so the
+        // unit's identity is left Unqueried (-> Unknown/retry), never a
+        // confident match against the truncated value.
+        let text = "\
+Id=nixling-exec-03-w.service
+Slice=nixling-exec.slice
+ExecStart={ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec \"$@\" nl-exec sh -c echo a ; ignore_errors=evil }
+echo b ; ignore_errors=no ; start_time=[n/a] }
+BindsTo=nixling-exec-03.service
+PartOf=nixling-exec-03.service
+After=nixling-exec-03.service
+";
+        let blocks = parse_show_blocks(text);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].malformed,
+            "a non-property continuation line must flag the block malformed"
+        );
+
+        // A well-formed single-line block is NOT malformed.
+        let ok = "\
+Id=nixling-exec-03-w.service
+Slice=nixling-exec.slice
+ExecStart={ path=/bin/bash ; argv[]=/bin/bash -l -c exec \"$@\" nl-exec id ; ignore_errors=no }
+BindsTo=nixling-exec-03.service
+";
+        let blocks = parse_show_blocks(ok);
+        assert_eq!(blocks.len(), 1);
+        assert!(!blocks[0].malformed);
     }
 
     #[test]
@@ -936,6 +997,7 @@ ExecStart=
             binds_to: Some("nixling-exec-03.service".to_owned()),
             part_of: Some("nixling-exec-03.service".to_owned()),
             after: Some("nixling-exec-03.service".to_owned()),
+            malformed: false,
         };
         for rendered in [
             format!("{identity:?}"),
