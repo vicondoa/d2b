@@ -337,9 +337,7 @@ fn run_detached_request(
                 .exec_create(&spec)
                 .await
                 .map(DetachedRealResponse::Create),
-            DetachedRealRequest::List => {
-                client.exec_list().await.map(DetachedRealResponse::List)
-            }
+            DetachedRealRequest::List => client.exec_list().await.map(DetachedRealResponse::List),
             DetachedRealRequest::Status { exec_id } => client
                 .exec_status(&exec_id)
                 .await

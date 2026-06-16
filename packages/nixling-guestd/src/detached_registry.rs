@@ -23,8 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::detached::{
     exec_start_raw_fields, parse_exec_start, unit_name, workload_unit_name, ManagedUnit,
-    ManagedUnitKind, RunnerUnitPaths,
-    TransientUnitManager, UnitIdentity,
+    ManagedUnitKind, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
 };
 use crate::exec::{
     ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream,
