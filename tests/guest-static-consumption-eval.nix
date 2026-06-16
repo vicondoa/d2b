@@ -8,7 +8,6 @@ let
   nixosSystem = flake.inputs.nixpkgs.lib.nixosSystem;
   expected = [
     flake.packages.${system}.nixling-guestd-static
-    flake.packages.${system}.nixling-userd-static
     flake.packages.${system}.nixling-exec-runner-static
   ];
   nixos = nixosSystem {
