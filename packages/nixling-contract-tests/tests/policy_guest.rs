@@ -140,15 +140,12 @@ fn retired_guest_control_nongoals_are_now_shipped_goals() {
     );
 
     // W16: the `nixling exec` CLI non-goal became the admin-only guest-control
-    // `vm exec` / `vm konsole` surface.
+    // `vm exec` surface. (The earlier `vm konsole` verb was superseded by
+    // `vm exec` upstream and is intentionally absent.)
     let cli = read_repo_file("packages/nixling/src/lib.rs");
     assert!(
         cli.contains("Exec(VmExecArgs)"),
         "the CLI must expose the admin-only `vm exec` guest-control verb"
-    );
-    assert!(
-        cli.contains("Konsole(VmKonsoleArgs)"),
-        "the CLI must expose the admin-only `vm konsole` guest-control verb"
     );
 }
 
