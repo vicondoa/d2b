@@ -735,9 +735,6 @@ fi
 if [ -x "$ROOT/tests/cli-nix-consumers-eval.sh" ]; then
   nl_static_parallel_script_gate "tests/cli-nix-consumers-eval.sh" "$ROOT/tests/cli-nix-consumers-eval.sh"
 fi
-if [ -x "$ROOT/tests/daemon-metrics-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/daemon-metrics-eval.sh" "$ROOT/tests/daemon-metrics-eval.sh"
-fi
 # Wire orphaned static-eval gates. These were previously not referenced
 # in any CI workflow or aggregator;
 # wired here so ci-coverage.sh structural guard passes.
@@ -1220,12 +1217,7 @@ nl_static_parallel_wait_all
 # Group 2: runtime/socket gates. Their repo-local AF_UNIX sockets make
 # getFlake choke on dirty-tree snapshots, so run them only after the
 # read-only group has drained.
-if [ -x "$HERE/broker-socket-acl.sh" ]; then nl_static_parallel_script "tests/broker-socket-acl.sh" "$HERE/broker-socket-acl.sh"; fi
-if [ -x "$HERE/broker-export-audit.sh" ]; then nl_static_parallel_script "tests/broker-export-audit.sh" "$HERE/broker-export-audit.sh"; fi
 if [ -x "$HERE/broker-scm-rights-fd-lifecycle.sh" ]; then nl_static_parallel_script "tests/broker-scm-rights-fd-lifecycle.sh" "$HERE/broker-scm-rights-fd-lifecycle.sh"; fi
-if [ -x "$HERE/daemon-socket-acl.sh" ]; then nl_static_parallel_script "tests/daemon-socket-acl.sh" "$HERE/daemon-socket-acl.sh"; fi
-if [ -x "$HERE/daemon-state-lock.sh" ]; then nl_static_parallel_script "tests/daemon-state-lock.sh" "$HERE/daemon-state-lock.sh"; fi
-if [ -x "$HERE/daemon-version-negotiation.sh" ]; then nl_static_parallel_script "tests/daemon-version-negotiation.sh" "$HERE/daemon-version-negotiation.sh"; fi
 nl_static_parallel_wait_all
 if [ -x "$HERE/manifest-fuzz-bounded.sh" ]; then bash "$HERE/manifest-fuzz-bounded.sh" || fail "manifest-fuzz-bounded"; fi
 nl_static_gate_end "W2 control-plane skeleton gates"
@@ -1266,7 +1258,6 @@ if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tes
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
 if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
-if [ -x "$HERE/daemon-state-persistence.sh" ]; then bash "$HERE/daemon-state-persistence.sh" || fail "daemon-state-persistence"; fi
 nl_static_gate_end "W3 host-prepare gates"
 
 nl_static_gate_begin "L1c and performance canaries" "L1c and performance canaries"

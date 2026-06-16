@@ -30,7 +30,6 @@ jobs:
           for t in \
             tests/preflight-disk-space.sh \
             tests/cli-nix-consumers-eval.sh \
-            tests/daemon-metrics-eval.sh \
             tests/host-json-drift-gate.sh \
             tests/host-validate-verb-eval.sh \
             tests/deliverable-gate-inventory.sh \
@@ -67,7 +66,6 @@ jobs:
         run: |
           set -euo pipefail
           for t in \
-            tests/broker-export-audit.sh \
             tests/bundle-drift.sh \
             tests/stub-no-socket.sh \
           ; do

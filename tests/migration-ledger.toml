@@ -62,24 +62,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/broker-export-audit.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/broker-socket-acl.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
 name = "tests/bundle-drift.sh"
 group = "B"
 make_target = "test-drift"
@@ -141,51 +123,6 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
-
-[[script]]
-name = "tests/daemon-metrics-eval.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/daemon-socket-acl.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/daemon-state-lock.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/daemon-state-persistence.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
-
-[[script]]
-name = "tests/daemon-version-negotiation.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "yes"
 
 [[script]]
 name = "tests/deliverable-gate-inventory.sh"
@@ -537,6 +474,69 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/broker-export-audit.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (nixling-priv-broker broker_export_audit::export_audit_requires_admin_and_exports_op_audit_records) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/broker-export-audit.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/broker-socket-acl.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["broker-workspace cargo test --workspace --features layer1-bootstrap (nixling-priv-broker broker_socket_acl::socket_acl_rejects_non_nixlingd_peers_and_accepts_daemon) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/broker-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin across the broker workspace layer1-bootstrap list)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-metrics-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/policy_metrics.rs::daemon_metrics_inventory_descriptors_match_policy + daemon_metrics_histogram_buckets_match_policy + daemon_metrics_reference_doc_rows_match_retired_gate_policy (descriptor inventory names/kinds/label-keys/buckets + retired doc-row parity; gated via the NL_FIXTURES contract step in tests/rust-workspace-checks.sh)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-socket-acl.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixlingd/tests/daemon_socket_acl.rs::daemon_socket_acl::{non_launcher_uid_is_rejected,wheel_non_launcher_is_rejected,configured_launcher_is_accepted,daemon_self_client_is_rejected} — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-socket-acl.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-state-lock.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixlingd/tests/daemon_state_lock.rs::daemon_state_lock::{lock_file_created_with_current_user_0640,second_lock_holder_exits_already_running,symlink_lock_parent_is_rejected} — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-lock.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-state-persistence.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixlingd/tests/daemon_state_persistence.rs::daemon_state_persistence::restores_pidfd_table_and_clears_after_vm_stop — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-state-persistence.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
+
+[[script]]
+name = "tests/daemon-version-negotiation.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixlingd/tests/daemon_version_negotiation.rs::daemon_version_negotiation::{version_mismatch_is_rejected,unknown_feature_flags_are_accepted,unknown_hello_field_is_rejected,invalid_ifname_is_rejected} — default cargo test --workspace via tests/rust-workspace-checks.sh", "tests/golden/pinned/daemon-version-negotiation.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
+exercised_today = "yes"
 
 [[script]]
 name = "tests/ch-net-handoff-canary.sh"
