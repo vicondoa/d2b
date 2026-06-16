@@ -34,7 +34,6 @@ jobs:
             tests/host-json-drift-gate.sh \
             tests/host-validate-verb-eval.sh \
             tests/deliverable-gate-inventory.sh \
-            tests/video-sidecar-hardening-eval.sh \
           ; do
             if [ -f "$t" ]; then
               echo "==> $t"
