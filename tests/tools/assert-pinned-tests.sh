@@ -83,12 +83,14 @@ if [ -f "$broker_lock" ]; then
 fi
 collect_present < <(
   cd "$ROOT/packages/nixling-priv-broker"
-  # `--features layer1-bootstrap` lists a SUPERSET of the default broker
-  # tests (the feature is additive — the legacy probe-* harness + the
-  # scm_rights_fd_lifecycle fd-passing tests), so the pinned gate can guard
-  # those layer1-bootstrap-gated tests too. rust-workspace-checks.sh runs
-  # both the default and the layer1-bootstrap broker test passes.
-  cargo nextest list --workspace --features layer1-bootstrap --message-format oneline
+  # `--features layer1-bootstrap,fake-backends` lists a SUPERSET of the broker
+  # test surface: the default real-wire tests, the layer1-bootstrap legacy
+  # probe-* + scm_rights_fd_lifecycle fd-passing tests, AND the
+  # `#![cfg(feature = "fake-backends")]`-gated hermetic integration tests
+  # (e.g. tests/pidfd_handoff_scm_rights.rs). rust-workspace-checks.sh runs the
+  # default, layer1-bootstrap, AND fake-backends broker test passes, so every
+  # listed test is actually executed and can be guarded by the pinned gate.
+  cargo nextest list --workspace --features layer1-bootstrap,fake-backends --message-format oneline
 )
 if [ -n "$broker_lock_backup" ]; then
   cp "$broker_lock_backup" "$broker_lock"

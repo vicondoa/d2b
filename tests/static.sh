@@ -1288,7 +1288,6 @@ nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 # negatives, kernel-module + device-node matrix, runner-shape preflight,
 # minijail version check, ipv6 sysctl readback). Safe to run in parallel
 # alongside the fake-backend network gates.
-if [ -x "$HERE/pidfd-handoff.sh" ]; then nl_static_parallel_script "tests/pidfd-handoff.sh" "$HERE/pidfd-handoff.sh"; fi
 if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
 # L3 distro-matrix pin parser/drift gate (integrator-wired).
 # Host-prepare idempotency no-op invariant (integrator-wired).

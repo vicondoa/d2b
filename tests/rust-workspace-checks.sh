@@ -38,6 +38,8 @@ workspace_target_dir=$(nl_cargo_target_dir workspace)
 broker_target_dir=$(nl_cargo_target_dir broker)
 broker_layer1_target_dir=$(nl_mktemp .nixling-broker-layer1-target.XXXXXX)
 add_cleanup "rm -rf -- \"$broker_layer1_target_dir\""
+broker_fakebackends_target_dir=$(nl_mktemp .nixling-broker-fakebackends-target.XXXXXX)
+add_cleanup "rm -rf -- \"$broker_fakebackends_target_dir\""
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full NL_FIXTURES delivery to the sandbox/CI is a tracked W1 deliverable.
@@ -272,9 +274,22 @@ log "--> cargo test --workspace --features layer1-bootstrap (broker workspace, l
 CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
 ok "broker cargo test --features layer1-bootstrap"
 
+# The `fake-backends` feature gates the broker's hermetic integration tests
+# (e.g. tests/pidfd_handoff_scm_rights.rs, #![cfg(feature = "fake-backends")])
+# behind test doubles for the privileged spawn/host backends. Neither the
+# default nor the layer1-bootstrap pass enables it, so without this pass those
+# fd-passing integration tests would not run in the gate at all — the retired
+# tests/pidfd-handoff.sh used to run them via `--all-features`. Run the full
+# broker workspace under fake-backends so every such test runs uniformly
+# (fail-closed presence is pinned in tests/golden/pinned/pidfd-handoff.txt).
+log "--> cargo test --workspace --features fake-backends (broker workspace, hermetic integration test doubles)"
+CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
+ok "broker cargo test --features fake-backends"
+
 cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
 cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
 cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
+cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/nixlingd/target"
 
 schema_out="$ROOT/packages/xtask/out"

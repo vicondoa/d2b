@@ -191,7 +191,6 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 for gate in \
-  pidfd-handoff \
   ifname-collision \
   ioctl-negative \
   kernel-module-matrix \
