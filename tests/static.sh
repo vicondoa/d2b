@@ -747,14 +747,6 @@ fi
 for _d13_gate in \
   broker-socket-activation-eval \
   daemon-autostart-eval \
-  minijail-validator-audio \
-  minijail-validator-gpu \
-  minijail-validator-otel-host-bridge \
-  minijail-validator-swtpm \
-  minijail-validator-usbip \
-  minijail-validator-video \
-  minijail-validator-vsock-relay \
-  minijail-validator-wayland-proxy \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
   deliverable-gate-inventory \

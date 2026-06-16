@@ -422,78 +422,6 @@ successor_ids = []
 exercised_today = "yes"
 
 [[script]]
-name = "tests/minijail-validator-audio.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-gpu.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-otel-host-bridge.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-swtpm.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-usbip.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-video.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-vsock-relay.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
-name = "tests/minijail-validator-wayland-proxy.sh"
-group = "C"
-make_target = "test-contract"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "manual"
-
-[[script]]
 name = "tests/multi-env-daemon-backed.sh"
 group = "D"
 make_target = "test-nix-unit"
@@ -744,6 +672,78 @@ tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
 exercised_today = "skip"
+
+[[script]]
+name = "tests/minijail-validator-audio.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_audio_usbip.rs::audio_profile_source_layer1_shape (nixos-modules/minijail-profiles.nix audio Layer-1 shape: profile block present, host capabilities kept empty (no `capabilities =`), seccompPolicyRef = \"w1-audio\", namespaces = defaultNamespaces // { net = true; }, userNamespace = { ... } — per-line grep-faithful regex + the bash awk block extraction from `profileIdFor name \"audio\"` through the first `};` line)", "packages/nixling-contract-tests/tests/minijail_audio_usbip.rs::audio_rendered_profile_broker_pre_ns_shape (REAL rendered fixture-smoke-full RoleProfile vm-corp-full-audio: EMPTY host caps, seccompPolicyRef = w1-audio, net + user namespaces isolated with ipc/mount isolated and pid/uts shared, single-entry userNamespace mapping in-NS 0 -> the nixling-<vm>-snd principal uid/gid (== profile uid/gid, != 0), umask 0o007 for the shared snd.sock, cgroup nixling.slice/<vm>/audio; early-returns SKIP when NL_FIXTURES_FULL is unset)", "tests/rust-workspace-checks.sh (NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` -> static.sh)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-gpu.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_gpu.rs (gated via the NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — gpu_rendered_device_bind_matrix_and_wayland_target (static closed-set: the rendered Gpu RoleProfile pins the exact 6-entry DEVICE_BINDS matrix /dev/kvm,/dev/dri/renderD128,/dev/nvidiactl,/dev/nvidia0,/dev/nvidia-uvm,/dev/udmabuf each under /dev, plus the in-sandbox wayland BIND_TARGET parent /run/nixling-gpu/<vm> as a writable path), gpu_rendered_jail_shape (empty host caps, w1-gpu seccompPolicyRef, nixling.slice/<vm>/gpu cgroup subtree, mount+ipc namespaces with no net/user NS, hideDeviceNodesByDefault, nixStoreReadOnly, umask 0o007, no broker-pre-NS userNamespace), gpu_broker_role_device_claim_source (role_device_classes(Gpu) arm in packages/nixling-core/src/bundle_resolver.rs includes kvm/dri/nvidia-ctl/nvidia-uvm/nvidia-render/udmabuf and excludes vfio), gpu_render_node_minijail_profile_source_shape (D5/P2.3 gpu-render-node mkProfile block in nixos-modules/minijail-profiles.nix: present, userNamespace referencing the gpu principal, seccompPolicyRef = \"w1-gpu-render-node\", empty deviceBinds, umask = 7, gated on vm.graphics.renderNodeOnly), gpu_render_node_broker_processes_wiring_source (D5/P2.3 wiring: live_handlers.rs maps w1-gpu-render-node, sys.rs declares RENDER_NODE_INHERITED_FD + pre_opened_device_fds on RunnerIsolationSpec, processes-json.nix defines gpuRenderNodeRunner + emits \"gpu-render-node\" role node + carries --gpu-device-node in argv). The bash gate's opt-in live arms (cc-compiled virtgpu_probe; minijail0 positive arm DRM_IOCTL_VIRTGPU_GET_CAPS must not SIGSYS; negative arm ptrace(PTRACE_TRACEME) must SIGSYS; NL_LIVE=1 bare GET_CAPS hardware smoke on the host render node; /var/lib/nixling/validated/p1-gpu.json evidence write) are live host-execution layers and do not port to the contract layer."]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-otel-host-bridge.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_relay_otel.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — otel_host_bridge_profile_source_reference (Layer-1 source-grep over nixos-modules/minijail-profiles.nix: references the host-scoped otel-host-bridge profile via `otel-?host-?bridge|otelHostBridge|OtelHostBridge`), otel_host_bridge_rendered_profile_shape (rendered RoleProfile over the FULL fixture `host-otel-host-bridge`: role = OtelHostBridge, caps == [], NO /dev binds in writablePaths and empty deviceBinds, seccompPolicyRef = \"w1-otel-host-bridge\", documented RW bind set /run/nixling/otel + obs VM CH vsock dir under /var/lib/nixling/vms, host-scoped cgroup subtree nixling.slice/host/otel-host-bridge, mount+ipc namespaces with no net/user — the bash gate's NL_LIVE=1 jq checks over the live /etc/nixling/minijail-profiles/host-otel-host-bridge.json port here as rendered checks that always run and are strictly stronger), otel_host_bridge_rendered_argv_socat_shape (rendered socat runner argv: socat binaryPath, nixling-otel-host-bridge title, UNIX-LISTEN:/run/nixling/otel/host-egress.sock listen + EXEC ch-vsock-connect forward leg). The bash gate's NL_LIVE=1 Layer-2 (minijail0 positive pre-opened-fd path, python3 socket(AF_VSOCK) SIGSYS/EPERM negative probe, /var/lib/nixling/validated/p1-otel-host-bridge.json evidence write) is a live host-execution layer and does not port to the contract layer."]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-swtpm.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_swtpm_video.rs (gated via the NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — swtpm_rendered_empty_caps_both_profiles (Phase-1 S2: rendered swtpm + swtpm-flush RoleProfiles declare EMPTY caps and the closed w1-swtpm seccompPolicyRef; strictly stronger than the bash awk that relied on the mkProfile empty-caps default), swtpm_rendered_user_namespace_long_lived_sidecar_only (Phase-1 S3/S4-rendered: the long-lived swtpm sidecar declares an ADR-0021 userNamespace mapping in-NS uid/gid 0 to the swtpm principal's own uid/gid with a user namespace requested, and swtpm-flush carries NO userNamespace and no user namespace), swtpm_rendered_umask_state_dir_cgroup (Phase-1 S5/S6 + cgroup intent: swtpm sidecar retains umask = 0o007, both profiles bind /var/lib/nixling/vms/<vm>/swtpm as a writable path (no tmpfs), and the nixling.slice/<vm>/{swtpm,swtpm-flush} cgroup subtrees), swtpm_source_principal_and_no_tmpfs (Phase-1 S1/S4-source/S7 over nixos-modules/minijail-profiles.nix: module present, swtpm userNamespace references stablePrincipalId \"nixling-${name}-swtpm\" not the runner principal, and the negative no-tmpfs-for-swtpm-state per-line regex ^\\s*[^#/\\s].*(tmpfs.*swtpm|swtpm.*tmpfs) matches zero non-comment lines). The bash gate's opt-in NL_LIVE=1 Phase 2 (boot swtpm under a hand-rolled minijail0 profile, tpm2_nvdefine/tpm2_nvwrite a TPM 2.0 NVRAM index, restart swtpm and read the index back to prove byte-identical persistence, ptrace SIGSYS seccomp-kill negative probe, and the /var/lib/nixling/validated/p1-swtpm.json evidence write) is a root + live-host + swtpm/tpm2-tools/minijail0 runtime layer and does not port to the contract layer."]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-usbip.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_audio_usbip.rs::usbip_profile_source_layer1_shape (nixos-modules/minijail-profiles.nix usbip Layer-1 shape pins: role = \"usbip\" declared, capabilities = [ \"CAP_NET_RAW\" ] (kernel-r2-4 cap matrix), seccompPolicyRef = \"w1-usbip\" (the closed allowlist; ptrace not in it — the bash gate's negative-path Layer-1 equivalent) — file-scoped per-line grep-faithful regex covering the per-VM vm-<name>-usbip corp-full block AND the usbipd backend block)", "packages/nixling-contract-tests/tests/minijail_audio_usbip.rs::usbip_rendered_usbipd_backend_proxy_shape (REAL rendered fixture-smoke-full RoleProfiles on the env net side: vm-sys-work-usbipd-backend — caps == [CAP_NET_RAW], seccompPolicyRef = w1-usbip, uid/gid 0 with the host-root usbip_sockfd adr_carve_out, private pid namespace, cgroup nixling.slice/sys-work-usbipd/backend; vm-sys-work-usbipd-proxy — EMPTY caps, seccompPolicyRef = w1-usbip-proxy, non-root principal uid, cgroup nixling.slice/sys-work-usbipd/proxy; both: no net/user namespace, no broker-pre userNamespace; early-returns SKIP when NL_FIXTURES_FULL is unset)", "tests/rust-workspace-checks.sh (NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` -> static.sh)"]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-video.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_swtpm_video.rs (gated via the NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — video_rendered_profile_shape (Layer-1 V1/V2/V3/V4-device-mask/V5: rendered video RoleProfile exists with EMPTY caps, seccompPolicyRef = \"w1-video\", masked /dev (hideDeviceNodesByDefault = true) exposing exactly [/dev/dri/renderD128] when videoNvidiaDecode is off, a private PID namespace, umask = 0o007 for CH socket-ACL inheritance, the nixling.slice/<vm>/video cgroup leaf, and a DEDICATED video principal whose uid does not collide with any gpu/gpu-render-node uid — AGENTS nixling-<vm>-video NOT gpu), video_source_nvidia_gating_namespace_principal (Layer-1 V1/V4-source over nixos-modules/minijail-profiles.nix, scoped to the `grep -A 45 'profileIdFor name \"video\"'` window: NVIDIA nodes /dev/nvidiactl + /dev/nvidia0 + /dev/nvidia-uvm gated behind lib.optionals (vm.graphics.videoNvidiaDecode or false), namespaces = defaultNamespaces // { pid = true; }, and principal = \"nixling-${name}-video\"), video_host_activation_runtime_and_session_acls (Layer-1 V6 over nixos-modules/host-activation.nix: ten verbatim grep -q substrings — video_media_uids= over cloud-hypervisor-runner/video, gpu_session_uids= over gpu/gpu-render-node, audio_session_uids= over audio, setfacl -d -x \"u:$uid\" /run/nixling-video, the u:$uid:--- deny entries, and stale_video_uid= / u:$stale_video_uid:--- stale-video reaping — so the video runtime dir ACL grants only cloud-hypervisor/video runtime access and video is excluded from host session sockets). The bash gate's opt-in NL_LIVE=1 Layer-2 (live render-node/cgroup-leaf/CH-uid preconditions, a benign vhost-user-media bind probe under minijail0 positive path, an undeclared-syscall ptrace SIGSYS negative probe, the socket-inherits-CH-uid-ACL assertion, and the /var/lib/nixling/validated/p1-video.json evidence write) is a root + live-host + minijail0 runtime layer and does not port to the contract layer."]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-vsock-relay.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_relay_otel.rs (gated via the NL_FIXTURES contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — vsock_relay_profile_source_shape (Layer-1 source-grep over nixos-modules/minijail-profiles.nix: profile block exists for `profileIdFor name \"vsock-relay\"`, explicit `capabilities = [ ]` empty-cap branch / no `\"CAP_*\"` token via the bash if/elif short-circuit, seccompPolicyRef = \"w1-vsock-relay\"), vsock_relay_rendered_profile_shape (rendered RoleProfile over the FULL fixture `vm-corp-full-vsock-relay`: role = VsockRelay, caps == [], seccompPolicyRef = \"w1-vsock-relay\", per-VM + obs-VM RW bind set under /var/lib/nixling/vms with NO /dev binds and empty deviceBinds, cgroup subtree nixling.slice/<vm>/vsock-relay, mount+ipc namespaces with no net/user — strictly stronger than the bash gate's jq/grep over a live host profile), vsock_relay_rendered_argv_socat_shape (rendered socat runner argv: socat binaryPath, nixling-otel-relay@<vm> title, UNIX-LISTEN + EXEC ch-vsock-connect pipe). The bash gate's NL_LIVE=1 Layer-2 (minijail0 + socat pre-opened-fd positive path, socket(AF_VSOCK) SIGSYS/EPERM negative probe, PTRACE_TRACEME probe, /var/lib/nixling/validated/p1-vsock-relay.json evidence write) is a live host-execution layer and does not port to the contract layer."]
+exercised_today = "manual"
+
+[[script]]
+name = "tests/minijail-validator-wayland-proxy.sh"
+group = "C"
+make_target = "test-contract"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-contract-tests/tests/minijail_gpu.rs (gated via the NL_FIXTURES / NL_FIXTURES_FULL contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh -> static.sh) — wayland_proxy_profile_source_shape (Layer-1 assert_profile_source over nixos-modules/minijail-profiles.nix: role = \"wayland-proxy\" declaration, mandatory seccompPolicyRef = \"w1-wayland-proxy\", empty capabilities/no CAP_ in the profile block, requiresStartRoot never true, no userNamespace, writable path /run/nixling-wlproxy present, no PipeWire/Pulse bind in the block, umask = 7, deviceBinds = [ ] empty), wayland_proxy_policy_ref_device_classes_source (Layer-1 assert_policy_ref_entry: \"w1-wayland-proxy\" in packages/nixling-priv-broker/src/live_handlers.rs policy_ref_device_classes), wayland_proxy_rust_variants_declared_source (Layer-1 assert_rust_variant_exists: ProcessRole::WaylandProxy in packages/nixling-core/src/processes.rs and RunnerRole::WaylandProxy in packages/nixling-ipc/src/broker_wire.rs), wayland_proxy_rendered_profile_shape (Layer-1 assert_installed_profiles_consistent applied to the REAL rendered RoleProfile — strictly stronger than the bash gate which scanned /etc/nixling/minijail-profiles/*wayland-proxy*.json and skipped when absent: empty caps, w1-wayland-proxy seccomp, empty deviceBinds + bindMounts, dedicated runtime dir /run/nixling-wlproxy/<vm> as the sole writable path, no PipeWire/Pulse path access, umask 0o007, no broker-pre-NS userNamespace). The bash gate's NL_LIVE=1 Layer-2 (minijail0 /bin/true positive probe; /var/lib/nixling/validated/p1-wayland-proxy.json evidence write) is a live host-execution layer and does not port to the contract layer."]
+exercised_today = "manual"
 
 [[script]]
 name = "tests/minijail-validator-cloud-hypervisor.sh"
