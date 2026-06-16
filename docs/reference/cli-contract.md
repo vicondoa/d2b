@@ -64,7 +64,7 @@ than literal byte-for-byte goldens unless the corresponding
 | Code | Meaning | Typed error / reference |
 | --- | --- | --- |
 | `0` | Success. | — |
-| `1` | Unexpected local probe or manifest-read failure. | [`generic`](./error-codes.md#generic) |
+| `1` | Unexpected daemon reply, local probe, or manifest-read failure. | [`generic`](./error-codes.md#generic) |
 | `2` | Unknown flag or unsupported invocation shape. | [`usage`](./error-codes.md#usage) |
 
 **Human example**
@@ -72,8 +72,8 @@ than literal byte-for-byte goldens unless the corresponding
 ```text
 $ nixling list
 NAME               ENV       GRAPHICS  TPM   USBIP   STATIC_IP       STATUS
-corp-vm            work      false     false false   10.20.0.10      stopped
-sys-work-net       work      false     false false   192.0.2.1       stopped (net-vm)
+corp-vm            work      false     false false   10.20.0.10      running
+sys-work-net       work      false     false false   192.0.2.1       running (net-vm)
 ```
 
 **`--json` example** — schema: [`list.schema.json`](./cli-output/list.schema.json); prose companion: [`list.md`](./cli-output/list.md).
@@ -87,7 +87,7 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
     "tpm": false,
     "usbip": false,
     "staticIp": "10.20.0.10",
-    "status": "stopped",
+    "status": "running",
     "isNetVm": false
   },
   {
@@ -97,7 +97,7 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
     "tpm": false,
     "usbip": false,
     "staticIp": "192.0.2.1",
-    "status": "stopped",
+    "status": "running",
     "isNetVm": true
   }
 ]
@@ -105,11 +105,16 @@ sys-work-net       work      false     false false   192.0.2.1       stopped (ne
 
 **Status**
 
-`list` is a daemon-native, read-only inventory query; the daemon answers it without mutating host or guest state.
+`list` is a daemon-native, read-only inventory query. When nixlingd is
+reachable, the CLI queries the public socket and reports declared VM
+metadata plus daemon-derived lifecycle state. If the public socket is
+unavailable or does not support the request, the CLI falls back to the
+static manifest/local status path.
 
 **Native**
 
-- Pure read-only manifest/inventory query; no broker op and no guest contact.
+- Pure read-only public-socket inventory query; no broker op and no guest
+  contact. The static manifest/local status path is fallback only.
 
 **Bash**
 
@@ -306,17 +311,18 @@ vm restart corp-vm: vm stop corp-vm: broker recorded the audited SignalRunner re
 
 **Synopsis:** `nixling vm list [--human] [--json]`
 
-**Status:** `vm list` is the reserved daemon-side runtime inventory surface,
-but the current CLI keeps the stable shape explicit and still returns a
-placeholder empty inventory until live runner enumeration is wired through
-this command. Use `nixling status <vm>` for per-VM runtime truth today.
+**Status:** `vm list` is the daemon-side runtime inventory surface. It
+queries nixlingd's public socket and returns the same live lifecycle/runtime
+entries the daemon exposes to desktop clients. If the public socket is not
+available, the command exits successfully with an empty `entries` array plus
+a note explaining that nixlingd must be started or restarted.
 
 **Flags**
 
 | Flag | Type | Default | Semantics |
 | --- | --- | --- | --- |
-| `--json` | boolean | `false` | Emit the stable placeholder inventory document on stdout. |
-| `--human` | boolean | `false` | Force the human placeholder summary on stdout. |
+| `--json` | boolean | `false` | Emit the daemon runtime inventory document on stdout. |
+| `--human` | boolean | `false` | Force the human runtime inventory table on stdout. |
 
 **Arguments**
 
@@ -336,7 +342,8 @@ this command. Use `nixling status <vm>` for per-VM runtime truth today.
 
 ```text
 $ nixling vm list
-vm list: daemon runner inventory not yet exposed here; use `nixling status <vm>`
+VM        STATE    RUNTIME
+corp-vm   running  running
 ```
 
 **`--json` example**
@@ -344,14 +351,50 @@ vm list: daemon runner inventory not yet exposed here; use `nixling status <vm>`
 ```json
 {
   "command": "vm list",
-  "entries": [],
-  "notes": "vm list placeholder: live daemon runner inventory is not wired through this surface yet; use `nixling status <vm>` for per-VM truth."
+  "entries": [
+    {
+      "vm": "corp-vm",
+      "name": "corp-vm",
+      "env": "work",
+      "graphics": false,
+      "isNetVm": false,
+      "lifecycle": {
+        "pendingRestart": false,
+        "state": "Running"
+      },
+      "runtime": {
+        "detail": "running"
+      },
+      "services": {
+        "gpu": null,
+        "microvm": "running",
+        "nixling": "active",
+        "snd": null,
+        "swtpm": null,
+        "video": null,
+        "virtiofsd": "running"
+      },
+      "sshUser": "alice",
+      "staticIp": "10.20.0.10",
+      "tpm": false,
+      "usbip": false
+    }
+  ]
 }
 ```
 
-**Current disposition:** `rust-native` placeholder — the Rust CLI owns the
-stable daemon-side runtime-view contract here, but the live runner table is
-not wired through this surface yet.
+When nixlingd's public socket is unavailable, `--json` returns:
+
+```json
+{
+  "command": "vm list",
+  "entries": [],
+  "notes": "vm list requires nixlingd's public socket; start or restart nixlingd and retry."
+}
+```
+
+**Current disposition:** `rust-native` — the Rust CLI owns the stable
+daemon-side runtime-view contract and reads it from nixlingd's public socket.
 
 ### `status`
 
@@ -2503,7 +2546,7 @@ detached state lives in guestd's detached registry).
 | `vm start` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SpawnRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm stop` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed `SignalRunner` path. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
 | `vm restart` | `rust-native` | The Rust CLI owns parsing and dry-run DAG output; `--apply` routes through the daemon-backed stop+start sequence. Daemon-unreachable / native-handler-deferred conditions surface typed envelopes (exit `1` / exit `78` per ADR 0015); the historical bash fallback was retired in v1.0. |
-| `vm list` | `rust-native` placeholder | Reserves the daemon-side runtime-view contract, but today returns an explicit empty inventory until live runner enumeration is wired through this surface. |
+| `vm list` | `rust-native` | Daemon-side runtime inventory from nixlingd's public socket; daemon-unavailable returns an explicit empty inventory with remediation text. |
 | `status` | `rust-native` | Status is a read-only daemon RPC, including the frozen per-VM JSON shape. |
 | `status --check-bridges` | `rust-native` | The bridge-health probe is part of the read-only status surface, even though reconcile remains deferred. |
 | `usb attach` | `rust-native` | USBIP attach parses and dispatches through the native daemon → broker path; the guest-side `usbip attach` still runs over the framework-managed per-VM SSH key. |
