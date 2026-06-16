@@ -45,9 +45,6 @@ jobs:
         run: |
           set -euo pipefail
           for t in \
-            tests/net-vm-network-eval.sh \
-            tests/observability-eval.sh \
-            tests/per-vm-state-ownership-eval.sh \
             tests/runner-shape-snapshot.sh \
           ; do
             if [ -f "$t" ]; then

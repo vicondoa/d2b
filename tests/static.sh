@@ -126,7 +126,6 @@ reap_known_static_orphans() {
     '.nixling-rust-gate.*'
     '.nixling-stub-smoke.*'
     '.nixling-test.log'
-    '.observability-eval.*'
     '.opaque-key-ids.*'
     '.privileges-matrix.*'
     '.runner-shape-snapshot.log'
@@ -637,9 +636,6 @@ nl_static_parallel_wait_all
 # Smaller eval/runtime script gates parallelize well, but the large
 # assertion/observability matrices saturate the nix daemon when overlapped.
 # Keep those two serial after the lighter fan-out drains.
-if [ -x "$ROOT/tests/net-vm-network-eval.sh" ]; then
-  nl_static_parallel_script_gate "tests/net-vm-network-eval.sh" "$ROOT/tests/net-vm-network-eval.sh"
-fi
 if [ -x "$ROOT/tests/bridge-isolation-runtime.sh" ]; then
   nl_static_parallel_script_gate "tests/bridge-isolation-runtime.sh" "$ROOT/tests/bridge-isolation-runtime.sh"
 fi
@@ -727,7 +723,6 @@ for _d13_gate in \
   net-vm-bundle-gate-eval \
   niri-vm-borders-eval \
   deliverable-gate-inventory \
-  per-vm-state-ownership-eval \
   readiness-waves-eval; do
   if [ -x "$ROOT/tests/${_d13_gate}.sh" ]; then
     nl_static_parallel_script_gate "tests/${_d13_gate}.sh" "$ROOT/tests/${_d13_gate}.sh"
@@ -760,17 +755,6 @@ if [ -x "$ROOT/tests/assertions-eval.sh" ]; then
   fi
 fi
 nl_static_gate_end "tests/assertions-eval.sh"
-
-nl_static_gate_begin "tests/observability-eval.sh" "tests/observability-eval.sh"
-if [ -x "$ROOT/tests/observability-eval.sh" ]; then
-  if bash "$ROOT/tests/observability-eval.sh" >/dev/null 2>&1; then
-    ok "observability-eval"
-  else
-    bash "$ROOT/tests/observability-eval.sh" 2>&1 | tail -40 >&2 || true
-    fail "observability-eval"
-  fi
-fi
-nl_static_gate_end "tests/observability-eval.sh"
 
 # Release auto-gcroots accumulated by the smoke-eval pool +
 # the two big eval gates (assertions/observability). Without this

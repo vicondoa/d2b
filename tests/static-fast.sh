@@ -21,8 +21,8 @@
 #
 # Skipped vs tests/static.sh (run those in the full panel gate):
 #   - smoke-eval-*.nix (5 toplevel evals, ~4 min, ~50 G disk)
-#   - assertions-eval + observability-eval (~37 min after)
-#   - mid-tier evals (autostart, net-vm, restart-policy, video, usbip,
+#   - assertions-eval (~37 min after)
+#   - mid-tier evals (autostart, restart-policy, video, usbip,
 #     bridge-isolation) — ~9 min, each materializes a system closure
 #   - manifest contract (~1 min)
 #   - control-plane gates (~12 min cargo + broker test daemons)
@@ -230,5 +230,5 @@ done
 #     golden against live CLI output)
 
 log "Static-fast checks OK"
-log "(skipped: smoke-eval, assertions-eval, observability-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
+log "(skipped: smoke-eval, assertions-eval, mid-tier evals, manifest contract, broker daemon checks, per-example flake-check, audio.)"
 log "(run tests/static.sh before panel dispatch / release-exit gates.)"

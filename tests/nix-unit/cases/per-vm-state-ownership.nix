@@ -1,11 +1,17 @@
 # nix-unit cases migrated from tests/per-vm-state-ownership-eval.sh.
 #
 # Asserts the canonical per-VM state ownership matrix from
-# nixos-modules/options-ownership-matrix.nix and the source-level store-sync
-# guardrails that the bash gate also carried. The matrix checks mirror the
-# original host eval fixture and cover structure, required path presence,
-# per-path owner/group/mode posture, hardlink-farm recursion carve-outs, and
-# the signed store-view layout.
+# nixos-modules/options-ownership-matrix.nix: structure, required path
+# presence, per-path owner/group/mode posture, hardlink-farm recursion
+# carve-outs, and the signed store-view layout.
+#
+# The bash gate's source-level store-sync guardrails (no legacy root:kvm /
+# 2775 store-mode enforcement in nixos-modules/store.nix or the daemon's
+# packages/nixlingd/src/ownership_preflight.rs) are SOURCE-LINTS, not
+# eval-time value assertions, so they live in the Rust policy layer:
+# packages/nixling-contract-tests/tests/policy_ownership_preflight.rs
+# (per the eval/Rust routing discipline — nix-unit holds pure-eval
+# assertions; source-greps belong with the other policy_*.rs lints).
 #
 # Spec correction (existing code is canon): the retired gate's prose used the
 # shorthand `nixling:<group>` for several host-created entries, but the
@@ -13,7 +19,7 @@
 # `nixlingd:nixling 0600` for store-view/sync.lock and
 # `nixlingd:users 0644` for the live marker). These cases assert the current
 # matrix values rather than the stale prose shorthand.
-{ mkEval, lib, flakeRoot, ... }:
+{ mkEval, ... }:
 
 let
   configMod = { lib, ... }: {
@@ -43,46 +49,6 @@ let
     expr = (entry path).${field};
     inherit expected;
   };
-
-  linesOf = rel: lib.splitString "\n" (builtins.readFile (flakeRoot + rel));
-  storeLines = linesOf "/nixos-modules/store.nix";
-  ownershipPreflightLines = linesOf "/packages/nixlingd/src/ownership_preflight.rs";
-  hasLine = lines: needle: lib.any (line: lib.hasInfix needle line) lines;
-
-  filesUnder = dir:
-    let
-      entries = builtins.readDir dir;
-    in lib.concatMap
-      (name:
-        let
-          kind = entries.${name};
-          path = dir + "/${name}";
-        in
-          if kind == "directory" then filesUnder path
-          else if kind == "regular" || kind == "symlink" then [ path ]
-          else [ ])
-      (lib.attrNames entries);
-  nixosModuleLines = lib.concatMap
-    (path: lib.splitString "\n" (builtins.readFile path))
-    (filesUnder (flakeRoot + "/nixos-modules"));
-  storeStoreMeta2775Line = line:
-       lib.hasInfix "store store-meta" line
-    && (lib.hasInfix "--mode 2775" line || lib.hasInfix "chmod 2775" line);
-
-  indexedLines = lines:
-    builtins.genList
-      (i: { inherit i; line = builtins.elemAt lines i; })
-      (builtins.length lines);
-  ownershipLen = builtins.length ownershipPreflightLines;
-  storePathIndices = map (x: x.i)
-    (builtins.filter (x: lib.hasInfix "path: \"store" x.line)
-      (indexedLines ownershipPreflightLines));
-  storePathWindows = lib.concatMap
-    (i:
-      builtins.genList
-        (offset: builtins.elemAt ownershipPreflightLines (i + offset))
-        (if ownershipLen - i < 6 then ownershipLen - i else 6))
-    storePathIndices;
 in
 {
   # ---- Structural matrix invariants ----
@@ -185,30 +151,4 @@ in
   "per-vm-state-ownership/live-marker-mode" = fieldCase "store-view/live/.nixling-marker-<vm>" "mode" "0644";
   "per-vm-state-ownership/live-marker-kind" = fieldCase "store-view/live/.nixling-marker-<vm>" "kind" "file";
   "per-vm-state-ownership/live-marker-required-false" = fieldCase "store-view/live/.nixling-marker-<vm>" "required" false;
-
-  # ---- Store-sync/source guardrails from the retired bash gate ----
-  "per-vm-state-ownership/store-sync-chown-meta-dirs" = {
-    expr = hasLine storeLines ''find "$META_DIR" -type d -exec chown nixlingd:users {} +'';
-    expected = true;
-  };
-  "per-vm-state-ownership/store-sync-chmod-meta-dirs" = {
-    expr = hasLine storeLines ''find "$META_DIR" -type d -exec chmod 0755 {} +'';
-    expected = true;
-  };
-  "per-vm-state-ownership/store-sync-no-root-kvm" = {
-    expr = hasLine storeLines "chown root:kvm";
-    expected = false;
-  };
-  "per-vm-state-ownership/store-sync-no-chmod-2775" = {
-    expr = hasLine storeLines "chmod 2775";
-    expected = false;
-  };
-  "per-vm-state-ownership/nixos-modules-no-store-store-meta-2775-line" = {
-    expr = builtins.any storeStoreMeta2775Line nixosModuleLines;
-    expected = false;
-  };
-  "per-vm-state-ownership/daemon-preflight-no-store-2775-mode" = {
-    expr = hasLine storePathWindows "mode: 0o2775";
-    expected = false;
-  };
 }
