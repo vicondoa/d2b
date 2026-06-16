@@ -188,14 +188,17 @@ trust-boundary statements are:
   --property=PAMName=login --uid=<user>`); the wire `user` field is
   host-fixed by guestd and ignored, and operators elevate with `sudo`
   inside the session.
-- **Leak-safe daemon-side audit.** The daemon records exec *lifecycle*
-  events (`GuestControlExecEstablished` / `GuestControlExecTerminated`)
-  to its own `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM
-  name, the admin `peer_uid`, and the negotiated `tty` shape. The
-  session handle, argv, env, cwd, exit status, and any stdin/stdout/
-  stderr bytes are NEVER recorded. This daemon-side exec audit is
-  distinct from the broker `OpAuditRecord` stream (which covers
-  privileged host mutation, not guest exec).
+- **Leak-safe daemon-side audit.** The daemon records attached exec
+  lifecycle events (`GuestControlExecEstablished` /
+  `GuestControlExecTerminated`) to its own
+  `daemon-events-<utc-date>.jsonl`, carrying ONLY the VM name, the
+  admin `peer_uid`, and the negotiated `tty` shape. Detached create and
+  kill/cancel write separate redacted daemon audit events carrying ONLY
+  the VM name, admin `peer_uid`, closed action/result enums, and the
+  opaque `exec_id`. The session handle, argv, env, cwd, exit status, and
+  any stdin/stdout/stderr bytes are NEVER recorded. This daemon-side
+  exec audit is distinct from the broker `OpAuditRecord` stream (which
+  covers privileged host mutation, not guest exec).
 - **Containment / DoS limits.** Exec is bounded at multiple layers:
   per-VM concurrent session caps; detached-exec slot and retained-log
   quotas; bounded per-op deadlines (each long-poll op gets a fresh
@@ -204,9 +207,10 @@ trust-boundary statements are:
   down through the single existing teardown path with no reader-side
   socket write, preserving the single-writer invariant — so a stalled
   or abusive owner cannot pin unbounded work, and owner EOF/POLLHUP is
-  always observed promptly; and bounded teardown on disconnect. Known
-  limitation: these bounds are in-session only — a detached exec is not
-  reaped if its owning daemon session is lost (no orphan reaper yet).
+  always observed promptly; and bounded teardown on disconnect.
+  Detached exec adds startup reconciliation, valid runner/workload
+  re-adoption, orphan workload cleanup, terminal-record retention, and a
+  periodic reaper that releases retained-log slots.
 
 ## See also
 
