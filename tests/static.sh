@@ -443,17 +443,20 @@ export NL_STATIC_CACHE
 
 # -----------------------------------------------------------------------------
 # Launch the Rust workspace gate as a background long pole NOW, so its
-# multi-core cargo compile/clippy/test overlaps the single-core nix eval
-# region that follows (parse+eval, flake check, smoke evals, eval gates,
-# mid-tier evals, per-example flake checks). It is joined below at the point
-# where it used to run synchronously, before the W2 cargo prebuild — nothing
-# between here and the join touches the shared cargo target dir. The gate's
-# entire $ROOT footprint is gitignored, so concurrent git-fetcher flake evals
-# never stat it. Opt out with NL_STATIC_SERIAL_RUST=1.
+# multi-core cargo compile/clippy/test overlaps the SINGLE-CORE, lighter nix
+# eval region that immediately follows (parse+eval, the 120s flake check, and
+# the smoke evals). It is joined right after the smoke-eval barrier — BEFORE the
+# memory-heavy mid-tier eval pool + assertions-eval, which materialize multiple
+# NixOS system closures. Overlapping the Rust gate's process-spawning tests with
+# that heavy Nix-build phase oversubscribes RAM and starves test subprocesses,
+# so the join is deliberately early. Nothing between here and the join touches
+# the shared cargo target dir. The gate's entire $ROOT footprint is gitignored,
+# so concurrent git-fetcher flake evals never stat it. Opt out with
+# NL_STATIC_SERIAL_RUST=1.
 _STATIC_RUST_GATE_OVERLAP=0
 if [ -z "${NL_STATIC_SERIAL_RUST:-}" ] && [ -d "$ROOT/packages" ] && [ -x "$HERE/rust-workspace-checks.sh" ]; then
   _STATIC_RUST_GATE_OVERLAP=1
-  log "==> launching rust-workspace-checks.sh as background long pole (overlaps nix eval region)"
+  log "==> launching rust-workspace-checks.sh as background long pole (overlaps flake check + smoke evals)"
   nl_static_longpole_spawn "tests/rust-workspace-checks.sh" bash "$HERE/rust-workspace-checks.sh"
 fi
 
@@ -704,6 +707,21 @@ nl_static_parallel_smoke_eval_gate \
   "smoke-eval-aarch64" \
   20
 nl_static_parallel_wait_all
+
+# Join the background Rust workspace gate HERE — after the lighter flake-check +
+# smoke-eval region it was overlapping, but BEFORE the memory-heavy mid-tier
+# eval pool and assertions-eval below (those materialize multiple NixOS system
+# closures). Overlapping the Rust gate's process-spawning TESTS with that heavy
+# Nix-build phase oversubscribes RAM and starves test subprocesses (the PTY
+# hangup test was the canary). Joining here keeps the high-value overlap (Rust
+# compile ‖ the 120s single-core flake check + smoke evals) while letting the
+# Rust tests finish against light Nix load, and the heavy Nix builds then run
+# without Rust contention.
+if [ "${_STATIC_RUST_GATE_OVERLAP:-0}" -eq 1 ]; then
+  log "==> joining background rust-workspace-checks.sh long pole (before heavy mid-tier evals)"
+  nl_static_longpole_join
+  _STATIC_RUST_GATE_OVERLAP=2
+fi
 
 # Smaller eval/runtime script gates parallelize well, but the large
 # assertion/observability matrices saturate the nix daemon when overlapped.
@@ -1149,7 +1167,11 @@ nl_static_gate_end "tests/layer1-self-inventory.sh"
 # tests/stub-no-socket.sh is invoked by rust-workspace-checks.sh after the
 # cargo gates.
 # -----------------------------------------------------------------------------
-if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
+if [ "$_STATIC_RUST_GATE_OVERLAP" -eq 2 ]; then
+  : # Already joined above (after the smoke-eval region, before heavy evals).
+elif [ "$_STATIC_RUST_GATE_OVERLAP" -eq 1 ]; then
+  # Defensive: overlap spawned but not yet joined (e.g. smoke-eval region
+  # skipped). Join now.
   log "==> joining background rust-workspace-checks.sh long pole"
   nl_static_longpole_join
 else
