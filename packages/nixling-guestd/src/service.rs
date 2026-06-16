@@ -1813,7 +1813,20 @@ fn validate_detached_command(
         return Err(ExecError::InvalidArgv);
     }
     for arg in &input.argv {
-        if arg.len() > MAX_ARG_BYTES || arg.as_bytes().contains(&0) {
+        // NUL is rejected for every exec. Detached argv additionally must not
+        // contain a newline or carriage return: the workload-identity reconciler
+        // recovers the running command from `systemctl show -p ExecStart`, whose
+        // `argv[]` is a single line, so a `\n`/`\r` byte would split the property
+        // and make the live workload unmatchable (silently reaped). Reject at
+        // create — as an invalid argument — so a detached job is not started
+        // only to be reaped on the first reconcile. (The create error reuses the
+        // existing InvalidArgv kind; its operator message is generic.)
+        if arg.len() > MAX_ARG_BYTES
+            || arg
+                .as_bytes()
+                .iter()
+                .any(|&b| b == 0 || b == b'\n' || b == b'\r')
+        {
             return Err(ExecError::InvalidArgv);
         }
     }
@@ -2227,6 +2240,30 @@ mod tests {
     fn detached_command_validation_rejects_empty_argv0_as_invalid_program() {
         let err = validate_detached_command(&detached_input(""), &exec_policy()).unwrap_err();
         assert_eq!(err, ExecError::InvalidProgram);
+    }
+
+    #[test]
+    fn detached_command_validation_rejects_newline_or_cr_in_argv() {
+        // A detached argv byte that would split the single-line `systemctl show
+        // -p ExecStart` property (newline / carriage return) is rejected at
+        // create — otherwise the running workload becomes unmatchable by the
+        // identity reconciler and is silently reaped. Reject up front instead.
+        for bad in ["a\nb", "a\rb", "trailing\n"] {
+            let mut input = detached_input("/bin/sh");
+            input.argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), bad.to_owned()];
+            let err = validate_detached_command(&input, &exec_policy()).unwrap_err();
+            assert_eq!(err, ExecError::InvalidArgv, "argv {bad:?} must be rejected");
+        }
+        // A semicolon argument (now handled by raw identity matching) is still
+        // accepted — the newline guard must not over-restrict the common
+        // `sh -c 'a ; b'` pattern.
+        let mut ok = detached_input("/bin/sh");
+        ok.argv = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo a ; echo b".to_owned(),
+        ];
+        assert!(validate_detached_command(&ok, &exec_policy()).is_ok());
     }
 
     #[test]

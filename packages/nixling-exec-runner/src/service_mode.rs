@@ -861,14 +861,17 @@ mod production {
                 if slice != Some("nixling-exec.slice") {
                     return SliceCheck::Unsafe;
                 }
+                // systemd nests `nixling-exec.slice` under `nixling.slice`
+                // (a `-`-keyed slice name denotes cgroup hierarchy), so the
+                // live `ControlGroup` is `/nixling.slice/nixling-exec.slice/
+                // <unit>`, NOT a top-level `/nixling-exec.slice/<unit>`. Verify
+                // the IMMEDIATE parent slice segment is `nixling-exec.slice`
+                // regardless of ancestor slices; the authoritative `Slice=`
+                // property above already pins the slice unit assignment.
+                let expected_suffix = format!("/nixling-exec.slice/{unit_name}");
                 return match cgroup {
                     Some("") => SliceCheck::NotObserved,
-                    Some(value)
-                        if value.starts_with("/nixling-exec.slice/")
-                            && value.ends_with(unit_name) =>
-                    {
-                        SliceCheck::Verified
-                    }
+                    Some(value) if value.ends_with(&expected_suffix) => SliceCheck::Verified,
                     Some(_) => SliceCheck::Unsafe,
                     None => SliceCheck::NotObserved,
                 };
@@ -1113,7 +1116,28 @@ mod tests {
 
     #[test]
     fn slice_verification_requires_runner_and_workload_in_exec_slice() {
+        // Production reality: systemd nests `nixling-exec.slice` under
+        // `nixling.slice`, so the live `ControlGroup` paths carry the
+        // `/nixling.slice/nixling-exec.slice/<unit>` prefix.
         let ok = "\
+Id=nixling-exec-03.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
+
+Id=nixling-exec-03-w.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03-w.service
+";
+        assert!(production::units_in_expected_slice(
+            ok,
+            "nixling-exec-03.service",
+            "nixling-exec-03-w.service"
+        ));
+
+        // A flat (top-level) slice placement must also verify — the check
+        // anchors on the immediate parent slice segment, not on a fixed
+        // ancestor prefix.
+        let flat = "\
 Id=nixling-exec-03.service
 Slice=nixling-exec.slice
 ControlGroup=/nixling-exec.slice/nixling-exec-03.service
@@ -1123,13 +1147,13 @@ Slice=nixling-exec.slice
 ControlGroup=/nixling-exec.slice/nixling-exec-03-w.service
 ";
         assert!(production::units_in_expected_slice(
-            ok,
+            flat,
             "nixling-exec-03.service",
             "nixling-exec-03-w.service"
         ));
 
         let bad_workload_slice = ok.replace(
-            "Slice=nixling-exec.slice\nControlGroup=/nixling-exec.slice/nixling-exec-03-w.service",
+            "Slice=nixling-exec.slice\nControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03-w.service",
             "Slice=user-1000.slice\nControlGroup=/user.slice/user-1000.slice/session-2.scope",
         );
         assert!(!production::units_in_expected_slice(
@@ -1138,10 +1162,28 @@ ControlGroup=/nixling-exec.slice/nixling-exec-03-w.service
             "nixling-exec-03-w.service"
         ));
 
+        // A workload whose immediate parent slice is NOT `nixling-exec.slice`
+        // (even if `nixling-exec.slice` appears as a non-adjacent ancestor)
+        // must fail closed.
+        let wrong_parent = "\
+Id=nixling-exec-03.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
+
+Id=nixling-exec-03-w.service
+Slice=nixling-exec.slice
+ControlGroup=/nixling.slice/nixling-exec.slice/evil.slice/nixling-exec-03-w.service
+";
+        assert!(!production::units_in_expected_slice(
+            wrong_parent,
+            "nixling-exec-03.service",
+            "nixling-exec-03-w.service"
+        ));
+
         let missing_workload = "\
 Id=nixling-exec-03.service
 Slice=nixling-exec.slice
-ControlGroup=/nixling-exec.slice/nixling-exec-03.service
+ControlGroup=/nixling.slice/nixling-exec.slice/nixling-exec-03.service
 ";
         assert!(!production::units_in_expected_slice(
             missing_workload,

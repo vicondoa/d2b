@@ -310,45 +310,54 @@ fn run_real(
     let params = resolve_guest_control_probe_params(state, &resolver, vm)
         .map_err(|_| exec_typed_error(ExecOpError::OldGeneration))?;
     let broker_socket = broker_socket_path(state);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| TypedError::InternalIo {
-            context: "build detached exec runtime".to_owned(),
-            detail: err.to_string(),
-        })?;
+    run_detached_request(params, broker_socket, request)
+}
 
-    runtime
-        .block_on(async move {
-            let client = DetachedClient::connect(params, broker_socket).await?;
-            match request {
-                DetachedRealRequest::Create(spec) => client
-                    .exec_create(&spec)
-                    .await
-                    .map(DetachedRealResponse::Create),
-                DetachedRealRequest::List => {
-                    client.exec_list().await.map(DetachedRealResponse::List)
-                }
-                DetachedRealRequest::Status { exec_id } => client
-                    .exec_status(&exec_id)
-                    .await
-                    .map(DetachedRealResponse::Status),
-                DetachedRealRequest::Logs {
-                    exec_id,
-                    stdout_offset,
-                    stderr_offset,
-                    max_len,
-                } => client
-                    .exec_logs(&exec_id, stdout_offset, stderr_offset, max_len)
-                    .await
-                    .map(DetachedRealResponse::Logs),
-                DetachedRealRequest::Kill { exec_id } => client
-                    .exec_kill(&exec_id)
-                    .await
-                    .map(DetachedRealResponse::Kill),
-            }
-        })
-        .map_err(exec_typed_error)
+/// Drive a detached guest-control request to completion over the guest-control
+/// bridge. Extracted from `run_real` so the runtime-bridging boundary is
+/// unit-testable independently of bundle/owner resolution.
+///
+/// Detached ops dispatch from two distinct contexts: detached *create* runs on a
+/// dedicated `std::thread` (the exec owner, no ambient runtime), while the
+/// management verbs (list/logs/status/kill) dispatch INLINE on the
+/// multi-threaded runtime's request thread. A raw nested `Runtime::block_on`
+/// panics ("Cannot start a runtime from within a runtime") in the latter case
+/// and crashes the whole daemon, so this MUST use the shared `block_on_future`
+/// helper: it uses `block_in_place` + the ambient `Handle` when already inside
+/// the runtime and only builds a temporary runtime when none is present.
+fn run_detached_request(
+    params: ProbeParams,
+    broker_socket: PathBuf,
+    request: DetachedRealRequest,
+) -> Result<DetachedRealResponse, TypedError> {
+    crate::block_on_future(async move {
+        let client = DetachedClient::connect(params, broker_socket).await?;
+        match request {
+            DetachedRealRequest::Create(spec) => client
+                .exec_create(&spec)
+                .await
+                .map(DetachedRealResponse::Create),
+            DetachedRealRequest::List => client.exec_list().await.map(DetachedRealResponse::List),
+            DetachedRealRequest::Status { exec_id } => client
+                .exec_status(&exec_id)
+                .await
+                .map(DetachedRealResponse::Status),
+            DetachedRealRequest::Logs {
+                exec_id,
+                stdout_offset,
+                stderr_offset,
+                max_len,
+            } => client
+                .exec_logs(&exec_id, stdout_offset, stderr_offset, max_len)
+                .await
+                .map(DetachedRealResponse::Logs),
+            DetachedRealRequest::Kill { exec_id } => client
+                .exec_kill(&exec_id)
+                .await
+                .map(DetachedRealResponse::Kill),
+        }
+    })
+    .map_err(exec_typed_error)
 }
 
 fn exec_typed_error(error: ExecOpError) -> TypedError {
@@ -1019,6 +1028,45 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    // Regression guard for the detached-management nested-runtime panic.
+    //
+    // Management verbs (list/logs/status/kill) dispatch INLINE on nixlingd's
+    // multi-threaded runtime request thread. `run_detached_request` MUST bridge
+    // through `block_on_future` (block_in_place + the ambient `Handle`), NOT
+    // build a fresh `Runtime` and `block_on` it — the latter panics ("Cannot
+    // start a runtime from within a runtime") and took down the whole daemon
+    // (status=101) on every management call. The hook-based routing tests below
+    // short-circuit before `run_real`/`run_detached_request`, so only this test
+    // exercises the bridge: reverting it to a nested runtime makes this PANIC
+    // (a test failure) instead of merely returning `Err`.
+    //
+    // It runs on a multi-threaded runtime worker (Handle::current is Some,
+    // exactly like the inline dispatch). With a non-existent broker socket and
+    // guest-control endpoint, the connect fails fast and the call returns a
+    // transport error; reaching that error proves the bridge ran without
+    // panicking.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_detached_request_bridges_runtime_without_panicking() {
+        let params = ProbeParams {
+            vm_id: "vm-a".to_owned(),
+            socket_path: PathBuf::from("/nonexistent/nixling/vm-a/vsock.sock"),
+            state_root: PathBuf::from("/nonexistent/nixling/vm-a"),
+            expected_state_root_uid: 0,
+            expected_state_root_gid: 0,
+            expected_peer_uid: 0,
+            expected_peer_gid: 0,
+        };
+        let result = run_detached_request(
+            params,
+            PathBuf::from("/nonexistent/nixling/broker.sock"),
+            DetachedRealRequest::List,
+        );
+        assert!(
+            result.is_err(),
+            "detached request with no reachable guest must return an error, not panic: {result:?}"
+        );
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct RecordedCall {

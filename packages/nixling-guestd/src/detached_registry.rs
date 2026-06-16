@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::detached::{
-    parse_exec_start, unit_name, workload_unit_name, ManagedUnit, ManagedUnitKind, RunnerUnitPaths,
-    TransientUnitManager, UnitIdentity,
+    exec_start_raw_fields, parse_exec_start, unit_name, workload_unit_name, ManagedUnit,
+    ManagedUnitKind, RunnerUnitPaths, TransientUnitManager, UnitIdentity,
 };
 use crate::exec::{
     ExecError, ExecIdSource, ExecSnapshot, ExecState, ExitOutcome, Stream as RtStream,
@@ -552,6 +552,19 @@ impl DetachedRegistry {
                     return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
                 }
                 Some(StatusPhase::InfraFailed) => {
+                    // The runner spawned the workload but its post-spawn safety
+                    // verification failed (slice placement, the never-root
+                    // re-guard, or a unit-setup fault) and refused to publish
+                    // `Started`. The operator-facing wire error is intentionally
+                    // coarse and carries no argv, so emit a guest-journal
+                    // diagnostic naming the failure class and what to inspect.
+                    eprintln!(
+                        "nixling-guestd: detached exec create aborted (slot {slot:02}): the exec \
+                         runner reported an infrastructure failure — post-spawn verification \
+                         failed. Inspect the nixling-exec.slice placement and status of \
+                         nixling-exec-{slot:02}.service and nixling-exec-{slot:02}-w.service in \
+                         the guest journal."
+                    );
                     self.abort_create(slot).await;
                     return Err(ExecError::RetainedLogPathUnsafe);
                 }
@@ -759,6 +772,18 @@ impl DetachedRegistry {
         slot: u32,
         spec: &ExecSpec,
     ) -> bool {
+        // The workload's TRUST identity is structural and systemd-/root-enforced:
+        // membership in `nixling-exec.slice` plus `BindsTo`/`PartOf`/`After`
+        // pinned to THIS slot's runner unit, both checked below. Only the
+        // framework (running as root in the guest) creates `nixling-exec-*` units
+        // with those properties, so a non-root caller cannot place an impostor at
+        // our slot. The `argv[]` comparison that follows is a best-effort
+        // CONSISTENCY check (does the live command match the persisted spec?)
+        // recovered from systemd's lossy single-line `systemctl show` rendering;
+        // it is hardened against the realistic argv bytes our own well-formed
+        // units carry, but it is not — and need not be — a defense against a
+        // guest-root attacker crafting a multi-line/forged ExecStart, which is a
+        // total compromise the structural boundary cannot help with either.
         if identity.slice != Some("nixling-exec.slice") {
             return false;
         }
@@ -772,10 +797,16 @@ impl DetachedRegistry {
         let Some(exec_start) = identity.exec_start else {
             return false;
         };
-        let Some(parsed) = parse_exec_start(exec_start) else {
+        // Match against the RAW `path=`/`argv[]=` fields, never the quote-aware
+        // token parser: `systemctl show` renders argv[] losslessly space-joined
+        // and UNescaped, and `validate_command` permits argv bytes the parser
+        // would reject (literal `"`, trailing `\`) or fail-OPEN truncate at (a
+        // user `;`). Render the expected argv the same lossy way and compare the
+        // raw strings byte-for-byte.
+        let Some((raw_path, raw_argv)) = exec_start_raw_fields(exec_start) else {
             return false;
         };
-        if parsed.exe != spec.login_shell_path {
+        if raw_path != spec.login_shell_path {
             return false;
         }
         let mut expected = Vec::with_capacity(5 + spec.argv.len());
@@ -785,7 +816,7 @@ impl DetachedRegistry {
         expected.push(r#"exec "$@""#.to_owned());
         expected.push("nl-exec".to_owned());
         expected.extend(spec.argv.iter().cloned());
-        argv_matches_expected(&parsed.argv, &expected)
+        raw_argv == expected.join(" ")
     }
 
     // ---- read-side ops ---------------------------------------------------
@@ -1643,18 +1674,6 @@ fn property_contains_unit(value: Option<&str>, unit: &str) -> bool {
     value
         .map(|v| v.split_whitespace().any(|token| token == unit))
         .unwrap_or(false)
-}
-
-/// Exact argv equality for workload-unit identity. `parse_exec_start`'s
-/// `parse_exec_argv` is quote-aware (honours `'`/`"`/`\`), so a systemd-rendered
-/// `argv[]=` round-trips to the persisted argv exactly — including the
-/// space-bearing `exec "$@"` element. We therefore require BYTE-EXACT argv
-/// equality: a whitespace-flattened comparison would let a foreign unit whose
-/// argument boundaries differ (e.g. `["hello", "world"]` vs a persisted
-/// `["hello world"]`) classify as the expected workload. A genuine mismatch
-/// fails closed (the slot is not adopted) rather than adopting a foreign unit.
-fn argv_matches_expected(actual: &[String], expected: &[String]) -> bool {
-    actual == expected
 }
 
 fn build_spec(
@@ -2714,27 +2733,16 @@ mod tests {
         rendered.push(r#"exec "$@""#.to_owned());
         rendered.push("nl-exec".to_owned());
         rendered.extend(spec.argv);
-        let argv = rendered
-            .iter()
-            .map(|arg| quote_exec_start_arg(arg))
-            .collect::<Vec<_>>()
-            .join(" ");
+        // Render argv[] the way real systemd does: a literal single-space join
+        // with NO escaping of embedded spaces/quotes (so the `-c` value
+        // `exec "$@"` appears verbatim as `... -c exec "$@" nl-exec ...`). This
+        // mirrors `systemctl show -p ExecStart` output so the identity tests
+        // exercise the real, lossy rendering rather than an idealized escaped one.
+        let argv = rendered.join(" ");
         format!(
             "{{ path={} ; argv[]={argv} ; ignore_errors=no }}",
             spec.login_shell_path
         )
-    }
-
-    fn quote_exec_start_arg(arg: &str) -> String {
-        if !arg.is_empty()
-            && arg
-                .chars()
-                .all(|ch| !ch.is_whitespace() && ch != '"' && ch != '\'' && ch != '\\')
-        {
-            return arg.to_owned();
-        }
-        let escaped = arg.replace('\\', r"\\").replace('"', r#"\""#);
-        format!("\"{escaped}\"")
     }
 
     fn test_registry_config() -> RegistryConfig {
@@ -3313,33 +3321,122 @@ mod tests {
     }
 
     #[test]
-    fn argv_matches_expected_requires_byte_exact_argv() {
-        let expected = vec![
-            "/run/current-system/sw/bin/bash".to_owned(),
-            "-l".to_owned(),
-            "-c".to_owned(),
-            r#"exec "$@""#.to_owned(),
-            "nl-exec".to_owned(),
-            "/bin/id".to_owned(),
-        ];
-        assert!(argv_matches_expected(&expected, &expected));
+    fn exec_start_raw_fields_handles_lossy_systemd_argv_bytes() {
+        use crate::detached::exec_start_raw_fields;
 
-        // A whitespace-flattened variant MUST NOT match: a persisted single arg
-        // with an embedded space must not be satisfied by two separate args
-        // (the foreign-unit adoption hole the flatten fallback opened).
-        let persisted = vec!["hello world".to_owned()];
-        let two_args = vec!["hello".to_owned(), "world".to_owned()];
-        assert!(!argv_matches_expected(&two_args, &persisted));
-        assert!(!argv_matches_expected(&persisted, &two_args));
+        // Helper: build the expected raw argv[] string the same lossy way systemd
+        // renders it (literal single-space join, no escaping).
+        fn expected_raw(exe: &str, user_argv: &[&str]) -> String {
+            let mut v = vec![
+                exe.to_owned(),
+                "-l".to_owned(),
+                "-c".to_owned(),
+                r#"exec "$@""#.to_owned(),
+                "nl-exec".to_owned(),
+            ];
+            v.extend(user_argv.iter().map(|s| (*s).to_owned()));
+            v.join(" ")
+        }
 
-        // The space-bearing `exec "$@"` element round-trips exactly through the
-        // quote-aware ExecStart parser, so byte-exact comparison still matches a
-        // real systemd `argv[]=` rendering.
-        let parsed = parse_exec_start(
-            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c "exec \"$@\"" nl-exec /bin/id ; ignore_errors=no }"#,
+        let exe = "/run/current-system/sw/bin/bash";
+
+        // Real systemd renders the `-c` value `exec "$@"` UNescaped and
+        // space-joined: `... -c exec "$@" nl-exec ...`. Raw extraction must
+        // recover it verbatim (this is what was reaping our own live workloads).
+        let (path, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/id ; ignore_errors=no ; start_time=[n/a] }"#,
         )
-        .expect("parse systemd ExecStart");
-        assert!(argv_matches_expected(&parsed.argv, &expected));
+        .expect("extract raw fields");
+        assert_eq!(path, exe);
+        assert_eq!(argv, expected_raw(exe, &["/bin/id"]));
+
+        // A user argument containing a literal double quote (which the token
+        // parser would reject as an unmatched quote, reaping a valid job) is
+        // preserved byte-for-byte by raw extraction.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec grep " /etc/hosts ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["grep", "\"", "/etc/hosts"]));
+
+        // A user argument ending in a backslash (rejected by the token parser as
+        // a dangling escape) is preserved.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec echo back\ ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["echo", "back\\"]));
+
+        // A user argument containing a semicolon (the common `sh -c 'a ; b'`
+        // pattern) must NOT truncate at the `;`: extraction is bounded by the
+        // fixed ` ; ignore_errors=` field, so the whole `a ; b` is preserved.
+        // (A bare `;` split would fail-OPEN by comparing only the prefix `a`.)
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo b ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["sh", "-c", "echo a ; echo b"]));
+
+        // A user argument containing the EXACT field delimiter ` ; ignore_errors=`
+        // is preserved in full: we bound on the LAST occurrence (systemd's real
+        // field), so the user's copy stays in the recovered argv and matches a
+        // persisted spec that carries it.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; ignore_errors=evil ; ignore_errors=no ; start_time=[n/a] }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(
+            argv,
+            expected_raw(exe, &["sh", "-c", "echo a ; ignore_errors=evil"])
+        );
+        // ...and a DIFFERENT persisted command must NOT match it (fail closed):
+        // a spec for just `echo a` does not equal the recovered, full argv.
+        assert_ne!(argv, expected_raw(exe, &["sh", "-c", "echo a"]));
+
+        // A final argument's trailing whitespace is significant and preserved
+        // (the recovered argv is not trimmed).
+        let (_, argv) = exec_start_raw_fields(
+            "{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec \"$@\" nl-exec echo hi  ; ignore_errors=no }",
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["echo", "hi "]));
+
+        // Distinct semicolon suffixes are NOT conflated, both at the rendering
+        // layer and when driven through real extraction.
+        assert_ne!(
+            expected_raw(exe, &["sh", "-c", "echo a ; echo b"]),
+            expected_raw(exe, &["sh", "-c", "echo a ; echo c"]),
+        );
+        let (_, argv_b) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo b ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        let (_, argv_c) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo c ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_ne!(argv_b, argv_c);
+
+        // Missing fields => None (treated as a mismatch, never a match):
+        // no path, no argv[], and path-present-but-argv-absent.
+        assert!(exec_start_raw_fields("{ argv[]=x ; ignore_errors=no }").is_none());
+        assert!(exec_start_raw_fields("{ path=/x ; argv[]=/x ; }").is_none());
+        assert!(exec_start_raw_fields("{ path=/x ; ignore_errors=no }").is_none());
+
+        // A truncated / line-split ExecStart (no closing `}`, e.g. a foreign
+        // unit whose argv newline split the `systemctl show` property across
+        // lines) MUST fail closed — even though it carries a `; ignore_errors=`
+        // tail that would otherwise let a recovered prefix match a shorter
+        // persisted argv.
+        assert!(exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; ignore_errors=evil"#,
+        )
+        .is_none());
+        // No leading brace (e.g. a captured continuation line) also fails closed.
+        assert!(exec_start_raw_fields(
+            "path=/x ; argv[]=/x -l -c exec \"$@\" nl-exec id ; ignore_errors=no }"
+        )
+        .is_none());
     }
 
     #[tokio::test]
