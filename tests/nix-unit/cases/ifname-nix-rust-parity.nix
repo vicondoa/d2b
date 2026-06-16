@@ -1,0 +1,97 @@
+# nix-unit cases migrated from tests/ifname-nix-rust-parity.sh.
+#
+# Covers the pure-eval host.json shape assertions: the smoke bundle must emit
+# at least one ifNameMappings row, every derivedIfname must keep the exact
+# legacy shell regex (`^nl-[bt][0-9A-F]{8}$`), and bridge/TAP rows must carry
+# the role tag that the Rust predicate accepts.
+#
+# The impure `NIXLING_HOST_RUNTIME_PATH` host-runtime.json readback is retained
+# in the bash gate for now; this corpus cannot set per-case evaluator
+# environment variables.
+{ mkEval, lib, flakeRoot, ... }:
+
+let
+  smokeConfig = { lib, ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text =
+      "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
+    nixling.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+      yubikey.enable = false;
+    };
+    nixling.envs.work = {
+      lanSubnet = "10.20.0.0/24";
+      uplinkSubnet = "192.0.2.0/30";
+    };
+    nixling.vms.corp-vm = {
+      enable = true;
+      env = "work";
+      index = 10;
+      ssh.user = "alice";
+      config = {
+        networking.hostName = lib.mkDefault "corp-vm";
+        users.users.alice = { isNormalUser = true; uid = 1000; };
+      };
+    };
+  };
+
+  cfg = (mkEval [ smokeConfig ]).config;
+  hostJson = builtins.fromJSON cfg.nixling._bundle.hostJson.jsonText;
+  mappings = hostJson.ifNameMappings or [ ];
+  regex = "^nl-[bt][0-9A-F]{8}$";
+  matchesShape = name: builtins.match regex name != null;
+  tagFor = row: builtins.substring 3 1 row.derivedIfname;
+  expectedRoleTags = [
+    { role = "net-vm-lan"; tag = "b"; }
+    { role = "uplink"; tag = "b"; }
+    { role = "workload-lan"; tag = "t"; }
+  ];
+  roleTagPresent = wanted:
+    lib.any
+      (row: row.role == wanted.role && tagFor row == wanted.tag)
+      mappings;
+  hostJsonSource = builtins.readFile (flakeRoot + "/nixos-modules/host-json.nix");
+in
+{
+  "ifname-nix-rust-parity/ifname-mappings-non-empty" = {
+    expr = mappings != [ ];
+    expected = true;
+  };
+
+  "ifname-nix-rust-parity/derived-ifnames-match-regex" = {
+    expr = map
+      (row: {
+        inherit (row) role userVisibleName derivedIfname;
+        matches = matchesShape row.derivedIfname;
+      })
+      mappings;
+    expected = map
+      (row: {
+        inherit (row) role userVisibleName derivedIfname;
+        matches = true;
+      })
+      mappings;
+  };
+
+  "ifname-nix-rust-parity/bridge-and-tap-role-tags" = {
+    expr = map
+      (wanted: wanted // { present = roleTagPresent wanted; })
+      expectedRoleTags;
+    expected = map
+      (wanted: wanted // { present = true; })
+      expectedRoleTags;
+  };
+
+  "ifname-nix-rust-parity/host-runtime-override-source-hook-present" = {
+    expr =
+      lib.hasInfix ''builtins.getEnv "NIXLING_HOST_RUNTIME_PATH"'' hostJsonSource
+      && lib.hasInfix "runtimeRow.derivedIfname" hostJsonSource;
+    expected = true;
+  };
+}

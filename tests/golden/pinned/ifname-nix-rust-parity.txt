@@ -1,0 +1,6 @@
+# ifname-nix-rust-parity — nixling-host ifname oracle #[test].
+# Successor for the cargo-test portion of tests/ifname-nix-rust-parity.sh,
+# which ran:
+#   cargo test -p nixling-host -- nix_emitted_ifnames_pass_looks_nixling_owned
+# Bare libtest path, present under default `cargo test --workspace`.
+ifname::tests::nix_emitted_ifnames_pass_looks_nixling_owned
