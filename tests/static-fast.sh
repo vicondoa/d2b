@@ -152,7 +152,6 @@ run_script_gate_if_present "tests/group-migration-fresh-install-eval.sh" "$ROOT/
 run_script_gate_if_present "tests/guest-control-auth-eval.sh" "$ROOT/tests/guest-control-auth-eval.sh"
 run_script_gate_if_present "tests/guest-control-token-materializer.sh" "$ROOT/tests/guest-control-token-materializer.sh"
 run_script_gate_if_present "tests/guest-control-vsock-eval.sh" "$ROOT/tests/guest-control-vsock-eval.sh"
-run_script_gate_if_present "tests/guest-static-consumption-eval.sh" "$ROOT/tests/guest-static-consumption-eval.sh"
 
 run_gate "nix flake check --no-build --all-systems" '
   nix flake check "'$ROOT'" --no-build --all-systems

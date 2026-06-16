@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["flake.checks.<system>.guest-static-consumption (flake.nix:722; the check's `${evidence}` interpolation forces the eval-time `assert lib.all (pkg: elem pkg guestSystemPackages) expected` in tests/guest-static-consumption-eval.nix, so `nix flake check --no-build --all-systems` — already run by tests/static.sh — covers the assertion on every system; the retired bash gate only additionally realized the marker-writing runCommand, which asserts nothing beyond the eval)"]
