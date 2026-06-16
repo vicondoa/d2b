@@ -145,7 +145,10 @@ deprecations ship one minor release before removal.
   semicolon) were misclassified as foreign and reaped as `lost-guestd`
   shortly after starting. Workload identity is now matched against systemd's
   raw rendering, and a failed runner-side spawn verification logs an
-  actionable guest-journal diagnostic.
+  actionable guest-journal diagnostic. (Detached command arguments may not
+  contain a newline or carriage return, which `systemctl show` cannot render
+  on one line; such commands are now rejected at create with a clear error
+  rather than starting and then vanishing.)
 
 ### Added
 
