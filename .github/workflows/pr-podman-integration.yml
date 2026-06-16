@@ -1,0 +1,31 @@
+name: pr-podman-integration
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Container integration tier (type-G): builds the Nix-built OCI images under
+# tests/containers/images/*.nix and runs them with rootless podman via
+# `make test-integration`. This is the Ubuntu-CI-parity tier — it proves the
+# statically-linked nixling guest binary runs on a stock non-Nix userland
+# (ubuntu:24.04). podman is preinstalled on the ubuntu-latest runner; Nix is
+# installed to build the images. See tests/containers/README.md for why this
+# tier is deliberately narrow (foreign-userland portability only; daemon/socket
+# activation is covered natively + by the runNixOSTest tier).
+jobs:
+  podman-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Podman container integration tier
+        run: make test-integration
