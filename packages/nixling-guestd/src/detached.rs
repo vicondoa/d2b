@@ -236,23 +236,30 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
 /// `;`, which `parse_exec_start` treats as a field delimiter — a fail-OPEN
 /// truncation that would compare only a shared prefix). The caller compares
 /// this raw `argv[]=` value byte-for-byte against the expected argv rendered the
-/// same lossy way, so the match is symmetric, never tokenizes user bytes, and
-/// cannot truncate at a user `;`.
+/// same lossy way, so the match is symmetric and never tokenizes user bytes.
 ///
 /// The `argv[]=` value is delimited by the fixed ` ; ignore_errors=` field that
-/// systemd always emits immediately after it, so a `;` inside a user argument
-/// (e.g. `sh -c 'a ; b'`) is preserved rather than treated as a field break.
-/// Returns `None` if either field is absent (treated as a mismatch, never a
-/// match).
+/// systemd always emits immediately after it. We bound on the LAST occurrence
+/// (`rsplit_once`): systemd's `ignore_errors` field is the last
+/// ` ; ignore_errors=` in the line (no later field — `start_time`, `pid`, … —
+/// contains that substring), so a user argument that itself contains the literal
+/// ` ; ignore_errors=` substring is preserved in full rather than truncating the
+/// recovered argv at the user's copy (a fail-OPEN that could match a shorter
+/// persisted argv). The recovered argv is NOT trimmed: every argv byte is
+/// significant, including a final argument's trailing whitespace.
+///
+/// Newline bytes in an argument are rejected at detached create
+/// (`validate_detached_command`) because `systemctl show` would split the
+/// single-line property; they cannot reach this matcher. Returns `None` if
+/// either field is absent (treated as a mismatch, never a match).
 pub fn exec_start_raw_fields(value: &str) -> Option<(String, String)> {
-    let path = {
-        let after = value.split_once("path=")?.1;
-        after.split_once(" ; ")?.0.trim().to_owned()
-    };
-    let argv = {
-        let after = value.split_once("argv[]=")?.1;
-        after.split_once(" ; ignore_errors=")?.0.trim().to_owned()
-    };
+    let path = value.split_once("path=")?.1.split_once(" ; ")?.0.to_owned();
+    let argv = value
+        .split_once("argv[]=")?
+        .1
+        .rsplit_once(" ; ignore_errors=")?
+        .0
+        .to_owned();
     Some((path, argv))
 }
 

@@ -3366,16 +3366,51 @@ mod tests {
         .expect("extract raw fields");
         assert_eq!(argv, expected_raw(exe, &["sh", "-c", "echo a ; echo b"]));
 
-        // Distinct semicolon suffixes are NOT conflated (no prefix-truncation
-        // fail-open): `echo a ; echo b` and `echo a ; echo c` differ.
+        // A user argument containing the EXACT field delimiter ` ; ignore_errors=`
+        // is preserved in full: we bound on the LAST occurrence (systemd's real
+        // field), so the user's copy stays in the recovered argv and matches a
+        // persisted spec that carries it.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; ignore_errors=evil ; ignore_errors=no ; start_time=[n/a] }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(
+            argv,
+            expected_raw(exe, &["sh", "-c", "echo a ; ignore_errors=evil"])
+        );
+        // ...and a DIFFERENT persisted command must NOT match it (fail closed):
+        // a spec for just `echo a` does not equal the recovered, full argv.
+        assert_ne!(argv, expected_raw(exe, &["sh", "-c", "echo a"]));
+
+        // A final argument's trailing whitespace is significant and preserved
+        // (the recovered argv is not trimmed).
+        let (_, argv) = exec_start_raw_fields(
+            "{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec \"$@\" nl-exec echo hi  ; ignore_errors=no }",
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["echo", "hi "]));
+
+        // Distinct semicolon suffixes are NOT conflated, both at the rendering
+        // layer and when driven through real extraction.
         assert_ne!(
             expected_raw(exe, &["sh", "-c", "echo a ; echo b"]),
             expected_raw(exe, &["sh", "-c", "echo a ; echo c"]),
         );
+        let (_, argv_b) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo b ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        let (_, argv_c) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo c ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_ne!(argv_b, argv_c);
 
-        // Missing fields => None (treated as a mismatch, never a match).
+        // Missing fields => None (treated as a mismatch, never a match):
+        // no path, no argv[], and path-present-but-argv-absent.
         assert!(exec_start_raw_fields("{ argv[]=x ; ignore_errors=no }").is_none());
         assert!(exec_start_raw_fields("{ path=/x ; argv[]=/x ; }").is_none());
+        assert!(exec_start_raw_fields("{ path=/x ; ignore_errors=no }").is_none());
     }
 
     #[tokio::test]
