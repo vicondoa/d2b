@@ -1,0 +1,9 @@
+# nft-foreign-rule-preservation — nixling-host nftables foreign-rule
+# preservation + drift-detection #[test]s. Successor of
+# tests/nft-foreign-rule-preservation.sh, which only ran these #[test]s
+# (`cargo test -p nixling-host --all-features`); they already run in the
+# gated `cargo test --workspace` pass in tests/rust-workspace-checks.sh.
+# Pinned fail-closed via tests/tools/assert-pinned-tests.sh.
+nftables::tests::fake_backend_preserves_foreign_rules
+nftables::tests::drift_detection_strips_volatile_fields
+nftables::tests::drift_detection_catches_real_change

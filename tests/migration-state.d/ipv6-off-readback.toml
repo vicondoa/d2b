@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["cargo test --workspace (nixling-host netlink::tests::{ipv6_off_sequence_runs_in_order,drift_after_write_fails_closed,bridge_nf_sysctls_applied_when_loaded,ipv6_off_sequence_fails_closed_on_nm_precondition}) — already gated in tests/rust-workspace-checks.sh", "tests/golden/pinned/ipv6-off-readback.txt + tests/tools/assert-pinned-tests.sh (fail-closed presence pin)"]
