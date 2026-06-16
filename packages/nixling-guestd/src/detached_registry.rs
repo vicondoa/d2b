@@ -22,7 +22,8 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::detached::{
-    parse_exec_start, unit_name, workload_unit_name, ManagedUnit, ManagedUnitKind, RunnerUnitPaths,
+    exec_start_raw_fields, parse_exec_start, unit_name, workload_unit_name, ManagedUnit,
+    ManagedUnitKind, RunnerUnitPaths,
     TransientUnitManager, UnitIdentity,
 };
 use crate::exec::{
@@ -552,6 +553,19 @@ impl DetachedRegistry {
                     return Ok((exec_id.to_owned(), self.snapshot_for(slot)?));
                 }
                 Some(StatusPhase::InfraFailed) => {
+                    // The runner spawned the workload but its post-spawn safety
+                    // verification failed (slice placement, the never-root
+                    // re-guard, or a unit-setup fault) and refused to publish
+                    // `Started`. The operator-facing wire error is intentionally
+                    // coarse and carries no argv, so emit a guest-journal
+                    // diagnostic naming the failure class and what to inspect.
+                    eprintln!(
+                        "nixling-guestd: detached exec create aborted (slot {slot:02}): the exec \
+                         runner reported an infrastructure failure — post-spawn verification \
+                         failed. Inspect the nixling-exec.slice placement and status of \
+                         nixling-exec-{slot:02}.service and nixling-exec-{slot:02}-w.service in \
+                         the guest journal."
+                    );
                     self.abort_create(slot).await;
                     return Err(ExecError::RetainedLogPathUnsafe);
                 }
@@ -772,10 +786,16 @@ impl DetachedRegistry {
         let Some(exec_start) = identity.exec_start else {
             return false;
         };
-        let Some(parsed) = parse_exec_start(exec_start) else {
+        // Match against the RAW `path=`/`argv[]=` fields, never the quote-aware
+        // token parser: `systemctl show` renders argv[] losslessly space-joined
+        // and UNescaped, and `validate_command` permits argv bytes the parser
+        // would reject (literal `"`, trailing `\`) or fail-OPEN truncate at (a
+        // user `;`). Render the expected argv the same lossy way and compare the
+        // raw strings byte-for-byte.
+        let Some((raw_path, raw_argv)) = exec_start_raw_fields(exec_start) else {
             return false;
         };
-        if parsed.exe != spec.login_shell_path {
+        if raw_path != spec.login_shell_path {
             return false;
         }
         let mut expected = Vec::with_capacity(5 + spec.argv.len());
@@ -785,7 +805,7 @@ impl DetachedRegistry {
         expected.push(r#"exec "$@""#.to_owned());
         expected.push("nl-exec".to_owned());
         expected.extend(spec.argv.iter().cloned());
-        workload_argv_matches_rendered(&parsed.argv, &spec.login_shell_path, &expected)
+        raw_argv == expected.join(" ")
     }
 
     // ---- read-side ops ---------------------------------------------------
@@ -1643,40 +1663,6 @@ fn property_contains_unit(value: Option<&str>, unit: &str) -> bool {
     value
         .map(|v| v.split_whitespace().any(|token| token == unit))
         .unwrap_or(false)
-}
-
-/// Compare a workload unit's parsed `argv[]` against the expected login-session
-/// argv, accounting for systemd's lossy `ExecStart` rendering.
-///
-/// `systemctl show -p ExecStart` joins `argv[]` with single spaces and does NOT
-/// escape embedded spaces or quotes — the `-c` value `exec "$@"` renders
-/// literally as `exec "$@"`, NOT as the escaped `"exec \"$@\""`. So the rendered
-/// `argv[]=` does not round-trip an argv whose elements contain spaces: neither
-/// the fixed `exec "$@"` login preamble nor any user argument that contains a
-/// space. (An earlier byte-exact comparison assumed systemd escapes such
-/// elements; against real systemd it instead reaps our OWN live workloads as
-/// "foreign".)
-///
-/// Re-render the EXPECTED argv through the same space-join and re-parse it with
-/// the same quote-aware tokenizer, so the comparison is symmetric with whatever
-/// systemd produced. The rendering is inherently lossy (a single arg
-/// `foo bar` is indistinguishable from two args `foo` `bar`), but the workload
-/// unit's `nixling-exec.slice` placement plus its `BindsTo`/`PartOf`/`After`
-/// pinning to THIS slot's runner unit already establish that the unit is ours;
-/// the argv comparison is a consistency check on top of that structural
-/// identity, not the trust boundary. A genuine mismatch (different exe, program,
-/// or argument count/content beyond systemd's space-flattening) still fails
-/// closed.
-fn workload_argv_matches_rendered(actual: &[String], exe: &str, expected: &[String]) -> bool {
-    let rendered = format!(
-        "{{ path={} ; argv[]={} ; ignore_errors=no }}",
-        exe,
-        expected.join(" ")
-    );
-    match parse_exec_start(&rendered) {
-        Some(reparsed) => actual == reparsed.argv.as_slice(),
-        None => false,
-    }
 }
 
 fn build_spec(
@@ -3324,60 +3310,72 @@ mod tests {
     }
 
     #[test]
-    fn workload_argv_matches_real_unescaped_systemd_rendering() {
+    fn exec_start_raw_fields_handles_lossy_systemd_argv_bytes() {
+        use crate::detached::exec_start_raw_fields;
+
+        // Helper: build the expected raw argv[] string the same lossy way systemd
+        // renders it (literal single-space join, no escaping).
+        fn expected_raw(exe: &str, user_argv: &[&str]) -> String {
+            let mut v = vec![
+                exe.to_owned(),
+                "-l".to_owned(),
+                "-c".to_owned(),
+                r#"exec "$@""#.to_owned(),
+                "nl-exec".to_owned(),
+            ];
+            v.extend(user_argv.iter().map(|s| (*s).to_owned()));
+            v.join(" ")
+        }
+
         let exe = "/run/current-system/sw/bin/bash";
-        let expected = vec![
-            exe.to_owned(),
-            "-l".to_owned(),
-            "-c".to_owned(),
-            r#"exec "$@""#.to_owned(),
-            "nl-exec".to_owned(),
-            "/bin/id".to_owned(),
-        ];
 
-        // Real systemd renders argv[] with a literal space-join and NO escaping
-        // of the `-c` value's inner quotes/space: `... -c exec "$@" nl-exec ...`.
-        // The quote-aware parser splits that into [`exec`, `$@`]. The matcher
-        // must accept this (it reaped our own live workloads before the fix).
-        let real = parse_exec_start(
-            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/id ; ignore_errors=no }"#,
+        // Real systemd renders the `-c` value `exec "$@"` UNescaped and
+        // space-joined: `... -c exec "$@" nl-exec ...`. Raw extraction must
+        // recover it verbatim (this is what was reaping our own live workloads).
+        let (path, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/id ; ignore_errors=no ; start_time=[n/a] }"#,
         )
-        .expect("parse systemd ExecStart");
-        assert!(
-            workload_argv_matches_rendered(&real.argv, exe, &expected),
-            "real unescaped systemd argv[] must match the expected login-session argv"
+        .expect("extract raw fields");
+        assert_eq!(path, exe);
+        assert_eq!(argv, expected_raw(exe, &["/bin/id"]));
+
+        // A user argument containing a literal double quote (which the token
+        // parser would reject as an unmatched quote, reaping a valid job) is
+        // preserved byte-for-byte by raw extraction.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec grep " /etc/hosts ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["grep", "\"", "/etc/hosts"]));
+
+        // A user argument ending in a backslash (rejected by the token parser as
+        // a dangling escape) is preserved.
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec echo back\ ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["echo", "back\\"]));
+
+        // A user argument containing a semicolon (the common `sh -c 'a ; b'`
+        // pattern) must NOT truncate at the `;`: extraction is bounded by the
+        // fixed ` ; ignore_errors=` field, so the whole `a ; b` is preserved.
+        // (A bare `;` split would fail-OPEN by comparing only the prefix `a`.)
+        let (_, argv) = exec_start_raw_fields(
+            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec sh -c echo a ; echo b ; ignore_errors=no }"#,
+        )
+        .expect("extract raw fields");
+        assert_eq!(argv, expected_raw(exe, &["sh", "-c", "echo a ; echo b"]));
+
+        // Distinct semicolon suffixes are NOT conflated (no prefix-truncation
+        // fail-open): `echo a ; echo b` and `echo a ; echo c` differ.
+        assert_ne!(
+            expected_raw(exe, &["sh", "-c", "echo a ; echo b"]),
+            expected_raw(exe, &["sh", "-c", "echo a ; echo c"]),
         );
 
-        // A genuinely different program (same login preamble) must NOT match.
-        let wrong_prog = parse_exec_start(
-            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/evil ; ignore_errors=no }"#,
-        )
-        .expect("parse systemd ExecStart");
-        assert!(
-            !workload_argv_matches_rendered(&wrong_prog.argv, exe, &expected),
-            "a different program must fail the workload argv match"
-        );
-
-        // A user argument that itself contains a space round-trips through the
-        // same lossy rendering on both sides, so it matches.
-        let expected_spacey = vec![
-            exe.to_owned(),
-            "-l".to_owned(),
-            "-c".to_owned(),
-            r#"exec "$@""#.to_owned(),
-            "nl-exec".to_owned(),
-            "/bin/sh".to_owned(),
-            "-c".to_owned(),
-            "echo hi there".to_owned(),
-        ];
-        let real_spacey = parse_exec_start(
-            r#"{ path=/run/current-system/sw/bin/bash ; argv[]=/run/current-system/sw/bin/bash -l -c exec "$@" nl-exec /bin/sh -c echo hi there ; ignore_errors=no }"#,
-        )
-        .expect("parse systemd ExecStart");
-        assert!(
-            workload_argv_matches_rendered(&real_spacey.argv, exe, &expected_spacey),
-            "a user arg containing spaces matches via symmetric lossy rendering"
-        );
+        // Missing fields => None (treated as a mismatch, never a match).
+        assert!(exec_start_raw_fields("{ argv[]=x ; ignore_errors=no }").is_none());
+        assert!(exec_start_raw_fields("{ path=/x ; argv[]=/x ; }").is_none());
     }
 
     #[tokio::test]

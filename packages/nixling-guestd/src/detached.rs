@@ -224,6 +224,38 @@ pub fn parse_exec_start(value: &str) -> Option<ParsedExecStart> {
     })
 }
 
+/// Extract the RAW `path=` and `argv[]=` field values from a systemd-rendered
+/// `ExecStart` (`{ path=<exe> ; argv[]=<args> ; ignore_errors=... ; ... }`)
+/// WITHOUT tokenizing the argv.
+///
+/// `systemctl show -p ExecStart` renders `argv[]` as a literal single-space
+/// join of the argument vector with NO escaping of embedded spaces, quotes, or
+/// backslashes. The token parser (`parse_exec_start`) is therefore the wrong
+/// tool for the workload-identity check: `validate_command` permits argv bytes
+/// the tokenizer rejects (an unmatched `"`, a trailing `\`) or mis-splits (a
+/// `;`, which `parse_exec_start` treats as a field delimiter — a fail-OPEN
+/// truncation that would compare only a shared prefix). The caller compares
+/// this raw `argv[]=` value byte-for-byte against the expected argv rendered the
+/// same lossy way, so the match is symmetric, never tokenizes user bytes, and
+/// cannot truncate at a user `;`.
+///
+/// The `argv[]=` value is delimited by the fixed ` ; ignore_errors=` field that
+/// systemd always emits immediately after it, so a `;` inside a user argument
+/// (e.g. `sh -c 'a ; b'`) is preserved rather than treated as a field break.
+/// Returns `None` if either field is absent (treated as a mismatch, never a
+/// match).
+pub fn exec_start_raw_fields(value: &str) -> Option<(String, String)> {
+    let path = {
+        let after = value.split_once("path=")?.1;
+        after.split_once(" ; ")?.0.trim().to_owned()
+    };
+    let argv = {
+        let after = value.split_once("argv[]=")?.1;
+        after.split_once(" ; ignore_errors=")?.0.trim().to_owned()
+    };
+    Some((path, argv))
+}
+
 /// Absolute, controlled paths the manager needs to launch a runner unit. All
 /// values are host-supplied constants (never caller-derived).
 #[derive(Debug, Clone, PartialEq, Eq)]
