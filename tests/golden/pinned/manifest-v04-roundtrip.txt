@@ -1,0 +1,11 @@
+# manifest-v04-roundtrip — nixling-core ManifestV04 golden round-trip
+# #[test] successor of tests/manifest-v04-roundtrip.sh, which built xtask
+# manifest_v04_check and ran tests/golden/manifest_v04/assert-roundtrip.sh
+# against tests/golden/manifest_v04/baseline-vms.json.
+# The integration test uses ManifestV04::from_path + to_compact_json on the
+# same golden, asserts byte-identical compact JSON, and preserves every
+# required networking path/value assertion from the retired shell gate.
+# Pinned fail-closed via tests/tools/assert-pinned-tests.sh. One bare libtest
+# path per line.
+#
+manifest_v04_roundtrip::baseline_vms_json_round_trips_byte_identically
