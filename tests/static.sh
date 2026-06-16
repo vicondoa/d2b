@@ -1298,7 +1298,6 @@ nl_static_gate_begin "W3 host-prepare gates" "W3 host-prepare gates"
 if [ -x "$HERE/pidfd-handoff.sh" ]; then nl_static_parallel_script "tests/pidfd-handoff.sh" "$HERE/pidfd-handoff.sh"; fi
 if [ -x "$HERE/ifname-collision.sh" ]; then nl_static_parallel_script "tests/ifname-collision.sh" "$HERE/ifname-collision.sh"; fi
 # L3 distro-matrix pin parser/drift gate (integrator-wired).
-if [ -x "$HERE/l3-pin-consistency.sh" ]; then nl_static_parallel_script "tests/l3-pin-consistency.sh" "$HERE/l3-pin-consistency.sh"; fi
 # Host-prepare idempotency no-op invariant (integrator-wired).
 # Ch-net-handoff executable canary (replaces prior doc-grep) (integrator-wired).
 if [ -x "$HERE/kernel-module-matrix.sh" ]; then nl_static_parallel_script "tests/kernel-module-matrix.sh" "$HERE/kernel-module-matrix.sh"; fi

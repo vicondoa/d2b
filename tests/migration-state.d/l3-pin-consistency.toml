@@ -1,0 +1,2 @@
+status = "retired"
+successor_ids = ["packages/nixling-contract-tests/tests/policy_l3_pin.rs::l3_matrix_pins_parse_and_carry_required_keys (reads the committed tests/golden/l3-matrix/*.txt distro-matrix pins and asserts each parses as key=value with the required keys, a placeholder-or-64-char-lowercase-hex sha256, an https:// image_url, and panel_approval_required_for_change=true; gated via the NL_FIXTURES-free contract step `cargo test -p nixling-contract-tests` in tests/rust-workspace-checks.sh)"]

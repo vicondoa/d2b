@@ -195,7 +195,6 @@ fi
 for gate in \
   pidfd-handoff \
   ifname-collision \
-  l3-pin-consistency \
   ioctl-negative \
   kernel-module-matrix \
   dag-topo \
