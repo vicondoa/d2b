@@ -131,6 +131,22 @@ deprecations ship one minor release before removal.
   exhaustion from breaking TPM-bound credentials while preserving NVRAM
   and persistent handles.
 
+- Detached exec (`nixling vm exec -d`) now works end-to-end. Three faults in
+  its initial implementation are fixed: the per-VM exec runner verified the
+  workload's cgroup placement against a top-level `nixling-exec.slice` path
+  even though systemd nests it under `nixling.slice`, so every detached
+  command was killed at spawn; the daemon panicked (taking down `nixlingd`)
+  when a detached management verb (`list`/`logs`/`status`/`kill`) was
+  dispatched, because it built a nested async runtime on the request thread;
+  and the guest reconciler matched a running workload's command against
+  `systemctl show` output using exact, quote-aware argv tokens, but systemd
+  renders `ExecStart` argv as a literal, unescaped, space-joined string — so
+  live jobs (and any command containing a space, quote, backslash, or
+  semicolon) were misclassified as foreign and reaped as `lost-guestd`
+  shortly after starting. Workload identity is now matched against systemd's
+  raw rendering, and a failed runner-side spawn verification logs an
+  actionable guest-journal diagnostic.
+
 ### Added
 
 - `nixling vm exec <vm> -- <cmd…>` (and `-it` for an interactive TTY):
