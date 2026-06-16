@@ -72,6 +72,24 @@ in
             uid = 1000;
           };
 
+          # runNixOSTest runs first-boot activation before systemd-tmpfiles has
+          # materialized the nixling state tree. Pre-create the key directory so
+          # nixlingGenerateKeys can open its flock during the initrd activation
+          # path without relying on tmpfiles ordering.
+          system.activationScripts.nixlingTestStateDirs = {
+            deps = [ "users" ];
+            text = ''
+              install -d -m 0750 -o root -g nixlingd /var/lib/nixling
+              install -d -m 0710 -o root -g nixling /var/lib/nixling/keys
+              : > /var/lib/nixling/keys/.lock
+              chown root:root /var/lib/nixling/keys/.lock
+              chmod 0600 /var/lib/nixling/keys/.lock
+            '';
+          };
+          system.activationScripts.nixlingGenerateKeys.deps = [
+            "nixlingTestStateDirs"
+          ];
+
           system.stateVersion = "25.11";
         }
         # Opt-in writable same-fs store. ONLY needed by tests that drive the
