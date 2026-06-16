@@ -8,15 +8,6 @@ schema_version = 0
 generated_for = "test-rearchitecture W0"
 
 [[script]]
-name = "tests/activation-helper-eval.sh"
-group = "A"
-make_target = "test-rust"
-tier = "ci-l1"
-status = "legacy"      # legacy | porting | ported
-successor_ids = []
-exercised_today = "skip"
-
-[[script]]
 name = "tests/adr-index-coverage.sh"
 group = "H"
 make_target = "test-policy"
@@ -329,6 +320,15 @@ make_target = "test-drift"
 tier = "ci-l1"
 status = "legacy"      # legacy | porting | ported
 successor_ids = []
+exercised_today = "skip"
+
+[[script]]
+name = "tests/activation-helper-eval.sh"
+group = "A"
+make_target = "test-rust"
+tier = "ci-l1"
+status = "retired"      # legacy | porting | ported | retired
+successor_ids = ["packages/nixling-host/tests/activation_helper_fs_posture.rs (drives the real nixling-activation-helper binary via CARGO_BIN_EXE for the ensure-regular-file / enforce-dir-posture / setfacl-on-path / clear-acl-on-path / chown-if-orphan verbs: happy paths with uid/gid/mode/size assertions, existing-file re-assert, and the openat2+RESOLVE_NO_SYMLINKS exit-2 refusals for symlink, intermediate-symlink, directory, and no-hang FIFO; gated via `cargo test --workspace` in tests/rust-workspace-checks.sh)", "packages/nixling-host/tests/activation_helper_build_farm.rs (the sibling build-store-view{,-farm} verb coverage)"]
 exercised_today = "skip"
 
 [[script]]

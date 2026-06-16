@@ -1306,7 +1306,6 @@ if [ -x "$HERE/ioctl-negative.sh" ]; then nl_static_parallel_script "tests/ioctl
 # Gates: DAG executor + daemon state-persistence + [pending restart] machinery.
 # Layer-1 smoke for the nixling-activation-helper binary (fd-safe
 # activation primitives per ADR 0021 + TOCTOU closures).
-if [ -x "$HERE/activation-helper-eval.sh" ]; then nl_static_parallel_script "tests/activation-helper-eval.sh" "$HERE/activation-helper-eval.sh"; fi
 if [ -x "$HERE/dag-topo.sh" ]; then nl_static_parallel_script "tests/dag-topo.sh" "$HERE/dag-topo.sh"; fi
 if [ -x "$HERE/multi-env-daemon-backed.sh" ]; then nl_static_parallel_script "tests/multi-env-daemon-backed.sh" "$HERE/multi-env-daemon-backed.sh"; fi
 nl_static_parallel_wait_all
